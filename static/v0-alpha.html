@@ -1,0 +1,1515 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Breeze Automatic</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;700&family=Manrope:wght@550&display=swap" rel="stylesheet">
+    <link rel="preload" href="https://sdk.beta.breezesdk.store/clairvoyance/automatic-small.gif" as="image">
+    <link rel="preload" href="https://sdk.beta.breezesdk.store/clairvoyance/automatic.svg" as="image">
+    <link rel="preload" href="https://sdk.beta.breezesdk.store/clairvoyance/empty-state.png" as="image">
+    <style>
+      :root {
+        --bg-color: #1d1d1d;
+      --surface-color: #1d1d1d;
+      --text-color: #f1f1f1;
+      --secondary-text: #a0a0a0;
+      --grey-light: #484848;
+      --grey-medium: #333333;
+      --grey-dark: #222222;
+      --border-color: #2a2a2a;
+      --user-msg-bg: #333333;
+      --assistant-msg-bg: #1d1d1d;
+      --button-bg: #333333;
+      --button-hover: #444444;
+      --button-active: #222222;
+      --button-text: #ffffff;
+      --divider-color: #2a2a2a;
+      --input-bg: #1d1d1d;
+      --card-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.2);
+      --transition-speed: 0.2s;
+    }
+    
+    body {
+      font-family: 'Google Sans', sans-serif;
+      font-size: 1rem;
+      margin: 0;
+      padding: 0;
+      background-color: var(--bg-color);
+      color: var(--text-color);
+      box-sizing: border-box;
+      line-height: 1.5;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+      overflow: hidden; /* Prevent scrolling on body */
+      height: 100vh; /* Full viewport height */
+      width: 100vw; /* Full viewport width */
+    }
+    
+    * {
+      box-sizing: inherit;
+    }
+    
+    h2 {
+      color: #ffffff;
+      text-align: center;
+      margin-bottom: 30px;
+      font-weight: 500;
+      letter-spacing: 0.5px;
+      font-size: 1.75rem;
+      font-family: 'Google Sans', sans-serif;
+    }
+    
+    .status {
+      color: var(--secondary-text);
+      font-style: italic;
+      text-align: center;
+      padding: 8px 16px;
+      border-radius: 8px;
+      background-color: rgba(30, 30, 30, 0.7);
+      max-width: 80%;
+      margin: 30px auto;
+      transition: all var(--transition-speed) ease;
+      z-index: 5;
+    }
+    
+    body {
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      width: 100vw;
+      position: fixed;
+      top: 0;
+      left: 0;
+    }
+    
+    @media screen and (max-width: 768px) {
+      body {
+        padding: 0;
+      }
+      
+      h2 {
+        font-size: 1.5rem;
+        margin-bottom: 15px;
+      }
+      
+      .status {
+        font-size: 0.9rem;
+        margin-bottom: 10px;
+      }
+    }
+    
+    @media screen and (max-width: 480px) {
+      body {
+        padding: 0;
+        height: 100vh;
+        width: 100vw;
+        display: flex;
+        flex-direction: column;
+      }
+      
+      h2 {
+        font-size: 1.4rem;
+        margin-bottom: 12px;
+      }
+      
+      .status {
+        margin-bottom: 10px;
+        font-size: 0.85rem;
+        max-width: 95%;
+      }
+      
+      .chat-container {
+        height: 100vh; /* Full screen height */
+        width: 100vw; /* Full screen width */
+        padding: 10px;
+        padding-bottom: 100px; /* Increased to ensure space for controls */
+        flex: 1;
+      }
+      
+      .controls {
+        padding: 20px 0;
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        background-color: var(--surface-color);
+        z-index: 10;
+        box-shadow: none; /* Removed box-shadow for seamless UI */
+        display: flex;
+        justify-content: center;
+        gap: 20px;
+      }
+      
+      .controls::before {
+        content: "";
+        position: absolute;
+        top: 0;
+        left: 5%;
+        right: 5%;
+        height: 0; /* Border line removed for seamless UI */
+        background-color: var(--border-color);
+        width: 90%;
+      }
+      
+      button {
+        width: 55px; /* Increased from 50px */
+        height: 55px; /* Increased from 50px */
+        border-radius: 50%;
+        padding: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      
+      .icon {
+        width: 24px;
+        height: 24px;
+      }
+    }
+    
+    .controls {
+      display: flex;
+      justify-content: center;
+      gap: 24px;
+      margin-top: auto;
+      padding: 15px 0; /* Reduced vertical padding from 20px */
+      flex-wrap: wrap;
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      background-color: #1d1d1d; /* Explicitly set for CTA buttons wrapper */
+      z-index: 10;
+      /* box-shadow removed for seamless UI */
+    }
+    
+    .controls::before {
+      content: "";
+      position: absolute;
+      top: 0;
+      left: 5%;
+      right: 5%;
+      height: 0; /* Border line removed for seamless UI */
+      background-color: var(--border-color);
+      width: 90%;
+    }
+    
+    button {
+      width: 70px;  /* Increased from 60px */
+      height: 70px; /* Increased from 60px */
+      cursor: pointer;
+      color: var(--button-text);
+      border: 1px solid var(--grey-light);
+      border-radius: 50%;
+      transition: all var(--transition-speed) ease;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: transparent;
+      box-shadow: none;
+    }
+    
+    .call-controls {
+      display: flex;
+      gap: 24px;
+      justify-content: center;
+    }
+    
+    
+    /* Muted state for speaker and mic */
+    .muted {
+      border-color: var(--grey-dark);
+      opacity: 0.7;
+    }
+    
+    button:hover {
+      transform: translateY(-2px);
+      border-color: var(--grey-light);
+    }
+    
+    button:active {
+      transform: translateY(0);
+      border-color: var(--grey-medium);
+    }
+    
+    button:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+      transform: none;
+      box-shadow: none;
+    }
+    
+    /* All buttons use the same outline style */
+    #start, #stop {
+      background: transparent;
+      border: 1px solid var(--grey-light);
+    }
+    
+    #start:hover, #stop:hover {
+      border-color: var(--grey-medium);
+    }
+    
+    #start:active, #stop:active {
+      border-color: var(--grey-dark);
+    }
+    
+    .chat-container {
+      display: flex;
+      flex-direction: column;
+      margin: 0;
+      gap: 16px;
+      height: 100vh; /* Full screen height */
+      width: 100vw; /* Full screen width */
+      max-width: 100%;
+      overflow-y: auto;
+      padding: 10px 15px;
+      padding-bottom: 100px; /* Add padding at bottom to prevent content being hidden behind controls */
+      background-color: var(--surface-color);
+      scrollbar-width: thin;
+      scrollbar-color: var(--grey-light) var(--bg-color);
+      transition: all var(--transition-speed) ease;
+      position: relative; /* For positioning elements inside */
+    }
+    
+    /* Welcome state when no messages are present */
+    .welcome-state {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      height: 100%; /* Full height */
+      width: 100%; /* Full width */
+      padding: 30px;
+      color: var(--secondary-text);
+      position: absolute;
+      top: 0;
+      left: 0;
+    }
+    
+    .welcome-state h3 { /* This will be removed, but keeping style for reference if needed elsewhere */
+      margin-bottom: 10px;
+      color: #474747;
+      font-size: 1.75rem;
+      line-height: 2.25rem;
+      text-align: center;
+    }
+    
+    .empty-state-image {
+      max-width: 150px; /* Adjust as needed */
+      margin-bottom: 15px;
+      display: none; /* Hidden by default */
+    }
+
+    .empty-state-prompt {
+      color: var(--secondary-text);
+      font-size: 0.9rem;
+      margin-top: 0;
+      display: none; /* Hidden by default */
+    }
+    
+    @media screen and (max-width: 480px) {
+      .message {
+        max-width: 85%;
+        padding: 10px 14px;
+        font-size: 0.95rem;
+        margin: 6px 5px;
+      }
+      
+      .message::before {
+        font-size: 10px;
+        top: -18px;
+      }
+      
+      .icon {
+        width: 20px; /* Increased from 16px */
+        height: 20px; /* Increased from 16px */
+      }
+      
+      /* Ensure buttons fit on small screens */
+      .controls {
+        gap: 10px;
+      }
+    }
+    
+    /* Portrait orientation specific adjustments */
+    @media screen and (max-width: 480px) and (orientation: portrait) {
+      .chat-container {
+        height: 100vh;
+        padding-bottom: 120px;
+      }
+    }
+    
+    .chat-container::-webkit-scrollbar {
+      width: 8px;
+    }
+    
+    .chat-container::-webkit-scrollbar-track {
+      background: var(--bg-color);
+    }
+    
+    .chat-container::-webkit-scrollbar-thumb {
+      background-color: var(--grey-light);
+      border-radius: 10px;
+    }
+    
+
+    .message {
+      max-width: 75%;
+      padding: 14px 18px;
+      border-radius: 18px;
+      margin: 8px 5px;
+      word-wrap: break-word;
+      position: relative;
+      font-family: 'Manrope', sans-serif;
+      font-weight: 550;
+      font-size: 20px;
+      line-height: 28px;
+      letter-spacing: 0%;
+      /* box-shadow: var(--card-shadow); */ /* Shadow removed for assistant, kept for user */
+      transition: all var(--transition-speed) ease;
+    }
+    
+    /* User message styles (right side) */
+    .user-message {
+      align-self: flex-end;
+      background-color: #272A2D;
+      border-bottom-right-radius: 4px;
+      color: white;
+      box-shadow: var(--card-shadow); /* Added box-shadow back to user-message */
+    }
+    
+    /* Assistant message styles (left side) */
+    .assistant-message {
+      align-self: flex-start;
+      max-width: 90%; /* Increased max-width for assistant messages */
+      /* background-color: var(--assistant-msg-bg); */ /* Removed background color */
+      /* border-bottom-left-radius: 4px; */ /* Removed border radius */
+      color: var(--text-color);
+      box-shadow: none; /* Removed box shadow */
+      padding: 14px 0px 14px 0px; /* Added left padding */
+      display: flex; /* To align avatar and text */
+      align-items: flex-start; /* Align items to the top */
+    }
+
+    .assistant-avatar-container {
+      margin-right: 8px; /* Space between avatar/gif and text */
+      position: relative; /* For positioning GIF */
+      width: 30px; /* Increased size */
+      height: 30px; /* Increased size */
+      flex-shrink: 0; /* Prevent the avatar container from shrinking */
+    }
+
+    .assistant-avatar-gif, .assistant-avatar-svg {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+    }
+
+    .assistant-avatar-gif {
+      display: none; /* GIF hidden by default */
+      width: 100%; /* Fill the container */
+      height: 100%; /* Fill the container */
+    }
+    .assistant-avatar-svg {
+      display: block; /* SVG visible by default */
+      width: 26px; /* Slightly smaller */
+      height: 26px; /* Slightly smaller */
+      /* Center the smaller SVG within the 30x30 container */
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+    }
+    
+    /* Role indicators */
+    .message::before {
+      content: attr(data-role);
+      position: absolute;
+      top: -22px;
+      font-size: 12px;
+      color: var(--secondary-text);
+      font-weight: 500;
+    }
+    
+    .user-message::before {
+      /* content: ""; Remove the "You" label */
+      display: none; /* Hide the label for user messages */
+      right: 15px;
+    }
+    
+    .assistant-message::before {
+      /* left: 15px; */ /* Original position */
+      display: none; /* Remove the "Automatic" label */
+    }
+    
+    .icon {
+      display: inline-block;
+      width: 30px;  /* Increased from 24px */
+      height: 30px; /* Increased from 24px */
+      fill: currentColor;
+      transition: transform var(--transition-speed) ease;
+    }
+    
+    button:hover .icon {
+      transform: scale(1.1);
+    }
+    
+    .loading-dots {
+      display: inline-block;
+    }
+    
+    .loading-dots span {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background-color: var(--grey-light);
+      margin: 0 2px;
+      animation: pulse 1.4s infinite ease-in-out;
+    }
+    
+    .loading-dots span:nth-child(2) {
+      animation-delay: 0.2s;
+    }
+    
+    .loading-dots span:nth-child(3) {
+      animation-delay: 0.4s;
+    }
+    
+    @keyframes pulse {
+      0%, 100% {
+        transform: scale(0.5);
+        opacity: 0.5;
+      }
+      50% {
+        transform: scale(1);
+        opacity: 1;
+      }
+    }
+    
+    /* Fade in animation for messages */
+    @keyframes fadeIn {
+      from {
+        opacity: 0;
+        transform: translateY(10px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+    
+    .message {
+      animation: fadeIn 0.3s ease-out forwards;
+    }
+  </style>
+</head>
+<body>
+  <!-- Main app container - initially hidden -->
+  <div id="app-container" style="display: none;">
+    <!-- Chat container for conversation -->
+    <div id="chat-container" class="chat-container">
+      <!-- Welcome state - shown when no messages and call not started -->
+      <div id="welcome-state" class="welcome-state">
+        <div id="status" class="status"></div>
+        <img src="https://sdk.beta.breezesdk.store/clairvoyance/empty-state.png" alt="Start speaking" class="empty-state-image" id="empty-state-image">
+        <p class="empty-state-prompt" id="empty-state-prompt">Start speaking...</p>
+      </div>
+      
+      <!-- Messages will be inserted here dynamically -->
+      
+      <!-- Controls moved inside chat container -->
+      <div class="controls">
+      <!-- Call inactive state - only show Start Call button -->
+      <div id="call-inactive-controls" class="call-controls">
+        <button id="start" title="Start Call">
+          <!-- Initial SVG will be set by JavaScript -->
+        </button>
+      </div>
+      
+      <!-- Call active state - show speaker toggle, mute/unmute, end call -->
+      <div id="call-active-controls" class="call-controls" style="display: none;">
+        <!-- Left: Speaker toggle -->
+        <button id="speaker-toggle" title="Toggle Speaker">
+          <!-- Initial SVG will be set by JavaScript -->
+        </button>
+        
+        <!-- Center: Mute/unmute mic -->
+        <button id="mic-toggle" title="Toggle Microphone">
+          <!-- Initial SVG will be set by JavaScript -->
+        </button>
+        
+        <!-- Right: End call (red) -->
+        <button id="stop" title="End Call">
+          <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-x-icon lucide-x"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+        </button>
+      </div>
+      
+    </div>
+  </div>
+  
+  
+  <script>
+    const svgVolumeOn = '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-volume2-icon lucide-volume-2"><path d="M11 4.702a.705.705 0 0 0-1.203-.498L6.413 7.587A1.4 1.4 0 0 1 5.416 8H3a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2.416a1.4 1.4 0 0 1 .997.413l3.383 3.384A.705.705 0 0 0 11 19.298z"/><path d="M16 9a5 5 0 0 1 0 6"/><path d="M19.364 18.364a9 9 0 0 0 0-12.728"/></svg>';
+    const svgVolumeOff = '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-volume-off-icon lucide-volume-off"><path d="M16 9a5 5 0 0 1 .95 2.293"/><path d="M19.364 5.636a9 9 0 0 1 1.889 9.96"/><path d="m2 2 20 20"/><path d="m7 7-.587.587A1.4 1.4 0 0 1 5.416 8H3a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2.416a1.4 1.4 0 0 1 .997.413l3.383 3.384A.705.705 0 0 0 11 19.298V11"/><path d="M9.828 4.172A.686.686 0 0 1 11 4.657v.686"/></svg>';
+    const svgMicOn = '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-mic-icon lucide-mic"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/></svg>';
+    const svgMicOff = '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-mic-off-icon lucide-mic-off"><line x1="2" x2="22" y1="2" y2="22"/><path d="M18.89 13.23A7.12 7.12 0 0 0 19 12v-2"/><path d="M5 10v2a7 7 0 0 0 12 5"/><path d="M15 9.34V5a3 3 0 0 0-5.68-1.33"/><path d="M9 9v3a3 3 0 0 0 5.12 2.12"/><line x1="12" x2="12" y1="19" y2="22"/></svg>';
+    const svgStartConversation = '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#fd8414" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-audio-lines-icon lucide-audio-lines"><path d="M2 10v3"/><path d="M6 6v11"/><path d="M10 3v18"/><path d="M14 8v7"/><path d="M18 5v13"/><path d="M22 10v3"/></svg>';
+
+    // Input sample rate for Web API
+    const INPUT_SAMPLE_RATE = 16000;
+    // Output sample rate from Gemini according to documentation
+    const OUTPUT_SAMPLE_RATE = 24000;
+    const FRAME_DURATION = 30; // ms
+    const FRAME_SIZE = INPUT_SAMPLE_RATE * FRAME_DURATION / 1000 * 2; // bytes (16-bit PCM)
+    
+    const AUTO_SCROLL_THRESHOLD = 100; // px - if user is within this distance of bottom, auto-scroll
+    let isUserNearBottom = true; // Track if user is near bottom of chat
+    
+    const PING_INTERVAL = 5000; // 5 seconds
+    const RECONNECT_TIMEOUT = 3000; // 3 seconds
+
+    let ws, mediaStream, audioContext, processor;
+    let pingInterval;
+    let lastPongTime = Date.now();
+    const statusEl = document.getElementById("status");
+    const chatContainer = document.getElementById("chat-container");
+    const appContainer = document.getElementById("app-container");
+    
+    // Store the user's token
+    let userToken = '';
+
+    // Check for token in URL parameters first
+    const urlParams = new URLSearchParams(window.location.search);
+    const tokenFromUrl = urlParams.get('token');
+
+    if (tokenFromUrl && tokenFromUrl.trim() !== '') {
+      userToken = tokenFromUrl.trim();
+    } else {
+      userToken = 'testmode';
+    }
+
+    // App is always visible now
+    appContainer.style.display = 'block';
+    // document.getElementById("welcome-state").style.display = "flex"; // Welcome state visibility managed by status/message flow
+    // document.getElementById("welcome-message").style.display = "block"; // welcome-message div is removed
+    
+    // Enhanced scroll to bottom function that works consistently on mobile
+    function scrollToBottom(force = false) {
+      if (force || isUserNearBottom) {
+        // Use both methods for maximum compatibility across browsers and devices
+        chatContainer.scrollTop = chatContainer.scrollHeight;
+        
+        // For mobile devices, sometimes the above doesn't work consistently
+        // Use setTimeout to ensure this happens after rendering
+        setTimeout(() => {
+          chatContainer.scrollTop = chatContainer.scrollHeight;
+          
+          // For iOS Safari and some Android browsers
+          window.scrollTo(0, document.body.scrollHeight);
+        }, 10);
+      }
+    }
+    
+    // Check if user is near bottom to determine if auto-scroll should happen
+    chatContainer.addEventListener('scroll', () => {
+      const distanceFromBottom = chatContainer.scrollHeight - chatContainer.scrollTop - chatContainer.clientHeight;
+      isUserNearBottom = distanceFromBottom < AUTO_SCROLL_THRESHOLD;
+    });
+    
+    // Set up a mutation observer to detect when new content is added to the chat
+    const chatObserver = new MutationObserver(() => {
+      scrollToBottom();
+    });
+    
+    // Start observing the chat container for added nodes
+    chatObserver.observe(chatContainer, {
+      childList: true,
+      subtree: true,
+      characterData: true
+    });
+    
+    let isConnecting = false;
+
+    let currentSpeaker = null; // 'user' or 'assistant' or null
+    let turnCounter = 0;
+    let currentUserMessageId = null;
+    let currentAssistantMessageId = null;
+    let sessionCounter = 0;
+    
+    // Store the last received text for each speaker to avoid duplicates
+    let lastUserText = "";
+    let lastAssistantText = "";
+    
+    // Track active session
+    let isActiveSession = false;
+
+    let playbackContext = null;
+    const audioQueue = []; // Re-introduce the audio queue
+    let isPlaying = false;   // Re-introduce isPlaying state
+    let currentSource = null; // Track current playing audio source for interruption
+    let isSpeakerMuted = false; // Track speaker mute state
+    let masterPlaybackGainNode = null; // Single gain node for all playback
+    let dynamicsCompressorNode = null; // Compressor to manage overall loudness, re-added
+    
+    // Function to stop any ongoing audio playback and clear the queue
+    function stopAndClearAudio() {
+      if (currentSource) {
+        try {
+          currentSource.onended = null; // Prevent playNextInQueue from firing
+          currentSource.stop();
+        } catch (e) {
+          console.log("Error stopping current audio source:", e);
+        }
+        currentSource = null;
+      }
+      audioQueue.length = 0; // Clear the queue
+      isPlaying = false;
+      console.log("Audio playback stopped and queue cleared.");
+    }
+    
+    // Load chat history on page load
+    document.addEventListener('DOMContentLoaded', function() {
+      // Make sure status is inside welcome state
+      const welcomeState = document.getElementById("welcome-state");
+      const statusEl = document.getElementById("status");
+      
+      if (!welcomeState.contains(statusEl)) {
+        welcomeState.insertBefore(statusEl, welcomeState.firstChild);
+      }
+      
+      loadChatHistory();
+      
+      // Show welcome state if no messages
+      if (chatContainer.querySelectorAll('.message').length === 0) {
+        document.getElementById("welcome-state").style.display = "flex";
+        // document.getElementById("welcome-message").style.display = "block"; // welcome-message div is removed
+      } else {
+        document.getElementById("welcome-state").style.display = "none";
+      }
+    });
+    
+    // Set initial icons for speaker and mic buttons once DOM is loaded
+    document.addEventListener('DOMContentLoaded', function() {
+      const speakerButton = document.getElementById("speaker-toggle");
+      const micButton = document.getElementById("mic-toggle");
+      const startButton = document.getElementById("start");
+      if (speakerButton) {
+        speakerButton.innerHTML = svgVolumeOn;
+      }
+      if (micButton) {
+        micButton.innerHTML = svgMicOn;
+      }
+      if (startButton) {
+        startButton.innerHTML = svgStartConversation;
+      }
+    });
+    
+    function loadChatHistory() {
+      // Ensure welcome state is shown if no messages
+      if (chatContainer.querySelectorAll('.message').length === 0) {
+        document.getElementById("welcome-state").style.display = "flex";
+        // document.getElementById("welcome-message").style.display = "block"; // welcome-message div is removed
+      } else {
+         document.getElementById("welcome-state").style.display = "none";
+      }
+    }
+    
+
+    async function start() {
+      // userToken is now guaranteed to be set (either from URL or 'testmode')
+      
+      setStatus("Connecting to server...");
+      // Immediately show active call controls when connection starts
+      document.getElementById("call-inactive-controls").style.display = "none";
+      document.getElementById("call-active-controls").style.display = "flex";
+      resetSession();
+      connectWebSocket();
+    }
+
+    function resetSession() {
+      currentSpeaker = null;
+      currentUserMessageId = null;
+      currentAssistantMessageId = null;
+      currentUserText = "";
+      currentAssistantText = "";
+      
+      // Session divider creation removed.
+      
+      isActiveSession = true;
+      
+    }
+
+    function connectWebSocket() {
+      if (isConnecting) return;
+      
+      isConnecting = true;
+      // Use the user-provided token in the WebSocket connection
+      ws = new WebSocket(`wss://clairvoyance.breezesdk.store/ws/live?token=${encodeURIComponent(userToken)}`);
+      ws.binaryType = "arraybuffer";
+
+      ws.onopen = () => {
+        setStatus("Connected! Setting up microphone...");
+        isConnecting = false;
+        lastPongTime = Date.now();
+        
+        // Start ping interval
+        if (pingInterval) clearInterval(pingInterval);
+        pingInterval = setInterval(() => {
+          if (ws && ws.readyState === WebSocket.OPEN) {
+            try {
+              ws.send(JSON.stringify({ type: "ping" }));
+              
+              // Check if we haven't received a response for too long
+              if (Date.now() - lastPongTime > PING_INTERVAL * 3) {
+                console.warn("No pong received for a while, reconnecting...");
+                ws.close();
+                setTimeout(() => connectWebSocket(), RECONNECT_TIMEOUT);
+              }
+            } catch (e) {
+              console.error("Error sending ping:", e);
+            }
+          }
+        }, PING_INTERVAL);
+        
+        setupAudio();
+      };
+
+      ws.onclose = () => {
+        setStatus("Connection closed");
+        isConnecting = false;
+        if (pingInterval) clearInterval(pingInterval);
+        
+        // Only try to reconnect if we're in an active call session
+        // and the call wasn't explicitly stopped by the user
+        if (isActiveSession && document.getElementById("call-active-controls").style.display !== "none") {
+          setStatus("Connection lost. Reconnecting in 3 seconds...");
+          setTimeout(() => connectWebSocket(), RECONNECT_TIMEOUT);
+        }
+      };
+
+      ws.onerror = (err) => {
+        setStatus("WebSocket error: " + err.message);
+        console.error(err);
+        isConnecting = false;
+      };
+
+      ws.onmessage = (event) => {
+        if (typeof event.data === "string") {
+          try {
+            const msg = JSON.parse(event.data);
+            
+            if (msg.type === "ping") {
+              ws.send(JSON.stringify({ type: "pong" }));
+              return;
+            } else if (msg.type === "pong") {
+              lastPongTime = Date.now();
+              return;
+            } else if (msg.type === "llm_transcript") {
+              // Handle model text transcript - streaming
+              // If we're switching from user to assistant, create a new message
+              if (currentSpeaker === "user") {
+                currentSpeaker = "assistant";
+                currentAssistantMessageId = null;
+                ensureAssistantMessage();
+                currentAssistantText = "";
+              }
+              handleModelTranscript(msg);
+            } else if (msg.type === "audio_transcript") {
+              // Handle audio transcript - streaming (transcription of Gemini's audio)
+              // If we're switching from user to assistant, create a new message
+              if (currentSpeaker === "user") {
+                currentSpeaker = "assistant";
+                currentAssistantMessageId = null;
+                ensureAssistantMessage();
+                currentAssistantText = "";
+              }
+              handleAudioTranscript(msg);
+            } else if (msg.type === "input_transcript") {
+              // Handle user input transcript - streaming
+              // Only create a new message if switching from assistant to user
+              if (currentSpeaker === "assistant") {
+                currentSpeaker = "user";
+                currentUserMessageId = null;
+                ensureUserMessage();
+                currentUserText = "";
+              } else if (currentSpeaker !== "user") {
+                // If no speaker is set yet, set it to user
+                currentSpeaker = "user";
+                currentUserMessageId = null;
+                ensureUserMessage();
+                currentUserText = "";
+              }
+              handleUserInputTranscript(msg);
+            } else if (msg.type === "error") {
+              setStatus("Error: " + msg.message);
+            } else if (msg.type === "turn_start") {
+              // Handle turn transitions
+              if (msg.role === "user") {
+                // User started speaking
+                
+                // Stop any ongoing audio playback when user starts speaking
+                stopAndClearAudio();
+                
+                // Only create a new user message if switching from assistant to user
+                if (currentSpeaker !== "user") {
+                  currentSpeaker = "user";
+                  // Reset user text for new turn
+                  currentUserText = "";
+                  // Create a new user message only when switching turns
+                  currentUserMessageId = null;
+                  ensureUserMessage();
+                }
+              } else if (msg.role === "model") {
+                // Assistant started speaking
+                currentSpeaker = "assistant";
+                
+                // Reset assistant text for new turn
+                currentAssistantText = "";
+                
+                // Create a new assistant message (this will ensure a user message exists first)
+                currentAssistantMessageId = null;
+                ensureAssistantMessage();
+              }
+            } else if (msg.type === "interrupted") {
+              // Handle interruption event
+              setStatus("Model was interrupted");
+              
+              // Stop any ongoing audio playback
+              stopAndClearAudio();
+              
+              // Switch back to user's turn - this is a new turn since the assistant was interrupted
+              currentSpeaker = "user";
+              
+              // Reset for a new user message - interruption represents a turn change
+              currentUserMessageId = null;
+              currentUserText = "";
+              
+              // Clear any partial transcription
+            }
+          } catch (e) {
+            console.error("Error parsing message:", e);
+          }
+        } else if (event.data instanceof ArrayBuffer) {
+          const view = new Uint8Array(event.data);
+          if (view[0] === 0x01) {
+            const audioData = view.slice(1);
+            enqueueAudio(audioData); // Use the new enqueueing function
+          }
+        }
+      };
+    }
+    
+    // Helper function to create a new user message
+    function ensureUserMessage() {
+      // Always create a new message if currentUserMessageId is null
+      if (!currentUserMessageId) {
+        turnCounter++;
+        currentUserMessageId = `user-turn-${turnCounter}`;
+        
+        // Create a new message element
+        const messageEl = document.createElement("div");
+        messageEl.id = currentUserMessageId;
+        messageEl.className = "message user-message";
+        messageEl.dataset.role = ""; 
+        messageEl.textContent = "";
+        chatContainer.appendChild(messageEl);
+        
+        // Hide welcome state when messages are added
+        document.getElementById("welcome-state").style.display = "none";
+        
+        // Scroll to the bottom with the enhanced function
+        scrollToBottom();
+      }
+    }
+    
+    // Helper function to create a new assistant message
+    function ensureAssistantMessage() {
+      // Make sure we have a user message before creating an assistant message
+      if (!currentUserMessageId) {
+        // If no user message exists yet, create one first
+        ensureUserMessage();
+      }
+      
+      // Always create a new message if currentAssistantMessageId is null
+      if (!currentAssistantMessageId) {
+        turnCounter++;
+        currentAssistantMessageId = `assistant-turn-${turnCounter}`;
+        
+        // Create a new message element
+        const messageEl = document.createElement("div");
+        messageEl.id = currentAssistantMessageId;
+        messageEl.className = "message assistant-message";
+        messageEl.dataset.role = "Automatic"; /* Change "Assistant" to "Automatic" */
+        
+        // Create avatar container and GIF
+        const avatarContainer = document.createElement("div");
+        avatarContainer.className = "assistant-avatar-container";
+        
+        const gifEl = document.createElement("img");
+        gifEl.src = "https://sdk.beta.breezesdk.store/clairvoyance/automatic-small.gif";
+        gifEl.alt = "Thinking...";
+        gifEl.className = "assistant-avatar-gif";
+        gifEl.id = `assistant-gif-${currentAssistantMessageId}`;
+        
+        const svgEl = document.createElement("img");
+        svgEl.src = "https://sdk.beta.breezesdk.store/clairvoyance/automatic.svg";
+        svgEl.alt = "Automatic";
+        svgEl.className = "assistant-avatar-svg";
+        svgEl.id = `assistant-svg-${currentAssistantMessageId}`;
+
+        avatarContainer.appendChild(svgEl); // Add SVG first (it's default)
+        avatarContainer.appendChild(gifEl); // Add GIF
+        
+        // Create a span for the text content
+        const textSpan = document.createElement("span");
+        textSpan.className = "assistant-text-content";
+        textSpan.textContent = ""; // Initial text content
+
+        messageEl.appendChild(avatarContainer);
+        messageEl.appendChild(textSpan);
+        
+        chatContainer.appendChild(messageEl);
+        
+        // Hide welcome state when messages are added
+        document.getElementById("welcome-state").style.display = "none";
+          
+        // Scroll to the bottom with the enhanced function
+        scrollToBottom();
+      }
+    }
+    
+    // Simple approach: append text until turn changes
+    let currentUserText = "";
+    let currentAssistantText = "";
+    
+    // Handle model transcript message - the text response from Gemini
+    function handleModelTranscript(msg) {
+      // Skip if no new text
+      if (!msg.text) return;
+      
+      // Make sure we have an assistant message
+      ensureAssistantMessage();
+      
+      // Append to the current assistant text
+      if (currentAssistantText.length === 0) {
+        currentAssistantText = msg.text;
+      } else {
+        currentAssistantText += msg.text;
+      }
+      
+      // Update the assistant message
+      const messageEl = document.getElementById(currentAssistantMessageId);
+      if (messageEl) {
+        const textSpan = messageEl.querySelector(".assistant-text-content");
+        if (textSpan) {
+          textSpan.textContent = currentAssistantText;
+        }
+        
+        // Show GIF, hide SVG, then revert after 1.5 seconds
+        const gifEl = document.getElementById(`assistant-gif-${currentAssistantMessageId}`);
+        const svgEl = document.getElementById(`assistant-svg-${currentAssistantMessageId}`);
+
+        if (gifEl && svgEl) {
+          svgEl.style.display = "none"; // Hide static SVG
+          gifEl.style.display = "block"; // Show animated GIF
+          
+          setTimeout(() => {
+            gifEl.style.display = "none";   // Hide animated GIF
+            svgEl.style.display = "block";  // Show static SVG
+          }, 1500);
+        }
+        
+        // Scroll to the bottom with the enhanced function
+        scrollToBottom();
+      }
+    }
+    
+    // Handle audio transcript message - what Gemini is actually saying via audio
+    function handleAudioTranscript(msg) {
+      // Skip if no new text
+      if (!msg.text) return;
+      
+      // Make sure we have an assistant message
+      ensureAssistantMessage();
+      
+      // Append to the current assistant text
+      if (currentAssistantText.length === 0) {
+        currentAssistantText = msg.text;
+      } else {
+        currentAssistantText += msg.text;
+      }
+      
+      // Update the assistant message
+      const messageEl = document.getElementById(currentAssistantMessageId);
+      if (messageEl) {
+        const textSpan = messageEl.querySelector(".assistant-text-content");
+        if (textSpan) {
+          textSpan.textContent = currentAssistantText;
+        }
+
+        // Show GIF, hide SVG, then revert after 1.5 seconds
+        const gifEl = document.getElementById(`assistant-gif-${currentAssistantMessageId}`);
+        const svgEl = document.getElementById(`assistant-svg-${currentAssistantMessageId}`);
+
+        if (gifEl && svgEl) {
+          svgEl.style.display = "none"; // Hide static SVG
+          gifEl.style.display = "block"; // Show animated GIF
+          
+          setTimeout(() => {
+            gifEl.style.display = "none";   // Hide animated GIF
+            svgEl.style.display = "block";  // Show static SVG
+          }, 1500);
+        }
+        
+        // Scroll to the bottom with the enhanced function
+        scrollToBottom();
+      }
+    }
+    
+    // Handle user input transcript message
+    function handleUserInputTranscript(msg) {
+      // Skip if no new text
+      if (!msg.text) return;
+
+      // Remove all occurrences of <noise> from the text
+      let cleanedText = msg.text.replace(/<noise>/g, '').trim();
+
+      // Skip if, after cleaning, the text is empty
+      if (!cleanedText) return;
+      
+      // Ensure we have a user message
+      ensureUserMessage();
+      
+      // Append to the current user text
+      if (currentUserText.length === 0) {
+        currentUserText = cleanedText;
+      } else {
+        // Add a space if currentUserText is not empty and cleanedText is not empty,
+        // to prevent words from merging if <noise> was between them.
+        currentUserText += (currentUserText.endsWith(' ') || cleanedText.startsWith(' ') ? '' : ' ') + cleanedText;
+      }
+      
+      // Update the user message
+      const messageEl = document.getElementById(currentUserMessageId);
+      if (messageEl) {
+        messageEl.textContent = currentUserText;
+        
+        
+        // Scroll to the bottom with the enhanced function
+        scrollToBottom();
+      }
+    }
+
+    async function setupAudio() {
+      try {
+        // Use the input sample rate for recording
+        audioContext = new AudioContext({ sampleRate: INPUT_SAMPLE_RATE });
+        mediaStream = await navigator.mediaDevices.getUserMedia({ 
+          audio: { 
+            echoCancellation: true,
+            noiseSuppression: true,
+            sampleRate: INPUT_SAMPLE_RATE 
+          } 
+        });
+        setStatus("Microphone connected. You can speak now!");
+
+        const source = audioContext.createMediaStreamSource(mediaStream);
+        processor = audioContext.createScriptProcessor(4096, 1, 1);
+        source.connect(processor);
+        processor.connect(audioContext.destination);
+
+        const pcmEncoder = (input) => {
+          const buf = new ArrayBuffer(input.length * 2);
+          const view = new DataView(buf);
+          for (let i = 0; i < input.length; i++) {
+            const val = Math.max(-1, Math.min(1, input[i]));
+            view.setInt16(i * 2, val * 0x7FFF, true); // true = little endian
+          }
+          return new Uint8Array(buf);
+        };
+
+        let buffer = [];
+        let frameBytes = INPUT_SAMPLE_RATE * FRAME_DURATION / 1000;
+
+        processor.onaudioprocess = (e) => {
+          const input = e.inputBuffer.getChannelData(0);
+          buffer.push(...input);
+          while (buffer.length >= frameBytes) {
+            const frame = buffer.slice(0, frameBytes);
+            buffer = buffer.slice(frameBytes);
+            const pcm = pcmEncoder(frame);
+            if (ws && ws.readyState === WebSocket.OPEN) {
+              try {
+                ws.send(pcm);
+              } catch (error) {
+                console.error("Error sending audio data:", error);
+              }
+            }
+          }
+        };
+
+        // Initialize playback context once
+        playbackContext = new AudioContext({ sampleRate: OUTPUT_SAMPLE_RATE });
+        
+        // Initialize master playback gain node and dynamics compressor
+        if (playbackContext) {
+            dynamicsCompressorNode = playbackContext.createDynamicsCompressor();
+            // Using default compressor settings. Parameters can be tuned here if needed:
+            // dynamicsCompressorNode.threshold.setValueAtTime(-50, playbackContext.currentTime);
+            // dynamicsCompressorNode.knee.setValueAtTime(40, playbackContext.currentTime);
+            // dynamicsCompressorNode.ratio.setValueAtTime(12, playbackContext.currentTime);
+            // dynamicsCompressorNode.attack.setValueAtTime(0, playbackContext.currentTime);
+            // dynamicsCompressorNode.release.setValueAtTime(0.25, playbackContext.currentTime);
+            
+            masterPlaybackGainNode = playbackContext.createGain();
+            masterPlaybackGainNode.gain.value = isSpeakerMuted ? 0 : 5; // Initial gain
+
+            // Connect audio chain: (Source -> Compressor -> Gain -> Destination)
+            // Source is connected in proceedWithPlayback.
+            dynamicsCompressorNode.connect(masterPlaybackGainNode);
+            masterPlaybackGainNode.connect(playbackContext.destination);
+            console.log("DynamicsCompressorNode and MasterPlaybackGainNode initialized and chained in setupAudio.");
+        }
+
+        // Show active call controls, hide inactive call controls
+        document.getElementById("call-inactive-controls").style.display = "none";
+        document.getElementById("call-active-controls").style.display = "flex";
+        
+        // Show or hide welcome state based on whether messages exist
+        // setStatus will handle the visibility of empty-state-image and empty-state-prompt
+        if (chatContainer.querySelectorAll('.message').length === 0) {
+            document.getElementById("welcome-state").style.display = "flex"; // Ensure welcome-state container is visible
+            // setStatus will correctly show/hide the image/prompt based on the status message
+        } else {
+            document.getElementById("welcome-state").style.display = "none";
+        }
+      } catch (err) {
+        setStatus("Error setting up audio: " + err.message);
+        console.error(err);
+      }
+    }
+
+    function stop() {
+      setStatus("Stopping session...");
+      
+      if (processor) processor.disconnect();
+      if (audioContext) audioContext.close();
+      if (playbackContext) playbackContext.close();
+      if (mediaStream) mediaStream.getTracks().forEach(t => t.stop());
+      if (pingInterval) clearInterval(pingInterval);
+      if (ws) ws.close();
+      
+      // Mark session as inactive
+      isActiveSession = false;
+      stopAndClearAudio(); // Ensure queue and playback state are reset
+      
+      // Show inactive call controls, hide active call controls
+      document.getElementById("call-inactive-controls").style.display = "flex";
+      document.getElementById("call-active-controls").style.display = "none";
+      
+      // Show welcome state if no messages
+      if (chatContainer.querySelectorAll('.message').length === 0) {
+        document.getElementById("welcome-state").style.display = "flex";
+        // document.getElementById("welcome-message").style.display = "block"; // welcome-message div is removed
+      }
+      
+      // Ensure controls are visible
+      const controlsEl = document.querySelector(".controls");
+      if (controlsEl) {
+        controlsEl.style.display = "flex";
+      }
+      
+      setStatus("Session ended");
+    }
+
+    // Convert PCM data to audio buffer with improved error handling
+    function createAudioBufferFromPCM(uint8Array) {
+      try {
+        // Use existing playback context created in setupAudio
+        if (!playbackContext || playbackContext.state === 'closed') {
+          console.error("createAudioBufferFromPCM: playbackContext is not available or closed. Cannot create buffer.");
+          return null;
+        }
+        
+        if (playbackContext.state === 'suspended') {
+          console.warn("createAudioBufferFromPCM: playbackContext is suspended. The buffer will be created, but playback will require the context to be resumed.");
+        }
+        // This function's sole responsibility is creating the AudioBuffer.
+        // Node connections and context state for playback are handled in playNextInQueue/proceedWithPlayback.
+        
+        // Validate input data
+        if (!uint8Array || uint8Array.length < 2) {
+          console.warn("Received invalid audio data with length:", uint8Array ? uint8Array.length : 0);
+          return null;
+        }
+        
+        const audioBuffer = playbackContext.createBuffer(1, uint8Array.length / 2, OUTPUT_SAMPLE_RATE);
+        const channel = audioBuffer.getChannelData(0);
+        
+        // Convert LINEAR16 to float, respecting little-endian format
+        const dataView = new DataView(uint8Array.buffer);
+        for (let i = 0; i < uint8Array.length / 2; i++) {
+          try {
+            // Get 16-bit sample (true for little-endian)
+            const sample = dataView.getInt16(i * 2, true);
+            channel[i] = sample / 32768.0; // Convert to float [-1.0, 1.0]
+          } catch (e) {
+            console.error("Error processing audio sample at index", i, e);
+            // Set to silence for this sample rather than failing
+            channel[i] = 0;
+          }
+        }
+        
+        return audioBuffer;
+      } catch (e) {
+        console.error("Error creating audio buffer:", e);
+        return null;
+      }
+    }
+    
+    function enqueueAudio(uint8Array) {
+      const audioBuffer = createAudioBufferFromPCM(uint8Array);
+      if (audioBuffer) {
+        audioQueue.push(audioBuffer);
+        if (!isPlaying) {
+          playNextInQueue();
+        }
+      } else {
+        console.warn("Failed to create audio buffer, not enqueueing.");
+      }
+    }
+
+    function playNextInQueue() {
+      if (audioQueue.length === 0) {
+        isPlaying = false;
+        currentSource = null; // Ensure currentSource is cleared when queue is empty
+        return;
+      }
+
+      // Check playbackContext state
+      if (!playbackContext || playbackContext.state === 'closed') {
+        console.error("playNextInQueue: playbackContext is not available or closed. Cannot play audio.");
+        // Clear queue as we can't process it
+        audioQueue.length = 0;
+        isPlaying = false;
+        currentSource = null;
+        return;
+      }
+      
+      if (playbackContext.state === 'suspended') {
+        console.warn("playNextInQueue: playbackContext is suspended. Attempting to resume.");
+        playbackContext.resume().then(() => {
+          console.log("Playback context resumed successfully.");
+          // Proceed with playback after resume
+          proceedWithPlayback();
+        }).catch(e => {
+          console.error("Error resuming playback context in playNextInQueue:", e);
+          isPlaying = false;
+          // Potentially clear queue or retry later if appropriate
+          return;
+        });
+      } else if (playbackContext.state === 'running') {
+        // Context is running, proceed directly
+        proceedWithPlayback();
+      } else {
+        console.error(`playNextInQueue: playbackContext in unexpected state: ${playbackContext.state}`);
+        isPlaying = false;
+        return;
+      }
+    }
+
+    function proceedWithPlayback() {
+      if (audioQueue.length === 0) {
+        isPlaying = false;
+        currentSource = null;
+        return;
+      }
+      
+      // Ensure playbackContext is running (it should be, due to checks in playNextInQueue)
+      if (!playbackContext || playbackContext.state !== 'running') {
+          console.error("proceedWithPlayback: playbackContext is not running. Aborting.");
+          audioQueue.length = 0;
+          isPlaying = false;
+          currentSource = null;
+          return;
+      }
+
+      // Ensure dynamicsCompressorNode and masterPlaybackGainNode are valid and connected.
+      if (!dynamicsCompressorNode || dynamicsCompressorNode.context.state !== 'running' ||
+          !masterPlaybackGainNode || masterPlaybackGainNode.context.state !== 'running') {
+        console.warn("proceedWithPlayback: Audio chain nodes are invalid or context closed. Re-establishing chain.");
+        
+        dynamicsCompressorNode = playbackContext.createDynamicsCompressor();
+        // (Apply default or custom compressor settings if needed)
+        masterPlaybackGainNode = playbackContext.createGain();
+        masterPlaybackGainNode.gain.value = isSpeakerMuted ? 0 : 5;
+        
+        dynamicsCompressorNode.connect(masterPlaybackGainNode);
+        masterPlaybackGainNode.connect(playbackContext.destination);
+        console.log("Audio chain (compressor, gain) re-established in proceedWithPlayback.");
+      }
+
+      isPlaying = true;
+      const bufferToPlay = audioQueue.shift();
+      
+      const source = playbackContext.createBufferSource();
+      currentSource = source;
+      source.buffer = bufferToPlay;
+
+      // Connect the source to the dynamicsCompressorNode.
+      // The chain (compressor -> gain -> destination) should be intact from setupAudio or the re-establishment block above.
+      if (dynamicsCompressorNode && dynamicsCompressorNode.context.state === 'running') {
+        source.connect(dynamicsCompressorNode);
+      } else {
+        // This is a critical failure if compressor is still not available.
+        console.error("proceedWithPlayback: CRITICAL - dynamicsCompressorNode is not available for connection even after checks. Audio will likely fail or be incorrect.");
+        // As a last resort, try connecting to destination, though this bypasses effects.
+        if (masterPlaybackGainNode && masterPlaybackGainNode.context.state === 'running') {
+             console.warn("proceedWithPlayback: Connecting source directly to masterPlaybackGainNode (bypassing compressor).");
+            source.connect(masterPlaybackGainNode);
+        } else if (playbackContext.destination) { // Check playbackContext.destination directly
+            console.warn("proceedWithPlayback: Connecting source directly to destination (bypassing compressor and gain).");
+            source.connect(playbackContext.destination);
+        } else {
+             console.error("proceedWithPlayback: No valid audio output path available. Cannot play.");
+             isPlaying = false;
+             return;
+        }
+      }
+
+      source.onended = () => {
+        if (currentSource === source) { // Ensure it's the same source that ended
+            currentSource = null;
+        }
+        playNextInQueue(); // Play the next item in the queue
+      };
+
+      try {
+        source.start();
+      } catch (e) {
+        console.error("Error starting audio source:", e);
+        currentSource = null;
+        isPlaying = false;
+        setTimeout(playNextInQueue, 50);
+      }
+    }
+
+    function setStatus(message) {
+      // Check if we're showing a loading state
+      if (message.includes("Connecting") || message.includes("Setting up") || message.includes("Reconnecting")) {
+        statusEl.innerHTML = message + ' <div class="loading-dots"><span></span><span></span><span></span></div>';
+        document.getElementById("empty-state-image").style.display = "none";
+        document.getElementById("empty-state-prompt").style.display = "none";
+      } else {
+        if (message === "Microphone connected. You can speak now!" && chatContainer.querySelectorAll('.message').length === 0) {
+          statusEl.innerHTML = ''; // Clear the status message text
+          document.getElementById("empty-state-image").style.display = "block";
+          document.getElementById("empty-state-prompt").style.display = "block";
+        } else {
+          statusEl.textContent = message; // Show other status messages
+          document.getElementById("empty-state-image").style.display = "none";
+          document.getElementById("empty-state-prompt").style.display = "none";
+        }
+      }
+      
+      // Ensure the welcome-state container itself is visible if it's supposed to show a status
+      if (chatContainer.querySelectorAll('.message').length === 0) {
+        document.getElementById("welcome-state").style.display = "flex";
+      }
+
+      // Add a subtle animation
+      statusEl.style.animation = 'none';
+      setTimeout(() => {
+        statusEl.style.animation = 'fadeIn 0.3s ease-out forwards';
+      }, 10);
+      
+      // Make sure status is visible
+      statusEl.style.display = 'block';
+    }
+
+    document.getElementById("start").onclick = start;
+    document.getElementById("stop").onclick = stop;
+    
+    // Speaker toggle functionality
+    document.getElementById("speaker-toggle").onclick = function() {
+      isSpeakerMuted = !isSpeakerMuted;
+      
+      // Toggle muted class for visual feedback
+      this.classList.toggle("muted");
+      
+      // Update icon to show muted/unmuted state
+      const speakerButton = this; // The button element itself
+      if (isSpeakerMuted) {
+        speakerButton.innerHTML = svgVolumeOff;
+      } else {
+        speakerButton.innerHTML = svgVolumeOn;
+      }
+      // Update the master gain node's value
+      if (masterPlaybackGainNode && masterPlaybackGainNode.context.state === 'running') {
+        masterPlaybackGainNode.gain.value = isSpeakerMuted ? 0 : 5;
+      } else {
+        console.error("Cannot set speaker volume: masterPlaybackGainNode is invalid or context closed (speaker toggle).");
+        // Attempt to re-establish the full audio chain if playbackContext is available and running.
+        if (playbackContext && playbackContext.state === 'running') {
+            console.warn("MasterPlaybackGainNode invalid in speaker toggle. Re-establishing full audio chain.");
+            
+            dynamicsCompressorNode = playbackContext.createDynamicsCompressor();
+            // (Apply any specific compressor settings if necessary)
+
+            masterPlaybackGainNode = playbackContext.createGain();
+            masterPlaybackGainNode.gain.value = isSpeakerMuted ? 0 : 5;
+            
+            // Reconnect chain: compressor -> gain -> destination
+            dynamicsCompressorNode.connect(masterPlaybackGainNode);
+            masterPlaybackGainNode.connect(playbackContext.destination);
+            console.log("Full audio chain re-established in speaker toggle.");
+        } else {
+            console.error("Cannot re-establish audio chain in speaker toggle: playbackContext not available/running.");
+        }
+      }
+    };
+    
+    
+    // Microphone toggle functionality
+    let isMicMuted = false;
+    document.getElementById("mic-toggle").onclick = function() {
+      isMicMuted = !isMicMuted;
+      
+      // Toggle muted class for visual feedback
+      this.classList.toggle("muted");
+      
+      // Update icon to show muted/unmuted state
+      const micButton = this; // The button element itself
+      if (isMicMuted) {
+        micButton.innerHTML = svgMicOff;
+      } else {
+        micButton.innerHTML = svgMicOn;
+      }
+      
+      // Mute/unmute the microphone stream
+      if (mediaStream) {
+        mediaStream.getAudioTracks().forEach(track => {
+          track.enabled = !isMicMuted;
+        });
+      }
+    };
+    
+    // Overflow menu and clear history functionality removed.
+    
+    // Initial check is now handled above.
+    // The logic at the beginning of the script now handles showing/hiding the token form
+    // based on URL params.
+    // Automatically start the connection when the entire page (including resources) has loaded
+    window.onload = function() {
+      // Using a small timeout can sometimes help ensure everything is settled
+      setTimeout(start, 100);
+    };
+  </script>
+</body>
+</html>
