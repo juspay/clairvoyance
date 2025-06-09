@@ -5,14 +5,169 @@ import time
 import traceback
 from fastapi import WebSocket, WebSocketDisconnect
 from google.genai import types
+from datetime import datetime as dt, time as dt_time, timezone as dt_timezone
+import pytz
+
 
 from app.core.config import PING_INTERVAL, FRAME_SIZE, SAMPLE_RATE
 from app.services.gemini_service import create_gemini_session, close_gemini_session, process_tool_calls
+from app.server.breeze_auth import validate_euler_auth, fetch_breeze_token, ValidateEulerAuthStatus, FetchTokenStatus
+from app.server.juspay_metrics import (
+    # get_success_rate, # No longer calling individual functions
+    # get_payment_method_wise_sr,
+    # get_failure_transactional_data,
+    # get_success_transactional_data,
+    # get_gmv_order_value_payment_method_wise,
+    # get_average_ticket_payment_wise,
+    get_cumulative_juspay_analytics, # Import the new aggregator
+    JuspayAPIError
+)
+from app.server.shops import fetch_shop_data, Shop # Import Shop for type hinting
+from app.server.breeze_metrics import get_breeze_analytics, BreezeAnalyticsError
 
 logger = logging.getLogger(__name__)
 
 active_connections = set()
 shutdown_event = asyncio.Event() # This might be better managed at the app level
+
+
+async def _perform_pre_gemini_calls(token: str, session_id: str):
+    """
+    Performs a series of API calls before Gemini initialization for non-test mode.
+    Logs results and handles errors gracefully.
+    Returns a dictionary with stringified analytics data and current timestamp.
+    """
+    # logger.info(f"[{session_id}] Performing pre-Gemini API calls...") # Overall marker
+    merchant_id_found: str | None = None
+    actual_breeze_token: str | None = None
+    shop_details_list: list[Shop] | None = None
+    
+    # Initialize return values
+    juspay_analytics_str: Optional[str] = None
+    breeze_analytics_str: Optional[str] = None
+    current_kolkata_time_str: Optional[str] = None
+
+    # Step 1: Validate Euler Auth
+    try:
+        # logger.info(f"[{session_id}] Step 1: Validating Euler auth token...")
+        euler_auth_result = await validate_euler_auth(token=token)
+        if euler_auth_result.status == ValidateEulerAuthStatus.SUCCESS:
+            merchant_id_found = euler_auth_result.merchant_id
+            # logger.info(f"[{session_id}] Euler auth successful. Merchant ID: {merchant_id_found}")
+        else:
+            logger.error(f"[{session_id}] Euler auth failed: {euler_auth_result.status} - {getattr(euler_auth_result, 'message', 'No message')}")
+    except Exception as e:
+        logger.error(f"[{session_id}] Exception during Euler auth validation: {e}", exc_info=True)
+
+    # Step 2: Call Cumulative Juspay Metrics function
+    start_time_iso_str: Optional[str] = None
+    end_time_iso_str: Optional[str] = None
+    try:
+        # logger.info(f"[{session_id}] Step 2: Fetching cumulative Juspay metrics...")
+        ist_timezone = pytz.timezone("Asia/Kolkata")
+        now_ist = dt.now(ist_timezone)
+        current_kolkata_time_str = now_ist.strftime('%Y-%m-%d %H:%M:%S %Z%z') # For system prompt
+
+        end_time_utc = now_ist.astimezone(dt_timezone.utc)
+        end_time_iso_str = end_time_utc.strftime('%Y-%m-%dT%H:%M:%SZ')
+        start_of_day_ist = ist_timezone.localize(dt.combine(now_ist.date(), dt_time.min))
+        start_time_utc = start_of_day_ist.astimezone(dt_timezone.utc)
+        start_time_iso_str = start_time_utc.strftime('%Y-%m-%dT%H:%M:%SZ')
+        
+        # logger.info(f"[{session_id}] Calculated time range for metrics: Start='{start_time_iso_str}', End='{end_time_iso_str}'")
+
+        _cumulative_juspay_analytics_obj = await get_cumulative_juspay_analytics(
+            login_token=token,
+            start_time_iso=start_time_iso_str,
+            end_time_iso=end_time_iso_str
+        )
+        if _cumulative_juspay_analytics_obj:
+            juspay_analytics_str = _cumulative_juspay_analytics_obj.model_dump_json(indent=2)
+            logger.info(f"[{session_id}] Full Cumulative Juspay Analytics Data:\n{juspay_analytics_str}")
+            if _cumulative_juspay_analytics_obj.errors:
+                logger.error(f"[{session_id}] Errors during cumulative Juspay analytics fetching: {_cumulative_juspay_analytics_obj.errors}")
+        else:
+            logger.error(f"[{session_id}] get_cumulative_juspay_analytics returned None or empty.")
+            juspay_analytics_str = "{}"
+
+
+    except JuspayAPIError as e:
+        logger.error(f"[{session_id}] JuspayAPIError calling get_cumulative_juspay_analytics: {e}")
+    except ValueError as e:
+        logger.error(f"[{session_id}] ValueError for get_cumulative_juspay_analytics: {e}")
+    except Exception as e:
+        logger.error(f"[{session_id}] Unexpected error during cumulative Juspay metrics call: {e}", exc_info=True)
+
+    # Step 3: Fetch Shop Data
+    if merchant_id_found:
+        try:
+            # logger.info(f"[{session_id}] Step 3: Fetching shop data for merchant ID: {merchant_id_found}...")
+            shop_response_obj = await fetch_shop_data(merchant_id=merchant_id_found)
+            if shop_response_obj and shop_response_obj.shops:
+                shop_details_list = shop_response_obj.shops
+                # logger.info(f"[{session_id}] Shop data fetched successfully. Shops found: {len(shop_details_list)}")
+            # else:
+                # logger.warning(f"[{session_id}] Failed to fetch shop data or no shops found for merchant ID: {merchant_id_found}.")
+        except Exception as e:
+            logger.error(f"[{session_id}] Exception during shop data fetching: {e}", exc_info=True)
+    # else:
+        # logger.warning(f"[{session_id}] Step 3: Skipped fetching shop data as merchant ID was not found.")
+
+    # Step 4: Fetch Breeze Token
+    try:
+        # logger.info(f"[{session_id}] Step 4: Fetching Breeze token...")
+        breeze_token_result = await fetch_breeze_token(platform_token=token)
+        if breeze_token_result.status == FetchTokenStatus.SUCCESS and hasattr(breeze_token_result, 'token'):
+            actual_breeze_token = breeze_token_result.token
+            # logger.info(f"[{session_id}] Breeze token fetched successfully: Token ending with ...{actual_breeze_token[-6:]}")
+        # else:
+            # logger.error(f"[{session_id}] Failed to fetch Breeze token: {breeze_token_result.status} - {getattr(breeze_token_result, 'message', 'No message')}")
+    except Exception as e:
+        logger.error(f"[{session_id}] Exception during Breeze token fetching: {e}", exc_info=True)
+
+    # Step 5: Fetch Breeze Analytics
+    if actual_breeze_token and shop_details_list and len(shop_details_list) > 0:
+        first_shop = shop_details_list[0]
+        if start_time_iso_str and end_time_iso_str:
+            try:
+                # logger.info(f"[{session_id}] Step 5: Fetching Breeze analytics for shop ID: {first_shop.id}...")
+                breeze_analytics_data_raw = await get_breeze_analytics(
+                    breeze_token=actual_breeze_token,
+                    start_time_iso=start_time_iso_str,
+                    end_time_iso=end_time_iso_str,
+                    shop_id=first_shop.id,
+                    shop_url=first_shop.url,
+                    shop_type=first_shop.type
+                )
+                if breeze_analytics_data_raw: # This is already a dict
+                    breeze_analytics_str = json.dumps(breeze_analytics_data_raw, indent=2)
+                    logger.info(f"[{session_id}] Full Breeze Analytics Raw Data:\n{breeze_analytics_str}")
+                else:
+                    logger.warning(f"[{session_id}] Failed to fetch Breeze analytics or no raw data returned.")
+                    breeze_analytics_str = "{}"
+            except BreezeAnalyticsError as e:
+                logger.error(f"[{session_id}] BreezeAnalyticsError fetching analytics: {e}")
+            except ValueError as e:
+                 logger.error(f"[{session_id}] ValueError for Breeze analytics (likely missing params): {e}")
+            except Exception as e:
+                logger.error(f"[{session_id}] Unexpected error fetching Breeze analytics: {e}", exc_info=True)
+        # else:
+            # logger.warning(f"[{session_id}] Step 5: Skipped fetching Breeze analytics as time range was not determined from Step 2.")
+    # else:
+        # missing_prereqs = []
+        # if not actual_breeze_token: missing_prereqs.append("actual Breeze token")
+        # if not shop_details_list or len(shop_details_list) == 0: missing_prereqs.append("shop details")
+        # logger.warning(f"[{session_id}] Step 5: Skipped fetching Breeze analytics due to missing prerequisites: {', '.join(missing_prereqs)}.")
+        if not breeze_analytics_str: breeze_analytics_str = "{}"
+
+
+    logger.info(f"[{session_id}] Pre-Gemini API calls completed.")
+    return {
+        "juspay_analytics_str": juspay_analytics_str if juspay_analytics_str else "{}",
+        "breeze_analytics_str": breeze_analytics_str if breeze_analytics_str else "{}",
+        "current_kolkata_time_str": current_kolkata_time_str if current_kolkata_time_str else "Not available"
+    }
+
 
 async def handle_websocket_session(websocket: WebSocket):
     session_id = f"session_{len(active_connections) + 1}_{int(time.time())}"
@@ -56,10 +211,21 @@ async def handle_websocket_session(websocket: WebSocket):
                 break
 
     try:
-        logger.info(f"[{session_id}] Test mode active: {is_test_mode}")
-        gemini_session, gemini_session_cm = await create_gemini_session(test_mode=is_test_mode)
+        pre_gemini_data = None
+        if not is_test_mode:
+            # Perform pre-Gemini calls only if not in test mode
+            pre_gemini_data = await _perform_pre_gemini_calls(token=websocket.state.juspay_token, session_id=session_id)
+        
+        logger.info(f"[{session_id}] Test mode active: {is_test_mode}. Proceeding to create Gemini session.")
+        gemini_session, gemini_session_cm = await create_gemini_session(
+            test_mode=is_test_mode,
+            # Pass pre_gemini_data only if it's not None, otherwise pass None for each individual key
+            current_kolkata_time_str=pre_gemini_data.get("current_kolkata_time_str") if pre_gemini_data else None,
+            juspay_analytics_str=pre_gemini_data.get("juspay_analytics_str") if pre_gemini_data else None,
+            breeze_analytics_str=pre_gemini_data.get("breeze_analytics_str") if pre_gemini_data else None
+        )
     except Exception as e:
-        logger.error(f"[{session_id}] Failed to establish Gemini session: {e}")
+        logger.error(f"[{session_id}] Failed to establish Gemini session (or error during pre-calls): {e}")
         await websocket.send_text(json.dumps({"type": "error", "message": "Failed to connect to Gemini"}))
         if websocket in active_connections: active_connections.remove(websocket)
         await websocket.close()
