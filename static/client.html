@@ -583,15 +583,43 @@
     
     // Store the user's token
     let userToken = '';
+    let shopId = '';
+    let shopUrl = '';
+    let shopType = '';
+    let merchantId = '';
 
     // Check for token in URL parameters first
     const urlParams = new URLSearchParams(window.location.search);
     const tokenFromUrl = urlParams.get('token');
+    const shopIdFromUrl = urlParams.get('shopId');
+    const shopUrlFromUrl = urlParams.get('shopUrl');
+    const shopTypeFromUrl = urlParams.get('shopType');
+    const merchantIdFromUrl = urlParams.get('merchantId');
 
     if (tokenFromUrl && tokenFromUrl.trim() !== '') {
       userToken = tokenFromUrl.trim();
     } else {
       userToken = '';
+    }
+    if (shopIdFromUrl && shopIdFromUrl.trim() !== '') {
+      shopId = shopIdFromUrl.trim();
+    } else {
+      shopId = '';
+    }
+    if (shopUrlFromUrl && shopUrlFromUrl.trim() !== '') {
+      shopUrl = shopUrlFromUrl.trim();
+    } else {
+      shopUrl = '';
+    }
+    if (shopTypeFromUrl && shopTypeFromUrl.trim() !== '') {
+      shopType = shopTypeFromUrl.trim();
+    } else {
+      shopType = '';
+    }
+    if (merchantIdFromUrl && merchantIdFromUrl.trim() !== '') {
+      merchantId = merchantIdFromUrl.trim();
+    } else {
+      merchantId = '';
     }
 
     // App is always visible now
@@ -750,7 +778,7 @@
       
       isConnecting = true;
       // Use the user-provided token in the WebSocket connection
-      ws = new WebSocket(`ws://localhost:8000/ws/live?token=${encodeURIComponent(userToken)}`);
+      ws = new WebSocket(`ws://localhost:8000/ws/live?token=${encodeURIComponent(userToken)}&shopId=${encodeURIComponent(shopId)}&shopUrl=${encodeURIComponent(shopUrl)}&shopType=${encodeURIComponent(shopType)}&merchantId=${encodeURIComponent(merchantId)}`);
       ws.binaryType = "arraybuffer";
 
       ws.onopen = () => {
