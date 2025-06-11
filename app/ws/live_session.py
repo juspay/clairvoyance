@@ -24,6 +24,7 @@ from app.server.juspay_metrics import (
 )
 from app.server.shops import fetch_shop_data, Shop # Import Shop for type hinting
 from app.server.breeze_metrics import get_breeze_analytics, BreezeAnalyticsError
+from app.data.dummy.analytics_data import dummy_juspay_analytics, dummy_breeze_analytics
 
 logger = logging.getLogger(__name__)
 
@@ -174,14 +175,14 @@ async def handle_websocket_session(websocket: WebSocket):
     token = websocket.query_params.get("token")
     testmode_param = websocket.query_params.get("testmode", "false").lower()
     is_test_mode = testmode_param == "true"
+    isTokenPresent = True
 
     if not token:
-        logger.error(f"[{session_id}] Missing Juspay token in WebSocket connection")
-        await websocket.close(code=4001, reason="Missing Juspay token")
-        return
+        logger.warning(f"[{session_id}] Missing Juspay token in WebSocket connection")
+        isTokenPresent = False
 
     await websocket.accept()
-    logger.info(f"[{session_id}] WebSocket connection established. Token received.")
+    logger.info(f"[{session_id}] WebSocket connection established. Token received. {token}")
     active_connections.add(websocket)
     
     # Store token and session_id in websocket.state for access in other parts (like tool calls)
@@ -213,9 +214,18 @@ async def handle_websocket_session(websocket: WebSocket):
     try:
         pre_gemini_data = None
         if not is_test_mode:
-            # Perform pre-Gemini calls only if not in test mode
-            pre_gemini_data = await _perform_pre_gemini_calls(token=websocket.state.juspay_token, session_id=session_id)
-        
+            if(isTokenPresent):
+                # Perform pre-Gemini calls only if not in test mode
+                pre_gemini_data = await _perform_pre_gemini_calls(token=websocket.state.juspay_token, session_id=session_id)
+            else:
+                ist_timezone = pytz.timezone("Asia/Kolkata")
+                now_ist = dt.now(ist_timezone)
+                pre_gemini_data = {
+                    "juspay_analytics_str": dummy_juspay_analytics,
+                    "breeze_analytics_str": dummy_breeze_analytics,
+                    "current_kolkata_time_str": now_ist.strftime('%Y-%m-%d %H:%M:%S %Z%z')
+                }
+                
         logger.info(f"[{session_id}] Test mode active: {is_test_mode}. Proceeding to create Gemini session.")
         gemini_session, gemini_session_cm = await create_gemini_session(
             test_mode=is_test_mode,
