@@ -4,7 +4,6 @@ import logging
 import json
 from typing import Optional, Dict, Any, Union, List
 from datetime import datetime as dt
-import pytz
 from pydantic import BaseModel, Field # For new Pydantic models
 
 from app.core.config import GENIUS_API_URL
@@ -430,76 +429,3 @@ async def get_cumulative_juspay_analytics(
         results.errors.append(f"Unexpected data format for average ticket size: {type(avg_ticket_result)}")
 
     return results
-
-# Example usage (for testing, can be removed or kept under if __name__ == "__main__":)
-# async def main():
-#     # Replace with a valid token
-#     test_token = "your_x_web_logintoken_here"
-#     if test_token == "your_x_web_logintoken_here":
-#         print("Please replace 'your_x_web_logintoken_here' with a valid token to test.")
-#         return
-
-#     print("\n--- Testing get_success_rate ---")
-#     try:
-#         # Test with specific time
-#         # yesterday = dt.now(pytz.timezone("Asia/Kolkata")) - timedelta(days=1)
-#         # start_iso = yesterday.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
-#         # end_iso = yesterday.replace(hour=23, minute=59, second=59, microsecond=999999).isoformat()
-#         # result_sr = await get_success_rate(test_token, start_iso, end_iso)
-#         # Test with default time (today)
-#         result_sr = await get_success_rate(test_token)
-#         print(f"Success Rate: {json.dumps(result_sr, indent=2)}")
-#     except (JuspayAPIError, ValueError) as e:
-#         print(f"Error: {e}")
-
-#     print("\n--- Testing get_payment_method_wise_sr ---")
-#     try:
-#         result_pm_sr = await get_payment_method_wise_sr(test_token)
-#         print(f"Payment Method Wise SR: {json.dumps(result_pm_sr, indent=2)}")
-#     except (JuspayAPIError, ValueError) as e:
-#         print(f"Error: {e}")
-
-#     print("\n--- Testing get_failure_transactional_data ---")
-#     try:
-#         result_fail_data = await get_failure_transactional_data(test_token)
-#         print(f"Failure Transactional Data: {json.dumps(result_fail_data, indent=2)}")
-#     except (JuspayAPIError, ValueError) as e:
-#         print(f"Error: {e}")
-
-    # Add more test calls for other functions if needed...
-
-# if __name__ == "__main__":
-#     # Replace with a valid token and actual times for testing
-#     test_token = "your_x_web_logintoken_here"
-#     # Get current time and yesterday for example
-#     from datetime import datetime, timedelta, timezone
-#     now_utc = datetime.now(timezone.utc)
-#     yesterday_utc = now_utc - timedelta(days=1)
-#     start_time_str = yesterday_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
-#     end_time_str = now_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
-
-#     if test_token == "your_x_web_logintoken_here":
-#         print("Please replace 'your_x_web_logintoken_here' with a valid token to test.")
-#         return
-
-#     try:
-#         print(f"Fetching success rate for token: {test_token[:10]}...")
-#         print(f"Start: {start_time_str}, End: {end_time_str}")
-#         result = await get_today_success_rate(
-#             login_token=test_token,
-#             start_time_iso=start_time_str,
-#             end_time_iso=end_time_str
-#         )
-#         print("Juspay Success Rate API Response:")
-#         import json
-#         print(json.dumps(result, indent=2))
-#     except ValueError as ve:
-#         print(f"Input Error: {ve}")
-#     except JuspayAPIError as e:
-#         print(f"API Error: {e}")
-#     except Exception as e:
-#         print(f"An unexpected error occurred: {e}")
-
-# if __name__ == "__main__":
-#     import asyncio
-#     asyncio.run(main())

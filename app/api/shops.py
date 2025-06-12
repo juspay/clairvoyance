@@ -1,6 +1,6 @@
 import httpx
 import logging
-from typing import List, Optional, Dict, Any
+from typing import List, Optional
 from pydantic import BaseModel, Field
 
 # Configure logging
