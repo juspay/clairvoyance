@@ -25,10 +25,5 @@ SAMPLE_RATE = 16000
 FRAME_DURATION = 30  # ms
 FRAME_SIZE = int(SAMPLE_RATE * FRAME_DURATION / 1000) * 2  # bytes per frame (16-bit PCM)
 
-# Feature flag for V2 flow
-ENABLE_SIMPLE_V2_FLOW_STR = os.environ.get("ENABLE_SIMPLE_V2_FLOW", "False")
-ENABLE_SIMPLE_V2_FLOW = ENABLE_SIMPLE_V2_FLOW_STR.lower() in ('true', '1', 't')
-
 logger.info(f"Using model: {MODEL}")
 logger.info(f"Using response modality: {RESPONSE_MODALITY}")
-logger.info(f"Enable Simple V2 Flow: {ENABLE_SIMPLE_V2_FLOW}")
