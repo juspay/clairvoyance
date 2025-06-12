@@ -7,6 +7,7 @@ from fastapi import WebSocket, WebSocketDisconnect
 from google.genai import types
 from datetime import datetime as dt, time as dt_time, timezone as dt_timezone
 import pytz
+from typing import Optional
 
 
 from app.core.config import PING_INTERVAL, FRAME_SIZE, SAMPLE_RATE
@@ -32,33 +33,35 @@ active_connections = set()
 shutdown_event = asyncio.Event() # This might be better managed at the app level
 
 
-async def _perform_pre_gemini_calls(token: str, session_id: str):
+async def _perform_pre_gemini_calls(token: str, session_id: str, shop_id: Optional[str], shop_url: Optional[str], shop_type: Optional[str], merchant_id: Optional[str]) -> dict:
     """
     Performs a series of API calls before Gemini initialization for non-test mode.
     Logs results and handles errors gracefully.
     Returns a dictionary with stringified analytics data and current timestamp.
     """
     # logger.info(f"[{session_id}] Performing pre-Gemini API calls...") # Overall marker
-    merchant_id_found: str | None = None
+    merchant_id_found: str | None = merchant_id
     actual_breeze_token: str | None = None
     shop_details_list: list[Shop] | None = None
+    logger.info(f"[{session_id}] Starting pre-Gemini API calls with token: {token}, shop_id: {shop_id}, shop_url: {shop_url}, shop_type: {shop_type}, merchant_id: {merchant_id_found}")
     
     # Initialize return values
     juspay_analytics_str: Optional[str] = None
     breeze_analytics_str: Optional[str] = None
     current_kolkata_time_str: Optional[str] = None
 
-    # Step 1: Validate Euler Auth
-    try:
-        # logger.info(f"[{session_id}] Step 1: Validating Euler auth token...")
-        euler_auth_result = await validate_euler_auth(token=token)
-        if euler_auth_result.status == ValidateEulerAuthStatus.SUCCESS:
-            merchant_id_found = euler_auth_result.merchant_id
-            # logger.info(f"[{session_id}] Euler auth successful. Merchant ID: {merchant_id_found}")
-        else:
-            logger.error(f"[{session_id}] Euler auth failed: {euler_auth_result.status} - {getattr(euler_auth_result, 'message', 'No message')}")
-    except Exception as e:
-        logger.error(f"[{session_id}] Exception during Euler auth validation: {e}", exc_info=True)
+    if not merchant_id_found:
+        # Step 1: Validate Euler Auth
+        try:
+            # logger.info(f"[{session_id}] Step 1: Validating Euler auth token...")
+            euler_auth_result = await validate_euler_auth(token=token)
+            if euler_auth_result.status == ValidateEulerAuthStatus.SUCCESS:
+                merchant_id_found = euler_auth_result.merchant_id
+                # logger.info(f"[{session_id}] Euler auth successful. Merchant ID: {merchant_id_found}")
+            else:
+                logger.error(f"[{session_id}] Euler auth failed: {euler_auth_result.status} - {getattr(euler_auth_result, 'message', 'No message')}")
+        except Exception as e:
+            logger.error(f"[{session_id}] Exception during Euler auth validation: {e}", exc_info=True)
 
     # Step 2: Call Cumulative Juspay Metrics function
     start_time_iso_str: Optional[str] = None
@@ -99,8 +102,11 @@ async def _perform_pre_gemini_calls(token: str, session_id: str):
     except Exception as e:
         logger.error(f"[{session_id}] Unexpected error during cumulative Juspay metrics call: {e}", exc_info=True)
 
-    # Step 3: Fetch Shop Data
-    if merchant_id_found:
+    # Step 3: Fetch or Use Provided Shop Data
+    if shop_id and shop_url and shop_type:
+        logger.info(f"[{session_id}] Using shop details from query parameters.")
+        shop_details_list = [Shop(id=shop_id, url=shop_url, type=shop_type)]
+    elif merchant_id_found:
         try:
             # logger.info(f"[{session_id}] Step 3: Fetching shop data for merchant ID: {merchant_id_found}...")
             shop_response_obj = await fetch_shop_data(merchant_id=merchant_id_found)
@@ -215,8 +221,14 @@ async def handle_websocket_session(websocket: WebSocket):
         pre_gemini_data = None
         if not is_test_mode:
             if(isTokenPresent):
+                # Extract shop details from query parameters
+                shop_id = websocket.query_params.get("shopId")
+                shop_url = websocket.query_params.get("shopUrl")
+                shop_type = websocket.query_params.get("shopType")
+                merchant_id = websocket.query_params.get("merchantId")
+
                 # Perform pre-Gemini calls only if not in test mode
-                pre_gemini_data = await _perform_pre_gemini_calls(token=websocket.state.juspay_token, session_id=session_id)
+                pre_gemini_data = await _perform_pre_gemini_calls(token=websocket.state.juspay_token, session_id=session_id, shop_id=shop_id, shop_url=shop_url, shop_type=shop_type, merchant_id=merchant_id)
             else:
                 ist_timezone = pytz.timezone("Asia/Kolkata")
                 now_ist = dt.now(ist_timezone)
