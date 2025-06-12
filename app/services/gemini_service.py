@@ -64,6 +64,8 @@ BASE_SYSTEM_INSTRUCTION_TEXT = (
     "Continue to use the retained context in follow-up interactions unless the user explicitly changes it. For example, if the user initially asks about \"last week's sales,\" subsequent queries like \"What about returns?\" should default to the same time frame.\n"
     "If there's ambiguity or a potential shift in context, seek clarification to ensure accurate and relevant responses.\n"
     "Clearly inform the user when the context has been updated or changed based on their input.\n"
+    "If user asks for any data and do not specify source (Breeze or Juspay), assume Breeze as the default source. If data is not exists in Breeze, then fallback to Juspay data.\n"
+    "when token is not present and using dummy data, respond: \"To help you experience Breeze Automatic, sample data is provided for just today. For the complete experience, please log in with your merchant account.\"\n"
 )
 
 _STATIC_SYSTEM_INSTRUCTION_TAIL = (
