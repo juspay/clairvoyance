@@ -4,6 +4,7 @@ import logging
 import time
 import traceback
 from fastapi import WebSocket, WebSocketDisconnect
+from starlette.websockets import WebSocketState
 from google.genai import types
 from datetime import datetime as dt, time as dt_time, timezone as dt_timezone, timedelta
 import pytz
@@ -207,8 +208,8 @@ async def handle_websocket_session(websocket: WebSocket):
             ist_timezone = pytz.timezone("Asia/Kolkata")
             now_ist = dt.now(ist_timezone)
             pre_gemini_data = {
-                "juspay_analytics_today_str": dummy_juspay_analytics_today, # Retaining for any case if needed
-                "breeze_analytics_today_str": dummy_breeze_analytics_today, # Retaining for any case if needed
+                "juspay_analytics_today_str": dummy_juspay_analytics_today,
+                "breeze_analytics_today_str": dummy_breeze_analytics_today,
                 "juspay_analytics_weekly_str": dummy_juspay_analytics_weekly,
                 "breeze_analytics_weekly_str": dummy_breeze_analytics_weekly,
                 "current_kolkata_time_str": now_ist.strftime('%Y-%m-%d %H:%M:%S %Z%z')
@@ -216,7 +217,12 @@ async def handle_websocket_session(websocket: WebSocket):
         else:
             # Perform pre-Gemini calls only if not in test mode and token is present
             pre_gemini_data = await _perform_pre_gemini_calls(token=websocket.state.juspay_token, session_id=session_id)
-                
+
+        # Check for disconnection after long-running analytics call
+        if websocket.client_state != WebSocketState.CONNECTED:
+            logger.warning(f"[{session_id}] Client disconnected during analytics fetch. Aborting session.")
+            return
+
         logger.info(f"[{session_id}] Proceeding to create Gemini session.")
         gemini_session, gemini_session_cm = await create_gemini_session(
             use_dummy_data=use_dummy_data,
@@ -226,11 +232,33 @@ async def handle_websocket_session(websocket: WebSocket):
             juspay_analytics_weekly_str=pre_gemini_data.get("juspay_analytics_weekly_str") if pre_gemini_data else None,
             breeze_analytics_weekly_str=pre_gemini_data.get("breeze_analytics_weekly_str") if pre_gemini_data else None
         )
+
+        # Check for disconnection after Gemini session creation
+        if websocket.client_state != WebSocketState.CONNECTED:
+            logger.warning(f"[{session_id}] Client disconnected during Gemini session creation. Aborting and cleaning up session.")
+            await close_gemini_session(gemini_session_cm)
+            return
+
+        logger.info(f"[{session_id}] Gemini session created successfully. Sending initialization_done event.")
+        await websocket.send_text(json.dumps({"type": "initialization_done"}))
+
+    except (WebSocketDisconnect, RuntimeError) as e:
+        # This will catch cases where the client disconnects while we are trying to send/receive
+        if isinstance(e, RuntimeError) and "close message has been sent" in str(e).lower():
+            logger.warning(f"[{session_id}] Attempted to operate on a closed websocket during initialization.")
+        else:
+            logger.info(f"[{session_id}] Client disconnected during initialization. Aborting.")
+        # The 'finally' block will handle cleanup, so we just need to exit the function.
+        return
     except Exception as e:
-        logger.error(f"[{session_id}] Failed to establish Gemini session (or error during pre-calls): {e}")
-        await websocket.send_text(json.dumps({"type": "error", "message": "Failed to connect to Gemini"}))
-        if websocket in active_connections: active_connections.remove(websocket)
-        await websocket.close()
+        logger.error(f"[{session_id}] A critical error occurred during session initialization: {e}", exc_info=True)
+        # Try to inform the client, but expect it might fail if the connection is the issue
+        try:
+            if websocket.client_state == WebSocketState.CONNECTED:
+                await websocket.send_text(json.dumps({"type": "error", "message": "Failed to initialize session"}))
+        except (WebSocketDisconnect, RuntimeError):
+            logger.warning(f"[{session_id}] Client was already disconnected. Could not send initialization error.")
+        # The 'finally' block will handle cleanup
         return
 
     async def receive_from_client():
