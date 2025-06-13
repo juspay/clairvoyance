@@ -648,6 +648,7 @@
     
     // Track active session
     let isActiveSession = false;
+    let isInitialized = false;
 
     let playbackContext = null;
     const audioQueue = []; // Re-introduce the audio queue
@@ -733,6 +734,7 @@
     }
 
     function resetSession() {
+      isInitialized = false;
       currentSpeaker = null;
       currentUserMessageId = null;
       currentAssistantMessageId = null;
@@ -754,7 +756,7 @@
       ws.binaryType = "arraybuffer";
 
       ws.onopen = () => {
-        setStatus("Connected! Setting up microphone...");
+        setStatus("Initializing...");
         isConnecting = false;
         lastPongTime = Date.now();
         
@@ -891,6 +893,9 @@
               currentUserText = "";
               
               // Clear any partial transcription
+            } else if (msg.type === "initialization_done") {
+              isInitialized = true;
+              setStatus("Microphone connected. You can speak now!");
             }
           } catch (e) {
             console.error("Error parsing message:", e);
@@ -1117,7 +1122,7 @@
             sampleRate: INPUT_SAMPLE_RATE 
           } 
         });
-        setStatus("Microphone connected. You can speak now!");
+        // The status is now set when the 'initialization_done' event is received.
 
         const source = audioContext.createMediaStreamSource(mediaStream);
         processor = audioContext.createScriptProcessor(4096, 1, 1);
@@ -1144,7 +1149,7 @@
             const frame = buffer.slice(0, frameBytes);
             buffer = buffer.slice(frameBytes);
             const pcm = pcmEncoder(frame);
-            if (ws && ws.readyState === WebSocket.OPEN) {
+            if (ws && ws.readyState === WebSocket.OPEN && isInitialized) {
               try {
                 ws.send(pcm);
               } catch (error) {
