@@ -3,7 +3,7 @@ fastapi==0.115.12
 uvicorn==0.34.2
 
 # Google Generative AI
-google-genai==1.15.0
+google-genai>=1.14.0,<1.15.0
 
 # Async HTTP client
 aiohttp>=3.8.4
@@ -18,3 +18,11 @@ starlette>=0.27.0
 
 # Logging and environment
 python-dotenv>=1.0.0
+
+pipecat-ai[daily,google,assembly,silero,openai,azure]==0.0.71
+
+# Google Cloud Speech
+google-cloud-speech
+
+# Misc
+loguru

@@ -6,7 +6,7 @@ from typing import Optional
 from google import genai
 from google.genai import types
 
-from app.core.config import API_KEY, MODEL, RESPONSE_MODALITY
+from app.core.config import GEMINI_API_KEY as API_KEY, GEMINI_MODEL as  MODEL, RESPONSE_MODALITY
 # Updated import to use the new aggregated tool structures
 from app.tools import gemini_tools_for_api, all_tool_definitions_map
 
