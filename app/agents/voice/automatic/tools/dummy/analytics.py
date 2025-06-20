@@ -21,16 +21,6 @@ juspay_weekly = json.loads(dummy_juspay_analytics_weekly)
 breeze_weekly = json.loads(dummy_breeze_analytics_weekly)
 
 
-async def get_current_time(params: FunctionCallParams):
-    timezone_str = params.arguments.get("timezone", "Asia/Kolkata")
-    try:
-        tz = pytz.timezone(timezone_str)
-        current_time = datetime.now(tz).isoformat()
-        await params.result_callback({"time": current_time})
-    except Exception as e:
-        await params.result_callback({"error": str(e)})
-
-
 async def get_sr_success_rate_by_time(params: FunctionCallParams):
     await params.result_callback(juspay_today["overall_success_rate_data"])
 
@@ -139,18 +129,6 @@ time_input_schema = {
     },
     "required": ["startTime", "endTime"],
 }
-
-get_current_time_function = FunctionSchema(
-    name="get_current_time",
-    description="Get the current time in a specific timezone.",
-    properties={
-        "timezone": {
-            "type": "string",
-            "description": "Timezone (e.g., 'Asia/Kolkata')",
-        }
-    },
-    required=[],
-)
 
 get_sr_success_rate_function = FunctionSchema(
     name="get_sr_success_rate_by_time",
@@ -316,7 +294,6 @@ breeze_weekly_ad_spend_and_roas_function = FunctionSchema(
 
 tools = ToolsSchema(
     standard_tools=[
-        get_current_time_function,
         get_sr_success_rate_function,
         payment_method_wise_sr_function,
         failure_transactional_data_function,
@@ -345,7 +322,6 @@ tools = ToolsSchema(
 
 # A list of all tool functions for easy registration
 tool_functions = {
-    "get_current_time": get_current_time,
     "get_sr_success_rate_by_time": get_sr_success_rate_by_time,
     "get_payment_method_wise_sr_by_time": get_payment_method_wise_sr_by_time,
     "get_failure_transactional_data": get_failure_transactional_data,

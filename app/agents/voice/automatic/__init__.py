@@ -1,7 +1,6 @@
 import asyncio
 import sys
 import argparse
-
 from dotenv import load_dotenv
 from loguru import logger
 
@@ -34,6 +33,9 @@ async def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("-u", "--url", type=str, required=True, help="URL of the Daily room")
     parser.add_argument("-t", "--token", type=str, required=True, help="Daily token")
+    parser.add_argument("--mode", type=str, choices=["test", "live"], default="test", help="Mode (test or live)")
+    parser.add_argument("--euler-token", type=str, help="Euler token for live mode")
+    parser.add_argument("--breeze-token", type=str, help="Breeze token for live mode")
     args = parser.parse_args()
 
     transport = DailyTransport(
@@ -126,5 +128,14 @@ async def main():
         logger.info(f"Participant left: {participant['id']}")
         await task.cancel()
 
+    @task.event_handler("on_pipeline_cancelled")
+    async def on_pipeline_cancelled(task, frame):
+        logger.info("Pipeline task cancelled. Cancelling main task.")
+        main_task = asyncio.current_task()
+        main_task.cancel()
+
     runner = PipelineRunner()
-    await runner.run(task)
+    try:
+        await runner.run(task)
+    except asyncio.CancelledError:
+        logger.info("Main task cancelled. Exiting gracefully.")
