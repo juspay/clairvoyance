@@ -4,6 +4,7 @@ import subprocess
 from pathlib import Path
 from contextlib import asynccontextmanager
 from typing import Any, Dict
+from enum import Enum
 
 import aiohttp
 from fastapi import FastAPI, WebSocket, HTTPException, Request
@@ -28,11 +29,22 @@ def cleanup():
 
     Called during server shutdown.
     """
-    for entry in bot_procs.values():
-        proc = entry[0]
-        proc.terminate()
-        proc.wait()
-    logger.info("All bot processes terminated.")
+    logger.info(f"Attempting to terminate {len(bot_procs)} bot processes.")
+    for pid, (proc, room_url) in list(bot_procs.items()):
+        try:
+            if proc.poll() is None:
+                logger.info(f"Terminating process {pid} for room {room_url}...")
+                proc.terminate()
+                proc.wait()
+                logger.info(f"Process {pid} terminated successfully.")
+            else:
+                logger.info(f"Process {pid} for room {room_url} has already terminated.")
+        except Exception as e:
+            logger.error(f"Error terminating process {pid}: {e}", exc_info=True)
+        finally:
+            # Ensure the process is removed from the tracking dictionary
+            bot_procs.pop(pid, None)
+    logger.info("All bot processes have been handled.")
 
 
 @asynccontextmanager
@@ -81,41 +93,57 @@ async def websocket_endpoint(websocket: WebSocket):
     await handle_websocket_session(websocket)
 
 # Pipecat bot endpoint
+class Mode(Enum):
+    TEST = "test"
+    LIVE = "live"
+
 @app.post("/agent/voice/automatic")
-async def bot_connect(request: Request) -> Dict[Any, Any]:
-    """Connect endpoint that creates a room and returns connection credentials."""
-    logger.info("Received request to connect pipecat bot.")
+async def bot_connect(request: Request) -> Dict[str, Any]:
+    payload = await request.json()
+
+    logger.info(f"Received payload: {payload}")
+    # 1. Extract and validate mode, defaulting to TEST on any error
+    raw_mode = payload.get("mode", Mode.TEST.value)
     try:
-        room = await daily_helpers["rest"].create_room(DailyRoomParams())
-        if not room.url:
-            raise HTTPException(status_code=500, detail="Failed to create room")
+        mode = Mode(raw_mode)
+    except ValueError:
+        # Invalid or missing → fallback to TEST
+        mode = Mode.TEST
 
-        token = await daily_helpers["rest"].get_token(room.url)
-        if not token:
-            raise HTTPException(status_code=500, detail=f"Failed to get token for room: {room.url}")
+    euler_tok  = payload.get("eulerToken")
+    breeze_tok = payload.get("breezeToken")
 
-        logger.info(f"Created Daily room: {room.url}")
+    # 2. Create room + token
+    room  = await daily_helpers["rest"].create_room(DailyRoomParams())
+    token = await daily_helpers["rest"].get_token(room.url)
 
-        # Start the agent process
-        bot_file = "app.agents.voice.automatic"
-        command = f"python3 -m {bot_file} -u {room.url} -t {token}"
-        
-        logger.info(f"Launching agent process with command: {command}")
-        
-        proc = subprocess.Popen(
-            [command],
-            shell=True,
-            bufsize=1,
-            cwd=Path(__file__).parent.parent, # Run from project root
-        )
-        bot_procs[proc.pid] = (proc, room.url)
-        logger.info(f"Bot process started with PID: {proc.pid}")
+    # 3. Build command args list
+    bot_file = "app.agents.voice.automatic"
+    cmd = [
+        "python3", "-m", bot_file,
+        "-u", room.url,
+        "-t", token,
+        "--mode", mode.value,
+    ]
 
-        return {"room_url": room.url, "token": token}
+    # Only send external tokens when in LIVE mode
+    if mode is Mode.LIVE:
+        if euler_tok:
+            cmd += ["--euler-token", euler_tok]
+        if breeze_tok:
+            cmd += ["--breeze-token", breeze_tok]
 
-    except Exception as e:
-        logger.error(f"Failed to start bot subprocess: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to start subprocess: {e}")
+    # 4. Launch subprocess without shell
+    logger.info(f"Launching subprocess with command: {' '.join(cmd)}")
+    proc = subprocess.Popen(
+        cmd,
+        cwd=Path(__file__).parent.parent,
+        bufsize=1,
+    )
+    bot_procs[proc.pid] = (proc, room.url)
+    logger.info(f"Subprocess started with PID: {proc.pid}")
+
+    return {"room_url": room.url, "token": token}
 
 
 # Serve client.html at the root
