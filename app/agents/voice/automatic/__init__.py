@@ -21,7 +21,7 @@ from pipecat.services.google.rtvi import GoogleRTVIObserver
 from app.core import config
 from .processors import LLMSpyProcessor
 from .prompts import SYSTEM_PROMPT
-from .tools import tools, all_tool_functions as tool_functions
+from .tools import initialize_tools
 
 load_dotenv(override=True)
 
@@ -36,7 +36,29 @@ async def main():
     parser.add_argument("--mode", type=str, choices=["test", "live"], default="test", help="Mode (test or live)")
     parser.add_argument("--euler-token", type=str, help="Euler token for live mode")
     parser.add_argument("--breeze-token", type=str, help="Breeze token for live mode")
+    parser.add_argument("--shop-url", type=str, help="Shop URL for live mode")
+    parser.add_argument("--shop-id", type=str, help="Shop ID for live mode")
+    parser.add_argument("--shop-type", type=str, help="Shop type for live mode")
+    parser.add_argument("--user-name", type=str, help="User's name")
     args = parser.parse_args()
+
+    # Initialize tools based on the mode and provided tokens
+    tools, tool_functions = initialize_tools(
+        mode=args.mode,
+        breeze_token=args.breeze_token,
+        euler_token=args.euler_token,
+        shop_url=args.shop_url,
+        shop_id=args.shop_id,
+        shop_type=args.shop_type,
+    )
+
+    # Personalize the system prompt if a user name is provided
+    system_prompt = SYSTEM_PROMPT
+    if args.user_name:
+        logger.info(f"Personalizing prompt for user: {args.user_name}")
+        system_prompt = f"You are talking to {args.user_name}. {SYSTEM_PROMPT}"
+    else:
+        system_prompt = SYSTEM_PROMPT
 
     transport = DailyTransport(
         args.url,
@@ -80,7 +102,7 @@ async def main():
     messages = [
         {
             "role": "system",
-            "content": SYSTEM_PROMPT
+            "content": system_prompt
         },
     ]
 
