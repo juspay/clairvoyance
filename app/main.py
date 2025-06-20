@@ -110,8 +110,12 @@ async def bot_connect(request: Request) -> Dict[str, Any]:
         # Invalid or missing → fallback to TEST
         mode = Mode.TEST
 
-    euler_tok  = payload.get("eulerToken")
+    euler_tok = payload.get("eulerToken")
     breeze_tok = payload.get("breezeToken")
+    shop_url = payload.get("shopUrl")
+    shop_id = payload.get("shopId")
+    shop_type = payload.get("shopType")
+    user_name = payload.get("userName")
 
     # 2. Create room + token
     room  = await daily_helpers["rest"].create_room(DailyRoomParams())
@@ -132,6 +136,14 @@ async def bot_connect(request: Request) -> Dict[str, Any]:
             cmd += ["--euler-token", euler_tok]
         if breeze_tok:
             cmd += ["--breeze-token", breeze_tok]
+        if shop_url:
+            cmd += ["--shop-url", shop_url]
+        if shop_id:
+            cmd += ["--shop-id", shop_id]
+        if shop_type:
+            cmd += ["--shop-type", shop_type]
+        if user_name:
+            cmd += ["--user-name", user_name]
 
     # 4. Launch subprocess without shell
     logger.info(f"Launching subprocess with command: {' '.join(cmd)}")
