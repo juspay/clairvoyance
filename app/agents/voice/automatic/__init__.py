@@ -13,7 +13,7 @@ from pipecat.services.azure.llm import AzureLLMService
 from pipecat.services.google.stt import GoogleSTTService
 from pipecat.services.google.tts import GoogleTTSService
 from pipecat.transcriptions.language import Language
-from pipecat.frames.frames import TTSSpeakFrame
+from pipecat.frames.frames import TTSSpeakFrame, BotSpeakingFrame, LLMFullResponseEndFrame
 from pipecat.transports.services.daily import DailyParams, DailyTransport
 from pipecat.processors.frameworks.rtvi import RTVIConfig, RTVIProcessor
 from pipecat.services.google.rtvi import GoogleRTVIObserver
@@ -56,7 +56,7 @@ async def main():
     system_prompt = SYSTEM_PROMPT
     if args.user_name:
         logger.info(f"Personalizing prompt for user: {args.user_name}")
-        system_prompt = f"You are talking to {args.user_name}. {SYSTEM_PROMPT}"
+        system_prompt = f"You are speaking with {args.user_name}. Make the conversation feel more personal by naturally using their name where appropriate. {SYSTEM_PROMPT}"
     else:
         system_prompt = SYSTEM_PROMPT
 
@@ -131,7 +131,11 @@ async def main():
 
     task = PipelineTask(
         pipeline,
+        idle_timeout_secs=60.0,  
+        idle_timeout_frames=(BotSpeakingFrame,
+                         LLMFullResponseEndFrame),
         params=PipelineParams(allow_interruptions=True),
+        cancel_on_idle_timeout=True,
         observers=[GoogleRTVIObserver(rtvi)],
     )
 
