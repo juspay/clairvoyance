@@ -1,5 +1,6 @@
 import uvicorn
 import os
+import json
 import subprocess
 from pathlib import Path
 from contextlib import asynccontextmanager
@@ -99,7 +100,11 @@ class Mode(Enum):
 
 @app.post("/agent/voice/automatic")
 async def bot_connect(request: Request) -> Dict[str, Any]:
-    payload = await request.json()
+    try:
+        payload = await request.json()
+    except json.JSONDecodeError:
+        logger.error("Failed to decode JSON from request body")
+        raise HTTPException(status_code=400, detail="Invalid JSON payload")
 
     logger.info(f"Received payload: {payload}")
     # 1. Extract and validate mode, defaulting to TEST on any error
