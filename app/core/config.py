@@ -28,6 +28,9 @@ GOOGLE_CREDENTIALS_JSON = get_required_env("GOOGLE_CREDENTIALS_JSON")
 PING_INTERVAL = int(os.environ.get("WS_PING_INTERVAL", 5))  # seconds
 PING_TIMEOUT = int(os.environ.get("WS_PING_TIMEOUT", 10))  # seconds
 
+# STT Configuration
+ENABLE_GOOGLE_STT = os.environ.get("ENABLE_GOOGLE_STT", "true").lower() == 'true'
+
 # Juspay API configuration
 GENIUS_API_URL = "https://portal.juspay.in/api/q/query?api-type=genius-query"
 
