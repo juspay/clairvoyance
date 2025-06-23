@@ -24,5 +24,10 @@ pipecat-ai[daily,google,assembly,silero,openai,azure]==0.0.71
 # Google Cloud Speech
 google-cloud-speech
 
+# Voice Activity Detection
+webrtcvad>=2.0.10
+
 # Misc
 loguru
+
+setuptools>=60.0.0
