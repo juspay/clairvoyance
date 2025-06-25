@@ -1,16 +1,12 @@
 import asyncio # For asyncio.gather
 import httpx
-import logging
 import json
 from typing import Optional, Dict, Any, Union, List
 from datetime import datetime as dt
 from pydantic import BaseModel, Field # For new Pydantic models
 
 from app.core.config import GENIUS_API_URL
-
-# Configure logging
-logger = logging.getLogger(__name__)
-# logging.basicConfig(level=logging.INFO)
+from app.core.logger import logger
 
 # It's good practice to have a shared async client if making multiple calls
 # For now, we'll create one per call or you can manage it globally in your app

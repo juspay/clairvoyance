@@ -1,8 +1,7 @@
 import datetime
 import pytz
-import logging
 
-logger = logging.getLogger(__name__)
+from app.core.logger import logger
 
 # ---- Function Declarations ----
 get_current_time_declaration = {

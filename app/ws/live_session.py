@@ -1,6 +1,5 @@
 import asyncio
 import json
-import logging
 import time
 import traceback
 from fastapi import WebSocket, WebSocketDisconnect
@@ -9,7 +8,7 @@ from google.genai import types
 from datetime import datetime as dt, time as dt_time, timezone as dt_timezone, timedelta
 import pytz
 
-
+from app.core.logger import logger
 from app.core.config import PING_INTERVAL, FRAME_SIZE, SAMPLE_RATE
 from app.services.gemini_service import create_gemini_session, close_gemini_session, process_tool_calls
 from app.api.auth import validate_euler_auth, fetch_breeze_token, ValidateEulerAuthStatus, FetchTokenStatus
@@ -20,8 +19,6 @@ from app.api.juspay_metrics import (
 from app.api.shops import fetch_shop_data, Shop
 from app.api.breeze_metrics import get_breeze_analytics, BreezeAnalyticsError
 from app.data.dummy.analytics_data import dummy_juspay_analytics_today, dummy_breeze_analytics_today, dummy_juspay_analytics_weekly, dummy_breeze_analytics_weekly
-
-logger = logging.getLogger(__name__)
 
 active_connections = set()
 shutdown_event = asyncio.Event() # This might be better managed at the app level

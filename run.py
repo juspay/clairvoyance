@@ -1,10 +1,7 @@
 import uvicorn
 import os
-import logging
 
-# Configure logging for the run script itself
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
+from app.core.logger import logger
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))

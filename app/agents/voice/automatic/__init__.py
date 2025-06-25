@@ -2,8 +2,8 @@ import asyncio
 import sys
 import argparse
 from dotenv import load_dotenv
-from loguru import logger
 
+from app.core.logger import logger
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
@@ -24,10 +24,6 @@ from .prompts import SYSTEM_PROMPT
 from .tools import initialize_tools
 
 load_dotenv(override=True)
-
-logger.remove(0)
-logger.add(sys.stderr, level="DEBUG")
-
 
 async def main():
     parser = argparse.ArgumentParser()

@@ -1,5 +1,4 @@
-from loguru import logger
-
+from app.core.logger import logger
 from pipecat.services.llm_service import FunctionCallParams
 from pipecat.adapters.schemas.function_schema import FunctionSchema
 from pipecat.adapters.schemas.tools_schema import ToolsSchema

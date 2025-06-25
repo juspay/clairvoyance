@@ -1,12 +1,8 @@
 import httpx
-import logging
 from typing import List, Optional
 from pydantic import BaseModel, Field
 
-# Configure logging
-logger = logging.getLogger(__name__)
-# Assuming logging is configured elsewhere or can be set here if needed
-# logging.basicConfig(level=logging.INFO)
+from app.core.logger import logger
 
 # --- Pydantic Models ---
 

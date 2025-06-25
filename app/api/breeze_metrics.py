@@ -1,10 +1,9 @@
 import httpx
-import logging
 import json
 from typing import Optional, Dict, Any
 from pydantic import BaseModel, Field, validator
 
-logger = logging.getLogger(__name__)
+from app.core.logger import logger
 
 class BreezeAnalyticsError(Exception):
     """Custom exception for Breeze Analytics API errors."""

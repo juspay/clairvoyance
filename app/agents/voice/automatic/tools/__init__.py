@@ -1,6 +1,6 @@
 from typing import List
-from loguru import logger
 
+from app.core.logger import logger
 from pipecat.adapters.schemas.tools_schema import ToolsSchema
 from .dummy import tools as dummy_tools, tool_functions as dummy_tool_functions
 from .system import tools as system_tools, tool_functions as system_tool_functions
