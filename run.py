@@ -1,5 +1,9 @@
 import uvicorn
 import os
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 from app.core.logger import logger
 
@@ -18,5 +22,7 @@ if __name__ == "__main__":
         host=host,
         port=port,
         reload=reload,
-        log_level=log_level
+        log_level=log_level,
+        log_config=None,  # Disable Uvicorn's default logging config
+        access_log=True   # Keep access logs but route through our interceptor
     )

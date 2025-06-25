@@ -2,6 +2,8 @@ import uvicorn
 import os
 import json
 import subprocess
+import uuid
+import time
 from pathlib import Path
 from contextlib import asynccontextmanager
 from typing import Any, Dict
@@ -12,7 +14,7 @@ from fastapi import FastAPI, WebSocket, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
-from pipecat.transports.services.helpers.daily_rest import DailyRESTHelper, DailyRoomParams
+from pipecat.transports.services.helpers.daily_rest import DailyRESTHelper, DailyRoomParams, DailyRoomProperties, DailyMeetingTokenParams, DailyMeetingTokenProperties
 
 # Import necessary components from the new structure
 from app.ws.live_session import handle_websocket_session, get_active_connections, get_shutdown_event
@@ -123,16 +125,42 @@ async def bot_connect(request: Request) -> Dict[str, Any]:
     user_name = payload.get("userName")
 
     # 2. Create room + token
-    room  = await daily_helpers["rest"].create_room(DailyRoomParams())
-    token = await daily_helpers["rest"].get_token(room.url)
+    MAX_DURATION = 30 * 60
+    room = await daily_helpers["rest"].create_room(
+        params=DailyRoomParams(
+            properties=DailyRoomProperties(
+                exp=time.time() + MAX_DURATION,
+                eject_at_room_exp=True,
+            )
+        )
+    )
 
-    # 3. Build command args list
+    token_params = DailyMeetingTokenParams(
+        properties=DailyMeetingTokenProperties(
+            eject_after_elapsed=MAX_DURATION,
+        )
+    )
+    
+    token = await daily_helpers["rest"].get_token(
+        room.url,
+        expiry_time=MAX_DURATION,
+        eject_at_token_exp=True,
+        owner=True,
+        params=token_params,
+    )
+
+    # 3. Generate unique session ID for this subprocess
+    session_id = str(uuid.uuid4())
+    logger.bind(session_id=session_id).info(f"Generated session ID for new voice agent: {session_id}")
+
+    # 4. Build command args list
     bot_file = "app.agents.voice.automatic"
     cmd = [
         "python3", "-m", bot_file,
         "-u", room.url,
         "-t", token,
         "--mode", mode.value,
+        "--session-id", session_id,
     ]
 
     # Only send external tokens when in LIVE mode
@@ -150,15 +178,15 @@ async def bot_connect(request: Request) -> Dict[str, Any]:
         if user_name:
             cmd += ["--user-name", user_name]
 
-    # 4. Launch subprocess without shell
-    logger.info(f"Launching subprocess with command: {' '.join(cmd)}")
+    # 5. Launch subprocess without shell
+    logger.bind(session_id=session_id).info(f"Launching subprocess with command: {' '.join(cmd)}")
     proc = subprocess.Popen(
         cmd,
         cwd=Path(__file__).parent.parent,
         bufsize=1,
     )
     bot_procs[proc.pid] = (proc, room.url)
-    logger.info(f"Subprocess started with PID: {proc.pid}")
+    logger.bind(session_id=session_id).info(f"Subprocess started with PID: {proc.pid}")
 
     return {"room_url": room.url, "token": token}
 

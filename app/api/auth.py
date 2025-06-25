@@ -166,8 +166,7 @@ async def validate_euler_auth(token: str) -> ValidateEulerAuthResult:
     }
     payload = EulerAuthValidateRequest(token=token).model_dump()
 
-    logger.info(f"Validating Euler auth token. URL: {api_url}")
-    logger.debug(f"Payload: {payload}")
+    logger.info(f"Validating Euler auth token. URL: {api_url}, Payload: {payload}")
 
     async with httpx.AsyncClient(timeout=30.0) as client:
         try:
