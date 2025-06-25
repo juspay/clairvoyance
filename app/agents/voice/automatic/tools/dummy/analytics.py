@@ -3,6 +3,7 @@ import pytz
 
 from datetime import datetime
 
+from app.core.logger import logger
 from pipecat.services.llm_service import FunctionCallParams
 from pipecat.adapters.schemas.function_schema import FunctionSchema
 from pipecat.adapters.schemas.tools_schema import ToolsSchema
@@ -22,96 +23,119 @@ breeze_weekly = json.loads(dummy_breeze_analytics_weekly)
 
 
 async def get_sr_success_rate_by_time(params: FunctionCallParams):
+    logger.info("Retrieving dummy Juspay SR success rate data")
     await params.result_callback(juspay_today["overall_success_rate_data"])
 
 
 async def get_payment_method_wise_sr_by_time(params: FunctionCallParams):
+    logger.info("Retrieving dummy Juspay payment method wise SR data")
     await params.result_callback(juspay_today["payment_method_success_rates"])
 
 
 async def get_failure_transactional_data(params: FunctionCallParams):
+    logger.info("Retrieving dummy Juspay failure transactional data")
     await params.result_callback(juspay_today["failure_details"])
 
 
 async def get_success_transactional_data(params: FunctionCallParams):
+    logger.info("Retrieving dummy Juspay success transactional data")
     await params.result_callback(juspay_today["success_volume_by_payment_method"])
 
 
 async def get_gmv_order_value_payment_method_wise(params: FunctionCallParams):
+    logger.info("Retrieving dummy Juspay GMV by payment method data")
     await params.result_callback(juspay_today["gmv_by_payment_method"])
 
 
 async def get_average_ticket_payment_wise(params: FunctionCallParams):
+    logger.info("Retrieving dummy Juspay average ticket size data")
     await params.result_callback(juspay_today["average_ticket_size_by_payment_method"])
 
 
 async def get_weekly_sr_success_rate(params: FunctionCallParams):
+    logger.info("Retrieving dummy Juspay weekly SR success rate data")
     await params.result_callback(juspay_weekly["overall_success_rate_data"])
 
 
 async def get_weekly_payment_method_wise_sr(params: FunctionCallParams):
+    logger.info("Retrieving dummy Juspay weekly payment method wise SR data")
     await params.result_callback(juspay_weekly["payment_method_success_rates"])
 
 
 async def get_weekly_failure_transactional_data(params: FunctionCallParams):
+    logger.info("Retrieving dummy Juspay weekly failure transactional data")
     await params.result_callback(juspay_weekly["failure_details"])
 
 
 async def get_weekly_success_transactional_data(params: FunctionCallParams):
+    logger.info("Retrieving dummy Juspay weekly success transactional data")
     await params.result_callback(juspay_weekly["success_volume_by_payment_method"])
 
 
 async def get_weekly_gmv_order_value_payment_method_wise(
         params: FunctionCallParams):
+    logger.info("Retrieving dummy Juspay weekly GMV by payment method data")
     await params.result_callback(juspay_weekly["gmv_by_payment_method"])
 
 
 async def get_weekly_average_ticket_payment_wise(params: FunctionCallParams):
+    logger.info("Retrieving dummy Juspay weekly average ticket size data")
     await params.result_callback(
         juspay_weekly["average_ticket_size_by_payment_method"])
 
 
 async def get_breeze_daily_sales_breakdown(params: FunctionCallParams):
+    logger.info("Retrieving dummy Breeze daily sales breakdown data")
     await params.result_callback(breeze_today["businessTotalSalesBreakdown"])
 
 
 async def get_breeze_daily_orders_breakdown(params: FunctionCallParams):
+    logger.info("Retrieving dummy Breeze daily orders breakdown data")
     await params.result_callback(breeze_today["businessTotalOrdersBreakdown"])
 
 
 async def get_breeze_daily_conversion_breakdown(params: FunctionCallParams):
+    logger.info("Retrieving dummy Breeze daily conversion breakdown data")
     await params.result_callback(breeze_today["businessConversionBreakdown"])
 
 
 async def get_breeze_daily_payment_success_rate(params: FunctionCallParams):
+    logger.info("Retrieving dummy Breeze daily payment success rate data")
     await params.result_callback(breeze_today["paymentSuccessRate"])
 
 
 async def get_breeze_daily_average_order_value(params: FunctionCallParams):
+    logger.info("Retrieving dummy Breeze daily average order value data")
     await params.result_callback(breeze_today["averageOrderValue"])
 
 
 async def get_breeze_weekly_sales_breakdown(params: FunctionCallParams):
+    logger.info("Retrieving dummy Breeze weekly sales breakdown data")
     await params.result_callback(breeze_weekly["businessTotalSalesBreakdown"])
 
 
 async def get_breeze_weekly_orders_breakdown(params: FunctionCallParams):
+    logger.info("Retrieving dummy Breeze weekly orders breakdown data")
     await params.result_callback(breeze_weekly["businessTotalOrdersBreakdown"])
 
 
 async def get_breeze_weekly_conversion_breakdown(params: FunctionCallParams):
+    logger.info("Retrieving dummy Breeze weekly conversion breakdown data")
     await params.result_callback(breeze_weekly["businessConversionBreakdown"])
 
 
 async def get_breeze_weekly_payment_success_rate(params: FunctionCallParams):
+    logger.info("Retrieving dummy Breeze weekly payment success rate data")
     await params.result_callback(breeze_weekly["paymentSuccessRate"])
 
 
 async def get_breeze_weekly_average_order_value(params: FunctionCallParams):
+    logger.info("Retrieving dummy Breeze weekly average order value data")
     await params.result_callback(breeze_weekly["averageOrderValue"])
 
 
 async def get_breeze_weekly_ad_spend_and_roas(params: FunctionCallParams):
+    logger.info("Retrieving dummy Breeze weekly ad spend and ROAS data")
     await params.result_callback(breeze_weekly["adSpendAndRoas"])
 
 

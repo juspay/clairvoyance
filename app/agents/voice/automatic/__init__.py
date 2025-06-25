@@ -3,7 +3,7 @@ import sys
 import argparse
 from dotenv import load_dotenv
 
-from app.core.logger import logger
+from app.core.logger import logger, configure_session_logger
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
@@ -30,6 +30,7 @@ async def main():
     parser.add_argument("-u", "--url", type=str, required=True, help="URL of the Daily room")
     parser.add_argument("-t", "--token", type=str, required=True, help="Daily token")
     parser.add_argument("--mode", type=str, choices=["test", "live"], default="test", help="Mode (test or live)")
+    parser.add_argument("--session-id", type=str, required=True, help="Session ID for logging")
     parser.add_argument("--euler-token", type=str, help="Euler token for live mode")
     parser.add_argument("--breeze-token", type=str, help="Breeze token for live mode")
     parser.add_argument("--shop-url", type=str, help="Shop URL for live mode")
@@ -37,6 +38,10 @@ async def main():
     parser.add_argument("--shop-type", type=str, help="Shop type for live mode")
     parser.add_argument("--user-name", type=str, help="User's name")
     args = parser.parse_args()
+
+    # Configure logger with session ID for all logs in this subprocess
+    configure_session_logger(args.session_id)
+    logger.info(f"Voice agent started with session ID: {args.session_id}")
 
     # Initialize tools based on the mode and provided tokens
     tools, tool_functions = initialize_tools(
@@ -141,7 +146,7 @@ async def main():
 
     @transport.event_handler("on_first_participant_joined")
     async def on_first_participant_joined(transport, participant):
-        logger.debug(f"First participant joined: {participant['id']}")
+        logger.info(f"First participant joined: {participant['id']}")
         # Kick off the conversation
         await task.queue_frames([context_aggregator.user().get_context_frame()])
 

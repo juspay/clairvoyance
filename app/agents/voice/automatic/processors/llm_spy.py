@@ -19,7 +19,7 @@ class LLMSpyProcessor(FrameProcessor):
         await super().process_frame(frame, direction)
 
         if isinstance(frame, FunctionCallInProgressFrame):
-            logger.debug(f"Function call started: {frame.function_name} with args: {frame.arguments}")
+            logger.info(f"Function call started: {frame.function_name} with args: {frame.arguments}")
             await self._rtvi.push_frame(
                 RTVIServerMessageFrame(
                     data={
@@ -34,7 +34,7 @@ class LLMSpyProcessor(FrameProcessor):
                 )
             )
         elif isinstance(frame, FunctionCallResultFrame):
-            logger.debug(f"Function call result: {frame.function_name} with result: {frame.result}")
+            logger.info(f"Function call result: {frame.function_name} with result: {frame.result}")
             await self._rtvi.push_frame(
                 RTVIServerMessageFrame(
                     data={
