@@ -1,6 +1,5 @@
 import asyncio
 import json
-import logging
 from enum import Enum
 from typing import Optional, Union, Any
 
@@ -8,9 +7,7 @@ import httpx # Changed from requests for new async function
 import requests # Keep for existing fetch_breeze_token
 from pydantic import BaseModel, Field
 
-# Configure logging
-logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.INFO) # You can adjust the log level
+from app.core.logger import logger
 
 class BreezeAuthRequest(BaseModel):
     token: str

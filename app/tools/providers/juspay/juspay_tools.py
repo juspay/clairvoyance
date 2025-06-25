@@ -1,5 +1,4 @@
 import json
-import logging
 import datetime
 import pytz
 import aiohttp
@@ -7,8 +6,7 @@ import aiohttp
 # from google.genai import types # Not strictly needed here anymore for Tool object creation
 
 from app.core.config import GENIUS_API_URL
-
-logger = logging.getLogger(__name__)
+from app.core.logger import logger
 
 # ---- Function Declarations (as before) ----
 # get_current_time_declaration removed from here

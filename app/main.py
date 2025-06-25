@@ -16,7 +16,7 @@ from pipecat.transports.services.helpers.daily_rest import DailyRESTHelper, Dail
 
 # Import necessary components from the new structure
 from app.ws.live_session import handle_websocket_session, get_active_connections, get_shutdown_event
-from app.core.config import logger # Use the logger from config
+from app.core.logger import logger
 
 # Dictionary to track bot processes: {pid: (process, room_url)}
 bot_procs = {}

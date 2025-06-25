@@ -1,7 +1,6 @@
 import time
 
-from loguru import logger
-
+from app.core.logger import logger
 from pipecat.frames.frames import Frame, FunctionCallInProgressFrame, FunctionCallResultFrame
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.processors.frameworks.rtvi import RTVIProcessor, RTVIServerMessageFrame
