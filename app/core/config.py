@@ -34,5 +34,9 @@ SAMPLE_RATE = 16000
 FRAME_DURATION = 30  # ms
 FRAME_SIZE = int(SAMPLE_RATE * FRAME_DURATION / 1000) * 2  # bytes per frame (16-bit PCM)
 
+# Tracing
+ENABLE_TRACING = os.environ.get("ENABLE_TRACING", "false").lower() == "true"
+
 logger.info(f"Using Gemini model: {GEMINI_MODEL}")
 logger.info(f"Using response modality: {RESPONSE_MODALITY}")
+logger.info(f"Tracing enabled: {ENABLE_TRACING}")

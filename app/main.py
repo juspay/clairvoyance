@@ -19,6 +19,7 @@ from pipecat.transports.services.helpers.daily_rest import DailyRESTHelper, Dail
 # Import necessary components from the new structure
 from app.ws.live_session import handle_websocket_session, get_active_connections, get_shutdown_event
 from app.core.logger import logger
+from app import __version__
 
 # Dictionary to track bot processes: {pid: (process, room_url)}
 bot_procs = {}
@@ -75,7 +76,7 @@ async def lifespan(app: FastAPI):
     await shutdown_server()
 
 
-app = FastAPI(title="Breeze Automatic Server", lifespan=lifespan)
+app = FastAPI(title="Breeze Automatic Server", version=__version__, lifespan=lifespan)
 
 # Add CORS middleware
 app.add_middleware(
@@ -201,6 +202,12 @@ async def get_client_html():
 async def health_check():
     logger.info("Health check endpoint called")
     return JSONResponse({"status": "healthy"})
+
+# Version endpoint
+@app.get("/version")
+async def get_version():
+    """Get application version."""
+    return JSONResponse({"version": __version__})
 
 # Graceful shutdown handling for WebSocket connections
 async def shutdown_server():
