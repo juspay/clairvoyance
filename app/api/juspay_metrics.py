@@ -78,9 +78,9 @@ async def _make_genius_api_request_internal(
         "user-agent": "ClairvoyanceApp/1.0"
     }
 
-    logger.info(f"Requesting Juspay Genius API. URL: {GENIUS_API_URL}, Metric: {payload_details.get('metric', metric_name)}")
+    logger.info(f"Requesting Juspay Genius API. URL: {GENIUS_API_URL}, Metric: {payload_details.get('metric', metric_name)}, Payload: {json.dumps(full_payload)}")
     logger.debug(f"Headers: {headers}")
-    logger.debug(f"Payload: {json.dumps(full_payload)}") # Log the full payload
+
 
     async with httpx.AsyncClient(timeout=60.0) as client: # Increased timeout slightly
         try:

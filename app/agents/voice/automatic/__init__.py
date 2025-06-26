@@ -3,6 +3,7 @@ import sys
 import argparse
 from dotenv import load_dotenv
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from app.core.logger import logger, configure_session_logger
 from pipecat.audio.vad.silero import SileroVADAnalyzer
@@ -136,10 +137,12 @@ async def main():
     )
 
     user_name = args.user_name or "guest"
-    shopId = args.shop_id or "dummy"
-    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    shopId = "euler" if args.euler_token and not args.shop_id else args.shop_id or "dummy"
+    ist_time = datetime.now(ZoneInfo("Asia/Kolkata"))
+    timestamp = ist_time.strftime("%Y-%m-%d_%H-%M-%S")
     conversation_id=f"{user_name}-{shopId}-{timestamp}"
 
+    # make sure to add env's OTEL_EXPORTER_OTLP_TRACES_HEADERS, OTEL_EXPORTER_OTLP_TRACES_ENDPOINT to push traces to OpenTelemetry collector
     setup_tracing("breeze-voice-agent")
 
     tracer = trace.get_tracer(__name__)
