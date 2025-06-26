@@ -142,53 +142,57 @@ async def main():
     timestamp = ist_time.strftime("%Y-%m-%d_%H-%M-%S")
     conversation_id=f"{user_name}-{shopId}-{timestamp}"
 
-    # make sure to add env's OTEL_EXPORTER_OTLP_TRACES_HEADERS, OTEL_EXPORTER_OTLP_TRACES_ENDPOINT to push traces to OpenTelemetry collector
-    setup_tracing("breeze-voice-agent")
+    task_params = {
+        "idle_timeout_secs": 60.0,
+        "idle_timeout_frames": (BotSpeakingFrame, LLMFullResponseEndFrame),
+        "params": PipelineParams(allow_interruptions=True),
+        "cancel_on_idle_timeout": True,
+        "observers": [GoogleRTVIObserver(rtvi)],
+    }
 
-    tracer = trace.get_tracer(__name__)
-    
-    with tracer.start_as_current_span(conversation_id) as root_span:
-        logger.info(f"Starting current span with conversation ID: {conversation_id}")
-        root_span.set_attribute("conversation.id", conversation_id)
-        root_span.set_attribute("conversation.type", "voice")
-        root_span.set_attribute("user.name", user_name)
-        root_span.set_attribute("service.name", "breeze-voice-agent")
+    if config.ENABLE_TRACING:
+        setup_tracing("breeze-voice-agent")
+        task_params["conversation_id"] = conversation_id
+        task_params["enable_tracing"] = True
 
-        task = PipelineTask(
-            pipeline,
-            idle_timeout_secs=60.0,  
-            idle_timeout_frames=(BotSpeakingFrame,
-                            LLMFullResponseEndFrame),
-            params=PipelineParams(allow_interruptions=True),
-            cancel_on_idle_timeout=True,
-            observers=[GoogleRTVIObserver(rtvi)],
-            conversation_id=conversation_id,
-            enable_tracing=True
-        )
+    task = PipelineTask(pipeline, **task_params)
 
-        @rtvi.event_handler("on_client_ready")
-        async def on_client_ready(rtvi):
-            await rtvi.set_bot_ready()
+    @rtvi.event_handler("on_client_ready")
+    async def on_client_ready(rtvi):
+        await rtvi.set_bot_ready()
 
-        @transport.event_handler("on_first_participant_joined")
-        async def on_first_participant_joined(transport, participant):
-            logger.info(f"First participant joined: {participant['id']}")
-            # Kick off the conversation
-            await task.queue_frames([context_aggregator.user().get_context_frame()])
+    @transport.event_handler("on_first_participant_joined")
+    async def on_first_participant_joined(transport, participant):
+        logger.info(f"First participant joined: {participant['id']}")
+        await task.queue_frames([context_aggregator.user().get_context_frame()])
 
-        @transport.event_handler("on_participant_left")
-        async def on_participant_left(transport, participant, reason):
-            logger.info(f"Participant left: {participant['id']}")
-            await task.cancel()
+    @transport.event_handler("on_participant_left")
+    async def on_participant_left(transport, participant, reason):
+        logger.info(f"Participant left: {participant['id']}")
+        await task.cancel()
 
-        @task.event_handler("on_pipeline_cancelled")
-        async def on_pipeline_cancelled(task, frame):
-            logger.info("Pipeline task cancelled. Cancelling main task.")
-            main_task = asyncio.current_task()
-            main_task.cancel()
+    @task.event_handler("on_pipeline_cancelled")
+    async def on_pipeline_cancelled(task, frame):
+        logger.info("Pipeline task cancelled. Cancelling main task.")
+        main_task = asyncio.current_task()
+        main_task.cancel()
 
-        runner = PipelineRunner()
+    runner = PipelineRunner()
+
+    async def run_pipeline():
         try:
             await runner.run(task)
         except asyncio.CancelledError:
             logger.info("Main task cancelled. Exiting gracefully.")
+
+    if config.ENABLE_TRACING:
+        tracer = trace.get_tracer(__name__)
+        with tracer.start_as_current_span(conversation_id) as root_span:
+            logger.info(f"Starting current span with conversation ID: {conversation_id}")
+            root_span.set_attribute("conversation.id", conversation_id)
+            root_span.set_attribute("conversation.type", "voice")
+            root_span.set_attribute("user.name", user_name)
+            root_span.set_attribute("service.name", "breeze-voice-agent")
+            await run_pipeline()
+    else:
+        await run_pipeline()
