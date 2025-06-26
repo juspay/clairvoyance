@@ -2,6 +2,7 @@ import asyncio
 import sys
 import argparse
 from dotenv import load_dotenv
+from datetime import datetime
 
 from app.core.logger import logger, configure_session_logger
 from pipecat.audio.vad.silero import SileroVADAnalyzer
@@ -22,8 +23,12 @@ from app.core import config
 from .processors import LLMSpyProcessor
 from .prompts import SYSTEM_PROMPT
 from .tools import initialize_tools
+from opentelemetry import trace
 
 load_dotenv(override=True)
+
+# import setup_tracing from tracing_setup.py file
+from app.agents.voice.automatic.analytics.tracing_setup import setup_tracing
 
 async def main():
     parser = argparse.ArgumentParser()
@@ -130,39 +135,57 @@ async def main():
         ]
     )
 
-    task = PipelineTask(
-        pipeline,
-        idle_timeout_secs=60.0,  
-        idle_timeout_frames=(BotSpeakingFrame,
-                         LLMFullResponseEndFrame),
-        params=PipelineParams(allow_interruptions=True),
-        cancel_on_idle_timeout=True,
-        observers=[GoogleRTVIObserver(rtvi)],
-    )
+    user_name = args.user_name or "guest"
+    shopId = args.shop_id or "dummy"
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    conversation_id=f"{user_name}-{shopId}-{timestamp}"
 
-    @rtvi.event_handler("on_client_ready")
-    async def on_client_ready(rtvi):
-        await rtvi.set_bot_ready()
+    setup_tracing("breeze-voice-agent")
 
-    @transport.event_handler("on_first_participant_joined")
-    async def on_first_participant_joined(transport, participant):
-        logger.info(f"First participant joined: {participant['id']}")
-        # Kick off the conversation
-        await task.queue_frames([context_aggregator.user().get_context_frame()])
+    tracer = trace.get_tracer(__name__)
+    
+    with tracer.start_as_current_span(conversation_id) as root_span:
+        logger.info(f"Starting current span with conversation ID: {conversation_id}")
+        root_span.set_attribute("conversation.id", conversation_id)
+        root_span.set_attribute("conversation.type", "voice")
+        root_span.set_attribute("user.name", user_name)
+        root_span.set_attribute("service.name", "breeze-voice-agent")
 
-    @transport.event_handler("on_participant_left")
-    async def on_participant_left(transport, participant, reason):
-        logger.info(f"Participant left: {participant['id']}")
-        await task.cancel()
+        task = PipelineTask(
+            pipeline,
+            idle_timeout_secs=60.0,  
+            idle_timeout_frames=(BotSpeakingFrame,
+                            LLMFullResponseEndFrame),
+            params=PipelineParams(allow_interruptions=True),
+            cancel_on_idle_timeout=True,
+            observers=[GoogleRTVIObserver(rtvi)],
+            conversation_id=conversation_id,
+            enable_tracing=True
+        )
 
-    @task.event_handler("on_pipeline_cancelled")
-    async def on_pipeline_cancelled(task, frame):
-        logger.info("Pipeline task cancelled. Cancelling main task.")
-        main_task = asyncio.current_task()
-        main_task.cancel()
+        @rtvi.event_handler("on_client_ready")
+        async def on_client_ready(rtvi):
+            await rtvi.set_bot_ready()
 
-    runner = PipelineRunner()
-    try:
-        await runner.run(task)
-    except asyncio.CancelledError:
-        logger.info("Main task cancelled. Exiting gracefully.")
+        @transport.event_handler("on_first_participant_joined")
+        async def on_first_participant_joined(transport, participant):
+            logger.info(f"First participant joined: {participant['id']}")
+            # Kick off the conversation
+            await task.queue_frames([context_aggregator.user().get_context_frame()])
+
+        @transport.event_handler("on_participant_left")
+        async def on_participant_left(transport, participant, reason):
+            logger.info(f"Participant left: {participant['id']}")
+            await task.cancel()
+
+        @task.event_handler("on_pipeline_cancelled")
+        async def on_pipeline_cancelled(task, frame):
+            logger.info("Pipeline task cancelled. Cancelling main task.")
+            main_task = asyncio.current_task()
+            main_task.cancel()
+
+        runner = PipelineRunner()
+        try:
+            await runner.run(task)
+        except asyncio.CancelledError:
+            logger.info("Main task cancelled. Exiting gracefully.")
