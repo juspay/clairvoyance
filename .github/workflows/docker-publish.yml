@@ -1,8 +1,6 @@
 name: Build & Push Docker Image to GCR
 
 on:
-  release:
-    types: [published]
   push:
     branches:
       - release
@@ -33,9 +31,13 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      - name: Extract short SHA
+        # This uses bash substring syntax to grab first 8 chars
+        run: echo "SHORT_SHA=${GITHUB_SHA:0:8}" >> $GITHUB_ENV
+
       - name: Build and Push Docker Image to GCR
         uses: docker/build-push-action@v5
         with:
           context: .
           push: true
-          tags: gcr.io/breeze-uat-453414/clairvoyance:${{ github.event.release.tag_name }}
+          tags: gcr.io/breeze-uat-453414/clairvoyance:${{ env.SHORT_SHA }}
