@@ -3,6 +3,9 @@ name: Build & Push Docker Image to GCR
 on:
   release:
     types: [published]
+  push:
+    branches:
+      - release
 
 permissions:
   id-token: write
