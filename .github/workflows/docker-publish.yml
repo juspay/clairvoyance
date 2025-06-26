@@ -1,4 +1,4 @@
-name: Build & Push Docker Image to GCR
+name: Build & Push Docker Image to Artifact Registry
 
 on:
   push:
@@ -18,26 +18,24 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Authenticate to Google Cloud
-        id: auth
         uses: google-github-actions/auth@v1
         with:
-          workload_identity_provider: "projects/745400138007/locations/global/workloadIdentityPools/github-pool/providers/github-provider"
-          service_account: "github-deployer@breeze-uat-453414.iam.gserviceaccount.com"
+          workload_identity_provider: projects/745400138007/locations/global/workloadIdentityPools/github-pool/providers/github-provider
+          service_account: github-deployer@breeze-uat-453414.iam.gserviceaccount.com
 
-      - name: Configure Docker to use gcloud as a credential helper
+      - name: Configure Docker for Artifact Registry
         run: |
-          gcloud auth configure-docker --quiet
+          gcloud auth configure-docker asia-south1-docker.pkg.dev --quiet
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
       - name: Extract short SHA
-        # This uses bash substring syntax to grab first 8 chars
         run: echo "SHORT_SHA=${GITHUB_SHA:0:8}" >> $GITHUB_ENV
 
-      - name: Build and Push Docker Image to GCR
+      - name: Build and Push Docker Image to Artifact Registry
         uses: docker/build-push-action@v5
         with:
           context: .
           push: true
-          tags: gcr.io/breeze-uat-453414/clairvoyance:${{ env.SHORT_SHA }}
+          tags: asia-south1-docker.pkg.dev/breeze-uat-453414/clairvoyance/clairvoyance:${{ env.SHORT_SHA }}
