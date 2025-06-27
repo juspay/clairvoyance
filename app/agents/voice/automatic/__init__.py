@@ -92,7 +92,7 @@ async def main():
     llm = AzureLLMService(
         api_key=config.AZURE_OPENAI_API_KEY,
         endpoint=config.AZURE_OPENAI_ENDPOINT,
-        model="gpt-4o-automatic",
+        model=config.AZURE_OPENAI_MODEL,
     )
 
     for name, function in tool_functions.items():

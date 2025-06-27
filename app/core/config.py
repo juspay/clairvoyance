@@ -20,6 +20,7 @@ RESPONSE_MODALITY = os.environ.get("RESPONSE_MODALITY", "AUDIO")
 DAILY_API_KEY = get_required_env("DAILY_API_KEY")
 AZURE_OPENAI_API_KEY = get_required_env("AZURE_OPENAI_API_KEY")
 AZURE_OPENAI_ENDPOINT = get_required_env("AZURE_OPENAI_ENDPOINT")
+AZURE_OPENAI_MODEL = os.environ.get("AZURE_OPENAI_MODEL", "gpt-4o-automatic")
 GOOGLE_CREDENTIALS_JSON = get_required_env("GOOGLE_CREDENTIALS_JSON")
 
 # WebSocket keepalive settings
