@@ -1,67 +1,156 @@
+import httpx
+import json
+
 from app.core.logger import logger
+from app.core.config import GENIUS_API_URL
 from pipecat.services.llm_service import FunctionCallParams
 from pipecat.adapters.schemas.function_schema import FunctionSchema
 from pipecat.adapters.schemas.tools_schema import ToolsSchema
 
-from app.api.juspay_metrics import (
-    get_success_rate,
-    get_payment_method_wise_sr,
-    get_failure_transactional_data,
-    get_success_transactional_data,
-    get_gmv_order_value_payment_method_wise,
-    get_average_ticket_payment_wise,
-)
-
 # This token will be set when the tools are initialized
-euler_token = None
+euler_token: str | None = None
+
+
+async def _make_genius_api_request(params: FunctionCallParams, payload_details: dict):
+    """
+    Generic helper to make requests to the Juspay Genius API and return the raw text response.
+    """
+    if not euler_token:
+        logger.error("Juspay tool called without required euler_token.")
+        await params.result_callback({"error": "Juspay tool is not configured."})
+        return
+
+    start_time_iso = params.arguments.get("startTime")
+    end_time_iso = params.arguments.get("endTime")
+
+    if not start_time_iso or not end_time_iso:
+        await params.result_callback({"error": "startTime and endTime are required parameters in ISO format."})
+        return
+
+    full_payload = {
+        **payload_details,
+        "interval": {"start": start_time_iso, "end": end_time_iso},
+    }
+
+    headers = {
+        'Content-Type': 'application/json',
+        'x-web-logintoken': euler_token,
+        "user-agent": "ClairvoyanceApp/1.0"
+    }
+
+    logger.info(f"Requesting Juspay Genius API with payload: {json.dumps(full_payload)}")
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post(GENIUS_API_URL, json=full_payload, headers=headers)
+            response.raise_for_status()  # Raise an exception for bad status codes (4xx or 5xx)
+            
+            # Return the raw text response as requested
+            response_text = response.text
+            logger.info(f"Raw Juspay API response: {response_text}")
+            logger.info(f"Received Juspay API text response. Length: {len(response_text)}")
+            await params.result_callback({"data": response_text})
+
+    except httpx.TimeoutException:
+        logger.error("Juspay API request timed out after 10 seconds.")
+        await params.result_callback({"error": "It is taking so much time. Please try again."})
+    except httpx.HTTPStatusError as e:
+        logger.error(f"HTTP error calling Juspay API: {e.response.status_code} - {e.response.text}")
+        await params.result_callback({"error": f"Juspay API error: {e.response.status_code}", "details": e.response.text})
+    except Exception as e:
+        logger.error(f"Unexpected error calling Juspay API: {e}")
+        await params.result_callback({"error": f"An unexpected error occurred: {e}"})
 
 
 async def get_sr_success_rate_by_time(params: FunctionCallParams):
-    logger.info(f"Fetching real-time SR success rate with params: {params.arguments}")
-    start_time = params.arguments.get("startTime")
-    end_time = params.arguments.get("endTime")
-    result = await get_success_rate(euler_token, start_time, end_time)
-    await params.result_callback(result)
+    try:
+        logger.info(f"Fetching real-time SR success rate with params: {params.arguments}")
+        payload_details = {
+            "dimensions": [],
+            "domain": "kvorders",
+            "metric": "success_rate"
+        }
+        await _make_genius_api_request(params, payload_details)
+    except Exception as e:
+        logger.error(f"Critical error in get_sr_success_rate_by_time: {e}", exc_info=True)
+        await params.result_callback({"error": f"A critical error occurred in the tool function: {e}"})
 
 
 async def get_payment_method_wise_sr_by_time(params: FunctionCallParams):
-    logger.info(f"Fetching real-time payment method-wise SR with params: {params.arguments}")
-    start_time = params.arguments.get("startTime")
-    end_time = params.arguments.get("endTime")
-    result = await get_payment_method_wise_sr(euler_token, start_time, end_time)
-    await params.result_callback(result)
+    try:
+        logger.info(f"Fetching real-time payment method-wise SR with params: {params.arguments}")
+        payload_details = {
+            "dimensions": ["payment_method_type"],
+            "domain": "kvorders",
+            "metric": "success_rate"
+        }
+        await _make_genius_api_request(params, payload_details)
+    except Exception as e:
+        logger.error(f"Critical error in get_payment_method_wise_sr_by_time: {e}", exc_info=True)
+        await params.result_callback({"error": f"A critical error occurred in the tool function: {e}"})
 
 
-async def get_failure_transactional_data_live(params: FunctionCallParams):
-    logger.info(f"Fetching real-time failure data with params: {params.arguments}")
-    start_time = params.arguments.get("startTime")
-    end_time = params.arguments.get("endTime")
-    result = await get_failure_transactional_data(euler_token, start_time, end_time)
-    await params.result_callback(result)
+async def get_failure_transactional_data_by_time(params: FunctionCallParams):
+    try:
+        logger.info(f"Fetching real-time failure data with params: {params.arguments}")
+        payload_details = {
+            "dimensions": ["error_message", "payment_method_type"],
+            "domain": "kvorders",
+            "filters": {
+                "and": {
+                    "left": {"condition": "NotIn", "field": "error_message", "val": [None]},
+                    "right": {"condition": "In", "field": "error_message", "val": {"limit": 20, "sortedOn": {"ordering": "Desc", "sortDimension": "order_with_transactions"}}}
+                }
+            },
+            "metric": "order_with_transactions"
+        }
+        await _make_genius_api_request(params, payload_details)
+    except Exception as e:
+        logger.error(f"Critical error in get_failure_transactional_data_by_time: {e}", exc_info=True)
+        await params.result_callback({"error": f"A critical error occurred in the tool function: {e}"})
 
 
-async def get_success_transactional_data_live(params: FunctionCallParams):
-    logger.info(f"Fetching real-time success data with params: {params.arguments}")
-    start_time = params.arguments.get("startTime")
-    end_time = params.arguments.get("endTime")
-    result = await get_success_transactional_data(euler_token, start_time, end_time)
-    await params.result_callback(result)
+async def get_success_transactional_data_by_time(params: FunctionCallParams):
+    try:
+        logger.info(f"Fetching real-time success data with params: {params.arguments}")
+        payload_details = {
+            "dimensions": ["payment_method_type"],
+            "domain": "kvorders",
+            "filters": {"condition": "In", "field": "payment_status", "val": ["SUCCESS"]},
+            "metric": "success_volume"
+        }
+        await _make_genius_api_request(params, payload_details)
+    except Exception as e:
+        logger.error(f"Critical error in get_success_transactional_data_by_time: {e}", exc_info=True)
+        await params.result_callback({"error": f"A critical error occurred in the tool function: {e}"})
 
 
-async def get_gmv_order_value_payment_method_wise_live(params: FunctionCallParams):
-    logger.info(f"Fetching real-time GMV with params: {params.arguments}")
-    start_time = params.arguments.get("startTime")
-    end_time = params.arguments.get("endTime")
-    result = await get_gmv_order_value_payment_method_wise(euler_token, start_time, end_time)
-    await params.result_callback(result)
+async def get_gmv_order_value_payment_method_wise_by_time(params: FunctionCallParams):
+    try:
+        logger.info(f"Fetching real-time GMV with params: {params.arguments}")
+        payload_details = {
+            "dimensions": ["payment_method_type"],
+            "domain": "kvorders",
+            "metric": "total_amount"
+        }
+        await _make_genius_api_request(params, payload_details)
+    except Exception as e:
+        logger.error(f"Critical error in get_gmv_order_value_payment_method_wise_by_time: {e}", exc_info=True)
+        await params.result_callback({"error": f"A critical error occurred in the tool function: {e}"})
 
 
-async def get_average_ticket_payment_wise_live(params: FunctionCallParams):
-    logger.info(f"Fetching real-time average ticket size with params: {params.arguments}")
-    start_time = params.arguments.get("startTime")
-    end_time = params.arguments.get("endTime")
-    result = await get_average_ticket_payment_wise(euler_token, start_time, end_time)
-    await params.result_callback(result)
+async def get_average_ticket_payment_wise_by_time(params: FunctionCallParams):
+    try:
+        logger.info(f"Fetching real-time average ticket size with params: {params.arguments}")
+        payload_details = {
+            "dimensions": ["payment_method_type"],
+            "domain": "kvorders",
+            "metric": "avg_ticket_size"
+        }
+        await _make_genius_api_request(params, payload_details)
+    except Exception as e:
+        logger.error(f"Critical error in get_average_ticket_payment_wise_by_time: {e}", exc_info=True)
+        await params.result_callback({"error": f"A critical error occurred in the tool function: {e}"})
 
 
 time_input_schema = {
@@ -69,11 +158,11 @@ time_input_schema = {
     "properties": {
         "startTime": {
             "type": "string",
-            "description": "Start time in ISO format (e.g., 2023-01-01T00:00:00Z)",
+            "description": "The start time for the analysis in ISO format (e.g., '2023-01-01T00:00:00Z'). This is mandatory.",
         },
         "endTime": {
             "type": "string",
-            "description": "End time in ISO format (e.g., 2023-01-01T01:00:00Z)",
+            "description": "The end time for the analysis in ISO format (e.g., '2023-01-01T01:00:00Z'). This is mandatory.",
         },
     },
     "required": ["startTime", "endTime"],
@@ -94,28 +183,28 @@ payment_method_wise_sr_function = FunctionSchema(
 )
 
 failure_transactional_data_function = FunctionSchema(
-    name="get_failure_transactional_data",
+    name="get_failure_transactional_data_by_time",
     description="Retrieves data for failed transactions.",
     properties=time_input_schema["properties"],
     required=time_input_schema["required"],
 )
 
 success_transactional_data_function = FunctionSchema(
-    name="get_success_transactional_data",
+    name="get_success_transactional_data_by_time",
     description="Retrieves count of successful transactions by payment method.",
     properties=time_input_schema["properties"],
     required=time_input_schema["required"],
 )
 
 gmv_order_value_payment_method_wise_function = FunctionSchema(
-    name="get_gmv_order_value_payment_method_wise",
+    name="get_gmv_order_value_payment_method_wise_by_time",
     description="Retrieves Gross Merchandise Value (GMV) by payment method.",
     properties=time_input_schema["properties"],
     required=time_input_schema["required"],
 )
 
 average_ticket_payment_wise_function = FunctionSchema(
-    name="get_average_ticket_payment_wise",
+    name="get_average_ticket_payment_wise_by_time",
     description="Calculates average ticket size by payment method.",
     properties=time_input_schema["properties"],
     required=time_input_schema["required"],
@@ -135,8 +224,8 @@ tools = ToolsSchema(
 tool_functions = {
     "get_sr_success_rate_by_time": get_sr_success_rate_by_time,
     "get_payment_method_wise_sr_by_time": get_payment_method_wise_sr_by_time,
-    "get_failure_transactional_data": get_failure_transactional_data_live,
-    "get_success_transactional_data": get_success_transactional_data_live,
-    "get_gmv_order_value_payment_method_wise": get_gmv_order_value_payment_method_wise_live,
-    "get_average_ticket_payment_wise": get_average_ticket_payment_wise_live,
+    "get_failure_transactional_data_by_time": get_failure_transactional_data_by_time,
+    "get_success_transactional_data_by_time": get_success_transactional_data_by_time,
+    "get_gmv_order_value_payment_method_wise_by_time": get_gmv_order_value_payment_method_wise_by_time,
+    "get_average_ticket_payment_wise_by_time": get_average_ticket_payment_wise_by_time,
 }
