@@ -35,6 +35,12 @@ AZURE_OPENAI_MODEL = os.environ.get("AZURE_OPENAI_MODEL", "gpt-4o-automatic")
 GOOGLE_CREDENTIALS_JSON = get_required_env("GOOGLE_CREDENTIALS_JSON")
 ENABLE_NOISE_REDUCE_FILTER = os.environ.get("ENABLE_NOISE_REDUCE_FILTER", "true").lower() == "true"
 
+# TTS Configuration
+DEFAULT_TTS_SERVICE = os.environ.get("DEFAULT_TTS_SERVICE", "GOOGLE")
+ELEVENLABS_API_KEY = os.environ.get("ELEVENLABS_API_KEY")
+ELEVENLABS_VOICE_ID = os.environ.get("ELEVENLABS_VOICE_ID", "WTnybLRChAQj0OBHYZg4") # bQQWtYx9EodAqMdkrNAc
+ELEVENLABS_MODEL_ID = os.environ.get("ELEVENLABS_MODEL_ID", "eleven_flash_v2_5")
+
 # WebSocket keepalive settings
 PING_INTERVAL = int(os.environ.get("WS_PING_INTERVAL", 5))  # seconds
 PING_TIMEOUT = int(os.environ.get("WS_PING_TIMEOUT", 10))  # seconds

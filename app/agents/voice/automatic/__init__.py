@@ -15,7 +15,6 @@ from pipecat.pipeline.task import PipelineParams, PipelineTask
 from pipecat.processors.aggregators.openai_llm_context import OpenAILLMContext
 from pipecat.services.azure.llm import AzureLLMService
 from pipecat.services.google.stt import GoogleSTTService
-from pipecat.services.google.tts import GoogleTTSService
 from pipecat.transcriptions.language import Language
 from pipecat.frames.frames import TTSSpeakFrame, BotSpeakingFrame, LLMFullResponseEndFrame
 from pipecat.transports.services.daily import DailyParams, DailyTransport
@@ -26,6 +25,7 @@ from app.core import config
 from .processors import LLMSpyProcessor
 from .prompts import SYSTEM_PROMPT
 from .tools import initialize_tools
+from .tts import get_tts_service
 from opentelemetry import trace
 
 load_dotenv(override=True)
@@ -45,6 +45,7 @@ async def main():
     parser.add_argument("--shop-id", type=str, help="Shop ID for live mode")
     parser.add_argument("--shop-type", type=str, help="Shop type for live mode")
     parser.add_argument("--user-name", type=str, help="User's name")
+    parser.add_argument("--tts-service", type=str, choices=["GOOGLE", "ELEVENLABS"], help="TTS service to use")
     args = parser.parse_args()
 
     # Configure logger with session ID for all logs in this subprocess
@@ -101,11 +102,7 @@ async def main():
         credentials=config.GOOGLE_CREDENTIALS_JSON
     )
 
-    tts = GoogleTTSService(
-        voice_id="en-IN-Chirp3-HD-Sadaltager",
-        params=GoogleTTSService.InputParams(language=Language.EN_IN),
-        credentials=config.GOOGLE_CREDENTIALS_JSON
-    )
+    tts = get_tts_service(tts_service=args.tts_service)
 
     llm = AzureLLMService(
         api_key=config.AZURE_OPENAI_API_KEY,
