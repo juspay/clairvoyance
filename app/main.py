@@ -124,6 +124,7 @@ async def bot_connect(request: Request) -> Dict[str, Any]:
     shop_id = payload.get("shopId")
     shop_type = payload.get("shopType")
     user_name = payload.get("userName")
+    tts_service = payload.get("ttsService")
 
     # 2. Create room + token
     MAX_DURATION = 30 * 60
@@ -178,6 +179,8 @@ async def bot_connect(request: Request) -> Dict[str, Any]:
             cmd += ["--shop-type", shop_type]
         if user_name:
             cmd += ["--user-name", user_name]
+        if tts_service:
+            cmd += ["--tts-service", tts_service]
 
     # 5. Launch subprocess without shell
     logger.bind(session_id=session_id).info(f"Launching subprocess with command: {' '.join(cmd)}")
