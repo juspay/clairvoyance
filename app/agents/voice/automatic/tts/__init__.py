@@ -33,3 +33,10 @@ def get_tts_service(tts_service: str | None = None):
         params=GoogleTTSService.InputParams(language=Language.EN_IN),
         credentials=config.GOOGLE_CREDENTIALS_JSON
     )
+
+def get_tts_service_enum(tts_service: str | None = None) -> TTSService:
+    """
+    Returns the TTSService enum based on the provided service or the default configuration.
+    """
+    service_to_use = tts_service or config.DEFAULT_TTS_SERVICE
+    return TTSService(service_to_use)

@@ -25,7 +25,7 @@ from app.core import config
 from .processors import LLMSpyProcessor
 from .prompts import SYSTEM_PROMPT
 from .tools import initialize_tools
-from .tts import get_tts_service
+from .tts import get_tts_service, get_tts_service_enum, TTSService
 from opentelemetry import trace
 
 load_dotenv(override=True)
@@ -116,10 +116,12 @@ async def main():
     # Simplified event handler for TTS feedback
     @llm.event_handler("on_function_calls_started")
     async def on_function_calls_started(service, function_calls):
-        for function_call in function_calls:
-            if function_call.function_name != "get_current_time":
-                await tts.queue_frame(TTSSpeakFrame("Let me check on that."))
-                break
+        # Only play the "checking" message if using Google TTS
+        if get_tts_service_enum(args.tts_service) == TTSService.GOOGLE:
+            for function_call in function_calls:
+                if function_call.function_name != "get_current_time":
+                    await tts.queue_frame(TTSSpeakFrame("Let me check on that."))
+                    break
 
     messages = [
         {
