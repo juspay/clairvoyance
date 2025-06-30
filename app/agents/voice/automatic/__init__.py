@@ -7,6 +7,8 @@ from zoneinfo import ZoneInfo
 
 from app.core.logger import logger, configure_session_logger
 from pipecat.audio.vad.silero import SileroVADAnalyzer
+from pipecat.audio.vad.vad_analyzer import VADParams
+from pipecat.audio.filters.noisereduce_filter import NoisereduceFilter
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
@@ -67,19 +69,35 @@ async def main():
     else:
         system_prompt = SYSTEM_PROMPT
 
+    daily_params = DailyParams(
+        audio_in_enabled=True,
+        audio_out_enabled=True,
+        vad_analyzer=SileroVADAnalyzer(
+            sample_rate=16000,
+            params=VADParams(
+                confidence=config.VAD_CONFIDENCE,
+                start_secs=0.30,
+                stop_secs=1.00,
+                min_volume=config.VAD_MIN_VOLUME,
+            )
+        ),
+    )
+
+    if config.ENABLE_NOISE_REDUCE_FILTER:
+        logger.info("Noise reduction filter enabled.")
+        daily_params.audio_in_filter = NoisereduceFilter()
+    else:
+        logger.info("Noise reduction filter disabled.")
+
     transport = DailyTransport(
         args.url,
         args.token,
         "Breeze Automatic Voice Agent",
-        DailyParams(
-            audio_in_enabled=True,
-            audio_out_enabled=True,
-            vad_analyzer=SileroVADAnalyzer(),
-        ),
+        daily_params,
     )
 
     stt = GoogleSTTService(
-        params=GoogleSTTService.InputParams(languages=[Language.EN_US, Language.EN_IN]),
+        params=GoogleSTTService.InputParams(languages=[Language.EN_US, Language.EN_IN], enable_interim_results=False),
         credentials=config.GOOGLE_CREDENTIALS_JSON
     )
 
@@ -92,7 +110,7 @@ async def main():
     llm = AzureLLMService(
         api_key=config.AZURE_OPENAI_API_KEY,
         endpoint=config.AZURE_OPENAI_ENDPOINT,
-        model="gpt-4o-automatic",
+        model=config.AZURE_OPENAI_MODEL,
     )
 
     for name, function in tool_functions.items():

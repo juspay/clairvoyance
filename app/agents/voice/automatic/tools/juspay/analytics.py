@@ -170,42 +170,42 @@ time_input_schema = {
 
 get_sr_success_rate_function = FunctionSchema(
     name="get_sr_success_rate_by_time",
-    description="Calculates overall success rate (SR) for transactions.",
+    description="Get the overall payment success rate for all transactions within a specified time range. Use this to understand the general health of the payment system.",
     properties=time_input_schema["properties"],
     required=time_input_schema["required"],
 )
 
 payment_method_wise_sr_function = FunctionSchema(
     name="get_payment_method_wise_sr_by_time",
-    description="Fetches success rate (SR) by payment method.",
+    description="Get the payment success rate for each payment method (e.g., UPI, Cards, Netbanking) within a specified time range. Use this to identify which payment methods are performing well or poorly.",
     properties=time_input_schema["properties"],
     required=time_input_schema["required"],
 )
 
 failure_transactional_data_function = FunctionSchema(
     name="get_failure_transactional_data_by_time",
-    description="Retrieves data for failed transactions.",
+    description="Get a list of the top transaction failure reasons and the payment methods they occurred on within a specified time range. Use this to diagnose the most common payment issues.",
     properties=time_input_schema["properties"],
     required=time_input_schema["required"],
 )
 
 success_transactional_data_function = FunctionSchema(
     name="get_success_transactional_data_by_time",
-    description="Retrieves count of successful transactions by payment method.",
+    description="Get the total count of successful transactions for each payment method within a specified time range. Use this to see which payment methods are most popular.",
     properties=time_input_schema["properties"],
     required=time_input_schema["required"],
 )
 
 gmv_order_value_payment_method_wise_function = FunctionSchema(
     name="get_gmv_order_value_payment_method_wise_by_time",
-    description="Retrieves Gross Merchandise Value (GMV) by payment method.",
+    description="Get the total Gross Merchandise Value (GMV) for each payment method within a specified time range. The results can be summed to calculate the total payment method GMV/sales. Use this to understand the revenue contribution of each payment method and the overall sales performance.",
     properties=time_input_schema["properties"],
     required=time_input_schema["required"],
 )
 
 average_ticket_payment_wise_function = FunctionSchema(
     name="get_average_ticket_payment_wise_by_time",
-    description="Calculates average ticket size by payment method.",
+    description="Get the average transaction value (ticket size) for each payment method within a specified time range. Use this to analyze customer spending habits across different payment options.",
     properties=time_input_schema["properties"],
     required=time_input_schema["required"],
 )
