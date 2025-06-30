@@ -1,5 +1,4 @@
 import sys
-import os
 import json
 import logging
 from loguru import logger
@@ -7,11 +6,7 @@ from loguru import logger
 # Remove the default sink to have full control over logging.
 logger.remove()
 
-# Get the environment, default to "production"
-ENVIRONMENT = os.environ.get("ENVIRONMENT", "production")
-
-# Get the production log level, default to "INFO"
-PROD_LOG_LEVEL = os.environ.get("PROD_LOG_LEVEL", "INFO")
+from app.core.config import ENVIRONMENT, PROD_LOG_LEVEL
 
 def json_sink(message):
     """

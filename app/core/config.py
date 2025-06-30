@@ -11,6 +11,16 @@ def get_required_env(var_name: str) -> str:
         raise ValueError(f"{var_name} environment variable is required")
     return value
 
+# Environment
+ENVIRONMENT = os.environ.get("ENVIRONMENT", "production")
+PROD_LOG_LEVEL = os.environ.get("PROD_LOG_LEVEL", "INFO")
+
+# Uvicorn
+PORT = int(os.environ.get("PORT", 8000))
+HOST = os.environ.get("HOST", "0.0.0.0")
+UVICORN_RELOAD = os.environ.get("UVICORN_RELOAD", "true").lower() == "true"
+UVICORN_LOG_LEVEL = os.environ.get("UVICORN_LOG_LEVEL", "info")
+
 # Gemini Proxy Configuration
 GEMINI_API_KEY = get_required_env("GEMINI_API_KEY")
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash-live-001")
@@ -18,9 +28,12 @@ RESPONSE_MODALITY = os.environ.get("RESPONSE_MODALITY", "AUDIO")
 
 # Pipecat Agent Configuration
 DAILY_API_KEY = get_required_env("DAILY_API_KEY")
+DAILY_API_URL = os.environ.get("DAILY_API_URL", "https://api.daily.co/v1")
 AZURE_OPENAI_API_KEY = get_required_env("AZURE_OPENAI_API_KEY")
 AZURE_OPENAI_ENDPOINT = get_required_env("AZURE_OPENAI_ENDPOINT")
+AZURE_OPENAI_MODEL = os.environ.get("AZURE_OPENAI_MODEL", "gpt-4o-automatic")
 GOOGLE_CREDENTIALS_JSON = get_required_env("GOOGLE_CREDENTIALS_JSON")
+ENABLE_NOISE_REDUCE_FILTER = os.environ.get("ENABLE_NOISE_REDUCE_FILTER", "true").lower() == "true"
 
 # WebSocket keepalive settings
 PING_INTERVAL = int(os.environ.get("WS_PING_INTERVAL", 5))  # seconds
@@ -33,6 +46,8 @@ GENIUS_API_URL = "https://portal.juspay.in/api/q/query?api-type=genius-query"
 SAMPLE_RATE = 16000
 FRAME_DURATION = 30  # ms
 FRAME_SIZE = int(SAMPLE_RATE * FRAME_DURATION / 1000) * 2  # bytes per frame (16-bit PCM)
+VAD_CONFIDENCE = float(os.environ.get("VAD_CONFIDENCE", 0.85))
+VAD_MIN_VOLUME = float(os.environ.get("VAD_MIN_VOLUME", 0.75))
 
 # Tracing
 ENABLE_TRACING = os.environ.get("ENABLE_TRACING", "false").lower() == "true"
