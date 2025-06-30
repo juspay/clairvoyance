@@ -1,5 +1,4 @@
 import uvicorn
-import os
 import json
 import subprocess
 import uuid
@@ -19,6 +18,7 @@ from pipecat.transports.services.helpers.daily_rest import DailyRESTHelper, Dail
 # Import necessary components from the new structure
 from app.ws.live_session import handle_websocket_session, get_active_connections, get_shutdown_event
 from app.core.logger import logger
+from app.core.config import DAILY_API_KEY, DAILY_API_URL, PORT, HOST
 from app import __version__
 
 # Dictionary to track bot processes: {pid: (process, room_url)}
@@ -58,8 +58,8 @@ async def lifespan(app: FastAPI):
     # Initialize aiohttp session
     aiohttp_session = aiohttp.ClientSession()
     daily_helpers["rest"] = DailyRESTHelper(
-        daily_api_key=os.getenv("DAILY_API_KEY", ""),
-        daily_api_url=os.getenv("DAILY_API_URL", "https://api.daily.co/v1"),
+        daily_api_key=DAILY_API_KEY,
+        daily_api_url=DAILY_API_URL,
         aiohttp_session=aiohttp_session,
     )
     logger.info("Daily REST helper initialized.")
@@ -231,6 +231,4 @@ async def shutdown_server():
 # The main block is now only for direct execution, which is not the recommended way.
 # Uvicorn running from run.py is the standard.
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8000))
-    host = os.environ.get("HOST", "0.0.0.0")
-    uvicorn.run(app, host=host, port=port, log_level="info")
+    uvicorn.run(app, host=HOST, port=PORT, log_level="info")

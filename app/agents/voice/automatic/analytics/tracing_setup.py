@@ -4,12 +4,13 @@ from opentelemetry.sdk.resources import SERVICE_NAME, Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from opentelemetry import trace
-import os
 
 from loguru import logger
 
+from app.core.config import ENABLE_TRACING
+
 def setup_tracing(service_name: str):
-    if os.environ.get("ENABLE_TRACING", "false").lower() != "true":
+    if not ENABLE_TRACING:
         logger.info("Tracing is disabled. Skipping setup.")
         return
 
