@@ -8,6 +8,16 @@ logger.remove()
 
 from app.core.config import ENVIRONMENT, PROD_LOG_LEVEL
 
+LOGS_TO_UPLEVEL = ["pipecat.transports.base_input", "pipecat.transports.base_output"]
+
+def log_record_filter(record):
+    if record["name"] in LOGS_TO_UPLEVEL and record["level"].name == "DEBUG":
+        info_level = logger.level("INFO")
+        record["level"].name = info_level.name
+        record["level"].no = info_level.no
+        record["level"].icon = info_level.icon
+    return True
+
 def json_sink(message):
     """
     Custom sink function for JSON output in production environments.
@@ -90,6 +100,7 @@ def _setup_logger_sinks(include_session_id: bool = False):
             enqueue=True,
             backtrace=False,  # Keep JSON logs concise and predictable
             diagnose=False,   # Prevent sensitive data leakage and performance overhead
+            filter=log_record_filter,
         )
 
 def configure_session_logger(session_id: str):
