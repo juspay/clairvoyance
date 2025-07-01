@@ -165,6 +165,12 @@ async def bot_connect(request: Request) -> Dict[str, Any]:
         "--session-id", session_id,
     ]
 
+    # Add user_name and tts_service regardless of mode
+    if user_name:
+        cmd += ["--user-name", user_name]
+    if tts_service:
+        cmd += ["--tts-service", tts_service]
+
     # Only send external tokens when in LIVE mode
     if mode is Mode.LIVE:
         if euler_tok:
@@ -177,10 +183,6 @@ async def bot_connect(request: Request) -> Dict[str, Any]:
             cmd += ["--shop-id", shop_id]
         if shop_type:
             cmd += ["--shop-type", shop_type]
-        if user_name:
-            cmd += ["--user-name", user_name]
-        if tts_service:
-            cmd += ["--tts-service", tts_service]
 
     # 5. Launch subprocess without shell
     logger.bind(session_id=session_id).info(f"Launching subprocess with command: {' '.join(cmd)}")
