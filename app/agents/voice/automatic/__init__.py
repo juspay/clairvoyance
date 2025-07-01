@@ -23,7 +23,7 @@ from pipecat.services.google.rtvi import GoogleRTVIObserver
 
 from app.core import config
 from .processors import LLMSpyProcessor
-from .prompts import SYSTEM_PROMPT
+from .prompts import get_system_prompt
 from .tools import initialize_tools
 from .tts import get_tts_service, get_tts_service_enum, TTSService
 from opentelemetry import trace
@@ -63,12 +63,7 @@ async def main():
     )
 
     # Personalize the system prompt if a user name is provided
-    system_prompt = SYSTEM_PROMPT
-    if args.user_name:
-        logger.info(f"Personalizing prompt for user: {args.user_name}")
-        system_prompt = f"You are speaking with {args.user_name}. Make the conversation feel more personal by naturally using their name where appropriate. {SYSTEM_PROMPT}"
-    else:
-        system_prompt = SYSTEM_PROMPT
+    system_prompt = get_system_prompt(args.user_name, args.tts_service)
 
     daily_params = DailyParams(
         audio_in_enabled=True,
@@ -160,7 +155,7 @@ async def main():
     conversation_id=f"{user_name}-{shopId}-{timestamp}"
 
     task_params = {
-        "idle_timeout_secs": 60.0,
+        "idle_timeout_secs": 180.0,
         "idle_timeout_frames": (BotSpeakingFrame, LLMFullResponseEndFrame),
         "params": PipelineParams(allow_interruptions=True),
         "cancel_on_idle_timeout": True,
