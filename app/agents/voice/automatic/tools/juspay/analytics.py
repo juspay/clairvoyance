@@ -1,6 +1,8 @@
 import httpx
 import json
 
+from datetime import datetime
+import pytz
 from app.core.logger import logger
 from app.core.config import GENIUS_API_URL
 from pipecat.services.llm_service import FunctionCallParams
@@ -20,11 +22,44 @@ async def _make_genius_api_request(params: FunctionCallParams, payload_details: 
         await params.result_callback({"error": "Juspay tool is not configured."})
         return
 
-    start_time_iso = params.arguments.get("startTime")
-    end_time_iso = params.arguments.get("endTime")
+    start_time_str = params.arguments.get("startTime")
+    end_time_str = params.arguments.get("endTime")
 
-    if not start_time_iso or not end_time_iso:
-        await params.result_callback({"error": "startTime and endTime are required parameters in ISO format."})
+    try:
+        ist = pytz.timezone("Asia/Kolkata")
+        utc = pytz.utc
+
+        # If startTime is not provided, default to the beginning of today in IST.
+        if not start_time_str:
+            now_ist = datetime.now(ist)
+            start_time_ist = now_ist.replace(hour=0, minute=0, second=0, microsecond=0)
+        else:
+            # Assuming the provided string is in a format that can be parsed,
+            # and we'll treat it as IST. For simplicity, this example assumes
+            # a 'YYYY-MM-DD HH:MM:SS' format if a string is passed.
+            # A more robust solution would handle various formats.
+            start_time_ist = ist.localize(datetime.strptime(start_time_str, '%Y-%m-%d %H:%M:%S'))
+
+        # Convert start time to UTC
+        start_time_utc = start_time_ist.astimezone(utc)
+
+        # Handle end time
+        if end_time_str:
+            end_time_ist = ist.localize(datetime.strptime(end_time_str, '%Y-%m-%d %H:%M:%S'))
+        else:
+            # If endTime is not provided, default to the current time in IST.
+            end_time_ist = datetime.now(ist)
+        
+        # Convert end time to UTC
+        end_time_utc = end_time_ist.astimezone(utc)
+
+        # Format to ISO string with 'Z' required by the API
+        start_time_iso = start_time_utc.isoformat().replace('+00:00', 'Z')
+        end_time_iso = end_time_utc.isoformat().replace('+00:00', 'Z')
+
+    except Exception as e:
+        logger.error(f"Error converting time for Juspay API: {e}")
+        await params.result_callback({"error": f"Invalid time format provided. Please use 'YYYY-MM-DD HH:MM:SS' in IST. Error: {e}"})
         return
 
     full_payload = {
@@ -158,11 +193,11 @@ time_input_schema = {
     "properties": {
         "startTime": {
             "type": "string",
-            "description": "The start time for the analysis in ISO format (e.g., '2023-01-01T00:00:00Z'). This is mandatory.",
+            "description": "The start time for the analysis in IST format 'YYYY-MM-DD HH:MM:SS'. This is mandatory.",
         },
         "endTime": {
             "type": "string",
-            "description": "The end time for the analysis in ISO format (e.g., '2023-01-01T01:00:00Z'). This is mandatory.",
+            "description": "The end time for the analysis in IST format 'YYYY-MM-DD HH:MM:SS'. Defaults to the current time if not provided.",
         },
     },
     "required": ["startTime", "endTime"],
