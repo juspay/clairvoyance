@@ -27,6 +27,7 @@ from .prompts import get_system_prompt
 from .tools import initialize_tools
 from .tts import get_tts_service, get_tts_service_enum, TTSService
 from opentelemetry import trace
+from langfuse import get_client
 
 load_dotenv(override=True)
 
@@ -198,6 +199,7 @@ async def main():
             logger.info("Main task cancelled. Exiting gracefully.")
 
     if config.ENABLE_TRACING:
+        langfuse_client = get_client()
         tracer = trace.get_tracer(__name__)
         with tracer.start_as_current_span(conversation_id) as root_span:
             logger.info(f"Starting current span with conversation ID: {conversation_id}")
@@ -205,6 +207,9 @@ async def main():
             root_span.set_attribute("conversation.type", "voice")
             root_span.set_attribute("user.name", user_name)
             root_span.set_attribute("service.name", "breeze-voice-agent")
+            langfuse_client.update_current_trace(user_id=user_name)
+            langfuse_client.update_current_trace(session_id=args.session_id)
+            langfuse_client.update_current_trace(tags=["Bret"])
             await run_pipeline()
     else:
         await run_pipeline()
