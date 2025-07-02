@@ -8,16 +8,6 @@ logger.remove()
 
 from app.core.config import ENVIRONMENT, PROD_LOG_LEVEL
 
-LOGS_TO_UPLEVEL = ["pipecat.transports.base_input", "pipecat.transports.base_output"]
-
-def log_record_filter(record):
-    if record["name"] in LOGS_TO_UPLEVEL and record["level"].name == "DEBUG":
-        info_level = logger.level("INFO")
-        record["level"].name = info_level.name
-        record["level"].no = info_level.no
-        record["level"].icon = info_level.icon
-    return True
-
 def json_sink(message):
     """
     Custom sink function for JSON output in production environments.
@@ -96,11 +86,33 @@ def _setup_logger_sinks(include_session_id: bool = False):
         # Production mode - JSON automatically includes session_id from extra
         logger.add(
             json_sink,
-            level=PROD_LOG_LEVEL,  # Configurable log level via PROD_LOG_LEVEL env var
+            level=PROD_LOG_LEVEL,  # Configurable log level via PROD_LOG_LEVEL env var defaulting to INFO
             enqueue=True,
             backtrace=False,  # Keep JSON logs concise and predictable
             diagnose=False,   # Prevent sensitive data leakage and performance overhead
-            filter=log_record_filter,
+        )
+
+        DEBUG_LOGS_TO_UPLEVEL = {"pipecat.transports.base_input", "pipecat.transports.base_output"}
+
+        # 2) Secondary “promote” sink for exactly those two DEBUG records
+        def promote_debug_logs(record):
+            name = record["name"]
+            lvl  = record["level"].name
+            # target only required debug logs
+            if name in DEBUG_LOGS_TO_UPLEVEL and lvl == "DEBUG":
+                # bump them up to INFO so that they pass the PROD_LOG_LEVEL filter
+                record["level"].name = "INFO"
+                record["level"].no   = logger.level("INFO").no
+                return True
+            return False
+
+        logger.add(
+            json_sink,               # same JSON formatter
+            level="DEBUG",           # catch DEBUGs…
+            filter=promote_debug_logs,
+            enqueue=True,
+            backtrace=False,
+            diagnose=False,
         )
 
 def configure_session_logger(session_id: str):
