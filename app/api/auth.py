@@ -1,7 +1,7 @@
 import asyncio
 import json
 from enum import Enum
-from typing import Optional, Union, Any
+from typing import Optional, Union
 
 import httpx # Changed from requests for new async function
 import requests # Keep for existing fetch_breeze_token
