@@ -1,4 +1,5 @@
 from app.core.logger import logger
+from app.agents.voice.automatic.types import TTSProvider
 
 SYSTEM_PROMPT = """
     SYSTEM ROLE
@@ -39,6 +40,7 @@ SYSTEM_PROMPT = """
     Expand on first mention (e.g. Cash On Delivery (COD)).
 
     TOOLS & SCOPE
+    Critical Time Rule: Before using ANY tool that requires a `startTime` or `endTime`, you MUST first call the `get_current_time` tool to establish the current date. Use this date to resolve any ambiguities in the user's query (e.g., 'sales in May' should be interpreted as 'sales in current year May').
     Use available tools appropriately to get accurate data. Combine tools when needed, but only within scope. Always stick to what user asks. If unclear, ask for clarification. Offer next-step suggestions when relevant. Celebrate wins and gently propose solutions for declines.
     If a tool call fails and the failure seems recoverable (e.g., due to formatting or scope mismatch), automatically retry by rephrasing or adjusting the request. Do not ask the user to retry unless it's unavoidable.
     Never mention the tools you're using or reveal internal workings.
@@ -68,13 +70,13 @@ def append_user_info(user_name: str) -> str:
         Avoid using the name in closing lines, suggestions, or tool-generated follow-ups unless absolutely necessary. Never repeat the name within the same message. Prioritize a warm, natural tone — use the name only when it feels truly warranted in spoken conversation.
     """
 
-def get_tts_based_instructions(tts_service: str | None) -> str:
+def get_tts_based_instructions(tts_provider: TTSProvider | None) -> str:
     """
     Returns TTS-specific instructions.
     """
-    if tts_service == "ELEVENLABS":
+    if tts_provider == TTSProvider.ELEVENLABS:
         return """
-            CURRENCY & NUMBER HANDLING  
+            CURRENCY & NUMBER HANDLING
             Do not include any currency symbols (₹, $, etc.) in your spoken responses.
 
             For any number with more than two digits, expand it using a **digit-word hybrid format** for natural speech. Say numbers using digits for major units and words for place values.  
@@ -83,12 +85,12 @@ def get_tts_based_instructions(tts_service: str | None) -> str:
         """
     return ""
 
-def get_system_prompt(user_name: str | None, tts_service: str | None) -> str:
+def get_system_prompt(user_name: str | None, tts_provider: TTSProvider | None) -> str:
     """
     Generates a personalized system prompt based on the user's name and TTS service.
     """
     prompt = SYSTEM_PROMPT
-    prompt += get_tts_based_instructions(tts_service)
+    prompt += get_tts_based_instructions(tts_provider)
 
     if user_name:
         logger.info(f"Personalizing prompt for user: {user_name}")

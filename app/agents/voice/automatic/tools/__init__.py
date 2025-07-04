@@ -2,6 +2,7 @@ from typing import List
 
 from app.core.logger import logger
 from pipecat.adapters.schemas.tools_schema import ToolsSchema
+from app.agents.voice.automatic.types import Mode
 from .dummy import tools as dummy_tools, tool_functions as dummy_tool_functions
 from .system import tools as system_tools, tool_functions as system_tool_functions
 from . import juspay
@@ -43,7 +44,7 @@ def initialize_tools(
     logger.info(f"Loaded {len(system_tools.standard_tools)} system tools.")
 
     # Dummy tools are only available in test mode
-    if mode == "test":
+    if mode == Mode.TEST.value:
         all_tools.extend(dummy_tools.standard_tools)
         all_tool_functions.update(dummy_tool_functions)
         logger.info(f"Loaded {len(dummy_tools.standard_tools)} dummy tools for test mode.")

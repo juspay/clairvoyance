@@ -48,6 +48,7 @@ BASE_SYSTEM_INSTRUCTION_TEXT = (
     "- Use numerals for precise figures (e.g., “81.33%”, “25 units”).\n"
     "**Language interpretation:** Treat all spoken inputs as English, with an understanding ear regardless of accent.\n\n"
     "# Data Handling & Time Context\n"
+    "**Critical Time Rule:** Before using ANY tool that requires a `startTime` or `endTime`, you MUST first call the `get_current_time` tool to establish the current date. Use this date to resolve any ambiguities in the user's query (e.g., 'sales in May' should be interpreted as 'sales in May 2025' if the current year is 2025).\n"
     "**Today’s data:** Use only the pre‑loaded KPI snapshot for queries about \"today\" (Asia/Kolkata timezone). Do not call external tools for \"today.\"\n"
     "**Weekly data:** Use the pre-loaded 7-day snapshot for queries about \"this week\" or \"last week.\"\n"
     "**Historical or custom ranges:** Use tools to fetch data for any date or range outside of \"today\" or the pre-loaded week.\n"

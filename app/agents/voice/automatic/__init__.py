@@ -25,7 +25,14 @@ from app.core import config
 from .processors import LLMSpyProcessor
 from .prompts import get_system_prompt
 from .tools import initialize_tools
-from .tts import get_tts_service, get_tts_service_enum, TTSService
+from .tts import get_tts_service
+from app.agents.voice.automatic.types import (
+    TTSProvider,
+    Mode,
+    decode_tts_provider,
+    decode_voice_name,
+    decode_mode,
+)
 from opentelemetry import trace
 from langfuse import get_client
 
@@ -38,7 +45,7 @@ async def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("-u", "--url", type=str, required=True, help="URL of the Daily room")
     parser.add_argument("-t", "--token", type=str, required=True, help="Daily token")
-    parser.add_argument("--mode", type=str, choices=["test", "live"], default="test", help="Mode (test or live)")
+    parser.add_argument("--mode", type=str, help="Mode (TEST or LIVE)")
     parser.add_argument("--session-id", type=str, required=True, help="Session ID for logging")
     parser.add_argument("--euler-token", type=str, help="Euler token for live mode")
     parser.add_argument("--breeze-token", type=str, help="Breeze token for live mode")
@@ -46,25 +53,37 @@ async def main():
     parser.add_argument("--shop-id", type=str, help="Shop ID for live mode")
     parser.add_argument("--shop-type", type=str, help="Shop type for live mode")
     parser.add_argument("--user-name", type=str, help="User's name")
-    parser.add_argument("--tts-service", type=str, choices=["GOOGLE", "ELEVENLABS"], help="TTS service to use")
+    parser.add_argument("--tts-provider", type=str, help="TTS provider to use")
+    parser.add_argument("--voice-name", type=str, help="Voice name to use")
     args = parser.parse_args()
 
     # Configure logger with session ID for all logs in this subprocess
     configure_session_logger(args.session_id)
     logger.info(f"Voice agent started with session ID: {args.session_id}")
 
+    # Decode TTS parameters
+    tts_provider = decode_tts_provider(args.tts_provider)
+    voice_name = decode_voice_name(args.voice_name)
+    mode = decode_mode(args.mode)
+
     # Initialize tools based on the mode and provided tokens
-    tools, tool_functions = initialize_tools(
-        mode=args.mode,
-        breeze_token=args.breeze_token,
-        euler_token=args.euler_token,
-        shop_url=args.shop_url,
-        shop_id=args.shop_id,
-        shop_type=args.shop_type,
-    )
+    # Only pass tokens if in live mode
+    if mode == Mode.LIVE:
+        tools, tool_functions = initialize_tools(
+            mode=mode.value,
+            breeze_token=args.breeze_token,
+            euler_token=args.euler_token,
+            shop_url=args.shop_url,
+            shop_id=args.shop_id,
+            shop_type=args.shop_type,
+        )
+    else:
+        tools, tool_functions = initialize_tools(
+            mode=mode.value,
+        )
 
     # Personalize the system prompt if a user name is provided
-    system_prompt = get_system_prompt(args.user_name, args.tts_service)
+    system_prompt = get_system_prompt(args.user_name, tts_provider)
 
     daily_params = DailyParams(
         audio_in_enabled=True,
@@ -98,7 +117,7 @@ async def main():
         credentials=config.GOOGLE_CREDENTIALS_JSON
     )
 
-    tts = get_tts_service(tts_service=args.tts_service)
+    tts = get_tts_service(tts_provider=tts_provider.value, voice_name=voice_name.value)
 
     llm = AzureLLMService(
         api_key=config.AZURE_OPENAI_API_KEY,
@@ -113,7 +132,7 @@ async def main():
     @llm.event_handler("on_function_calls_started")
     async def on_function_calls_started(service, function_calls):
         # Only play the "checking" message if using Google TTS
-        if get_tts_service_enum(args.tts_service) == TTSService.GOOGLE:
+        if tts_provider == TTSProvider.GOOGLE:
             for function_call in function_calls:
                 if function_call.function_name != "get_current_time":
                     await tts.queue_frame(TTSSpeakFrame("Let me check on that."))

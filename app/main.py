@@ -6,7 +6,6 @@ import time
 from pathlib import Path
 from contextlib import asynccontextmanager
 from typing import Any, Dict
-from enum import Enum
 
 import aiohttp
 from fastapi import FastAPI, WebSocket, HTTPException, Request
@@ -20,6 +19,7 @@ from app.ws.live_session import handle_websocket_session, get_active_connections
 from app.core.logger import logger
 from app.core.config import DAILY_API_KEY, DAILY_API_URL, PORT, HOST
 from app import __version__
+from app.schemas import AutomaticVoiceUserConnectRequest
 
 # Dictionary to track bot processes: {pid: (process, room_url)}
 bot_procs = {}
@@ -97,34 +97,19 @@ async def websocket_endpoint(websocket: WebSocket):
     await handle_websocket_session(websocket)
 
 # Pipecat bot endpoint
-class Mode(Enum):
-    TEST = "test"
-    LIVE = "live"
-
 @app.post("/agent/voice/automatic")
-async def bot_connect(request: Request) -> Dict[str, Any]:
-    try:
-        payload = await request.json()
-    except json.JSONDecodeError:
-        logger.error("Failed to decode JSON from request body")
-        raise HTTPException(status_code=400, detail="Invalid JSON payload")
-
-    logger.info(f"Received payload: {payload}")
-    # 1. Extract and validate mode, defaulting to TEST on any error
-    raw_mode = payload.get("mode", Mode.TEST.value)
-    try:
-        mode = Mode(raw_mode)
-    except ValueError:
-        # Invalid or missing → fallback to TEST
-        mode = Mode.TEST
-
-    euler_tok = payload.get("eulerToken")
-    breeze_tok = payload.get("breezeToken")
-    shop_url = payload.get("shopUrl")
-    shop_id = payload.get("shopId")
-    shop_type = payload.get("shopType")
-    user_name = payload.get("userName")
-    tts_service = payload.get("ttsService")
+async def bot_connect(request: AutomaticVoiceUserConnectRequest) -> Dict[str, Any]:
+    logger.info(f"Received new user connect request payload: {request.model_dump_json(exclude_none=True)}")
+    # 1. Validate request
+    raw_mode = request.mode
+    euler_tok = request.eulerToken
+    breeze_tok = request.breezeToken
+    shop_url = request.shopUrl
+    shop_id = request.shopId
+    shop_type = request.shopType
+    user_name = request.userName
+    tts_provider = request.ttsService.ttsProvider.value if request.ttsService else None
+    voice_name = request.ttsService.voiceName.value if request.ttsService else None
 
     # 2. Create room + token
     MAX_DURATION = 30 * 60
@@ -161,28 +146,27 @@ async def bot_connect(request: Request) -> Dict[str, Any]:
         "python3", "-m", bot_file,
         "-u", room.url,
         "-t", token,
-        "--mode", mode.value,
+        "--mode", raw_mode.upper() if raw_mode else None,
         "--session-id", session_id,
     ]
 
     # Add user_name and tts_service regardless of mode
     if user_name:
         cmd += ["--user-name", user_name]
-    if tts_service:
-        cmd += ["--tts-service", tts_service]
-
-    # Only send external tokens when in LIVE mode
-    if mode is Mode.LIVE:
-        if euler_tok:
-            cmd += ["--euler-token", euler_tok]
-        if breeze_tok:
-            cmd += ["--breeze-token", breeze_tok]
-        if shop_url:
-            cmd += ["--shop-url", shop_url]
-        if shop_id:
-            cmd += ["--shop-id", shop_id]
-        if shop_type:
-            cmd += ["--shop-type", shop_type]
+    if tts_provider:
+        cmd += ["--tts-provider", tts_provider]
+    if voice_name:
+        cmd += ["--voice-name", voice_name]
+    if euler_tok:
+        cmd += ["--euler-token", euler_tok]
+    if breeze_tok:
+        cmd += ["--breeze-token", breeze_tok]
+    if shop_url:
+        cmd += ["--shop-url", shop_url]
+    if shop_id:
+        cmd += ["--shop-id", shop_id]
+    if shop_type:
+        cmd += ["--shop-type", shop_type]
 
     # 5. Launch subprocess without shell
     logger.bind(session_id=session_id).info(f"Launching subprocess with command: {' '.join(cmd)}")
