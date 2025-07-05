@@ -119,16 +119,27 @@ def get_sr_success_rate_by_time(params: FunctionCallParams) -> GeniusApiResponse
 
 async def get_payment_analytics_by_dimension(params: FunctionCallParams):
     try:
-        dimension = params.arguments.get("dimension")
+        input_dimension = params.arguments.get("dimension")
         logger.info(
-            f"Fetching payment analytics for dimension '{dimension}' with params: {params.arguments}")
+            f"Fetching payment analytics for input dimension '{input_dimension}' with params: {params.arguments}")
+
+        actual_dimensions = []
+        if input_dimension == "payment_gateway":
+            actual_dimensions = ["payment_gateway"]
+        elif input_dimension == "payment_instrument_overview":
+            actual_dimensions = ["payment_instrument_group"]
+        elif input_dimension == "payment_instrument_breakdown":
+            actual_dimensions = ["payment_method", "payment_method_subtype"]
+        else:
+            actual_dimensions = ["payment_method_type"]
 
         # Analytics data
         analytics_payload = {
             "metric": ["total_amount", "order_with_transactions",
                        "success_rate", "success_volume"],
-            "dimensions": [dimension],
+            "dimensions": actual_dimensions,
             "domain": "kvorders",
+            "sortedOn": {"sortDimension": "total_amount", "ordering": "Desc"},
         }
         analytics_result = await _make_genius_api_request(
             params, analytics_payload)
@@ -139,7 +150,7 @@ async def get_payment_analytics_by_dimension(params: FunctionCallParams):
         # Error messages data
         errors_payload = {
             "metric": ["order_with_transactions"],
-            "dimensions": [dimension, "error_message"],
+            "dimensions": actual_dimensions + ["error_message"],
             "domain": "kvorders",
         }
         errors_result = await _make_genius_api_request(params, errors_payload)
@@ -224,6 +235,7 @@ async def merchant_offer_analytics(params: FunctionCallParams):
                        "success_rate", "avg_ticket_size", "total_amount"],
             "dimensions": ["merchant_offer_code"],
             "domain": "kvoffers",
+            "sortedOn": {"sortDimension": "total_amount", "ordering": "Desc"},
         }
         analytics_result = await _make_genius_api_request(
             params, analytics_payload)
@@ -280,13 +292,13 @@ get_sr_success_rate_function = FunctionSchema(
 
 payment_analytics_by_dimension_function = FunctionSchema(
     name="get_payment_analytics_by_dimension",
-    description="Fetches payment analytics and error messages, grouped by a specified dimension. Use this to answer questions about performance for different payment gateways, instrument groups, or method types.",
+    description="Retrieves time-bound KPIs—total transaction volume, success rate, and transaction count—broken down by the selected dimension. Useful to analyze performance by gateway, instrument category, or specific instrument type (e.g., Visa, Mastercard). Always aim to extract as many dimensions as possible for a comprehensive snapshot.",
     properties={
         **time_input_schema["properties"],
         "dimension": {
             "type": "string",
-            "description": "The dimension to group the analytics by. Choose 'payment_gateway' for gateways (e.g., Stripe, Razorpay), 'payment_instrument_group' for instrument groups (e.g., Credit Card, UPI), or 'payment_method_type' for broad method types (e.g., Card, UPI).",
-            "enum": ["payment_gateway", "payment_instrument_group", "payment_method_type"],
+            "description": "How to slice the data: 'payment_gateway' for each gateway (Stripe, Razorpay), 'payment_instrument_overview' for high-level groups (Credit, Debit, UPI, Wallet), or 'payment_instrument_breakdown' for granular types (Visa, Mastercard, UPI-Collect, Rupay, etc.). Choose the most specific level containing the metric you need.",
+            "enum": ["payment_gateway", "payment_instrument_overview", "payment_instrument_breakdown"],
         },
     },
     required=["startTime", "endTime", "dimension"],
