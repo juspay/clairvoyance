@@ -60,6 +60,12 @@ VAD_MIN_VOLUME = float(os.environ.get("VAD_MIN_VOLUME", 0.75))
 # Tracing
 ENABLE_TRACING = os.environ.get("ENABLE_TRACING", "false").lower() == "true"
 
+# Search
+ENABLE_SEARCH_GROUNDING = os.environ.get("ENABLE_SEARCH_GROUNDING", "true").lower() == "true"
+GEMINI_SEARCH_RESULT_API_MODEL = os.environ.get("GEMINI_SEARCH_RESULT_API_MODEL", "gemini-2.5-flash-lite-preview-06-17")
+
 logger.info(f"Using Gemini model: {GEMINI_MODEL}")
 logger.info(f"Using response modality: {RESPONSE_MODALITY}")
 logger.info(f"Tracing enabled: {ENABLE_TRACING}")
+logger.info(f"Search grounding enabled: {ENABLE_SEARCH_GROUNDING}")
+logger.info(f"Using Gemini search result model: {GEMINI_SEARCH_RESULT_API_MODEL}")

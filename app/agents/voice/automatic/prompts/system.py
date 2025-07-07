@@ -1,4 +1,5 @@
 from app.core.logger import logger
+from app.core.config import ENABLE_SEARCH_GROUNDING
 from app.agents.voice.automatic.types import TTSProvider
 
 SYSTEM_PROMPT = """
@@ -87,6 +88,16 @@ SYSTEM_PROMPT = """
 
 """
 
+def get_internet_search_instructions() -> str:
+    """
+    Returns instructions for internet search if enabled.
+    """
+    if ENABLE_SEARCH_GROUNDING:
+        return """
+            Internet access": You have tool to access internet for questions you are not aware of. But before using internet search tool you should ALWAYS ask user confirmation whether to search internet or not. If user says yes, then you can use internet search tool.
+        """
+    return ""
+
 def append_user_info(user_name: str) -> str:
     """
     Appends user personalization instructions to the system prompt.
@@ -123,6 +134,7 @@ def get_system_prompt(user_name: str | None, tts_provider: TTSProvider | None) -
     """
     prompt = SYSTEM_PROMPT
     prompt += get_tts_based_instructions(tts_provider)
+    prompt += get_internet_search_instructions()
 
     if user_name:
         logger.info(f"Personalizing prompt for user: {user_name}")
