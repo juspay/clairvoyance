@@ -110,6 +110,8 @@ async def bot_connect(request: AutomaticVoiceUserConnectRequest) -> Dict[str, An
     user_name = request.userName
     tts_provider = request.ttsService.ttsProvider.value if request.ttsService else None
     voice_name = request.ttsService.voiceName.value if request.ttsService else None
+    merchant_id = request.merchantId
+    platform_integrations = request.platformIntegrations
 
     # 2. Create room + token
     MAX_DURATION = 30 * 60
@@ -167,6 +169,10 @@ async def bot_connect(request: AutomaticVoiceUserConnectRequest) -> Dict[str, An
         cmd += ["--shop-id", shop_id]
     if shop_type:
         cmd += ["--shop-type", shop_type]
+    if merchant_id:
+        cmd += ["--merchant-id", merchant_id]
+    if platform_integrations:
+        cmd += ["--platform-integrations"] + platform_integrations
 
     # 5. Launch subprocess without shell
     logger.bind(session_id=session_id).info(f"Launching subprocess with command: {' '.join(cmd)}")

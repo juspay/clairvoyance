@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, List
 from pydantic import BaseModel
 from app.agents.voice.automatic.types.models import TTSProvider, VoiceName
 
@@ -15,3 +15,5 @@ class AutomaticVoiceUserConnectRequest(BaseModel):
     shopType: Optional[str] = None
     userName: Optional[str] = None
     ttsService: Optional[AutomaticVoiceTTSServiceConfig] = None
+    merchantId: Optional[str] = None
+    platformIntegrations: Optional[List[str]] = None
