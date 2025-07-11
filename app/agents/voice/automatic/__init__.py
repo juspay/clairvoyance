@@ -22,6 +22,7 @@ from pipecat.processors.frameworks.rtvi import RTVIConfig, RTVIProcessor
 from pipecat.services.google.rtvi import GoogleRTVIObserver
 
 from app.core import config
+from app.agents.voice.automatic.services.mcp.automatic_client import MCPClient
 from .processors import LLMSpyProcessor
 from .prompts import get_system_prompt
 from .tools import initialize_tools
@@ -55,6 +56,8 @@ async def main():
     parser.add_argument("--user-name", type=str, help="User's name")
     parser.add_argument("--tts-provider", type=str, help="TTS provider to use")
     parser.add_argument("--voice-name", type=str, help="Voice name to use")
+    parser.add_argument("--merchant-id", type=str, help="Merchant Id of the Shop")
+    parser.add_argument("--platform-integrations",type=str, nargs="+", help="Platform Integrations that are supported by the shop (string array)")
     args = parser.parse_args()
 
     # Configure logger with session ID for all logs in this subprocess
@@ -68,19 +71,9 @@ async def main():
 
     # Initialize tools based on the mode and provided tokens
     # Only pass tokens if in live mode
-    if mode == Mode.LIVE:
-        tools, tool_functions = initialize_tools(
-            mode=mode.value,
-            breeze_token=args.breeze_token,
-            euler_token=args.euler_token,
-            shop_url=args.shop_url,
-            shop_id=args.shop_id,
-            shop_type=args.shop_type,
-        )
-    else:
-        tools, tool_functions = initialize_tools(
-            mode=mode.value,
-        )
+    
+    use_automatic_mcp_server = config.AUTOMATIC_MCP_TOOL_SERVER_USAGE or \
+        (args.shop_id and args.shop_id in config.SHOPS_FOR_AUTOMATIC_MCP_SERVER)
 
     # Personalize the system prompt if a user name is provided
     system_prompt = get_system_prompt(args.user_name, tts_provider)
@@ -125,8 +118,44 @@ async def main():
         model=config.AZURE_OPENAI_MODEL,
     )
 
-    for name, function in tool_functions.items():
-        llm.register_function(name, function)
+    if not use_automatic_mcp_server:
+        if mode == Mode.LIVE:
+            tools, tool_functions = initialize_tools(
+                mode=mode.value,
+                breeze_token=args.breeze_token,
+                euler_token=args.euler_token,
+                shop_url=args.shop_url,
+                shop_id=args.shop_id,
+                shop_type=args.shop_type,
+            )
+        else:
+            tools, tool_functions = initialize_tools(
+                mode=mode.value,
+            )
+            
+        for name, function in tool_functions.items():
+            logger.info("Initializing the default function tools")
+            llm.register_function(name, function)
+    else:
+        logger.info(f"Initializing tools from remote MCP server")
+        
+        mcp_context = {
+            "sessionId": args.session_id,
+            "juspayToken": args.euler_token,
+            "shopUrl": args.shop_url,
+            "shopId": args.shop_id,
+            "shopType": args.shop_type,
+            "userId": args.user_name,
+            "enableDemoMode": mode != Mode.LIVE,
+            "merchantId": args.merchant_id,
+            "platformIntegrations": args.platform_integrations
+        }
+        mcp_client = MCPClient(
+            server_url=config.AUTOMATIC_TOOL_MCP_SERVER_URL,
+            auth_token=args.breeze_token,
+            context=mcp_context
+        )
+        tools = await mcp_client.register_tools(llm)
 
     # Simplified event handler for TTS feedback
     @llm.event_handler("on_function_calls_started")
@@ -228,7 +257,7 @@ async def main():
             root_span.set_attribute("service.name", "breeze-voice-agent")
             langfuse_client.update_current_trace(user_id=user_name)
             langfuse_client.update_current_trace(session_id=args.session_id)
-            langfuse_client.update_current_trace(tags=["Bret"])
+            langfuse_client.update_current_trace(tags=[voice_name])
             await run_pipeline()
     else:
         await run_pipeline()
