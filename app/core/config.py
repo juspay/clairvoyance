@@ -69,3 +69,12 @@ logger.info(f"Using response modality: {RESPONSE_MODALITY}")
 logger.info(f"Tracing enabled: {ENABLE_TRACING}")
 logger.info(f"Search grounding enabled: {ENABLE_SEARCH_GROUNDING}")
 logger.info(f"Using Gemini search result model: {GEMINI_SEARCH_RESULT_API_MODEL}")
+
+#Automatic MCP Tool Server
+AUTOMATIC_MCP_TOOL_SERVER_USAGE=os.environ.get("AUTOMATIC_MCP_TOOL_SERVER_USAGE", "false").lower() == "true"
+AUTOMATIC_TOOL_MCP_SERVER_URL=os.environ.get("AUTOMATIC_TOOL_MCP_SERVER_URL", "https://portal.breeze.in/ai/mcp")
+
+_shops_for_mcp_str = os.environ.get("SHOPS_FOR_AUTOMATIC_MCP_SERVER", "")
+SHOPS_FOR_AUTOMATIC_MCP_SERVER = [shop.strip() for shop in _shops_for_mcp_str.split(',') if shop.strip()]
+
+logger.info(f"Shops enabled for Automatic MCP Server: {SHOPS_FOR_AUTOMATIC_MCP_SERVER}")
