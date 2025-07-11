@@ -22,6 +22,7 @@ from pipecat.processors.frameworks.rtvi import RTVIConfig, RTVIProcessor
 from pipecat.services.google.rtvi import GoogleRTVIObserver
 
 from app.core import config
+from app.services.custom_mcp_client import CustomMCPClient
 from .processors import LLMSpyProcessor
 from .prompts import get_system_prompt
 from .tools import initialize_tools
@@ -55,6 +56,8 @@ async def main():
     parser.add_argument("--user-name", type=str, help="User's name")
     parser.add_argument("--tts-provider", type=str, help="TTS provider to use")
     parser.add_argument("--voice-name", type=str, help="Voice name to use")
+    parser.add_argument("--merchant-id", type=str, help="Merchant Id of the Shop")
+    parser.add_argument("--platform-integrations",type=str, nargs="+", help="Platform Integrations that are supported by the shop (string array)")
     args = parser.parse_args()
 
     # Configure logger with session ID for all logs in this subprocess
@@ -68,19 +71,21 @@ async def main():
 
     # Initialize tools based on the mode and provided tokens
     # Only pass tokens if in live mode
-    if mode == Mode.LIVE:
-        tools, tool_functions = initialize_tools(
-            mode=mode.value,
-            breeze_token=args.breeze_token,
-            euler_token=args.euler_token,
-            shop_url=args.shop_url,
-            shop_id=args.shop_id,
-            shop_type=args.shop_type,
-        )
-    else:
-        tools, tool_functions = initialize_tools(
-            mode=mode.value,
-        )
+    
+    if not config.ENABLE_MCP_SERVER_USAGE:
+        if mode == Mode.LIVE:
+            tools, tool_functions = initialize_tools(
+                mode=mode.value,
+                breeze_token=args.breeze_token,
+                euler_token=args.euler_token,
+                shop_url=args.shop_url,
+                shop_id=args.shop_id,
+                shop_type=args.shop_type,
+            )
+        else:
+            tools, tool_functions = initialize_tools(
+                mode=mode.value,
+            )
 
     # Personalize the system prompt if a user name is provided
     system_prompt = get_system_prompt(args.user_name, tts_provider)
@@ -125,8 +130,33 @@ async def main():
         model=config.AZURE_OPENAI_MODEL,
     )
 
-    for name, function in tool_functions.items():
-        llm.register_function(name, function)
+    if not config.ENABLE_MCP_SERVER_USAGE:
+        for name, function in tool_functions.items():
+            llm.register_function(name, function)
+            logger.info("Default tools")
+            logger.info(config.ENABLE_MCP_SERVER_USAGE )
+    else:
+        logger.info(f"Initializing tools from remote MCP server at 8000")
+        
+        mcp_context = {
+            "sessionId": args.session_id,
+            "juspayToken": args.euler_token,
+            "shopUrl": args.shop_url,
+            "shopId": args.shop_id,
+            "shopType": args.shop_type,
+            "userId": args.user_name,
+            "enableDemoMode": mode != Mode.LIVE,
+            "merchantId": args.merchant_id,
+            "platformIntegrations": args.platform_integrations
+        }
+        mcp_client = CustomMCPClient(
+            server_url=config.MCP_SERVER_URL,
+            auth_token=args.breeze_token,
+            context=mcp_context
+        )
+        # The client's register_tools method will fetch the tools AND
+        # register the necessary callback handlers with the llm instance.
+        tools = await mcp_client.register_tools(llm)
 
     # Simplified event handler for TTS feedback
     @llm.event_handler("on_function_calls_started")
