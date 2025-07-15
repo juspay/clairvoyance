@@ -65,6 +65,12 @@ ENABLE_TRACING = os.environ.get("ENABLE_TRACING", "false").lower() == "true"
 ENABLE_SEARCH_GROUNDING = os.environ.get("ENABLE_SEARCH_GROUNDING", "true").lower() == "true"
 GEMINI_SEARCH_RESULT_API_MODEL = os.environ.get("GEMINI_SEARCH_RESULT_API_MODEL", "gemini-2.5-flash-lite-preview-06-17")
 
+# --- STT Configuration ---
+STT_PROVIDER = os.environ.get("STT_PROVIDER", "google").lower()  # "google", "assemblyai", or "openai"
+ASSEMBLYAI_API_KEY = os.getenv("ASSEMBLYAI_API_KEY")
+OPENAI_STT_API_KEY = os.getenv("OPENAI_STT_API_KEY")
+OPENAI_STT_MODEL = os.environ.get("OPENAI_STT_MODEL", "gpt-4o-transcribe")  # or "whisper-1"
+
 logger.info(f"Using Gemini model: {GEMINI_MODEL}")
 logger.info(f"Using response modality: {RESPONSE_MODALITY}")
 logger.info(f"Tracing enabled: {ENABLE_TRACING}")
