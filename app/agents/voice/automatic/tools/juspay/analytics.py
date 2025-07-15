@@ -14,6 +14,23 @@ from app.agents.voice.automatic.types.models import ApiFailure, ApiSuccess, Geni
 # This token will be set when the tools are initialized
 euler_token: str | None = None
 
+def format_indian_currency(amount):
+    """Formats a number into Indian currency style with commas."""
+    s = str(amount)
+    if len(s) <= 3:
+        return s
+    last_three = s[-3:]
+    other_numbers = s[:-3]
+    formatted_other_numbers = ""
+    while other_numbers:
+        if len(other_numbers) > 2:
+            formatted_other_numbers = other_numbers[-2:] + "," + formatted_other_numbers
+            other_numbers = other_numbers[:-2]
+        else:
+            formatted_other_numbers = other_numbers + "," + formatted_other_numbers
+            other_numbers = ""
+    return formatted_other_numbers + last_three
+
 
 async def _make_genius_api_request(params: FunctionCallParams, payload_details: dict) -> GeniusApiResponse:
     """
@@ -72,7 +89,7 @@ async def _make_genius_api_request(params: FunctionCallParams, payload_details: 
             response.raise_for_status()
             response_text = response.text
             logger.info(
-                f"Received Juspay API text response. Length: {len(response_text)}")
+                f"Received Raw Juspay API text response: {response_text}")
             return ApiSuccess(data=response_text)
     except httpx.TimeoutException:
         logger.error("Juspay API request timed out after 10 seconds.")
@@ -201,15 +218,39 @@ def get_success_transactional_data_by_time(params: FunctionCallParams) -> Genius
     return _make_genius_api_request(params, payload_details)
 
 
-@handle_genius_response
-def get_gmv_order_value_payment_method_wise_by_time(params: FunctionCallParams) -> GeniusApiResponse:
+async def get_gmv_order_value_payment_method_wise_by_time(params: FunctionCallParams):
     logger.info(f"Fetching real-time GMV with params: {params.arguments}")
     payload_details = {
         "dimensions": ["payment_method_type"],
         "domain": "kvorders",
         "metric": "total_amount"
     }
-    return _make_genius_api_request(params, payload_details)
+    try:
+        result = await _make_genius_api_request(params, payload_details)
+        if isinstance(result, ApiSuccess):
+            processed_data = []
+            for line in result.data.strip().split('\n'):
+                if not line:
+                    continue
+                try:
+                    item = json.loads(line)
+                    if "total_amount" in item and isinstance(item["total_amount"], (int, float)):
+                        item["total_amount"] = format_indian_currency(round(item["total_amount"]))
+                    processed_data.append(item)
+                except json.JSONDecodeError as e:
+                    logger.error(f"Error decoding JSON line: {line}. Error: {e}")
+                    continue
+
+            total_gmv = sum(float(item["total_amount"].replace(",", "")) for item in processed_data if "total_amount" in item and isinstance(item["total_amount"], str))
+            processed_data.append({"total_gmv": format_indian_currency(round(total_gmv))})
+
+            logger.info(f"Processed GMV data: {processed_data}")
+            await params.result_callback({"data": json.dumps(processed_data)})
+        else:
+            await params.result_callback(result.error)
+    except Exception as e:
+        logger.error(f"Unexpected error in get_gmv_order_value_payment_method_wise_by_time: {e}", exc_info=True)
+        await params.result_callback({"data": json.dumps({"error": f"Unexpected error occurred in the tool function: {e}"})})
 
 
 @handle_genius_response
