@@ -228,7 +228,7 @@ async def main():
             root_span.set_attribute("service.name", "breeze-voice-agent")
             langfuse_client.update_current_trace(user_id=user_name)
             langfuse_client.update_current_trace(session_id=args.session_id)
-            langfuse_client.update_current_trace(tags=["Bret"])
+            langfuse_client.update_current_trace(tags=[f"{tts_provider.value}_{voice_name.value}"])
             await run_pipeline()
     else:
         await run_pipeline()
