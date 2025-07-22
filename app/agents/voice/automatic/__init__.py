@@ -12,7 +12,7 @@ from pipecat.audio.filters.noisereduce_filter import NoisereduceFilter
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
-from pipecat.processors.aggregators.openai_llm_context import OpenAILLMContext
+from app.agents.voice.automatic.services.llm_wrapper import LLMServiceWrapper
 from pipecat.services.azure.llm import AzureLLMService
 from pipecat.services.google.stt import GoogleSTTService
 from pipecat.transcriptions.language import Language
@@ -112,11 +112,11 @@ async def main():
 
     tts = get_tts_service(tts_provider=tts_provider.value, voice_name=voice_name.value)
 
-    llm = AzureLLMService(
+    llm = LLMServiceWrapper(AzureLLMService(
         api_key=config.AZURE_OPENAI_API_KEY,
         endpoint=config.AZURE_OPENAI_ENDPOINT,
         model=config.AZURE_OPENAI_MODEL,
-    )
+    ))
 
     if not use_automatic_mcp_server:
         if mode == Mode.LIVE:
@@ -176,7 +176,11 @@ async def main():
         },
     ]
 
-    context = OpenAILLMContext(messages, tools)
+    context = llm.create_summarizing_context(
+        messages,
+        tools,
+    )
+
     context_aggregator = llm.create_context_aggregator(context)
 
     # RTVI events for Pipecat client UI
