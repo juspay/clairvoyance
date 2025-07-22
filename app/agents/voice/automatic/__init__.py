@@ -127,10 +127,12 @@ async def main():
                 shop_url=args.shop_url,
                 shop_id=args.shop_id,
                 shop_type=args.shop_type,
+                merchant_id=args.merchant_id,
             )
         else:
             tools, tool_functions = initialize_tools(
                 mode=mode.value,
+                merchant_id=args.merchant_id,
             )
             
         for name, function in tool_functions.items():
