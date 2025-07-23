@@ -23,7 +23,7 @@ from pipecat.services.google.rtvi import GoogleRTVIObserver
 
 from app.core import config
 from app.agents.voice.automatic.services.mcp.automatic_client import MCPClient
-from .processors import LLMSpyProcessor
+from .processors import LLMSpyProcessor, ToolInterceptor
 from .prompts import get_system_prompt
 from .tools import initialize_tools
 from .tts import get_tts_service
@@ -182,11 +182,15 @@ async def main():
 
     # Add custom LLMSpyProcessor for streaming function call events
     tool_call_processor = LLMSpyProcessor(rtvi)
+    
+    # Add ToolInterceptor for logging function calls with RTVI for UI visibility
+    tool_interceptor = ToolInterceptor(rtvi, llm_service=llm, require_confirmation=True)
 
     pipeline = Pipeline(
         [
             transport.input(),
             stt,
+            tool_interceptor,  # Move interceptor here to catch transcriptions
             rtvi,
             context_aggregator.user(),
             llm,
