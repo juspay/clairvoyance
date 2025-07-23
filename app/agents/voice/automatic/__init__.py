@@ -139,17 +139,22 @@ async def main():
     else:
         logger.info(f"Initializing tools from remote MCP server")
         
-        mcp_context = {
-            "sessionId": args.session_id,
-            "juspayToken": args.euler_token,
-            "shopUrl": args.shop_url,
-            "shopId": args.shop_id,
-            "shopType": args.shop_type,
-            "userId": args.user_name,
-            "enableDemoMode": mode != Mode.LIVE,
-            "merchantId": args.merchant_id,
-            "platformIntegrations": args.platform_integrations
-        }
+        mcp_context = {"sessionId": args.session_id}
+        if args.euler_token:
+            mcp_context["juspayToken"] = args.euler_token
+        if args.shop_url:
+            mcp_context["shopUrl"] = args.shop_url
+        if args.shop_id:
+            mcp_context["shopId"] = args.shop_id
+        if args.shop_type:
+            mcp_context["shopType"] = args.shop_type
+        if args.user_name:
+            mcp_context["userId"] = args.user_name
+        if args.merchant_id:
+            mcp_context["merchantId"] = args.merchant_id
+        if args.platform_integrations:
+            mcp_context["platformIntegrations"] = args.platform_integrations
+        mcp_context["enableDemoMode"] = mode != Mode.LIVE
         mcp_client = MCPClient(
             server_url=config.AUTOMATIC_TOOL_MCP_SERVER_URL,
             auth_token=args.breeze_token,
