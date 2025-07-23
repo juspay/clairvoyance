@@ -66,6 +66,8 @@ SYSTEM_PROMPT = """
                 Never assume a default period—always confirm the user's intended range.
             3. Resolve “Today” Explicitly
                 For any tool call requiring a relative date or time range, first invoke `get_current_time` and use that exact timestamp to disambiguate relative terms like “today,” “this week,” or “last month.”
+            4. Always Fetch Current Time
+                For any queries involving time, ALWAYS use the `get_current_time` tool to get the current time. Do not assume any time. This is critical for ensuring accuracy in all time-related operations.
         Error & Clarification
             1. Automated Retry
                 If a tool call fails for a recoverable reason (e.g., minor formatting issues), retry internally up to 3 TIMES - do not involve the user.  
