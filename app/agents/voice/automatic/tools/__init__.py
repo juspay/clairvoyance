@@ -18,6 +18,7 @@ def initialize_tools(
     shop_url: str | None = None,
     shop_id: str | None = None,
     shop_type: str | None = None,
+    merchant_id: str | None = None,
 ):
     """
     Initializes tools based on the operating mode and available tokens.
@@ -62,9 +63,11 @@ def initialize_tools(
         logger.info("Skipping dummy tools in live mode.")
         if "euler" in providers:
             juspay.analytics.euler_token = euler_token
+            juspay.analytics.merchant_id = merchant_id
             all_tools.extend(juspay.tools.standard_tools)
             all_tool_functions.update(juspay.tool_functions)
             logger.info(f"Loaded {len(juspay.tools.standard_tools)} real-time Juspay tools.")
+            logger.info(f"Set merchant_id for Juspay tools: {merchant_id}")
         if "breeze" in providers and shop_id and shop_url and shop_type:
             breeze.analytics.breeze_token = breeze_token
             breeze.analytics.shop_id = shop_id

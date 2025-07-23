@@ -5,7 +5,7 @@ import functools
 from datetime import datetime
 import pytz
 from app.core.logger import logger
-from app.core.config import GENIUS_API_URL
+from app.core.config import GENIUS_API_URL, EULER_DASHBOARD_API_URL
 from pipecat.services.llm_service import FunctionCallParams
 from pipecat.adapters.schemas.function_schema import FunctionSchema
 from pipecat.adapters.schemas.tools_schema import ToolsSchema
@@ -13,6 +13,14 @@ from app.agents.voice.automatic.types.models import ApiFailure, ApiSuccess, Geni
 
 # This token will be set when the tools are initialized
 euler_token: str | None = None
+merchant_id: str | None = None
+
+# Define required fields for offer creation - shared between function and schema
+OFFER_REQUIRED_KEYS = [
+    "offerCode", "offerType", "offerTitle", 
+    "discountValue", "startDate", "endDate", 
+    "offerDescription"
+]
 
 def format_indian_currency(amount):
     """Formats a number into Indian currency style with commas."""
@@ -264,6 +272,267 @@ def get_average_ticket_payment_wise_by_time(params: FunctionCallParams) -> Geniu
     return _make_genius_api_request(params, payload_details)
 
 
+async def create_euler_offer(params: FunctionCallParams):
+    """
+    Creates discount offers, cashbacks, and other promotional offers in the platform. IMPORTANT: Before calling this function, you MUST first present all the offer details to the user in a clear, formatted way and explicitly ask for their confirmation. Only proceed with calling this function after the user has explicitly confirmed they want to create the offer. Do not call this function without explicit user confirmation.
+    """
+    try:
+        # Define required fields
+        required_fields = {
+            key: params.arguments.get(key) for key in OFFER_REQUIRED_KEYS
+        }
+        
+        # Find missing ones
+        missing_fields = [key for key, value in required_fields.items() if not value]
+        
+        if missing_fields:
+            await params.result_callback({
+                "error": f"Missing required fields: {', '.join(missing_fields)}"
+            })
+            return
+
+        # Get merchantId from global context variable (set during tool initialization)
+        if not merchant_id:
+            await params.result_callback({"error": "Merchant ID not available in session context. Cannot create offer."})
+            return
+
+        # Authentication check
+        if not euler_token:
+            await params.result_callback({"error": "Authentication token is missing. Cannot create offer."})
+            return
+
+        # Extract validated required parameters
+        offer_code = required_fields["offerCode"]
+        offer_type = required_fields["offerType"]
+        offer_title = required_fields["offerTitle"]
+        discount_value = required_fields["discountValue"]
+        start_date = required_fields["startDate"]
+        end_date = required_fields["endDate"]
+        offer_description = required_fields["offerDescription"]
+
+        logger.info(f"Creating Euler offer with code '{offer_code}' for merchant '{merchant_id}'")
+
+        # Get optional parameters with defaults
+        min_order_amount = params.arguments.get("minOrderAmount", 1)
+        max_discount_amount = params.arguments.get("maxDiscountAmount")
+        calculation_type = params.arguments.get("calculationType", "ABSOLUTE")
+        is_coupon_based = params.arguments.get("isCouponBased", True)
+        sponsored_by = params.arguments.get("sponsoredBy", "BREEZE")
+        payment_instruments = params.arguments.get("paymentInstruments", [])
+
+        # Payment instrument mapping
+        instrument_map = {
+            "CARD": {
+                "payment_method_type": "CARD",
+                "payment_method": [],
+                "app": [],
+                "type": [],
+                "issuer": [],
+                "variant": []
+            },
+            "NB": {
+                "payment_method_type": "NB",
+                "payment_method": [],
+                "app": [],
+                "type": [],
+                "issuer": [],
+                "variant": []
+            },
+            "WALLET": {
+                "payment_method_type": "WALLET",
+                "payment_method": [],
+                "app": [],
+                "type": [],
+                "issuer": [],
+                "variant": []
+            },
+            "CONSUMER_FINANCE": {
+                "payment_method_type": "CONSUMER_FINANCE",
+                "payment_method": [],
+                "app": [],
+                "type": [],
+                "issuer": [],
+                "variant": []
+            },
+            "REWARD": {
+                "payment_method_type": "REWARD",
+                "payment_method": [],
+                "app": [],
+                "type": [],
+                "issuer": [],
+                "variant": []
+            },
+            "CASH": {
+                "payment_method_type": "CASH",
+                "payment_method": ["CASH"],
+                "app": [],
+                "type": [],
+                "issuer": [],
+                "variant": []
+            },
+            "UPI": {
+                "payment_method_type": "UPI",
+                "payment_method": [],
+                "app": [],
+                "type": ["UPI_COLLECT", "UPI_PAY", "UPI_QR", "UPI_INAPP"],
+                "issuer": [],
+                "variant": []
+            }
+        }
+
+        # Convert IST dates to ISO format for API payload
+        try:
+            ist = pytz.timezone("Asia/Kolkata")
+            
+            # Parse start_date from IST format and convert to ISO
+            start_date_ist = ist.localize(datetime.strptime(start_date, '%Y-%m-%d %H:%M:%S'))
+            start_date_iso = start_date_ist.isoformat()
+            
+            # Parse end_date from IST format and convert to ISO
+            end_date_ist = ist.localize(datetime.strptime(end_date, '%Y-%m-%d %H:%M:%S'))
+            end_date_iso = end_date_ist.isoformat()
+            
+        except Exception as e:
+            logger.error(f"Error converting date format for offer creation: {e}")
+            await params.result_callback({"error": f"Invalid date format provided. Please use 'YYYY-MM-DD HH:MM:SS' in IST. Error: {e}"})
+            return
+
+        # Build payment instruments payload
+        if payment_instruments:
+            payment_instruments_payload = [
+                instrument_map[instrument] for instrument in payment_instruments
+                if instrument in instrument_map
+            ]
+        else:
+            payment_instruments_payload = list(instrument_map.values())
+
+        # Construct the API payload
+        api_payload = {
+            "application_mode": "ORDER",
+            "merchant_id": merchant_id,
+            "offer_code": offer_code,
+            "batch_id": "",
+            "offer_description": {
+                "title": offer_title,
+                "description": offer_description,
+                "tnc": "",
+                "sponsored_by": sponsored_by,
+                "display_title": offer_title
+            },
+            "ui_configs": {
+                "is_hidden": "false",
+                "should_validate": "true",
+                "auto_apply": "false" if is_coupon_based else "true",
+                "offer_display_priority": 0,
+                "payment_method_label": ""
+            },
+            "rule_dsl": {
+                "order": {
+                    "max_quantity": None,
+                    "min_quantity": None,
+                    "max_order_amount": None,
+                    "min_order_amount": str(min_order_amount),
+                    "currency": "INR",
+                    "amount_info": []
+                },
+                "additional_payment_filters": None,
+                "payment_instrument": payment_instruments_payload,
+                "counters": [],
+                "payment_channel": [],
+                "benefits": [
+                    {
+                        "type": offer_type,
+                        "calculation_rule": calculation_type,
+                        "value": discount_value,
+                        "amount_info": [],
+                        "max_amount": max_discount_amount,
+                        "global_max_amount": None
+                    }
+                ],
+                "filters": {
+                    "blacklist": [],
+                    "whitelist": []
+                }
+            },
+            "status": "ACTIVE",
+            "start_time": start_date_iso,
+            "end_time": end_date_iso,
+            "metadata": {
+                "analytics_offer_code": offer_code,
+                "customerResetPeriodType": "offerPeriod",
+                "cardResetPeriodType": "offerPeriod",
+                "productCustomerResetPeriodType": "offerPeriod",
+                "productCardResetPeriodType": "offerPeriod",
+                "upiResetPeriodType": "offerPeriod",
+                "productUpiResetPeriodType": "offerPeriod",
+                "start_date": start_date_iso,
+                "end_date": end_date_iso
+            },
+            "udf1": None,
+            "udf2": None,
+            "udf3": None,
+            "udf4": None,
+            "udf5": None,
+            "udf6": None,
+            "udf7": None,
+            "udf8": None,
+            "udf9": None,
+            "udf10": None,
+            "minOfferBreakupCheckbox": False,
+            "offerBreakupBool": False,
+            "benefitsAmountInfo": [],
+            "has_multi_codes": False
+        }
+
+        # Make API request
+        endpoint = f"{EULER_DASHBOARD_API_URL}/api/offers/dashboard/create?merchant_id={merchant_id}"
+        headers = {
+            'Content-Type': 'application/json',
+            'x-web-logintoken': euler_token
+        }
+
+        logger.info(f"Making offer creation request to: {endpoint}")
+        logger.debug(f"Offer creation payload: {json.dumps(api_payload, indent=2)}")
+
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post(endpoint, json=api_payload, headers=headers)
+            
+            if response.status_code == 200:
+                response_data = response.json()
+                offer_id = response_data.get("offer_id")
+                
+                if offer_id:
+                    success_result = {
+                        "status": "success",
+                        "offerId": offer_id,
+                        "message": f"Successfully created offer {offer_code}",
+                        "details": {
+                            "offerCode": offer_code,
+                            "type": offer_type,
+                            "value": discount_value,
+                            "validFrom": start_date,
+                            "validTo": end_date,
+                            "minAmount": min_order_amount,
+                            "sponsoredBy": sponsored_by,
+                            "paymentMethods": payment_instruments if payment_instruments else "All payment methods"
+                        }
+                    }
+                    await params.result_callback({"data": json.dumps(success_result)})
+                else:
+                    error_message = response_data.get("error_message", "API call failed to return an offer ID.")
+                    await params.result_callback({"error": f"Failed to create offer: {error_message}"})
+            else:
+                error_text = response.text
+                logger.error(f"Offer creation failed: {response.status_code} - {error_text}")
+                await params.result_callback({"error": f"Failed to create offer: HTTP {response.status_code}"})
+
+    except httpx.TimeoutException:
+        logger.error("Offer creation request timed out after 30 seconds.")
+        await params.result_callback({"error": "Request timed out. Please try again."})
+    except Exception as e:
+        logger.error(f"Critical error in create_euler_offer: {e}", exc_info=True)
+        await params.result_callback({"error": f"An unexpected error occurred: {str(e)}"})
+
 
 async def merchant_offer_analytics(params: FunctionCallParams):
     try:
@@ -380,6 +649,73 @@ merchant_offer_analytics_function = FunctionSchema(
     required=time_input_schema["required"],
 )
 
+create_euler_offer_function = FunctionSchema(
+    name="create_euler_offer",
+    description="Creates discount offers, cashbacks, and other promotional offers in the platform. IMPORTANT: Before calling this function, you MUST first present all the offer details to the user in a clear, formatted way and explicitly ask for their confirmation. Only proceed with calling this function after the user has explicitly confirmed they want to create the offer. Do not call this function without explicit user confirmation.",
+    properties={
+        "offerCode": {
+            "type": "string",
+            "description": "Unique identifier for the offer. Examples: SAVE20, WELCOME10, NEWYEAR2025"
+        },
+        "offerType": {
+            "type": "string",
+            "description": "Type of promotional offer",
+            "enum": ["CASHBACK", "DISCOUNT", "EMI DISCOUNT", "EMI CASHBACK", "PAYMENT LOCKING VIA OFFER"]
+        },
+        "offerTitle": {
+            "type": "string",
+            "description": "Customer-facing title for the offer. Examples: Get 20% Off on All Items, Welcome Cashback for New Users"
+        },
+        "discountValue": {
+            "type": "number",
+            "description": "Discount amount in rupees for absolute discounts, or percentage value for percentage-based discounts"
+        },
+        "startDate": {
+            "type": "string",
+            "description": "REQUIRED: Ask the user for the offer start date and time. Must be provided in IST format YYYY-MM-DD HH:MM:SS. Do not use example dates - always get the actual desired start date from the user."
+        },
+        "endDate": {
+            "type": "string",
+            "description": "REQUIRED: Ask the user for the offer end date and time. Must be provided in IST format YYYY-MM-DD HH:MM:SS. Do not use example dates - always get the actual desired end date from the user."
+        },
+        "offerDescription": {
+            "type": "string",
+            "description": "Detailed description of the offer terms and conditions"
+        },
+        "minOrderAmount": {
+            "type": "number",
+            "description": "Minimum order value required to apply this offer in rupees"
+        },
+        "maxDiscountAmount": {
+            "type": "number",
+            "description": "Maximum discount amount that can be applied in rupees"
+        },
+        "calculationType": {
+            "type": "string",
+            "description": "How the discount is calculated",
+            "enum": ["PERCENTAGE", "ABSOLUTE"]
+        },
+        "isCouponBased": {
+            "type": "boolean",
+            "description": "Whether customers need to enter a coupon code to apply this offer"
+        },
+        "sponsoredBy": {
+            "type": "string",
+            "description": "Entity sponsoring this offer",
+            "enum": ["BREEZE"]
+        },
+        "paymentInstruments": {
+            "type": "array",
+            "items": {
+                "type": "string",
+                "enum": ["CARD", "NB", "WALLET", "CONSUMER_FINANCE", "REWARD", "CASH", "UPI"]
+            },
+            "description": "Payment methods eligible for this offer. If not specified, applies to all payment methods"
+        }
+    },
+    required=OFFER_REQUIRED_KEYS
+)
+
 tools = ToolsSchema(
     standard_tools=[
         get_sr_success_rate_function,
@@ -389,6 +725,7 @@ tools = ToolsSchema(
         gmv_order_value_payment_method_wise_function,
         average_ticket_payment_wise_function,
         merchant_offer_analytics_function,
+        create_euler_offer_function,
     ]
 )
 
@@ -400,4 +737,5 @@ tool_functions = {
     "get_gmv_order_value_payment_method_wise_by_time": get_gmv_order_value_payment_method_wise_by_time,
     "get_average_ticket_payment_wise_by_time": get_average_ticket_payment_wise_by_time,
     "merchant_offer_analytics": merchant_offer_analytics,
+    "create_euler_offer": create_euler_offer,
 }
