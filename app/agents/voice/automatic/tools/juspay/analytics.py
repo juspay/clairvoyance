@@ -274,10 +274,7 @@ def get_average_ticket_payment_wise_by_time(params: FunctionCallParams) -> Geniu
 
 async def create_euler_offer(params: FunctionCallParams):
     """
-    Creates discount offers, cashbacks, and other promotional offers in the platform.
-    IMPORTANT: Before calling this function, you MUST first present all the offer details to the user in a clear, formatted way and explicitly ask for their confirmation.
-    Only proceed with calling this function after the user has explicitly confirmed they want to create the offer. 
-    To set the offer's active period, always use the get_current_time() tool for accurate start and end times in IST.
+    Creates discount offers, cashbacks, and other promotional offers in the platform. IMPORTANT: Before calling this function, you MUST first present all the offer details to the user in a clear, formatted way and explicitly ask for their confirmation. Only proceed with calling this function after the user has explicitly confirmed they want to create the offer. Do not call this function without explicit user confirmation. To set the offer's active period, always use the get_current_time() tool for accurate start and end times in IST.
     """
     try:
         # Define required fields
@@ -317,6 +314,8 @@ async def create_euler_offer(params: FunctionCallParams):
 
         # Get optional parameters with defaults
         min_order_amount = params.arguments.get("minOrderAmount", 1)
+        if min_order_amount is None:
+            min_order_amount = 1
         max_discount_amount = params.arguments.get("maxDiscountAmount")
         calculation_type = params.arguments.get("calculationType", "ABSOLUTE")
         is_coupon_based = params.arguments.get("isCouponBased", True)
@@ -494,8 +493,7 @@ async def create_euler_offer(params: FunctionCallParams):
             'x-web-logintoken': euler_token
         }
 
-        logger.info(f"Making offer creation request to: {endpoint}")
-        logger.debug(f"Offer creation payload: {json.dumps(api_payload, indent=2)}")
+        logger.info(f"Making offer creation request to: {endpoint} | Payload: {json.dumps(api_payload, indent=2)}")
 
         async with httpx.AsyncClient(timeout=10.0) as client:
             response = await client.post(endpoint, json=api_payload, headers=headers)
@@ -654,7 +652,7 @@ merchant_offer_analytics_function = FunctionSchema(
 
 create_euler_offer_function = FunctionSchema(
     name="create_euler_offer",
-    description="Creates discount offers, cashbacks, and other promotional offers in the platform. IMPORTANT: Before calling this function, you MUST first present all the offer details to the user in a clear, formatted way and explicitly ask for their confirmation. Only proceed with calling this function after the user has explicitly confirmed they want to create the offer. To set the offer's active period, always use the get_current_time() tool for accurate start and end times in IST.",
+    description="Creates discount offers, cashbacks, and other promotional offers in the platform. IMPORTANT: Before calling this function, you MUST first present all the offer details to the user in a clear, formatted way and explicitly ask for their confirmation. Only proceed with calling this function after the user has explicitly confirmed they want to create the offer. Do not call this function without explicit user confirmation. To set the offer's active period, always use the get_current_time() tool for accurate start and end times in IST",
     properties={
         "offerCode": {
             "type": "string",
@@ -662,8 +660,8 @@ create_euler_offer_function = FunctionSchema(
         },
         "offerType": {
             "type": "string",
-            "description": "Type of promotional offer",
-            "enum": ["CASHBACK", "DISCOUNT", "EMI DISCOUNT", "EMI CASHBACK", "PAYMENT LOCKING VIA OFFER"]
+            "description": "Type of promotional offer. ONLY these types are supported: CASHBACK (gives money back to customer), DISCOUNT (reduces order amount). No other offer types can be created.",
+            "enum": ["CASHBACK", "DISCOUNT"]
         },
         "offerTitle": {
             "type": "string",
@@ -679,7 +677,7 @@ create_euler_offer_function = FunctionSchema(
         },
         "endDate": {
             "type": "string",
-            "description": "REQUIRED: The offer end date and time in IST format 'YYYY-MM-DD HH:MM:SS'. Ask the user for the offer's duration (e.g., '7 days', 'until midnight'), then calculate the end date by adding the duration to the current time obtained from get_current_time()."
+            "description": "REQUIRED: Ask the user for the offer end date and time. Must be provided in IST format YYYY-MM-DD HH:MM:SS. Do not use example dates - always get the actual desired end date from the user."
         },
         "offerDescription": {
             "type": "string",
