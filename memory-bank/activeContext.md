@@ -16,6 +16,7 @@ The primary focus of recent development has been to enable the voice agent to us
     3.  Dynamically register a handler for these tools with the LLM. The registration process is now wrapped in more explicit error logging and handling to prevent agent startup failures.
 
 - **Context-Aware Tool Calls:** All calls made to the remote server by the client include a secure authentication token and a session-specific context. The client now correctly parses both simple `tools/list` responses and complex `tools/call` responses that contain nested JSON, ensuring the LLM receives clean data.
+- **Date-Preserving Summarization:** The summarization logic has been updated to explicitly instruct the LLM to preserve dates and time ranges, improving the accuracy of long-term context.
 
 ## 3. Next Steps & Considerations
 

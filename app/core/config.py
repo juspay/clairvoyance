@@ -79,3 +79,8 @@ _shops_for_mcp_str = os.environ.get("SHOPS_FOR_AUTOMATIC_MCP_SERVER", "")
 SHOPS_FOR_AUTOMATIC_MCP_SERVER = [shop.strip() for shop in _shops_for_mcp_str.split(',') if shop.strip()]
 
 logger.info(f"Shops enabled for Automatic MCP Server: {SHOPS_FOR_AUTOMATIC_MCP_SERVER}")
+
+# Context Summarization Configuration
+ENABLE_SUMMARIZATION = os.environ.get("ENABLE_SUMMARIZATION", "true").lower() == "true"
+MAX_TURNS_BEFORE_SUMMARY = int(os.environ.get("MAX_TURNS_BEFORE_SUMMARY", 10))
+KEEP_RECENT_TURNS = int(os.environ.get("KEEP_RECENT_TURNS", 2))
