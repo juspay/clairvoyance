@@ -23,20 +23,26 @@ class StreamableHTTPTransport:
         self._auth_token = auth_token
         self._context_b64 = base64.b64encode(json.dumps(context).encode()).decode()
         self._client = httpx.AsyncClient(timeout=15)
+        self._demo_mode = context.get("enableDemoMode", False)
 
     async def post(self, method: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Performs a JSON-RPC POST request and handles streaming response."""
         headers = {
             "Content-Type": "application/json",
             "Accept": "application/json, text/event-stream",
-            "x-auth-token": self._auth_token,
             "x-context": self._context_b64,
         }
+        if self._auth_token:
+            headers["x-auth-token"] = self._auth_token
         json_rpc_payload = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params or {}}
+        
+        query_params = {}
+        if self._demo_mode:
+            query_params["demoMode"] = "true"
 
         try:
             logger.info(f"Attempting to POST to: {self._server_url} with payload: {json_rpc_payload} and headers: {headers}")
-            async with self._client.stream("POST", self._server_url, headers=headers, json=json_rpc_payload) as response:
+            async with self._client.stream("POST", self._server_url, headers=headers, json=json_rpc_payload, params=query_params) as response:
                 response.raise_for_status()
 
                 async for line in response.aiter_lines():

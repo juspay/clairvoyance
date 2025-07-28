@@ -7,6 +7,7 @@
 - **Robust Streaming and Parsing:** The `StreamableHTTPTransport` has been refactored to be highly resilient. It now processes streams line-by-line, uses Pydantic for strict data validation against the MCP spec, and correctly parses nested JSON in tool call results.
 - **Improved Error Handling:** The transport layer and client now gracefully handle a wide range of exceptions. This includes network errors, HTTP status code errors, and data validation errors. Specifically, the Pydantic models were updated to correctly parse both successful tool results (with nested JSON) and tool error results (with plain text), preventing crashes on server-side errors.
 - **Context-Aware Sessions:** The system for passing session-specific data (`mcp_context`) via HTTP headers is in place and functional, allowing for authenticated and contextual tool execution.
+- **Date-Preserving Summaries:** The summarization prompt has been updated to ensure that dates and time ranges are preserved in conversation summaries.
 
 ## 2. What's Left to Build
 
