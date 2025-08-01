@@ -20,6 +20,17 @@ from app.core.logger import logger
 from app.core.config import DAILY_API_KEY, DAILY_API_URL, PORT, HOST
 from app import __version__
 from app.schemas import AutomaticVoiceUserConnectRequest
+from app.agents.voice.breeze_buddy.breeze.order_confirmation.types import BreezeOrderData
+from app.agents.voice.breeze_buddy.breeze.order_confirmation.websocket_bot import main as telephony_websocket_conn
+from twilio.rest import Client
+from twilio.twiml.voice_response import VoiceResponse, Connect, Stream
+from starlette.websockets import WebSocketDisconnect
+from app.core.config import (
+    TWILIO_ACCOUNT_SID,
+    TWILIO_AUTH_TOKEN,
+    TWILIO_FROM_NUMBER,
+    TWILIO_WEBSOCKET_URL,
+)
 
 # Dictionary to track bot processes: {pid: (process, room_url)}
 bot_procs = {}
@@ -62,6 +73,7 @@ async def lifespan(app: FastAPI):
         daily_api_url=DAILY_API_URL,
         aiohttp_session=aiohttp_session,
     )
+    daily_helpers["session"] = aiohttp_session
     logger.info("Daily REST helper initialized.")
     
     yield
@@ -89,6 +101,81 @@ app.add_middleware(
 
 # Mount static files directory
 app.mount("/static", StaticFiles(directory="static"), name="static")
+
+@app.post("/agent/voice/breeze-buddy/{identity}/order-confirmation")
+async def trigger_order_confirmation(identity: str, order: BreezeOrderData):
+    """
+    Receives order details and triggers a order confirmation workflow.
+    """
+    if identity != "breeze":
+        raise HTTPException(status_code=404, detail="Feature not supported for this shop")
+    
+    logger.info(f"Received order: {order.order_id} for {order.customer_name}")
+
+    if not all([TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM_NUMBER]):
+        raise HTTPException(status_code=500, detail="Twilio credentials are not configured.")
+
+    client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+    
+    ws_url = TWILIO_WEBSOCKET_URL
+
+    voice_call_payload = VoiceResponse()
+    connect = Connect()
+    stream = Stream(url=ws_url)
+    stream.parameter(name="order_id", value=order.order_id)
+    stream.parameter(name="customer_name", value=order.customer_name)
+    stream.parameter(name="shop_name", value=order.shop_name)
+    stream.parameter(name="total_price", value=order.total_price)
+    stream.parameter(name="customer_address", value=order.customer_address)
+    stream.parameter(name="customer_mobile_number", value=order.customer_mobile_number)
+    stream.parameter(name="order_data", value=json.dumps(order.order_data))
+    stream.parameter(name="identity", value=identity)
+    if order.reporting_webhook_url:
+        stream.parameter(name="reporting_webhook_url", value=order.reporting_webhook_url)
+    connect.append(stream)
+    voice_call_payload.append(connect)
+
+    try:
+        call = client.calls.create(
+            to=order.customer_mobile_number,
+            from_=TWILIO_FROM_NUMBER,
+            twiml=str(voice_call_payload)
+        )
+        logger.info(f"Call initiated with SID: {call.sid}")
+        return {"status": "call_initiated", "sid": call.sid}
+    except Exception as e:
+        logger.error(f"Failed to initiate call: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.websocket("/agent/voice/breeze-buddy/{serviceIdentifier}/callback/{workflow}")
+async def telephony_websocket_handler(serviceIdentifier: str, workflow: str, websocket: WebSocket):
+    """
+    WebSocket endpoint that accepts a connection and passes it to the
+    pipecat bot's main function.
+    """
+    
+    if serviceIdentifier != "twillio" or workflow != "order-confirmation":
+        raise HTTPException(status_code=404, detail="Feature not supported for this service or workflow")
+    
+    try:
+        # The websocket_bot_main function handles the entire
+        # lifecycle of the WebSocket connection, including accept().
+        await telephony_websocket_conn(websocket, daily_helpers["session"])
+    except WebSocketDisconnect:
+        logger.warning("WebSocket client disconnected.")
+    except Exception as e:
+        logger.error(f"An error occurred in the WebSocket handler: {e}")
+        await websocket.close(code=1011, reason="Internal Server Error")
+    finally:
+        logger.info("WebSocket client connection closed.")
+
+
+# @app.post("/order/confirmation/webhook/call-summary")
+# async def call_summary_webhook(summary: CallSummary):
+#     logger.info(f"Received call summary for {summary.call_sid}")
+#     logger.info(f"Outcome: {summary.outcome}")
+#     logger.info(f"Transcription: {summary.transcription}")
+#     return {"status": "received"}
 
 
 # WebSocket endpoint for Gemini Live
