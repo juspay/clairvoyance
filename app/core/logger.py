@@ -53,6 +53,16 @@ def _setup_logger_sinks(include_session_id: bool = False):
     Internal function to set up logger sinks based on environment.
     Reduces code duplication between initial setup and session configuration.
     """
+    
+    # Filter function to completely block websockets, daily_core, and specific openai spam logs
+    def filter_spam_logs(record):
+        logger_name = record["name"]
+        return not (
+            logger_name.startswith("websockets") or 
+            logger_name.startswith("daily_core") or
+            logger_name.startswith("openai._base_client")  # Only block _base_client logs, not all openai logs
+        )
+    
     if ENVIRONMENT == "dev":
         # Development mode format
         session_part = "<cyan>[{extra[session_id]}]</cyan> | " if include_session_id else ""
@@ -69,6 +79,7 @@ def _setup_logger_sinks(include_session_id: bool = False):
             sys.stdout,
             level="DEBUG",
             format=stdout_fmt,
+            filter=filter_spam_logs,  # Apply filter to block spam logs
             enqueue=True,
             backtrace=False,
             colorize=True,
@@ -78,6 +89,7 @@ def _setup_logger_sinks(include_session_id: bool = False):
             sys.stderr,
             level="WARNING",
             format=stderr_fmt,
+            filter=filter_spam_logs,  # Apply filter to block spam logs
             enqueue=True,
             backtrace=True,
             colorize=True,
@@ -87,6 +99,7 @@ def _setup_logger_sinks(include_session_id: bool = False):
         logger.add(
             json_sink,
             level=PROD_LOG_LEVEL,  # Configurable log level via PROD_LOG_LEVEL env var defaulting to INFO
+            filter=filter_spam_logs,  # Apply filter to block spam logs
             enqueue=True,
             backtrace=False,  # Keep JSON logs concise and predictable
             diagnose=False,   # Prevent sensitive data leakage and performance overhead
@@ -94,10 +107,13 @@ def _setup_logger_sinks(include_session_id: bool = False):
 
         DEBUG_LOGS_TO_UPLEVEL = {"pipecat.transports.base_input", "pipecat.transports.base_output"}
 
-        # 2) Secondary “promote” sink for exactly those two DEBUG records
+        # 2) Secondary "promote" sink for exactly those two DEBUG records
         def promote_debug_logs(record):
             name = record["name"]
             lvl  = record["level"].name
+            # First check spam filter
+            if not filter_spam_logs(record):
+                return False
             # target only required debug logs
             if name in DEBUG_LOGS_TO_UPLEVEL and lvl == "DEBUG":
                 # bump them up to INFO so that they pass the PROD_LOG_LEVEL filter
@@ -139,6 +155,10 @@ def setup_logging_interception():
     for name in logging.root.manager.loggerDict.keys():
         logging.getLogger(name).handlers = []
         logging.getLogger(name).propagate = True
+
+    # Completely disable logs from websockets and daily_core to avoid spamming
+    logging.getLogger("websockets").disabled = True
+    logging.getLogger("daily_core").disabled = True
 
 # Initial logger configuration
 _setup_logger_sinks(include_session_id=False)
