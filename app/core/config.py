@@ -14,6 +14,7 @@ def get_required_env(var_name: str) -> str:
 # Environment
 ENVIRONMENT = os.environ.get("ENVIRONMENT", "production")
 PROD_LOG_LEVEL = os.environ.get("PROD_LOG_LEVEL", "INFO")
+VOICE_PROVIDER = os.environ.get("VOICE_PROVIDER", "exotel")
 
 # Uvicorn
 PORT = int(os.environ.get("PORT", 8000))
@@ -40,6 +41,7 @@ ELEVENLABS_API_KEY = os.environ.get("ELEVENLABS_API_KEY")
 ELEVENLABS_VOICE_ID = os.environ.get("ELEVENLABS_VOICE_ID", "bQQWtYx9EodAqMdkrNAc") # bQQWtYx9EodAqMdkrNAc
 ELEVENLABS_RHEA_VOICE_ID = os.environ.get("ELEVENLABS_RHEA_VOICE_ID", "bQQWtYx9EodAqMdkrNAc")
 ELEVENLABS_MODEL_ID = os.environ.get("ELEVENLABS_MODEL_ID", "eleven_flash_v2_5")
+ELEVENLABS_VOICE_SPEED = float(os.environ.get("ELEVENLABS_VOICE_SPEED", 1.0))
 GOOGLE_BRET_VOICE = os.environ.get("GOOGLE_BRET_VOICE", "en-IN-Chirp3-HD-Sadaltager")
 GOOGLE_MIA_VOICE = os.environ.get("GOOGLE_MIA_VOICE", "en-IN-Chirp3-HD-Despina")
 
@@ -84,3 +86,16 @@ logger.info(f"Shops enabled for Automatic MCP Server: {SHOPS_FOR_AUTOMATIC_MCP_S
 ENABLE_SUMMARIZATION = os.environ.get("ENABLE_SUMMARIZATION", "true").lower() == "true"
 MAX_TURNS_BEFORE_SUMMARY = int(os.environ.get("MAX_TURNS_BEFORE_SUMMARY", 10))
 KEEP_RECENT_TURNS = int(os.environ.get("KEEP_RECENT_TURNS", 2))
+
+# Twilio settings
+TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "")
+TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "")
+TWILIO_FROM_NUMBER = os.getenv("TWILIO_FROM_NUMBER", "")
+TWILIO_WEBSOCKET_URL = os.getenv("TWILIO_WEBSOCKET_URL", "wss://pendant-route-singles-antivirus.trycloudflare.com/agent/voice/breeze-buddy/callback/order-confirmation")
+
+# Exotel settings
+EXOTEL_ACCOUNT_SID = os.getenv("EXOTEL_ACCOUNT_SID")
+EXOTEL_API_KEY = os.getenv("EXOTEL_API_KEY")
+EXOTEL_API_TOKEN = os.getenv("EXOTEL_API_TOKEN")
+EXOTEL_SUBDOMAIN = os.getenv("EXOTEL_SUBDOMAIN", "api.exotel.com")
+EXOTEL_FROM_NUMBER = os.getenv("EXOTEL_FROM_NUMBER")

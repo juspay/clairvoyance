@@ -20,6 +20,11 @@ from app.core.logger import logger
 from app.core.config import DAILY_API_KEY, DAILY_API_URL, PORT, HOST
 from app import __version__
 from app.schemas import AutomaticVoiceUserConnectRequest
+from app.agents.voice.breeze_buddy.breeze.order_confirmation.types import BreezeOrderData
+from app.agents.voice.breeze_buddy.breeze.order_confirmation.websocket_bot import main as telephony_websocket_conn
+from starlette.websockets import WebSocketDisconnect
+from app.core.config import VOICE_PROVIDER
+from app.services.voice_call_providers.factory import get_voice_provider
 
 # Dictionary to track bot processes: {pid: (process, room_url)}
 bot_procs = {}
@@ -62,6 +67,7 @@ async def lifespan(app: FastAPI):
         daily_api_url=DAILY_API_URL,
         aiohttp_session=aiohttp_session,
     )
+    daily_helpers["session"] = aiohttp_session
     logger.info("Daily REST helper initialized.")
     
     yield
@@ -89,6 +95,49 @@ app.add_middleware(
 
 # Mount static files directory
 app.mount("/static", StaticFiles(directory="static"), name="static")
+
+@app.post("/agent/voice/breeze-buddy/{identity}/order-confirmation")
+async def trigger_order_confirmation(identity: str, order: BreezeOrderData):
+    """
+    Receives order details and triggers a order confirmation workflow.
+    """
+    if identity != "breeze":
+        raise HTTPException(status_code=404, detail="Feature not supported for this shop")
+    
+    logger.info(f"Received order: {order.order_id} for {order.customer_name} via {identity}")
+    provider = get_voice_provider(VOICE_PROVIDER, daily_helpers["session"])
+    return provider.make_call(order)
+
+@app.websocket("/agent/voice/breeze-buddy/callback/{workflow}")
+async def telephony_websocket_handler(workflow: str, websocket: WebSocket):
+    """
+    WebSocket endpoint that accepts a connection and passes it to the
+    pipecat bot's main function.
+    """
+    
+    if workflow != "order-confirmation":
+        raise HTTPException(status_code=404, detail="Feature not supported for this workflow")
+
+    logger.info(f"Handling websocket for {workflow}")
+    provider = get_voice_provider(VOICE_PROVIDER, daily_helpers["session"])
+    
+    try:
+        await provider.handle_websocket(websocket)
+    except WebSocketDisconnect:
+        logger.warning("WebSocket client disconnected.")
+    except Exception as e:
+        logger.error(f"An error occurred in the WebSocket handler: {e}")
+        await websocket.close(code=1011, reason="Internal Server Error")
+    finally:
+        logger.info("WebSocket client connection closed.")
+
+
+# @app.post("/order/confirmation/webhook/call-summary")
+# async def call_summary_webhook(summary: CallSummary):
+#     logger.info(f"Received call summary for {summary.call_sid}")
+#     logger.info(f"Outcome: {summary.outcome}")
+#     logger.info(f"Transcription: {summary.transcription}")
+#     return {"status": "received"}
 
 
 # WebSocket endpoint for Gemini Live
