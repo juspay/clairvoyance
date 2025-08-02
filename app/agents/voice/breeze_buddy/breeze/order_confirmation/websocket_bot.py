@@ -2,7 +2,6 @@ import json
 import os
 import asyncio
 from dotenv import load_dotenv
-from twilio.http.http_client import TwilioHttpClient
 from fastapi import WebSocket
 from loguru import logger
 from pipecat.audio.vad.silero import SileroVADAnalyzer
@@ -10,7 +9,6 @@ from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
 from pipecat.processors.aggregators.openai_llm_context import OpenAILLMContext
-from pipecat.serializers.twilio import TwilioFrameSerializer
 from pipecat.services.openai.llm import OpenAILLMService
 from pipecat.transcriptions.language import Language
 from pipecat.transports.network.fastapi_websocket import (
@@ -38,24 +36,16 @@ from app.core.config import (
 
 load_dotenv(override=True)
 
-class CustomTwilioFrameSerializer(TwilioFrameSerializer):
-    async def _hang_up_call(self):
-        logger.info("Skipping automatic hang-up from serializer.")
-        pass
-
 class OrderConfirmationBot:
-    def __init__(self, ws: WebSocket, aiohttp_session):
+    def __init__(self, ws: WebSocket, aiohttp_session, serializer, hangup_function):
         self.ws = ws
         self.aiohttp_session = aiohttp_session
         self.task: PipelineTask = None
         self.outcome = "unknown"
         self.context: OpenAILLMContext = None
         self.reporting_webhook_url = None
-        self.twilio_client = Client(
-            TWILIO_ACCOUNT_SID,
-            TWILIO_AUTH_TOKEN,
-            http_client=TwilioHttpClient(),
-        )
+        self.serializer = serializer
+        self.hangup_function = hangup_function
 
     async def run(self):
         logger.info("Starting WebSocket bot")
@@ -66,9 +56,14 @@ class OrderConfirmationBot:
         call_data = json.loads(await start_data.__anext__())
         logger.info(f"Received call data: {call_data}")
 
-        stream_sid = call_data["start"]["streamSid"]
-        self.call_sid = call_data["start"]["callSid"]
-        custom_parameters = call_data["start"]["customParameters"]
+        if "start" in call_data: # Twilio
+            stream_sid = call_data["start"]["streamSid"]
+            self.call_sid = call_data["start"]["callSid"]
+            custom_parameters = call_data["start"]["customParameters"]
+        else: # Exotel
+            stream_sid = call_data["stream_id"]
+            self.call_sid = call_data["call_sid"]
+            custom_parameters = self.ws.query_params
 
         order_id = custom_parameters.get("order_id", "N/A")
         customer_name = custom_parameters.get("customer_name", "Valued Customer")
@@ -94,17 +89,10 @@ class OrderConfirmationBot:
         self.order_summary = ", ".join(summary_parts) or "your items"
 
         logger.info(
-            f"Connected to Twilio call: CallSid={self.call_sid}, StreamSid={stream_sid}"
+            f"Connected to call: CallSid={self.call_sid}, StreamSid={stream_sid}"
         )
         logger.info(
             f"Order Details: ID-{order_id}, Customer-{customer_name}, Summary-{self.order_summary}, Price-₹{total_price}"
-        )
-
-        serializer = CustomTwilioFrameSerializer(
-            stream_sid=stream_sid,
-            call_sid=self.call_sid,
-            account_sid=TWILIO_ACCOUNT_SID,
-            auth_token=TWILIO_AUTH_TOKEN,
         )
 
         transport = FastAPIWebsocketTransport(
@@ -114,7 +102,7 @@ class OrderConfirmationBot:
                 audio_out_enabled=True,
                 add_wav_header=False,
                 vad_analyzer=SileroVADAnalyzer(),
-                serializer=serializer,
+                serializer=self.serializer(stream_sid, self.call_sid) if self.serializer else None,
             ),
         )
 
@@ -302,10 +290,11 @@ class OrderConfirmationBot:
                     except Exception as e:
                         logger.error(f"Error sending webhook: {e}")
 
-            self.twilio_client.calls(self.call_sid).update(status="completed")
-            logger.info(f"Twilio call {self.call_sid} hung up successfully.")
+            if self.hangup_function:
+                self.hangup_function(self.call_sid)
+                logger.info(f"Call {self.call_sid} hung up successfully.")
         except Exception as e:
-            logger.error(f"Failed to hang up Twilio call {self.call_sid}: {str(e)}")
+            logger.error(f"Failed to hang up call {self.call_sid}: {str(e)}")
         finally:
             await self.task.cancel()
 
@@ -396,6 +385,6 @@ class OrderConfirmationBot:
         )
 
 
-async def main(ws: WebSocket, aiohttp_session):
-    bot = OrderConfirmationBot(ws, aiohttp_session)
+async def main(ws: WebSocket, aiohttp_session, serializer, hangup_function):
+    bot = OrderConfirmationBot(ws, aiohttp_session, serializer, hangup_function)
     await bot.run()

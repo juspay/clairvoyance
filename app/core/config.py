@@ -14,6 +14,7 @@ def get_required_env(var_name: str) -> str:
 # Environment
 ENVIRONMENT = os.environ.get("ENVIRONMENT", "production")
 PROD_LOG_LEVEL = os.environ.get("PROD_LOG_LEVEL", "INFO")
+VOICE_PROVIDER = os.environ.get("VOICE_PROVIDER", "exotel")
 
 # Uvicorn
 PORT = int(os.environ.get("PORT", 8000))
@@ -90,5 +91,11 @@ KEEP_RECENT_TURNS = int(os.environ.get("KEEP_RECENT_TURNS", 2))
 TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "")
 TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "")
 TWILIO_FROM_NUMBER = os.getenv("TWILIO_FROM_NUMBER", "")
-TWILIO_WEBSOCKET_URL = os.getenv("TWILIO_WEBSOCKET_URL", "wss://knew-tractor-manager-arranged.trycloudflare.com/agent/voice/breeze-buddy/twillio/callback/order-confirmation")
+TWILIO_WEBSOCKET_URL = os.getenv("TWILIO_WEBSOCKET_URL", "wss://pendant-route-singles-antivirus.trycloudflare.com/agent/voice/breeze-buddy/callback/order-confirmation")
 
+# Exotel settings
+EXOTEL_ACCOUNT_SID = os.getenv("EXOTEL_ACCOUNT_SID")
+EXOTEL_API_KEY = os.getenv("EXOTEL_API_KEY")
+EXOTEL_API_TOKEN = os.getenv("EXOTEL_API_TOKEN")
+EXOTEL_SUBDOMAIN = os.getenv("EXOTEL_SUBDOMAIN", "api.exotel.com")
+EXOTEL_FROM_NUMBER = os.getenv("EXOTEL_FROM_NUMBER")
