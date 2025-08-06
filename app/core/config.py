@@ -93,3 +93,14 @@ TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "")
 TWILIO_FROM_NUMBER = os.getenv("TWILIO_FROM_NUMBER", "")
 TWILIO_WEBSOCKET_URL = os.getenv("TWILIO_WEBSOCKET_URL", "")
 
+# PostgreSQL Database Configuration
+POSTGRES_USER = os.getenv("POSTGRES_USER", "")
+POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "")
+POSTGRES_HOST = os.getenv("POSTGRES_HOST", "")
+POSTGRES_PORT = os.getenv("POSTGRES_PORT", "")
+POSTGRES_DB = os.getenv("POSTGRES_DB", "")
+
+# Connection pool settings
+POSTGRES_POOL_SIZE = int(os.getenv("POSTGRES_POOL_SIZE", "5"))
+POSTGRES_MAX_OVERFLOW = int(os.getenv("POSTGRES_MAX_OVERFLOW", "10"))
+POSTGRES_POOL_RECYCLE = int(os.getenv("POSTGRES_POOL_RECYCLE", "3600"))  # 1 hour
