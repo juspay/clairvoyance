@@ -34,5 +34,8 @@ opentelemetry-sdk
 opentelemetry-exporter-otlp-proto-http
 langfuse
 
+# PostgreSQL database support
+asyncpg
+
 twilio
 pipecat-ai-flows

@@ -14,6 +14,9 @@ from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pipecat.transports.services.helpers.daily_rest import DailyRESTHelper, DailyRoomParams, DailyRoomProperties, DailyMeetingTokenParams, DailyMeetingTokenProperties
 
+# Database imports
+from app.database.config import init_db_pool, close_db_pool
+
 # Import necessary components from the new structure
 from app.ws.live_session import handle_websocket_session, get_active_connections, get_shutdown_event
 from app.core.logger import logger
@@ -66,6 +69,14 @@ def cleanup():
 async def lifespan(app: FastAPI):
     """FastAPI lifespan manager that handles startup and shutdown tasks."""
     logger.info("Application startup...")
+    
+    # Initialize database and create tables if needed
+    try:
+        await init_db_pool()
+        logger.info("Database initialized successfully with schema.")
+    except Exception as e:
+        logger.error(f"Failed to initialize database: {e}")
+    
     # Initialize aiohttp session
     aiohttp_session = aiohttp.ClientSession()
     daily_helpers["rest"] = DailyRESTHelper(
@@ -80,6 +91,8 @@ async def lifespan(app: FastAPI):
     logger.info("Application shutdown event triggered...")
     # Cleanup bot processes
     cleanup()
+    # Close database pool
+    await close_db_pool()
     # Close aiohttp session
     await aiohttp_session.close()
     logger.info("Aiohttp session closed.")
