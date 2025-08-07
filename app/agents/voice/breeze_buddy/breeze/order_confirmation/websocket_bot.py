@@ -179,6 +179,12 @@ class OrderConfirmationBot:
                 audio_out_sample_rate=8000,
                 enable_metrics=True,
                 enable_usage_metrics=True,
+                vad_analyzer=SileroVADAnalyzer(params=VADParams(
+                    confidence=0.5,       # Let's be a little more confident about speech
+                    stop_secs=0.8,        # INCREASED: Require a longer pause (800ms) to stop
+                    min_volume=0.08,      # Slightly increase to ignore very faint noise
+                    start_secs=0.1,       # Keep this low for fast startup
+                )),
             ),
         )
 

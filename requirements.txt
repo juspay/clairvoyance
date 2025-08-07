@@ -36,3 +36,9 @@ langfuse
 
 twilio
 pipecat-ai-flows
+
+# Redis for message queue and caching
+redis>=5.0.0
+
+# System monitoring
+psutil>=5.9.0

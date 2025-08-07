@@ -93,3 +93,14 @@ TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "")
 TWILIO_FROM_NUMBER = os.getenv("TWILIO_FROM_NUMBER", "")
 TWILIO_WEBSOCKET_URL = os.getenv("TWILIO_WEBSOCKET_URL", "")
 
+# Redis Configuration
+REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379")
+REDIS_SESSION_QUEUE = os.environ.get("REDIS_SESSION_QUEUE", "voice_sessions")
+REDIS_WORKER_RESPONSE_QUEUE = os.environ.get("REDIS_WORKER_RESPONSE_QUEUE", "worker_responses")
+REDIS_CACHE_TTL = int(os.environ.get("REDIS_CACHE_TTL", 3600))  # 1 hour
+
+# Worker Pool Configuration
+WORKER_POOL_SIZE = int(os.environ.get("WORKER_POOL_SIZE", 2))  # Reduced to 2 for development
+MAX_SESSIONS_PER_WORKER = int(os.environ.get("MAX_SESSIONS_PER_WORKER", 10))
+WORKER_HEARTBEAT_INTERVAL = int(os.environ.get("WORKER_HEARTBEAT_INTERVAL", 30))
+
