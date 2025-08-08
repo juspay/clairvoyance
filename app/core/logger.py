@@ -34,6 +34,21 @@ class InterceptHandler(logging.Handler):
     This allows us to capture logs from libraries like Uvicorn.
     """
     def emit(self, record):
+        # Filter out noisy WebSocket audio logs and gRPC shutdown errors
+        message = record.getMessage()
+        if any(noise in message for noise in [
+            "AudioAdded", 
+            "> BINARY", 
+            "< TEXT", 
+            "Received message=",
+            "bytes]",
+            "AttributeError: 'NoneType' object has no attribute 'POLLER'",
+            "grpc._cython.cygrpc.shutdown_grpc_aio",
+            "grpc._cython.cygrpc._actual_aio_shutdown",
+            "grpc._cython.cygrpc.AioChannel.__dealloc__"
+        ]):
+            return  # Skip these noisy logs
+            
         # Get corresponding Loguru level if it exists
         try:
             level = logger.level(record.levelname).name

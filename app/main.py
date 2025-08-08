@@ -3,8 +3,47 @@ import json
 import uuid
 import time
 import asyncio
+import signal
+import sys
+import warnings
+import atexit
 from contextlib import asynccontextmanager
 from typing import Any, Dict
+
+# Suppress gRPC shutdown warnings that appear during process termination
+warnings.filterwarnings("ignore", message=".*POLLER.*")
+warnings.filterwarnings("ignore", message=".*grpc.*shutdown.*")
+warnings.filterwarnings("ignore", message=".*cygrpc.*")
+
+# Also suppress at the exception level
+import logging
+logging.getLogger("grpc").setLevel(logging.CRITICAL)
+
+# Custom stderr handler to filter gRPC shutdown errors
+class FilteredStderr:
+    def __init__(self, original_stderr):
+        self.original_stderr = original_stderr
+    
+    def write(self, message):
+        # Filter out gRPC shutdown error messages
+        if any(pattern in str(message) for pattern in [
+            "AttributeError: 'NoneType' object has no attribute 'POLLER'",
+            "grpc._cython.cygrpc",
+            "shutdown_grpc_aio",
+            "_actual_aio_shutdown",
+            "AioChannel.__dealloc__"
+        ]):
+            return  # Suppress these messages
+        self.original_stderr.write(message)
+    
+    def flush(self):
+        self.original_stderr.flush()
+    
+    def __getattr__(self, name):
+        return getattr(self.original_stderr, name)
+
+# Install the filtered stderr handler
+sys.stderr = FilteredStderr(sys.stderr)
 
 import aiohttp
 from fastapi import FastAPI, WebSocket, HTTPException, Request
@@ -56,21 +95,118 @@ async def cleanup():
         # Stop session manager (which will stop worker pool)
         await session_manager.stop()
         
-        # Cleanup shared models
+        # Pre-cleanup gRPC - do this before cleaning up models
+        try:
+            await _pre_cleanup_grpc()
+        except Exception as e:
+            logger.debug(f"Pre-gRPC cleanup: {e}")
+        
+        # Cleanup Gemini client and gRPC channels
+        try:
+            from app.services.gemini_service import cleanup_gemini_client
+            await cleanup_gemini_client()
+        except Exception as e:
+            logger.debug(f"Error cleaning up Gemini client: {e}")
+        
+        # Cleanup shared models (includes Google services)
         await shared_model_manager.cleanup()
         
         # Disconnect from Redis
         await redis_manager.disconnect()
+        
+        # Final gRPC cleanup - force close any remaining channels
+        try:
+            await asyncio.wait_for(_cleanup_grpc_async(), timeout=0.5)
+        except Exception as e:
+            logger.debug(f"Final gRPC cleanup: {e}")
         
         logger.info("Worker-based architecture cleanup completed.")
     except Exception as e:
         logger.error(f"Error during cleanup: {e}", exc_info=True)
 
 
+async def _pre_cleanup_grpc():
+    """Pre-cleanup gRPC resources to prevent POLLER errors."""
+    try:
+        # Cancel any pending gRPC tasks
+        current_task = asyncio.current_task()
+        all_tasks = [t for t in asyncio.all_tasks() if t != current_task and not t.done()]
+        
+        # Cancel tasks that might be holding gRPC resources
+        grpc_tasks = [t for t in all_tasks if 'grpc' in str(t.get_coro()).lower()]
+        for task in grpc_tasks:
+            if not task.done():
+                task.cancel()
+        
+        # Short wait for cancellations
+        if grpc_tasks:
+            await asyncio.sleep(0.05)
+        
+    except Exception as e:
+        logger.debug(f"Pre-gRPC cleanup: {e}")
+
+
+async def _cleanup_grpc_async():
+    """Helper function to cleanup gRPC async runtime."""
+    try:
+        import grpc.aio
+        
+        # Wait for any pending gRPC operations to complete
+        await asyncio.sleep(0.1)
+        
+        # Force cleanup of the gRPC async runtime before event loop closes
+        try:
+            # Attempt graceful shutdown first
+            grpc.aio.shutdown_grpc_aio()
+        except Exception as cleanup_error:
+            logger.debug(f"gRPC shutdown: {cleanup_error}")
+            
+        # Additional wait to let cleanup complete
+        await asyncio.sleep(0.05)
+        
+    except Exception as e:
+        # This is expected during shutdown, just log at debug level
+        logger.debug(f"gRPC async cleanup: {e}")
+
+
+# Global shutdown event for signal handling
+shutdown_event = asyncio.Event()
+
+def _emergency_grpc_cleanup():
+    """Emergency gRPC cleanup for atexit handler."""
+    try:
+        import grpc.aio
+        # Force shutdown without asyncio
+        grpc.aio.shutdown_grpc_aio()
+    except:
+        pass  # Ignore all errors in emergency cleanup
+
+# Register emergency cleanup as last resort
+atexit.register(_emergency_grpc_cleanup)
+
+def signal_handler(signum, frame):
+    """Handle shutdown signals gracefully."""
+    logger.info(f"Received signal {signum}, initiating graceful shutdown...")
+    shutdown_event.set()
+
+def setup_signal_handlers():
+    """Setup signal handlers for graceful shutdown."""
+    if sys.platform != "win32":  # Unix-based systems
+        signal.signal(signal.SIGINT, signal_handler)
+        signal.signal(signal.SIGTERM, signal_handler)
+        logger.info("Signal handlers registered for SIGINT and SIGTERM")
+    else:  # Windows
+        signal.signal(signal.SIGINT, signal_handler)
+        logger.info("Signal handler registered for SIGINT")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """FastAPI lifespan manager that handles startup and shutdown tasks."""
     logger.info("Application startup...")
+    
+    # Setup signal handlers for graceful shutdown
+    setup_signal_handlers()
     
     # Initialize Redis connection
     await redis_manager.connect()
@@ -101,15 +237,18 @@ async def lifespan(app: FastAPI):
     
     logger.info("Application shutdown event triggered...")
     
-    # Cleanup worker-based architecture
+    # Gracefully shutdown websocket connections first
+    await shutdown_server()
+    
+    # Cleanup worker-based architecture (includes gRPC cleanup)
     await cleanup()
     
     # Close aiohttp session
     await aiohttp_session.close()
     logger.info("Aiohttp session closed.")
     
-    # Gracefully shutdown websocket connections
-    await shutdown_server()
+    # Note: gRPC shutdown improvements should reduce/eliminate the 
+    # AttributeError: 'NoneType' object has no attribute 'POLLER' errors
 
 
 app = FastAPI(title="Breeze Automatic Server", version=__version__, lifespan=lifespan)
@@ -552,6 +691,31 @@ async def get_session_latency(session_id: str):
         logger.error(f"Failed to get session latency for {session_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to get session latency")
 
+# Speaker diarization status endpoint
+@app.get("/status/speakers")
+async def get_speaker_status():
+    """Get speaker diarization configuration and status."""
+    try:
+        from app.core.config import (
+            ENABLE_SPEAKER_DIARIZATION, 
+            SPEECHMATICS_API_KEY, 
+            SPEAKER_SENSITIVITY, 
+            MAX_SPEAKERS, 
+            ENABLE_VOICE_LOCKING
+        )
+        
+        return JSONResponse({
+            "speaker_diarization_enabled": ENABLE_SPEAKER_DIARIZATION,
+            "speechmatics_configured": bool(SPEECHMATICS_API_KEY),
+            "voice_locking_enabled": ENABLE_VOICE_LOCKING,
+            "speaker_sensitivity": SPEAKER_SENSITIVITY,
+            "max_speakers": MAX_SPEAKERS,
+            "service": "speechmatics" if ENABLE_SPEAKER_DIARIZATION and SPEECHMATICS_API_KEY else "google"
+        })
+    except Exception as e:
+        logger.error(f"Failed to get speaker status: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get speaker status")
+
 # Debug endpoint for Redis state
 @app.get("/debug/redis")
 async def debug_redis():
@@ -587,6 +751,103 @@ async def debug_redis():
             "redis_connected": False,
             "error": str(e)
         })
+
+@app.get("/health/redis")
+async def health_redis():
+    """Health check for Redis cleanup functionality."""
+    try:
+        # Test Redis connection
+        await redis_manager.redis.ping()
+        
+        # Get active workers with heartbeat status
+        active_workers = await redis_manager.get_active_workers()
+        heartbeat_status = {}
+        
+        for worker_id in active_workers:
+            heartbeat_key = f"worker:{worker_id}:heartbeat"
+            heartbeat_exists = await redis_manager.redis.exists(heartbeat_key)
+            ttl = await redis_manager.redis.ttl(heartbeat_key) if heartbeat_exists else -1
+            heartbeat_status[worker_id] = {
+                "alive": bool(heartbeat_exists),
+                "ttl_seconds": ttl
+            }
+        
+        # Check for stale data
+        all_worker_keys = await redis_manager.redis.keys("worker:*")
+        worker_session_queues = await redis_manager.redis.keys("worker:*:sessions")
+        session_assignment_keys = await redis_manager.redis.keys("session:*:assignment")
+        
+        return JSONResponse({
+            "status": "healthy",
+            "redis_connected": True,
+            "active_workers": len(active_workers),
+            "heartbeat_status": heartbeat_status,
+            "total_worker_keys": len(all_worker_keys),
+            "session_queues": len(worker_session_queues),
+            "session_assignments": len(session_assignment_keys),
+            "cleanup_enabled": True
+        })
+    except Exception as e:
+        logger.error(f"Redis health check failed: {e}")
+        return JSONResponse({
+            "status": "unhealthy",
+            "redis_connected": False,
+            "error": str(e)
+        }, status_code=503)
+
+@app.post("/admin/cleanup/stale-workers")
+async def cleanup_stale_workers():
+    """Manually trigger cleanup of stale workers."""
+    try:
+        stale_workers = await redis_manager.cleanup_stale_workers()
+        return JSONResponse({
+            "status": "success",
+            "cleaned_workers": stale_workers,
+            "count": len(stale_workers)
+        })
+    except Exception as e:
+        logger.error(f"Manual cleanup failed: {e}")
+        return JSONResponse({
+            "status": "error",
+            "error": str(e)
+        }, status_code=500)
+
+@app.get("/admin/redis/keys")
+async def list_redis_keys():
+    """List all Redis keys for debugging."""
+    try:
+        all_keys = await redis_manager.redis.keys("*")
+        
+        # Categorize keys
+        categorized = {
+            "workers": [],
+            "heartbeats": [],
+            "session_queues": [],
+            "session_assignments": [],
+            "other": []
+        }
+        
+        for key in all_keys:
+            if key.startswith("worker:") and key.count(":") == 1:
+                categorized["workers"].append(key)
+            elif ":heartbeat" in key:
+                categorized["heartbeats"].append(key)
+            elif ":sessions" in key:
+                categorized["session_queues"].append(key)
+            elif ":assignment" in key:
+                categorized["session_assignments"].append(key)
+            else:
+                categorized["other"].append(key)
+        
+        return JSONResponse({
+            "total_keys": len(all_keys),
+            "categorized_keys": categorized
+        })
+    except Exception as e:
+        logger.error(f"Failed to list Redis keys: {e}")
+        return JSONResponse({
+            "error": str(e)
+        }, status_code=500)
 
 # Graceful shutdown handling for WebSocket connections
 async def shutdown_server():

@@ -29,7 +29,7 @@ BASE_SYSTEM_INSTRUCTION_TEXT = (
     "**Analytical Insights:** Provide data‑driven recommendations on strategy, operations, marketing, technology, and customer experience.\n"
     "**Clarification:** Ask concise follow‑up questions when user requests are ambiguous or lack context.\n"
     "**Transparency:** Always disclose data limitations. If needed data is unavailable, say:\n"
-    "\"I’m sorry, I don’t have access to that data at the moment. Is there something else I can help you with?\"\n"
+    "\"I'm sorry, I don't have access to that data at the moment. Is there something else I can help you with?\"\n"
     "**Accuracy:** Never invent or fabricate data.\n\n"
     "# Personality & Tone\n"
     "**Business‑savvy:** Ground suggestions in metrics, facts, and industry best practices with confidence.\n"
@@ -93,7 +93,8 @@ genai_client = genai.Client(api_key=API_KEY)
 
 async def process_tool_calls(tool_call, websocket_state):
     """
-    Process tool calls from Gemini and prepare function responses
+    Process tool calls from Gemini and prepare function responses.
+    Chart generation is now handled by dedicated chart tools that the LLM calls directly.
     """
     function_responses = []
     
@@ -142,6 +143,7 @@ async def process_tool_calls(tool_call, websocket_state):
                     name=fc.name,
                     response={"output": result} # Gemini expects the actual result here
                 ))
+                
             except Exception as e:
                 logger.error(f"[{current_session_id}] Error executing tool {fc.name}: {e}")
                 logger.debug(traceback.format_exc())
@@ -157,6 +159,7 @@ async def process_tool_calls(tool_call, websocket_state):
                 name=fc.name,
                 response={"output": f"Unknown tool: {fc.name}"}
             ))
+    
     return function_responses
 
 def get_live_connect_config(
@@ -272,9 +275,36 @@ async def close_gemini_session(session_cm):
     if session_cm:
         logger.info("Cleaning up Gemini session")
         try:
-            await asyncio.wait_for(session_cm.__aexit__(None, None, None), timeout=2.0)
+            # Force close with shorter timeout to prevent hanging
+            await asyncio.wait_for(session_cm.__aexit__(None, None, None), timeout=1.0)
+            logger.debug("Gemini session closed successfully")
         except asyncio.TimeoutError:
-            logger.warning("Gemini session cleanup timed out")
+            logger.warning("Gemini session cleanup timed out - force closing")
+            # Try to cancel any pending tasks
+            try:
+                if hasattr(session_cm, '_session') and hasattr(session_cm._session, '_transport'):
+                    # Force close the underlying transport if available
+                    transport = session_cm._session._transport
+                    if hasattr(transport, 'close'):
+                        transport.close()
+            except Exception as te:
+                logger.debug(f"Error force-closing transport: {te}")
         except Exception as e:
-            logger.error(f"Error during session cleanup: {e}")
-            logger.debug(traceback.format_exc())
+            logger.warning(f"Error during Gemini session cleanup: {e}")
+            # Don't log full traceback for shutdown errors to reduce noise
+            
+async def cleanup_gemini_client():
+    """Cleanup the global Gemini client and its gRPC channels."""
+    global genai_client
+    try:
+        if genai_client:
+            # Close any underlying gRPC channels if accessible
+            if hasattr(genai_client, '_transport') and hasattr(genai_client._transport, 'close'):
+                await genai_client._transport.close()
+            elif hasattr(genai_client, 'close'):
+                await genai_client.close()
+            logger.debug("Gemini client cleaned up")
+    except Exception as e:
+        logger.debug(f"Error cleaning up Gemini client: {e}")
+    finally:
+        genai_client = None

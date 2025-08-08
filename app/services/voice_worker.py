@@ -47,6 +47,9 @@ class VoiceWorker:
         self.running = True
         
         try:
+            # Setup signal handlers for graceful shutdown
+            self._setup_signal_handlers()
+            
             # Connect to Redis
             await self.redis.connect()
             
@@ -77,6 +80,18 @@ class VoiceWorker:
         finally:
             await self.stop()
     
+    def _setup_signal_handlers(self):
+        """Setup signal handlers for graceful worker shutdown."""
+        def signal_handler(signum, frame):
+            logger.info(f"Worker {self.worker_id} received signal {signum}, shutting down gracefully...")
+            self.running = False
+        
+        if sys.platform != "win32":  # Unix-based systems
+            signal.signal(signal.SIGINT, signal_handler)
+            signal.signal(signal.SIGTERM, signal_handler)
+        else:  # Windows
+            signal.signal(signal.SIGINT, signal_handler)
+    
     async def stop(self):
         """Stop the worker gracefully."""
         if not self.running:
@@ -99,6 +114,17 @@ class VoiceWorker:
         
         # Disconnect from Redis
         await self.redis.disconnect()
+        
+        # Cleanup any gRPC channels if we used Google services
+        try:
+            if self._models_loaded and any(model for name, model in [
+                ("google_stt", self._stt_service),
+                ("google_tts", getattr(self, '_google_tts_service', None))
+            ] if model):
+                # Give gRPC channels time to cleanup
+                await asyncio.sleep(0.05)
+        except Exception as e:
+            logger.debug(f"Worker {self.worker_id} gRPC cleanup: {e}")
         
         logger.info(f"Voice worker {self.worker_id} stopped")
     
@@ -176,6 +202,10 @@ class VoiceWorker:
                 # Only register as READY if models are loaded and we're running
                 status = WorkerStatus.READY if self._models_loaded else WorkerStatus.STARTING
                 await self._register_worker(status)
+                
+                # Update heartbeat with TTL
+                await self.redis.update_worker_heartbeat(self.worker_id)
+                
                 await asyncio.sleep(WORKER_HEARTBEAT_INTERVAL)
             except Exception as e:
                 logger.error(f"Worker {self.worker_id} heartbeat error: {e}")
@@ -186,21 +216,16 @@ class VoiceWorker:
         logger.info(f"Worker {self.worker_id} starting session handler loop")
         while self.running:
             try:
-                # Get next session from queue
-                logger.debug(f"Worker {self.worker_id} waiting for session (timeout=5s)")
-                session_data = await self.redis.dequeue_session(timeout=5)
+                # Get next session from our worker-specific queue
+                # logger.debug(f"Worker {self.worker_id} waiting for session (timeout=5s)")
+                session_data = await self.redis.dequeue_session(self.worker_id, timeout=5)
                 if not session_data:
                     logger.debug(f"Worker {self.worker_id} no session received, continuing...")
                     continue
                 
                 logger.info(f"Worker {self.worker_id} received session: {session_data.get('session_id')}")
                 
-                # Check if this session is for us
-                if session_data.get("worker_id") != self.worker_id:
-                    # Re-queue if not for us (shouldn't happen)
-                    logger.warning(f"Worker {self.worker_id} received session for different worker {session_data.get('worker_id')}, re-queueing")
-                    await self.redis.enqueue_session(session_data)
-                    continue
+                # No need to check worker_id anymore since we're using per-worker queues
                 
                 # Handle the session
                 await self._handle_session(session_data)

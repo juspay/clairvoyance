@@ -19,7 +19,7 @@ starlette>=0.27.0
 # Logging and environment
 python-dotenv>=1.0.0
 
-pipecat-ai[daily,google,assembly,silero,openai,azure,elevenlabs]
+pipecat-ai[daily,google,assembly,silero,openai,azure,elevenlabs,speechmatics]
 pipecat-ai[noisereduce]
 
 # Google Cloud Speech

@@ -87,6 +87,19 @@ ENABLE_SUMMARIZATION = os.environ.get("ENABLE_SUMMARIZATION", "true").lower() ==
 MAX_TURNS_BEFORE_SUMMARY = int(os.environ.get("MAX_TURNS_BEFORE_SUMMARY", 10))
 KEEP_RECENT_TURNS = int(os.environ.get("KEEP_RECENT_TURNS", 2))
 
+# Speechmatics Configuration
+SPEECHMATICS_API_KEY = os.environ.get("SPEECHMATICS_API_KEY")  # Note: Matches your .env spelling
+ENABLE_SPEAKER_DIARIZATION = os.environ.get("ENABLE_SPEAKER_DIARIZATION", "true").lower() == "true"
+SPEAKER_SENSITIVITY = float(os.environ.get("SPEAKER_SENSITIVITY", "0.5"))
+MAX_SPEAKERS = int(os.environ.get("MAX_SPEAKERS", "5"))
+ENABLE_VOICE_LOCKING = os.environ.get("ENABLE_VOICE_LOCKING", "true").lower() == "true"
+
+# Debug: Log Speechmatics configuration on startup
+logger.info(f"[CONFIG-DEBUG] Speechmatics configuration loaded:")
+logger.info(f"[CONFIG-DEBUG] - SPEECHMATICS_API_KEY: '{SPEECHMATICS_API_KEY}'")
+logger.info(f"[CONFIG-DEBUG] - ENABLE_SPEAKER_DIARIZATION: {ENABLE_SPEAKER_DIARIZATION}")
+logger.info(f"[CONFIG-DEBUG] - ENABLE_VOICE_LOCKING: {ENABLE_VOICE_LOCKING}")
+
 # Twilio settings
 TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "")
 TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "")
@@ -103,4 +116,11 @@ REDIS_CACHE_TTL = int(os.environ.get("REDIS_CACHE_TTL", 3600))  # 1 hour
 WORKER_POOL_SIZE = int(os.environ.get("WORKER_POOL_SIZE", 2))  # Reduced to 2 for development
 MAX_SESSIONS_PER_WORKER = int(os.environ.get("MAX_SESSIONS_PER_WORKER", 10))
 WORKER_HEARTBEAT_INTERVAL = int(os.environ.get("WORKER_HEARTBEAT_INTERVAL", 30))
+
+# Redis Cleanup Configuration
+WORKER_REGISTRATION_TTL = int(os.environ.get("WORKER_REGISTRATION_TTL", 60))  # 60 seconds
+SESSION_ASSIGNMENT_TTL = int(os.environ.get("SESSION_ASSIGNMENT_TTL", 300))  # 5 minutes
+HEARTBEAT_TTL = int(os.environ.get("HEARTBEAT_TTL", 30))  # 30 seconds
+CLEANUP_INTERVAL = int(os.environ.get("CLEANUP_INTERVAL", 60))  # 60 seconds
+ENABLE_STARTUP_CLEANUP = os.environ.get("ENABLE_STARTUP_CLEANUP", "true").lower() == "true"
 

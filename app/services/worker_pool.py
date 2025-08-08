@@ -1,4 +1,5 @@
 import asyncio
+import json
 import multiprocessing
 import uuid
 import time
@@ -61,6 +62,9 @@ class WorkerPoolManager:
         
         # Connect to Redis
         await redis_manager.connect()
+        
+        # Perform startup cleanup
+        await self._startup_cleanup()
         
         # Start initial workers
         for i in range(WORKER_POOL_SIZE):
@@ -173,8 +177,11 @@ class WorkerPoolManager:
                         await self._restart_worker(worker_id)
                         continue
                 
-                # Get active workers from Redis (the source of truth)
+                # First cleanup stale workers to get accurate count
                 from app.core.redis_manager import redis_manager
+                await redis_manager.cleanup_stale_workers()
+                
+                # Get active workers from Redis (the source of truth)
                 active_worker_ids = await redis_manager.get_active_workers()
                 
                 # Update our local tracking with Redis data
@@ -207,6 +214,81 @@ class WorkerPoolManager:
         await self._stop_worker(worker_id)
         await self._start_worker()
     
+    async def _startup_cleanup(self):
+        """Clean up stale workers and sessions on startup."""
+        from app.core.config import ENABLE_STARTUP_CLEANUP
+        
+        if not ENABLE_STARTUP_CLEANUP:
+            logger.info("Startup cleanup disabled")
+            return
+        
+        logger.info("Performing startup cleanup...")
+        
+        # Clean up stale workers
+        stale_workers = await redis_manager.cleanup_stale_workers()
+        if stale_workers:
+            logger.info(f"Cleaned up {len(stale_workers)} stale workers: {stale_workers}")
+        
+        # Find and redistribute orphaned sessions from dead workers
+        await self._redistribute_orphaned_sessions()
+        
+        logger.info("Startup cleanup completed")
+    
+    async def _redistribute_orphaned_sessions(self):
+        """Find sessions in queues of dead workers and redistribute."""
+        try:
+            # Get all worker session queues
+            worker_queue_keys = await redis_manager.redis.keys("worker:*:sessions")
+            active_workers = await redis_manager.get_active_workers()
+            
+            for queue_key in worker_queue_keys:
+                # Extract worker_id from queue key
+                parts = queue_key.split(":")
+                if len(parts) >= 3:
+                    worker_id = parts[1]
+                    
+                    # Check if this worker is still active
+                    if worker_id not in active_workers:
+                        # Worker is dead, redistribute its sessions
+                        queue_length = await redis_manager.redis.llen(queue_key)
+                        logger.info(f"Found {queue_length} orphaned sessions in queue {queue_key}")
+                        
+                        # Move all sessions from this queue to be redistributed
+                        while True:
+                            session_data_str = await redis_manager.redis.rpop(queue_key)
+                            if not session_data_str:
+                                break
+                            
+                            try:
+                                session_data = json.loads(session_data_str)
+                                session_id = session_data.get("session_id")
+                                logger.info(f"Redistributing orphaned session: {session_id}")
+                                
+                                # Create new session request to redistribute
+                                from app.models.session_models import SessionRequest
+                                session_request = SessionRequest(
+                                    session_id=session_id,
+                                    session_type=session_data.get("session_type"),
+                                    config=session_data.get("config"),
+                                    websocket_info=session_data.get("websocket_info")
+                                )
+                                
+                                # Reallocate to available worker
+                                new_worker_id = await self.allocate_session(session_request)
+                                if new_worker_id:
+                                    logger.info(f"Redistributed session {session_id} from dead worker {worker_id} to {new_worker_id}")
+                                else:
+                                    logger.error(f"Failed to redistribute session {session_id}")
+                                    
+                            except Exception as e:
+                                logger.error(f"Error redistributing session: {e}")
+                        
+                        # Clean up empty queue
+                        await redis_manager.redis.delete(queue_key)
+                        
+        except Exception as e:
+            logger.error(f"Error redistributing orphaned sessions: {e}")
+    
     async def allocate_session(self, session_request: SessionRequest) -> Optional[str]:
         """Allocate a session to an available worker."""
         # Get active workers from Redis (source of truth)
@@ -237,7 +319,10 @@ class WorkerPoolManager:
         from app.core.redis_manager import redis_manager
         success = await redis_manager.enqueue_session(session_data)
         if success:
-            # Track session assignment
+            # Track session assignment in Redis with TTL
+            await redis_manager.set_session_assignment(session_request.session_id, worker_id)
+            
+            # Track session assignment locally
             self.session_to_worker[session_request.session_id] = worker_id
             
             # Update worker session count if we have local tracking

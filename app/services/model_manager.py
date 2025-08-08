@@ -144,6 +144,24 @@ class ModelManager:
         """Cleanup shared models and resources."""
         logger.info("Cleaning up shared models...")
         
+        # Close Google services first to properly cleanup gRPC channels
+        google_services = [
+            "google_stt", "google_tts_bret", "google_tts_mia"
+        ]
+        
+        for service_name in google_services:
+            if service_name in self._models:
+                try:
+                    service = self._models[service_name]
+                    # Check if service has a close method
+                    if hasattr(service, 'close'):
+                        await service.close()
+                    elif hasattr(service, 'cleanup'):
+                        await service.cleanup()
+                    logger.debug(f"Closed Google service: {service_name}")
+                except Exception as e:
+                    logger.warning(f"Error closing {service_name}: {e}")
+        
         # Close aiohttp session
         if self._aiohttp_session:
             await self._aiohttp_session.close()
