@@ -15,7 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from pipecat.transports.services.helpers.daily_rest import DailyRESTHelper, DailyRoomParams, DailyRoomProperties, DailyMeetingTokenParams, DailyMeetingTokenProperties
 
 # Database imports
-from app.database.config import init_db_pool, close_db_pool
+from app.database import init_db_pool, close_db_pool, get_db_connection
 
 # Import necessary components from the new structure
 from app.ws.live_session import handle_websocket_session, get_active_connections, get_shutdown_event
@@ -34,6 +34,11 @@ from app.core.config import (
     TWILIO_FROM_NUMBER,
     TWILIO_WEBSOCKET_URL,
 )
+from app.schemas import CallStatus, RequestedBy
+from app.database.accessor import create_call_data
+from uuid import uuid4
+from datetime import datetime
+from app.services.call_queue_manager import call_queue_manager
 
 # Dictionary to track bot processes: {pid: (process, room_url)}
 bot_procs = {}
@@ -91,8 +96,14 @@ async def lifespan(app: FastAPI):
     logger.info("Application shutdown event triggered...")
     # Cleanup bot processes
     cleanup()
+    
     # Close database pool
-    await close_db_pool()
+    try:
+        await close_db_pool()
+        logger.info("Database pool closed successfully.")
+    except Exception as e:
+        logger.error(f"Failed to close database pool: {e}")
+    
     # Close aiohttp session
     await aiohttp_session.close()
     logger.info("Aiohttp session closed.")
@@ -117,7 +128,7 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 @app.post("/agent/voice/breeze-buddy/{identity}/order-confirmation")
 async def trigger_order_confirmation(identity: str, order: BreezeOrderData):
     """
-    Receives order details and triggers a order confirmation workflow.
+    Receives order details and adds them to the call queue for processing.
     """
     if identity != "breeze":
         raise HTTPException(status_code=404, detail="Feature not supported")
@@ -127,37 +138,57 @@ async def trigger_order_confirmation(identity: str, order: BreezeOrderData):
     if not all([TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM_NUMBER]):
         raise HTTPException(status_code=500, detail="Twilio credentials are not configured.")
 
-    client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
-    
-    ws_url = TWILIO_WEBSOCKET_URL
-
-    voice_call_payload = VoiceResponse()
-    connect = Connect()
-    stream = Stream(url=ws_url)
-    stream.parameter(name="order_id", value=order.order_id)
-    stream.parameter(name="customer_name", value=order.customer_name)
-    stream.parameter(name="shop_name", value=order.shop_name)
-    stream.parameter(name="total_price", value=order.total_price)
-    stream.parameter(name="customer_address", value=order.customer_address)
-    stream.parameter(name="customer_mobile_number", value=order.customer_mobile_number)
-    stream.parameter(name="order_data", value=json.dumps(order.order_data.model_dump()))
-    stream.parameter(name="identity", value=identity)
-    if order.reporting_webhook_url:
-        stream.parameter(name="reporting_webhook_url", value=order.reporting_webhook_url)
-    connect.append(stream)
-    voice_call_payload.append(connect)
-
     try:
-        call = client.calls.create(
-            to=order.customer_mobile_number,
-            from_=TWILIO_FROM_NUMBER,
-            twiml=str(voice_call_payload)
+        # Generate unique call data ID
+        call_data_id = str(uuid4())
+        
+        # Prepare call payload with all order information
+        call_payload = {
+            "order_id": order.order_id,
+            "customer_name": order.customer_name,
+            "shop_name": order.shop_name,
+            "total_price": order.total_price,
+            "customer_address": order.customer_address,
+            "customer_mobile_number": order.customer_mobile_number,
+            "order_data": order.order_data.model_dump(),
+            "identity": identity,
+            "reporting_webhook_url": order.reporting_webhook_url
+        }
+        
+        # Insert call request into database
+        call_data = await create_call_data(
+            id=call_data_id,
+            outcome=None,  # No outcome yet
+            transcription=None,  # No transcription yet
+            call_start_time=datetime.now().isoformat(),
+            call_end_time=None,  # Call hasn't ended yet
+            call_id=None,  # Will be updated with Twilio SID later
+            provider="twilio",
+            status=CallStatus.BACKLOG,  # Start in backlog
+            requested_by=RequestedBy.BREEZE,
+            call_payload=call_payload,
+            assigned_number=order.customer_mobile_number
         )
-        logger.info(f"Call initiated with SID: {call.sid}")
-        return {"status": "call_initiated", "sid": call.sid}
+        
+        if call_data:
+            logger.info(f"Call request {order.order_id} added to queue with ID {call_data_id}")
+            
+            # Trigger queue processing
+            call_queue_manager.trigger_processing()
+            
+            return {
+                "status": "queued",
+                "call_data_id": call_data_id,
+                "order_id": order.order_id,
+                "message": "Call request added to queue for processing"
+            }
+        else:
+            logger.error(f"Failed to add call request {order.order_id} to queue")
+            raise HTTPException(status_code=500, detail="Failed to add call request to queue")
+            
     except Exception as e:
-        logger.error(f"Failed to initiate call: {e}")
-        raise HTTPException(status_code=400, detail=str(e))
+        logger.error(f"Error processing order confirmation request: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.websocket("/agent/voice/breeze-buddy/{serviceIdentifier}/callback/{workflow}")
 async def telephony_websocket_handler(serviceIdentifier: str, workflow: str, websocket: WebSocket):
@@ -288,6 +319,40 @@ async def get_client_html():
 async def health_check():
     logger.info("Health check endpoint called")
     return JSONResponse({"status": "healthy"})
+
+# Database health check endpoint
+@app.get("/health/database")
+async def database_health_check():
+    """Check database connectivity and health."""
+    logger.info("Database health check endpoint called")
+    try:
+        async for conn in get_db_connection():
+            result = await conn.fetchval("SELECT 1")
+            if result == 1:
+                return JSONResponse({
+                    "status": "healthy",
+                    "database": "connected",
+                    "message": "Database connection is healthy"
+                })
+            else:
+                return JSONResponse(
+                    status_code=503,
+                    content={
+                        "status": "unhealthy",
+                        "database": "error",
+                        "message": "Database query returned unexpected result"
+                    }
+                )
+    except Exception as e:
+        logger.error(f"Database health check failed: {e}")
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "unhealthy",
+                "database": "disconnected",
+                "message": f"Database connection failed: {str(e)}"
+            }
+        )
 
 # Version endpoint
 @app.get("/version")

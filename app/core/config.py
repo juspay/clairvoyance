@@ -1,5 +1,8 @@
 import os
-from app.core.logger import logger
+from loguru import logger
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # --- Configuration ---
 

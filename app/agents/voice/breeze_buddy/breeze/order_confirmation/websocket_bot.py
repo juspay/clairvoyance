@@ -2,6 +2,7 @@ import json
 import os
 import asyncio
 from dotenv import load_dotenv
+from datetime import datetime
 from twilio.http.http_client import TwilioHttpClient
 from fastapi import WebSocket, WebSocketException
 from loguru import logger
@@ -27,6 +28,9 @@ from pydantic import ValidationError
 
 from app.agents.voice.breeze_buddy.breeze.order_confirmation.types import OrderData
 from app.agents.voice.breeze_buddy.breeze.order_confirmation.utils import indian_number_to_speech
+from app.schemas import CallOutcome
+from app.services.call_queue_manager import call_queue_manager
+from app.database.accessor import get_call_data_by_call_id
 
 from app.core.config import (
     TWILIO_ACCOUNT_SID,
@@ -74,6 +78,8 @@ class OrderConfirmationBot:
         stream_sid = call_data["start"]["streamSid"]
         self.call_sid = call_data["start"]["callSid"]
         custom_parameters = call_data["start"]["customParameters"]
+
+        self.call_data_id = custom_parameters.get("call_data_id")
 
         order_id = custom_parameters.get("order_id", "N/A")
         customer_name = custom_parameters.get("customer_name", "Valued Customer")
@@ -252,38 +258,71 @@ class OrderConfirmationBot:
     async def _end_conversation_handler(self, flow_manager, args):
         logger.info("Ending conversation.")
         try:
-            # Send webhook with transcription history
+            # Prepare transcription and outcome data
+            transcription = []
             if self.context:
                 history = self.context.messages
-                transcription = []
                 for msg in history:
                     if isinstance(msg, dict) and "role" in msg and "content" in msg and isinstance(msg["content"], str):
                         transcription.append(
                             {"role": msg["role"], "content": msg["content"]}
                         )
-                summary_data = {
-                    "call_sid": self.call_sid,
-                    "transcription": transcription,
-                    "outcome": self.outcome,
-                }
-                logger.info(f"Call summary data: {summary_data}")
-                if self.reporting_webhook_url:
-                    try:
-                        async with self.aiohttp_session.post(
-                            self.reporting_webhook_url, json=summary_data
-                        ) as response:
-                            if response.status == 200:
-                                logger.info("Successfully sent call summary webhook.")
-                            else:
-                                response_text = await response.text()
-                                logger.error(
-                                    f"Failed to send call summary webhook. Status: {response.status}, Body: {response_text}"
-                                )
-                    except Exception as e:
-                        logger.error(f"Error sending webhook: {e}")
+            
+            summary_data = {
+                "call_sid": self.call_sid,
+                "transcription": transcription,
+                "outcome": self.outcome,
+            }
+
+            logger.info(f"Call summary data: {summary_data}")
+            
+            # Send webhook with transcription history
+            if self.reporting_webhook_url:
+                try:
+                    async with self.aiohttp_session.post(
+                        self.reporting_webhook_url, json=summary_data
+                    ) as response:
+                        if response.status == 200:
+                            logger.info("Successfully sent call summary webhook.")
+                        else:
+                            response_text = await response.text()
+                            logger.error(
+                                f"Failed to send call summary webhook. Status: {response.status}, Body: {response_text}"
+                            )
+                except Exception as e:
+                    logger.error(f"Error sending webhook: {e}")
 
             self.twilio_client.calls(self.call_sid).update(status="completed")
             logger.info(f"Twilio call {self.call_sid} hung up successfully.")
+
+            # Update database with call completion
+            if self.call_data_id:
+                try:
+                    # Map outcome to CallOutcome enum
+                    call_outcome = None
+                    if self.outcome == "confirmed":
+                        call_outcome = CallOutcome.CONFIRM
+                    elif self.outcome == "cancelled":
+                        call_outcome = CallOutcome.CANCEL
+                    elif self.outcome == "busy":
+                        call_outcome = CallOutcome.BUSY
+                    
+                    if call_outcome:
+                        await call_queue_manager.complete_call(
+                            call_data_id=self.call_data_id,
+                            outcome=call_outcome,
+                            transcription={"messages": transcription, "call_sid": self.call_sid},
+                            call_end_time=datetime.now().isoformat()
+                        )
+                        logger.info(f"Updated database for call_data_id: {self.call_data_id} with outcome: {call_outcome}")
+                    else:
+                        logger.warning(f"Unknown outcome '{self.outcome}' for call_data_id: {self.call_data_id}")
+                        
+                except Exception as e:
+                    logger.error(f"Error updating database for call_data_id {self.call_data_id}: {e}")
+            else:
+                logger.warning("No call_data_id found, skipping database update")
+            
         except Exception as e:
             logger.error(f"Failed to hang up Twilio call {self.call_sid}: {str(e)}")
         finally:
