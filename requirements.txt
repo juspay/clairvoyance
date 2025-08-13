@@ -39,3 +39,6 @@ asyncpg
 
 twilio
 pipecat-ai-flows
+
+# JWT Authentication
+PyJWT

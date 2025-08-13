@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 from typing import Any, Dict
 
 import aiohttp
-from fastapi import FastAPI, WebSocket, HTTPException, Request
+from fastapi import FastAPI, WebSocket, HTTPException, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -21,6 +21,7 @@ from app.database.config import init_db_pool, close_db_pool
 from app.ws.live_session import handle_websocket_session, get_active_connections, get_shutdown_event
 from app.core.logger import logger
 from app.core.config import DAILY_API_KEY, DAILY_API_URL, PORT, HOST
+from app.core.jwt_auth import get_current_user, TokenData
 from app import __version__
 from app.schemas import AutomaticVoiceUserConnectRequest
 from app.agents.voice.breeze_buddy.breeze.order_confirmation.types import BreezeOrderData
@@ -115,14 +116,19 @@ app.add_middleware(
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 @app.post("/agent/voice/breeze-buddy/{identity}/order-confirmation")
-async def trigger_order_confirmation(identity: str, order: BreezeOrderData):
+async def trigger_order_confirmation(
+    identity: str, 
+    order: BreezeOrderData,
+    current_user: TokenData = Depends(get_current_user)
+):
     """
     Receives order details and triggers a order confirmation workflow.
+    Requires JWT authentication.
     """
     if identity != "breeze":
         raise HTTPException(status_code=404, detail="Feature not supported")
     
-    logger.info(f"Received order: {order.order_id} for {order.customer_name}")
+    logger.info(f"Authenticated user {current_user.user_id} requesting order confirmation for order: {order.order_id} for {order.customer_name}")
 
     if not all([TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM_NUMBER]):
         raise HTTPException(status_code=500, detail="Twilio credentials are not configured.")
