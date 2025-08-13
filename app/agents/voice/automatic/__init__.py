@@ -26,6 +26,7 @@ from app.agents.voice.automatic.services.mcp.automatic_client import MCPClient
 from .processors import LLMSpyProcessor
 from .prompts import get_system_prompt
 from .tools import initialize_tools
+from .services.mock_stt import TestQuestionProcessor, DEFAULT_TEST_QUESTIONS
 from .tts import get_tts_service
 from app.agents.voice.automatic.types import (
     TTSProvider,
@@ -62,7 +63,6 @@ async def main():
 
     # Configure logger with session ID for all logs in this subprocess
     configure_session_logger(args.session_id)
-    logger.info(f"Voice agent started with session ID: {args.session_id}")
 
     # Decode TTS parameters
     tts_provider = decode_tts_provider(args.tts_provider)
@@ -93,10 +93,11 @@ async def main():
     )
 
     if config.ENABLE_NOISE_REDUCE_FILTER:
-        logger.info("Noise reduction filter enabled.")
+        # logger.info("Noise reduction filter enabled.")
         daily_params.audio_in_filter = NoisereduceFilter()
     else:
-        logger.info("Noise reduction filter disabled.")
+        # logger.info("Noise reduction filter disabled.")
+        pass
 
     transport = DailyTransport(
         args.url,
@@ -136,7 +137,7 @@ async def main():
             )
             
         for name, function in tool_functions.items():
-            logger.info("Initializing the default function tools")
+            # logger.info("Initializing the default function tools")
             llm.register_function(name, function)
     else:
         logger.info(f"Initializing tools from remote MCP server")
@@ -166,7 +167,7 @@ async def main():
         if tts_provider == TTSProvider.GOOGLE:
             for function_call in function_calls:
                 if function_call.function_name != "get_current_time":
-                    await tts.queue_frame(TTSSpeakFrame("Let me check on that."))
+                    # await tts.queue_frame(TTSSpeakFrame("Let me check on that."))
                     break
 
     messages = [
@@ -188,20 +189,31 @@ async def main():
 
     # Add custom LLMSpyProcessor for streaming function call events
     tool_call_processor = LLMSpyProcessor(rtvi)
+    
+    # Build pipeline components
+    pipeline_components = [
+        transport.input(),
+        stt,
+    ]
+    
+    # Add test question processor only in development environment
+    if config.ENVIRONMENT.lower() in ["development", "dev"]:
+        test_processor = TestQuestionProcessor(questions=DEFAULT_TEST_QUESTIONS)
+        pipeline_components.append(test_processor)
+        logger.info("🧪 Test Question Processor enabled (development mode)")
+    
+    # Continue with rest of pipeline
+    pipeline_components.extend([
+        rtvi,
+        context_aggregator.user(),
+        llm,
+        tool_call_processor,
+        tts,
+        transport.output(),
+        context_aggregator.assistant(),
+    ])
 
-    pipeline = Pipeline(
-        [
-            transport.input(),
-            stt,
-            rtvi,
-            context_aggregator.user(),
-            llm,
-            tool_call_processor,
-            tts,
-            transport.output(),
-            context_aggregator.assistant(),
-        ]
-    )
+    pipeline = Pipeline(pipeline_components)
 
     user_name = args.user_name or "guest"
     shopId = "euler" if args.euler_token and not args.shop_id else args.shop_id or "dummy"
@@ -230,17 +242,17 @@ async def main():
 
     @transport.event_handler("on_first_participant_joined")
     async def on_first_participant_joined(transport, participant):
-        logger.info(f"First participant joined: {participant['id']}")
+        # logger.info(f"First participant joined: {participant['id']}")
         await task.queue_frames([context_aggregator.user().get_context_frame()])
 
     @transport.event_handler("on_participant_left")
     async def on_participant_left(transport, participant, reason):
-        logger.info(f"Participant left: {participant['id']}")
+        # logger.info(f"Participant left: {participant['id']}")
         await task.cancel()
 
     @task.event_handler("on_pipeline_cancelled")
     async def on_pipeline_cancelled(task, frame):
-        logger.info("Pipeline task cancelled. Cancelling main task.")
+        # logger.info("Pipeline task cancelled. Cancelling main task.")
         main_task = asyncio.current_task()
         main_task.cancel()
 
@@ -250,13 +262,14 @@ async def main():
         try:
             await runner.run(task)
         except asyncio.CancelledError:
-            logger.info("Main task cancelled. Exiting gracefully.")
+            # logger.info("Main task cancelled. Exiting gracefully.")
+            pass
 
     if config.ENABLE_TRACING:
         langfuse_client = get_client()
         tracer = trace.get_tracer(__name__)
         with tracer.start_as_current_span(conversation_id) as root_span:
-            logger.info(f"Starting current span with conversation ID: {conversation_id}")
+            # logger.info(f"Starting current span with conversation ID: {conversation_id}")
             root_span.set_attribute("conversation.id", conversation_id)
             root_span.set_attribute("conversation.type", "voice")
             root_span.set_attribute("user.name", user_name)
