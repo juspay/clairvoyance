@@ -233,6 +233,21 @@ This file records architectural and implementation decisions using a list format
 *
 
 ## Decision
+*   [2025-08-23 18:15:00] - Sanitize AI-generated text to prevent TTS from reading markdown.
+
+## Rationale
+*   The AI voice assistant was reading markdown syntax (e.g., "###", "---", "|") aloud, creating an unnatural and confusing user experience.
+*   A robust, code-based solution was needed to strip this formatting from the text before it reaches the Text-to-Speech (TTS) service, without affecting the UI or causing application instability.
+
+## Implementation Details
+*   Modified `app/agents/voice/automatic/processors/llm_spy.py`.
+*   The `LLMSpyProcessor` now intercepts `TextFrame` objects and sanitizes the text in-place.
+*   A new `_sanitize_text` method was added to this processor. It uses a set of pre-compiled regular expressions to efficiently remove a wide range of markdown syntax, including headings, horizontal rules, and table structures.
+*   The `process_frame` method was updated to check for `TextFrame`s and apply this sanitization before passing the frame down the pipeline. This ensures that both the UI and the TTS receive the same, sanitized text, which is the safest and most stable solution.
+*   The regex patterns were pre-compiled as a class variable to optimize performance.
+*
+
+## Decision
 *   [2025-05-24 18:45:00] - Update system prompt in `v2.py` for a more sensual, cheesy, flirty, and expressive personality.
 
 ## Rationale

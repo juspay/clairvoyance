@@ -2,12 +2,14 @@ import time
 import json
 from typing import Dict, Any
 
+
 from opentelemetry import trace
 from app.core import config
 from app.core.logger import logger
-from pipecat.frames.frames import Frame, FunctionCallInProgressFrame, FunctionCallResultFrame
+from pipecat.frames.frames import Frame, FunctionCallInProgressFrame, FunctionCallResultFrame, TextFrame
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.processors.frameworks.rtvi import RTVIProcessor, RTVIServerMessageFrame
+from ..services.markdown import sanitize_markdown
 
 
 # Custom LLMSpyProcessor for streaming function call events
@@ -26,7 +28,12 @@ class LLMSpyProcessor(FrameProcessor):
         """Emit RTVI server messages for function call frames."""
         await super().process_frame(frame, direction)
 
-        if isinstance(frame, FunctionCallInProgressFrame):
+        if isinstance(frame, TextFrame):
+            if config.SANITIZE_TEXT_FOR_TTS:
+                await self.push_frame(TextFrame(text=sanitize_markdown(frame.text)), direction)
+            else:
+                await self.push_frame(frame, direction)
+        elif isinstance(frame, FunctionCallInProgressFrame):
             # Start tracing span
             if self._tracer:
                 span = self._tracer.start_span(f"Tool: {frame.function_name}", kind=trace.SpanKind.CLIENT)
@@ -50,6 +57,7 @@ class LLMSpyProcessor(FrameProcessor):
                     }
                 )
             )
+            await self.push_frame(frame, direction)
         elif isinstance(frame, FunctionCallResultFrame):
             # End tracing span
             if self._tracer and frame.tool_call_id in self._active_spans:
@@ -72,5 +80,6 @@ class LLMSpyProcessor(FrameProcessor):
                     }
                 )
             )
-
-        await self.push_frame(frame, direction)
+            await self.push_frame(frame, direction)
+        else:
+            await self.push_frame(frame, direction)
