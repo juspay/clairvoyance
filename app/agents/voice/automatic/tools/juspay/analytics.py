@@ -3,7 +3,6 @@ import json
 import functools
 from difflib import SequenceMatcher
 import requests
-import logging
 from typing import get_args, Optional, Dict, Any, Union, List, Mapping
 from dateutil import parser
 
@@ -15,12 +14,13 @@ from pipecat.services.llm_service import FunctionCallParams
 from pipecat.adapters.schemas.function_schema import FunctionSchema
 from pipecat.adapters.schemas.tools_schema import ToolsSchema
 from app.agents.voice.automatic.types.models import (
-    ApiFailure, ApiSuccess, GeniusApiResponse, CardinalityDimension,
-    DimensionLookupRequest, DimensionLookupResult, FieldLookupBatchResponse,
-    # Q API Types
-    DimensionObject, DimensionString, FlatFilter, Interval, Metric,
-    QApiResponse, QApiSuccessResponse, QApiErrorResponse, QApiPayload,
-    MetricEnum, MetricFilter
+    ApiFailure, ApiSuccess, GeniusApiResponse
+)
+from app.agents.voice.automatic.types.juspay import (
+    CardinalityDimension, DimensionLookupRequest, DimensionLookupResult,
+    FieldLookupBatchResponse, DimensionObject, DimensionString, FlatFilter,
+    Interval, Metric, QApiResponse, QApiSuccessResponse, QApiErrorResponse,
+    QApiPayload, MetricEnum, MetricFilter
 )
 from .field_value_config import DIMENSION_ALIASES, FIELD_GUARDS
 from .aliases import (
@@ -29,9 +29,10 @@ from .aliases import (
     reverse_metric_alias,
     reverse_dimension_alias,
 )
-from app.utils.time import ist_to_utc, convert_utc_to_ist_in_qapi_response
+from app.utils.time import ist_to_utc
+from app.utils.qapi.time_utils import convert_utc_to_ist_in_qapi_response
 from app.utils.datetime_serialization import json_dumps_with_datetime
-from app.utils.auth import get_authorized_merchants, validate_and_extract_fields
+from app.utils.juspay.auth import get_authorized_merchants, validate_and_extract_fields
 from app.utils.qapi.filters_flat_to_tree import flat_filter_to_tree
 
 # This token will be set when the tools are initialized

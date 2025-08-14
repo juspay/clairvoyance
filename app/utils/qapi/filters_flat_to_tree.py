@@ -14,7 +14,7 @@ def flat_filter_to_tree(flat_filter) -> Dict[str, Any]:
     Convert a FlatFilter (with .clauses: List[Clause], .logic: string like "(0 AND 1 AND 2)")
     into a nested AND/OR tree of plain dicts.
     """
-    from app.agents.voice.automatic.types.models import FlatFilter, Clause
+    from app.agents.voice.automatic.types.juspay import FlatFilter, Clause
 
     def clause_to_dict(clause: Clause) -> Dict[str, Any]:
         val = clause.val

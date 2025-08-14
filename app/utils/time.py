@@ -1,7 +1,6 @@
 from datetime import datetime, timedelta
-import logging
+from app.core.logger import logger
 
-logger = logging.getLogger(__name__)
 
 
 def is_valid_timestamp(date_string):
@@ -62,27 +61,3 @@ def utc_to_ist(utc_time_string: str) -> str:
         return utc_time_string
 
 
-def convert_utc_to_ist_in_qapi_response(
-    response_json: list, time_field: str = "order_created_at_time"
-) -> list:
-    """
-    Convert UTC timestamps to IST in JSON response objects.
-
-    Args:
-        response_json: List of JSON objects
-        time_field: The field name containing the UTC timestamp to convert
-
-    Returns:
-        List of JSON objects with converted timestamps
-    """
-    try:
-        for row in response_json:
-            if time_field in row:
-                row[time_field] = utc_to_ist(row[time_field])
-                logging.info(
-                    f"Converted {time_field} from utc to ist: {row[time_field]}"
-                )
-        return response_json
-    except Exception as e:
-        logging.error(f"Error converting {time_field} in JSON response: {str(e)}")
-        return response_json
