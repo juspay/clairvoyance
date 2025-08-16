@@ -27,6 +27,7 @@ from pydantic import ValidationError
 
 from app.agents.voice.breeze_buddy.breeze.order_confirmation.types import OrderData
 from app.agents.voice.breeze_buddy.breeze.order_confirmation.utils import indian_number_to_speech
+from app.core.security.sha import calculate_hmac_sha256
 
 from app.core.config import (
     TWILIO_ACCOUNT_SID,
@@ -39,6 +40,7 @@ from app.core.config import (
     ELEVENLABS_BB_VOICE_ID,
     ELEVENLABS_MODEL_ID,
     ELEVENLABS_VOICE_SPEED,
+    ORDER_CONFIRMATION_WEBHOOK_SECRET_KEY,
 )
 
 load_dotenv(override=True)
@@ -75,7 +77,7 @@ class OrderConfirmationBot:
         self.call_sid = call_data["start"]["callSid"]
         custom_parameters = call_data["start"]["customParameters"]
 
-        order_id = custom_parameters.get("order_id", "N/A")
+        self.order_id = custom_parameters.get("order_id", "N/A")
         customer_name = custom_parameters.get("customer_name", "Valued Customer")
         shop_name = custom_parameters.get("shop_name", "the shop")
         total_price = custom_parameters.get("total_price")
@@ -109,7 +111,7 @@ class OrderConfirmationBot:
             f"Connected to Twilio call: CallSid={self.call_sid}, StreamSid={stream_sid}"
         )
         logger.info(
-            f"Order Details: ID-{order_id}, Customer-{customer_name}, Summary-{self.order_summary}, Price-₹{total_price}"
+            f"Order Details: ID-{self.order_id}, Customer-{customer_name}, Summary-{self.order_summary}, Price-₹{total_price}"
         )
 
         serializer = CustomTwilioFrameSerializer(
@@ -152,7 +154,7 @@ class OrderConfirmationBot:
         )
 
         self.system_prompt = self._get_system_prompt(
-            shop_name, customer_name, order_id, self.order_summary, price_words
+            shop_name, customer_name, self.order_id, self.order_summary, price_words
         )
         messages = [{"role": "system", "content": self.system_prompt}]
 
@@ -262,15 +264,26 @@ class OrderConfirmationBot:
                             {"role": msg["role"], "content": msg["content"]}
                         )
                 summary_data = {
-                    "call_sid": self.call_sid,
-                    "transcription": transcription,
+                    "callSid": self.call_sid,
                     "outcome": self.outcome,
+                    "orderId": self.order_id
                 }
                 logger.info(f"Call summary data: {summary_data}")
                 if self.reporting_webhook_url:
                     try:
+                        payload = json.dumps(summary_data).replace(" ", "")
+                        signature = calculate_hmac_sha256(payload, ORDER_CONFIRMATION_WEBHOOK_SECRET_KEY)
+                        headers = {
+                            'Content-Type': 'application/json',
+                        }
+                        
+                        if signature:
+                            headers['checksum'] = signature
+
                         async with self.aiohttp_session.post(
-                            self.reporting_webhook_url, json=summary_data
+                            self.reporting_webhook_url,
+                            json=summary_data,
+                            headers=headers
                         ) as response:
                             if response.status == 200:
                                 logger.info("Successfully sent call summary webhook.")

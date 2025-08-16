@@ -7,14 +7,7 @@ from pydantic import BaseModel
 
 from app.core.config import JWT_SECRET_KEY, JWT_ALGORITHM, JWT_ACCESS_TOKEN_EXPIRE_MINUTES
 from app.core.logger import logger
-
-
-class TokenData(BaseModel):
-    """Token data model for JWT payload"""
-    user_id: Optional[str] = None
-    username: Optional[str] = None
-    email: Optional[str] = None
-    scopes: list[str] = []
+from app.schemas import TokenData
 
 
 class JWTManager:
