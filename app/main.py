@@ -15,7 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from pipecat.transports.services.helpers.daily_rest import DailyRESTHelper, DailyRoomParams, DailyRoomProperties, DailyMeetingTokenParams, DailyMeetingTokenProperties
 
 # Database imports
-from app.database.config import init_db_pool, close_db_pool
+from app.database import init_db_pool, close_db_pool, get_db_connection
 
 # Import necessary components from the new structure
 from app.ws.live_session import handle_websocket_session, get_active_connections, get_shutdown_event
@@ -34,7 +34,13 @@ from app.core.config import (
     TWILIO_AUTH_TOKEN,
     TWILIO_FROM_NUMBER,
     TWILIO_WEBSOCKET_URL,
+    BREEZE_BUDDY_CALL_PROVIDER,
 )
+from app.schemas import CallStatus, RequestedBy
+from app.database.accessor.main import create_call_data
+from uuid import uuid4
+from datetime import datetime
+from app.services.call_queue_manager import call_queue_manager
 
 # Dictionary to track bot processes: {pid: (process, room_url)}
 bot_procs = {}
@@ -117,7 +123,7 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 
 @app.post("/agent/voice/breeze-buddy/{identity}/order-confirmation")
 async def trigger_order_confirmation(
-    identity: str, 
+    identity: RequestedBy, 
     order: BreezeOrderData,
     current_user: TokenData = Depends(get_current_user)
 ):
@@ -133,36 +139,52 @@ async def trigger_order_confirmation(
     if not all([TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM_NUMBER]):
         raise HTTPException(status_code=500, detail="Twilio credentials are not configured.")
 
-    client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
-    
-    ws_url = TWILIO_WEBSOCKET_URL
-
-    voice_call_payload = VoiceResponse()
-    connect = Connect()
-    stream = Stream(url=ws_url)
-    stream.parameter(name="order_id", value=order.order_id)
-    stream.parameter(name="customer_name", value=order.customer_name)
-    stream.parameter(name="shop_name", value=order.shop_name)
-    stream.parameter(name="total_price", value=order.total_price)
-    stream.parameter(name="customer_address", value=order.customer_address)
-    stream.parameter(name="customer_mobile_number", value=order.customer_mobile_number)
-    stream.parameter(name="order_data", value=json.dumps(order.order_data.model_dump()))
-    stream.parameter(name="identity", value=identity)
-    if order.reporting_webhook_url:
-        stream.parameter(name="reporting_webhook_url", value=order.reporting_webhook_url)
-    connect.append(stream)
-    voice_call_payload.append(connect)
-
     try:
-        call = client.calls.create(
-            to=order.customer_mobile_number,
-            from_=TWILIO_FROM_NUMBER,
-            twiml=str(voice_call_payload)
+        uuid = str(uuid4())
+        call_payload = {
+            "order_id": order.order_id,
+            "customer_name": order.customer_name,
+            "shop_name": order.shop_name,
+            "total_price": order.total_price,
+            "customer_address": order.customer_address,
+            "customer_mobile_number": order.customer_mobile_number,
+            "order_data": order.order_data.model_dump(),
+            "identity": identity,
+            "reporting_webhook_url": order.reporting_webhook_url
+        }
+        
+        # Insert call request into database
+        call_data = await create_call_data(
+            id=uuid,
+            outcome=None,
+            transcription=None,
+            call_start_time=datetime.now().isoformat(),
+            call_end_time=None,
+            call_id=None,
+            provider=BREEZE_BUDDY_CALL_PROVIDER,
+            status=CallStatus.BACKLOG,
+            requested_by=identity,
+            call_payload=call_payload,
+            assigned_number=TWILIO_FROM_NUMBER
         )
-        logger.info(f"Call initiated with SID: {call.sid}")
-        return {"status": "call_initiated", "sid": call.sid}
+        
+        if call_data:
+            logger.info(f"Call request {order.order_id} added to queue with ID {uuid}")
+            
+            call_queue_manager.trigger_processing()
+            
+            return {
+                "status": "queued",
+                "call_data_id": uuid,
+                "order_id": order.order_id,
+                "message": "Call request added to queue for processing"
+            }
+        else:
+            logger.error(f"Failed to add call request {order.order_id} to queue")
+            raise HTTPException(status_code=400, detail="Failed to add call request to queue")
+            
     except Exception as e:
-        logger.error(f"Failed to initiate call: {e}")
+        logger.error(f"Error processing order confirmation request: {e}")
         raise HTTPException(status_code=400, detail=str(e))
 
 @app.websocket("/agent/voice/breeze-buddy/{serviceIdentifier}/callback/{workflow}")
@@ -171,20 +193,35 @@ async def telephony_websocket_handler(serviceIdentifier: str, workflow: str, web
     WebSocket endpoint that accepts a connection and passes it to the
     pipecat bot's main function.
     """
-    
+
     if serviceIdentifier != "twillio" or workflow != "order-confirmation":
         raise HTTPException(status_code=404, detail="Feature not supported for this service or workflow")
+    
+    aiohttp_session = aiohttp.ClientSession()
     
     try:
         # The websocket_bot_main function handles the entire
         # lifecycle of the WebSocket connection, including accept().
-        await telephony_websocket_conn(websocket, aiohttp.ClientSession())
+        await telephony_websocket_conn(websocket, aiohttp_session)
     except WebSocketDisconnect:
         logger.warning("WebSocket client disconnected.")
     except Exception as e:
-        logger.error(f"An error occurred in the WebSocket handler: {e}")
-        await websocket.close(code=1011, reason="Internal Server Error")
+        error_type = type(e).__name__
+        error_message = str(e)
+        logger.error(f"An error occurred in the WebSocket handler - Type: {error_type}, Message: '{error_message}', Args: {e.args}", exc_info=True)
+        # Only try to close the websocket if it's still open
+        try:
+            if websocket.client_state.name != "DISCONNECTED":
+                await websocket.close(code=1011, reason="Internal Server Error")
+        except Exception as close_error:
+            logger.warning(f"Could not close websocket (likely already closed): {close_error}")
     finally:
+        # Always close the aiohttp session to prevent resource leaks
+        try:
+            await aiohttp_session.close()
+            logger.debug("Aiohttp session closed successfully.")
+        except Exception as session_close_error:
+            logger.warning(f"Error closing aiohttp session: {session_close_error}")
         logger.info("WebSocket client connection closed.")
 
 
@@ -294,6 +331,40 @@ async def get_client_html():
 async def health_check():
     logger.info("Health check endpoint called")
     return JSONResponse({"status": "healthy"})
+
+# Database health check endpoint
+@app.get("/health/database")
+async def database_health_check():
+    """Check database connectivity and health."""
+    logger.info("Database health check endpoint called")
+    try:
+        async for conn in get_db_connection():
+            result = await conn.fetchval("SELECT 1")
+            if result == 1:
+                return JSONResponse({
+                    "status": "healthy",
+                    "database": "connected",
+                    "message": "Database connection is healthy"
+                })
+            else:
+                return JSONResponse(
+                    status_code=400,
+                    content={
+                        "status": "unhealthy",
+                        "database": "error",
+                        "message": "Database query returned unexpected result"
+                    }
+                )
+    except Exception as e:
+        logger.error(f"Database health check failed: {e}")
+        return JSONResponse(
+            status_code=400,
+            content={
+                "status": "unhealthy",
+                "database": "disconnected",
+                "message": f"Database connection failed: {str(e)}"
+            }
+        )
 
 # Version endpoint
 @app.get("/version")

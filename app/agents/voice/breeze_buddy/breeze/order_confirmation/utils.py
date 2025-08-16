@@ -1,3 +1,12 @@
+from app.schemas import CallOutcome
+
+# Mapping dictionary for outcome strings to CallOutcome enum values
+OUTCOME_TO_ENUM = {
+    "confirmed": CallOutcome.CONFIRM,
+    "cancelled": CallOutcome.CANCEL,
+    "busy": CallOutcome.BUSY,
+}
+
 def indian_number_to_speech(number: int) -> str:
     if number < 100:
         return f"{number} rupees"

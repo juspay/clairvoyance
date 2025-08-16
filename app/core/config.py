@@ -1,5 +1,8 @@
 import os
-from app.core.logger import logger
+from loguru import logger
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # --- Configuration ---
 
@@ -86,6 +89,8 @@ logger.info(f"Shops enabled for Automatic MCP Server: {SHOPS_FOR_AUTOMATIC_MCP_S
 ENABLE_SUMMARIZATION = os.environ.get("ENABLE_SUMMARIZATION", "true").lower() == "true"
 MAX_TURNS_BEFORE_SUMMARY = int(os.environ.get("MAX_TURNS_BEFORE_SUMMARY", 10))
 KEEP_RECENT_TURNS = int(os.environ.get("KEEP_RECENT_TURNS", 2))
+
+BREEZE_BUDDY_CALL_PROVIDER = os.environ.get("BREEZE_BUDDY_CALL_PROVIDER", "twilio")
 
 # Twilio settings
 TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "")
