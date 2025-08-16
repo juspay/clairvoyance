@@ -21,9 +21,9 @@ from app.database.config import init_db_pool, close_db_pool
 from app.ws.live_session import handle_websocket_session, get_active_connections, get_shutdown_event
 from app.core.logger import logger
 from app.core.config import DAILY_API_KEY, DAILY_API_URL, PORT, HOST
-from app.core.jwt_auth import get_current_user, TokenData
+from app.core.security.jwt import get_current_user
 from app import __version__
-from app.schemas import AutomaticVoiceUserConnectRequest
+from app.schemas import AutomaticVoiceUserConnectRequest, TokenData
 from app.agents.voice.breeze_buddy.breeze.order_confirmation.types import BreezeOrderData
 from app.agents.voice.breeze_buddy.breeze.order_confirmation.websocket_bot import main as telephony_websocket_conn
 from twilio.rest import Client
