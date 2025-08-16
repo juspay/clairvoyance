@@ -2,6 +2,7 @@ import json
 import os
 import asyncio
 from dotenv import load_dotenv
+from datetime import datetime
 from twilio.http.http_client import TwilioHttpClient
 from fastapi import WebSocket, WebSocketException
 from loguru import logger
@@ -26,8 +27,11 @@ from twilio.rest import Client
 from pydantic import ValidationError
 
 from app.agents.voice.breeze_buddy.breeze.order_confirmation.types import OrderData
-from app.agents.voice.breeze_buddy.breeze.order_confirmation.utils import indian_number_to_speech
 from app.core.security.sha import calculate_hmac_sha256
+from app.agents.voice.breeze_buddy.breeze.order_confirmation.utils import indian_number_to_speech, OUTCOME_TO_ENUM
+from app.schemas import CallOutcome
+from app.services.call_queue_manager import call_queue_manager
+from app.database.accessor.main import get_call_data_by_call_id
 
 from app.core.config import (
     TWILIO_ACCOUNT_SID,
@@ -68,14 +72,29 @@ class OrderConfirmationBot:
         logger.info("Starting WebSocket bot")
         await self.ws.accept()
 
-        start_data = self.ws.iter_text()
-        await start_data.__anext__()
-        call_data = json.loads(await start_data.__anext__())
-        logger.info(f"Received call data: {call_data}")
+        try:
+            start_data = self.ws.iter_text()
+            await start_data.__anext__()
+            call_data_str = await start_data.__anext__()
+            call_data = json.loads(call_data_str)
+            logger.info(f"Received call data: {call_data}")
+        except StopAsyncIteration:
+            logger.warning("WebSocket connection closed before receiving call data")
+            return
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse call data JSON: {e}")
+            try:
+                if self.ws.client_state.name != "DISCONNECTED":
+                    await self.ws.close(code=4000, reason="Invalid JSON data")
+            except Exception as close_error:
+                logger.warning(f"Could not close websocket (likely already closed): {close_error}")
+            return
 
         stream_sid = call_data["start"]["streamSid"]
         self.call_sid = call_data["start"]["callSid"]
         custom_parameters = call_data["start"]["customParameters"]
+
+        self.call_data_id = custom_parameters.get("call_data_id")
 
         self.order_id = custom_parameters.get("order_id", "N/A")
         customer_name = custom_parameters.get("customer_name", "Valued Customer")
@@ -87,7 +106,11 @@ class OrderConfirmationBot:
             price_words = indian_number_to_speech(price_int)
         except (ValueError, TypeError):
             logger.error(f"Could not parse total_price: {total_price}")
-            await self.ws.close(code=4000, reason=f"Invalid total_price: {total_price}")
+            try:
+                if self.ws.client_state.name != "DISCONNECTED":
+                    await self.ws.close(code=4000, reason=f"Invalid total_price: {total_price}")
+            except Exception as close_error:
+                logger.warning(f"Could not close websocket (likely already closed): {close_error}")
             return
 
         order_product_data_str = custom_parameters.get("order_data", "{}")
@@ -95,7 +118,11 @@ class OrderConfirmationBot:
             order_product_data = OrderData.model_validate_json(order_product_data_str)
         except ValidationError as e:
             logger.error(f"Could not parse order_data: {e}")
-            await self.ws.close(code=4000, reason=f"Invalid order_data: {e}")
+            try:
+                if self.ws.client_state.name != "DISCONNECTED":
+                    await self.ws.close(code=4000, reason=f"Invalid order_data: {e}")
+            except Exception as close_error:
+                logger.warning(f"Could not close websocket (likely already closed): {close_error}")
             return
 
         self.reporting_webhook_url = custom_parameters.get("reporting_webhook_url")
@@ -254,10 +281,10 @@ class OrderConfirmationBot:
     async def _end_conversation_handler(self, flow_manager, args):
         logger.info("Ending conversation.")
         try:
-            # Send webhook with transcription history
+            # Prepare transcription and outcome data
+            transcription = []
             if self.context:
                 history = self.context.messages
-                transcription = []
                 for msg in history:
                     if isinstance(msg, dict) and "role" in msg and "content" in msg and isinstance(msg["content"], str):
                         transcription.append(
@@ -297,6 +324,28 @@ class OrderConfirmationBot:
 
             self.twilio_client.calls(self.call_sid).update(status="completed")
             logger.info(f"Twilio call {self.call_sid} hung up successfully.")
+
+            # Update database with call completion
+            if self.call_data_id:
+                try:
+                    call_outcome = OUTCOME_TO_ENUM.get(self.outcome)
+                    
+                    if call_outcome:
+                        await call_queue_manager.complete_call(
+                            call_data_id=self.call_data_id,
+                            outcome=call_outcome,
+                            transcription={"messages": transcription, "call_sid": self.call_sid},
+                            call_end_time=datetime.now().isoformat()
+                        )
+                        logger.info(f"Updated database for call_data_id: {self.call_data_id} with outcome: {call_outcome}")
+                    else:
+                        logger.warning(f"Unknown outcome '{self.outcome}' for call_data_id: {self.call_data_id}")
+                        
+                except Exception as e:
+                    logger.error(f"Error updating database for call_data_id {self.call_data_id}: {e}")
+            else:
+                logger.warning("No call_data_id found, skipping database update")
+            
         except Exception as e:
             logger.error(f"Failed to hang up Twilio call {self.call_sid}: {str(e)}")
         finally:
