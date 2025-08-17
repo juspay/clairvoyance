@@ -16,5 +16,5 @@ class BreezeOrderData(BaseModel):
     customer_name: str
     customer_address: str
     order_id: str
-    identity: str = None
-    reporting_webhook_url: str = None
+    identity: str | None = None
+    reporting_webhook_url: str | None = None
