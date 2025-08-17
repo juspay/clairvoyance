@@ -71,7 +71,7 @@ async def _make_breeze_request(params: FunctionCallParams, operational_tab: str)
     logger.info(f"Requesting Breeze {operational_tab} data with payload: {json.dumps(payload)}")
 
     try:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(api_url, json=payload, headers=headers)
             response.raise_for_status()  # Raise an exception for bad status codes
             response_json = response.json()
