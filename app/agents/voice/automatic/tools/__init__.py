@@ -1,7 +1,7 @@
 from typing import List
 
 from app.core.logger import logger
-from app.core.config import ENABLE_SEARCH_GROUNDING
+from app.core.config import ENABLE_SEARCH_GROUNDING, BREEZE_BUDDY_TEST_SHOPIFY_SHOP_URL
 from pipecat.adapters.schemas.tools_schema import ToolsSchema
 from app.agents.voice.automatic.types import Mode
 from .dummy import tools as dummy_tools, tool_functions as dummy_tool_functions
@@ -9,6 +9,8 @@ from .system import tools as system_tools, tool_functions as system_tool_functio
 from . import juspay
 from . import breeze
 from . import internet
+from . import shopify_buddy_test
+from . import breeze_buddy
 
 
 def initialize_tools(
@@ -53,6 +55,15 @@ def initialize_tools(
         logger.info(f"Loaded {len(internet.tools.standard_tools)} internet tools.")
     else:
         logger.info("Internet search tools are disabled.")
+
+    if shop_url == BREEZE_BUDDY_TEST_SHOPIFY_SHOP_URL:
+        all_tools.extend(shopify_buddy_test.tools.standard_tools)
+        all_tool_functions.update(shopify_buddy_test.tool_functions)
+        logger.info(f"Loaded {len(shopify_buddy_test.tools.standard_tools)} shopify tools.")
+
+        all_tools.extend(breeze_buddy.tools.standard_tools)
+        all_tool_functions.update(breeze_buddy.tool_functions)
+        logger.info(f"Loaded {len(breeze_buddy.tools.standard_tools)} breeze buddy tools.")
 
     # Dummy tools are only available in test mode
     if mode == Mode.TEST.value:
