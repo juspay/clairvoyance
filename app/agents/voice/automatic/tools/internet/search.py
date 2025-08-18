@@ -1,4 +1,5 @@
 import os
+from datetime import datetime
 
 from app.core.logger import logger
 from app.core.config import GEMINI_SEARCH_RESULT_API_MODEL, GEMINI_API_KEY
@@ -41,10 +42,15 @@ async def gemini_search_fn(params: FunctionCallParams):
             {"role": "user", "content": query}
         ])
 
+        # Include current date in system message to provide context for the search
+        current_date = datetime.now().strftime("%Y-%m-%d")
+        
         ctx.system_message = (
-            "You are a helpful assistant that will always search the web for up-to-date information. "
-            "Your responses must be concise—no more than 50 words—while maximizing useful detail and clarity. "
-            "Prioritize relevance, freshness, and specificity. Avoid filler or repetition. Get straight to the point."
+            f"You are a helpful assistant that will always search the web for up-to-date information. "
+            f"The current date is {current_date}. "
+            f"Your responses must be concise—no more than 50 words—while maximizing useful detail and clarity. "
+            f"Prioritize relevance, freshness (relative to current date: {current_date}), and specificity. "
+            f"Avoid filler or repetition. Get straight to the point."
         )
 
         ctx._restructure_from_openai_messages()
