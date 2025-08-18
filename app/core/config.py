@@ -10,7 +10,6 @@ load_dotenv()
 def get_required_env(var_name: str) -> str:
     value = os.environ.get(var_name)
     if not value:
-        logger.error(f"{var_name} environment variable is required")
         raise ValueError(f"{var_name} environment variable is required")
     return value
 
@@ -70,12 +69,6 @@ ENABLE_TRACING = os.environ.get("ENABLE_TRACING", "false").lower() == "true"
 ENABLE_SEARCH_GROUNDING = os.environ.get("ENABLE_SEARCH_GROUNDING", "true").lower() == "true"
 GEMINI_SEARCH_RESULT_API_MODEL = os.environ.get("GEMINI_SEARCH_RESULT_API_MODEL", "gemini-2.5-flash-lite-preview-06-17")
 
-logger.info(f"Using Gemini model: {GEMINI_MODEL}")
-logger.info(f"Using response modality: {RESPONSE_MODALITY}")
-logger.info(f"Tracing enabled: {ENABLE_TRACING}")
-logger.info(f"Search grounding enabled: {ENABLE_SEARCH_GROUNDING}")
-logger.info(f"Using Gemini search result model: {GEMINI_SEARCH_RESULT_API_MODEL}")
-
 #Automatic MCP Tool Server
 AUTOMATIC_MCP_TOOL_SERVER_USAGE=os.environ.get("AUTOMATIC_MCP_TOOL_SERVER_USAGE", "false").lower() == "true"
 AUTOMATIC_TOOL_MCP_SERVER_URL=os.environ.get("AUTOMATIC_TOOL_MCP_SERVER_URL", "https://portal.breeze.in/ai/mcp")
@@ -83,14 +76,18 @@ AUTOMATIC_TOOL_MCP_SERVER_URL=os.environ.get("AUTOMATIC_TOOL_MCP_SERVER_URL", "h
 _shops_for_mcp_str = os.environ.get("SHOPS_FOR_AUTOMATIC_MCP_SERVER", "")
 SHOPS_FOR_AUTOMATIC_MCP_SERVER = [shop.strip() for shop in _shops_for_mcp_str.split(',') if shop.strip()]
 
-logger.info(f"Shops enabled for Automatic MCP Server: {SHOPS_FOR_AUTOMATIC_MCP_SERVER}")
-
 # Context Summarization Configuration
 ENABLE_SUMMARIZATION = os.environ.get("ENABLE_SUMMARIZATION", "true").lower() == "true"
 MAX_TURNS_BEFORE_SUMMARY = int(os.environ.get("MAX_TURNS_BEFORE_SUMMARY", 10))
 KEEP_RECENT_TURNS = int(os.environ.get("KEEP_RECENT_TURNS", 2))
 
 BREEZE_BUDDY_CALL_PROVIDER = os.environ.get("BREEZE_BUDDY_CALL_PROVIDER", "twilio")
+#SPEECHMATICS
+SPEECHMATICS_API_KEY = os.environ.get("SPEECHMATICS_API_KEY")  # Note: Matches your .env spelling
+ENABLE_SPEAKER_DIARIZATION = os.environ.get("ENABLE_SPEAKER_DIARIZATION", "true").lower() == "true"
+SPEAKER_SENSITIVITY = float(os.environ.get("SPEAKER_SENSITIVITY", "0.5"))
+MAX_SPEAKERS = int(os.environ.get("MAX_SPEAKERS", "5"))
+ENABLE_VOICE_LOCKING = os.environ.get("ENABLE_VOICE_LOCKING", "true").lower() == "true"
 
 # Twilio settings
 TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "")

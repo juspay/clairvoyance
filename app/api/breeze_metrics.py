@@ -32,7 +32,7 @@ async def get_breeze_analytics(
         logger.error("get_breeze_analytics called with one or more missing required parameters.")
         raise ValueError("Missing required parameters for Breeze analytics.")
 
-    api_url = "https://portal.breeze.in/analytics"
+    api_url = "http://localhost:5173/analytics"
     
     request_payload = {
         "shopIds": [shop_id], # API expects an array

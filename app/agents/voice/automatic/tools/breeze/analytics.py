@@ -52,7 +52,7 @@ async def _make_breeze_request(params: FunctionCallParams, operational_tab: str)
         await params.result_callback({"error": f"Invalid time format. Please use 'YYYY-MM-DD HH:MM:SS'. Error: {e}"})
         return
 
-    api_url = "https://portal.breeze.in/analytics"
+    api_url = "http://localhost:5173/analytics"
     payload = {
         "shopIds": [shop_id],
         "shops": [shop_url],
@@ -68,7 +68,7 @@ async def _make_breeze_request(params: FunctionCallParams, operational_tab: str)
         "x-auth-token": breeze_token
     }
 
-    logger.info(f"Requesting Breeze {operational_tab} data with payload: {json.dumps(payload)}")
+    logger.info(f"Requesting Breeze {operational_tab} data with payload: {json.dumps(payload)} headers: {headers}")
 
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:

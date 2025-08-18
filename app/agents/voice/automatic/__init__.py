@@ -1,46 +1,46 @@
 import asyncio
-import sys
 import argparse
 from dotenv import load_dotenv
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from app.core.logger import logger, configure_session_logger
+from opentelemetry import trace
+from langfuse import get_client
+
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.vad.vad_analyzer import VADParams
 from pipecat.audio.filters.noisereduce_filter import NoisereduceFilter
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
-from app.agents.voice.automatic.services.llm_wrapper import LLMServiceWrapper
 from pipecat.services.azure.llm import AzureLLMService
-from pipecat.services.google.stt import GoogleSTTService
+from pipecat.services.google.rtvi import GoogleRTVIObserver
 from pipecat.transcriptions.language import Language
 from pipecat.frames.frames import TTSSpeakFrame, BotSpeakingFrame, LLMFullResponseEndFrame
 from pipecat.transports.services.daily import DailyParams, DailyTransport
 from pipecat.processors.frameworks.rtvi import RTVIConfig, RTVIProcessor
-from pipecat.services.google.rtvi import GoogleRTVIObserver
 
 from app.core import config
+from app.core.logger import logger, configure_session_logger
+from app.services.speaker_diarization import speaker_diarization_service, SpeakerDiarizationConfig
+from app.utils.session_context import set_current_session_id
+from app.agents.voice.automatic.services.llm_wrapper import LLMServiceWrapper
 from app.agents.voice.automatic.services.mcp.automatic_client import MCPClient
+from app.agents.voice.automatic.analytics.tracing_setup import setup_tracing
 from .processors import LLMSpyProcessor
 from .prompts import get_system_prompt
 from .tools import initialize_tools
+from .services.mock_stt import TestQuestionProcessor, DEFAULT_TEST_QUESTIONS
 from .tts import get_tts_service
-from app.agents.voice.automatic.types import (
+from .types import (
     TTSProvider,
     Mode,
     decode_tts_provider,
     decode_voice_name,
     decode_mode,
 )
-from opentelemetry import trace
-from langfuse import get_client
 
 load_dotenv(override=True)
-
-# import setup_tracing from tracing_setup.py file
-from app.agents.voice.automatic.analytics.tracing_setup import setup_tracing
 
 async def main():
     parser = argparse.ArgumentParser()
@@ -63,6 +63,9 @@ async def main():
     # Configure logger with session ID for all logs in this subprocess
     configure_session_logger(args.session_id)
     logger.info(f"Voice agent started with session ID: {args.session_id}")
+    
+    # Set global session context for chart tools
+    set_current_session_id(args.session_id)
 
     # Decode TTS parameters
     tts_provider = decode_tts_provider(args.tts_provider)
@@ -93,10 +96,7 @@ async def main():
     )
 
     if config.ENABLE_NOISE_REDUCE_FILTER:
-        logger.info("Noise reduction filter enabled.")
         daily_params.audio_in_filter = NoisereduceFilter()
-    else:
-        logger.info("Noise reduction filter disabled.")
 
     transport = DailyTransport(
         args.url,
@@ -105,12 +105,28 @@ async def main():
         daily_params,
     )
 
-    stt = GoogleSTTService(
-        params=GoogleSTTService.InputParams(languages=[Language.EN_US, Language.EN_IN], enable_interim_results=False),
-        credentials=config.GOOGLE_CREDENTIALS_JSON
-    )
-
-    tts = get_tts_service(tts_provider=tts_provider.value, voice_name=voice_name.value)
+    # Choose STT service based on speaker diarization configuration
+    if config.ENABLE_SPEAKER_DIARIZATION and config.SPEECHMATICS_API_KEY:
+        # Create configuration for speaker diarization
+        diarization_config = SpeakerDiarizationConfig(
+            enable_diarization=config.ENABLE_SPEAKER_DIARIZATION,
+            enable_voice_locking=config.ENABLE_VOICE_LOCKING,
+            speaker_sensitivity=config.SPEAKER_SENSITIVITY,
+            max_speakers=config.MAX_SPEAKERS
+        )
+        
+        # Use the improved service with automatic fallback
+        stt, voice_locking_processor = speaker_diarization_service.create_stt_with_fallback(
+            config=diarization_config,
+            languages=[Language.EN_US, Language.EN_IN]
+        )
+    else:
+        # Create Google STT directly when speaker diarization is disabled
+        stt = speaker_diarization_service.create_google_stt_fallback(
+            languages=[Language.EN_US, Language.EN_IN]
+        )
+        voice_locking_processor = None
+        logger.info("Using Google STT (speaker diarization disabled)")
 
     llm = LLMServiceWrapper(AzureLLMService(
         api_key=config.AZURE_OPENAI_API_KEY,
@@ -159,14 +175,23 @@ async def main():
         )
         tools = await mcp_client.register_tools(llm)
 
+
+    rtvi = RTVIProcessor(config=RTVIConfig(config=[]))
+
+    tts = get_tts_service(
+        tts_provider=tts_provider.value, 
+        voice_name=voice_name.value,
+        session_id=args.session_id
+    )
     # Simplified event handler for TTS feedback
     @llm.event_handler("on_function_calls_started")
     async def on_function_calls_started(service, function_calls):
+        del service  # Unused parameter
         # Only play the "checking" message if using Google TTS
         if tts_provider == TTSProvider.GOOGLE:
             for function_call in function_calls:
                 if function_call.function_name != "get_current_time":
-                    await tts.queue_frame(TTSSpeakFrame("Let me check on that."))
+                    # await tts.queue_frame(TTSSpeakFrame("Let me check on that."))
                     break
 
     messages = [
@@ -183,25 +208,35 @@ async def main():
 
     context_aggregator = llm.create_context_aggregator(context)
 
-    # RTVI events for Pipecat client UI
-    rtvi = RTVIProcessor(config=RTVIConfig(config=[]))
+    # Add custom LLMSpyProcessor for streaming function call events (RTVI and TTS created earlier)
+    tool_call_processor = LLMSpyProcessor(rtvi, args.session_id)
 
-    # Add custom LLMSpyProcessor for streaming function call events
-    tool_call_processor = LLMSpyProcessor(rtvi)
+    # Build pipeline components
+    pipeline_components = [
+        transport.input(),
+        stt,
+    ]
+    
+    if config.ENVIRONMENT.lower() in ["development", "dev"]:
+        test_processor = TestQuestionProcessor(questions=DEFAULT_TEST_QUESTIONS)
+        pipeline_components.append(test_processor)
+        logger.info("Test Question Processor enabled (development mode)")
 
-    pipeline = Pipeline(
-        [
-            transport.input(),
-            stt,
-            rtvi,
-            context_aggregator.user(),
-            llm,
-            tool_call_processor,
-            tts,
-            transport.output(),
-            context_aggregator.assistant(),
-        ]
-    )
+    if voice_locking_processor is not None:
+        pipeline_components.append(voice_locking_processor)
+        logger.info("Added voice locking processor to pipeline")
+    
+    pipeline_components.extend([
+        context_aggregator.user(),
+        llm,
+        tool_call_processor,
+        rtvi,
+        tts,
+        transport.output(),
+        context_aggregator.assistant(),
+    ])
+    
+    pipeline = Pipeline(pipeline_components)
 
     user_name = args.user_name or "guest"
     shopId = "euler" if args.euler_token and not args.shop_id else args.shop_id or "dummy"
@@ -226,20 +261,24 @@ async def main():
 
     @rtvi.event_handler("on_client_ready")
     async def on_client_ready(rtvi):
+        del rtvi
         await rtvi.set_bot_ready()
 
     @transport.event_handler("on_first_participant_joined")
     async def on_first_participant_joined(transport, participant):
+        del transport
         logger.info(f"First participant joined: {participant['id']}")
         await task.queue_frames([context_aggregator.user().get_context_frame()])
 
     @transport.event_handler("on_participant_left")
     async def on_participant_left(transport, participant, reason):
+        del transport, reason
         logger.info(f"Participant left: {participant['id']}")
         await task.cancel()
 
     @task.event_handler("on_pipeline_cancelled")
-    async def on_pipeline_cancelled(task, frame):
+    async def on_pipeline_cancelled(task_obj, frame):
+        del task_obj, frame  # Unused but required by event handler signature
         logger.info("Pipeline task cancelled. Cancelling main task.")
         main_task = asyncio.current_task()
         main_task.cancel()
@@ -251,6 +290,8 @@ async def main():
             await runner.run(task)
         except asyncio.CancelledError:
             logger.info("Main task cancelled. Exiting gracefully.")
+        except Exception as e:
+            logger.error(f"Pipeline runner error: {e}")
 
     if config.ENABLE_TRACING:
         langfuse_client = get_client()
