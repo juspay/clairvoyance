@@ -3,6 +3,7 @@ import json
 import base64
 from typing import Dict, Any, Optional, Callable
 
+from app.core.config import MCP_CLIENT_TIMEOUT
 from app.core.logger import logger
 from pipecat.adapters.schemas.tools_schema import ToolsSchema
 from pipecat.adapters.schemas.function_schema import FunctionSchema
@@ -22,7 +23,7 @@ class StreamableHTTPTransport:
         self._server_url = server_url.strip()
         self._auth_token = auth_token
         self._context_b64 = base64.b64encode(json.dumps(context).encode()).decode()
-        self._client = httpx.AsyncClient(timeout=15)
+        self._client = httpx.AsyncClient(timeout=MCP_CLIENT_TIMEOUT)
         self._demo_mode = context.get("enableDemoMode", False)
 
     async def post(self, method: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -43,7 +44,9 @@ class StreamableHTTPTransport:
         try:
             logger.info(f"Attempting to POST to: {self._server_url} with payload: {json_rpc_payload} and headers: {headers}")
             async with self._client.stream("POST", self._server_url, headers=headers, json=json_rpc_payload, params=query_params) as response:
-                response.raise_for_status()
+                if response.is_error:
+                    await response.aread()
+                    response.raise_for_status()
 
                 async for line in response.aiter_lines():
                     if line.startswith("data:"):
@@ -68,10 +71,10 @@ class StreamableHTTPTransport:
 
         except httpx.HTTPStatusError as e:
             logger.error(f"HTTP error on method {method}: {e.response.status_code} - {e.response.text}")
-            raise RuntimeError(f"HTTP Error: {e.response.status_code}")
+            raise RuntimeError(f"HTTP Error: {e.response.status_code}") from e
         except httpx.RequestError as e:
             logger.error(f"Network request error on method {method}: {e}")
-            raise RuntimeError(f"Network Error: {e}")
+            raise RuntimeError(f"Network Error: {e}") from e
         except Exception as e:
             logger.error(f"An unexpected transport error occurred on method {method}: {e}")
             raise

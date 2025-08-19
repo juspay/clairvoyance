@@ -5,7 +5,7 @@
 - **Remote Tool Integration:** The integration of the `MCPClient` is functional. The voice agent can successfully connect to the remote MCP server, fetch the list of tools, and register them with the LLM.
 - **Dynamic Tool Calling:** The agent can correctly identify when a user's request requires a remote tool and can execute the `tools/call` method, passing the necessary arguments and context.
 - **Robust Streaming and Parsing:** The `StreamableHTTPTransport` has been refactored to be highly resilient. It now processes streams line-by-line, uses Pydantic for strict data validation against the MCP spec, and correctly parses nested JSON in tool call results.
-- **Improved Error Handling:** The transport layer and client now gracefully handle a wide range of exceptions. This includes network errors, HTTP status code errors, and data validation errors. Specifically, the Pydantic models were updated to correctly parse both successful tool results (with nested JSON) and tool error results (with plain text), preventing crashes on server-side errors.
+- **Improved Error Handling:** The transport layer and client now gracefully handle a wide range of exceptions. This includes network errors, HTTP status code errors, and data validation errors. The streaming logic now correctly manages the stream lifecycle during HTTP errors, preventing crashes from race conditions. The client timeout is also now configurable.
 - **Context-Aware Sessions:** The system for passing session-specific data (`mcp_context`) via HTTP headers is in place and functional, allowing for authenticated and contextual tool execution.
 - **Date-Preserving Summaries:** The summarization prompt has been updated to ensure that dates and time ranges are preserved in conversation summaries.
 
