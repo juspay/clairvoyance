@@ -1,6 +1,5 @@
 from typing import Optional, List, Dict, Any
 from pydantic import BaseModel, Field
-from datetime import datetime
 from enum import Enum
 from app.agents.voice.automatic.types.models import TTSProvider, VoiceName
 

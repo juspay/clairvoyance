@@ -3,10 +3,7 @@ Database accessor functions for the application.
 """
 from typing import Any, Dict, List, Optional
 import asyncpg
-import json
-from datetime import datetime
 from app.core.logger import logger
-from app.database import get_db_connection
 from app.schemas import CallDataResponse, CallOutcome, CallStatus, RequestedBy
 from app.database.queries.main import run_parameterized_query
 from app.database.accessor.decoder import decode_call_data, decode_call_data_list

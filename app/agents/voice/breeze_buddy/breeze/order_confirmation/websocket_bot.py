@@ -1,10 +1,9 @@
 import json
-import os
 import asyncio
 from dotenv import load_dotenv
 from datetime import datetime
 from twilio.http.http_client import TwilioHttpClient
-from fastapi import WebSocket, WebSocketException
+from fastapi import WebSocket
 from loguru import logger
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.pipeline.pipeline import Pipeline
@@ -12,13 +11,11 @@ from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
 from pipecat.processors.aggregators.openai_llm_context import OpenAILLMContext
 from pipecat.serializers.twilio import TwilioFrameSerializer
-from pipecat.services.openai.llm import OpenAILLMService
 from pipecat.transcriptions.language import Language
 from pipecat.transports.network.fastapi_websocket import (
     FastAPIWebsocketParams,
     FastAPIWebsocketTransport,
 )
-from pipecat.services.google.tts import GoogleTTSService
 from pipecat.services.google.stt import GoogleSTTService
 from pipecat.services.elevenlabs.tts import ElevenLabsTTSService
 from pipecat.services.azure.llm import AzureLLMService
@@ -31,7 +28,6 @@ from app.core.security.sha import calculate_hmac_sha256
 from app.agents.voice.breeze_buddy.breeze.order_confirmation.utils import indian_number_to_speech, OUTCOME_TO_ENUM
 from app.schemas import CallOutcome
 from app.services.call_queue_manager import call_queue_manager
-from app.database.accessor.main import get_call_data_by_call_id
 
 from app.core.config import (
     TWILIO_ACCOUNT_SID,
@@ -61,7 +57,11 @@ class OrderConfirmationBot:
         self.task: PipelineTask = None
         self.outcome = "unknown"
         self.context: OpenAILLMContext = None
+        self.conversation_ended = False
         self.reporting_webhook_url = None
+        self.call_sid = None
+        self.call_data_id = None
+        self.order_id = None
         self.twilio_client = Client(
             TWILIO_ACCOUNT_SID,
             TWILIO_AUTH_TOKEN,
@@ -226,6 +226,32 @@ class OrderConfirmationBot:
         @transport.event_handler("on_client_disconnected")
         async def on_client_disconnected(transport, client):
             logger.info(f"Client disconnected: {client}")
+            if not self.conversation_ended:
+                self.conversation_ended = True
+                logger.info("Client disconnected unexpectedly. Updating call status directly.")
+                try:
+                    if self.call_data_id:
+                        transcription = []
+                        if self.context:
+                            history = self.context.messages
+                            for msg in history:
+                                if isinstance(msg, dict) and "role" in msg and "content" in msg and isinstance(msg["content"], str):
+                                    transcription.append(
+                                        {"role": msg["role"], "content": msg["content"]}
+                                    )
+                        
+                        await call_queue_manager.complete_call(
+                            call_data_id=self.call_data_id,
+                            outcome=CallOutcome.BUSY,
+                            transcription={"messages": transcription, "call_sid": self.call_sid},
+                            call_end_time=datetime.now().isoformat()
+                        )
+                        logger.info(f"Updated database for call_data_id: {self.call_data_id} with outcome: INTERRUPTED")
+                    else:
+                        logger.warning("No call_data_id found, skipping database update on disconnect.")
+                except Exception as e:
+                    logger.error(f"Error during direct DB update on disconnect for call_data_id {self.call_data_id}: {e}")
+
             await self.task.cancel()
 
         runner = PipelineRunner(handle_sigint=False, force_gc=True)
@@ -279,7 +305,8 @@ class OrderConfirmationBot:
         """
 
     async def _end_conversation_handler(self, flow_manager, args):
-        logger.info("Ending conversation.")
+        self.conversation_ended = True
+        logger.info(f"Ending conversation with outcome: {self.outcome}")
         try:
             # Prepare transcription and outcome data
             transcription = []

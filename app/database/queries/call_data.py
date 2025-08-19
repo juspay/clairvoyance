@@ -2,11 +2,8 @@
 Database query functions for the application.
 """
 from typing import Any, Dict, List, Optional, Tuple
-from uuid import UUID
-import asyncpg
 import json
 from datetime import datetime
-from app.core.logger import logger
 from app.schemas import CallOutcome, CallStatus, RequestedBy
 from app.utils.common import parse_iso_datetime
 

@@ -5,7 +5,6 @@ Handles call requests with simple recursive processing.
 import json
 import asyncio
 from typing import Optional, Dict, Any
-from datetime import datetime
 
 from app.core.logger import logger
 from app.schemas import CallOutcome, CallStatus, RequestedBy, CallDataResponse
