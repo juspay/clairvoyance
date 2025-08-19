@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from enum import Enum
-from typing import Union, List, Dict, Any, Optional, Literal
+from typing import Union, List, Dict, Any, Optional
 from pydantic import BaseModel, Field, Json
 
 class TTSProvider(str, Enum):

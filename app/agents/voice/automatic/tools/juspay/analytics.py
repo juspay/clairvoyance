@@ -56,7 +56,7 @@ def validate_token(token: str) -> Dict[str, Any]:
     try:
         logger.info("Validating euler_token with Juspay API")
         response = requests.post(
-            "https://portal.juspay.in/ec/v1/validate/token",
+            f"{EULER_DASHBOARD_API_URL}/ec/v1/validate/token",
             json={"token": token},
             timeout=10.0
         )
@@ -147,9 +147,9 @@ async def get_field_values_from_api(dimension: str) -> list[str]:
         logger.info(f"Fetching field values for dimension '{dimension}' from QAPI filters endpoint")
         
         # Use the QAPI filters URL instead of GENIUS_API_URL
-        qapi_filters_url = "https://portal.juspay.in/api/q/query?api=filters"
+        qapi_filters_url = f"{EULER_DASHBOARD_API_URL}/api/q/query?api=filters"
         
-        async with httpx.AsyncClient(timeout=5.0) as client:
+        async with httpx.AsyncClient(timeout=15.0) as client:
             response = await client.post(qapi_filters_url, json=payload, headers=headers)
             response.raise_for_status()
             
@@ -1268,7 +1268,7 @@ async def call_query_api(payload: QApiPayload, web_login_token: str, token_respo
         # Call the internal analytics API
         logger.debug(f"QAPI Call: Sending payload: {serialized_payload}")
         response = requests.post(
-            "https://portal.juspay.in/api/q/query",
+            f"{EULER_DASHBOARD_API_URL}/api/q/query",
             data=json_dumps_with_datetime(serialized_payload),
             headers={
                 "X-Web-LoginToken": web_login_token,
