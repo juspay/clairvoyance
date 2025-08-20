@@ -85,11 +85,11 @@ class MCPClient:
         self._transport = StreamableHTTPTransport(server_url, auth_token, context)
         self._llm = None
 
-    async def register_tools(self, llm) -> ToolsSchema:
+    async def register_tools(self, llm, selective_functions) -> ToolsSchema:
         """Lists tools and registers them with the given LLM processor."""
         self._llm = llm
         logger.info("Registering tools from custom MCP client...")
-        
+        selective_functions_set = set(selective_functions)
         try:
             response_dict = await self._transport.post(method="tools/list")
             
@@ -104,8 +104,19 @@ class MCPClient:
 
             raw_tools = response_dict["result"]["tools"]
             
+            selective_tools_to_register = []
+            if len(selective_functions) > 0:
+                for tool_data in raw_tools:
+                    tool_name = tool_data["name"]
+                    if tool_name in selective_functions_set:
+                        selective_tools_to_register.append(tool_data)
+                        
+            tools_to_process = raw_tools
+            if len(selective_tools_to_register) > 0:
+                tools_to_process = selective_tools_to_register
+            
             converted_tools = []
-            for tool_data in raw_tools:
+            for tool_data in tools_to_process:
                 tool_name = tool_data["name"]
                 logger.debug(f"Registering remote tool: {tool_name}")
                 

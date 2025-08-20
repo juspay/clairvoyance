@@ -157,7 +157,9 @@ async def main():
             auth_token=args.breeze_token,
             context=mcp_context
         )
-        tools = await mcp_client.register_tools(llm)
+
+        selective_functions = config.SELECTIVE_MCP_FUNCTIONS if len(config.SELECTIVE_MCP_FUNCTIONS) > 0 else []
+        tools = await mcp_client.register_tools(llm, selective_functions)
 
         if args.shop_url == config.BREEZE_BUDDY_TEST_SHOPIFY_SHOP_URL:
             tools.standard_tools.extend(shopify_buddy_test.tools.standard_tools)
