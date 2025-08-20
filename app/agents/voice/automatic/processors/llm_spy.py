@@ -18,6 +18,7 @@ from pipecat.processors.frameworks.rtvi import RTVIProcessor, RTVIServerMessageF
 
 from app.core.logger import logger
 from app.agents.voice.automatic.conversation_manager import get_conversation_manager
+from app.agents.voice.automatic.analytics.tracing_setup import create_tool_span, complete_tool_span
 
 
 class LLMSpyProcessor(FrameProcessor):
@@ -29,6 +30,7 @@ class LLMSpyProcessor(FrameProcessor):
     2. Collects LLM responses and delegates to ConversationManager
     3. Handles chart component emission
     4. Processes highlight text for timing correlation
+    5. Creates OpenTelemetry spans for tool calls to track latency in Langfuse
     """
 
     def __init__(self, rtvi: RTVIProcessor, session_id: str, name: str = "LLMSpyProcessor"):
@@ -42,6 +44,9 @@ class LLMSpyProcessor(FrameProcessor):
         
         # Conversation management (delegates to service)
         self._conversation_manager = get_conversation_manager()
+        
+        # Tool span tracking for OpenTelemetry/Langfuse
+        self._active_tool_spans = {}
         
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
@@ -76,6 +81,12 @@ class LLMSpyProcessor(FrameProcessor):
 
         # Function Call Start - emit RTVI event and track in conversation
         elif isinstance(frame, FunctionCallInProgressFrame):
+            # Create OpenTelemetry span for tool execution
+            span = create_tool_span(frame.function_name, frame.arguments, frame.tool_call_id)
+            if span:
+                self._active_tool_spans[frame.tool_call_id] = span
+                logger.debug(f"Created tool span for {frame.function_name} ({frame.tool_call_id})")
+            
             # Emit tool-call-start event
             await self._rtvi.push_frame(
                 RTVIServerMessageFrame(
@@ -123,6 +134,23 @@ class LLMSpyProcessor(FrameProcessor):
             for event in events:
                 await self._emit_rtvi_event(event)
             
+            # Complete OpenTelemetry span for tool execution
+            span = self._active_tool_spans.pop(frame.tool_call_id, None)
+            if span:
+                # Get execution time from conversation manager
+                conversation = self._conversation_manager.get_conversation(self._session_id)
+                execution_time_ms = None
+                if conversation and conversation.current_turn:
+                    for tool_result in conversation.current_turn.tool_results:
+                        if tool_result.tool_call_id == frame.tool_call_id:
+                            execution_time_ms = tool_result.execution_time_ms
+                            break
+                
+                # Determine success based on result content
+                success = not ("error" in frame.result.lower() or "failed" in frame.result.lower())
+                complete_tool_span(span, frame.result, success, execution_time_ms)
+                logger.debug(f"Completed tool span for {frame.function_name} ({frame.tool_call_id}) - {execution_time_ms}ms")
+            
             # Handle chart component emission (works for both local and MCP tools)
             # Always check for pending components after any function call
             await self._emit_chart_components(frame.function_name)
@@ -165,4 +193,3 @@ class LLMSpyProcessor(FrameProcessor):
             pass
         except Exception as e:
             logger.error(f"Error emitting chart components for session {self._session_id}: {e}")
-

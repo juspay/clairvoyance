@@ -26,7 +26,7 @@ from app.core.logger import logger, configure_session_logger
 from app.utils.session_context import create_session_context
 from app.agents.voice.automatic.services.llm_wrapper import LLMServiceWrapper
 from app.agents.voice.automatic.services.mcp.automatic_client import MCPClient
-from app.agents.voice.automatic.analytics.tracing_setup import setup_tracing
+from app.agents.voice.automatic.analytics.tracing_setup import setup_tracing, create_assistant_launch_span, complete_assistant_launch_span
 from .processors import LLMSpyProcessor
 from .prompts import get_system_prompt
 from .tools import initialize_tools
@@ -43,6 +43,9 @@ from .types import (
 load_dotenv(override=True)
 
 async def main():
+    import time
+    launch_start_time = time.time()
+    
     parser = argparse.ArgumentParser()
     parser.add_argument("-u", "--url", type=str, required=True, help="URL of the Daily room")
     parser.add_argument("-t", "--token", type=str, required=True, help="Daily token")
@@ -63,6 +66,20 @@ async def main():
     # Configure logger with session ID for all logs in this subprocess
     configure_session_logger(args.session_id)
     logger.info(f"Voice agent started with session ID: {args.session_id}")
+    
+    # Decode TTS parameters early for span creation
+    mode = decode_mode(args.mode)
+    
+    # Create assistant launch span for tracking
+    assistant_launch_span = None
+    if config.ENABLE_TRACING:
+        setup_tracing("breeze-voice-agent")
+        assistant_launch_span = create_assistant_launch_span(
+            session_id=args.session_id,
+            mode=mode.value if mode else "unknown",
+            user_name=args.user_name
+        )
+        logger.info(f"Created assistant launch span for session: {args.session_id}")
     
     # Create session context for passing to components
     session_context = create_session_context(args.session_id)
@@ -234,11 +251,24 @@ async def main():
     }
 
     if config.ENABLE_TRACING:
-        setup_tracing("breeze-voice-agent")
         task_params["conversation_id"] = conversation_id
         task_params["enable_tracing"] = True
 
     task = PipelineTask(pipeline, **task_params)
+    
+    # Calculate launch time and complete assistant launch span
+    launch_end_time = time.time()
+    launch_duration_ms = (launch_end_time - launch_start_time) * 1000
+    components_count = len(pipeline_components)
+    
+    if assistant_launch_span:
+        complete_assistant_launch_span(
+            assistant_launch_span,
+            success=True,
+            execution_time_ms=launch_duration_ms,
+            components_initialized=components_count
+        )
+        logger.info(f"Assistant launch completed in {launch_duration_ms:.2f}ms with {components_count} components")
 
     @rtvi.event_handler("on_client_ready")
     async def on_client_ready(rtvi):
