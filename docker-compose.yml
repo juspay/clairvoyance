@@ -1,0 +1,94 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: clairvoyance-postgres
+    environment:
+      POSTGRES_USER: clairvoyance_user
+      POSTGRES_PASSWORD: clairvoyance_pass
+      POSTGRES_DB: clairvoyance
+      POSTGRES_INITDB_ARGS: "--encoding=UTF-8"
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-db.sql:/docker-entrypoint-initdb.d/init-db.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U clairvoyance_user -d clairvoyance"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+
+  # Redis (for session management if needed)
+  redis:
+    image: redis:7-alpine
+    container_name: clairvoyance-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
+  # Main Application
+  app:
+    build: .
+    container_name: clairvoyance-app
+    ports:
+      - "8000:8000"
+    environment:
+      # Database Configuration
+      POSTGRES_USER: clairvoyance_user
+      POSTGRES_PASSWORD: clairvoyance_pass
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: clairvoyance
+      
+      # Redis Configuration (optional)
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      
+      # App Configuration
+      ENVIRONMENT: production
+      PORT: 8000
+      HOST: 0.0.0.0
+      
+      # These need to be set in your .env file or passed as secrets
+      DAILY_API_KEY: ${DAILY_API_KEY}
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      AZURE_OPENAI_API_KEY: ${AZURE_OPENAI_API_KEY}
+      AZURE_OPENAI_ENDPOINT: ${AZURE_OPENAI_ENDPOINT}
+      GOOGLE_CREDENTIALS_JSON: ${GOOGLE_CREDENTIALS_JSON}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./logs:/app/logs
+      - ./.env:/app/.env:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+
+networks:
+  default:
+    name: clairvoyance-network

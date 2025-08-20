@@ -11,13 +11,36 @@ from pipecat.frames.frames import (
     FunctionCallResultFrame, 
     LLMTextFrame,
     LLMFullResponseStartFrame, 
-    LLMFullResponseEndFrame
+    LLMFullResponseEndFrame,
+    TranscriptionFrame
 )
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.processors.frameworks.rtvi import RTVIProcessor, RTVIServerMessageFrame
 
 from app.core.logger import logger
 from app.agents.voice.automatic.conversation_manager import get_conversation_manager
+
+# Global store for current user messages per session
+_session_user_messages = {}
+
+
+class UserMessageCaptureProcessor(FrameProcessor):
+    """Simple processor to capture user transcriptions before they reach the context aggregator."""
+    
+    def __init__(self, session_id: str, name: str = "UserMessageCaptureProcessor"):
+        super().__init__(name=name)
+        self._session_id = session_id
+    
+    async def process_frame(self, frame: Frame, direction: FrameDirection):
+        """Capture TranscriptionFrame and store user message globally."""
+        await super().process_frame(frame, direction)
+        
+        if isinstance(frame, TranscriptionFrame):
+            if frame.text and frame.text.strip():
+                _session_user_messages[self._session_id] = frame.text.strip()
+                logger.debug(f"Captured user message for session {self._session_id}: {frame.text.strip()}")
+        
+        await self.push_frame(frame, direction)
 
 
 class LLMSpyProcessor(FrameProcessor):
@@ -40,6 +63,7 @@ class LLMSpyProcessor(FrameProcessor):
         self._accumulated_text = ""
         self._is_collecting_response = False
         
+        
         # Conversation management (delegates to service)
         self._conversation_manager = get_conversation_manager()
         
@@ -53,10 +77,17 @@ class LLMSpyProcessor(FrameProcessor):
             self._is_collecting_response = True
             self._accumulated_text = ""
             
-            # Start conversation turn via ConversationManager
-            event = await self._conversation_manager.start_turn_with_events(self._session_id)
+            # Get captured user message from global store
+            user_content = _session_user_messages.get(self._session_id, "[Inferred from voice]")
+            
+            # Start conversation turn via ConversationManager with actual user message
+            event = await self._conversation_manager.start_turn_with_events(self._session_id, user_content)
             if event:
                 await self._emit_rtvi_event(event)
+            
+            # Clear the captured message after using it
+            if self._session_id in _session_user_messages:
+                del _session_user_messages[self._session_id]
                 
         # LLM Output - accumulate streaming text
         elif isinstance(frame, LLMTextFrame) and self._is_collecting_response:
@@ -70,6 +101,15 @@ class LLMSpyProcessor(FrameProcessor):
                 )
                 if event:
                     await self._emit_rtvi_event(event)
+                
+                # Complete the turn after LLM response if no tool calls are pending
+                conversation = self._conversation_manager.get_conversation(self._session_id)
+                if conversation and conversation.current_turn:
+                    # If no tool calls in this turn, complete it now
+                    if len(conversation.current_turn.tool_calls) == 0:
+                        completed_turn = self._conversation_manager.complete_turn(self._session_id)
+                        if completed_turn:
+                            logger.debug(f"Completed turn {completed_turn.turn_number} for session {self._session_id} (no tools)")
                     
             self._accumulated_text = ""
             self._is_collecting_response = False

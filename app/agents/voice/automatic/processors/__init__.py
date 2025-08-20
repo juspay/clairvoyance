@@ -1,3 +1,3 @@
-from .llm_spy import LLMSpyProcessor
+from .llm_spy import LLMSpyProcessor, UserMessageCaptureProcessor
 
-__all__ = ["LLMSpyProcessor"]
+__all__ = ["LLMSpyProcessor", "UserMessageCaptureProcessor"]

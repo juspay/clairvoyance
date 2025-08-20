@@ -1,5 +1,6 @@
 import asyncio
 import argparse
+import time
 from dotenv import load_dotenv
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -27,7 +28,7 @@ from app.utils.session_context import create_session_context
 from app.agents.voice.automatic.services.llm_wrapper import LLMServiceWrapper
 from app.agents.voice.automatic.services.mcp.automatic_client import MCPClient
 from app.agents.voice.automatic.analytics.tracing_setup import setup_tracing
-from .processors import LLMSpyProcessor
+from .processors import LLMSpyProcessor, UserMessageCaptureProcessor
 from .prompts import get_system_prompt
 from .tools import initialize_tools
 from .services.mock_stt import TestQuestionProcessor, DEFAULT_TEST_QUESTIONS
@@ -179,12 +180,76 @@ async def main():
                     await tts.queue_frame(TTSSpeakFrame("Let me check on that."))
                     break
 
-    messages = [
-        {
-            "role": "system",
-            "content": system_prompt
-        },
-    ]
+    # Check if this is a reconnection and restore conversation context
+    conversation_manager = None
+    try:
+        from .conversation_manager import get_conversation_manager
+        conversation_manager = get_conversation_manager()
+        existing_conversation = conversation_manager.get_conversation(args.session_id)
+        
+        # If not found in memory, try loading from database
+        if not existing_conversation:
+            try:
+                existing_conversation = await conversation_manager.load_conversation_from_db(args.session_id)
+                if existing_conversation:
+                    logger.info(f"Loaded conversation from database for session {args.session_id}")
+            except Exception as e:
+                logger.warning(f"Failed to load conversation from database: {e}")
+        
+        if existing_conversation and existing_conversation.turns:
+            logger.info(f"Restoring conversation context for session {args.session_id} with {len(existing_conversation.turns)} turns")
+            
+            # Modify system prompt for reconnection - remove the intro greeting instruction
+            reconnection_system_prompt = system_prompt.replace(
+                'Begin every session with:\n    "Hey, whatsup? How can I help you today?"',
+                'This is a RECONNECTION to an existing session. Do NOT say any greeting. Continue the conversation naturally from where it left off.'
+            )
+            
+            # Log to verify the replacement worked
+            if 'RECONNECTION' in reconnection_system_prompt:
+                logger.info(f"Successfully modified system prompt for reconnection in session {args.session_id}")
+            else:
+                logger.warning(f"Failed to modify system prompt for reconnection in session {args.session_id}")
+            
+            messages = [{"role": "system", "content": reconnection_system_prompt}]
+            
+            for turn in existing_conversation.turns:
+                if turn.user_message:
+                    messages.append({
+                        "role": "user", 
+                        "content": turn.user_message.content
+                    })
+                if turn.assistant_response:
+                    messages.append({
+                        "role": "assistant",
+                        "content": turn.assistant_response.content
+                    })
+                    # Add tool calls and results if present
+                    for tool_call in turn.tool_calls:
+                        messages.append({
+                            "role": "assistant",
+                            "content": None,
+                            "tool_calls": [{
+                                "id": tool_call.tool_call_id,
+                                "type": "function",
+                                "function": {
+                                    "name": tool_call.function_name,
+                                    "arguments": tool_call.arguments
+                                }
+                            }]
+                        })
+                    for tool_result in turn.tool_results:
+                        messages.append({
+                            "role": "tool",
+                            "content": tool_result.result,
+                            "tool_call_id": tool_result.tool_call_id
+                        })
+        else:
+            logger.info(f"No existing conversation found for session {args.session_id}, starting fresh")
+            messages = [{"role": "system", "content": system_prompt}]
+    except Exception as e:
+        logger.warning(f"Could not restore conversation context: {e}, starting fresh")
+        messages = [{"role": "system", "content": system_prompt}]
 
     context = llm.create_summarizing_context(
         messages,
@@ -193,7 +258,8 @@ async def main():
 
     context_aggregator = llm.create_context_aggregator(context)
 
-    # Add custom LLMSpyProcessor for streaming function call events (RTVI and TTS created earlier)
+    # Add processors for conversation tracking
+    user_message_capture = UserMessageCaptureProcessor(args.session_id)
     tool_call_processor = LLMSpyProcessor(rtvi, args.session_id)
 
     # Build pipeline components
@@ -208,6 +274,7 @@ async def main():
         logger.info("Test Question Processor enabled (development mode)")
     
     pipeline_components.extend([
+        user_message_capture,  # Capture user messages before context aggregator
         context_aggregator.user(),
         llm,
         tool_call_processor,
@@ -225,6 +292,39 @@ async def main():
     timestamp = ist_time.strftime("%Y-%m-%d_%H-%M-%S")
     conversation_id=f"{user_name}-{shopId}-{timestamp}"
 
+    # Custom task class to intercept idle timeout before cancellation
+    class IdleTimeoutNotifyingTask(PipelineTask):
+        def __init__(self, pipeline, rtvi_instance, session_id, **kwargs):
+            super().__init__(pipeline, **kwargs)
+            self._rtvi = rtvi_instance
+            self._session_id = session_id
+        
+        async def _idle_timeout_detected(self, frame_buffer):
+            # Send notification BEFORE cancellation
+            try:
+                from pipecat.processors.frameworks.rtvi import RTVIServerMessageFrame
+                await self._rtvi.push_frame(
+                    RTVIServerMessageFrame(
+                        data={
+                            "type": "session-disconnected",
+                            "payload": {
+                                "reason": "idle_timeout",
+                                "message": "Session disconnected due to inactivity",
+                                "timestamp": int(time.time() * 1000),
+                                "session_id": self._session_id
+                            }
+                        }
+                    )
+                )
+                logger.info(f"Sent idle timeout notification to frontend for session {self._session_id}")
+                # Brief delay to ensure message is sent before connection closes
+                await asyncio.sleep(0.5)
+            except Exception as e:
+                logger.warning(f"Failed to notify frontend about idle timeout: {e}")
+            
+            # Now proceed with normal idle timeout handling
+            return await super()._idle_timeout_detected(frame_buffer)
+
     task_params = {
         "idle_timeout_secs": 180.0,
         "idle_timeout_frames": (BotSpeakingFrame, LLMFullResponseEndFrame),
@@ -238,15 +338,45 @@ async def main():
         task_params["conversation_id"] = conversation_id
         task_params["enable_tracing"] = True
 
-    task = PipelineTask(pipeline, **task_params)
+    task = IdleTimeoutNotifyingTask(pipeline, rtvi, args.session_id, **task_params)
 
     @rtvi.event_handler("on_client_ready")
     async def on_client_ready(rtvi):
+        # Send session-start event with session ID
+        try:
+            from pipecat.processors.frameworks.rtvi import RTVIServerMessageFrame
+            await rtvi.push_frame(
+                RTVIServerMessageFrame(
+                    data={
+                        "type": "session-start",
+                        "payload": {
+                            "session_id": args.session_id,
+                            "timestamp": int(time.time() * 1000),
+                            "user_name": args.user_name or "guest",
+                            "mode": mode.value if mode else "unknown"
+                        }
+                    }
+                )
+            )
+            logger.info(f"Sent session-start event to frontend for session {args.session_id}")
+        except Exception as e:
+            logger.warning(f"Failed to send session-start event: {e}")
+        
         await rtvi.set_bot_ready()
 
     @transport.event_handler("on_first_participant_joined")
     async def on_first_participant_joined(transport, participant):
         logger.info(f"First participant joined: {participant['id']}")
+        
+        # Check if this is a reconnection with existing conversation
+        # If so, don't automatically queue context to prevent re-processing previous questions
+        if existing_conversation and existing_conversation.turns:
+            logger.info(f"Reconnection detected for session {args.session_id} - skipping automatic context trigger")
+            # For reconnections, we've already restored the context in the LLM
+            # The system should wait for actual new user input before responding
+            return
+        
+        # Only trigger context for fresh sessions (no existing conversation)
         await task.queue_frames([context_aggregator.user().get_context_frame()])
 
     @transport.event_handler("on_participant_left")

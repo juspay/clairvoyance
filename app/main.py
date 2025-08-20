@@ -23,7 +23,7 @@ from app.core.logger import logger
 from app.core.config import DAILY_API_KEY, DAILY_API_URL, PORT, HOST
 from app.core.security.jwt import get_current_user
 from app import __version__
-from app.schemas import AutomaticVoiceUserConnectRequest, TokenData
+from app.schemas import AutomaticVoiceUserConnectRequest, VoiceReconnectRequest, TokenData
 from app.agents.voice.breeze_buddy.breeze.order_confirmation.types import BreezeOrderData
 from app.agents.voice.breeze_buddy.breeze.order_confirmation.websocket_bot import main as telephony_websocket_conn
 from twilio.rest import Client
@@ -41,6 +41,7 @@ from app.database.accessor.main import create_call_data
 from uuid import uuid4
 from datetime import datetime
 from app.services.call_queue_manager import call_queue_manager
+from app.agents.voice.automatic.conversation_manager import get_conversation_manager
 
 # Dictionary to track bot processes: {pid: (process, room_url)}
 bot_procs = {}
@@ -93,11 +94,29 @@ async def lifespan(app: FastAPI):
     )
     logger.info("Daily REST helper initialized.")
     
+    # Initialize conversation database tables (optional)
+    try:
+        from app.database.accessor.conversation import init_conversation_tables
+        await init_conversation_tables()
+        logger.info("Conversation database tables initialized.")
+    except Exception as e:
+        logger.warning(f"Failed to initialize conversation tables (conversation persistence disabled): {e}")
+        logger.info("Server will continue with in-memory conversation storage only.")
+    
+    # Initialize conversation manager for the main server
+    from app.agents.voice.automatic.conversation_manager import start_conversation_manager
+    await start_conversation_manager()
+    logger.info("Conversation manager initialized for main server.")
+    
     yield
     
     logger.info("Application shutdown event triggered...")
     # Cleanup bot processes
     cleanup()
+    # Stop conversation manager
+    from app.agents.voice.automatic.conversation_manager import stop_conversation_manager
+    await stop_conversation_manager()
+    logger.info("Conversation manager stopped.")
     # Close database pool
     await close_db_pool()
     # Close aiohttp session
@@ -249,10 +268,21 @@ async def bot_connect(request: AutomaticVoiceUserConnectRequest) -> Dict[str, An
 
     # 2. Create room + token
     MAX_DURATION = 30 * 60
+    
+    # Use test disconnect duration if provided (for testing reconnection)
+    if request.testDisconnectSeconds:
+        test_duration = min(request.testDisconnectSeconds, 300)  # Max 5 minutes for safety
+        logger.info(f"Creating room with test disconnect after {test_duration} seconds")
+        room_exp_time = time.time() + test_duration
+        token_exp_time = test_duration
+    else:
+        room_exp_time = time.time() + MAX_DURATION
+        token_exp_time = MAX_DURATION
+    
     room = await daily_helpers["rest"].create_room(
         params=DailyRoomParams(
             properties=DailyRoomProperties(
-                exp=time.time() + MAX_DURATION,
+                exp=room_exp_time,
                 eject_at_room_exp=True,
             )
         )
@@ -260,21 +290,26 @@ async def bot_connect(request: AutomaticVoiceUserConnectRequest) -> Dict[str, An
 
     token_params = DailyMeetingTokenParams(
         properties=DailyMeetingTokenProperties(
-            eject_after_elapsed=MAX_DURATION,
+            eject_after_elapsed=token_exp_time,
         )
     )
     
     token = await daily_helpers["rest"].get_token(
         room.url,
-        expiry_time=MAX_DURATION,
+        expiry_time=token_exp_time,
         eject_at_token_exp=True,
         owner=True,
         params=token_params,
     )
 
-    # 3. Generate unique session ID for this subprocess
-    session_id = str(uuid.uuid4())
-    logger.bind(session_id=session_id).info(f"Generated session ID for new voice agent: {session_id}")
+    # 3. Use provided session ID or generate new one
+    session_id = request.sessionId if request.sessionId else str(uuid.uuid4())
+    is_reconnection = bool(request.sessionId)
+    
+    if is_reconnection:
+        logger.bind(session_id=session_id).info(f"Reconnection requested for existing session: {session_id}")
+    else:
+        logger.bind(session_id=session_id).info(f"Generated new session ID for new voice agent: {session_id}")
 
     # 4. Build command args list
     bot_file = "app.agents.voice.automatic"
@@ -318,7 +353,127 @@ async def bot_connect(request: AutomaticVoiceUserConnectRequest) -> Dict[str, An
     bot_procs[proc.pid] = (proc, room.url)
     logger.bind(session_id=session_id).info(f"Subprocess started with PID: {proc.pid}")
 
-    return {"room_url": room.url, "token": token}
+    return {
+        "room_url": room.url, 
+        "token": token, 
+        "session_id": session_id,
+        "is_reconnection": is_reconnection
+    }
+
+# Voice reconnection endpoint
+@app.post("/agent/voice/automatic/reconnect")
+async def reconnect_voice_session(request: VoiceReconnectRequest) -> Dict[str, Any]:
+    """Reconnect to an existing voice session with preserved conversation context."""
+    session_id = request.sessionId
+    logger.info(f"Received reconnection request for session: {session_id}")
+    
+    try:
+        # 1. Check if conversation exists in conversation manager or database
+        conversation_manager = get_conversation_manager()
+        logger.info(f"Checking conversation manager for session {session_id}. Active sessions: {conversation_manager.get_session_stats()}")
+        
+        # First check memory, then database
+        conversation = conversation_manager.get_conversation(session_id)
+        
+        if not conversation:
+            logger.info(f"No conversation in memory for session {session_id}, checking database...")
+            try:
+                conversation = await conversation_manager.load_conversation_from_db(session_id)
+            except Exception as e:
+                logger.debug(f"Database load failed: {e}")
+                conversation = None
+        
+        if not conversation:
+            logger.warning(f"No conversation found in memory or database for session {session_id}")
+            logger.info(f"Proceeding with reconnection using existing session ID {session_id} but fresh context")
+            conversation_turns = 0
+        else:
+            logger.info(f"Found existing conversation for session {session_id} with {len(conversation.turns)} turns")
+            conversation_turns = len(conversation.turns)
+        
+        # 2. Create new Daily.co room + token (same logic as new connection)
+        MAX_DURATION = 30 * 60
+        room = await daily_helpers["rest"].create_room(
+            params=DailyRoomParams(
+                properties=DailyRoomProperties(
+                    exp=time.time() + MAX_DURATION,
+                    eject_at_room_exp=True,
+                )
+            )
+        )
+
+        token_params = DailyMeetingTokenParams(
+            properties=DailyMeetingTokenProperties(
+                eject_after_elapsed=MAX_DURATION,
+            )
+        )
+        
+        token = await daily_helpers["rest"].get_token(
+            room.url,
+            expiry_time=MAX_DURATION,
+            eject_at_token_exp=True,
+            owner=True,
+            params=token_params,
+        )
+        
+        # 3. Launch new subprocess with EXISTING session ID
+        bot_file = "app.agents.voice.automatic"
+        cmd = [
+            "python3", "-m", bot_file,
+            "-u", room.url,
+            "-t", token,
+            "--session-id", session_id,  # Use existing session ID
+        ]
+        
+        # Add optional parameters from reconnect request
+        if request.mode:
+            cmd += ["--mode", request.mode.upper()]
+        if request.userName:
+            cmd += ["--user-name", request.userName]
+        if request.eulerToken:
+            cmd += ["--euler-token", request.eulerToken]
+        if request.breezeToken:
+            cmd += ["--breeze-token", request.breezeToken]
+        if request.shopUrl:
+            cmd += ["--shop-url", request.shopUrl]
+        if request.shopId:
+            cmd += ["--shop-id", request.shopId]
+        if request.shopType:
+            cmd += ["--shop-type", request.shopType]
+        if request.merchantId:
+            cmd += ["--merchant-id", request.merchantId]
+        if request.platformIntegrations:
+            cmd += ["--platform-integrations"] + request.platformIntegrations
+        
+        # Launch subprocess
+        logger.bind(session_id=session_id).info(f"Launching reconnection subprocess with command: {' '.join(cmd)}")
+        proc = subprocess.Popen(
+            cmd,
+            cwd=Path(__file__).parent.parent,
+            bufsize=1,
+        )
+        bot_procs[proc.pid] = (proc, room.url)
+        logger.bind(session_id=session_id).info(f"Reconnection subprocess started with PID: {proc.pid}")
+
+        return {
+            "room_url": room.url,
+            "token": token,
+            "session_id": session_id,
+            "is_reconnection": True,
+            "conversation_turns": conversation_turns,
+            "message": f"Successfully reconnected to session {session_id}"
+        }
+        
+    except Exception as e:
+        logger.error(f"Error during reconnection for session {session_id}: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": "Reconnection failed",
+                "message": f"Failed to reconnect session {session_id}: {str(e)}",
+                "session_id": session_id
+            }
+        )
 
 
 # Serve client.html at the root
@@ -371,6 +526,44 @@ async def database_health_check():
 async def get_version():
     """Get application version."""
     return JSONResponse({"version": __version__})
+
+# Conversation history endpoint for reconnection
+@app.get("/conversation/{session_id}")
+async def get_conversation_history(session_id: str):
+    """Get conversation history for a session to support reconnection."""
+    try:
+        logger.info(f"Fetching conversation history for session: {session_id}")
+        
+        conversation_manager = get_conversation_manager()
+        conversation_data = conversation_manager.export_conversation(session_id)
+        
+        if conversation_data:
+            logger.info(f"Found conversation history for session {session_id} with {len(conversation_data.get('turns', []))} turns")
+            return JSONResponse({
+                "success": True,
+                "conversation": conversation_data,
+                "session_id": session_id
+            })
+        else:
+            logger.warning(f"No conversation history found for session: {session_id}")
+            return JSONResponse({
+                "success": False,
+                "conversation": None,
+                "session_id": session_id,
+                "message": "No conversation history found for this session"
+            })
+            
+    except Exception as e:
+        logger.error(f"Error fetching conversation history for session {session_id}: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={
+                "success": False,
+                "conversation": None,
+                "session_id": session_id,
+                "error": f"Failed to fetch conversation history: {str(e)}"
+            }
+        )
 
 # Graceful shutdown handling for WebSocket connections
 async def shutdown_server():

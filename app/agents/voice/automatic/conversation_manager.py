@@ -175,6 +175,12 @@ class ConversationManager:
             turn = conversation.current_turn
             logger.info(f"[{session_id}] Completed turn {turn.turn_number} ({status}) - duration: {turn.duration_ms:.1f}ms")
             
+            # Save to database after completing turn (if available)
+            try:
+                asyncio.create_task(self._save_conversation_to_db(conversation))
+            except Exception as e:
+                logger.debug(f"Database save failed (continuing with in-memory only): {e}")
+            
             return turn
     
     # Event-returning methods for LLMSpyProcessor
@@ -300,10 +306,82 @@ class ConversationManager:
         with self._lock:
             conversation = self.get_conversation(session_id)
             if not conversation:
-                return None
+                # Try loading from database if not in memory
+                return self._load_conversation_from_db(session_id)
             
             conversation.update_summary()
             return conversation.model_dump()
+    
+    def _load_conversation_from_db(self, session_id: str) -> Optional[Dict[str, Any]]:
+        """Load conversation from database (synchronous wrapper)"""
+        try:
+            import asyncio
+            from app.database.accessor.conversation import load_conversation
+            
+            # Get the current event loop or create one if needed
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    # If loop is running, we need to use a different approach
+                    # This is a fallback for synchronous calls from async contexts
+                    return None
+                else:
+                    return loop.run_until_complete(load_conversation(session_id))
+            except RuntimeError:
+                # No event loop in current thread, create a new one
+                return asyncio.run(load_conversation(session_id))
+                
+        except Exception as e:
+            logger.error(f"Failed to load conversation from database for session {session_id}: {e}")
+            return None
+    
+    async def _save_conversation_to_db(self, conversation: 'ConversationDebugData'):
+        """Save conversation to database"""
+        try:
+            from app.database.accessor.conversation import save_conversation
+            
+            conversation.update_summary()
+            conversation_data = conversation.model_dump()
+            
+            success = await save_conversation(
+                session_id=conversation.session_id,
+                conversation_id=conversation.conversation_id,
+                conversation_data=conversation_data
+            )
+            
+            if success:
+                logger.debug(f"Saved conversation {conversation.session_id} to database")
+            else:
+                logger.warning(f"Failed to save conversation {conversation.session_id} to database")
+                
+        except Exception as e:
+            logger.error(f"Error saving conversation to database: {e}")
+    
+    async def load_conversation_from_db(self, session_id: str) -> Optional['ConversationDebugData']:
+        """Load conversation from database and restore to memory"""
+        try:
+            from app.database.accessor.conversation import load_conversation
+            from .services.conversation import ConversationDebugData
+            
+            conversation_data = await load_conversation(session_id)
+            if not conversation_data:
+                logger.debug(f"No conversation found in database for session {session_id}")
+                return None
+            
+            # Reconstruct ConversationDebugData from stored data
+            conversation = ConversationDebugData.model_validate(conversation_data)
+            
+            # Store in memory cache
+            with self._lock:
+                self._conversations[session_id] = conversation
+                self._session_access_times[session_id] = time.time()
+            
+            logger.info(f"Loaded conversation {session_id} from database with {len(conversation.turns)} turns")
+            return conversation
+            
+        except Exception as e:
+            logger.error(f"Failed to load conversation from database for session {session_id}: {e}")
+            return None
     
     def get_session_stats(self) -> Dict[str, Any]:
         """Get overall session statistics"""

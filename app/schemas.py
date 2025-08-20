@@ -67,6 +67,20 @@ class AutomaticVoiceUserConnectRequest(BaseModel):
     ttsService: Optional[AutomaticVoiceTTSServiceConfig] = None
     merchantId: Optional[str] = None
     platformIntegrations: Optional[List[str]] = None
+    sessionId: Optional[str] = None  # For reconnection support
+    testDisconnectSeconds: Optional[int] = None  # For testing disconnection
+
+class VoiceReconnectRequest(BaseModel):
+    sessionId: str
+    userName: Optional[str] = None
+    mode: Optional[str] = None
+    eulerToken: Optional[str] = None
+    breezeToken: Optional[str] = None
+    shopUrl: Optional[str] = None
+    shopId: Optional[str] = None
+    shopType: Optional[str] = None
+    merchantId: Optional[str] = None
+    platformIntegrations: Optional[List[str]] = None
 
 class TokenData(BaseModel):
     """Token data model for JWT payload"""
