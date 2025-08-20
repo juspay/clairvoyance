@@ -1,0 +1,44 @@
+name: Build & Push Docker Image to Artifact Registry (Beta)
+
+on:
+  push:
+    branches:
+      - beta
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v1
+        with:
+          workload_identity_provider: projects/745400138007/locations/global/workloadIdentityPools/github-pool/providers/github-provider
+          service_account: github-deployer@breeze-uat-453414.iam.gserviceaccount.com
+
+      - name: Configure Docker for Artifact Registry
+        run: |
+          gcloud auth configure-docker asia-south1-docker.pkg.dev --quiet
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Extract short SHA
+        run: echo "SHORT_SHA=${GITHUB_SHA:0:8}" >> $GITHUB_ENV
+
+      - name: Build and Push Docker Image to Artifact Registry
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64
+          tags: asia-south1-docker.pkg.dev/breeze-uat-453414/clairvoyance/clairvoyance-beta:${{ env.SHORT_SHA }}
+          provenance: false
+          sbom: false
