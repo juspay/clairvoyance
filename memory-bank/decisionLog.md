@@ -6,6 +6,33 @@ This file records architectural and implementation decisions using a list format
 *
 
 ## Decision
+*   [2025-08-20 14:42:00] - Embed Dynamic Date Directly into SYSTEM_PROMPT F-String.
+
+## Rationale
+*   Per user instruction, the implementation for dynamic dating was changed to embed the `datetime` call directly within the `SYSTEM_PROMPT` f-string. This approach, while setting the date only once at application startup, was the explicitly requested method.
+
+## Implementation Details
+*   Modified `app/agents/voice/automatic/prompts/system.py`:
+    *   The `SYSTEM_PROMPT` variable was converted to an f-string.
+    *   The placeholder `{current_date}` was replaced with the direct call `{datetime.datetime.now().strftime("%B %d, %Y")}`.
+    *   The `get_system_prompt` function was simplified to remove the `.format()` call, as the date is now embedded directly in the `SYSTEM_PROMPT` constant.
+*
+
+## Decision
+*   [2025-08-20 13:26:00] - Embed Date into System Prompt and Refactor Timestamp Handling.
+
+## Rationale
+*   To simplify the system message structure and ensure the date is always present, the timestamp was embedded directly into the system prompt. This removes the need for a separate timestamp message.
+
+## Implementation Details
+*   Modified `app/agents/voice/automatic/prompts/system.py`:
+    *   Imported the `datetime` module.
+    *   The `SYSTEM_PROMPT` is now an f-string that includes the `CURRENT_TIMESTAMP` with the format `YYYY-MM-DD`.
+*   Modified `app/agents/voice/automatic/__init__.py`:
+    *   Removed the separate system message that contained the timestamp, as it is now part of the main `system_prompt`.
+*
+
+## Decision
 
 *   [2025-05-22 18:35:00] - Implement and populate the Memory Bank.
 
