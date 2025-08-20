@@ -1,46 +1,46 @@
 import asyncio
-import sys
 import argparse
 from dotenv import load_dotenv
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from app.core.logger import logger, configure_session_logger
+from opentelemetry import trace
+from langfuse import get_client
+
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.vad.vad_analyzer import VADParams
 from pipecat.audio.filters.noisereduce_filter import NoisereduceFilter
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
-from app.agents.voice.automatic.services.llm_wrapper import LLMServiceWrapper
 from pipecat.services.azure.llm import AzureLLMService
-from pipecat.services.google.stt import GoogleSTTService
+from pipecat.services.google.rtvi import GoogleRTVIObserver
 from pipecat.transcriptions.language import Language
+from pipecat.services.google import GoogleSTTService
 from pipecat.frames.frames import TTSSpeakFrame, BotSpeakingFrame, LLMFullResponseEndFrame
 from pipecat.transports.services.daily import DailyParams, DailyTransport
 from pipecat.processors.frameworks.rtvi import RTVIConfig, RTVIProcessor
-from pipecat.services.google.rtvi import GoogleRTVIObserver
 
 from app.core import config
+from app.core.logger import logger, configure_session_logger
+from app.utils.session_context import create_session_context
+from app.agents.voice.automatic.services.llm_wrapper import LLMServiceWrapper
 from app.agents.voice.automatic.services.mcp.automatic_client import MCPClient
+from app.agents.voice.automatic.analytics.tracing_setup import setup_tracing
 from .processors import LLMSpyProcessor
 from .prompts import get_system_prompt
 from .tools import initialize_tools
+from .services.mock_stt import TestQuestionProcessor, DEFAULT_TEST_QUESTIONS
 from .tts import get_tts_service
-from app.agents.voice.automatic.types import (
+from .types import (
     TTSProvider,
     Mode,
     decode_tts_provider,
     decode_voice_name,
     decode_mode,
 )
-from opentelemetry import trace
-from langfuse import get_client
 
 load_dotenv(override=True)
-
-# import setup_tracing from tracing_setup.py file
-from app.agents.voice.automatic.analytics.tracing_setup import setup_tracing
 
 async def main():
     parser = argparse.ArgumentParser()
@@ -63,6 +63,9 @@ async def main():
     # Configure logger with session ID for all logs in this subprocess
     configure_session_logger(args.session_id)
     logger.info(f"Voice agent started with session ID: {args.session_id}")
+    
+    # Create session context for passing to components
+    session_context = create_session_context(args.session_id)
 
     # Decode TTS parameters
     tts_provider = decode_tts_provider(args.tts_provider)
@@ -110,8 +113,6 @@ async def main():
         credentials=config.GOOGLE_CREDENTIALS_JSON
     )
 
-    tts = get_tts_service(tts_provider=tts_provider.value, voice_name=voice_name.value)
-
     llm = LLMServiceWrapper(AzureLLMService(
         api_key=config.AZURE_OPENAI_API_KEY,
         endpoint=config.AZURE_OPENAI_ENDPOINT,
@@ -155,10 +156,19 @@ async def main():
         mcp_client = MCPClient(
             server_url=config.AUTOMATIC_TOOL_MCP_SERVER_URL,
             auth_token=args.breeze_token,
-            context=mcp_context
+            context=mcp_context,
+            session_context=session_context
         )
         tools = await mcp_client.register_tools(llm)
 
+
+    rtvi = RTVIProcessor(config=RTVIConfig(config=[]))
+
+    tts = get_tts_service(
+        tts_provider=tts_provider.value, 
+        voice_name=voice_name.value,
+        session_id=args.session_id
+    )
     # Simplified event handler for TTS feedback
     @llm.event_handler("on_function_calls_started")
     async def on_function_calls_started(service, function_calls):
@@ -183,25 +193,31 @@ async def main():
 
     context_aggregator = llm.create_context_aggregator(context)
 
-    # RTVI events for Pipecat client UI
-    rtvi = RTVIProcessor(config=RTVIConfig(config=[]))
+    # Add custom LLMSpyProcessor for streaming function call events (RTVI and TTS created earlier)
+    tool_call_processor = LLMSpyProcessor(rtvi, args.session_id)
 
-    # Add custom LLMSpyProcessor for streaming function call events
-    tool_call_processor = LLMSpyProcessor(rtvi)
-
-    pipeline = Pipeline(
-        [
-            transport.input(),
-            stt,
-            rtvi,
-            context_aggregator.user(),
-            llm,
-            tool_call_processor,
-            tts,
-            transport.output(),
-            context_aggregator.assistant(),
-        ]
-    )
+    # Build pipeline components
+    pipeline_components = [
+        transport.input(),
+        stt,
+    ]
+    
+    if config.ENVIRONMENT.lower() in ["development", "dev"]:
+        test_processor = TestQuestionProcessor(questions=DEFAULT_TEST_QUESTIONS)
+        pipeline_components.append(test_processor)
+        logger.info("Test Question Processor enabled (development mode)")
+    
+    pipeline_components.extend([
+        context_aggregator.user(),
+        llm,
+        tool_call_processor,
+        rtvi,
+        tts,
+        transport.output(),
+        context_aggregator.assistant(),
+    ])
+    
+    pipeline = Pipeline(pipeline_components)
 
     user_name = args.user_name or "guest"
     shopId = "euler" if args.euler_token and not args.shop_id else args.shop_id or "dummy"
@@ -251,6 +267,8 @@ async def main():
             await runner.run(task)
         except asyncio.CancelledError:
             logger.info("Main task cancelled. Exiting gracefully.")
+        except Exception as e:
+            logger.error(f"Pipeline runner error: {e}")
 
     if config.ENABLE_TRACING:
         langfuse_client = get_client()

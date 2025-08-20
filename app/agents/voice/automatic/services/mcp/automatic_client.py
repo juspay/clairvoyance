@@ -2,6 +2,7 @@ import httpx
 import json
 import base64
 from typing import Dict, Any, Optional, Callable
+from app.utils.session_context import SessionContext
 
 from app.core.logger import logger
 from pipecat.adapters.schemas.tools_schema import ToolsSchema
@@ -81,8 +82,9 @@ class StreamableHTTPTransport:
 
 class MCPClient:
     """A service to list, register, and call tools from a remote MCP server."""
-    def __init__(self, server_url: str, auth_token: str, context: Dict[str, Any]):
+    def __init__(self, server_url: str, auth_token: str, context: Dict[str, Any], session_context: SessionContext):
         self._transport = StreamableHTTPTransport(server_url, auth_token, context)
+        self._session_context = session_context
         self._llm = None
 
     async def register_tools(self, llm) -> ToolsSchema:
@@ -150,21 +152,60 @@ class MCPClient:
             if response_dict.get("error"):
                 raise RuntimeError(f"JSON-RPC Error calling tool: {response_dict['error']}")
 
-            result_content = response_dict.get("result", {}).get("content", [])
-            
-            text_response = " ".join(
-                json.dumps(item.get("text")) for item in result_content if item.get("type") == "text"
-            )
+            result = response_dict.get("result", {})
+            text_responses = []
+            ui_components = []
 
+            # Parse MCP response structure: result.content[0].text
+            content_items = result.get("content", [])
+            for item in content_items:
+                if item.get("type") == "text" and item.get("text"):
+                    text_data = item.get("text")
+                    if isinstance(text_data, dict) and text_data.get("uiComponent") is True:
+                        ui_components.append(text_data)
+                    else:
+                        text_responses.append(str(text_data))
+
+            # Store UI components if any
+            if ui_components:
+                await self._store_ui_components_from_mcp(ui_components)
+            
+            # Prepare text response for LLM
+            text_response = " ".join(text_responses)
             if not text_response:
                 text_response = "Tool executed successfully but returned no text."
 
             logger.debug(f"Tool '{function_name}' returned: {text_response}")
+            if ui_components:
+                logger.debug(f"Tool '{function_name}' also returned {len(ui_components)} UI components")
+                
             await result_callback(text_response)
 
         except Exception as e:
             logger.error(f"Failed to call tool '{function_name}': {e}")
             await result_callback(f"Error: Could not execute tool {function_name}.")
+
+    async def _store_ui_components_from_mcp(self, ui_components: list[Dict[str, Any]]) -> None:
+        """Store UI components from MCP response in local registry for LLMSpyProcessor pickup."""
+        try:
+            from app.tools.providers.system.chart_tools import _register_pending_chart_emission
+            
+            session_id = self._session_context.session_id
+            
+            for ui_component in ui_components:
+                # Transform MCP UI component format to expected format
+                component_data = ui_component.copy()
+                
+                # Map MCP fields to expected format
+                if "id" in component_data and "componentId" not in component_data:
+                    component_data["componentId"] = component_data["id"]
+                
+                _register_pending_chart_emission(session_id, component_data)
+                component_id = component_data.get("componentId", component_data.get("id", "unknown"))
+                logger.info(f"[{session_id}] Stored UI component from MCP: {component_id}")
+                
+        except Exception as e:
+            logger.error(f"Error storing UI components from MCP: {e}")
 
     async def close(self):
         await self._client.aclose()
