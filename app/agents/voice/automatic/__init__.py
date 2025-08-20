@@ -25,7 +25,7 @@ from app.core import config
 from app.agents.voice.automatic.services.mcp.automatic_client import MCPClient
 from .processors import LLMSpyProcessor
 from .prompts import get_system_prompt
-from .tools import initialize_tools
+from .tools import initialize_tools, shopify_buddy_test, breeze_buddy
 from .tts import get_tts_service
 from app.agents.voice.automatic.types import (
     TTSProvider,
@@ -158,6 +158,17 @@ async def main():
             context=mcp_context
         )
         tools = await mcp_client.register_tools(llm)
+
+        if args.shop_url == config.BREEZE_BUDDY_TEST_SHOPIFY_SHOP_URL:
+            tools.standard_tools.extend(shopify_buddy_test.tools.standard_tools)
+            for name, function in shopify_buddy_test.tool_functions.items():
+                llm.register_function(name, function)
+            logger.info(f"Loaded {len(shopify_buddy_test.tools.standard_tools)} shopify tools.")
+
+            tools.standard_tools.extend(breeze_buddy.tools.standard_tools)
+            for name, function in breeze_buddy.tool_functions.items():
+                llm.register_function(name, function)
+            logger.info(f"Loaded {len(breeze_buddy.tools.standard_tools)} breeze buddy tools.")
 
     # Simplified event handler for TTS feedback
     @llm.event_handler("on_function_calls_started")
