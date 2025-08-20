@@ -18,6 +18,9 @@ class RequestedBy(str, Enum):
     BREEZE = "breeze"
     SHOPIFY = "shopify"
 
+class Workflow(str, Enum):
+    ORDER_CONFIRMATION = "order-confirmation"
+
 class CallDataCreate(BaseModel):
     id: str
     outcome: Optional[CallOutcome] = None
@@ -28,6 +31,7 @@ class CallDataCreate(BaseModel):
     provider: str
     status: CallStatus = CallStatus.BACKLOG
     requested_by: RequestedBy
+    workflow: Workflow
     call_payload: Optional[Dict[str, Any]] = None
     assigned_number: Optional[str] = None
 
@@ -46,6 +50,7 @@ class CallDataResponse(BaseModel):
     provider: str
     status: str
     requested_by: str
+    workflow: str
     call_payload: Optional[Dict[str, Any]] = None
     assigned_number: Optional[str] = None
     created_at: str

@@ -36,7 +36,7 @@ from app.core.config import (
     TWILIO_WEBSOCKET_URL,
     BREEZE_BUDDY_CALL_PROVIDER,
 )
-from app.schemas import CallStatus, RequestedBy
+from app.schemas import CallStatus, RequestedBy, Workflow
 from app.database.accessor.main import create_call_data
 from uuid import uuid4
 from datetime import datetime
@@ -121,9 +121,10 @@ app.add_middleware(
 # Mount static files directory
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
-@app.post("/agent/voice/breeze-buddy/{identity}/order-confirmation")
+@app.post("/agent/voice/breeze-buddy/{identity}/{workflow}")
 async def trigger_order_confirmation(
-    identity: RequestedBy, 
+    identity: RequestedBy,
+    workflow: Workflow,
     order: BreezeOrderData,
     current_user: TokenData = Depends(get_current_user)
 ):
@@ -164,6 +165,7 @@ async def trigger_order_confirmation(
             provider=BREEZE_BUDDY_CALL_PROVIDER,
             status=CallStatus.BACKLOG,
             requested_by=identity,
+            workflow=workflow,
             call_payload=call_payload,
             assigned_number=TWILIO_FROM_NUMBER
         )

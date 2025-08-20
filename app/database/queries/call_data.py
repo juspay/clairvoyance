@@ -4,7 +4,7 @@ Database query functions for the application.
 from typing import Any, Dict, List, Optional, Tuple
 import json
 from datetime import datetime
-from app.schemas import CallOutcome, CallStatus, RequestedBy
+from app.schemas import CallOutcome, CallStatus, RequestedBy, Workflow
 from app.utils.common import parse_iso_datetime
 
 
@@ -22,6 +22,7 @@ def insert_call_data_query(
     provider: str,
     status: CallStatus,
     requested_by: RequestedBy,
+    workflow: Workflow,
     call_payload: Optional[Dict[str, Any]],
     assigned_number: Optional[str] = None
 ) -> Tuple[str, List[Any]]:
@@ -40,12 +41,13 @@ def insert_call_data_query(
             "provider",
             "status",
             "requested_by",
+            "workflow",
             "call_payload",
             "assigned_number",
             "created_at",
             "updated_at"
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING *;
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) RETURNING *;
     """
     
     call_start_dt = parse_iso_datetime(call_start_time)
@@ -61,6 +63,7 @@ def insert_call_data_query(
         provider,
         status.value,
         requested_by.value,
+        workflow.value,
         json.dumps(call_payload) if call_payload else None,
         assigned_number,
         datetime.now(),

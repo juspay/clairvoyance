@@ -26,6 +26,7 @@ def create_call_data_table_query() -> str:
             "provider" VARCHAR(255) NOT NULL,
             "status" VARCHAR(50) CHECK ("status" IN ('backlog', 'finished', 'ongoing', 'error')) DEFAULT 'backlog',
             "requested_by" VARCHAR(50) CHECK ("requested_by" IN ('breeze', 'shopify')) NOT NULL,
+            "workflow" VARCHAR(50) NOT NULL,
             "call_payload" JSONB,
             "assigned_number" VARCHAR(50),
             "created_at" TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
@@ -35,6 +36,7 @@ def create_call_data_table_query() -> str:
         CREATE INDEX IF NOT EXISTS idx_call_data_status ON "{CALL_DATA_TABLE}" ("status");
         CREATE INDEX IF NOT EXISTS idx_call_data_provider ON "{CALL_DATA_TABLE}" ("provider");
         CREATE INDEX IF NOT EXISTS idx_call_data_requested_by ON "{CALL_DATA_TABLE}" ("requested_by");
+        CREATE INDEX IF NOT EXISTS idx_call_data_workflow ON "{CALL_DATA_TABLE}" ("workflow");
         CREATE INDEX IF NOT EXISTS idx_call_data_call_id ON "{CALL_DATA_TABLE}" ("call_id");
         CREATE INDEX IF NOT EXISTS idx_call_data_created_at ON "{CALL_DATA_TABLE}" ("created_at");
     """

@@ -4,7 +4,7 @@ Database accessor functions for the application.
 from typing import Any, Dict, List, Optional
 import asyncpg
 from app.core.logger import logger
-from app.schemas import CallDataResponse, CallOutcome, CallStatus, RequestedBy
+from app.schemas import CallDataResponse, CallOutcome, CallStatus, RequestedBy, Workflow
 from app.database.queries.main import run_parameterized_query
 from app.database.accessor.decoder import decode_call_data, decode_call_data_list
 from app.database.queries.call_data import (
@@ -39,6 +39,7 @@ async def create_call_data(
     provider: str,
     status: CallStatus,
     requested_by: RequestedBy,
+    workflow: Workflow,
     call_payload: Optional[Dict[str, Any]],
     assigned_number: Optional[str] = None
 ) -> Optional[CallDataResponse]:
@@ -58,6 +59,7 @@ async def create_call_data(
             provider=provider,
             status=status,
             requested_by=requested_by,
+            workflow=workflow,
             call_payload=call_payload,
             assigned_number=assigned_number
         )
