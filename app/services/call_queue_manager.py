@@ -5,13 +5,13 @@ Handles call requests with simple recursive processing.
 import json
 import asyncio
 from typing import Optional, Dict, Any
+from datetime import datetime, timezone
 
 from app.core.logger import logger
-from app.schemas import CallOutcome, CallStatus, RequestedBy, CallDataResponse
+from app.schemas import CallOutcome, CallStatus, CallDataResponse
 from app.database.accessor.main import (
     get_call_data_by_status,
     update_call_data_status,
-    update_call_data_outcome,
     update_call_data_call_id,
     complete_call_data_update,
 )
@@ -51,14 +51,41 @@ class CallQueueManager:
         Check if no call is ongoing and process next call from backlog.
         This function is called recursively after each call completion.
         """
+        
+        timed_out_call = None
         async with self._lock:
             try:
                 # Check if any call is currently ongoing
                 ongoing_calls = await get_call_data_by_status(CallStatus.ONGOING)
                 
                 if len(ongoing_calls) > 0:
-                    logger.info(f"Call already in progress, skipping queue processing")
-                    return
+                    logger.info(f"Call already in progress, checking for timeout")
+                    
+                    # Check if the ongoing call has timed out
+                    ongoing_call = ongoing_calls[0]
+                    
+                    # If updated_at is a string, convert it to a datetime object
+                    if isinstance(ongoing_call.updated_at, str):
+                        updated_at_time = datetime.fromisoformat(ongoing_call.updated_at)
+                    else:
+                        updated_at_time = ongoing_call.updated_at
+                    
+                    # Ensure updated_at_time is timezone-aware (assuming UTC)
+                    if updated_at_time.tzinfo is None:
+                        updated_at_time = updated_at_time.replace(tzinfo=timezone.utc)
+                    
+                    # Get the current time in UTC
+                    now_utc = datetime.now(timezone.utc)
+                    
+                    # Calculate the time difference
+                    time_since_update = now_utc - updated_at_time
+
+                    if time_since_update.total_seconds() > 300:  # 300-second timeout
+                        logger.warning(f"Call {ongoing_call.id} has timed out. Marking as NO_ANSWER.")
+                        timed_out_call = ongoing_call
+                    else:
+                        logger.info(f"Ongoing call is within the timeout period. Skipping queue processing.")
+                        return
                 
                 # Get next call from backlog
                 backlog_calls = await get_call_data_by_status(CallStatus.BACKLOG)
@@ -68,13 +95,20 @@ class CallQueueManager:
                     return
                 
                 # Get the oldest call
-                next_call = backlog_calls[-1]  # Since we order by created_at DESC, last item is oldest
+                next_call = backlog_calls[-1]
                 
                 # Initiate the call
                 await self._initiate_call(next_call)
                 
             except Exception as e:
                 logger.error(f"Error processing next call: {e}")
+
+        if timed_out_call:
+            await self.complete_call(
+                call_data_id=timed_out_call.id,
+                outcome=CallOutcome.NO_ANSWER,
+                call_end_time=datetime.now().isoformat()
+            )
     
     async def _initiate_call(self, call_data: CallDataResponse):
         """

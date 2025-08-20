@@ -7,6 +7,7 @@ class CallOutcome(str, Enum):
     CONFIRM = "CONFIRM"
     BUSY = "BUSY"
     CANCEL = "CANCEL"
+    NO_ANSWER = "NO_ANSWER"
 
 class CallStatus(str, Enum):
     BACKLOG = "backlog"

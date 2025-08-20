@@ -18,7 +18,7 @@ def create_call_data_table_query() -> str:
     return f"""
         CREATE TABLE IF NOT EXISTS "{CALL_DATA_TABLE}" (
             "id" VARCHAR(255) PRIMARY KEY,
-            "outcome" VARCHAR(50) CHECK ("outcome" IN ('CONFIRM', 'BUSY', 'CANCEL')),
+            "outcome" VARCHAR(50) CHECK ("outcome" IN ('CONFIRM', 'BUSY', 'CANCEL', 'NO_ANSWER')),
             "transcription" JSONB,
             "call_start_time" TIMESTAMP WITH TIME ZONE NOT NULL,
             "call_end_time" TIMESTAMP WITH TIME ZONE,
