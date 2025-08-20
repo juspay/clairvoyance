@@ -210,7 +210,7 @@ async def main():
     conversation_id=f"{user_name}-{shopId}-{timestamp}"
 
     task_params = {
-        "idle_timeout_secs": 180.0,
+        "idle_timeout_secs": config.AUTOMATIC_SESSION_IDLE_TIMEOUT,
         "idle_timeout_frames": (BotSpeakingFrame, LLMFullResponseEndFrame),
         "params": PipelineParams(allow_interruptions=True),
         "cancel_on_idle_timeout": True,
