@@ -319,7 +319,7 @@ class OrderConfirmationBot:
                         )
                 summary_data = {
                     "callSid": self.call_sid,
-                    "outcome": self.outcome,
+                    "outcome": OUTCOME_TO_ENUM.get(self.outcome),
                     "orderId": self.order_id
                 }
                 logger.info(f"Call summary data: {summary_data}")
