@@ -1,5 +1,4 @@
 import uvicorn
-import json
 import subprocess
 import uuid
 import time
@@ -8,7 +7,7 @@ from contextlib import asynccontextmanager
 from typing import Any, Dict
 
 import aiohttp
-from fastapi import FastAPI, WebSocket, HTTPException, Request, Depends
+from fastapi import FastAPI, WebSocket, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -26,15 +25,13 @@ from app import __version__
 from app.schemas import AutomaticVoiceUserConnectRequest, TokenData
 from app.agents.voice.breeze_buddy.breeze.order_confirmation.types import BreezeOrderData
 from app.agents.voice.breeze_buddy.breeze.order_confirmation.websocket_bot import main as telephony_websocket_conn
-from twilio.rest import Client
-from twilio.twiml.voice_response import VoiceResponse, Connect, Stream
 from starlette.websockets import WebSocketDisconnect
 from app.core.config import (
     TWILIO_ACCOUNT_SID,
     TWILIO_AUTH_TOKEN,
     TWILIO_FROM_NUMBER,
-    TWILIO_WEBSOCKET_URL,
     BREEZE_BUDDY_CALL_PROVIDER,
+    MAX_DAILY_SESSION_LIMIT
 )
 from app.schemas import CallStatus, RequestedBy, Workflow
 from app.database.accessor.main import create_call_data
@@ -250,11 +247,10 @@ async def bot_connect(request: AutomaticVoiceUserConnectRequest) -> Dict[str, An
     platform_integrations = request.platformIntegrations
 
     # 2. Create room + token
-    MAX_DURATION = 30 * 60
     room = await daily_helpers["rest"].create_room(
         params=DailyRoomParams(
             properties=DailyRoomProperties(
-                exp=time.time() + MAX_DURATION,
+                exp=time.time() + MAX_DAILY_SESSION_LIMIT,
                 eject_at_room_exp=True,
             )
         )
@@ -262,13 +258,13 @@ async def bot_connect(request: AutomaticVoiceUserConnectRequest) -> Dict[str, An
 
     token_params = DailyMeetingTokenParams(
         properties=DailyMeetingTokenProperties(
-            eject_after_elapsed=MAX_DURATION,
+            eject_after_elapsed=MAX_DAILY_SESSION_LIMIT,
         )
     )
     
     token = await daily_helpers["rest"].get_token(
         room.url,
-        expiry_time=MAX_DURATION,
+        expiry_time=MAX_DAILY_SESSION_LIMIT,
         eject_at_token_exp=True,
         owner=True,
         params=token_params,
