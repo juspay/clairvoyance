@@ -1,27 +1,69 @@
--- Initialize the clairvoyance database with required tables
+-- Initialize the clairvoyance database with normalized conversation tables
 -- This script runs automatically when the PostgreSQL container starts for the first time
 
 -- Set encoding and locale
 \encoding UTF8
 
--- Create conversations table for session persistence
+-- Enable UUID extension for better primary keys
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+
+-- Conversations table - metadata and session tracking
 CREATE TABLE IF NOT EXISTS conversations (
-    session_id VARCHAR(255) PRIMARY KEY,
-    conversation_id VARCHAR(255) NOT NULL,
-    conversation_data JSONB NOT NULL,
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    session_id VARCHAR(255) UNIQUE NOT NULL,
+    user_id VARCHAR(255) NOT NULL,
+    merchant_id VARCHAR(255) NOT NULL,
+    title VARCHAR(255),
+    status VARCHAR(50) DEFAULT 'active' CHECK (status IN ('active', 'completed', 'cancelled')),
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    last_activity_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    last_activity_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    metadata JSONB DEFAULT '{}'
 );
 
--- Create index on updated_at for cleanup queries
+-- Messages table - individual conversation messages
+CREATE TABLE IF NOT EXISTS messages (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    conversation_id UUID NOT NULL,
+    turn_number INTEGER NOT NULL,
+    role VARCHAR(20) NOT NULL CHECK (role IN ('user', 'assistant', 'system')),
+    content TEXT NOT NULL,
+    timestamp TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    metadata JSONB DEFAULT '{}',
+    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+);
+
+-- Tool calls table - function calls and results
+CREATE TABLE IF NOT EXISTS tool_calls (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    message_id UUID NOT NULL,
+    tool_call_id VARCHAR(255) NOT NULL,
+    function_name VARCHAR(255) NOT NULL,
+    arguments JSONB NOT NULL DEFAULT '{}',
+    result TEXT,
+    success BOOLEAN DEFAULT NULL,
+    timestamp TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE
+);
+
+-- Performance and security indexes
+-- User access patterns for security
+CREATE INDEX IF NOT EXISTS idx_conversations_user_merchant ON conversations(user_id, merchant_id);
+CREATE INDEX IF NOT EXISTS idx_conversations_session_user ON conversations(session_id, user_id);
+
+-- Message retrieval patterns
+CREATE INDEX IF NOT EXISTS idx_messages_conversation_id ON messages(conversation_id);
+CREATE INDEX IF NOT EXISTS idx_messages_conversation_turn ON messages(conversation_id, turn_number);
+CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp);
+
+-- Tool call patterns
+CREATE INDEX IF NOT EXISTS idx_tool_calls_message_id ON tool_calls(message_id);
+CREATE INDEX IF NOT EXISTS idx_tool_calls_function ON tool_calls(function_name);
+
+-- Cleanup and analytics patterns
+CREATE INDEX IF NOT EXISTS idx_conversations_last_activity ON conversations(last_activity_at);
 CREATE INDEX IF NOT EXISTS idx_conversations_updated_at ON conversations(updated_at);
-
--- Create index on created_at for analytics
 CREATE INDEX IF NOT EXISTS idx_conversations_created_at ON conversations(created_at);
-
--- Create index on last_activity_at for cleanup queries
-CREATE INDEX IF NOT EXISTS idx_conversations_last_activity_at ON conversations(last_activity_at);
 
 -- Create function to automatically update updated_at column
 CREATE OR REPLACE FUNCTION update_updated_at_column()

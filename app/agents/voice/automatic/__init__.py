@@ -118,6 +118,8 @@ async def main():
         api_key=config.AZURE_OPENAI_API_KEY,
         endpoint=config.AZURE_OPENAI_ENDPOINT,
         model=config.AZURE_OPENAI_MODEL,
+        timeout=30.0,  # Add 30 second timeout for Azure OpenAI requests
+        max_retries=2,  # Retry failed requests 2 times
     ))
 
     if not use_automatic_mcp_server:

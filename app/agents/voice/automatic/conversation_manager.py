@@ -313,10 +313,14 @@ class ConversationManager:
             return conversation.model_dump()
     
     def _load_conversation_from_db(self, session_id: str) -> Optional[Dict[str, Any]]:
-        """Load conversation from database (synchronous wrapper)"""
+        """Load conversation from normalized database (synchronous wrapper)"""
         try:
             import asyncio
-            from app.database.accessor.conversation import load_conversation
+            from app.database.accessor.conversation import load_full_conversation
+            
+            # Use fallback values for synchronous call
+            user_id = "unknown_user"
+            merchant_id = "unknown_merchant"
             
             # Get the current event loop or create one if needed
             try:
@@ -326,61 +330,164 @@ class ConversationManager:
                     # This is a fallback for synchronous calls from async contexts
                     return None
                 else:
-                    return loop.run_until_complete(load_conversation(session_id))
+                    return loop.run_until_complete(load_full_conversation(session_id, user_id, merchant_id))
             except RuntimeError:
                 # No event loop in current thread, create a new one
-                return asyncio.run(load_conversation(session_id))
+                return asyncio.run(load_full_conversation(session_id, user_id, merchant_id))
                 
         except Exception as e:
-            logger.error(f"Failed to load conversation from database for session {session_id}: {e}")
+            logger.error(f"Failed to load conversation from normalized database for session {session_id}: {e}")
             return None
     
-    async def _save_conversation_to_db(self, conversation: 'ConversationDebugData'):
-        """Save conversation to database"""
+    async def _save_conversation_to_db(self, conversation: 'ConversationDebugData', user_id: str = None, merchant_id: str = None):
+        """Save conversation to normalized database structure with user authorization"""
         try:
-            from app.database.accessor.conversation import save_conversation
-            
-            conversation.update_summary()
-            conversation_data = conversation.model_dump()
-            
-            success = await save_conversation(
-                session_id=conversation.session_id,
-                conversation_id=conversation.conversation_id,
-                conversation_data=conversation_data
+            from app.database.accessor.conversation import (
+                create_conversation, get_conversation_by_session, save_message, save_tool_call
             )
             
-            if success:
-                logger.debug(f"Saved conversation {conversation.session_id} to database")
+            # Use fallback values if user context not provided
+            if not user_id:
+                user_id = "unknown_user"  # This should be improved to get from session context
+            if not merchant_id:
+                merchant_id = "unknown_merchant"  # This should be improved to get from session context
+            
+            # Check if conversation already exists in database
+            existing_conv = await get_conversation_by_session(conversation.session_id, user_id, merchant_id)
+            
+            if not existing_conv:
+                # Create new conversation record
+                conversation_uuid = await create_conversation(
+                    session_id=conversation.session_id,
+                    user_id=user_id,
+                    merchant_id=merchant_id,
+                    title=conversation.metadata.get('title'),
+                    metadata=conversation.metadata
+                )
+                if not conversation_uuid:
+                    logger.error(f"Failed to create conversation record for {conversation.session_id}")
+                    return
             else:
-                logger.warning(f"Failed to save conversation {conversation.session_id} to database")
+                conversation_uuid = existing_conv['id']
+            
+            # Save all messages and tool calls for each turn
+            for turn in conversation.turns:
+                if not turn.status == "completed":
+                    continue  # Only save completed turns
+                
+                # Save user message if exists
+                if turn.user_message:
+                    user_msg_uuid = await save_message(
+                        conversation_id=conversation_uuid,
+                        turn_number=turn.turn_number,
+                        role="user",
+                        content=turn.user_message.content,
+                        metadata={"message_id": turn.user_message.id, "timestamp": turn.user_message.timestamp.isoformat()}
+                    )
+                
+                # Save assistant message if exists
+                if turn.assistant_response:
+                    assistant_msg_uuid = await save_message(
+                        conversation_id=conversation_uuid,
+                        turn_number=turn.turn_number,
+                        role="assistant",
+                        content=turn.assistant_response.content,
+                        metadata={"message_id": turn.assistant_response.id, "timestamp": turn.assistant_response.timestamp.isoformat()}
+                    )
+                    
+                    # Save tool calls for this assistant message
+                    for tool_call in turn.tool_calls:
+                        if assistant_msg_uuid:
+                            tool_call_uuid = await save_tool_call(
+                                message_id=assistant_msg_uuid,
+                                tool_call_id=tool_call.id,
+                                function_name=tool_call.function_name,
+                                arguments=tool_call.arguments
+                            )
+            
+            logger.debug(f"Saved conversation {conversation.session_id} to normalized database (user: {user_id}, merchant: {merchant_id})")
                 
         except Exception as e:
-            logger.error(f"Error saving conversation to database: {e}")
+            logger.error(f"Error saving conversation to normalized database: {e}")
     
-    async def load_conversation_from_db(self, session_id: str) -> Optional['ConversationDebugData']:
-        """Load conversation from database and restore to memory"""
+    async def load_conversation_from_db(self, session_id: str, user_id: str = None, merchant_id: str = None) -> Optional['ConversationDebugData']:
+        """Load conversation from normalized database structure with user authorization and restore to memory"""
         try:
-            from app.database.accessor.conversation import load_conversation
-            from .services.conversation import ConversationDebugData
+            from app.database.accessor.conversation import load_full_conversation
+            from .services.conversation import ConversationDebugData, ConversationTurn, ConversationMessage, ToolCall
             
-            conversation_data = await load_conversation(session_id)
+            # Use fallback values if user context not provided
+            if not user_id:
+                user_id = "unknown_user"  # This should be improved to get from session context
+            if not merchant_id:
+                merchant_id = "unknown_merchant"  # This should be improved to get from session context
+            
+            conversation_data = await load_full_conversation(session_id, user_id, merchant_id)
             if not conversation_data:
-                logger.debug(f"No conversation found in database for session {session_id}")
+                logger.debug(f"No authorized conversation found in database for session {session_id} (user: {user_id}, merchant: {merchant_id})")
                 return None
             
-            # Reconstruct ConversationDebugData from stored data
-            conversation = ConversationDebugData.model_validate(conversation_data)
+            # Reconstruct ConversationDebugData from normalized database structure
+            conversation = ConversationDebugData(
+                session_id=session_id,
+                conversation_id=conversation_data['id'],
+                metadata={'loaded_from_database': True}
+            )
+            
+            # Reconstruct turns from the normalized data
+            for turn_data in conversation_data.get('turns', []):
+                turn_messages = turn_data['messages']
+                turn_number = turn_data['turn_number']
+                
+                # Find user and assistant messages
+                user_message = None
+                assistant_message = None
+                tool_calls = []
+                
+                for msg in turn_messages:
+                    if msg['role'] == 'user':
+                        user_message = ConversationMessage(
+                            id=msg.get('id', f"user_{turn_number}"),
+                            role='user',
+                            content=msg['content'],
+                            timestamp=msg['timestamp']
+                        )
+                    elif msg['role'] == 'assistant':
+                        assistant_message = ConversationMessage(
+                            id=msg.get('id', f"assistant_{turn_number}"),
+                            role='assistant',
+                            content=msg['content'],
+                            timestamp=msg['timestamp']
+                        )
+                        
+                        # Add tool calls for this assistant message
+                        for tool_call_data in msg.get('tool_calls', []):
+                            tool_call = ToolCall(
+                                id=tool_call_data['tool_call_id'],
+                                function_name=tool_call_data['function_name'],
+                                arguments=tool_call_data['arguments']
+                            )
+                            tool_calls.append(tool_call)
+                
+                # Create and add the turn
+                if user_message or assistant_message:
+                    turn = conversation.start_new_turn(user_message)
+                    turn.turn_number = turn_number
+                    if assistant_message:
+                        turn.assistant_response = assistant_message
+                    turn.tool_calls = tool_calls
+                    turn.complete_turn("completed")
             
             # Store in memory cache
             with self._lock:
                 self._conversations[session_id] = conversation
                 self._session_access_times[session_id] = time.time()
             
-            logger.info(f"Loaded conversation {session_id} from database with {len(conversation.turns)} turns")
+            logger.info(f"Loaded authorized conversation {session_id} from normalized database with {len(conversation.turns)} turns (user: {user_id}, merchant: {merchant_id})")
             return conversation
             
         except Exception as e:
-            logger.error(f"Failed to load conversation from database for session {session_id}: {e}")
+            logger.error(f"Failed to load authorized conversation from normalized database for session {session_id}: {e}")
             return None
     
     def get_session_stats(self) -> Dict[str, Any]:

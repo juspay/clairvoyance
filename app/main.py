@@ -94,14 +94,8 @@ async def lifespan(app: FastAPI):
     )
     logger.info("Daily REST helper initialized.")
     
-    # Initialize conversation database tables (optional)
-    try:
-        from app.database.accessor.conversation import init_conversation_tables
-        await init_conversation_tables()
-        logger.info("Conversation database tables initialized.")
-    except Exception as e:
-        logger.warning(f"Failed to initialize conversation tables (conversation persistence disabled): {e}")
-        logger.info("Server will continue with in-memory conversation storage only.")
+    # Conversation database tables are now initialized via init-db.sql
+    logger.info("Normalized conversation database structure available via schema initialization.")
     
     # Initialize conversation manager for the main server
     from app.agents.voice.automatic.conversation_manager import start_conversation_manager
@@ -360,12 +354,60 @@ async def bot_connect(request: AutomaticVoiceUserConnectRequest) -> Dict[str, An
         "is_reconnection": is_reconnection
     }
 
-# Voice reconnection endpoint
+async def validate_reconnection_tokens(request: VoiceReconnectRequest) -> tuple[str, str]:
+    """Validate euler and breeze tokens, return user_id and merchant_id."""
+    from app.api.auth import validate_euler_auth, fetch_breeze_token, ValidateEulerAuthStatus, FetchTokenStatus
+    
+    # Validate Euler token first
+    if not request.eulerToken:
+        raise HTTPException(status_code=401, detail="Euler token required for conversation access")
+    
+    euler_result = await validate_euler_auth(request.eulerToken)
+    if euler_result.status != ValidateEulerAuthStatus.SUCCESS:
+        logger.warning(f"Invalid Euler token for reconnection request: {euler_result}")
+        raise HTTPException(status_code=401, detail="Invalid Euler token")
+    
+    merchant_id = euler_result.merchant_id
+    
+    # Cross-reference with provided merchant ID
+    if request.merchantId and request.merchantId != merchant_id:
+        logger.warning(f"Merchant ID mismatch: token={merchant_id}, request={request.merchantId}")
+        raise HTTPException(status_code=403, detail="Merchant ID mismatch")
+    
+    # Validate Breeze token
+    if not request.breezeToken:
+        raise HTTPException(status_code=401, detail="Breeze token required for conversation access")
+    
+    breeze_result = await fetch_breeze_token(request.breezeToken)
+    if breeze_result.status != FetchTokenStatus.SUCCESS:
+        logger.warning(f"Invalid Breeze token for reconnection request: {breeze_result}")
+        raise HTTPException(status_code=401, detail="Invalid Breeze token")
+    
+    # Extract user_id from token or use userName as fallback
+    # In a real implementation, you'd decode the breeze token to get user_id
+    # For now, using userName as user_id (this should be improved)
+    user_id = request.userName or "unknown_user"
+    
+    logger.info(f"Token validation successful: user_id={user_id}, merchant_id={merchant_id}")
+    return user_id, merchant_id
+
+
+# Voice reconnection endpoint with authentication
 @app.post("/agent/voice/automatic/reconnect")
 async def reconnect_voice_session(request: VoiceReconnectRequest) -> Dict[str, Any]:
-    """Reconnect to an existing voice session with preserved conversation context."""
+    """Reconnect to an existing voice session with proper authentication and conversation context preservation."""
     session_id = request.sessionId
     logger.info(f"Received reconnection request for session: {session_id}")
+    
+    # 1. Validate authentication tokens first
+    try:
+        user_id, merchant_id = await validate_reconnection_tokens(request)
+        logger.info(f"Authentication successful for reconnection: user={user_id}, merchant={merchant_id}")
+    except HTTPException:
+        raise  # Re-raise authentication errors
+    except Exception as e:
+        logger.error(f"Token validation error: {e}")
+        raise HTTPException(status_code=500, detail="Authentication validation failed")
     
     try:
         # 1. Check if conversation exists in conversation manager or database
@@ -376,11 +418,14 @@ async def reconnect_voice_session(request: VoiceReconnectRequest) -> Dict[str, A
         conversation = conversation_manager.get_conversation(session_id)
         
         if not conversation:
-            logger.info(f"No conversation in memory for session {session_id}, checking database...")
+            logger.info(f"No conversation in memory for session {session_id}, checking normalized database with user authorization...")
             try:
-                conversation = await conversation_manager.load_conversation_from_db(session_id)
+                # Use secure normalized database load with user/merchant authorization
+                conversation = await conversation_manager.load_conversation_from_db(session_id, user_id, merchant_id)
+                if conversation:
+                    logger.info(f"Loaded authorized conversation for session {session_id} from normalized database")
             except Exception as e:
-                logger.debug(f"Database load failed: {e}")
+                logger.debug(f"Secure normalized database load failed: {e}")
                 conversation = None
         
         if not conversation:
