@@ -172,7 +172,17 @@ class MCPClient:
             
             # Prepare text response for LLM
             text_response = " ".join(text_responses)
-            if not text_response:
+            if not text_response and ui_components:
+                # Extract cleanVoiceDescription from UI components metadata
+                ui_text_parts = []
+                for ui_component in ui_components:
+                    metadata = ui_component.get("metadata", {})
+                    clean_voice_description = metadata.get("cleanVoiceDescription")
+                    if clean_voice_description and str(clean_voice_description).strip():
+                        ui_text_parts.append(str(clean_voice_description).strip())
+                
+                text_response = " ".join(ui_text_parts) if ui_text_parts else "Tool executed successfully but returned no text."
+            elif not text_response:
                 text_response = "Tool executed successfully but returned no text."
 
             logger.debug(f"Tool '{function_name}' returned: {text_response}")

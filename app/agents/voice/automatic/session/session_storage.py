@@ -4,7 +4,7 @@ Stores pending UI components that need to be emitted via WebSocket.
 """
 
 from typing import Dict, List, Any
-from app.tools.providers.system.chart_tools import UIComponentEvent
+from app.types.ui_components import UIComponentEvent
 
 
 class SessionStorage:

@@ -237,10 +237,13 @@ class ConversationManager:
         events = []
         
         try:
-            # Determine if the result indicates success or failure
-            success = not ("error" in result.lower() or "failed" in result.lower())
+            # Convert result to string if it's not already
+            result_str = str(result) if not isinstance(result, str) else result
             
-            tool_result = self.add_tool_result(session_id, tool_call_id, function_name, result, success)
+            # Determine if the result indicates success or failure
+            success = not ("error" in result_str.lower() or "failed" in result_str.lower())
+            
+            tool_result = self.add_tool_result(session_id, tool_call_id, function_name, result_str, success)
             
             if tool_result:
                 conversation = self.get_conversation(session_id)
