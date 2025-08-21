@@ -23,7 +23,7 @@ from pipecat.processors.frameworks.rtvi import RTVIConfig, RTVIProcessor
 
 from app.core import config
 from app.core.logger import logger, configure_session_logger
-from app.utils.session_context import create_session_context
+from app.utils.session_context import create_session_context, set_current_session_id
 from app.agents.voice.automatic.services.llm_wrapper import LLMServiceWrapper
 from app.agents.voice.automatic.services.mcp.automatic_client import MCPClient
 from app.agents.voice.automatic.analytics.tracing_setup import setup_tracing
@@ -66,6 +66,9 @@ async def main():
     
     # Create session context for passing to components
     session_context = create_session_context(args.session_id)
+    
+    # Set global session ID for chart tools
+    set_current_session_id(args.session_id)
 
     # Decode TTS parameters
     tts_provider = decode_tts_provider(args.tts_provider)
@@ -167,7 +170,14 @@ async def main():
         # Only play the "checking" message if using Google TTS
         if tts_provider == TTSProvider.GOOGLE:
             for function_call in function_calls:
-                if function_call.function_name != "get_current_time":
+                # Skip "checking" message for instant functions and chart tools
+                if function_call.function_name not in [
+                    "get_current_time",
+                    "generate_bar_chart", 
+                    "generate_line_chart",
+                    "generate_donut_chart", 
+                    "generate_single_stat_card"
+                ]:
                     await tts.queue_frame(TTSSpeakFrame("Let me check on that."))
                     break
 
@@ -192,6 +202,7 @@ async def main():
     pipeline_components = [
         transport.input(),
         stt,
+        rtvi
     ]
     
     if config.ENVIRONMENT.lower() in ["development", "dev"]:
@@ -203,7 +214,6 @@ async def main():
         context_aggregator.user(),
         llm,
         tool_call_processor,
-        rtvi,
         tts,
         transport.output(),
         context_aggregator.assistant(),
