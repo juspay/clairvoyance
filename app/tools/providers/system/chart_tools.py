@@ -3,62 +3,26 @@ Chart generation tools for LLM function calling.
 The LLM can call these tools to generate interactive charts with voice narration.
 """
 
-import json
-import time
-from typing import List, Dict, Any, Optional, Union
+from typing import List, Dict, Any
 from datetime import datetime
-from pydantic import BaseModel
 
 from app.core.logger import logger
+from app.types.ui_components import UIComponentEvent
+from app.utils.highlight_parser import HighlightTagParser
+from app.utils.session_context import get_current_session_id
 
-
-class ChartSeries(BaseModel):
-    """Data series for charts"""
-    name: str
-    data: List[Union[int, float]]
-    color: Optional[str] = None
-
-
-class ChartDataSpec(BaseModel):
-    """Chart data specification matching frontend requirements"""
-    title: str
-    subtitle: Optional[str] = None
-    categories: List[str]
-    series: List[ChartSeries]
-    changePercentages: Optional[List[float]] = None
-    autoNarrate: bool = True
-    interactive: bool = True
-    metadata: Optional[Dict[str, Any]] = None
-
-
-class UIComponentMetadata(BaseModel):
-    """Metadata for UI components"""
-    generatedAt: str
-    dataSource: str
-    confidence: float = 0.95
-
-
-class UIComponentData(BaseModel):
-    """Component data wrapper"""
-    id: str
-    metadata: UIComponentMetadata
-
-
-class UIComponentEvent(BaseModel):
-    """Complete UI component event structure for WebSocket emission"""
-    status: str = "completed"
-    message: str
-    componentType: str  # "bar-chart", "line-chart", "donut-chart"
-    data: ChartDataSpec
-    voiceDescription: str
-    renderOrder: int = 0
-    componentData: UIComponentData
+# Color constants matching MCP implementation
+DEFAULT_COLORS = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b']
+DONUT_COLORS = ['#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2']
 
 # Global registry for pending chart emissions
 _pending_chart_emissions: Dict[str, List[Dict[str, Any]]] = {}
 
-# Global registry for chart context (categories mapping for highlights)
-_chart_contexts: Dict[str, Dict[str, Any]] = {}
+def generate_chart_id(chart_type: str) -> str:
+    """Generate chart ID matching MCP format: {chartType}_{timestamp}"""
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    return f"{chart_type}_{timestamp}"
+
 
 def get_pending_ui_components(session_id: str) -> List[UIComponentEvent]:
     """
@@ -80,8 +44,6 @@ def _register_pending_chart_emission(session_id: str, component_data: Dict[str, 
     if session_id not in _pending_chart_emissions:
         _pending_chart_emissions[session_id] = []
     _pending_chart_emissions[session_id].append(component_data)
-    logger.debug(f"[{session_id}] Registered chart for RTVI emission: {component_data['componentId']}")
-
 
 def get_pending_chart_emissions(session_id: str) -> List[Dict[str, Any]]:
     """Get and clear pending chart emissions for a session"""
@@ -92,26 +54,300 @@ def get_pending_chart_emissions(session_id: str) -> List[Dict[str, Any]]:
     return charts
 
 
-def _store_chart_context(chart_id: str, context: Dict[str, Any]):
-    """Store chart context for AI highlighting"""
-    global _chart_contexts
-    _chart_contexts[chart_id] = context
-    logger.debug(f"Stored chart context for {chart_id}: {len(context.get('categories', []))} categories")
+async def generate_bar_chart(params) -> None:
+    """Generate a bar chart component for comparative data analysis."""
+    try:
+        # Extract parameters from LLM call
+        title = params.arguments.get("title")
+        categories = params.arguments.get("categories")
+        series_data = params.arguments.get("series_data")
+        voice_description = params.arguments.get("voice_description")
+        subtitle = params.arguments.get("subtitle")
+        session_id = params.arguments.get("session_id") or get_current_session_id()
+        
+        # Validate series_data - only one series allowed like MCP
+        if len(series_data) > 1:
+            await params.result_callback("Error: Only one series allowed for bar charts")
+            return
+        
+        # Generate chart ID using MCP format
+        chart_id = generate_chart_id("bar_chart")
+        
+        # Process voice description with MCP-style highlight parsing
+        highlight_parser = HighlightTagParser()
+        processed = highlight_parser.parse_highlight_tags(voice_description, {
+            "categories": categories,
+            "chartType": "bar-chart",
+            "chartId": chart_id,
+            "sessionId": session_id
+        })
+        
+        # Create UI component matching MCP structure
+        ui_component = {
+            "id": chart_id,
+            "type": "bar-chart",
+            "props": {
+                "chartId": chart_id,
+                "title": title,
+                "subtitle": subtitle,
+                "categories": categories,
+                "series": [
+                    {
+                        "name": s.get('name', 'Data'),
+                        "data": s.get('data', []),
+                        "color": s.get('color') or DEFAULT_COLORS[i % len(DEFAULT_COLORS)]
+                    }
+                    for i, s in enumerate(series_data)
+                ]
+            },
+            "voiceDescription": processed["originalText"],
+            "renderOrder": 0,
+            "metadata": {
+                "generatedAt": datetime.now().isoformat(),
+                "chartType": "chart",
+                "confidence": 0.95,
+                "status": "completed",
+                "cleanVoiceDescription": processed["cleanText"],
+                "highlights": processed["highlights"]
+            },
+            "uiComponent": True
+        }
+        
+        # Store for RTVI emission
+        _register_pending_chart_emission(session_id, ui_component)
+        
+        logger.info(f"[{session_id}] Generated bar chart: {title} with {len(categories)} categories")
+        
+        # Return clean voice description to LLM
+        await params.result_callback(processed["cleanText"])
+        
+    except Exception as e:
+        error_message = str(e)
+        logger.error(f"[{session_id}] Error generating bar chart: {error_message}")
+        await params.result_callback(f"Error generating chart: {error_message}")
 
 
-def get_latest_chart_context(session_id: str) -> Optional[Dict[str, Any]]:
-    """Get the most recent chart context for a session"""
-    global _chart_contexts
-    
-    # Find the most recent chart for this session
-    session_charts = {
-        chart_id: ctx for chart_id, ctx in _chart_contexts.items() 
-        if ctx.get('sessionId') == session_id
-    }
-    
-    if not session_charts:
-        return None
-    
-    # Return the most recent one (charts are created with timestamps in IDs)
-    latest_chart_id = max(session_charts.keys())
-    return session_charts[latest_chart_id]
+async def generate_line_chart(params) -> None:
+    """Generate a line chart component for time series or trend analysis."""
+    try:
+        # Extract parameters from LLM call
+        title = params.arguments.get("title")
+        categories = params.arguments.get("categories")
+        series_data = params.arguments.get("series_data")
+        voice_description = params.arguments.get("voice_description")
+        subtitle = params.arguments.get("subtitle")
+        session_id = params.arguments.get("session_id") or get_current_session_id()
+        
+        # Generate chart ID using MCP format
+        chart_id = generate_chart_id("line_chart")
+        
+        # Process voice description with MCP-style highlight parsing
+        highlight_parser = HighlightTagParser()
+        processed = highlight_parser.parse_highlight_tags(voice_description, {
+            "categories": categories,
+            "chartType": "line-chart",
+            "chartId": chart_id,
+            "sessionId": session_id
+        })
+        
+        # Create UI component matching MCP structure
+        ui_component = {
+            "id": chart_id,
+            "type": "line-chart",
+            "props": {
+                "chartId": chart_id,
+                "title": title,
+                "subtitle": subtitle,
+                "categories": categories,
+                "series": [
+                    {
+                        "name": s.get('name', 'Trend'),
+                        "data": s.get('data', []),
+                        "dataLabel": categories,  # MCP adds this
+                        "dashStyle": "Solid",     # MCP adds this
+                        "color": s.get('color') or DEFAULT_COLORS[i % len(DEFAULT_COLORS)]
+                    }
+                    for i, s in enumerate(series_data)
+                ]
+            },
+            "voiceDescription": processed["originalText"],
+            "renderOrder": 0,
+            "metadata": {
+                "generatedAt": datetime.now().isoformat(),
+                "chartType": "chart",
+                "confidence": 0.95,
+                "status": "completed",
+                "cleanVoiceDescription": processed["cleanText"],
+                "highlights": processed["highlights"]
+            },
+            "uiComponent": True
+        }
+        
+        # Store for RTVI emission
+        _register_pending_chart_emission(session_id, ui_component)
+        
+        logger.info(f"[{session_id}] Generated line chart: {title} with {len(categories)} time points")
+        
+        # Return clean voice description to LLM
+        await params.result_callback(processed["cleanText"])
+        
+    except Exception as e:
+        error_message = str(e)
+        logger.error(f"[{session_id}] Error generating line chart: {error_message}")
+        await params.result_callback(f"Error generating chart: {error_message}")
+
+
+async def generate_donut_chart(params) -> None:
+    """Generate a donut chart component for percentage/proportion analysis."""
+    try:
+        # Extract parameters from LLM call
+        title = params.arguments.get("title")
+        categories = params.arguments.get("categories")
+        data = params.arguments.get("data")
+        data_type = params.arguments.get("data_type")
+        voice_description = params.arguments.get("voice_description")
+        subtitle = params.arguments.get("subtitle")
+        colors = params.arguments.get("colors")
+        session_id = params.arguments.get("session_id") or get_current_session_id()
+        
+        # Validate data_type parameter
+        valid_data_types = ['currency', 'numericalValue', 'percentage', 'unknown']
+        if data_type not in valid_data_types:
+            await params.result_callback(f"Error: Invalid data_type. Must be one of: {valid_data_types}")
+            return
+        
+        # Generate chart ID using MCP format
+        chart_id = generate_chart_id("donut_chart")
+        
+        # Process voice description with MCP-style highlight parsing
+        highlight_parser = HighlightTagParser()
+        processed = highlight_parser.parse_highlight_tags(voice_description, {
+            "categories": categories,
+            "chartType": "donut-chart",
+            "chartId": chart_id,
+            "sessionId": session_id
+        })
+        
+        # Use MCP donut colors if not provided
+        if colors is None or len(colors) != len(categories):
+            colors = DONUT_COLORS[:len(categories)]
+        
+        # Calculate and format total based on data type (matching MCP logic)
+        total_value = sum(data)
+        formatted_total = None
+        
+        if data_type == 'currency':
+            # Format as Indian currency with compact notation
+            formatted_total = f"₹{total_value:,.0f}" if total_value < 1000 else f"₹{total_value/1000:.1f}K" if total_value < 1000000 else f"₹{total_value/1000000:.1f}M"
+        elif data_type == 'numericalValue':
+            # Compact notation for numerical values
+            formatted_total = f"{total_value:,.0f}" if total_value < 1000 else f"{total_value/1000:.1f}K" if total_value < 1000000 else f"{total_value/1000000:.1f}M"
+        # For 'percentage' and 'unknown', formatted_total remains None
+        
+        # Create UI component matching MCP structure
+        ui_component = {
+            "id": chart_id,
+            "type": "donut-chart",
+            "props": {
+                "chartId": chart_id,
+                "title": title,
+                "subtitle": subtitle,
+                "categories": categories,
+                "series": [{"name": title, "data": data}],
+                "colors": colors,
+                "totalValue": formatted_total,
+                "dataType": data_type
+            },
+            "voiceDescription": processed["originalText"],
+            "renderOrder": 0,
+            "metadata": {
+                "generatedAt": datetime.now().isoformat(),
+                "chartType": "chart",
+                "confidence": 0.95,
+                "status": "completed",
+                "cleanVoiceDescription": processed["cleanText"],
+                "highlights": processed["highlights"]
+            },
+            "uiComponent": True
+        }
+        
+        # Store for RTVI emission
+        _register_pending_chart_emission(session_id, ui_component)
+        
+        logger.info(f"[{session_id}] Generated donut chart: {title} with {len(categories)} segments")
+        
+        # Return clean voice description to LLM
+        await params.result_callback(processed["cleanText"])
+        
+    except Exception as e:
+        error_message = str(e)
+        logger.error(f"[{session_id}] Error generating donut chart: {error_message}")
+        await params.result_callback(f"Error generating chart: {error_message}")
+
+
+async def generate_single_stat_card(params) -> None:
+    """Generate a single statistic card showing a key metric."""
+    try:
+        # Extract parameters from LLM call
+        title = params.arguments.get("title")
+        primary_value = params.arguments.get("primary_value")
+        metric_name = params.arguments.get("metric_name")
+        voice_description = params.arguments.get("voice_description")
+        delta_value = params.arguments.get("delta_value")
+        delta_positive = params.arguments.get("delta_positive", True)
+        date_range = params.arguments.get("date_range")
+        session_id = params.arguments.get("session_id") or get_current_session_id()
+        
+        # Generate chart ID using MCP format
+        chart_id = generate_chart_id("single_stat_card")
+        
+        # Process voice description with MCP-style highlight parsing
+        highlight_parser = HighlightTagParser()
+        processed = highlight_parser.parse_highlight_tags(voice_description, {
+            "categories": [metric_name],
+            "chartType": "single-stat-card",
+            "chartId": chart_id,
+            "sessionId": session_id
+        })
+        
+        # Create UI component matching MCP structure
+        ui_component = {
+            "id": chart_id,
+            "type": "single-stat-card",
+            "props": {
+                "chartId": chart_id,
+                "title": title,
+                "chartTitle": title,
+                "dateRange": date_range or "",
+                "primaryValue": primary_value,
+                "deltaValue": delta_value or "",
+                "deltaPositive": delta_positive,
+                "metricName": metric_name
+            },
+            "voiceDescription": processed["originalText"],
+            "renderOrder": 0,
+            "metadata": {
+                "generatedAt": datetime.now().isoformat(),
+                "chartType": "metric",
+                "confidence": 0.95,
+                "status": "completed",
+                "cleanVoiceDescription": processed["cleanText"],
+                "highlights": processed["highlights"]
+            },
+            "uiComponent": True
+        }
+        
+        # Store for RTVI emission
+        _register_pending_chart_emission(session_id, ui_component)
+        
+        logger.info(f"[{session_id}] Generated single stat card: {title} - {metric_name}")
+        
+        # Return clean voice description to LLM
+        await params.result_callback(processed["cleanText"])
+        
+    except Exception as e:
+        error_message = str(e)
+        logger.error(f"[{session_id}] Error generating single stat card: {error_message}")
+        await params.result_callback(f"Error generating chart: {error_message}")
+
+

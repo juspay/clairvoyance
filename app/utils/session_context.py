@@ -1,9 +1,10 @@
 """
 Session context for voice agent.
-Provides session information through explicit context passing.
+Provides session information through explicit context passing and global session ID management.
 """
 
 from dataclasses import dataclass
+from typing import Optional
 from app.core.logger import logger
 
 
@@ -19,3 +20,20 @@ class SessionContext:
 def create_session_context(session_id: str) -> SessionContext:
     """Create a new session context."""
     return SessionContext(session_id=session_id)
+
+
+# Global session ID storage for chart tools
+_current_session_id: Optional[str] = None
+
+
+def set_current_session_id(session_id: str) -> None:
+    """Set the current session ID for global access by chart tools."""
+    global _current_session_id
+    _current_session_id = session_id
+    logger.debug(f"Set global session ID: {session_id}")
+
+
+def get_current_session_id() -> Optional[str]:
+    """Get the current session ID for use by chart tools."""
+    global _current_session_id
+    return _current_session_id
