@@ -1,0 +1,21 @@
+"""
+Session context for voice agent.
+Provides session information through explicit context passing.
+"""
+
+from dataclasses import dataclass
+from app.core.logger import logger
+
+
+@dataclass
+class SessionContext:
+    """Context object containing session information."""
+    session_id: str
+    
+    def __post_init__(self):
+        logger.info(f"Created session context with ID: {self.session_id}")
+
+
+def create_session_context(session_id: str) -> SessionContext:
+    """Create a new session context."""
+    return SessionContext(session_id=session_id)
