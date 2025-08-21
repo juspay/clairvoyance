@@ -140,6 +140,8 @@ class ConversationDebugData(BaseModel):
     """Complete conversation data for debugging"""
     session_id: str
     conversation_id: str
+    merchant_id: Optional[str] = None
+    user_id: Optional[str] = None
     turns: List[ConversationTurn] = Field(default_factory=list)
     summary: Optional[ConversationSummary] = None
     metadata: Optional[Dict[str, Any]] = None

@@ -64,7 +64,7 @@ class ConversationManager:
             await self._cleanup_task
         logger.info("ConversationManager stopped")
     
-    def get_or_create_conversation(self, session_id: str) -> ConversationDebugData:
+    def get_or_create_conversation(self, session_id: str, user_id: Optional[str] = None, merchant_id: Optional[str] = None) -> ConversationDebugData:
         """Get existing conversation or create a new one for the session"""
         with self._lock:
             # Update access time
@@ -80,6 +80,8 @@ class ConversationManager:
                 conversation = ConversationDebugData(
                     session_id=session_id,
                     conversation_id=conversation_id,
+                    user_id=user_id,
+                    merchant_id=merchant_id,
                     metadata={
                         "created_by": "conversation_manager",
                         "max_turns": self.max_turns_per_session
@@ -177,7 +179,7 @@ class ConversationManager:
             
             # Save to database after completing turn (if available)
             try:
-                asyncio.create_task(self._save_conversation_to_db(conversation))
+                asyncio.create_task(self._save_conversation_to_db(conversation, conversation.user_id, conversation.merchant_id))
             except Exception as e:
                 logger.debug(f"Database save failed (continuing with in-memory only): {e}")
             
@@ -346,11 +348,11 @@ class ConversationManager:
                 create_conversation, get_conversation_by_session, save_message, save_tool_call
             )
             
-            # Use fallback values if user context not provided
+            # Use values from conversation object if not provided as parameters
             if not user_id:
-                user_id = "unknown_user"  # This should be improved to get from session context
+                user_id = conversation.user_id or "unknown_user"
             if not merchant_id:
-                merchant_id = "unknown_merchant"  # This should be improved to get from session context
+                merchant_id = conversation.merchant_id or "unknown_merchant"
             
             # Check if conversation already exists in database
             existing_conv = await get_conversation_by_session(conversation.session_id, user_id, merchant_id)
@@ -382,7 +384,7 @@ class ConversationManager:
                         turn_number=turn.turn_number,
                         role="user",
                         content=turn.user_message.content,
-                        metadata={"message_id": turn.user_message.id, "timestamp": turn.user_message.timestamp.isoformat()}
+                        metadata={"message_id": turn.user_message.id, "timestamp": datetime.fromtimestamp(turn.user_message.timestamp / 1000).isoformat()}
                     )
                 
                 # Save assistant message if exists
@@ -392,7 +394,7 @@ class ConversationManager:
                         turn_number=turn.turn_number,
                         role="assistant",
                         content=turn.assistant_response.content,
-                        metadata={"message_id": turn.assistant_response.id, "timestamp": turn.assistant_response.timestamp.isoformat()}
+                        metadata={"message_id": turn.assistant_response.id, "timestamp": datetime.fromtimestamp(turn.assistant_response.timestamp / 1000).isoformat()}
                     )
                     
                     # Save tool calls for this assistant message

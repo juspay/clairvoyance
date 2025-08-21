@@ -4,6 +4,7 @@ Lightweight frame processor that delegates business logic to ConversationManager
 """
 
 import time
+from typing import Optional
 
 from pipecat.frames.frames import (
     Frame, 
@@ -54,10 +55,12 @@ class LLMSpyProcessor(FrameProcessor):
     4. Processes highlight text for timing correlation
     """
 
-    def __init__(self, rtvi: RTVIProcessor, session_id: str, name: str = "LLMSpyProcessor"):
+    def __init__(self, rtvi: RTVIProcessor, session_id: str, user_id: Optional[str] = None, merchant_id: Optional[str] = None, name: str = "LLMSpyProcessor"):
         super().__init__(name=name)
         self._rtvi = rtvi
         self._session_id = session_id
+        self._user_id = user_id
+        self._merchant_id = merchant_id
         
         # LLM response collection
         self._accumulated_text = ""
@@ -81,6 +84,8 @@ class LLMSpyProcessor(FrameProcessor):
             user_content = _session_user_messages.get(self._session_id, "[Inferred from voice]")
             
             # Start conversation turn via ConversationManager with actual user message
+            # Ensure conversation is created with user_id and merchant_id
+            self._conversation_manager.get_or_create_conversation(self._session_id, self._user_id, self._merchant_id)
             event = await self._conversation_manager.start_turn_with_events(self._session_id, user_content)
             if event:
                 await self._emit_rtvi_event(event)
@@ -205,4 +210,3 @@ class LLMSpyProcessor(FrameProcessor):
             pass
         except Exception as e:
             logger.error(f"Error emitting chart components for session {self._session_id}: {e}")
-

@@ -192,7 +192,7 @@ async def main():
         # If not found in memory, try loading from database
         if not existing_conversation:
             try:
-                existing_conversation = await conversation_manager.load_conversation_from_db(args.session_id)
+                existing_conversation = await conversation_manager.load_conversation_from_db(args.session_id, args.user_name, args.merchant_id)
                 if existing_conversation:
                     logger.info(f"Loaded conversation from database for session {args.session_id}")
             except Exception as e:
@@ -262,7 +262,7 @@ async def main():
 
     # Add processors for conversation tracking
     user_message_capture = UserMessageCaptureProcessor(args.session_id)
-    tool_call_processor = LLMSpyProcessor(rtvi, args.session_id)
+    tool_call_processor = LLMSpyProcessor(rtvi, args.session_id, args.user_name, args.merchant_id)
 
     # Build pipeline components
     pipeline_components = [
