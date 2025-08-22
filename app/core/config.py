@@ -62,6 +62,8 @@ FRAME_DURATION = 30  # ms
 FRAME_SIZE = int(SAMPLE_RATE * FRAME_DURATION / 1000) * 2  # bytes per frame (16-bit PCM)
 VAD_CONFIDENCE = float(os.environ.get("VAD_CONFIDENCE", 0.85))
 VAD_MIN_VOLUME = float(os.environ.get("VAD_MIN_VOLUME", 0.75))
+VAD_START_SECS = float(os.environ.get("VAD_START_SECS", 0.30))
+VAD_STOP_SECS = float(os.environ.get("VAD_STOP_SECS", 1.00))
 
 # Tracing
 ENABLE_TRACING = os.environ.get("ENABLE_TRACING", "false").lower() == "true"
@@ -69,6 +71,13 @@ ENABLE_TRACING = os.environ.get("ENABLE_TRACING", "false").lower() == "true"
 # Search
 ENABLE_SEARCH_GROUNDING = os.environ.get("ENABLE_SEARCH_GROUNDING", "true").lower() == "true"
 GEMINI_SEARCH_RESULT_API_MODEL = os.environ.get("GEMINI_SEARCH_RESULT_API_MODEL", "gemini-2.5-flash-lite-preview-06-17")
+
+# --- STT Configuration ---
+STT_PROVIDER = os.environ.get("STT_PROVIDER", "google").lower()  # "google", "assemblyai", or "openai"
+ASSEMBLYAI_API_KEY = os.getenv("ASSEMBLYAI_API_KEY")
+OPENAI_STT_API_KEY = os.getenv("OPENAI_STT_API_KEY")
+OPENAI_STT_MODEL = os.environ.get("OPENAI_STT_MODEL", "gpt-4o-transcribe")  # or "whisper-1"
+ENABLE_OPENAI_FOR_MIA = os.environ.get("ENABLE_OPENAI_FOR_MIA", "false").lower() == "true"
 
 logger.info(f"Using Gemini model: {GEMINI_MODEL}")
 logger.info(f"Using response modality: {RESPONSE_MODALITY}")

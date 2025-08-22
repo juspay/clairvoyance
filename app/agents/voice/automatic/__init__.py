@@ -13,18 +13,17 @@ from pipecat.audio.filters.noisereduce_filter import NoisereduceFilter
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
+from app.agents.voice.automatic.services.llm_wrapper import LLMServiceWrapper
 from pipecat.services.azure.llm import AzureLLMService
-from pipecat.services.google.rtvi import GoogleRTVIObserver
 from pipecat.transcriptions.language import Language
-from pipecat.services.google import GoogleSTTService
 from pipecat.frames.frames import TTSSpeakFrame, BotSpeakingFrame, LLMFullResponseEndFrame
 from pipecat.transports.services.daily import DailyParams, DailyTransport
 from pipecat.processors.frameworks.rtvi import RTVIConfig, RTVIProcessor
+from pipecat.services.google.rtvi import GoogleRTVIObserver
 
 from app.core import config
 from app.core.logger import logger, configure_session_logger
 from app.utils.session_context import create_session_context, set_current_session_id
-from app.agents.voice.automatic.services.llm_wrapper import LLMServiceWrapper
 from app.agents.voice.automatic.services.mcp.automatic_client import MCPClient
 from app.agents.voice.automatic.analytics.tracing_setup import setup_tracing
 from .processors import LLMSpyProcessor
@@ -32,6 +31,7 @@ from .prompts import get_system_prompt
 from .tools import initialize_tools, shopify_buddy_test, breeze_buddy
 from .services.mock_stt import TestQuestionProcessor, DEFAULT_TEST_QUESTIONS
 from .tts import get_tts_service
+from .stt import get_stt_service
 from .types import (
     TTSProvider,
     Mode,
@@ -84,18 +84,20 @@ async def main():
     # Personalize the system prompt if a user name is provided
     system_prompt = get_system_prompt(args.user_name, tts_provider)
 
+    vad_analyzer = SileroVADAnalyzer(
+        sample_rate=16000,
+        params=VADParams(
+            confidence=config.VAD_CONFIDENCE,
+            start_secs=config.VAD_START_SECS,
+            stop_secs=config.VAD_STOP_SECS,
+            min_volume=config.VAD_MIN_VOLUME,
+        )
+    )
+
     daily_params = DailyParams(
         audio_in_enabled=True,
         audio_out_enabled=True,
-        vad_analyzer=SileroVADAnalyzer(
-            sample_rate=16000,
-            params=VADParams(
-                confidence=config.VAD_CONFIDENCE,
-                start_secs=0.30,
-                stop_secs=1.00,
-                min_volume=config.VAD_MIN_VOLUME,
-            )
-        ),
+        vad_analyzer=vad_analyzer,
     )
 
     if config.ENABLE_NOISE_REDUCE_FILTER:
@@ -111,10 +113,7 @@ async def main():
         daily_params,
     )
 
-    stt = GoogleSTTService(
-        params=GoogleSTTService.InputParams(languages=[Language.EN_US, Language.EN_IN], enable_interim_results=False),
-        credentials=config.GOOGLE_CREDENTIALS_JSON
-    )
+    stt = get_stt_service(voice_name=voice_name.value)
 
     llm = LLMServiceWrapper(AzureLLMService(
         api_key=config.AZURE_OPENAI_API_KEY,
