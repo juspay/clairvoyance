@@ -4,6 +4,8 @@ Lightweight frame processor that delegates business logic to ConversationManager
 """
 
 import time
+import json
+from typing import Dict, Any
 
 from pipecat.frames.frames import (
     Frame, 
@@ -16,6 +18,8 @@ from pipecat.frames.frames import (
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.processors.frameworks.rtvi import RTVIProcessor, RTVIServerMessageFrame
 
+from opentelemetry import trace
+from app.core import config
 from app.core.logger import logger
 from app.agents.voice.automatic.conversation_manager import get_conversation_manager
 
@@ -42,6 +46,10 @@ class LLMSpyProcessor(FrameProcessor):
         
         # Conversation management (delegates to service)
         self._conversation_manager = get_conversation_manager()
+        
+        # Tracing setup
+        self._tracer = trace.get_tracer("pipecat.tools") if config.ENABLE_TRACING else None
+        self._active_spans: Dict[str, Any] = {}  # tool_call_id -> span
         
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
@@ -74,8 +82,17 @@ class LLMSpyProcessor(FrameProcessor):
             self._accumulated_text = ""
             self._is_collecting_response = False
 
-        # Function Call Start - emit RTVI event and track in conversation
+        # Function Call Start - emit RTVI event, track in conversation, and start tracing
         elif isinstance(frame, FunctionCallInProgressFrame):
+            # Start tracing span
+            if self._tracer:
+                span = self._tracer.start_span(f"Tool: {frame.function_name}", kind=trace.SpanKind.CLIENT)
+                span.set_attributes({
+                    "tool.name": frame.function_name,
+                    "tool.args_json": json.dumps(frame.arguments, default=str)[:4096]
+                })
+                self._active_spans[frame.tool_call_id] = span
+            
             # Emit tool-call-start event
             await self._rtvi.push_frame(
                 RTVIServerMessageFrame(
@@ -98,8 +115,14 @@ class LLMSpyProcessor(FrameProcessor):
             if event:
                 await self._emit_rtvi_event(event)
             
-        # Function Call Result - emit RTVI event and track in conversation
+        # Function Call Result - emit RTVI event, track in conversation, and end tracing
         elif isinstance(frame, FunctionCallResultFrame):
+            # End tracing span
+            if self._tracer and frame.tool_call_id in self._active_spans:
+                span = self._active_spans.pop(frame.tool_call_id)
+                span.set_attribute("tool.result", json.dumps(frame.result, default=str)[:4096])
+                span.end()
+            
             # Emit tool-call-result event
             await self._rtvi.push_frame(
                 RTVIServerMessageFrame(
@@ -165,4 +188,3 @@ class LLMSpyProcessor(FrameProcessor):
             pass
         except Exception as e:
             logger.error(f"Error emitting chart components for session {self._session_id}: {e}")
-
