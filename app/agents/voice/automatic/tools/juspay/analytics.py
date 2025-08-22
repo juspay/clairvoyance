@@ -17,8 +17,8 @@ merchant_id: str | None = None
 
 # Define required fields for offer creation - shared between function and schema
 OFFER_REQUIRED_KEYS = [
-    "offerCode", "offerType", "offerTitle", 
-    "discountValue", "startDate", "endDate", 
+    "offerCode", "offerType", "offerTitle",
+    "discountValue", "startDate", "endDate",
     "offerDescription"
 ]
 
@@ -195,6 +195,92 @@ async def get_payment_analytics_by_dimension(params: FunctionCallParams):
         logger.error(
             f"Critical error in get_payment_analytics_by_dimension: {e}", exc_info=True)
         await params.result_callback({"error": f"A critical error occurred in the tool function: {e}"})
+
+
+async def list_offers_by_filter(params: FunctionCallParams):
+    """
+    Lists promotional offers. Fetches offers based on user-provided criteria.
+    """
+    try:
+        logger.info(f"Fetching offers with filters: {params.arguments}")
+
+        if not merchant_id or not euler_token:
+            await params.result_callback({"error": "Authentication token or Merchant ID is missing."})
+            return
+
+        ist = pytz.timezone("Asia/Kolkata")
+        utc = pytz.utc
+        
+        # Determine the date range for the API call in UTC.
+        now_utc = datetime.now(utc)
+        start_of_month_utc = now_utc.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        
+        user_created_at = params.arguments.get("created_at", {})
+        start_time_str = user_created_at.get("gte")
+        end_time_str = user_created_at.get("lte")
+        
+        try:
+            # If user provides time in IST, convert it to ISO format with timezone.
+            if start_time_str:
+                start_time_ist = ist.localize(datetime.strptime(start_time_str, '%Y-%m-%d %H:%M:%S'))
+            else:
+                start_time_ist = start_of_month_utc.astimezone(ist)
+
+            if end_time_str:
+                end_time_ist = ist.localize(datetime.strptime(end_time_str, '%Y-%m-%d %H:%M:%S'))
+            else:
+                end_time_ist = now_utc.astimezone(ist)
+        except Exception as e:
+            logger.error(f"Error converting user-provided time: {e}")
+            await params.result_callback({"error": f"Invalid time format. Please use 'YYYY-MM-DD HH:MM:SS' in IST. Error: {e}"})
+            return
+
+        # Prepare the payload for the API call.
+        filters = {}
+        for key in ["offerId", "offerCode", "paymentMethodType", "isCouponBased", "currency"]:
+            if key in params.arguments:
+                filters[key] = params.arguments[key]
+
+        payload = {
+            "status": params.arguments.get("status", ['ACTIVE']),
+            "limit": params.arguments.get("limit", 50),
+            "created_at": {
+                "gte": start_time_ist.isoformat(),
+                "lte": end_time_ist.isoformat()
+            },
+            "merchant_id": merchant_id,
+            "filters": filters,
+            "benefitType": params.arguments.get("benefitType"),
+            "start_time": "2021-12-31 18:30:00Z",
+            "end_time": "2050-12-31 18:29:59Z",
+            "sort_offers": {
+                "order": "DESCENDING",
+                "field": "CREATED_AT"
+            }
+        }
+
+        endpoint = f"{EULER_DASHBOARD_API_URL}/api/offers/dashboard/dashboard-list"
+        headers = {'Content-Type': 'application/json', 'x-web-logintoken': euler_token}
+
+        logger.info(f"Requesting Euler offers list from: {endpoint} | Payload: {json.dumps(payload, indent=2)}")
+
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(endpoint, json=payload, headers=headers)
+
+            if response.status_code != 200:
+                error_text = response.text
+                logger.error(f"Failed to list offers: {response.status_code} - {error_text}")
+                await params.result_callback({"error": f"Failed to list offers: HTTP {response.status_code}", "details": error_text})
+                return
+
+            await params.result_callback({"data": response.text})
+
+    except httpx.TimeoutException:
+        logger.error("List offers request timed out.")
+        await params.result_callback({"error": "Request timed out. Please try again."})
+    except Exception as e:
+        logger.error(f"Critical error in list_offers_by_filter: {e}", exc_info=True)
+        await params.result_callback({"error": f"An unexpected error occurred: {str(e)}"})
 
 
 @handle_genius_response
@@ -926,6 +1012,60 @@ create_euler_offer_function = FunctionSchema(
     required=OFFER_REQUIRED_KEYS
 )
 
+list_offers_by_filter_function = FunctionSchema(
+    name="list_offers_by_filter",
+    description="""Fetches and filters promotional offers. It defaults to fetching active offers from the start of current month to today's date.
+
+**Behavior:**
+- **Default:** Returns active offers from the start of current month to today's date.
+- **Status Filter:** If the user specifies a status (e.g., "paused", "expired"), it will filter for that status.
+- **Date Filter:** If the user provides a start (`gte`) or end (`lte`) date, the tool will process accordingly.""",
+    properties={
+        "status": {
+            "type": "array",
+            "items": {"type": "string", "enum": ['ACTIVE', 'EXPIRED', 'PAUSED', 'NEW']},
+            "description": "Filter by the calculated real-time status of the offers. Defaults to ['ACTIVE'].",
+        },
+        "offerId": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Filter by a list of offer IDs.",
+        },
+        "offerCode": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Filter by a list of offer codes.",
+        },
+        "paymentMethodType": {
+            "type": "array",
+            "items": {"type": "string", "enum": ['UPI', 'CARD', 'NB', 'WALLET', 'REWARD', 'CONSUMER_FINANCE', 'CASH']},
+            "description": "Filter by a list of payment method types.",
+        },
+        "benefitType": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Filter by the benefit type of the offers (e.g., 'CASHBACK', 'DISCOUNT').",
+        },
+        "isCouponBased": {
+            "type": "boolean",
+            "description": "Filter offers based on whether they are coupon-based.",
+        },
+        "limit": {
+            "type": "number",
+            "description": "The maximum number of offers to return. Defaults to 15.",
+        },
+        "created_at": {
+            "type": "object",
+            "properties": {
+                "gte": {"type": "string", "description": "Optional: The start of the date range in 'YYYY-MM-DD HH:MM:SS' format. Interpreted as IST. If not provided, defaults to start of current month."},
+                "lte": {"type": "string", "description": "Optional: The end of the date range in 'YYYY-MM-DD HH:MM:SS' format. Interpreted as IST. If not provided, defaults to current date and time."}
+            },
+            "description": "Optional: The date range to search for offers. If not provided, defaults to start of current month to current date. When provided, processing will be done accordingly.",
+        }
+    },
+    required=[]
+)
+
 delete_euler_offer_function = FunctionSchema(
     name="delete_euler_offer",
     description="Permanently deletes a promotional offer from the Euler platform based on its offer code. This action cannot be undone. Use this when you need to completely remove an offer from the system.",
@@ -960,6 +1100,7 @@ tools = ToolsSchema(
         average_ticket_payment_wise_function,
         merchant_offer_analytics_function,
         create_euler_offer_function,
+        list_offers_by_filter_function,
         delete_euler_offer_function,
         # pause_euler_offer_function,
     ]
@@ -974,6 +1115,7 @@ tool_functions = {
     "get_average_ticket_payment_wise_by_time": get_average_ticket_payment_wise_by_time,
     "merchant_offer_analytics": merchant_offer_analytics,
     "create_euler_offer": create_euler_offer,
+    "list_offers_by_filter": list_offers_by_filter,
     "delete_euler_offer": delete_euler_offer,
     # "pause_euler_offer": pause_euler_offer,
 }
