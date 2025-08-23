@@ -160,8 +160,8 @@ generate_single_stat_card_function = FunctionSchema(
             "description": "Card title"
         },
         "primary_value": {
-            "type": "string",
-            "description": "Main value to display (e.g., '₹2,47,85,640')"
+            "type": "number",
+            "description": "Main numeric value to display (e.g., 24785640)"
         },
         "metric_name": {
             "type": "string",
@@ -182,6 +182,12 @@ generate_single_stat_card_function = FunctionSchema(
         "date_range": {
             "type": "string",
             "description": "Time period for the metric (e.g., 'December 2024')"
+        },
+        "data_type": {
+            "type": "string",
+            "enum": ["currency", "numericalValue", "percentage", "unknown"],
+            "description": "Type of primary_value - currency (format with ₹ and Indian numbering), numericalValue (Indian numbering), percentage (add % suffix), unknown (no formatting)",
+            "default": "unknown"
         }
     },
     required=["title", "primary_value", "metric_name", "voice_description"]
