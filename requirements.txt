@@ -42,3 +42,6 @@ pipecat-ai-flows
 
 # JWT Authentication
 PyJWT
+
+# Audio processing
+pydub

@@ -1,5 +1,8 @@
 import json
 import asyncio
+import base64
+from pydub import AudioSegment
+import audioop
 from dotenv import load_dotenv
 from datetime import datetime
 from twilio.http.http_client import TwilioHttpClient
@@ -92,6 +95,32 @@ class OrderConfirmationBot:
 
         stream_sid = call_data["start"]["streamSid"]
         self.call_sid = call_data["start"]["callSid"]
+
+        try:
+            logger.info("Preparing to send initial audio message.")
+            wav_file_path = "app/agents/voice/breeze_buddy/breeze/order_confirmation/dial-tone.wav"
+            
+            # Load and convert audio
+            audio = AudioSegment.from_wav(wav_file_path)
+            audio = audio.set_frame_rate(8000).set_channels(1).set_sample_width(2)
+            pcm_data = audio.raw_data
+            mulaw_data = audioop.lin2ulaw(pcm_data, 2)
+            payload = base64.b64encode(mulaw_data).decode('utf-8')
+
+            # Create and send media message
+            media_message = {
+                "event": "media",
+                "streamSid": stream_sid,
+                "media": {
+                    "payload": payload
+                }
+            }
+            await self.ws.send_text(json.dumps(media_message))
+            logger.info(f"Successfully sent initial media message for streamSid: {stream_sid}")
+
+        except Exception as e:
+            logger.error(f"Failed to send initial media message: {e}")
+
         custom_parameters = call_data["start"]["customParameters"]
 
         self.call_data_id = custom_parameters.get("call_data_id")
