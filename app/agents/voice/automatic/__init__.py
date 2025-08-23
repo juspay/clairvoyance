@@ -64,6 +64,7 @@ async def main():
     configure_session_logger(args.session_id)
     logger.info(f"Voice agent started with session ID: {args.session_id}")
 
+
     # Decode TTS parameters
     tts_provider = decode_tts_provider(args.tts_provider)
     voice_name = decode_voice_name(args.voice_name)
