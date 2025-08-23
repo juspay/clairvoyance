@@ -34,7 +34,7 @@ class LLMSpyProcessor(FrameProcessor):
                     "tool.name": frame.function_name,
                     "tool.args_json": json.dumps(frame.arguments, default=str)[:4096]
                 })
-            self._active_spans[frame.tool_call_id] = span
+                self._active_spans[frame.tool_call_id] = span
 
             logger.info(f"Function call started: {frame.function_name} with args: {frame.arguments}")
             await self._rtvi.push_frame(
