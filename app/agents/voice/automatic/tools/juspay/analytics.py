@@ -579,6 +579,215 @@ async def merchant_offer_analytics(params: FunctionCallParams):
         await params.result_callback({"error": f"A critical error occurred in the tool function: {e}"})
 
 
+async def find_offer_by_code(offer_code: str) -> str | None:
+    """
+    Helper function to find an offer ID by its offer code.
+    Returns the offer_id if found, None otherwise.
+    """
+    if not euler_token or not merchant_id:
+        logger.error("Missing authentication token or merchant ID for offer search")
+        return None
+
+    try:
+        # Search for the offer using the offer code
+        search_payload = {
+            "merchant_id": merchant_id,
+            "offer_code": [offer_code],
+            "limit": 1,
+            "start_time": "2020-01-01T00:00:00Z",
+            "end_time": "2050-01-01T00:00:00Z",
+            "created_at": {
+                "gte": "2020-01-01T00:00:00Z",
+                "lte": "2050-01-01T00:00:00Z"
+            },
+            "sort_offers": {
+                "order": "DESCENDING",
+                "field": "CREATED_AT"
+            }
+        }
+
+        endpoint = f"{EULER_DASHBOARD_API_URL}/api/offers/dashboard/dashboard-list?merchant_id={merchant_id}"
+        headers = {
+            'Content-Type': 'application/json',
+            'x-web-logintoken': euler_token
+        }
+
+        logger.info(f"Searching for offer with code '{offer_code}' using endpoint: {endpoint}")
+
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(endpoint, json=search_payload, headers=headers)
+            
+            if response.status_code == 200:
+                response_data = response.json()
+                
+                if response_data.get("list") and len(response_data["list"]) > 0:
+                    offer_id = response_data["list"][0].get("offer_id")
+                    logger.info(f"Found offer ID '{offer_id}' for offer code '{offer_code}'")
+                    return offer_id
+                else:
+                    logger.warning(f"No offer found with code '{offer_code}'")
+                    return None
+            else:
+                logger.error(f"Failed to search for offer: {response.status_code} - {response.text}")
+                return None
+
+    except Exception as e:
+        logger.error(f"Error searching for offer by code '{offer_code}': {e}")
+        return None
+
+
+async def delete_euler_offer(params: FunctionCallParams):
+    """
+    Deletes a promotional offer from the Euler platform based on its offer code.
+    This permanently removes the offer and cannot be undone.
+    """
+    try:
+        offer_code = params.arguments.get("offerCode")
+        
+        if not offer_code:
+            await params.result_callback({"error": "Missing required field: offerCode"})
+            return
+
+        # Authentication check
+        if not euler_token:
+            await params.result_callback({"error": "Authentication token is missing. Cannot delete offer."})
+            return
+
+        if not merchant_id:
+            await params.result_callback({"error": "Merchant ID not available in session context. Cannot delete offer."})
+            return
+
+        logger.info(f"Attempting to delete Euler offer with code '{offer_code}' for merchant '{merchant_id}'")
+
+        # Step 1: Find the offer by code
+        offer_id = await find_offer_by_code(offer_code)
+        
+        if not offer_id:
+            await params.result_callback({
+                "error": f"Offer with code '{offer_code}' not found. Please verify the offer code and try again."
+            })
+            return
+
+        # Step 2: Delete the offer using the found ID
+        delete_endpoint = f"{EULER_DASHBOARD_API_URL}/api/offers/dashboard/{offer_id}/delete"
+        delete_payload = {
+            "merchant_id": merchant_id,
+            "offer_id": offer_id
+        }
+        
+        headers = {
+            'Content-Type': 'application/json',
+            'x-web-logintoken': euler_token
+        }
+
+        logger.info(f"Deleting offer with ID '{offer_id}' using endpoint: {delete_endpoint}")
+
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(delete_endpoint, json=delete_payload, headers=headers)
+            
+            if response.status_code == 200:
+                success_result = {
+                    "status": "success",
+                    "message": f"Successfully deleted offer '{offer_code}'",
+                    "details": {
+                        "offerCode": offer_code,
+                        "offerId": offer_id,
+                        "action": "deleted"
+                    }
+                }
+                logger.info(f"Successfully deleted offer '{offer_code}' (ID: {offer_id})")
+                await params.result_callback({"data": json.dumps(success_result)})
+            else:
+                error_text = response.text
+                logger.error(f"Failed to delete offer '{offer_code}': {response.status_code} - {error_text}")
+                await params.result_callback({
+                    "error": f"Failed to delete offer '{offer_code}': HTTP {response.status_code}. {error_text}"
+                })
+
+    except httpx.TimeoutException:
+        logger.error(f"Delete offer request timed out for offer '{offer_code}'")
+        await params.result_callback({"error": "Request timed out. Please try again."})
+    except Exception as e:
+        logger.error(f"Critical error in delete_euler_offer: {e}", exc_info=True)
+        await params.result_callback({"error": f"An unexpected error occurred: {str(e)}"})
+
+
+# async def pause_euler_offer(params: FunctionCallParams):
+#     """
+#     Pauses a promotional offer in the Euler platform based on its offer code.
+#     This temporarily disables the offer but allows it to be reactivated later.
+#     """
+#     try:
+#         offer_code = params.arguments.get("offerCode")
+        
+#         if not offer_code:
+#             await params.result_callback({"error": "Missing required field: offerCode"})
+#             return
+
+#         # Authentication check
+#         if not euler_token:
+#             await params.result_callback({"error": "Authentication token is missing. Cannot pause offer."})
+#             return
+
+#         if not merchant_id:
+#             await params.result_callback({"error": "Merchant ID not available in session context. Cannot pause offer."})
+#             return
+
+#         logger.info(f"Attempting to pause Euler offer with code '{offer_code}' for merchant '{merchant_id}'")
+
+#         # Step 1: Find the offer by code
+#         offer_id = await find_offer_by_code(offer_code)
+        
+#         if not offer_id:
+#             await params.result_callback({
+#                 "error": f"Offer with code '{offer_code}' not found. Please verify the offer code and try again."
+#             })
+#             return
+
+#         # Step 2: Pause the offer using the found ID
+#         pause_endpoint = f"{EULER_DASHBOARD_API_URL}/api/offers/dashboard/{offer_id}/pause"
+#         pause_payload = {
+#             "merchant_id": merchant_id,
+#             "offer_id": offer_id
+#         }
+        
+#         headers = {
+#             'Content-Type': 'application/json',
+#             'x-web-logintoken': euler_token
+#         }
+
+#         logger.info(f"Pausing offer with ID '{offer_id}' using endpoint: {pause_endpoint}")
+
+#         async with httpx.AsyncClient(timeout=10.0) as client:
+#             response = await client.post(pause_endpoint, json=pause_payload, headers=headers)
+            
+#             if response.status_code == 200:
+#                 success_result = {
+#                     "status": "success",
+#                     "message": f"Successfully paused offer '{offer_code}'",
+#                     "details": {
+#                         "offerCode": offer_code,
+#                         "offerId": offer_id,
+#                         "action": "paused"
+#                     }
+#                 }
+#                 logger.info(f"Successfully paused offer '{offer_code}' (ID: {offer_id})")
+#                 await params.result_callback({"data": json.dumps(success_result)})
+#             else:
+#                 error_text = response.text
+#                 logger.error(f"Failed to pause offer '{offer_code}': {response.status_code} - {error_text}")
+#                 await params.result_callback({
+#                     "error": f"Failed to pause offer '{offer_code}': HTTP {response.status_code}. {error_text}"
+#                 })
+
+#     except httpx.TimeoutException:
+#         logger.error(f"Pause offer request timed out for offer '{offer_code}'")
+#         await params.result_callback({"error": "Request timed out. Please try again."})
+#     except Exception as e:
+#         logger.error(f"Critical error in pause_euler_offer: {e}", exc_info=True)
+#         await params.result_callback({"error": f"An unexpected error occurred: {str(e)}"})
+
+
 time_input_schema = {
     "type": "object",
     "properties": {
@@ -717,6 +926,30 @@ create_euler_offer_function = FunctionSchema(
     required=OFFER_REQUIRED_KEYS
 )
 
+delete_euler_offer_function = FunctionSchema(
+    name="delete_euler_offer",
+    description="Permanently deletes a promotional offer from the Euler platform based on its offer code. This action cannot be undone. Use this when you need to completely remove an offer from the system.",
+    properties={
+        "offerCode": {
+            "type": "string",
+            "description": "The unique offer code of the offer to delete. Examples: SAVE20, WELCOME10, NEWYEAR2025"
+        }
+    },
+    required=["offerCode"]
+)
+
+# pause_euler_offer_function = FunctionSchema(
+#     name="pause_euler_offer",
+#     description="Temporarily pauses a promotional offer in the Euler platform based on its offer code. This disables the offer but allows it to be reactivated later. Use this when you want to temporarily stop an offer without permanently deleting it.",
+#     properties={
+#         "offerCode": {
+#             "type": "string",
+#             "description": "The unique offer code of the offer to pause. Examples: SAVE20, WELCOME10, NEWYEAR2025"
+#         }
+#     },
+#     required=["offerCode"]
+# )
+
 tools = ToolsSchema(
     standard_tools=[
         get_sr_success_rate_function,
@@ -727,6 +960,8 @@ tools = ToolsSchema(
         average_ticket_payment_wise_function,
         merchant_offer_analytics_function,
         create_euler_offer_function,
+        delete_euler_offer_function,
+        # pause_euler_offer_function,
     ]
 )
 
@@ -739,4 +974,6 @@ tool_functions = {
     "get_average_ticket_payment_wise_by_time": get_average_ticket_payment_wise_by_time,
     "merchant_offer_analytics": merchant_offer_analytics,
     "create_euler_offer": create_euler_offer,
+    "delete_euler_offer": delete_euler_offer,
+    # "pause_euler_offer": pause_euler_offer,
 }

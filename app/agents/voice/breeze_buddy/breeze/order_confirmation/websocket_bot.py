@@ -34,7 +34,7 @@ from app.core.config import (
     TWILIO_AUTH_TOKEN,
     AZURE_OPENAI_API_KEY,
     AZURE_OPENAI_ENDPOINT,
-    AZURE_OPENAI_MODEL,
+    AZURE_BREEZE_BUDDY_OPENAI_MODEL,
     GOOGLE_CREDENTIALS_JSON,
     ELEVENLABS_API_KEY,
     ELEVENLABS_BB_VOICE_ID,
@@ -169,7 +169,7 @@ class OrderConfirmationBot:
         llm = AzureLLMService(
             api_key=AZURE_OPENAI_API_KEY,
             endpoint=AZURE_OPENAI_ENDPOINT,
-            model=AZURE_OPENAI_MODEL,
+            model=AZURE_BREEZE_BUDDY_OPENAI_MODEL,
         )
         tts = ElevenLabsTTSService(
             api_key=ELEVENLABS_API_KEY,

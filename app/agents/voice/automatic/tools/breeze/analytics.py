@@ -241,7 +241,7 @@ async def get_breeze_address_data(params: FunctionCallParams):
 
 get_breeze_sales_data_function = FunctionSchema(
     name="get_breeze_sales_data",
-    description="Fetches sales data (gross sales, net sales, discounts, shipping, tax, total sales) from Breeze analytics for a given shop and time range. Time should be provided in IST (e.g., '2025-06-20 00:00:00').",
+    description="Fetches sales data (gross sales, net sales, discounts, shipping, tax, total sales) from Breeze analytics for a given shop and time range. This tool should be used to answer questions about 'burn rate' by using the 'discounts' value. Time should be provided in IST (e.g., '2025-06-20 00:00:00').",
     properties={
         "startTime": {
             "type": "string",
