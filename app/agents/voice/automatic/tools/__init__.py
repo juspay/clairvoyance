@@ -21,6 +21,7 @@ def initialize_tools(
     shop_id: str | None = None,
     shop_type: str | None = None,
     merchant_id: str | None = None,
+    session_id: str | None = None,
 ):
     """
     Initializes tools based on the operating mode and available tokens.
@@ -31,6 +32,7 @@ def initialize_tools(
     :param shop_url: The shop URL, if available.
     :param shop_id: The shop ID, if available.
     :param shop_type: The shop type, if available.
+    :param session_id: The session ID, if available.
     """
     providers = []
     if breeze_token:
@@ -84,6 +86,7 @@ def initialize_tools(
             breeze.analytics.shop_id = shop_id
             breeze.analytics.shop_url = shop_url
             breeze.analytics.shop_type = shop_type
+            breeze.analytics.sessionId = session_id
             all_tools.extend(breeze.tools.standard_tools)
             all_tool_functions.update(breeze.tool_functions)
             logger.info(f"Loaded {len(breeze.tools.standard_tools)} real-time Breeze tools.")
