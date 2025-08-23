@@ -237,11 +237,25 @@ async def generate_donut_chart(params) -> None:
         formatted_total = None
         
         if data_type == 'currency':
-            # Format as Indian currency with compact notation
-            formatted_total = f"₹{total_value:,.0f}" if total_value < 1000 else f"₹{total_value/1000:.1f}K" if total_value < 1000000 else f"₹{total_value/1000000:.1f}M"
+            # Format as Indian currency with Indian numbering system
+            if total_value < 1000:
+                formatted_total = f"₹{total_value:,.0f}"
+            elif total_value < 100000:  # Less than 1 lakh
+                formatted_total = f"₹{total_value/1000:.1f}K"
+            elif total_value < 10000000:  # Less than 1 crore
+                formatted_total = f"₹{total_value/100000:.1f}L"
+            else:  # 1 crore or more
+                formatted_total = f"₹{total_value/10000000:.1f}Cr"
         elif data_type == 'numericalValue':
-            # Compact notation for numerical values
-            formatted_total = f"{total_value:,.0f}" if total_value < 1000 else f"{total_value/1000:.1f}K" if total_value < 1000000 else f"{total_value/1000000:.1f}M"
+            # Indian numbering system for numerical values
+            if total_value < 1000:
+                formatted_total = f"{total_value:,.0f}"
+            elif total_value < 100000:  # Less than 1 lakh
+                formatted_total = f"{total_value/1000:.1f}K"
+            elif total_value < 10000000:  # Less than 1 crore
+                formatted_total = f"{total_value/100000:.1f}L"
+            else:  # 1 crore or more
+                formatted_total = f"{total_value/10000000:.1f}Cr"
         # For 'percentage' and 'unknown', formatted_total remains None
         
         # Create UI component matching MCP structure
@@ -296,7 +310,35 @@ async def generate_single_stat_card(params) -> None:
         delta_value = params.arguments.get("delta_value")
         delta_positive = params.arguments.get("delta_positive", True)
         date_range = params.arguments.get("date_range")
+        data_type = params.arguments.get("data_type", "unknown")
         session_id = params.arguments.get("session_id") or get_current_session_id()
+        
+        # Format primary_value based on data_type
+        formatted_primary_value = primary_value
+        if isinstance(primary_value, (int, float)):
+            if data_type == 'currency':
+                # Format as Indian currency with Indian numbering system
+                if primary_value < 1000:
+                    formatted_primary_value = f"₹{primary_value:,.0f}"
+                elif primary_value < 100000:  # Less than 1 lakh
+                    formatted_primary_value = f"₹{primary_value/1000:.1f}K"
+                elif primary_value < 10000000:  # Less than 1 crore
+                    formatted_primary_value = f"₹{primary_value/100000:.1f}L"
+                else:  # 1 crore or more
+                    formatted_primary_value = f"₹{primary_value/10000000:.1f}Cr"
+            elif data_type == 'numericalValue':
+                # Indian numbering system for numerical values
+                if primary_value < 1000:
+                    formatted_primary_value = f"{primary_value:,.0f}"
+                elif primary_value < 100000:  # Less than 1 lakh
+                    formatted_primary_value = f"{primary_value/1000:.1f}K"
+                elif primary_value < 10000000:  # Less than 1 crore
+                    formatted_primary_value = f"{primary_value/100000:.1f}L"
+                else:  # 1 crore or more
+                    formatted_primary_value = f"{primary_value/10000000:.1f}Cr"
+            elif data_type == 'percentage':
+                formatted_primary_value = f"{primary_value}%"
+            # For 'unknown', keep original value
         
         # Generate chart ID using MCP format
         chart_id = generate_chart_id("single_stat_card")
@@ -319,7 +361,7 @@ async def generate_single_stat_card(params) -> None:
                 "title": title,
                 "chartTitle": title,
                 "dateRange": date_range or "",
-                "primaryValue": primary_value,
+                "primaryValue": formatted_primary_value,
                 "deltaValue": delta_value or "",
                 "deltaPositive": delta_positive,
                 "metricName": metric_name
