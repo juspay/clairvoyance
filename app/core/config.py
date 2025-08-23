@@ -83,7 +83,12 @@ AUTOMATIC_TOOL_MCP_SERVER_URL=os.environ.get("AUTOMATIC_TOOL_MCP_SERVER_URL", "h
 _shops_for_mcp_str = os.environ.get("SHOPS_FOR_AUTOMATIC_MCP_SERVER", "")
 SHOPS_FOR_AUTOMATIC_MCP_SERVER = [shop.strip() for shop in _shops_for_mcp_str.split(',') if shop.strip()]
 
+# Selective MCP Functions (used when AUTOMATIC_MCP_TOOL_SERVER_USAGE is true)
+_selective_mcp_functions_str = os.environ.get("SELECTIVE_MCP_FUNCTIONS", "")
+SELECTIVE_MCP_FUNCTIONS = [func.strip() for func in _selective_mcp_functions_str.split(',') if func.strip()]
+
 logger.info(f"Shops enabled for Automatic MCP Server: {SHOPS_FOR_AUTOMATIC_MCP_SERVER}")
+logger.info(f"Selective MCP functions enabled: {SELECTIVE_MCP_FUNCTIONS}")
 
 # Context Summarization Configuration
 ENABLE_SUMMARIZATION = os.environ.get("ENABLE_SUMMARIZATION", "true").lower() == "true"

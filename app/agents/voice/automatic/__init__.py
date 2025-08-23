@@ -162,7 +162,8 @@ async def main():
             context=mcp_context,
             session_context=session_context
         )
-        tools = await mcp_client.register_tools(llm)
+        selective_functions = config.SELECTIVE_MCP_FUNCTIONS if len(config.SELECTIVE_MCP_FUNCTIONS) > 0 else []
+        tools = await mcp_client.register_tools(llm, selective_functions)
 
 
     rtvi = RTVIProcessor(config=RTVIConfig(config=[]))
