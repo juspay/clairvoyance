@@ -271,8 +271,8 @@ async def bot_connect(request: AutomaticVoiceUserConnectRequest) -> Dict[str, An
     )
 
     # 3. Generate unique session ID for this subprocess
-    session_id = str(uuid.uuid4())
-    logger.bind(session_id=session_id).info(f"Generated session ID for new voice agent: {session_id}")
+    session_id = request.sessionId or str(uuid.uuid4())
+    logger.bind(session_id=session_id).info(f"Using session ID for new voice agent: {session_id}")
 
     # 4. Build command args list
     bot_file = "app.agents.voice.automatic"

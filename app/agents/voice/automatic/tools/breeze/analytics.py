@@ -13,6 +13,7 @@ breeze_token: str | None = None
 shop_id: str | None = None
 shop_url: str | None = None
 shop_type: str | None = None
+sessionId: str | None = None
 
 async def _make_breeze_request(params: FunctionCallParams, operational_tab: str):
     """Generic helper to make requests to the Breeze analytics API."""
@@ -68,6 +69,9 @@ async def _make_breeze_request(params: FunctionCallParams, operational_tab: str)
         "x-auth-token": breeze_token
     }
 
+    if sessionId:
+        headers["x-session-id"] = sessionId
+
     logger.info(f"Requesting Breeze {operational_tab} data with payload: {json.dumps(payload)}")
 
     try:
@@ -88,7 +92,7 @@ async def _make_breeze_request(params: FunctionCallParams, operational_tab: str)
 
 async def get_breeze_sales_data(params: FunctionCallParams):
     """Fetches sales data from the Breeze analytics API."""
-    await _make_breeze_request(params, "SALES")
+    await _make_breeze_request(params, "OVERVIEW")
 
 
 async def get_breeze_orders_data(params: FunctionCallParams):
