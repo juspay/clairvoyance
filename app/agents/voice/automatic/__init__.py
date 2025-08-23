@@ -16,7 +16,12 @@ from pipecat.pipeline.task import PipelineParams, PipelineTask
 from pipecat.services.azure.llm import AzureLLMService
 from pipecat.services.google.rtvi import GoogleRTVIObserver
 from pipecat.transcriptions.language import Language
-from pipecat.services.google import GoogleSTTService
+from pipecat.services.google.stt import GoogleSTTService
+from app.services.speechmatics_service import (
+    create_speechmatics_stt_service,
+    validate_speechmatics_config,
+    log_speechmatics_config
+)
 from pipecat.frames.frames import TTSSpeakFrame, BotSpeakingFrame, LLMFullResponseEndFrame
 from pipecat.transports.services.daily import DailyParams, DailyTransport
 from pipecat.processors.frameworks.rtvi import RTVIConfig, RTVIProcessor
@@ -111,10 +116,28 @@ async def main():
         daily_params,
     )
 
-    stt = GoogleSTTService(
-        params=GoogleSTTService.InputParams(languages=[Language.EN_US, Language.EN_IN], enable_interim_results=False),
-        credentials=config.GOOGLE_CREDENTIALS_JSON
-    )
+    # Choose STT service based on configuration
+    log_speechmatics_config()
+    
+    if config.USE_SPEECHMATICS and validate_speechmatics_config():
+        logger.info("[VOICE-DEBUG] ✅ Using Speechmatics STT with audio filtering")
+        try:
+            stt = create_speechmatics_stt_service(languages=[Language.EN_US, Language.EN_IN])
+            logger.info("[VOICE-DEBUG] ✅ Speechmatics STT service created successfully")
+        except Exception as e:
+            logger.error(f"[VOICE-DEBUG] ❌ Failed to create Speechmatics STT: {e}")
+            logger.info("[VOICE-DEBUG] 🔄 Falling back to Google STT")
+            stt = GoogleSTTService(
+                params=GoogleSTTService.InputParams(languages=[Language.EN_US, Language.EN_IN], enable_interim_results=False),
+                credentials=config.GOOGLE_CREDENTIALS_JSON
+            )
+    else:
+        logger.info("[VOICE-DEBUG] ✅ Using Google STT")
+        logger.info(f"[VOICE-DEBUG] - Reason: USE_SPEECHMATICS={config.USE_SPEECHMATICS}, Config valid={validate_speechmatics_config()}")
+        stt = GoogleSTTService(
+            params=GoogleSTTService.InputParams(languages=[Language.EN_US, Language.EN_IN], enable_interim_results=False),
+            credentials=config.GOOGLE_CREDENTIALS_JSON
+        )
 
     llm = LLMServiceWrapper(AzureLLMService(
         api_key=config.AZURE_OPENAI_API_KEY,

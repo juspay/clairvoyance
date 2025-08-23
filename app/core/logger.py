@@ -35,6 +35,19 @@ class InterceptHandler(logging.Handler):
     """
     def emit(self, record):
         # Get corresponding Loguru level if it exists
+        message = record.getMessage()
+        if any(noise in message for noise in [
+            "AudioAdded", 
+            "> BINARY", 
+            "< TEXT", 
+            "Received message=",
+            "bytes]",
+            "AttributeError: 'NoneType' object has no attribute 'POLLER'",
+            "grpc._cython.cygrpc.shutdown_grpc_aio",
+            "grpc._cython.cygrpc._actual_aio_shutdown",
+            "grpc._cython.cygrpc.AioChannel.__dealloc__"
+        ]):
+            return  # Skip these noisy logs
         try:
             level = logger.level(record.levelname).name
         except ValueError:

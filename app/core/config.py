@@ -38,6 +38,25 @@ AZURE_OPENAI_MODEL = os.environ.get("AZURE_OPENAI_MODEL", "gpt-4o-automatic")
 GOOGLE_CREDENTIALS_JSON = get_required_env("GOOGLE_CREDENTIALS_JSON")
 ENABLE_NOISE_REDUCE_FILTER = os.environ.get("ENABLE_NOISE_REDUCE_FILTER", "true").lower() == "true"
 
+# Speechmatics STT Configuration
+USE_SPEECHMATICS = os.environ.get("USE_SPEECHMATICS", "false").lower() == "true"
+SPEECHMATICS_API_KEY = os.environ.get("SPEECHMATICS_API_KEY", "")
+SPEECHMATICS_RT_URL = os.environ.get("SPEECHMATICS_RT_URL", "wss://eu2.rt.speechmatics.com/v2")
+SPEECHMATICS_VOLUME_THRESHOLD = float(os.environ.get("SPEECHMATICS_VOLUME_THRESHOLD", "3.4"))
+SPEECHMATICS_OPERATING_POINT = os.environ.get("SPEECHMATICS_OPERATING_POINT", "enhanced")
+SPEECHMATICS_ENABLE_VOLUME_LABELING = os.environ.get("SPEECHMATICS_ENABLE_VOLUME_LABELING", "true").lower() == "true"
+
+# Advanced Speechmatics Configuration
+SPEECHMATICS_ENABLE_DIARIZATION = os.environ.get("SPEECHMATICS_ENABLE_DIARIZATION", "true").lower() == "true"
+SPEECHMATICS_SPEAKER_SENSITIVITY = float(os.environ.get("SPEECHMATICS_SPEAKER_SENSITIVITY", "0.6"))
+SPEECHMATICS_MAX_SPEAKERS = int(os.environ.get("SPEECHMATICS_MAX_SPEAKERS", "4"))
+SPEECHMATICS_END_OF_UTTERANCE_MODE = os.environ.get("SPEECHMATICS_END_OF_UTTERANCE_MODE", "adaptive")
+SPEECHMATICS_END_OF_UTTERANCE_SILENCE = float(os.environ.get("SPEECHMATICS_END_OF_UTTERANCE_SILENCE", "0.5"))
+SPEECHMATICS_MAX_DELAY = float(os.environ.get("SPEECHMATICS_MAX_DELAY", "0.8"))
+SPEECHMATICS_DOMAIN = os.environ.get("SPEECHMATICS_DOMAIN", "")  # Can be "finance", "medical", "legal", etc.
+SPEECHMATICS_ENABLE_PARTIALS = os.environ.get("SPEECHMATICS_ENABLE_PARTIALS", "true").lower() == "true"
+SPEECHMATICS_CHUNK_SIZE = int(os.environ.get("SPEECHMATICS_CHUNK_SIZE", "160"))
+
 # TTS Configuration
 ELEVENLABS_API_KEY = os.environ.get("ELEVENLABS_API_KEY")
 ELEVENLABS_VOICE_ID = os.environ.get("ELEVENLABS_VOICE_ID", "bQQWtYx9EodAqMdkrNAc") # bQQWtYx9EodAqMdkrNAc
