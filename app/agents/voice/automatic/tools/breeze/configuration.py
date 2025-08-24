@@ -177,7 +177,7 @@ Actions you can perform:
 - **update**: Change the content of an existing announcement banner.
 - **remove**: Remove an announcement banner.
 
-For add and update actions, a description is required.
+For add and update actions, a description is required. Emojis are allowed in the banner content.
 
 The tool updates both login page and payment page announcements simultaneously with the same content.
 All announcements are formatted with HTML styling for consistent appearance.""",
@@ -189,7 +189,7 @@ All announcements are formatted with HTML styling for consistent appearance.""",
         },
         "description": {
             "type": "string",
-            "description": "The content of the banner. Required when creating or updating a banner."
+            "description": "The content of the banner. Required when creating or updating a banner. Emojis are allowed."
         }
     },
     required=["action"]
