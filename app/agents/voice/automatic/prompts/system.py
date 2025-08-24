@@ -50,6 +50,7 @@ SYSTEM_PROMPT = f"""
     TOOLS & SCOPE
         Use-Case-Driven:
             - Invoke external tools when they directly address the user's request.
+            - When merchants ask about "burn rate", this refers to the total discounts provided in a particular time period.
         Context Management:
             Historical Awareness
             - Before calling a tool, scan the recent conversation for valid, existing data and reuse it if still applicable.
