@@ -203,7 +203,7 @@ async def main():
     rtvi = RTVIProcessor(config=RTVIConfig(config=[]))
 
     # Add custom LLMSpyProcessor for streaming function call events
-    tool_call_processor = LLMSpyProcessor(rtvi)
+    tool_call_processor = LLMSpyProcessor(rtvi, voice_name=voice_name.value)
 
     pipeline = Pipeline(
         [
@@ -243,6 +243,8 @@ async def main():
     @rtvi.event_handler("on_client_ready")
     async def on_client_ready(rtvi):
         await rtvi.set_bot_ready()
+        # Send STT provider information to frontend
+        await tool_call_processor.send_stt_provider_info()
 
     @transport.event_handler("on_first_participant_joined")
     async def on_first_participant_joined(transport, participant):

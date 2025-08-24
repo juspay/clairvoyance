@@ -10,19 +10,38 @@ from pipecat.frames.frames import Frame, FunctionCallInProgressFrame, FunctionCa
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.processors.frameworks.rtvi import RTVIProcessor, RTVIServerMessageFrame
 from ..services.markdown import sanitize_markdown
+from ..stt import get_stt_provider_name
 
 
 # Custom LLMSpyProcessor for streaming function call events
 class LLMSpyProcessor(FrameProcessor):
     """Intercepts function call frames to emit RTVI server messages for start and result."""
 
-    def __init__(self, rtvi: RTVIProcessor, name: str = "LLMSpyProcessor"):
+    def __init__(self, rtvi: RTVIProcessor, voice_name: str = None, name: str = "LLMSpyProcessor"):
         super().__init__(name=name)
         self._rtvi = rtvi
+        self._voice_name = voice_name
 
         # Tracing setup
         self._tracer = trace.get_tracer("pipecat.tools") if config.ENABLE_TRACING else None
         self._active_spans: Dict[str, Any] = {}  # tool_call_id -> span
+
+    async def send_stt_provider_info(self):
+        """Send STT provider information to frontend."""
+        stt_provider = get_stt_provider_name(self._voice_name)
+        await self._rtvi.push_frame(
+            RTVIServerMessageFrame(
+                data={
+                    "type": "stt-name",
+                    "payload": {
+                        "provider": stt_provider,
+                        "voiceName": self._voice_name,
+                        "timestamp": int(time.time() * 1000)
+                    }
+                }
+            )
+        )
+        logger.info(f"STT Provider info sent to frontend: {stt_provider} for voice: {self._voice_name}")
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         """Emit RTVI server messages for function call frames."""

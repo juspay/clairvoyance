@@ -76,11 +76,21 @@ ENABLE_SEARCH_GROUNDING = os.environ.get("ENABLE_SEARCH_GROUNDING", "true").lowe
 GEMINI_SEARCH_RESULT_API_MODEL = os.environ.get("GEMINI_SEARCH_RESULT_API_MODEL", "gemini-2.5-flash-lite-preview-06-17")
 
 # --- STT Configuration ---
-STT_PROVIDER = os.environ.get("STT_PROVIDER", "google").lower()  # "google", "assemblyai", or "openai"
+STT_PROVIDER = os.environ.get("STT_PROVIDER", "google").lower()  # "google", "assemblyai", "openai", or "speechmatics"
 ASSEMBLYAI_API_KEY = os.getenv("ASSEMBLYAI_API_KEY")
 OPENAI_STT_API_KEY = os.getenv("OPENAI_STT_API_KEY")
 OPENAI_STT_MODEL = os.environ.get("OPENAI_STT_MODEL", "gpt-4o-transcribe")  # or "whisper-1"
 ENABLE_OPENAI_FOR_MIA = os.environ.get("ENABLE_OPENAI_FOR_MIA", "false").lower() == "true"
+
+# Speechmatics STT Configuration
+SPEECHMATICS_API_KEY = os.getenv("SPEECHMATICS_API_KEY")
+SPEECHMATICS_RT_URL = os.environ.get("SPEECHMATICS_RT_URL", "wss://eu2.rt.speechmatics.com/v2")
+
+# STT Performance and Reliability Configuration
+STT_CONNECTION_TIMEOUT = int(os.environ.get("STT_CONNECTION_TIMEOUT", 30))  # seconds
+STT_READ_TIMEOUT = int(os.environ.get("STT_READ_TIMEOUT", 60))  # seconds
+STT_RETRY_ATTEMPTS = int(os.environ.get("STT_RETRY_ATTEMPTS", 3))
+STT_ENABLE_FALLBACK = os.environ.get("STT_ENABLE_FALLBACK", "true").lower() == "true"
 
 logger.info(f"Using Gemini model: {GEMINI_MODEL}")
 logger.info(f"Using response modality: {RESPONSE_MODALITY}")
