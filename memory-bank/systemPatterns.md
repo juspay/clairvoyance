@@ -36,6 +36,21 @@ It is optional, but recommended to be updated as the project evolves.
         *   Improves code organization by moving client logic and type definitions to dedicated modules within the `automatic` agent's folder structure.
     *   **Impact:** Replaces the previous pattern of locally defined tools with a more scalable and flexible remote tooling architecture.
 
+*   **[2025-08-24] - Shop Configuration Management Pattern:**
+    *   **Description:** A new pattern has been established for managing shop configurations through the voice agent. This pattern is first implemented with the banner management tool.
+        *   **Utility Functions:** Common shop configuration operations are abstracted into utility functions in `app/agents/voice/automatic/tools/breeze/utils.py`:
+            *   `get_current_shop_config_data`: Fetches the current configuration for a shop.
+            *   `patch_shop_config`: Updates the shop configuration with new values.
+            *   Helper functions for URL parsing and shop identification.
+        *   **Tool Implementation:** Specific tools like the banner management tool in `app/agents/voice/automatic/tools/breeze/banner.py` use these utility functions to perform their operations.
+        *   **Context Passing:** Shop-specific context (shop ID, URL, merchant ID, user ID) is passed during tool initialization and stored as module-level variables.
+        *   **Error Handling:** Comprehensive error handling with detailed logging and user-friendly error messages.
+    *   **Rationale:**
+        *   Promotes code reuse by centralizing common shop configuration operations.
+        *   Enhances maintainability by separating the utility functions from the specific tool implementations.
+        *   Improves error handling and logging for better debugging and user experience.
+    *   **Impact:** Establishes a pattern for future tools that need to interact with shop configurations, ensuring consistency and reducing code duplication.
+
 ## Testing Patterns
 
 *

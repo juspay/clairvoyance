@@ -22,6 +22,7 @@ def initialize_tools(
     shop_type: str | None = None,
     merchant_id: str | None = None,
     session_id: str | None = None,
+    user_id: str | None = None,
 ):
     """
     Initializes tools based on the operating mode and available tokens.
@@ -33,6 +34,8 @@ def initialize_tools(
     :param shop_id: The shop ID, if available.
     :param shop_type: The shop type, if available.
     :param session_id: The session ID, if available.
+    :param merchant_id: The merchant ID, if available.
+    :param user_id: The user ID, if available.
     """
     providers = []
     if breeze_token:
@@ -89,7 +92,16 @@ def initialize_tools(
             breeze.analytics.sessionId = session_id
             all_tools.extend(breeze.tools.standard_tools)
             all_tool_functions.update(breeze.tool_functions)
-            logger.info(f"Loaded {len(breeze.tools.standard_tools)} real-time Breeze tools.")
+            logger.info(f"Loaded {len(breeze.tools.standard_tools)} real-time Breeze analytics tools.")
+        if "breeze" in providers and breeze_token and shop_id and shop_url and merchant_id:
+            breeze.configuration.shop_id = shop_id
+            breeze.configuration.shop_url = shop_url
+            breeze.configuration.merchant_id = merchant_id
+            breeze.configuration.user_id = user_id or "unknown"
+            breeze.configuration.breeze_token = breeze_token
+            all_tools.extend(breeze.configuration_tools.standard_tools)
+            all_tool_functions.update(breeze.configuration_tool_functions)
+            logger.info(f"Loaded {len(breeze.configuration_tools.standard_tools)} real-time Breeze configuration tools.")
 
     # Create a single ToolsSchema with all aggregated tools
     final_tools = ToolsSchema(standard_tools=all_tools)

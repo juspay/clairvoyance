@@ -100,6 +100,8 @@ SELECTIVE_MCP_FUNCTIONS = [func.strip() for func in _selective_mcp_functions_str
 logger.info(f"Shops enabled for Automatic MCP Server: {SHOPS_FOR_AUTOMATIC_MCP_SERVER}")
 logger.info(f"Selective MCP functions enabled: {SELECTIVE_MCP_FUNCTIONS}")
 
+LIGHTHOUSE_APP_URL = os.environ.get("LIGHTHOUSE_APP_URL", "http://localhost:5173")
+
 # Context Summarization Configuration
 ENABLE_SUMMARIZATION = os.environ.get("ENABLE_SUMMARIZATION", "true").lower() == "true"
 MAX_TURNS_BEFORE_SUMMARY = int(os.environ.get("MAX_TURNS_BEFORE_SUMMARY", 10))

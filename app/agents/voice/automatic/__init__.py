@@ -129,6 +129,7 @@ async def main():
                 shop_type=args.shop_type,
                 merchant_id=args.merchant_id,
                 session_id=args.session_id,
+                user_id=args.user_name,
             )
         else:
             tools, tool_functions = initialize_tools(
