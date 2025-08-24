@@ -26,6 +26,8 @@ The primary focus of recent development has been to enable the voice agent to us
     4. Two types of banners are supported: login page announcements and payment page announcements.
     5. The tool interacts with the shop configuration API to manage these banners.
 
+- **Enhanced Analytics Metrics:** The Breeze analytics tools have been updated to include the `getAllMetricsFromCKH` parameter. This parameter is set to `True` when the `operational_tab` is 'OVERVIEW' to fetch a more comprehensive set of metrics.
+
 ## 3. Next Steps & Considerations
 
 - **Security Analysis:** An analysis was performed to identify how sensitive data is exposed. Key risks include the direct exposure of tool schemas and results to the LLM. The `mcp_context` is not directly exposed, but it defines the permissions for the tools the LLM can use.

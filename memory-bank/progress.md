@@ -10,6 +10,7 @@
 - **Date-Preserving Summaries:** The summarization prompt has been updated to ensure that dates and time ranges are preserved in conversation summaries.
 - **Banner Management Tool:** The new banner management tool is functional. It allows the voice agent to create, update, and remove announcement banners on login and payment pages. The tool includes comprehensive error handling and logging, and integrates with the shop configuration API.
 - **Shop Configuration Utilities:** The utility functions for shop configuration management are working correctly. They provide a robust foundation for future tools that need to interact with shop configurations.
+- **Enhanced Analytics:** The Breeze analytics tools now fetch more comprehensive metrics for the 'OVERVIEW' tab by utilizing the `getAllMetricsFromCKH` parameter.
 
 ## 2. What's Left to Build
 

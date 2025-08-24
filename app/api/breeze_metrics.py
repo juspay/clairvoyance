@@ -41,7 +41,8 @@ async def get_breeze_analytics(
         "endTime": end_time_iso,
         "operationalTab": "OVERVIEW",
         "granularityFilter": None, # JSONObject.NULL in Kotlin maps to None in Python for json.dumps
-        "shopType": shop_type
+        "shopType": shop_type,
+        "getAllMetricsFromCKH": True
     }
 
     headers = {

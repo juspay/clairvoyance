@@ -61,7 +61,8 @@ async def _make_breeze_request(params: FunctionCallParams, operational_tab: str)
         "endTime": end_time_iso,
         "operationalTab": operational_tab,
         "granularityFilter": {"timeGranularity": "DAILY", "paymentMethods": "ALL"},
-        "shopType": shop_type
+        "shopType": shop_type,
+        "getAllMetricsFromCKH": True if operational_tab == "OVERVIEW" else False
     }
     headers = {
         "Content-Type": "application/json",
@@ -92,7 +93,7 @@ async def _make_breeze_request(params: FunctionCallParams, operational_tab: str)
 
 async def get_breeze_sales_data(params: FunctionCallParams):
     """Fetches sales data from the Breeze analytics API."""
-    await _make_breeze_request(params, "SALES")
+    await _make_breeze_request(params, "OVERVIEW")
 
 
 async def get_breeze_orders_data(params: FunctionCallParams):
