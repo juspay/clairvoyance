@@ -246,7 +246,7 @@ async def get_breeze_address_data(params: FunctionCallParams):
 
 get_breeze_sales_data_function = FunctionSchema(
     name="get_breeze_sales_data",
-    description="Fetches sales data (gross sales, net sales, discounts, shipping, tax, total sales) from Breeze analytics for a given shop and time range. Time should be provided in IST (e.g., '2025-06-20 00:00:00').",
+    description="Fetches sales data (gross sales, net sales, discounts, shipping, tax, total sales) from Breeze analytics for a given shop and time range. Time should be provided in IST (e.g., '2025-06-20 00:00:00'). Default to today if no timeframe specified.",
     properties={
         "startTime": {
             "type": "string",
@@ -262,7 +262,7 @@ get_breeze_sales_data_function = FunctionSchema(
 
 get_breeze_orders_data_function = FunctionSchema(
     name="get_breeze_orders_data",
-    description="Fetches order data (total orders, average order value, total sales) from Breeze analytics for a given shop and time range. Time should be provided in IST (e.g., '2025-06-20 00:00:00').",
+    description="Fetches order data (total orders, average order value, total sales) from Breeze analytics for a given shop and time range. Time should be provided in IST (e.g., '2025-06-20 00:00:00'). Default to today if no timeframe specified.",
     properties={
         "startTime": {
             "type": "string",
@@ -278,7 +278,7 @@ get_breeze_orders_data_function = FunctionSchema(
 
 get_breeze_checkout_data_function = FunctionSchema(
     name="get_breeze_checkout_data",
-    description="Fetches checkout conversion funnel data (e.g., clicked checkout, logged in, placed order) from Breeze analytics for a given shop and time range. Time should be provided in IST (e.g., '2025-06-20 00:00:00').",
+    description="Fetches checkout conversion funnel data (e.g., clicked checkout, logged in, placed order) from Breeze analytics for a given shop and time range. Time should be provided in IST (e.g., '2025-06-20 00:00:00'). Default to today if no timeframe specified.",
     properties={
         "startTime": {
             "type": "string",
@@ -294,7 +294,7 @@ get_breeze_checkout_data_function = FunctionSchema(
 
 get_breeze_conversion_data_function = FunctionSchema(
     name="get_breeze_conversion_data",
-    description="Fetches conversion rate data (total sessions, orders placed, conversion rate) from Breeze analytics for a given shop and time range. Time should be provided in IST (e.g., '2025-06-20 00:00:00').",
+    description="Fetches conversion rate data (total sessions, orders placed, conversion rate) from Breeze analytics for a given shop and time range. Time should be provided in IST (e.g., '2025-06-20 00:00:00'). Default to today if no timeframe specified.",
     properties={
         "startTime": {
             "type": "string",
@@ -310,7 +310,7 @@ get_breeze_conversion_data_function = FunctionSchema(
 
 get_breeze_marketing_data_function = FunctionSchema(
     name="get_breeze_marketing_data",
-    description="Fetches marketing attribution data (UTM source, medium, campaign, etc.) from Breeze analytics for a given shop and time range. Also provides top referrers by website, showing which external sites are driving the most traffic to the shop. Time should be provided in IST (e.g., '2025-06-20 00:00:00').",
+    description="Fetches marketing attribution data (UTM source, medium, campaign, etc.) from Breeze analytics for a given shop and time range. Also provides top referrers by website, showing which external sites are driving the most traffic to the shop. Time should be provided in IST (e.g., '2025-06-20 00:00:00'). Default to today if no timeframe specified.",
     properties={
         "startTime": {
             "type": "string",
@@ -326,7 +326,7 @@ get_breeze_marketing_data_function = FunctionSchema(
 
 get_breeze_address_data_function = FunctionSchema(
     name="get_breeze_address_data",
-    description="Fetches address-related analytics (e.g., total logged-in users, users with prefilled addresses, address validation metrics) from Breeze analytics for a given shop and time range. Time should be provided in IST (e.g., '2025-06-20 00:00:00').",
+    description="Fetches address-related analytics (e.g., total logged-in users, users with prefilled addresses, address validation metrics) from Breeze analytics for a given shop and time range. Time should be provided in IST (e.g., '2025-06-20 00:00:00'). Default to today if no timeframe specified.",
     properties={
         "startTime": {
             "type": "string",

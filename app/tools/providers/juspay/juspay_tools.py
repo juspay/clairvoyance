@@ -28,37 +28,37 @@ time_input_schema = {
 
 get_sr_success_rate_declaration = {
     "name": "getSRSuccessRateByTime",
-    "description": "This tool calculates the overall success rate (SR) for transactions over a specified time interval.",
+    "description": "This tool calculates the overall success rate (SR) for transactions over a specified time interval. Default to today if no timeframe specified.",
     "parameters": time_input_schema
 }
 
 payment_method_wise_sr_declaration = {
     "name": "getPaymentMethodWiseSRByTime",
-    "description": "This tool fetches a breakdown of the success rate (SR) by payment method over a specified time interval.",
+    "description": "This tool fetches a breakdown of the success rate (SR) by payment method over a specified time interval. Default to today if no timeframe specified.",
     "parameters": time_input_schema
 }
 
 failure_transactional_data_declaration = {
     "name": "getFailureTransactionalData",
-    "description": "This tool retrieves transactional data for failed transactions. The returned data highlights the top failure reasons and their associated payment methods.",
+    "description": "This tool retrieves transactional data for failed transactions. The returned data highlights the top failure reasons and their associated payment methods. Default to today if no timeframe specified.",
     "parameters": time_input_schema
 }
 
 success_transactional_data_declaration = {
     "name": "getSuccessTransactionalData",
-    "description": "This tool retrieves the count of successful transactions (i.e. those with a payment_status of SUCCESS) for each payment method over a specified time interval.",
+    "description": "This tool retrieves the count of successful transactions (i.e. those with a payment_status of SUCCESS) for each payment method over a specified time interval. Default to today if no timeframe specified.",
     "parameters": time_input_schema
 }
 
 gmv_order_value_payment_method_wise_declaration = {
     "name": "getGMVOrderValuePaymentMethodWise",
-    "description": "This tool retrieves the Gross Merchandise Value (GMV) for each payment method over a specified time interval.",
+    "description": "This tool retrieves the Gross Merchandise Value (GMV) for each payment method over a specified time interval. Default to today if no timeframe specified.",
     "parameters": time_input_schema
 }
 
 average_ticket_payment_wise_declaration = {
     "name": "getAverageTicketPaymentWise",
-    "description": "This tool calculates the average ticket size for each payment method over a specified time interval.",
+    "description": "This tool calculates the average ticket size for each payment method over a specified time interval. Default to today if no timeframe specified.",
     "parameters": time_input_schema
 }
 

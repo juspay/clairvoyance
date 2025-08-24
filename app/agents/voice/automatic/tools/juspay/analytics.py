@@ -891,14 +891,14 @@ time_input_schema = {
 
 get_sr_success_rate_function = FunctionSchema(
     name="get_sr_success_rate_by_time",
-    description="Get the overall payment success rate for all transactions within a specified time range. Use this to understand the general health of the payment system.",
+    description="Get the overall payment success rate for all transactions within a specified time range. Use this to understand the general health of the payment system. Default to today if no timeframe specified.",
     properties=time_input_schema["properties"],
     required=time_input_schema["required"],
 )
 
 payment_analytics_by_dimension_function = FunctionSchema(
     name="get_payment_analytics_by_dimension",
-    description="Retrieves time-bound KPIs—total transaction volume, success rate, and transaction count—broken down by the selected dimension. Useful to analyze performance by gateway, instrument category, or specific instrument type (e.g., Visa, Mastercard). Always aim to extract as many dimensions as possible for a comprehensive snapshot.",
+    description="Retrieves time-bound KPIs—total transaction volume, success rate, and transaction count—broken down by the selected dimension. Useful to analyze performance by gateway, instrument category, or specific instrument type (e.g., Visa, Mastercard). Always aim to extract as many dimensions as possible for a comprehensive snapshot. Default to today if no timeframe specified.",
     properties={
         **time_input_schema["properties"],
         "dimension": {
@@ -912,35 +912,35 @@ payment_analytics_by_dimension_function = FunctionSchema(
 
 failure_transactional_data_function = FunctionSchema(
     name="get_failure_transactional_data_by_time",
-    description="Get a list of the top transaction failure reasons and the payment methods they occurred on within a specified time range. Use this to diagnose the most common payment issues.",
+    description="Get a list of the top transaction failure reasons and the payment methods they occurred on within a specified time range. Use this to diagnose the most common payment issues. Default to today if no timeframe specified.",
     properties=time_input_schema["properties"],
     required=time_input_schema["required"],
 )
 
 success_transactional_data_function = FunctionSchema(
     name="get_success_transactional_data_by_time",
-    description="Get the total count of successful transactions for each payment method within a specified time range. Use this to see which payment methods are most popular.",
+    description="Get the total count of successful transactions for each payment method within a specified time range. Use this to see which payment methods are most popular. Default to today if no timeframe specified.",
     properties=time_input_schema["properties"],
     required=time_input_schema["required"],
 )
 
 gmv_order_value_payment_method_wise_function = FunctionSchema(
     name="get_gmv_order_value_payment_method_wise_by_time",
-    description="Get the total Gross Merchandise Value (GMV) for each payment method within a specified time range. The results can be summed to calculate the total payment method GMV/sales. Use this to understand the revenue contribution of each payment method and the overall sales performance.",
+    description="Get the total Gross Merchandise Value (GMV) for each payment method within a specified time range. The results can be summed to calculate the total payment method GMV/sales. Use this to understand the revenue contribution of each payment method and the overall sales performance. Default to today if no timeframe specified.",
     properties=time_input_schema["properties"],
     required=time_input_schema["required"],
 )
 
 average_ticket_payment_wise_function = FunctionSchema(
     name="get_average_ticket_payment_wise_by_time",
-    description="Get the average transaction value (ticket size) for each payment method within a specified time range. Use this to analyze customer spending habits across different payment options.",
+    description="Get the average transaction value (ticket size) for each payment method within a specified time range. Use this to analyze customer spending habits across different payment options. Default to today if no timeframe specified.",
     properties=time_input_schema["properties"],
     required=time_input_schema["required"],
 )
 
 merchant_offer_analytics_function = FunctionSchema(
     name="merchant_offer_analytics",
-    description="Fetches a list of all active merchant offers and their performance data. Use this to find out what the current offers are, how they are performing, and to diagnose any errors related to offer application.",
+    description="Fetches a list of all active merchant offers and their performance data. Use this to find out what the current offers are, how they are performing, and to diagnose any errors related to offer application. Default to today if no timeframe specified.",
     properties=time_input_schema["properties"],
     required=time_input_schema["required"],
 )
