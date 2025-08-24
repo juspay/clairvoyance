@@ -92,7 +92,7 @@ async def _make_breeze_request(params: FunctionCallParams, operational_tab: str)
 
 async def get_breeze_sales_data(params: FunctionCallParams):
     """Fetches sales data from the Breeze analytics API."""
-    await _make_breeze_request(params, "OVERVIEW")
+    await _make_breeze_request(params, "SALES")
 
 
 async def get_breeze_orders_data(params: FunctionCallParams):
