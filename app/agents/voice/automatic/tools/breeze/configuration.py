@@ -142,10 +142,7 @@ async def manage_announcement_banner(params: FunctionCallParams):
             patch_result = await patch_shop_config(shop_url, user_id, config_to_patch, breeze_token)
 
             logger.info(f"Updated shop config for {shop_url} with changes to both announcement types")
-            logger.info(f"Config changes: {json.dumps({
-                'loginPageAnnouncementText': config_to_patch.get('loginPageAnnouncementText'),
-                'announcementBannerText': config_to_patch.get('announcementBannerText')
-            })}")
+            logger.info(f"Config changes: {json.dumps({'loginPageAnnouncementText': config_to_patch.get('loginPageAnnouncementText'), 'announcementBannerText': config_to_patch.get('announcementBannerText')})}")
             
             # If patch was successful, fetch and log the updated configuration
             if patch_result and patch_result.get("status") != "failure":
