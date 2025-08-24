@@ -4,6 +4,7 @@ from datetime import datetime
 import pytz
 
 from app.core.logger import logger
+from app.core.config import ENABLE_ALL_METRICS_FROM_CKH
 from pipecat.services.llm_service import FunctionCallParams
 from pipecat.adapters.schemas.function_schema import FunctionSchema
 from pipecat.adapters.schemas.tools_schema import ToolsSchema
@@ -62,7 +63,7 @@ async def _make_breeze_request(params: FunctionCallParams, operational_tab: str)
         "operationalTab": operational_tab,
         "granularityFilter": {"timeGranularity": "DAILY", "paymentMethods": "ALL"},
         "shopType": shop_type,
-        "getAllMetricsFromCKH": True if operational_tab == "OVERVIEW" else False
+        "getAllMetricsFromCKH": ENABLE_ALL_METRICS_FROM_CKH and operational_tab == "OVERVIEW"
     }
     headers = {
         "Content-Type": "application/json",

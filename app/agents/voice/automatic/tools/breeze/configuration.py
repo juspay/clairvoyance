@@ -9,6 +9,8 @@ from pipecat.adapters.schemas.tools_schema import ToolsSchema
 from .utils import (
     get_current_shop_config_data,
     patch_shop_config,
+    format_announcement_html,
+    remove_html_tags,
 )
 
 # These will be set by the initializer
@@ -19,45 +21,42 @@ merchant_id: str | None = None
 user_id: str | None = None
 
 
-class BannerType(str, Enum):
-    LOGIN_PAGE_ANNOUNCEMENT = "loginPageAnnouncement"
-    PAYMENT_PAGE_ANNOUNCEMENT = "paymentPageAnnouncement"
-
-class Action(str, Enum):
+class BannerAction(str, Enum):
+    FETCH = "fetch"
     ADD = "add"
     UPDATE = "update"
     REMOVE = "remove"
 
-async def create_announcement_banner(params: FunctionCallParams):
+async def manage_announcement_banner(params: FunctionCallParams):
     """
-    Manages banners by adding, updating, or removing them from the shop's configuration.
-    
-    This tool can handle:
-    - Login Page Announcements: Simple text messages shown on the login page.
-    - Payment Page Announcements: Simple text messages shown on the payment page.
+    Manages all announcement banner operations including fetching, creating, updating, and deleting.
     
     Actions you can perform:
-    - add: Create a new announcement.
-    - update: Change the content of an existing announcement.
-    - remove: Delete an announcement.
+    - fetch: Retrieve the current announcement banner.
+    - add: Create a new announcement banner.
+    - update: Change the content of an existing announcement banner.
+    - remove: Remove an announcement banner.
+    
+    The tool updates both login page and payment page announcements simultaneously.
     """
     try:
-        # Default to loginPageAnnouncement if bannerType is not provided
-        banner_type = params.arguments.get("bannerType", "loginPageAnnouncement")
         action = params.arguments.get("action")
         description = params.arguments.get("description")
-
-        if not shop_id or not shop_url or not merchant_id or not breeze_token:
-            logger.error("Banner tool called without required context (breezeToken, shopId, shopUrl, merchantId).")
+        
+        # Validate action
+        if not action:
+            await params.result_callback({"success": False, "error": "Action is required."})
+            return
+            
+        logger.info(f"Banner operation started: {action}")
+        
+        # For all actions, we need shop_url
+        if not shop_url:
+            logger.error("Banner operation called without required shop URL.")
             await params.result_callback({"success": False, "error": "Banner tool is not configured with shop information."})
             return
-
-        logger.info(f"updateBanner started: {action} for {banner_type}")
-        
-        if (action == "add" or action == "update") and not description:
-            await params.result_callback({"success": False, "error": "Description is required when adding or updating a banner."})
-            return
-        
+            
+        # Fetch shop configuration data once
         try:
             config = await get_current_shop_config_data(shop_url)
         except ValueError as e:
@@ -68,31 +67,85 @@ async def create_announcement_banner(params: FunctionCallParams):
             })
             return
             
-        config_to_patch = {**config}
-        config_key = None
+        # For fetch action, we only need shop_url
+        if action == BannerAction.FETCH:
+            # Extract announcement text from config (both keys have the same content)
+            announcement_text = config.get("loginPageAnnouncementText", "")
+            
+            # Check if announcement is present
+            if not announcement_text:
+                # Prepare result indicating no banner is set
+                result = {
+                    "success": True,
+                    "announcement": None,
+                    "message": "No announcement banner is currently set for this merchant."
+                }
+                logger.info(f"No announcement banner found for {shop_url}")
+            else:
+                clean_announcement = remove_html_tags(announcement_text)
 
-        if(banner_type == "paymentPageAnnouncement"):
-            config_key = "announcementBannerText"
-        elif(banner_type == "loginPageAnnouncement"):
-            config_key = "loginPageAnnouncementText"
-
-
-        if config_key is None:
-            await params.result_callback({"success": False, "error": "Invalid banner type."})
+                if not clean_announcement or len(clean_announcement) == 0:
+                    result = {
+                        "success": True,
+                        "announcement": None,
+                        "message": "No announcement content found."
+                    }
+                    logger.info(f"No announcement content found for {shop_url}")
+                else:
+                    result = {
+                        "success": True,
+                        "announcement": clean_announcement
+                    }
+                    
+                    logger.info(f"Fetched announcement for {shop_url}: {clean_announcement}")
+            
+            # Return the result
+            await params.result_callback(result)
             return
+            
+        # For all other actions, we need full shop information
+        if not shop_id or not merchant_id or not breeze_token:
+            logger.error("Banner operation called without required context (breezeToken, shopId, merchantId).")
+            await params.result_callback({"success": False, "error": "Banner tool is not configured with shop information."})
+            return
+            
+        # Validate description for add and update actions
+        if (action == BannerAction.ADD or action == BannerAction.UPDATE) and not description:
+            await params.result_callback({"success": False, "error": "Description is required when adding or updating a banner."})
+            return
+            
+        config_to_patch = {**config}
+        
+        # Define both config keys that will be updated
+        login_page_key = "loginPageAnnouncementText"
+        payment_page_key = "announcementBannerText"
 
-        if action == "add" or action == "update":
-            config_to_patch[config_key] = description
-            logger.info(f"Setting {config_key} to '{description}'")
-        elif action == "remove":
-            del config_to_patch[config_key]
-            logger.info(f"Deleted {config_key}")
+        if action == BannerAction.ADD or action == BannerAction.UPDATE:
+            # Format the description with HTML styling
+            formatted_description = format_announcement_html(description)
+            
+            # Update both announcement types with the same formatted content
+            config_to_patch[login_page_key] = formatted_description
+            config_to_patch[payment_page_key] = formatted_description
+            
+            logger.info(f"Setting both announcement types to '{formatted_description}'")
+        elif action == BannerAction.REMOVE:
+            # Remove both announcement types
+            if login_page_key in config_to_patch:
+                del config_to_patch[login_page_key]
+            if payment_page_key in config_to_patch:
+                del config_to_patch[payment_page_key]
+                
+            logger.info("Deleted both announcement types")
         
         if merchant_id == config.get("merchantId"):
             patch_result = await patch_shop_config(shop_url, user_id, config_to_patch, breeze_token)
 
-            logger.info(f"Updated shop config for {shop_url} with changes to {config_key}")
-            logger.info(f"Config changes: {json.dumps({banner_type: config_to_patch.get(config_key)})}")
+            logger.info(f"Updated shop config for {shop_url} with changes to both announcement types")
+            logger.info(f"Config changes: {json.dumps({
+                'loginPageAnnouncementText': config_to_patch.get('loginPageAnnouncementText'),
+                'announcementBannerText': config_to_patch.get('announcementBannerText')
+            })}")
             
             # If patch was successful, fetch and log the updated configuration
             if patch_result and patch_result.get("status") != "failure":
@@ -110,47 +163,43 @@ async def create_announcement_banner(params: FunctionCallParams):
         
     except Exception as e:
         error_message = str(e)
-        logger.error(f"updateBanner error: {error_message}")
+        logger.error(f"manageAnnouncementBanner error: {error_message}")
         await params.result_callback({"success": False, "error": error_message})
 
-create_announcement_banner_function = FunctionSchema(
-    name="create_announcement_banner",
-    description="""Manages banners by adding, updating, or removing them from the shop's configuration.
+manage_announcement_banner_function = FunctionSchema(
+    name="manage_announcement_banner",
+    description="""Manages all announcement banner operations including fetching, creating, updating, and deleting.
 
 This tool can handle:
 - **Login Page Announcements**: Simple text messages shown on the login page.
 - **Payment Page Announcements**: Simple text messages shown on the payment page.
 
 Actions you can perform:
-- **add**: Create a new announcement.
-- **update**: Change the content of an existing announcement.
-- **remove**: Delete an announcement.
+- **fetch**: Retrieve the current announcement banner.
+- **add**: Create a new announcement banner.
+- **update**: Change the content of an existing announcement banner.
+- **remove**: Remove an announcement banner.
 
-For announcements, only a description is needed.
+For add and update actions, a description is required.
 
-By default, if no banner type is specified, the tool will operate on the Login Page Announcement.""",
+The tool updates both login page and payment page announcements simultaneously with the same content.
+All announcements are formatted with HTML styling for consistent appearance.""",
     properties={
-        "bannerType": {
-            "type": "string",
-            "enum": [bt.value for bt in BannerType],
-            "description": """The type of banner or message to manage.
-- 'loginPageAnnouncement': A simple text message displayed on the login page. Good for general announcements. This is the default if not specified.
-- 'paymentPageAnnouncement': A simple text message displayed on the payment page. Good for important notices during checkout. 
-"""
-        },
         "action": {
             "type": "string",
-            "enum": [a.value for a in Action],
-            "description": "The operation to perform. 'add' creates a new item. 'update' modifies an existing item. 'remove' deletes an item."
+            "enum": [a.value for a in BannerAction],
+            "description": "The operation to perform on the announcement banner: 'fetch' retrieves the current banner, 'add' creates a new banner, 'update' changes an existing banner's content, and 'remove' deletes the banner."
         },
         "description": {
             "type": "string",
-            "description": "The content of the banner. Required when adding or updating any type of banner."
+            "description": "The content of the banner. Required when creating or updating a banner."
         }
     },
     required=["action"]
 )
 
-standard_tools = [create_announcement_banner_function]
-tool_functions = {"create_announcement_banner": create_announcement_banner}
+standard_tools = [manage_announcement_banner_function]
+tool_functions = {
+    "manage_announcement_banner": manage_announcement_banner
+}
 tools = ToolsSchema(standard_tools=standard_tools)

@@ -1,6 +1,6 @@
 """
 Utility functions for Breeze shop operations including URL parsing, shop name extraction,
-and configuration management.
+configuration management, and announcement formatting.
 """
 
 import json
@@ -175,3 +175,38 @@ async def patch_shop_config(
                 "data": None,
                 "statusCode": 500
             }
+
+def format_announcement_html(description: str) -> str:
+    """
+    Formats the announcement text with HTML styling.
+    
+    Args:
+        description: The announcement text to format
+        
+    Returns:
+        HTML formatted announcement text
+    """
+    return f"<div style='text-align: center; width: 100vw;background: green;color: white;padding:8px 0px;font-size:13px;'>{description}</div>"
+
+def remove_html_tags(html_text: str) -> str:
+    """
+    Extracts text content between <div>...</div> and strips inner HTML tags.
+
+    Args:
+        html_text: The HTML-formatted text.
+
+    Returns:
+        Plain text string from inside the div tags.
+    """
+    if not html_text:
+        return ""
+
+    # Find everything between <div>...</div>
+    match = re.search(r"<div.*?>(.*?)</div>", html_text, flags=re.DOTALL)
+    
+    if not match:
+        return ""
+        
+    content = match.group(1)
+    clean_text = re.sub(r"<[^>]*>", "", content).strip()
+    return clean_text

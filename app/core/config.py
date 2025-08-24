@@ -101,6 +101,7 @@ logger.info(f"Shops enabled for Automatic MCP Server: {SHOPS_FOR_AUTOMATIC_MCP_S
 logger.info(f"Selective MCP functions enabled: {SELECTIVE_MCP_FUNCTIONS}")
 
 LIGHTHOUSE_APP_URL = os.environ.get("LIGHTHOUSE_APP_URL", "http://localhost:5173")
+ENABLE_ALL_METRICS_FROM_CKH = os.environ.get("ENABLE_ALL_METRICS_FROM_CKH", "true").lower() == "true"
 
 # Context Summarization Configuration
 ENABLE_SUMMARIZATION = os.environ.get("ENABLE_SUMMARIZATION", "true").lower() == "true"
