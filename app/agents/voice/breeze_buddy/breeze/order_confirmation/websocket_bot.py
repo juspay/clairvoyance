@@ -9,6 +9,7 @@ from twilio.http.http_client import TwilioHttpClient
 from fastapi import WebSocket
 from loguru import logger
 from pipecat.audio.vad.silero import SileroVADAnalyzer
+from pipecat.audio.vad.vad_analyzer import VADParams
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
@@ -28,7 +29,7 @@ from pydantic import ValidationError
 
 from app.agents.voice.breeze_buddy.breeze.order_confirmation.types import OrderData
 from app.core.security.sha import calculate_hmac_sha256
-from app.agents.voice.breeze_buddy.breeze.order_confirmation.utils import indian_number_to_speech, OUTCOME_TO_ENUM
+from app.agents.voice.breeze_buddy.breeze.order_confirmation.utils import indian_number_to_speech, OUTCOME_TO_ENUM, get_stt_service
 from app.schemas import CallOutcome
 from app.services.call_queue_manager import call_queue_manager
 
@@ -38,12 +39,15 @@ from app.core.config import (
     AZURE_OPENAI_API_KEY,
     AZURE_OPENAI_ENDPOINT,
     AZURE_BREEZE_BUDDY_OPENAI_MODEL,
-    GOOGLE_CREDENTIALS_JSON,
     ELEVENLABS_API_KEY,
     ELEVENLABS_BB_VOICE_ID,
     ELEVENLABS_MODEL_ID,
     ELEVENLABS_VOICE_SPEED,
     ORDER_CONFIRMATION_WEBHOOK_SECRET_KEY,
+    BREEZE_BUDDY_VAD_CONFIDENCE,
+    BREEZE_BUDDY_VAD_START_SECS,
+    BREEZE_BUDDY_VAD_STOP_SECS,
+    BREEZE_BUDDY_VAD_MIN_VOLUME,
 )
 
 load_dotenv(override=True)
@@ -183,18 +187,20 @@ class OrderConfirmationBot:
                 audio_in_enabled=True,
                 audio_out_enabled=True,
                 add_wav_header=False,
-                vad_analyzer=SileroVADAnalyzer(),
+                vad_analyzer=SileroVADAnalyzer(
+                    sample_rate=16000,
+                    params=VADParams(
+                        confidence=BREEZE_BUDDY_VAD_CONFIDENCE,
+                        start_secs=BREEZE_BUDDY_VAD_START_SECS,
+                        stop_secs=BREEZE_BUDDY_VAD_STOP_SECS,
+                        min_volume=BREEZE_BUDDY_VAD_MIN_VOLUME,
+                    )
+                ),
                 serializer=serializer,
             ),
         )
 
-        stt = GoogleSTTService(
-            params=GoogleSTTService.InputParams(
-                languages=[Language.EN_US, Language.EN_IN],
-                enable_interim_results=False,
-            ),
-            credentials=GOOGLE_CREDENTIALS_JSON,
-        )
+        stt = get_stt_service()
         llm = AzureLLMService(
             api_key=AZURE_OPENAI_API_KEY,
             endpoint=AZURE_OPENAI_ENDPOINT,

@@ -1,4 +1,33 @@
 from app.schemas import CallOutcome
+from app.core.logger import logger
+from app.core import config
+
+from pipecat.services.google.stt import GoogleSTTService
+from pipecat.services.openai.stt import OpenAISTTService
+from pipecat.transcriptions.language import Language
+
+def get_stt_service():
+    """
+    Returns an STT service instance based on the environment configuration.
+    
+    Args:
+        voice_name: Voice name to determine STT provider override for specific voices
+    """
+    # Check for MIA voice with OpenAI override
+    if config.BREEZE_BUDDY_STT_SERVICE == 'openai':
+        logger.info("Using OpenAI STT service for Breeze Buddy voice")
+        return OpenAISTTService(
+            api_key=config.OPENAI_STT_API_KEY,
+            model=config.OPENAI_STT_MODEL,
+            language=Language.EN,
+            temperature=0.0,
+        )
+    else:
+        logger.info("Using Google STT service with VAD-based turn detection")
+        return GoogleSTTService(
+            params=GoogleSTTService.InputParams(languages=[Language.EN_US, Language.EN_IN], enable_interim_results=False),
+            credentials=config.GOOGLE_CREDENTIALS_JSON
+        )
 
 # Mapping dictionary for outcome strings to CallOutcome enum values
 OUTCOME_TO_ENUM = {
