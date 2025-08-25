@@ -579,10 +579,10 @@ async def merchant_offer_analytics(params: FunctionCallParams):
         await params.result_callback({"error": f"A critical error occurred in the tool function: {e}"})
 
 
-async def find_offer_by_code(offer_code: str) -> str | None:
+async def find_offer_by_code(offer_code: str) -> dict | None:
     """
-    Helper function to find an offer ID by its offer code.
-    Returns the offer_id if found, None otherwise.
+    Helper function to find an offer by its offer code and return complete offer details.
+    Returns the complete offer data if found, None otherwise.
     """
     if not euler_token or not merchant_id:
         logger.error("Missing authentication token or merchant ID for offer search")
@@ -621,9 +621,10 @@ async def find_offer_by_code(offer_code: str) -> str | None:
                 response_data = response.json()
                 
                 if response_data.get("list") and len(response_data["list"]) > 0:
-                    offer_id = response_data["list"][0].get("offer_id")
-                    logger.info(f"Found offer ID '{offer_id}' for offer code '{offer_code}'")
-                    return offer_id
+                    offer_data = response_data["list"][0]
+                    offer_id = offer_data.get("offer_id")
+                    logger.info(f"Found offer ID '{offer_id}' for offer code '{offer_code}' with complete details")
+                    return offer_data
                 else:
                     logger.warning(f"No offer found with code '{offer_code}'")
                     return None
@@ -634,7 +635,6 @@ async def find_offer_by_code(offer_code: str) -> str | None:
     except Exception as e:
         logger.error(f"Error searching for offer by code '{offer_code}': {e}")
         return None
-
 
 async def delete_euler_offer(params: FunctionCallParams):
     """
@@ -660,11 +660,19 @@ async def delete_euler_offer(params: FunctionCallParams):
         logger.info(f"Attempting to delete Euler offer with code '{offer_code}' for merchant '{merchant_id}'")
 
         # Step 1: Find the offer by code
-        offer_id = await find_offer_by_code(offer_code)
+        offer_data = await find_offer_by_code(offer_code)
         
-        if not offer_id:
+        if not offer_data:
             await params.result_callback({
                 "error": f"Offer with code '{offer_code}' not found. Please verify the offer code and try again."
+            })
+            return
+
+        # Extract offer_id from the returned offer data
+        offer_id = offer_data.get("offer_id")
+        if not offer_id:
+            await params.result_callback({
+                "error": f"Invalid offer data returned for '{offer_code}'. Missing offer_id."
             })
             return
 
@@ -712,80 +720,375 @@ async def delete_euler_offer(params: FunctionCallParams):
         await params.result_callback({"error": f"An unexpected error occurred: {str(e)}"})
 
 
-# async def pause_euler_offer(params: FunctionCallParams):
-#     """
-#     Pauses a promotional offer in the Euler platform based on its offer code.
-#     This temporarily disables the offer but allows it to be reactivated later.
-#     """
-#     try:
-#         offer_code = params.arguments.get("offerCode")
+async def update_euler_offer(params: FunctionCallParams):
+    """
+    Intelligently updates offer details or status in the Euler platform based on provided parameters.
+    
+    - If only 'status' is provided: Updates offer status (PAUSED/EXPIRED/ACTIVE) using status endpoint
+    - If other details are provided: Updates comprehensive offer details using v2/update endpoint
+    
+    This function automatically detects the intent and routes to the appropriate API endpoint.
+    
+    IMPORTANT: The following fields are IMMUTABLE and cannot be updated:
+    - startDate, endDate (offer validity period)
+    - offerDescription (offer description)
+    - sponsoredBy (sponsor information)
+    - paymentInstruments (payment methods)
+    """
+    try:
+        offer_code = params.arguments.get("offerCode")
         
-#         if not offer_code:
-#             await params.result_callback({"error": "Missing required field: offerCode"})
-#             return
+        if not offer_code:
+            await params.result_callback({"error": "Missing required field: offerCode"})
+            return
 
-#         # Authentication check
-#         if not euler_token:
-#             await params.result_callback({"error": "Authentication token is missing. Cannot pause offer."})
-#             return
-
-#         if not merchant_id:
-#             await params.result_callback({"error": "Merchant ID not available in session context. Cannot pause offer."})
-#             return
-
-#         logger.info(f"Attempting to pause Euler offer with code '{offer_code}' for merchant '{merchant_id}'")
-
-#         # Step 1: Find the offer by code
-#         offer_id = await find_offer_by_code(offer_code)
+        # Define immutable fields that cannot be updated
+        IMMUTABLE_FIELDS = ["startDate", "endDate", "offerDescription", "sponsoredBy", "paymentInstruments"]
         
-#         if not offer_id:
-#             await params.result_callback({
-#                 "error": f"Offer with code '{offer_code}' not found. Please verify the offer code and try again."
-#             })
-#             return
-
-#         # Step 2: Pause the offer using the found ID
-#         pause_endpoint = f"{EULER_DASHBOARD_API_URL}/api/offers/dashboard/{offer_id}/pause"
-#         pause_payload = {
-#             "merchant_id": merchant_id,
-#             "offer_id": offer_id
-#         }
+        # Check for restricted fields in the request
+        restricted_fields_found = []
+        for field in IMMUTABLE_FIELDS:
+            if params.arguments.get(field) is not None:
+                restricted_fields_found.append(field)
         
-#         headers = {
-#             'Content-Type': 'application/json',
-#             'x-web-logintoken': euler_token
-#         }
+        if restricted_fields_found:
+            await params.result_callback({
+                "error": f"Cannot update immutable fields: {', '.join(restricted_fields_found)}. These fields cannot be modified after offer creation. If you need to change these values, please create a new offer instead."
+            })
+            return
 
-#         logger.info(f"Pausing offer with ID '{offer_id}' using endpoint: {pause_endpoint}")
+        # Authentication check
+        if not euler_token:
+            await params.result_callback({"error": "Authentication token is missing. Cannot update offer."})
+            return
 
-#         async with httpx.AsyncClient(timeout=10.0) as client:
-#             response = await client.post(pause_endpoint, json=pause_payload, headers=headers)
+        if not merchant_id:
+            await params.result_callback({"error": "Merchant ID not available in session context. Cannot update offer."})
+            return
+
+        logger.info(f"Attempting to update Euler offer details for '{offer_code}' for merchant '{merchant_id}'")
+
+        # Step 1: Find the offer by code and get complete offer data
+        offer_data = await find_offer_by_code(offer_code)
+        
+        if not offer_data:
+            await params.result_callback({
+                "error": f"Offer with code '{offer_code}' not found. Please verify the offer code and try again."
+            })
+            return
+
+        # Extract offer_id from the returned offer data
+        offer_id = offer_data.get("offer_id")
+        if not offer_id:
+            await params.result_callback({
+                "error": f"Invalid offer data returned for '{offer_code}'. Missing offer_id."
+            })
+            return
+
+        # Step 2: Use the offer data from find_offer_by_code as the base (avoiding the failing detailed API)
+        existing_offer = offer_data
+        logger.info(f"Using offer data from search for '{offer_code}' (avoiding detailed API call)")
+
+        # Step 3: Extract user-provided update parameters
+        offer_title = params.arguments.get("offerTitle")
+        offer_description = params.arguments.get("offerDescription")
+        discount_value = params.arguments.get("discountValue")
+        calculation_type = params.arguments.get("calculationType")
+        min_order_amount = params.arguments.get("minOrderAmount")
+        max_discount_amount = params.arguments.get("maxDiscountAmount")
+        start_date = params.arguments.get("startDate")
+        end_date = params.arguments.get("endDate")
+        status = params.arguments.get("status")
+        sponsored_by = params.arguments.get("sponsoredBy")
+        payment_instruments = params.arguments.get("paymentInstruments")
+        offer_type = params.arguments.get("offerType")
+
+        # Step 3.5: Intelligent routing - detect if this is status-only update or comprehensive update
+        detail_params = [offer_title, offer_description, discount_value, calculation_type, 
+                        min_order_amount, max_discount_amount, start_date, end_date, 
+                        sponsored_by, payment_instruments, offer_type]
+        
+        # If only status is provided and no other details, use status-only endpoint
+        if status is not None and all(param is None for param in detail_params):
+            logger.info(f"Detected status-only update for offer '{offer_code}' to '{status}'")
             
-#             if response.status_code == 200:
-#                 success_result = {
-#                     "status": "success",
-#                     "message": f"Successfully paused offer '{offer_code}'",
-#                     "details": {
-#                         "offerCode": offer_code,
-#                         "offerId": offer_id,
-#                         "action": "paused"
-#                     }
-#                 }
-#                 logger.info(f"Successfully paused offer '{offer_code}' (ID: {offer_id})")
-#                 await params.result_callback({"data": json.dumps(success_result)})
-#             else:
-#                 error_text = response.text
-#                 logger.error(f"Failed to pause offer '{offer_code}': {response.status_code} - {error_text}")
-#                 await params.result_callback({
-#                     "error": f"Failed to pause offer '{offer_code}': HTTP {response.status_code}. {error_text}"
-#                 })
+            # Validate status
+            valid_statuses = ["PAUSED", "EXPIRED", "ACTIVE"]
+            if status not in valid_statuses:
+                await params.result_callback({
+                    "error": f"Invalid status '{status}'. Valid statuses are: {', '.join(valid_statuses)}"
+                })
+                return
 
-#     except httpx.TimeoutException:
-#         logger.error(f"Pause offer request timed out for offer '{offer_code}'")
-#         await params.result_callback({"error": "Request timed out. Please try again."})
-#     except Exception as e:
-#         logger.error(f"Critical error in pause_euler_offer: {e}", exc_info=True)
-#         await params.result_callback({"error": f"An unexpected error occurred: {str(e)}"})
+            # Use status-only endpoint
+            status_endpoint = f"{EULER_DASHBOARD_API_URL}/api/offers/dashboard/{offer_id}/status/update"
+            status_payload = {"status": status}
+            
+            headers = {
+                'Content-Type': 'application/json',
+                'x-web-logintoken': euler_token
+            }
+
+            logger.info(f"Using status-only endpoint: {status_endpoint}")
+            
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.post(status_endpoint, json=status_payload, headers=headers)
+                
+                if response.status_code == 200:
+                    action_map = {"PAUSED": "paused", "EXPIRED": "expired", "ACTIVE": "activated"}
+                    action = action_map.get(status, "updated")
+                    
+                    success_result = {
+                        "status": "success",
+                        "message": f"Successfully {action} offer '{offer_code}'",
+                        "details": {
+                            "offerCode": offer_code,
+                            "offerId": offer_id,
+                            "action": action,
+                            "newStatus": status
+                        }
+                    }
+                    logger.info(f"Successfully {action} offer '{offer_code}' (ID: {offer_id})")
+                    await params.result_callback({"data": json.dumps(success_result)})
+                    return
+                else:
+                    error_text = response.text
+                    logger.error(f"Failed to update offer '{offer_code}' status: {response.status_code} - {error_text}")
+                    await params.result_callback({
+                        "error": f"Failed to update offer '{offer_code}' status: HTTP {response.status_code}. {error_text}"
+                    })
+                    return
+
+        # If we reach here, it's a comprehensive details update
+        logger.info(f"Detected comprehensive details update for offer '{offer_code}'")
+
+        # Step 4: Convert dates if provided
+        start_date_iso = None
+        end_date_iso = None
+        if start_date:
+            try:
+                ist = pytz.timezone("Asia/Kolkata")
+                start_date_ist = ist.localize(datetime.strptime(start_date, '%Y-%m-%d %H:%M:%S'))
+                start_date_iso = start_date_ist.isoformat()
+            except Exception as e:
+                await params.result_callback({"error": f"Invalid start date format. Use 'YYYY-MM-DD HH:MM:SS' in IST. Error: {e}"})
+                return
+
+        if end_date:
+            try:
+                ist = pytz.timezone("Asia/Kolkata")
+                end_date_ist = ist.localize(datetime.strptime(end_date, '%Y-%m-%d %H:%M:%S'))
+                end_date_iso = end_date_ist.isoformat()
+            except Exception as e:
+                await params.result_callback({"error": f"Invalid end date format. Use 'YYYY-MM-DD HH:MM:SS' in IST. Error: {e}"})
+                return
+
+        # Step 5: Handle payment instruments if provided
+        payment_instruments_payload = None
+        if payment_instruments:
+            # Payment instrument mapping
+            instrument_map = {
+                "CARD": {
+                    "payment_method_type": "CARD",
+                    "payment_method": [],
+                    "app": [],
+                    "type": [],
+                    "issuer": [],
+                    "variant": []
+                },
+                "NB": {
+                    "payment_method_type": "NB",
+                    "payment_method": [],
+                    "app": [],
+                    "type": [],
+                    "issuer": [],
+                    "variant": []
+                },
+                "WALLET": {
+                    "payment_method_type": "WALLET",
+                    "payment_method": [],
+                    "app": [],
+                    "type": [],
+                    "issuer": [],
+                    "variant": []
+                },
+                "CONSUMER_FINANCE": {
+                    "payment_method_type": "CONSUMER_FINANCE",
+                    "payment_method": [],
+                    "app": [],
+                    "type": [],
+                    "issuer": [],
+                    "variant": []
+                },
+                "REWARD": {
+                    "payment_method_type": "REWARD",
+                    "payment_method": [],
+                    "app": [],
+                    "type": [],
+                    "issuer": [],
+                    "variant": []
+                },
+                "CASH": {
+                    "payment_method_type": "CASH",
+                    "payment_method": ["CASH"],
+                    "app": [],
+                    "type": [],
+                    "issuer": [],
+                    "variant": []
+                },
+                "UPI": {
+                    "payment_method_type": "UPI",
+                    "payment_method": [],
+                    "app": [],
+                    "type": ["UPI_COLLECT", "UPI_PAY", "UPI_QR", "UPI_INAPP"],
+                    "issuer": [],
+                    "variant": []
+                }
+            }
+            
+            payment_instruments_payload = [
+                instrument_map[instrument] for instrument in payment_instruments
+                if instrument in instrument_map
+            ]
+
+        # Step 6: Build update payload using existing data as base, only updating provided fields
+        api_payload = {
+            "application_mode": existing_offer.get("application_mode", "ORDER"),
+            "offer_id": offer_id,
+            "merchant_id": merchant_id,
+            "offer_code": offer_code,
+            "batch_id": existing_offer.get("batch_id", ""),
+            "offer_description": {
+                "title": offer_title if offer_title is not None else existing_offer.get("offer_description", {}).get("title", ""),
+                "description": offer_description if offer_description is not None else existing_offer.get("offer_description", {}).get("description", ""),
+                "tnc": existing_offer.get("offer_description", {}).get("tnc", ""),
+                "sponsored_by": sponsored_by if sponsored_by is not None else existing_offer.get("offer_description", {}).get("sponsored_by", "BREEZE"),
+                "display_title": offer_title if offer_title is not None else existing_offer.get("offer_description", {}).get("display_title", "")
+            },
+            "ui_configs": existing_offer.get("ui_configs", {
+                "is_hidden": "false",
+                "should_validate": "true",
+                "auto_apply": "true",
+                "offer_display_priority": 0,
+                "payment_method_label": ""
+            }),
+            "rule_dsl": {
+                "order": {
+                    "max_quantity": existing_offer.get("rule_dsl", {}).get("order", {}).get("max_quantity"),
+                    "min_quantity": existing_offer.get("rule_dsl", {}).get("order", {}).get("min_quantity"),
+                    "max_order_amount": existing_offer.get("rule_dsl", {}).get("order", {}).get("max_order_amount"),
+                    "min_order_amount": str(min_order_amount) if min_order_amount is not None else existing_offer.get("rule_dsl", {}).get("order", {}).get("min_order_amount", "1"),
+                    "currency": existing_offer.get("rule_dsl", {}).get("order", {}).get("currency", "INR"),
+                    "amount_info": existing_offer.get("rule_dsl", {}).get("order", {}).get("amount_info", [])
+                },
+                "additional_payment_filters": existing_offer.get("rule_dsl", {}).get("additional_payment_filters"),
+                "payment_instrument": payment_instruments_payload if payment_instruments_payload is not None else existing_offer.get("rule_dsl", {}).get("payment_instrument", []),
+                "counters": existing_offer.get("rule_dsl", {}).get("counters", []),
+                "txn_type": existing_offer.get("rule_dsl", {}).get("txn_type", ["ORDER"]),
+                "payment_channel": existing_offer.get("rule_dsl", {}).get("payment_channel", []),
+                "benefits": [
+                    {
+                        "type": offer_type if offer_type is not None else existing_offer.get("rule_dsl", {}).get("benefits", [{}])[0].get("type", "DISCOUNT"),
+                        "calculation_rule": calculation_type if calculation_type is not None else existing_offer.get("rule_dsl", {}).get("benefits", [{}])[0].get("calculation_rule", "ABSOLUTE"),
+                        "value": discount_value if discount_value is not None else existing_offer.get("rule_dsl", {}).get("benefits", [{}])[0].get("value", 0),
+                        "amount_info": existing_offer.get("rule_dsl", {}).get("benefits", [{}])[0].get("amount_info", []),
+                        "max_amount": max_discount_amount if max_discount_amount is not None else existing_offer.get("rule_dsl", {}).get("benefits", [{}])[0].get("max_amount"),
+                        "global_max_amount": existing_offer.get("rule_dsl", {}).get("benefits", [{}])[0].get("global_max_amount")
+                    }
+                ],
+                "filters": existing_offer.get("rule_dsl", {}).get("filters", {
+                    "blacklist": [],
+                    "whitelist": []
+                })
+            },
+            "status": status if status is not None else existing_offer.get("status", "ACTIVE"),
+            "start_time": start_date_iso if start_date_iso is not None else existing_offer.get("start_time"),
+            "end_time": end_date_iso if end_date_iso is not None else existing_offer.get("end_time"),
+            "metadata": {
+                "analytics_offer_code": offer_code,
+                "customerResetPeriodType": existing_offer.get("metadata", {}).get("customerResetPeriodType", "offerPeriod"),
+                "cardResetPeriodType": existing_offer.get("metadata", {}).get("cardResetPeriodType", "offerPeriod"),
+                "productCustomerResetPeriodType": existing_offer.get("metadata", {}).get("productCustomerResetPeriodType", "offerPeriod"),
+                "productCardResetPeriodType": existing_offer.get("metadata", {}).get("productCardResetPeriodType", "offerPeriod"),
+                "upiResetPeriodType": existing_offer.get("metadata", {}).get("upiResetPeriodType", "offerPeriod"),
+                "productUpiResetPeriodType": existing_offer.get("metadata", {}).get("productUpiResetPeriodType", "offerPeriod"),
+                "start_date": start_date_iso if start_date_iso is not None else existing_offer.get("metadata", {}).get("start_date"),
+                "end_date": end_date_iso if end_date_iso is not None else existing_offer.get("metadata", {}).get("end_date")
+            },
+            "udf1": existing_offer.get("udf1"),
+            "udf2": existing_offer.get("udf2"),
+            "udf3": existing_offer.get("udf3"),
+            "udf4": existing_offer.get("udf4"),
+            "udf5": existing_offer.get("udf5"),
+            "udf6": existing_offer.get("udf6"),
+            "udf7": existing_offer.get("udf7"),
+            "udf8": existing_offer.get("udf8"),
+            "udf9": existing_offer.get("udf9"),
+            "udf10": existing_offer.get("udf10"),
+            "minOfferBreakupCheckbox": existing_offer.get("minOfferBreakupCheckbox", False),
+            "offerBreakupBool": existing_offer.get("offerBreakupBool", False),
+            "benefitsAmountInfo": existing_offer.get("benefitsAmountInfo", []),
+            "has_multi_codes": existing_offer.get("has_multi_codes", False),
+            "isFilterBlacklist": existing_offer.get("isFilterBlacklist", False)
+        }
+
+        # Step 7: Update offer using v2/update endpoint
+        update_endpoint = f"{EULER_DASHBOARD_API_URL}/api/offers/dashboard/{offer_id}/v2/update"
+        
+        headers = {
+            'Content-Type': 'application/json',
+            'x-web-logintoken': euler_token
+        }
+
+        logger.info(f"Updating offer details with ID '{offer_id}' using endpoint: {update_endpoint}")
+        logger.info(f"Payload: {json.dumps(api_payload, indent=2)}")
+
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.put(update_endpoint, json=api_payload, headers=headers)
+            
+            if response.status_code == 200:
+                success_result = {
+                    "status": "success",
+                    "message": f"Successfully updated offer '{offer_code}' details",
+                    "details": {
+                        "offerCode": offer_code,
+                        "offerId": offer_id,
+                        "action": "updated",
+                        "updatedFields": {
+                            k: v for k, v in {
+                                "title": offer_title,
+                                "description": offer_description,
+                                "discountValue": discount_value,
+                                "calculationType": calculation_type,
+                                "minOrderAmount": min_order_amount,
+                                "maxDiscountAmount": max_discount_amount,
+                                "startDate": start_date,
+                                "endDate": end_date,
+                                "status": status,
+                                "sponsoredBy": sponsored_by,
+                                "paymentInstruments": payment_instruments,
+                                "offerType": offer_type
+                            }.items() if v is not None
+                        }
+                    }
+                }
+                logger.info(f"Successfully updated offer '{offer_code}' (ID: {offer_id})")
+                await params.result_callback({"data": json.dumps(success_result)})
+            else:
+                error_text = response.text
+                logger.error(f"Failed to update offer '{offer_code}' details: {response.status_code} - {error_text}")
+                await params.result_callback({
+                    "error": f"Failed to update offer '{offer_code}' details: HTTP {response.status_code}. {error_text}"
+                })
+
+    except httpx.TimeoutException:
+        logger.error(f"Update offer details request timed out for offer '{offer_code}'")
+        await params.result_callback({"error": "Request timed out. Please try again."})
+    except Exception as e:
+        logger.error(f"Critical error in update_euler_offer_details: {e}", exc_info=True)
+        await params.result_callback({"error": f"An unexpected error occurred: {str(e)}"})
+
+
 
 
 time_input_schema = {
@@ -938,17 +1241,48 @@ delete_euler_offer_function = FunctionSchema(
     required=["offerCode"]
 )
 
-# pause_euler_offer_function = FunctionSchema(
-#     name="pause_euler_offer",
-#     description="Temporarily pauses a promotional offer in the Euler platform based on its offer code. This disables the offer but allows it to be reactivated later. Use this when you want to temporarily stop an offer without permanently deleting it.",
-#     properties={
-#         "offerCode": {
-#             "type": "string",
-#             "description": "The unique offer code of the offer to pause. Examples: SAVE20, WELCOME10, NEWYEAR2025"
-#         }
-#     },
-#     required=["offerCode"]
-# )
+update_euler_offer_function = FunctionSchema(
+    name="update_euler_offer",
+    description="Intelligently updates offer details or status in the Euler platform by automatically detecting intent based on the provided parameters. This function handles status changes (PAUSED/EXPIRED/ACTIVE), discount value updates, and limited modifications. IMPORTANT: The following fields are IMMUTABLE — startDate, endDate (offer validity period), offerDescription (offer description), sponsoredBy (sponsor information), and paymentInstruments (payment methods). If the user wants to change these values, they must create a new offer instead",
+    properties={
+        "offerCode": {
+            "type": "string",
+            "description": "The unique offer code of the offer to update. Examples: SAVE20, WELCOME10, NEWYEAR2025"
+        },
+        "status": {
+            "type": "string",
+            "description": "New status for the offer. If this is the only parameter provided (besides offerCode), will use fast status-only update.",
+            "enum": ["PAUSED", "EXPIRED", "ACTIVE"]
+        },
+        "offerTitle": {
+            "type": "string",
+            "description": "Updated customer-facing title for the offer. Examples: Get 20% Off on All Items, Welcome Cashback for New Users"
+        },
+        "discountValue": {
+            "type": "number",
+            "description": "Updated discount amount in rupees for absolute discounts, or percentage value for percentage-based discounts"
+        },
+        "calculationType": {
+            "type": "string",
+            "description": "Updated calculation method for the discount",
+            "enum": ["PERCENTAGE", "ABSOLUTE"]
+        },
+        "minOrderAmount": {
+            "type": "number",
+            "description": "Updated minimum order value required to apply this offer in rupees"
+        },
+        "maxDiscountAmount": {
+            "type": "number",
+            "description": "Updated maximum discount amount that can be applied in rupees"
+        },
+        "offerType": {
+            "type": "string",
+            "description": "Updated type of promotional offer",
+            "enum": ["CASHBACK", "DISCOUNT"]
+        }
+    },
+    required=["offerCode"]
+)
 
 tools = ToolsSchema(
     standard_tools=[
@@ -961,9 +1295,10 @@ tools = ToolsSchema(
         merchant_offer_analytics_function,
         create_euler_offer_function,
         delete_euler_offer_function,
-        # pause_euler_offer_function,
+        update_euler_offer_function,
     ]
 )
+
 
 tool_functions = {
     "get_sr_success_rate_by_time": get_sr_success_rate_by_time,
@@ -975,5 +1310,5 @@ tool_functions = {
     "merchant_offer_analytics": merchant_offer_analytics,
     "create_euler_offer": create_euler_offer,
     "delete_euler_offer": delete_euler_offer,
-    # "pause_euler_offer": pause_euler_offer,
+    "update_euler_offer": update_euler_offer,
 }
