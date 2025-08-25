@@ -153,3 +153,11 @@ BREEZE_BUDDY_STT_SERVICE = os.getenv("BREEZE_BUDDY_STT_SERVICE", "google").lower
 # Session inactivity timeout
 AUTOMATIC_SESSION_INACTIVITY_TIMEOUT = float(os.environ.get("AUTOMATIC_SESSION_INACTIVITY_TIMEOUT", 900.0))
 MAX_DAILY_SESSION_LIMIT = int(os.environ.get("MAX_DAILY_SESSION_LIMIT", 1800))
+
+# Human-in-the-Loop (HITL) Configuration
+HITL_ENABLE = os.environ.get("HITL_ENABLE", "true").lower() == "true"
+FUNCTION_CONFIRMATION_TIMEOUT = int(os.environ.get("FUNCTION_CONFIRMATION_TIMEOUT", "30"))
+
+# HITL Actions Configuration
+_hitl_actions_str = os.environ.get("HITL_ACTIONS", "delete")
+HITL_ACTIONS = [action.strip().lower() for action in _hitl_actions_str.split(",") if action.strip()]

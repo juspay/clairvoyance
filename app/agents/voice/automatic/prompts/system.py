@@ -1,6 +1,6 @@
 import datetime
 from app.core.logger import logger
-from app.core.config import ENABLE_SEARCH_GROUNDING
+from app.core.config import ENABLE_SEARCH_GROUNDING, HITL_ENABLE
 from app.agents.voice.automatic.types import TTSProvider
 
 SYSTEM_PROMPT = f"""
@@ -59,6 +59,8 @@ SYSTEM_PROMPT = f"""
                 Provide exactly what was asked—no extra analysis or commentary.
             2. Optional Follow-Up
                 After your direct answer, invite the user to dive deeper (e.g., "Want to see performance metrics for this?").
+   
+
         Time & Date Handling
             1. Interactive Timeframes
                 - *USE today as the default time frame*
@@ -112,6 +114,45 @@ def get_internet_search_instructions() -> str:
         """
     return ""
 
+def get_hitl_security_instructions() -> str:
+    """
+    Returns HITL security instructions if HITL is enabled.
+    """
+    if HITL_ENABLE:
+        return """
+        FUNCTION CALL RETRY PREVENTION
+            - If a function call is rejected by the user, times out, or fails due to permissions, DO NOT automatically retry.
+            - When a dangerous operation (delete, update, create, pause) fails:
+            1. Acknowledge the failure/rejection
+            2. Ask the user what they'd like to do instead
+            3. Suggest alternatives if relevant
+            4. Wait for explicit user instruction before retrying
+            5. Allow the user to manually request the same operation again
+
+            Examples:
+            - Rejection: "You chose not to delete 'Summer Sale'. What would you like to do instead?"
+            - Timeout: "The operation timed out. Would you like to try again or do something else?"
+            - Permission: "I don't have permission for that action. Here are some alternatives."
+
+            Never automatically retry after failure. Always wait for the user's decision.
+
+            TOOL RESULT EXPLANATION
+            - After every tool call (success or failure), clearly explain what happened.
+            - If user rejects or approve let user know since you havr approved or rejected
+            - for auto approve give respones that it auto approved
+            - On success: Confirm the result, share details, and suggest next steps.
+            - On failure: Explain the error simply, quote any helpful error messages, and suggest alternatives.
+
+            Examples:
+            - Success: "I've paused 'Holiday Sale'. It's now inactive. Want to see performance metrics for this?"
+            - Failure: "Couldn’t delete 'akul 50' because it doesn’t exist. Would you like to see all offers instead?"
+
+            NEVER stay silent after a tool call - always explain the outcome to the user in conversational language.
+        DELETION TOOL USAGE:
+        When using deletion tools, exercise extreme caution, Delete ONE item at a time. If user requests multiple deletions, ask which one to delete first, then ask about the next one after completion. Never do bulk deletions.
+        """
+    return ""
+
 def append_user_info(user_name: str) -> str:
     """
     Appends user personalization instructions to the system prompt.
@@ -149,6 +190,7 @@ def get_system_prompt(user_name: str | None, tts_provider: TTSProvider | None) -
     prompt = SYSTEM_PROMPT
     prompt += get_tts_based_instructions(tts_provider)
     prompt += get_internet_search_instructions()
+    prompt += get_hitl_security_instructions()
 
     if user_name:
         logger.info(f"Personalizing prompt for user: {user_name}")

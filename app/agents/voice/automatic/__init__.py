@@ -27,6 +27,7 @@ from .prompts import get_system_prompt
 from .tools import initialize_tools, shopify_buddy_test, breeze_buddy
 from .tts import get_tts_service
 from .stt import get_stt_service
+from app.agents.voice.automatic.processors.llm_spy import handle_confirmation_response
 from app.agents.voice.automatic.types import (
     TTSProvider,
     Mode,
@@ -202,8 +203,8 @@ async def main():
     # RTVI events for Pipecat client UI
     rtvi = RTVIProcessor(config=RTVIConfig(config=[]))
 
-    # Add custom LLMSpyProcessor for streaming function call events
-    tool_call_processor = LLMSpyProcessor(rtvi)
+    # Add custom LLMSpyProcessor for streaming function call events (RTVI and TTS created earlier)
+    tool_call_processor = LLMSpyProcessor(rtvi, args.session_id)
 
     pipeline = Pipeline(
         [
@@ -244,6 +245,29 @@ async def main():
     async def on_client_ready(rtvi):
         await rtvi.set_bot_ready()
 
+    @rtvi.event_handler("on_client_message")
+    async def on_client_message(rtvi, message):
+        """Handle incoming messages from RTVI client, including function confirmation responses"""
+        try:
+            if isinstance(message, dict) and message.get("type") == "function-confirmation-response":
+
+                confirmation_id = message.get("confirmationId")
+                approved = message.get("approved", False)
+                reason = message.get("reason", "")
+                
+                if confirmation_id:
+                    response = {
+                        "approved": approved,
+                        "reason": reason
+                    }
+                    handle_confirmation_response(confirmation_id, response)
+                    logger.info(f"Processed function confirmation response: {confirmation_id} -> {approved}")
+                else:
+                    logger.warning("Received function confirmation response without confirmationId")
+                    
+        except Exception as e:
+            logger.error(f"Error handling RTVI client message: {e}")
+
     @transport.event_handler("on_first_participant_joined")
     async def on_first_participant_joined(transport, participant):
         logger.info(f"First participant joined: {participant['id']}")
@@ -253,6 +277,18 @@ async def main():
     async def on_participant_left(transport, participant, reason):
         logger.info(f"Participant left: {participant['id']}")
         await task.cancel()
+
+    # Route Daily transport messages to RTVI for function confirmations
+    @transport.event_handler("on_app_message")
+    async def on_app_message(transport, message, sender):
+        """Route function confirmation messages from Daily transport to RTVI"""
+        # Check if this is a function confirmation message and route to RTVI
+        if isinstance(message, dict) and message.get("type") == "function-confirmation-response":
+            # Manually trigger the RTVI handler since it might not be getting the message
+            try:
+                await on_client_message(rtvi, message)
+            except Exception as e:
+                logger.error(f"Error manually routing message to RTVI: {e}")
 
     @task.event_handler("on_pipeline_cancelled")
     async def on_pipeline_cancelled(task, frame):

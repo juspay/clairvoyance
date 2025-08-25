@@ -144,12 +144,19 @@ class MCPClient:
             required=tool.input_schema.required or [],
         )
 
-    async def _mcp_tool_wrapper(
-        self, function_name: str, tool_call_id: str, arguments: Dict[str, Any],
-        llm: Any, context: Any, result_callback: Callable
-    ) -> None:
+    async def _mcp_tool_wrapper(self, params) -> None:
         """This wrapper is called by the LLM. It then calls the remote tool."""
-        logger.debug(f"LLM called tool: {function_name} with args: {arguments}")
+        # Extract parameters from the params object
+        function_name = getattr(params, 'function_name', 'unknown')
+        arguments = getattr(params, 'arguments', {})
+        result_callback = getattr(params, 'result_callback', None)
+        
+        logger.debug(f"LLM called MCP tool: {function_name} with args: {arguments}")
+        
+        if not result_callback:
+            logger.error(f"No result_callback found for MCP function {function_name}")
+            return
+            
         await self._call_tool(function_name, arguments, result_callback)
 
     async def _call_tool(
