@@ -71,6 +71,9 @@ ENABLE_TRACING = os.environ.get("ENABLE_TRACING", "false").lower() == "true"
 # Text sanitization
 SANITIZE_TEXT_FOR_TTS = os.environ.get("SANITIZE_TEXT_FOR_TTS", "false").lower() == "true"
 
+# Audio recording
+ENABLE_AUTOMATIC_DAILY_RECORDING = os.environ.get("ENABLE_AUTOMATIC_DAILY_RECORDING", "false").lower() == "true"
+
 # Search
 ENABLE_SEARCH_GROUNDING = os.environ.get("ENABLE_SEARCH_GROUNDING", "true").lower() == "true"
 GEMINI_SEARCH_RESULT_API_MODEL = os.environ.get("GEMINI_SEARCH_RESULT_API_MODEL", "gemini-2.5-flash-lite-preview-06-17")
