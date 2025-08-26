@@ -257,11 +257,15 @@ async def main():
     @transport.event_handler("on_first_participant_joined")
     async def on_first_participant_joined(transport, participant):
         logger.info(f"First participant joined: {participant['id']}")
+        if config.ENABLE_AUTOMATIC_DAILY_RECORDING:
+            await transport.start_recording()
         await task.queue_frames([context_aggregator.user().get_context_frame()])
 
     @transport.event_handler("on_participant_left")
     async def on_participant_left(transport, participant, reason):
         logger.info(f"Participant left: {participant['id']}")
+        if config.ENABLE_AUTOMATIC_DAILY_RECORDING:
+            await transport.stop_recording()
         await task.cancel()
 
     @task.event_handler("on_pipeline_cancelled")

@@ -35,6 +35,7 @@ from app.core.config import (
     TWILIO_FROM_NUMBER,
     TWILIO_WEBSOCKET_URL,
     BREEZE_BUDDY_CALL_PROVIDER,
+    ENABLE_AUTOMATIC_DAILY_RECORDING
 )
 from app.schemas import CallStatus, RequestedBy
 from app.database.accessor.main import create_call_data
@@ -249,13 +250,18 @@ async def bot_connect(request: AutomaticVoiceUserConnectRequest) -> Dict[str, An
 
     # 2. Create room + token
     MAX_DURATION = 30 * 60
+    
+    daily_room_properties = DailyRoomProperties(
+        exp=time.time() + MAX_DURATION,
+        eject_at_room_exp=True,
+    )
+    
+    # Enable recording only if configured
+    if ENABLE_AUTOMATIC_DAILY_RECORDING:
+        daily_room_properties.enable_recording = "cloud"
+    
     room = await daily_helpers["rest"].create_room(
-        params=DailyRoomParams(
-            properties=DailyRoomProperties(
-                exp=time.time() + MAX_DURATION,
-                eject_at_room_exp=True,
-            )
-        )
+        params=DailyRoomParams(properties=daily_room_properties)
     )
 
     token_params = DailyMeetingTokenParams(
