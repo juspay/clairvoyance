@@ -10,6 +10,7 @@ from pipecat.utils.text.base_text_filter import BaseTextFilter
 
 from app.core.logger import logger
 from app.agents.voice.automatic.services.charts.utils.highlight_storage import store_highlights_for_session
+from app.tools.providers.system.chart_tools import get_latest_chart_context
 
 
 class HighlightedChartTextFilter(BaseTextFilter):
