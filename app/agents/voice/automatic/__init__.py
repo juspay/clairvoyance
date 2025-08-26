@@ -21,6 +21,7 @@ from pipecat.processors.frameworks.rtvi import RTVIConfig, RTVIProcessor
 from pipecat.services.google.rtvi import GoogleRTVIObserver
 
 from app.core import config
+from app.agents.voice.automatic.utils.session_context import create_session_context, set_current_session_id
 from app.agents.voice.automatic.services.mcp.automatic_client import MCPClient
 from .processors import LLMSpyProcessor
 from .prompts import get_system_prompt
@@ -37,6 +38,13 @@ from app.agents.voice.automatic.types import (
 )
 from opentelemetry import trace
 from langfuse import get_client
+from .types import (
+    TTSProvider,
+    Mode,
+    decode_tts_provider,
+    decode_voice_name,
+    decode_mode,
+)
 
 load_dotenv(override=True)
 
@@ -64,6 +72,12 @@ async def main():
     # Configure logger with session ID for all logs in this subprocess
     configure_session_logger(args.session_id)
     logger.info(f"Voice agent started with session ID: {args.session_id}")
+    
+    # Create session context for passing to components
+    session_context = create_session_context(args.session_id)
+    
+    # Set global session ID for chart tools
+    set_current_session_id(args.session_id)
 
 
     # Decode TTS parameters
@@ -111,7 +125,12 @@ async def main():
 
     stt = get_stt_service(voice_name=voice_name.value)
 
-    tts = get_tts_service(tts_provider=tts_provider.value, voice_name=voice_name.value)
+    tts = get_tts_service(
+        tts_provider=tts_provider.value, 
+        voice_name=voice_name.value, 
+        session_id=args.session_id, 
+        enable_chart_text_filter=config.ENABLE_CHARTS
+    )
 
     llm = LLMServiceWrapper(AzureLLMService(
         api_key=config.AZURE_OPENAI_API_KEY,
@@ -159,7 +178,9 @@ async def main():
         mcp_client = MCPClient(
             server_url=config.AUTOMATIC_TOOL_MCP_SERVER_URL,
             auth_token=args.breeze_token,
-            context=mcp_context
+            context=mcp_context,
+            session_context=session_context,
+            enable_chart=config.ENABLE_CHARTS
         )
 
         selective_functions = config.SELECTIVE_MCP_FUNCTIONS if len(config.SELECTIVE_MCP_FUNCTIONS) > 0 else []
@@ -176,13 +197,23 @@ async def main():
                 llm.register_function(name, function)
             logger.info(f"Loaded {len(breeze_buddy.tools.standard_tools)} breeze buddy tools.")
 
+
+    rtvi = RTVIProcessor(config=RTVIConfig(config=[]))
+
     # Simplified event handler for TTS feedback
     @llm.event_handler("on_function_calls_started")
     async def on_function_calls_started(service, function_calls):
         # Only play the "checking" message if using Google TTS
         if tts_provider == TTSProvider.GOOGLE:
             for function_call in function_calls:
-                if function_call.function_name != "get_current_time":
+                # Skip "checking" message for instant functions and chart tools
+                if function_call.function_name not in [
+                    "get_current_time",
+                    "generate_bar_chart", 
+                    "generate_line_chart",
+                    "generate_donut_chart", 
+                    "generate_single_stat_card"
+                ]:
                     await tts.queue_frame(TTSSpeakFrame("Let me check on that."))
                     break
 
@@ -200,11 +231,8 @@ async def main():
 
     context_aggregator = llm.create_context_aggregator(context)
 
-    # RTVI events for Pipecat client UI
-    rtvi = RTVIProcessor(config=RTVIConfig(config=[]))
-
     # Add custom LLMSpyProcessor for streaming function call events (RTVI and TTS created earlier)
-    tool_call_processor = LLMSpyProcessor(rtvi, args.session_id)
+    tool_call_processor = LLMSpyProcessor(rtvi, args.session_id, config.ENABLE_CHARTS, "LLMSpyProcessor")
 
     pipeline = Pipeline(
         [
@@ -307,6 +335,8 @@ async def main():
             await runner.run(task)
         except asyncio.CancelledError:
             logger.info("Main task cancelled. Exiting gracefully.")
+        except Exception as e:
+            logger.error(f"Pipeline runner error: {e}")
 
     if config.ENABLE_TRACING:
         langfuse_client = get_client()

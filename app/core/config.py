@@ -164,3 +164,6 @@ FUNCTION_CONFIRMATION_TIMEOUT = int(os.environ.get("FUNCTION_CONFIRMATION_TIMEOU
 # HITL Actions Configuration
 _hitl_actions_str = os.environ.get("HITL_ACTIONS", "delete")
 HITL_ACTIONS = [action.strip().lower() for action in _hitl_actions_str.split(",") if action.strip()]
+
+# Chart Generation Configuration
+ENABLE_CHARTS = os.environ.get("ENABLE_CHARTS", "false").lower() == "true"

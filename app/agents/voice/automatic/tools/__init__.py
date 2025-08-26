@@ -1,7 +1,7 @@
 from typing import List
 
 from app.core.logger import logger
-from app.core.config import ENABLE_SEARCH_GROUNDING, BREEZE_BUDDY_TEST_SHOPIFY_SHOP_URL
+from app.core.config import ENABLE_SEARCH_GROUNDING, BREEZE_BUDDY_TEST_SHOPIFY_SHOP_URL, ENABLE_CHARTS
 from pipecat.adapters.schemas.tools_schema import ToolsSchema
 from app.agents.voice.automatic.types import Mode
 from .dummy import tools as dummy_tools, tool_functions as dummy_tool_functions
@@ -11,6 +11,7 @@ from . import breeze
 from . import internet
 from . import shopify_buddy_test
 from . import breeze_buddy
+from . import charts
 
 
 def initialize_tools(
@@ -69,6 +70,11 @@ def initialize_tools(
         all_tools.extend(breeze_buddy.tools.standard_tools)
         all_tool_functions.update(breeze_buddy.tool_functions)
         logger.info(f"Loaded {len(breeze_buddy.tools.standard_tools)} breeze buddy tools.")
+
+    if ENABLE_CHARTS:
+        all_tools.extend(charts.generate_ui.standard_tools)
+        all_tool_functions.update(charts.tool_functions)
+        logger.info(f"Loaded {len(charts.tool_functions)} chart tools.")
 
     # Dummy tools are only available in test mode
     if mode == Mode.TEST.value:

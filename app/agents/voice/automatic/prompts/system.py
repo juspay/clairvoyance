@@ -1,6 +1,6 @@
 import datetime
 from app.core.logger import logger
-from app.core.config import ENABLE_SEARCH_GROUNDING, HITL_ENABLE
+from app.core.config import ENABLE_SEARCH_GROUNDING, HITL_ENABLE, ENABLE_CHARTS
 from app.agents.voice.automatic.types import TTSProvider
 
 SYSTEM_PROMPT = f"""
@@ -140,6 +140,76 @@ def get_tool_scope_instrucations() -> str:
         search_grounding=""""""
     return tool_scope + HITL_scope+tool_followups+search_grounding;
 
+def get_chart_visualization_instructions() -> str:
+    """
+    Returns chart visualization instructions if charts are enabled.
+    """
+    if ENABLE_CHARTS:
+        return """
+    🔒 AUTOMATIC DATA VISUALIZATION (MANDATORY)
+
+    Absolute Law: Every single data response must have a chart — no exceptions.
+
+    RULE 1: MANDATORY SEQUENCE
+        1. Receive analytics data
+        2. Detect categories, values, or time periods
+        3. Generate the correct chart (donut, bar, line, or single-stat)
+        4. Use the chart tool's result as the entire final response
+        5. Never skip, delay, or alter this sequence
+        6. Provide clear, descriptive titles and engaging voice descriptions
+        7. Make voice descriptions conversational and highlight key insights
+        8. In the Voice Description, always use the highlight tags around category names for synchronization with the chart. Always highlight the most important categoties.
+
+    RULE 2: COVERAGE
+        1. Multiple categories/percentages/time series → Donut, bar, or line chart
+        2. Single numeric value (e.g., "₹12,000 sales today") → Single-stat chart
+        3. Absolutely no text-only responses without a chart
+
+    RULE 3: PATTERN TRIGGERS
+
+        1. Payment method breakdown → Donut chart
+        2. Sales by channel/product/category → Donut chart
+        3. Time trends (daily, weekly, monthly) → Line chart
+        4. Comparisons between items → Bar chart
+        5. Single metric → Single-stat chart
+
+    RULE 4: FUNCTION RESULT SCANNING
+        SCAN EVERY function result for: arrays, categories, values, percentages
+        If you see componentType: 'DONUT_CHART' → MANDATORY generate_donut_chart call
+        If you see componentType: 'BAR_CHART' → MANDATORY generate_bar_chart call
+        If you see componentType: 'LINE_CHART' → MANDATORY generate_line_chart call
+
+    RULE 5: FLEXIBLE HANDLING
+        1. Always attempt a chart first
+        2. If chart generation fails or is not meaningful, provide a clear text response instead
+        3. Never leave the user without an answer
+
+    RULE 7: NARRATION HIGHLIGHTING
+
+        1. Always wrap category mentions in <highlight> XML tags
+        2. Use exact category names from chart data
+        3. Example: <highlight category="Credit Card">credit cards</highlight>
+        4. ONLY highlight the top 1–2 most important categories, never all
+        5. Importance = highest value (for totals) OR biggest change (for trends)
+        6. Do not list minor categories in the narration, even if present in the chart
+        7. Voice descriptions must stay short (2–3 sentences max), focusing on key insights
+
+    RULE 8 : CHART TOOL RESULT AS FINAL RESPONSE
+        ⚠️ CRITICAL REQUIREMENT - NO EXCEPTIONS ⚠️
+        After calling ANY chart generation tool (generate_bar_chart, generate_line_chart, generate_donut_chart):
+        1. The tool will return a text result
+        2. You MUST use that EXACT text as your complete final response
+        3. Do NOT add any additional words, explanations, or commentary
+        4. Do NOT generate your own response - the tool result IS your response
+        5. Simply return the tool result text verbatim as if you are speaking it directly
+        6. Don't remove <highlight> tags - they are critical for synchronization
+        EXAMPLE:
+        - Tool returns: "The funnel shows 18907 users clicked checkout..."
+        - Your response: "The funnel shows 18907 users clicked checkout..." (EXACTLY this, nothing more)
+        This rule overrides all other conversational guidelines - the tool result is your complete response.
+        """
+    return ""
+
 
 def append_user_info(user_name: str) -> str:
     """
@@ -176,6 +246,7 @@ def get_system_prompt(user_name: str | None, tts_provider: TTSProvider | None) -
     Generates a personalized system prompt based on the user's name and TTS service.
     """
     prompt = SYSTEM_PROMPT
+    prompt += get_chart_visualization_instructions()
     prompt += get_tts_based_instructions(tts_provider)
     prompt += get_tool_scope_instrucations()
 

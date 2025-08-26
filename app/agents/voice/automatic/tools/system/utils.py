@@ -26,12 +26,10 @@ get_current_time_function = FunctionSchema(
     required=[],
 )
 
-tools = ToolsSchema(
-    standard_tools=[
-        get_current_time_function,
-    ]
-)
+# Build tools list conditionally
+standard_tools_list = [get_current_time_function]
 
-tool_functions = {
-    "get_current_time": get_current_time,
-}
+tools = ToolsSchema(standard_tools=standard_tools_list)
+
+# Build tool functions dictionary conditionally
+tool_functions = {"get_current_time": get_current_time}

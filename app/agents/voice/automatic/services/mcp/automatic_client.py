@@ -2,6 +2,8 @@ import httpx
 import json
 import base64
 from typing import Dict, Any, Optional, Callable
+from app.agents.voice.automatic.utils.session_context import SessionContext
+
 
 from app.core.config import MCP_CLIENT_TIMEOUT
 from app.core.logger import logger
@@ -84,9 +86,11 @@ class StreamableHTTPTransport:
 
 class MCPClient:
     """A service to list, register, and call tools from a remote MCP server."""
-    def __init__(self, server_url: str, auth_token: str, context: Dict[str, Any]):
+    def __init__(self, server_url: str, auth_token: str, context: Dict[str, Any], session_context: SessionContext, enable_chart: bool):
         self._transport = StreamableHTTPTransport(server_url, auth_token, context)
+        self._session_context = session_context
         self._llm = None
+        self._enable_chart = enable_chart
 
     async def register_tools(self, llm, selective_functions) -> ToolsSchema:
         """Lists tools and registers them with the given LLM processor."""
@@ -172,15 +176,39 @@ class MCPClient:
                 raise RuntimeError(f"JSON-RPC Error calling tool: {response_dict['error']}")
 
             result_content = response_dict.get("result", {}).get("content", [])
-            
             text_response = " ".join(
                 json.dumps(item.get("text")) for item in result_content if item.get("type") == "text"
             )
 
+            if self._enable_chart:
+                ui_components = []
+                for item in result_content:
+                    if item.get("type") == "text" and isinstance(item.get("text"), dict) and item["text"].get("uiComponent") is True:
+                        ui_components.append(item["text"])
+
+                if ui_components:
+                    await self._store_ui_components_from_mcp(ui_components)
+            
+            
+                if not text_response and ui_components:
+                    # Extract cleanVoiceDescription from UI components metadata
+                    ui_text_parts = []
+                    for ui_component in ui_components:
+                        metadata = ui_component.get("metadata", {})
+                        clean_voice_description = metadata.get("cleanVoiceDescription")
+                        if clean_voice_description and str(clean_voice_description).strip():
+                            ui_text_parts.append(str(clean_voice_description).strip())
+                
+                    text_response = " ".join(ui_text_parts) if ui_text_parts else "Tool executed successfully but returned no text."
+                
+                if ui_components:
+                    logger.debug(f"Tool '{function_name}' also returned {len(ui_components)} UI components")
+            
             if not text_response:
                 text_response = "Tool executed successfully but returned no text."
 
             logger.debug(f"Tool '{function_name}' returned: {text_response}")
+                
             await result_callback(text_response)
 
         except Exception as e:

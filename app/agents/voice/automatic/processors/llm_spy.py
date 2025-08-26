@@ -1,6 +1,6 @@
 """
 LLM Spy Processor for intercepting function calls and conversation events.
-Lightweight frame processor that handles RTVI communication and function confirmations.
+Lightweight frame processor that delegates business logic to ConversationManager.
 """
 
 import time
@@ -11,15 +11,20 @@ from opentelemetry import trace
 from app.core import config
 from app.core.logger import logger
 from pipecat.frames.frames import (
-    Frame,
-    FunctionCallInProgressFrame,
-    FunctionCallResultFrame,
+    Frame, 
+    FunctionCallInProgressFrame, 
+    FunctionCallResultFrame, 
+    LLMTextFrame,
+    LLMFullResponseStartFrame, 
+    LLMFullResponseEndFrame,
     TextFrame
 )
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.processors.frameworks.rtvi import RTVIProcessor, RTVIServerMessageFrame
 from ..services.markdown import sanitize_markdown
-
+from app.agents.voice.automatic.utils.conversation_manager import get_conversation_manager
+from app.agents.voice.automatic.rtvi.rtvi import emit_rtvi_event
+from app.agents.voice.automatic.services.charts.rtvi.rtvi import emit_chart_components
 
 # Global RTVI processor reference for function confirmations
 _rtvi_processor = None
@@ -87,16 +92,19 @@ def handle_confirmation_response(confirmation_id: str, response: Dict) -> None:
 class LLMSpyProcessor(FrameProcessor):
     """
     Lightweight frame processor for intercepting LLM conversation events.
+    
     Responsibilities:
     1. Intercepts function call frames and emits RTVI events
-    2. Handles OpenTelemetry tracing for function calls
-    3. Processes text frames with markdown sanitization
+    2. Collects LLM responses and delegates to ConversationManager
+    3. Handles chart component emission
+    4. Processes highlight text for timing correlation
     """
 
-    def __init__(self, rtvi: RTVIProcessor, session_id: str, name: str = "LLMSpyProcessor"):
+    def __init__(self, rtvi: RTVIProcessor, session_id: str, enable_charts: bool, name: str = "LLMSpyProcessor"):
         super().__init__(name=name)
         self._rtvi = rtvi
         self._session_id = session_id
+        self._enable_charts = enable_charts
 
         # Register this RTVI processor globally for function confirmations
         set_rtvi_processor(rtvi)
@@ -105,17 +113,53 @@ class LLMSpyProcessor(FrameProcessor):
         self._tracer = trace.get_tracer("pipecat.tools") if config.ENABLE_TRACING else None
         self._active_spans: Dict[str, Any] = {}  # tool_call_id -> span
 
-    async def process_frame(self, frame: Frame, direction: FrameDirection):
-        """Emit RTVI server messages for function call frames."""
-        await super().process_frame(frame, direction)
+        if self._enable_charts:
+            # LLM response collection
+            self._accumulated_text = ""
+            self._is_collecting_response = False
+        
+            # Conversation management (delegates to service)
+            self._conversation_manager = get_conversation_manager()
+        
 
+    async def process_frame(self, frame: Frame, direction: FrameDirection):
+        """Process frames and delegate conversation logic to ConversationManager."""
+        await super().process_frame(frame, direction)
+        
         if isinstance(frame, TextFrame):
             if config.SANITIZE_TEXT_FOR_TTS:
                 await self.push_frame(TextFrame(text=sanitize_markdown(frame.text)), direction)
             else:
                 await self.push_frame(frame, direction)
+
+        # LLM Response Start - begin collecting text and start conversation turn
+        elif isinstance(frame, LLMFullResponseStartFrame) and self._enable_charts:
+            self._is_collecting_response = True
+            self._accumulated_text = ""
+            
+            # Start conversation turn via ConversationManager
+            event = await self._conversation_manager.start_turn_with_events(self._session_id)
+            if event:
+                await emit_rtvi_event(self._rtvi, event, self._session_id)
+                
+        # LLM Output - accumulate streaming text
+        elif isinstance(frame, LLMTextFrame) and self._is_collecting_response and self._enable_charts:
+            self._accumulated_text += frame.text
+            
+        # LLM Response Complete - send to ConversationManager
+        elif isinstance(frame, LLMFullResponseEndFrame) and self._enable_charts:
+            if self._accumulated_text.strip():
+                event = await self._conversation_manager.add_llm_response_with_events(
+                    self._session_id, self._accumulated_text.strip()
+                )
+                if event:
+                    await emit_rtvi_event(self._rtvi, event, self._session_id)
+
+            self._accumulated_text = ""
+            self._is_collecting_response = False
+
+        # Function Call Start - emit RTVI event and track in conversation
         elif isinstance(frame, FunctionCallInProgressFrame):
-            # Start tracing span
             if self._tracer:
                 span = self._tracer.start_span(f"Tool: {frame.function_name}", kind=trace.SpanKind.CLIENT)
                 span.set_attributes({
@@ -139,8 +183,18 @@ class LLMSpyProcessor(FrameProcessor):
                 )
             )
             await self.push_frame(frame, direction)
+
+            # Track in conversation via ConversationManager
+            if self._enable_charts:
+                event = await self._conversation_manager.add_tool_call_with_events(
+                    self._session_id, frame.function_name, frame.arguments, frame.tool_call_id
+                )
+                if event:
+                    await emit_rtvi_event(self._rtvi, event, self._session_id)
+
+        # Function Call Result - emit RTVI event and track in conversation
         elif isinstance(frame, FunctionCallResultFrame):
-            # End tracing span
+            # Emit tool-call-result event
             if self._tracer and frame.tool_call_id in self._active_spans:
                 span = self._active_spans.pop(frame.tool_call_id)
                 span.set_attribute("tool.result", json.dumps(frame.result, default=str)[:4096])
@@ -160,7 +214,20 @@ class LLMSpyProcessor(FrameProcessor):
                         }
                     }
                 )
-            )
+            )            
             await self.push_frame(frame, direction)
+
+            if self._enable_charts:
+                # Track in conversation via ConversationManager (may complete turn)
+                events = await self._conversation_manager.add_tool_result_with_events(
+                    self._session_id, frame.tool_call_id, frame.function_name, frame.result
+                )
+                for event in events:
+                    await emit_rtvi_event(self._rtvi, event, self._session_id)
+
+                # Handle chart component emission (works for both local and MCP tools)
+                # Always check for pending components after any function call
+                await emit_chart_components(self._rtvi, frame.function_name, self._session_id)
         else:
             await self.push_frame(frame, direction)
+
