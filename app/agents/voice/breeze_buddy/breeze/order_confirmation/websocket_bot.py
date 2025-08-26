@@ -69,6 +69,7 @@ class OrderConfirmationBot:
         self.call_sid = None
         self.call_data_id = None
         self.order_id = None
+        self.shop_name = None
         self.twilio_client = Client(
             TWILIO_ACCOUNT_SID,
             TWILIO_AUTH_TOKEN,
@@ -131,7 +132,7 @@ class OrderConfirmationBot:
 
         self.order_id = custom_parameters.get("order_id", "N/A")
         customer_name = custom_parameters.get("customer_name", "Valued Customer")
-        shop_name = custom_parameters.get("shop_name", "the shop")
+        self.shop_name = custom_parameters.get("shop_name", "the shop")
         total_price = custom_parameters.get("total_price")
         try:
             price_num = float(total_price)
@@ -216,7 +217,7 @@ class OrderConfirmationBot:
         )
 
         self.system_prompt = self._get_system_prompt(
-            shop_name, customer_name, self.order_id, self.order_summary, price_words
+            self.shop_name, customer_name, self.order_id, self.order_summary, price_words
         )
         messages = [{"role": "system", "content": self.system_prompt}]
 
@@ -330,13 +331,9 @@ class OrderConfirmationBot:
             - `confirm_order()`: If the customer confirms all the details.
             - `cancel_order()`: If the customer wants to cancel the order.
             - `user_busy()`: If the user says they are busy or it's not a good time to talk.
+            - `handle_unrelated_question()`: If the user asks a question about anything other than confirming or cancelling the order.
 
-            If the customer asks about something outside your scope—like product availability, delivery timelines, or other offerings—politely steer the conversation back to order confirmation. You can also guide them to visit the {shop_name} website for more details.
-            Example:
-            Customer: "Do you have this in blue?"
-            You: "I'm not able to check that right now, but you can find all the latest details on our website."
-
-            Your only role is to confirm or cancel this specific order. Do not answer questions unrelated to this order.
+            Your only role is to confirm or cancel this specific order. If the user asks about anything else (e.g. product details, delivery times, other products), you MUST call `handle_unrelated_question()` immediately. Do not try to answer these questions yourself.
         """
 
     async def _end_conversation_handler(self, flow_manager, args):
@@ -470,33 +467,59 @@ class OrderConfirmationBot:
         self.outcome = "busy"
         return {}, self._create_busy_node()
 
+    def _create_reprompt_node(self) -> NodeConfig:
+        return NodeConfig(
+            name="reprompt",
+            task_messages=[
+                {
+                    "role": "system",
+                    "content": f"I'm not able to help you with that right now, but you can find all the latest details on the {self.shop_name} website. Regarding your order for {self.order_summary}, would you like to confirm it?"
+                }
+            ],
+            functions=self._get_flow_functions()
+        )
+
+    async def _handle_unrelated_question_handler(self, flow_manager):
+        logger.info("User asked an unrelated question. Steering back to confirmation.")
+        return {}, self._create_reprompt_node()
+
+    def _get_flow_functions(self):
+        return [
+            FlowsFunctionSchema(
+                name="confirm_order",
+                description="Call this function to confirm the user's order.",
+                handler=self._confirm_order_handler,
+                properties={},
+                required=[],
+            ),
+            FlowsFunctionSchema(
+                name="cancel_order",
+                description="Call this function to cancel the user's order.",
+                handler=self._deny_order_handler,
+                properties={},
+                required=[],
+            ),
+            FlowsFunctionSchema(
+                name="user_busy",
+                description="Call this function if the user says they are busy or it's not a good time to talk.",
+                handler=self._user_busy_handler,
+                properties={},
+                required=[],
+            ),
+            FlowsFunctionSchema(
+                name="handle_unrelated_question",
+                description="Call this function if the user asks a question about anything other than confirming or cancelling the order.",
+                handler=self._handle_unrelated_question_handler,
+                properties={},
+                required=[],
+            )
+        ]
+
     def _create_initial_node(self) -> NodeConfig:
         return NodeConfig(
             name="initial",
             task_messages=[{"role": "system", "content": self.system_prompt}],
-            functions=[
-                FlowsFunctionSchema(
-                    name="confirm_order",
-                    description="Call this function to confirm the user's order.",
-                    handler=self._confirm_order_handler,
-                    properties={},
-                    required=[],
-                ),
-                FlowsFunctionSchema(
-                    name="cancel_order",
-                    description="Call this function to cancel the user's order.",
-                    handler=self._deny_order_handler,
-                    properties={},
-                    required=[],
-                ),
-                FlowsFunctionSchema(
-                    name="user_busy",
-                    description="Call this function if the user says they are busy or it's not a good time to talk.",
-                    handler=self._user_busy_handler,
-                    properties={},
-                    required=[],
-                )
-            ],
+            functions=self._get_flow_functions(),
         )
 
 
