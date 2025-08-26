@@ -7,6 +7,7 @@ from starlette.websockets import WebSocketState
 from google.genai import types
 from datetime import datetime as dt, time as dt_time, timezone as dt_timezone, timedelta
 import pytz
+from app.tools.providers.system.chart_tools import get_pending_ui_components
 
 from app.core.logger import logger
 from app.core.config import PING_INTERVAL, FRAME_SIZE, SAMPLE_RATE
@@ -392,6 +393,24 @@ async def handle_websocket_session(websocket: WebSocket):
                                 logger.info(f"[{session_id}] Processed function responses: {function_responses}")
                                 if function_responses and gemini_session:
                                     await gemini_session.send_tool_response(function_responses=function_responses)
+                                
+                                # Emit UI component events from chart generation tools
+                                try:
+                                    pending_components = get_pending_ui_components(session_id)
+                                    
+                                    for ui_component in pending_components:
+                                        try:
+                                            ui_event = {
+                                                "type": "ui-component",
+                                                "data": ui_component.model_dump()
+                                            }
+                                            await websocket.send_text(json.dumps(ui_event))
+                                            logger.info(f"[{session_id}] Sent chart UI component: {ui_component.componentData.id}")
+                                        except Exception as ui_error:
+                                            logger.error(f"[{session_id}] Error sending chart UI component: {ui_error}")
+                                            
+                                except Exception as chart_error:
+                                    logger.warning(f"[{session_id}] Error checking for chart components: {chart_error}")
                         
                         except WebSocketDisconnect:
                             logger.info(f"[{session_id}] WebSocket disconnected in forward_from_gemini (inner)")
