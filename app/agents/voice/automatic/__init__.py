@@ -4,6 +4,8 @@ import argparse
 from dotenv import load_dotenv
 from datetime import datetime
 from zoneinfo import ZoneInfo
+from collections import defaultdict
+
 
 from app.core.logger import logger, configure_session_logger
 from pipecat.audio.vad.silero import SileroVADAnalyzer
@@ -206,22 +208,35 @@ async def main():
 
     rtvi = RTVIProcessor(config=RTVIConfig(config=[]))
 
-    # Simplified event handler for TTS feedback
+    _current_turn = defaultdict(int)                 # session_id -> int
+    _last_check_prompt_turn = defaultdict(lambda: -1)
+
+    # Functions that are instant/visual (skip the prompt)
+    INSTANT_FUNCS = {
+        "get_current_time",
+        "generate_bar_chart",
+        "generate_line_chart",
+        "generate_donut_chart",
+        "generate_single_stat_card",
+    }
+
+    @llm.event_handler("on_turn_started")
+    async def _on_turn_started(service, turn):
+        _current_turn[service.session_id] += 1
+
     @llm.event_handler("on_function_calls_started")
-    async def on_function_calls_started(service, function_calls):
-        # Only play the "checking" message if using Google TTS
-        if tts_provider == TTSProvider.GOOGLE:
-            for function_call in function_calls:
-                # Skip "checking" message for instant functions and chart tools
-                if function_call.function_name not in [
-                    "get_current_time",
-                    "generate_bar_chart", 
-                    "generate_line_chart",
-                    "generate_donut_chart", 
-                    "generate_single_stat_card"
-                ]:
-                    await tts.queue_frame(TTSSpeakFrame("Let me check on that."))
-                    break
+    async def _on_function_calls_started(service, function_calls):
+        # Only for Google TTS UX
+        if tts_provider != TTSProvider.GOOGLE:
+            return
+        # If all are instant helpers, skip
+        if all(fc.function_name in INSTANT_FUNCS for fc in function_calls):
+            return
+
+        sid = service.session_id
+        if _last_check_prompt_turn[sid] != _current_turn[sid]:
+            await tts.queue_frame(TTSSpeakFrame("Let me check on that."))
+            _last_check_prompt_turn[sid] = _current_turn[sid]
 
     messages = [
         {
@@ -361,6 +376,9 @@ async def main():
         logger.info(f"Participant left: {participant['id']}")
         if config.ENABLE_AUTOMATIC_DAILY_RECORDING:
             await transport.stop_recording()
+        sid = args.session_id 
+        _current_turn.pop(sid, None)
+        _last_check_prompt_turn.pop(sid, None)  
         await task.cancel()
 
     # Route Daily transport messages to RTVI for function confirmations
@@ -381,6 +399,9 @@ async def main():
     @task.event_handler("on_pipeline_cancelled")
     async def on_pipeline_cancelled(task, frame):
         logger.info("Pipeline task cancelled. Cancelling main task.")
+        sid = args.session_id
+        _current_turn.pop(sid, None)
+        _last_check_prompt_turn.pop(sid, None)
         main_task = asyncio.current_task()
         main_task.cancel()
 
@@ -407,13 +428,31 @@ async def main():
             root_span.set_attribute("shop_url", args.shop_url)
             root_span.set_attribute("merchant_id", args.merchant_id)
             root_span.set_attribute("service.name", "breeze-voice-agent")
-            root_span.set_attribute("client_sid", args.client_sid)
-            root_span.set_attribute("application_logs", generate_open_observer_url_for_session_id(args.client_sid))
+
+            # Optional client session attributes (from release)
+            if getattr(args, "client_sid", None):
+                root_span.set_attribute("client_sid", args.client_sid)
+                # Add application logs URL if helper is available
+                try:
+                    from app.core.logger import generate_open_observer_url_for_session_id
+                    root_span.set_attribute(
+                        "application_logs",
+                        generate_open_observer_url_for_session_id(args.client_sid),
+                    )
+                except Exception:
+                    logger.warning(
+                        "generate_open_observer_url_for_session_id unavailable; skipping application_logs attribute"
+                    )
+
+            # Build Langfuse fields (combine both branches' logic)
             langfuse_client.update_current_trace(
-                user_id=args.user_email,
+                user_id=(getattr(args, "user_email", None) or user_name),
                 session_id=args.session_id,
-                tags=[voice_name.value if hasattr(voice_name, 'value') else str(voice_name)]
+                tags=[voice_name.value if hasattr(voice_name, "value") else str(voice_name)],
             )
+
             await run_pipeline()
+
+
     else:
         await run_pipeline()
