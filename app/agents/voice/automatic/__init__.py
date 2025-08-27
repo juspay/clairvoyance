@@ -50,6 +50,7 @@ load_dotenv(override=True)
 
 # import setup_tracing from tracing_setup.py file
 from app.agents.voice.automatic.analytics.tracing_setup import setup_tracing
+from app.agents.voice.automatic.analytics.utils import generate_open_observer_url_for_session_id
 
 async def main():
     parser = argparse.ArgumentParser()
@@ -64,6 +65,7 @@ async def main():
     parser.add_argument("--shop-id", type=str, help="Shop ID for live mode")
     parser.add_argument("--shop-type", type=str, help="Shop type for live mode")
     parser.add_argument("--user-name", type=str, help="User's name")
+    parser.add_argument("--user-email", type=str, help="User's email address")
     parser.add_argument("--tts-provider", type=str, help="TTS provider to use")
     parser.add_argument("--voice-name", type=str, help="Voice name to use")
     parser.add_argument("--merchant-id", type=str, help="Merchant Id of the Shop")
@@ -151,6 +153,7 @@ async def main():
                 merchant_id=args.merchant_id,
                 session_id=args.client_sid,  # Pass client_sid instead of session_id
                 user_id=args.user_name,
+                user_email=args.user_email
             )
         else:
             tools, tool_functions = initialize_tools(
@@ -172,6 +175,7 @@ async def main():
             "shopId": args.shop_id,
             "shopType": args.shop_type,
             "userId": args.user_name,
+            "userEmail": args.user_email,
             "enableDemoMode": mode != Mode.LIVE,
             "merchantId": args.merchant_id,
             "platformIntegrations": args.platform_integrations
@@ -344,14 +348,21 @@ async def main():
         tracer = trace.get_tracer(__name__)
         with tracer.start_as_current_span(conversation_id) as root_span:
             logger.info(f"Starting current span with conversation ID: {conversation_id}")
-            root_span.set_attribute("conversation.id", conversation_id)
-            root_span.set_attribute("conversation.type", "voice")
-            root_span.set_attribute("user.name", user_name)
+            root_span.set_attribute("conversation_id", conversation_id)
+            root_span.set_attribute("conversation_type", "voice")
+            root_span.set_attribute("user_name", user_name)
+            root_span.set_attribute("shop_id", args.shop_id)
+            root_span.set_attribute("shop_type", args.shop_type)
+            root_span.set_attribute("shop_url", args.shop_url)
+            root_span.set_attribute("merchant_id", args.merchant_id)
             root_span.set_attribute("service.name", "breeze-voice-agent")
             root_span.set_attribute("client_sid", args.client_sid)
-            langfuse_client.update_current_trace(user_id=user_name)
-            langfuse_client.update_current_trace(session_id=args.session_id)
-            langfuse_client.update_current_trace(tags=[voice_name])
+            root_span.set_attribute("application_logs", generate_open_observer_url_for_session_id(args.client_sid))
+            langfuse_client.update_current_trace(
+                user_id=args.user_email,
+                session_id=args.session_id,
+                tags=[voice_name.value if hasattr(voice_name, 'value') else str(voice_name)]
+            )
             await run_pipeline()
     else:
         await run_pipeline()

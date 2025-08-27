@@ -68,6 +68,7 @@ VAD_STOP_SECS = float(os.environ.get("VAD_STOP_SECS", 1.00))
 
 # Tracing
 ENABLE_TRACING = os.environ.get("ENABLE_TRACING", "false").lower() == "true"
+OPEN_OBSERVE_BASE_URL = os.environ.get("OPEN_OBSERVE_BASE_URL", "https://periscope.breeze.in")
 
 # Text sanitization
 SANITIZE_TEXT_FOR_TTS = os.environ.get("SANITIZE_TEXT_FOR_TTS", "false").lower() == "true"

@@ -241,6 +241,7 @@ async def bot_connect(request: AutomaticVoiceUserConnectRequest) -> Dict[str, An
     shop_url = request.shopUrl
     shop_id = request.shopId
     shop_type = request.shopType
+    user_email = request.userEmail
     user_name = request.userName
     tts_provider = request.ttsService.ttsProvider.value if request.ttsService else None
     voice_name = request.ttsService.voiceName.value if request.ttsService else None
@@ -296,6 +297,8 @@ async def bot_connect(request: AutomaticVoiceUserConnectRequest) -> Dict[str, An
     # Add user_name and tts_service regardless of mode
     if user_name:
         cmd += ["--user-name", user_name]
+    if user_email:
+        cmd += ["--user-email", user_email]
     if tts_provider:
         cmd += ["--tts-provider", tts_provider]
     if voice_name:
