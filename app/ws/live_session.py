@@ -343,7 +343,7 @@ async def handle_websocket_session(websocket: WebSocket):
                             if hasattr(resp, 'parts'):
                                 for part in resp.parts:
                                     if hasattr(part, 'text') and part.text:
-                                        text_content += part.text
+                                        text_content += str(part.text)
                                 if text_content:
                                     logger.info(f"[{session_id}] Received text response from Gemini: {text_content[:30]}...")
                                     await websocket.send_text(json.dumps({"type": "llm_transcript", "text": text_content}))
@@ -351,8 +351,8 @@ async def handle_websocket_session(websocket: WebSocket):
                             if hasattr(resp, 'server_content') and hasattr(resp.server_content, 'input_transcription'):
                                 input_transcription = resp.server_content.input_transcription
                                 if hasattr(input_transcription, 'text') and input_transcription.text:
-                                    logger.debug(f"[{session_id}] Received input audio transcription: {input_transcription.text[:30]}...")
-                                    await websocket.send_text(json.dumps({"type": "input_transcript", "text": input_transcription.text}))
+                                    logger.debug(f"[{session_id}] Received input audio transcription: {str(input_transcription.text)[:30]}...")
+                                    await websocket.send_text(json.dumps({"type": "input_transcript", "text": str(input_transcription.text)}))
                                     if not user_turn_started: # Ensure user turn is marked
                                         user_turn_started = True
                                         model_turn_started = False # Reset model turn if user speaks
@@ -361,8 +361,8 @@ async def handle_websocket_session(websocket: WebSocket):
                             if hasattr(resp, 'server_content') and hasattr(resp.server_content, 'output_transcription'):
                                 output_transcription = resp.server_content.output_transcription
                                 if hasattr(output_transcription, 'text') and output_transcription.text:
-                                    logger.debug(f"[{session_id}] Received output audio transcription: {output_transcription.text[:30]}...")
-                                    await websocket.send_text(json.dumps({"type": "audio_transcript", "text": output_transcription.text}))
+                                    logger.debug(f"[{session_id}] Received output audio transcription: {str(output_transcription.text)[:30]}...")
+                                    await websocket.send_text(json.dumps({"type": "audio_transcript", "text": str(output_transcription.text)}))
                                     if not model_turn_started: # Ensure model turn is marked
                                         model_turn_started = True
                                         user_turn_started = False # Reset user turn if model speaks
