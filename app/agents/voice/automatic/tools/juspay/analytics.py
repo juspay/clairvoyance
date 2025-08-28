@@ -820,7 +820,7 @@ async def update_euler_offer(params: FunctionCallParams):
             return
 
         # Define immutable fields that cannot be updated
-        IMMUTABLE_FIELDS = ["startDate", "endDate", "offerDescription", "sponsoredBy", "paymentInstruments"]
+        IMMUTABLE_FIELDS = ["startDate", "endDate" , "sponsoredBy", "paymentInstruments"]
         
         # Check for restricted fields in the request
         restricted_fields_found = []
@@ -1406,7 +1406,11 @@ update_euler_offer_function = FunctionSchema(
         },
         "offerTitle": {
             "type": "string",
-            "description": "Updated customer-facing title for the offer. Examples: Get 20% Off on All Items, Welcome Cashback for New Users"
+            "description": "The title of the offer. Auto-generate this value based on the current context. If a suitable title cannot be generated, prompt the user for input. This field is required."
+        },
+        "offerDescription": {
+            "type": "string",
+            "description": "The description of the offer. Auto-generate this value based on the user's request for updating the offer. If a suitable description cannot be generated, prompt the user for input. This field is required."
         },
         "discountValue": {
             "type": "number",
