@@ -194,19 +194,6 @@ def get_chart_visualization_instructions() -> str:
         6. Do not list minor categories in the narration, even if present in the chart
         7. Voice descriptions must stay short (2–3 sentences max), focusing on key insights
 
-    RULE 8 : CHART TOOL RESULT AS FINAL RESPONSE
-        ⚠️ CRITICAL REQUIREMENT - NO EXCEPTIONS ⚠️
-        After calling ANY chart generation tool (generate_bar_chart, generate_line_chart, generate_donut_chart):
-        1. The tool will return a text result
-        2. You MUST use that EXACT text as your complete final response
-        3. Do NOT add any additional words, explanations, or commentary
-        4. Do NOT generate your own response - the tool result IS your response
-        5. Simply return the tool result text verbatim as if you are speaking it directly
-        6. Don't remove <highlight> tags - they are critical for synchronization
-        EXAMPLE:
-        - Tool returns: "The funnel shows 18907 users clicked checkout..."
-        - Your response: "The funnel shows 18907 users clicked checkout..." (EXACTLY this, nothing more)
-        This rule overrides all other conversational guidelines - the tool result is your complete response.
         """
     return ""
 

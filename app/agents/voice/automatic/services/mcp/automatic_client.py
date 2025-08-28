@@ -15,6 +15,8 @@ from app.agents.voice.automatic.types.models import (
     MCPTool
 )
 
+from app.agents.voice.automatic.services.charts.mcp.utils import _store_ui_components_from_mcp
+
 class StreamableHTTPTransport:
     """Handles JSON-RPC 2.0 over streaming HTTP with custom headers."""
     def __init__(self, server_url: str, auth_token: str, context: Dict[str, Any]):
@@ -187,7 +189,7 @@ class MCPClient:
                         ui_components.append(item["text"])
 
                 if ui_components:
-                    await self._store_ui_components_from_mcp(ui_components)
+                    await _store_ui_components_from_mcp(self, ui_components)
             
             
                 if not text_response and ui_components:
