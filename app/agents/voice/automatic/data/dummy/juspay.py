@@ -2,186 +2,156 @@ import json
 
 dummy_juspay_analytics_today = json.dumps({
         "overall_success_rate_data": {
-            "success_rate": 64.33
+            "success_rate": 93.5
         },
         "payment_method_success_rates": [
             {
                 "payment_method_type": "WALLET",
-                "success_rate": 66.67,
+                "success_rate": 95.1,
             },
             {
-                "payment_method_type": "CARD",
-                "success_rate": 78.95
-            },
-            {
-                "payment_method_type": "CONSUMER_FINANCE",
-                "success_rate": 47.37
-            },
-            {
-                "payment_method_type": "CASH",
-                "success_rate": 100.0
+                "payment_method_type": "DEBIT_CARD",
+                "success_rate": 92.5
             },
             {
                 "payment_method_type": "UPI",
-                "success_rate": 53.92
+                "success_rate": 97.2
+            },
+            {
+                "payment_method_type": "CREDIT_CARD",
+                "success_rate": 94.8
             },
             {
                 "payment_method_type": "NB",
-                "success_rate": 0.0
+                "success_rate": 90.3
             }
         ],
         "failure_details": [
             {
-                "error_message": "FAILED",
-                "payment_method_type": "CONSUMER_FINANCE",
-                "count": 3
+                "error_message": "INSUFFICIENT_FUNDS",
+                "payment_method_type": "CREDIT_CARD",
+                "count": 125
             },
             {
-                "error_message": "COD initiated successfully",
-                "payment_method_type": "CASH",
-                "count": 196
+                "error_message": "BANK_TECHNICAL_ISSUE",
+                "payment_method_type": "NET_BANKING",
+                "count": 78
             },
             {
-                "error_message": "unable_to_process",
+                "error_message": "SESSION_EXPIRED",
                 "payment_method_type": "WALLET",
+                "count": 29
+            },
+            {
+                "error_message": "PAYMENT_TIMEOUT",
+                "payment_method_type": "UPI",
+                "count": 65
+            },
+            {
+                "error_message": "CARD_DECLINED",
+                "payment_method_type": "CREDIT_CARD",
+                "count": 54
+            },
+            {
+                "error_message": "AUTHENTICATION_FAILED",
+                "payment_method_type": "DEBIT_CARD",
+                "count": 42
+            },
+            {
+                "error_message": "GATEWAY_ERROR",
+                "payment_method_type": "ALL",
                 "count": 1
             },
             {
-                "error_message": "Transaction failed due to insufficient funds.",
-                "payment_method_type": "UPI",
-                "count": 1
-            },
-            {
-                "error_message": "payment_authorization_error. High response time for remitter bank",
-                "payment_method_type": "UPI",
-                "count": 1
-            },
-            {
-                "error_message": "Payment was unsuccessful as you could not complete it in time.",
-                "payment_method_type": "UPI",
-                "count": 48
-            },
-            {
-                "error_message": "payment_authentication_error. Transaction timed out at issuer ACS",
-                "payment_method_type": "CARD",
-                "count": 1
-            },
-            {
-                "error_message": "payment_processing_error. Collect expired",
-                "payment_method_type": "UPI",
-                "count": 2
-            },
-            {
-                "error_message": "pending. Transaction Pending",
-                "payment_method_type": "UPI",
-                "count": 7
-            },
-            {
-                "error_message": "Payment was unsuccessful as the phone number linked to this UPI ID is changed/removed. Try using another method.",
-                "payment_method_type": "UPI",
-                "count": 1
-            },
-            {
-                "error_message": "invalid_payment_credentials. Expired virtual address",
-                "payment_method_type": "UPI",
-                "count": 1
-            },
-            {
-                "error_message": "payment_authorization_error. Do not honour",
-                "payment_method_type": "CARD",
-                "count": 2
-            },
-            {
-                "error_message": "payment_authentication_error. Transaction not permitted to cardholder",
-                "payment_method_type": "CARD",
-                "count": 1
-            },
-            {
-                "error_message": "invalid_payment_credentials. Invalid MPIN",
-                "payment_method_type": "UPI",
-                "count": 1
+                "error_message":"OTP_VALIDATION_FAILED",
+                "payment_method_type": "CREDIT_CARD",
+                "count": 27
             }
         ],
         "success_volume_by_payment_method": [
             {
                 "payment_method_type": "WALLET",
-                "transaction_count": 6
+                "transaction_count": 980
             },
             {
-                "payment_method_type": "CARD",
-                "transaction_count": 15
+                "payment_method_type": "CREDIT_CARD",
+                "transaction_count": 2780
             },
             {
-                "payment_method_type": "CONSUMER_FINANCE",
-                "transaction_count": 9
+                "payment_method_type": "DEBIT_CARD",
+                "transaction_count": 1950
             },
             {
-                "payment_method_type": "CASH",
-                "transaction_count": 196
+                "payment_method_type": "BUY_NOW_PAY_LATER",
+                "transaction_count": 780
             },
             {
                 "payment_method_type": "UPI",
-                "transaction_count": 328
+                "transaction_count": 3250
+            },
+            {
+                "payment_method_type": "OTHERS",
+                "transaction_count": 320
             }
         ],
         "gmv_by_payment_method": [
             {
                 "payment_method_type": "WALLET",
-                "gmv": 4415.48
+                "gmv": 2180000
             },
             {
                 "payment_method_type": "REWARD",
                 "gmv": 0.0
             },
             {
-                "payment_method_type": "CARD",
-                "gmv": 22624.67
+                "payment_method_type": "CREDIT_CARD",
+                "gmv": 12850000
             },
             {
-                "payment_method_type": "CONSUMER_FINANCE",
-                "gmv": 8814.15
-            },
-            {
-                "payment_method_type": "CASH",
-                "gmv": 199788.61
+                "payment_method_type": "DEBIT_CARD",
+                "gmv": 6320000
             },
             {
                 "payment_method_type": "UPI",
-                "gmv": 320001.85
+                "gmv": 8750000
             },
             {
                 "payment_method_type": "NB",
-                "gmv": 0.0
+                "gmv": 4120000
+            },
+            {
+                "payment_method_type": "BUY_NOW_PAY_LATER",
+                "gmv": 3950000
+            },
+            {
+                "payment_method_type": "OTHERS",
+                "gmv": 980000
             }
         ],
         "average_ticket_size_by_payment_method": [
             {
                 "payment_method_type": "WALLET",
-                "average_ticket_size": 735.0
+                "average_ticket_size": 2224.49
             },
             {
-                "payment_method_type": "REWARD",
-                "average_ticket_size": 0.0
-            },
-            {
-                "payment_method_type": "CARD",
-                "average_ticket_size": 1508.0
-            },
-            {
-                "payment_method_type": "CONSUMER_FINANCE",
-                "average_ticket_size": 979.0
-            },
-            {
-                "payment_method_type": "CASH",
-                "average_ticket_size": 1019.0
+                "payment_method_type": "CREDIT_CARD",
+                "average_ticket_size": 4620.14
             },
             {
                 "payment_method_type": "UPI",
-                "average_ticket_size": 911.0
+                "average_ticket_size": 2692.31
+            },
+            {
+                "payment_method_type": "DEBIT_CARD",
+                "average_ticket_size": 3241.03
             },
             {
                 "payment_method_type": "NB",
-                "average_ticket_size": 0.0
+                "average_ticket_size": 2901.41
+            },
+            {
+                "payment_method_type": "BUY_NOW_PAY_LATER",
+                "average_ticket_size": 5064.1
             }
         ],
         "errors": []
@@ -192,38 +162,38 @@ dummy_breeze_analytics_today = json.dumps({
             "componentType": "STATISTICS_CARD_WITH_SLOT",
             "value": {
                 "title": "Total sales",
-                "value": 550432.17,
+                "value": 481462.77,
                 "bottomContainerItems": [
                     {
                         "metric": "PREPAID",
-                        "rate": 340341.56,
+                        "rate": 259428.41,
                         "subUnit": "AMOUNT"
                     },
                     {
                         "metric": "COD",
-                        "rate": 210090.61,
+                        "rate": 222034.36000000002,
                         "subUnit": "AMOUNT"
                     },
                     {
                         "metric": "PREPAID(%)",
-                        "rate": 61.83,
+                        "rate": 53.88,
                         "subUnit": "PERCENTAGE"
                     }
                 ],
                 "slotProperties": {
                     "componentType": "DONUT_CHART",
                     "value": {
-                        "other": 425008.99,
-                        "adyogi | CPC_fb": 46011.95,
-                        "google | product_sync": 34576.40,
-                        "adyogi | CPC_ig": 25226.34,
-                        "adyogi | google-performancemax": 6908.65,
-                        "facebook | paid": 5557.5,
-                        "bik | whatsapp": 2370.13,
+                        "other": 126399.26,
+                        "adyogi | CPC_fb": 118874.68,
+                        "google | product_sync": 33994.43,
+                        "adyogi | CPC_ig": 74847.33,
+                        "adyogi | google-performancemax": 79295.01,
+                        "facebook | paid": 2256.25,
+                        "bik | whatsapp": 7801.37,
                         "bio | ig": 1575.1,
-                        "google | search": 1461.1,
+                        "google | search": 24161.48,
                         "JioHotstar | Product1": 1028,
-                        "D2C | website": 708
+                        "D2C | website": 673
                     },
                     "unit": "AMOUNT",
                     "toolTipText": "Contribution of each marketing channel (UTM source) to total sales",
@@ -237,21 +207,21 @@ dummy_breeze_analytics_today = json.dumps({
             "componentType": "STATISTICS_CARD_WITH_SLOT",
             "value": {
                 "title": "Total orders",
-                "value": 578,
+                "value": 441,
                 "bottomContainerItems": [
                     {
                         "metric": "PREPAID",
-                        "rate": 381,
+                        "rate": 262,
                         "subUnit": "NUMBER"
                     },
                     {
                         "metric": "COD",
-                        "rate": 197,
+                        "rate": 179,
                         "subUnit": "NUMBER"
                     },
                     {
                         "metric": "PREPAID(%)",
-                        "rate": 65.92,
+                        "rate": 59.41,
                         "subUnit": "PERCENTAGE"
                     }
                 ]
@@ -262,22 +232,22 @@ dummy_breeze_analytics_today = json.dumps({
             "componentType": "STATISTICS_CARD_WITH_SLOT",
             "value": {
                 "title": "Conversion rate",
-                "value": 36.09,
+                "value": 35.3,
                 "bottomContainerItems": [
                     {
                         "metric": "SESSIONS",
-                        "rate": 1582,
+                        "rate": 1252,
                         "subUnit": "NUMBER"
                     },
                     {
                         "metric": "ORDERS",
-                        "rate": 571,
+                        "rate": 442,
                         "subUnit": "NUMBER"
                     },
                     {
                         "metric": "TIME TAKEN",
-                        "rate": 235,
-                        "subUnit": "TIME"
+                        "rate": 224,
+                        "subUnit": "TIME" 
                     }
                 ],
                 "slotProperties": {
@@ -285,11 +255,11 @@ dummy_breeze_analytics_today = json.dumps({
                     "value": {
                         "toolTipText": "Conversion Rate",
                         "toolTipDescription": "Track user progression from interaction to purchase, across key stages",
-                        "clickedCheckoutButton": 2701,
-                        "loggedIn": 1582,
-                        "submittedAddress": 1306,
-                        "clickedProceedToBuyButton": 820,
-                        "placedOrder": 571
+                        "clickedCheckoutButton": 2219,
+                        "loggedIn": 1252,
+                        "submittedAddress": 1082,
+                        "clickedProceedToBuyButton": 688,
+                        "placedOrder": 442
                     }
                 }
             },
@@ -297,7 +267,7 @@ dummy_breeze_analytics_today = json.dumps({
         },
         "paymentSuccessRate": {
             "componentType": "STATISTICS_CARD",
-            "value": 79.09,
+            "value": 73.54,
             "unit": "PERCENTAGE",
             "toolTipText": "Successful transactions over total attempted transactions"
         },
@@ -311,7 +281,7 @@ dummy_breeze_analytics_today = json.dumps({
         },
         "averageOrderValue": {
             "componentType": "STATISTICS_CARD",
-            "value": 952.3,
+            "value": 1091.75,
             "unit": "AMOUNT",
             "toolTipText": "Total sales over total number of orders"
         },
@@ -320,16 +290,16 @@ dummy_breeze_analytics_today = json.dumps({
             "value": [
                 {
                     "metric": "Of total GMV is prepaid",
-                    "rate": 61.83,
-                    "prepaidSales": 340341.56,
-                    "totalSales": 550432.17,
+                    "rate": 53.88,
+                    "prepaidSales": 259428.41,
+                    "totalSales": 481462.77,
                     "subUnit": "AMOUNT"
                 },
                 {
                     "metric": "Of total orders placed are prepaid",
-                    "rate": 65.92,
-                    "prepaidOrders": 381,
-                    "totalOrders": 578,
+                    "rate": 59.41,
+                    "prepaidOrders": 262,
+                    "totalOrders": 441,
                     "subUnit": "NUMBER"
                 }
             ],
@@ -341,16 +311,16 @@ dummy_breeze_analytics_today = json.dumps({
             "value": [
                 {
                     "metric": "Of total GMV is prepaid",
-                    "rate": 61.83,
-                    "prepaidSales": 340341.56,
-                    "totalSales": 550432.17,
+                    "rate": 53.88,
+                    "prepaidSales": 259428.41,
+                    "totalSales": 481462.77,
                     "subUnit": "AMOUNT"
                 },
                 {
                     "metric": "Of total orders placed are prepaid",
-                    "rate": 65.92,
-                    "prepaidOrders": 381,
-                    "totalOrders": 578,
+                    "rate": 59.41,
+                    "prepaidOrders": 262,
+                    "totalOrders": 441,
                     "subUnit": "NUMBER"
                 }
             ],
@@ -362,12 +332,12 @@ dummy_breeze_analytics_today = json.dumps({
             "value": {
                 "toolTipText": "Conversion Rate by platform",
                 "toolTipDescription": "Calculated by ratio of payment started to checkout completed",
-                "Facebook": 77.36,
-                "Chrome": 80.39,
-                "Safari": 79.69,
-                "Firefox": 75,
+                "Facebook": 73.08,
+                "Chrome": 72.49,
+                "Safari": 83.72,
+                "Firefox": 100,
                 "Unknown": 0,
-                "Instagram": 77.44
+                "Instagram": 72.37
             }
         },
         "deviceSubTypeBarGraphData": {
@@ -375,11 +345,11 @@ dummy_breeze_analytics_today = json.dumps({
             "value": {
                 "toolTipText": "Conversion Rate by device_sub_type",
                 "toolTipDescription": "Calculated by ratio of payment started to checkout completed",
-                "Android": 75.83,
-                "iPhone": 86.62,
-                "Windows": 88.33,
-                "Mac": 100,
-                "Unknown": 60
+                "Android": 72.28,
+                "iPhone": 81.52,
+                "Windows": 69.57,
+                "Mac": 72.73,
+                "Unknown": 100
             }
         }
 })
@@ -431,26 +401,26 @@ dummy_breeze_analytics_weekly = json.dumps({
         "componentType": "STATISTICS_CARD_WITH_SLOT",
         "value": {
             "title": "Total sales",
-            "value": 3859513.32,
+            "value": 481462.77,
             "bottomContainerItems": [
-                {"metric": "PREPAID", "rate": 2460993.05, "subUnit": "AMOUNT"},
-                {"metric": "COD", "rate": 1398520.27, "subUnit": "AMOUNT"},
-                {"metric": "PREPAID(%)", "rate": 63.76, "subUnit": "PERCENTAGE"}
+                {"metric": "PREPAID", "rate": 259428.41, "subUnit": "AMOUNT"},
+                {"metric": "COD", "rate": 222034.36000000002, "subUnit": "AMOUNT"},
+                {"metric": "PREPAID(%)", "rate": 53.88, "subUnit": "PERCENTAGE"}
             ],
             "slotProperties": {
                 "componentType": "DONUT_CHART",
                 "value": {
-                    "other": 2975062.93,
-                    "adyogi | CPC_fb": 322083.65,
-                    "google | product_sync": 242034.8,
+                    "other": 126399.26,
+                    "adyogi | CPC_fb": 118874.68,
+                    "google | product_sync": 33994.43,
                     "adyogi | CPC_ig": 176584.38,
-                    "adyogi | google-performancemax": 48360.55,
-                    "facebook | paid": 38902.5,
-                    "bik | whatsapp": 16590.91,
+                    "adyogi | google-performancemax": 79295.01,
+                    "facebook | paid": 2256.25,
+                    "bik | whatsapp": 7081.37,
                     "bio | ig": 11025.7,
-                    "google | search": 10227.7,
+                    "google | search": 24161.48,
                     "JioHotstar | Product1": 7196,
-                    "D2C | website": 4956
+                    "D2C | website": 673
                 },
                 "unit": "AMOUNT",
                 "toolTipText": "Contribution of each marketing channel (UTM source) to total sales",
@@ -464,11 +434,11 @@ dummy_breeze_analytics_weekly = json.dumps({
         "componentType": "STATISTICS_CARD_WITH_SLOT",
         "value": {
             "title": "Total orders",
-            "value": 4046,
+            "value": 441,
             "bottomContainerItems": [
-                {"metric": "PREPAID", "rate": 2646, "subUnit": "NUMBER"},
-                {"metric": "COD", "rate": 1400, "subUnit": "NUMBER"},
-                {"metric": "PREPAID(%)", "rate": 65.4, "subUnit": "PERCENTAGE"}
+                {"metric": "PREPAID", "rate": 262, "subUnit": "NUMBER"},
+                {"metric": "COD", "rate": 179, "subUnit": "NUMBER"},
+                {"metric": "PREPAID(%)", "rate": 59.41, "subUnit": "PERCENTAGE"}
             ]
         },
         "unit": "NUMBER"
@@ -477,22 +447,22 @@ dummy_breeze_analytics_weekly = json.dumps({
         "componentType": "STATISTICS_CARD_WITH_SLOT",
         "value": {
             "title": "Conversion rate",
-            "value": 35.0,
+            "value": 35.3,
             "bottomContainerItems": [
-                {"metric": "SESSIONS", "rate": 11560, "subUnit": "NUMBER"},
-                {"metric": "ORDERS", "rate": 4046, "subUnit": "NUMBER"},
-                {"metric": "TIME TAKEN", "rate": 240, "subUnit": "TIME"}
+                {"metric": "SESSIONS", "rate": 1252, "subUnit": "NUMBER"},
+                {"metric": "ORDERS", "rate": 442, "subUnit": "NUMBER"},
+                {"metric": "TIME TAKEN", "rate": 224, "subUnit": "TIME"}
             ],
             "slotProperties": {
                 "componentType": "BAR_GRAPH_CHART",
                 "value": {
                     "toolTipText": "Conversion Rate",
                     "toolTipDescription": "Track user progression from interaction to purchase, across key stages",
-                    "clickedCheckoutButton": 18907,
-                    "loggedIn": 11074,
-                    "submittedAddress": 9142,
-                    "clickedProceedToBuyButton": 5740,
-                    "placedOrder": 4046
+                    "clickedCheckoutButton": 2219,
+                    "loggedIn": 1252,
+                    "submittedAddress": 1082,
+                    "clickedProceedToBuyButton": 688,
+                    "placedOrder": 442
                 }
             }
         },
@@ -500,13 +470,13 @@ dummy_breeze_analytics_weekly = json.dumps({
     },
     "paymentSuccessRate": {
         "componentType": "STATISTICS_CARD",
-        "value": 82.5,
+        "value": 73.54,
         "unit": "PERCENTAGE",
         "toolTipText": "Successful transactions over total attempted transactions"
     },
     "averageOrderValue": {
         "componentType": "STATISTICS_CARD",
-        "value": 953.91,
+        "value": 1091.75,
         "unit": "AMOUNT",
         "toolTipText": "Total sales over total number of orders"
     },
