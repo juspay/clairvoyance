@@ -48,7 +48,7 @@ class InterceptHandler(logging.Handler):
 
         logger.opt(depth=depth, exception=record.exc_info).log(level, record.getMessage())
 
-def _setup_logger_sinks(include_session_id: bool = False):
+def _setup_logger_sinks(include_session_id: bool = False, include_client_sid: bool = False):
     """
     Internal function to set up logger sinks based on environment.
     Reduces code duplication between initial setup and session configuration.
@@ -66,10 +66,12 @@ def _setup_logger_sinks(include_session_id: bool = False):
     if ENVIRONMENT == "dev":
         # Development mode format
         session_part = "<cyan>[{extra[session_id]}]</cyan> | " if include_session_id else ""
+        client_sid_part = "<yellow>[{extra[client_sid]}]</yellow> | " if include_client_sid else ""
         stdout_fmt = (
             "<green>{time:YYYY-MM-DD HH:mm:ss}</green> | "
             "<level>{level: <8}</level> | "
             f"{session_part}"
+            f"{client_sid_part}"
             "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - "
             "<level>{message}</level>"
         )
@@ -95,7 +97,7 @@ def _setup_logger_sinks(include_session_id: bool = False):
             colorize=True,
         )
     else:
-        # Production mode - JSON automatically includes session_id from extra
+        # Production mode - JSON automatically includes session_id and client_sid from extra
         logger.add(
             json_sink,
             level=PROD_LOG_LEVEL,  # Configurable log level via PROD_LOG_LEVEL env var defaulting to INFO
@@ -127,14 +129,19 @@ def _setup_logger_sinks(include_session_id: bool = False):
             diagnose=False,
         )
 
-def configure_session_logger(session_id: str):
+def configure_session_logger(session_id: str, client_sid: str = None):
     """
-    Configure the logger to automatically include session_id in all log entries.
+    Configure the logger to automatically include session_id and client_sid in all log entries.
     This should be called once at the start of a subprocess.
     """
     logger.remove()
-    _setup_logger_sinks(include_session_id=True)
-    logger.configure(extra={"session_id": session_id})
+    _setup_logger_sinks(include_session_id=True, include_client_sid=bool(client_sid))
+    
+    extra_context = {"session_id": session_id}
+    if client_sid:
+        extra_context["client_sid"] = client_sid
+        
+    logger.configure(extra=extra_context)
     # Also set up logging interception for session-based logging
     setup_logging_interception()
 

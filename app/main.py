@@ -276,9 +276,11 @@ async def bot_connect(request: AutomaticVoiceUserConnectRequest) -> Dict[str, An
         params=token_params,
     )
 
-    # 3. Generate unique session ID for this subprocess
-    session_id = request.sessionId or str(uuid.uuid4())
-    logger.bind(session_id=session_id).info(f"Using session ID for new voice agent: {session_id}")
+    # 3. Generate unique session ID and client session ID for this subprocess
+    session_id = str(uuid.uuid4())  # Always generate random session ID
+    client_sid = request.sessionId or str(uuid.uuid4())  # Use client-provided sessionId or generate fallback
+    logger.bind(session_id=session_id).info(f"Generated session ID for new voice agent: {session_id}")
+    logger.bind(client_sid=client_sid).info(f"Using client session ID for new voice agent: {client_sid}")
 
     # 4. Build command args list
     bot_file = "app.agents.voice.automatic"
@@ -288,6 +290,7 @@ async def bot_connect(request: AutomaticVoiceUserConnectRequest) -> Dict[str, An
         "-t", token,
         "--mode", raw_mode.upper() if raw_mode else None,
         "--session-id", session_id,
+        "--client-sid", client_sid,
     ]
 
     # Add user_name and tts_service regardless of mode

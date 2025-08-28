@@ -34,7 +34,7 @@ def initialize_tools(
     :param shop_url: The shop URL, if available.
     :param shop_id: The shop ID, if available.
     :param shop_type: The shop type, if available.
-    :param session_id: The session ID, if available.
+    :param session_id: The client session ID for tool calls (now receives client_sid).
     :param merchant_id: The merchant ID, if available.
     :param user_id: The user ID, if available.
     """

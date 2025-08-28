@@ -57,6 +57,7 @@ async def main():
     parser.add_argument("-t", "--token", type=str, required=True, help="Daily token")
     parser.add_argument("--mode", type=str, help="Mode (TEST or LIVE)")
     parser.add_argument("--session-id", type=str, required=True, help="Session ID for logging")
+    parser.add_argument("--client-sid", type=str, help="Client session ID for logging")
     parser.add_argument("--euler-token", type=str, help="Euler token for live mode")
     parser.add_argument("--breeze-token", type=str, help="Breeze token for live mode")
     parser.add_argument("--shop-url", type=str, help="Shop URL for live mode")
@@ -69,9 +70,9 @@ async def main():
     parser.add_argument("--platform-integrations",type=str, nargs="+", help="Platform Integrations that are supported by the shop (string array)")
     args = parser.parse_args()
 
-    # Configure logger with session ID for all logs in this subprocess
-    configure_session_logger(args.session_id)
-    logger.info(f"Voice agent started with session ID: {args.session_id}")
+    # Configure logger with session ID and client session ID for all logs in this subprocess
+    configure_session_logger(args.session_id, args.client_sid)
+    logger.info(f"Voice agent started with session ID: {args.session_id}, client session ID: {args.client_sid}")
     
     # Create session context for passing to components
     session_context = create_session_context(args.session_id)
@@ -148,14 +149,14 @@ async def main():
                 shop_id=args.shop_id,
                 shop_type=args.shop_type,
                 merchant_id=args.merchant_id,
-                session_id=args.session_id,
+                session_id=args.client_sid,  # Pass client_sid instead of session_id
                 user_id=args.user_name,
             )
         else:
             tools, tool_functions = initialize_tools(
                 mode=mode.value,
                 merchant_id=args.merchant_id,
-                session_id=args.session_id,
+                session_id=args.client_sid,  # Pass client_sid instead of session_id
             )
             
         for name, function in tool_functions.items():
@@ -165,7 +166,7 @@ async def main():
         logger.info(f"Initializing tools from remote MCP server")
         
         mcp_context = {
-            "sessionId": args.session_id,
+            "sessionId": args.client_sid,  # Pass client_sid instead of session_id
             "juspayToken": args.euler_token,
             "shopUrl": args.shop_url,
             "shopId": args.shop_id,
@@ -347,6 +348,7 @@ async def main():
             root_span.set_attribute("conversation.type", "voice")
             root_span.set_attribute("user.name", user_name)
             root_span.set_attribute("service.name", "breeze-voice-agent")
+            root_span.set_attribute("client_sid", args.client_sid)
             langfuse_client.update_current_trace(user_id=user_name)
             langfuse_client.update_current_trace(session_id=args.session_id)
             langfuse_client.update_current_trace(tags=[voice_name])
