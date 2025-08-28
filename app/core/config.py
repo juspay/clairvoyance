@@ -44,6 +44,7 @@ ELEVENLABS_VOICE_ID = os.environ.get("ELEVENLABS_VOICE_ID", "bQQWtYx9EodAqMdkrNA
 ELEVENLABS_RHEA_VOICE_ID = os.environ.get("ELEVENLABS_RHEA_VOICE_ID", "bQQWtYx9EodAqMdkrNAc")
 ELEVENLABS_MODEL_ID = os.environ.get("ELEVENLABS_MODEL_ID", "eleven_flash_v2_5")
 ELEVENLABS_VOICE_SPEED = float(os.environ.get("ELEVENLABS_VOICE_SPEED", 1.15))
+ELEVENLABS_TTS_SPEED = float(os.environ.get("ELEVENLABS_TTS_SPEED", "1.10"))
 ELEVENLABS_BB_VOICE_ID = os.environ.get("ELEVENLABS_BB_VOICE_ID", "fG9s0SXJb213f4UxVHyG")
 GOOGLE_BRET_VOICE = os.environ.get("GOOGLE_BRET_VOICE", "en-IN-Chirp3-HD-Sadaltager")
 GOOGLE_MIA_VOICE = os.environ.get("GOOGLE_MIA_VOICE", "en-IN-Chirp3-HD-Despina")
@@ -122,7 +123,6 @@ TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "")
 TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "")
 TWILIO_FROM_NUMBER = os.getenv("TWILIO_FROM_NUMBER", "")
 TWILIO_WEBSOCKET_URL = os.getenv("TWILIO_WEBSOCKET_URL", "")
-
 # Webhook Authentication
 ORDER_CONFIRMATION_WEBHOOK_SECRET_KEY = os.getenv("ORDER_CONFIRMATION_WEBHOOK_SECRET_KEY", "")
 ORDER_CONFIRMATION_ENDPOINT = os.getenv("ORDER_CONFIRMATION_ENDPOINT", "http://localhost:8000/agent/voice/breeze-buddy/breeze/order-confirmation")

@@ -37,7 +37,7 @@ def get_tts_service(
             api_key=config.ELEVENLABS_API_KEY,
             voice_id=config.ELEVENLABS_RHEA_VOICE_ID,
             model_id=config.ELEVENLABS_MODEL_ID,
-            params=ElevenLabsTTSService.InputParams(speed=0.8, language=Language.EN_IN),
+            params=ElevenLabsTTSService.InputParams(speed=config.ELEVENLABS_TTS_SPEED, language=Language.EN_IN),
             text_filters=text_filters,
         )
     
