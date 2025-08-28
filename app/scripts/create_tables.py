@@ -5,11 +5,13 @@ This module handles the creation of all database tables and their indexes.
 from dotenv import load_dotenv
 import asyncio
 from app.database import init_db_pool, close_db_pool, get_db_connection
+from app.schemas import DailyRoomStatus
 
 load_dotenv(override=True)
 
 # Table names
 CALL_DATA_TABLE = "call_data"
+HOTLINE_ROOMS_TABLE = "daily_hotline_rooms"
 
 def create_call_data_table_query() -> str:
     """
@@ -41,6 +43,30 @@ def create_call_data_table_query() -> str:
         CREATE INDEX IF NOT EXISTS idx_call_data_created_at ON "{CALL_DATA_TABLE}" ("created_at");
     """
 
+def create_daily_hotline_rooms_table_query() -> str:
+    """
+    Generate query to create daily_hotline_rooms table with optimized indexes.
+    """
+    return f"""
+        CREATE TABLE IF NOT EXISTS "{HOTLINE_ROOMS_TABLE}" (
+            "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            "daily_room_url" TEXT NOT NULL,
+            "daily_token" TEXT NOT NULL,
+            "status" TEXT NOT NULL CHECK ("status" IN ('{DailyRoomStatus.AVAILABLE.value}', '{DailyRoomStatus.RESERVED.value}', '{DailyRoomStatus.IN_USE.value}')),
+            "agent_pid" INTEGER,
+            "session_id" TEXT,
+            "created_at" TIMESTAMP DEFAULT NOW(),
+            "expires_at" TIMESTAMP NOT NULL,
+            "isactive" BOOLEAN NOT NULL DEFAULT true
+        );
+        
+        -- Optimized indexes for daily hotline operations with soft delete support
+        CREATE INDEX IF NOT EXISTS idx_daily_hotline_rooms_active_status_expires ON "{HOTLINE_ROOMS_TABLE}"("isactive", "status", "expires_at") WHERE "isactive" = true AND "expires_at" > NOW();
+        CREATE INDEX IF NOT EXISTS idx_daily_hotline_rooms_active_expires ON "{HOTLINE_ROOMS_TABLE}"("isactive", "expires_at") WHERE "isactive" = true;
+        CREATE INDEX IF NOT EXISTS idx_daily_hotline_rooms_active_agent_pid ON "{HOTLINE_ROOMS_TABLE}"("isactive", "agent_pid") WHERE "isactive" = true AND "agent_pid" IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS idx_daily_hotline_rooms_isactive ON "{HOTLINE_ROOMS_TABLE}"("isactive");
+    """
+
 async def create_call_data_table():
     """
     Create the call_data table with all constraints and indexes.
@@ -55,6 +81,33 @@ async def create_call_data_table():
         print(f"Error creating call_data table: {e}")
         return False
 
+async def create_daily_hotline_rooms_table():
+    """
+    Create the daily_hotline_rooms table with all constraints and indexes.
+    """
+    try:
+        async for conn in get_db_connection():
+            print("Creating daily_hotline_rooms table...")
+            await conn.execute(create_daily_hotline_rooms_table_query())
+            print("Daily hotline rooms table created successfully")
+            
+            # Log table structure for verification
+            result = await conn.fetch("""
+                SELECT column_name, data_type, is_nullable
+                FROM information_schema.columns
+                WHERE table_name = 'daily_hotline_rooms'
+                ORDER BY ordinal_position;
+            """)
+            
+            print("Daily hotline rooms table structure:")
+            for row in result:
+                print(f"  {row['column_name']}: {row['data_type']} ({'NULL' if row['is_nullable'] == 'YES' else 'NOT NULL'})")
+            
+            return True
+    except Exception as e:
+        print(f"Error creating daily_hotline_rooms table: {e}")
+        return False
+
 async def create_all_tables():
     """
     Create all database tables.
@@ -65,7 +118,10 @@ async def create_all_tables():
         # Create call_data table
         call_data_success = await create_call_data_table()
         
-        if call_data_success:
+        # Create daily_hotline_rooms table
+        hotline_success = await create_daily_hotline_rooms_table()
+        
+        if call_data_success and hotline_success:
             print("All database tables created successfully")
             return True
         else:
@@ -105,7 +161,13 @@ def main():
         command = sys.argv[1].lower()
         
         if command == "create":
-            asyncio.run(create_all_tables())
+            async def run_create():
+                await init_db_pool()
+                try:
+                    await create_all_tables()
+                finally:
+                    await close_db_pool()
+            asyncio.run(run_create())
         elif command == "list":
             async def list_tables():
                 await init_db_pool()
@@ -120,6 +182,8 @@ def main():
             asyncio.run(list_tables())
         else:
             print("Usage: python -m app.scripts.create_tables [create|list]")
+    else:
+        print("Usage: python -m app.scripts.create_tables [create|list]")
 
 if __name__ == "__main__":
     main()

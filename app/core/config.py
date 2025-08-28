@@ -115,6 +115,29 @@ ENABLE_SUMMARIZATION = os.environ.get("ENABLE_SUMMARIZATION", "true").lower() ==
 MAX_TURNS_BEFORE_SUMMARY = int(os.environ.get("MAX_TURNS_BEFORE_SUMMARY", 10))
 KEEP_RECENT_TURNS = int(os.environ.get("KEEP_RECENT_TURNS", 2))
 
+# Daily Hotline Configuration - Room Reservation System
+ENABLE_DAILY_HOTLINE = os.environ.get("ENABLE_DAILY_HOTLINE", "false").lower() == "true"
+DAILY_HOTLINE_CLEANUP_ON_SHUTDOWN = os.environ.get("DAILY_HOTLINE_CLEANUP_ON_SHUTDOWN", "false").lower() == "true"
+DAILY_HOTLINE_POOL_MIN_SIZE = int(os.environ.get("DAILY_HOTLINE_POOL_MIN_SIZE", "3"))
+DAILY_HOTLINE_POOL_MAX_SIZE = int(os.environ.get("DAILY_HOTLINE_POOL_MAX_SIZE", "8"))
+DAILY_HOTLINE_ROOM_EXPIRY_MINUTES = int(os.environ.get("DAILY_HOTLINE_ROOM_EXPIRY_MINUTES", "45"))
+DAILY_HOTLINE_ENABLE_ON_DEMAND = True  # Always enabled
+
+# Validate daily hotline configuration - fallback to default values instead of error
+if ENABLE_DAILY_HOTLINE:
+    if DAILY_HOTLINE_POOL_MIN_SIZE <= 0:
+        logger.warning("DAILY_HOTLINE_POOL_MIN_SIZE must be greater than 0, falling back to default value of 3")
+        DAILY_HOTLINE_POOL_MIN_SIZE = 3
+    if DAILY_HOTLINE_POOL_MAX_SIZE < DAILY_HOTLINE_POOL_MIN_SIZE:
+        logger.warning("DAILY_HOTLINE_POOL_MAX_SIZE must be greater than or equal to DAILY_HOTLINE_POOL_MIN_SIZE, falling back to default value of 8")
+        DAILY_HOTLINE_POOL_MAX_SIZE = 8
+    if DAILY_HOTLINE_ROOM_EXPIRY_MINUTES <= 0:
+        logger.warning("DAILY_HOTLINE_ROOM_EXPIRY_MINUTES must be greater than 0, falling back to default value of 45")
+        DAILY_HOTLINE_ROOM_EXPIRY_MINUTES = 45
+    
+    logger.info(f"Daily Hotline configuration - Min: {DAILY_HOTLINE_POOL_MIN_SIZE}, Max: {DAILY_HOTLINE_POOL_MAX_SIZE}, Expiry: {DAILY_HOTLINE_ROOM_EXPIRY_MINUTES}min")
+    logger.info(f"Daily Hotline cleanup on shutdown: {'enabled' if DAILY_HOTLINE_CLEANUP_ON_SHUTDOWN else 'disabled'}")
+
 BREEZE_BUDDY_CALL_PROVIDER = os.environ.get("BREEZE_BUDDY_CALL_PROVIDER", "twilio")
 AZURE_BREEZE_BUDDY_OPENAI_MODEL = os.environ.get("AZURE_BREEZE_BUDDY_OPENAI_MODEL", "gpt-4o-automatic")
 

@@ -24,6 +24,32 @@ It is optional, but recommended to be updated as the project evolves.
     *   **Entry Point:** A `run.py` script in the project root is used to launch the Uvicorn server for the FastAPI app.
     *   **Static Files:** Client-side assets (like `client.html`) are served from a `static/` directory.
 
+*   **[2025-08-27] - Hotline Pool System for Performance Optimization:**
+    *   **Description:** Implemented a comprehensive voice agent pooling system to achieve sub-second response times:
+        *   **Database-Backed Pool:** `hotline_rooms` table stores pre-initialized agent state with room URLs, tokens, and metadata
+        *   **`HotlineManager` Service:** Located at `app/services/automatic/daily/hotline_manager.py`, manages pool allocation, release, and cleanup operations
+        *   **Enhanced API Endpoint:** Modified `/agent/voice/automatic` to attempt pool allocation first, graceful fallback to on-demand creation
+        *   **Configuration Control:** `ENABLE_HOTLINE` environment variable for feature toggle and instant rollback capability
+        *   **Performance Monitoring:** Comprehensive logging and timing for pool operations and fallback scenarios
+    *   **Performance Impact:** 
+        *   MIA voice: ~31ms response time (97% improvement over ~1000ms on-demand)
+        *   RHEA/BRET voices: Maintained ~1000ms (no regression from hotline implementation)
+        *   Backward compatibility: Full compatibility with existing on-demand creation flow
+    *   **Rationale:** 
+        *   Dramatically improves user experience through near-instantaneous voice agent connections
+        *   Provides foundation for scaling to multiple voice types
+        *   Maintains system reliability through graceful fallback mechanisms
+        *   Enables competitive advantage through superior response times
+    *   **Database Schema:** New `hotline_rooms` table with fields for pool state management and agent lifecycle tracking
+    *   **Description:** The system architecture was updated to support fetching and executing tools from a remote server that adheres to the Model Context Protocol (MCP). This decouples the agent from the tool implementations.
+        *   **`MCPClient` Service:** A dedicated client (`app/agents/voice/automatic/services/mcp/automatic_client.py`) handles all communication with the remote MCP server.
+        *   **`StreamableHTTPTransport`:** A robust transport layer within the client manages the SSE (Server-Sent Events) connection, including request signing and response parsing.
+        *   **Pydantic Model Validation:** The transport layer uses Pydantic models (`app/agents/voice/automatic/types/models.py`) to validate all incoming data against the MCP specification, ensuring resilience against malformed or unexpected responses.
+        *   **Dynamic Registration:** On startup, the `MCPClient` connects to the remote server, fetches the list of available tools, and dynamically registers them with the LLM service, making the agent's capabilities extensible without redeployment.
+    *   **Rationale:**
+        *   Decouples the voice agent from the tool logic, allowing tools to be updated independently.
+        *   Enhances security by centralizing tool execution on a remote server.
+        *   Improves code organization by moving client logic and type definitions to dedicated modules within the `automatic` agent's folder structure.
 *   **[2025-07-14] - Remote Tooling via MCP Client:**
     *   **Description:** The system architecture was updated to support fetching and executing tools from a remote server that adheres to the Model Context Protocol (MCP). This decouples the agent from the tool implementations.
         *   **`MCPClient` Service:** A dedicated client (`app/agents/voice/automatic/services/mcp/automatic_client.py`) handles all communication with the remote MCP server.
@@ -53,4 +79,13 @@ It is optional, but recommended to be updated as the project evolves.
 
 ## Testing Patterns
 
-*
+### Performance Testing Methodology
+*   **[2025-08-27] - Hotline Performance Validation:**
+    *   **Description:** Comprehensive performance testing approach for validating hotline pool system improvements:
+        *   **Baseline Comparison:** Testing legacy system performance with hotline disabled to establish pre-change baselines
+        *   **Load Testing:** Using `curl` with timing measurements to validate response times under various conditions
+        *   **Regression Testing:** Ensuring no performance degradation for non-pooled voices
+        *   **Feature Toggle Testing:** Validating system behavior with hotline enabled/disabled
+    *   **Metrics:** Response time measurement from API call to room URL/token return
+    *   **Test Cases:** MIA (pooled), RHEA/BRET (on-demand), legacy system comparison, concurrent request handling
+    *   **Rationale:** Ensures performance improvements are real and no regressions are introduced

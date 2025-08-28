@@ -22,6 +22,17 @@ class RequestedBy(str, Enum):
 class Workflow(str, Enum):
     ORDER_CONFIRMATION = "order-confirmation"
 
+class DailyRoomStatus(str, Enum):
+    """Status enum for hotline room reservation system."""
+    AVAILABLE = "available"
+    RESERVED = "reserved" 
+    IN_USE = "in_use"
+    
+    @classmethod
+    def all_values(cls) -> List[str]:
+        """Get all valid status values as a list."""
+        return [status.value for status in cls]
+
 class CallDataCreate(BaseModel):
     id: str
     outcome: Optional[CallOutcome] = None

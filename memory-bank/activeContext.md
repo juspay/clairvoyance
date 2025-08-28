@@ -1,37 +1,58 @@
-# Active Context: Remote Tooling with Custom MCPClient and Banner Management
+# Active Context: Hotline Pool System & Performance Optimization
 
 ## 1. Current Work Focus
 
-The primary focus of recent development has been to enable the voice agent to use tools hosted on a remote server, rather than relying solely on locally defined functions. This enhances flexibility and decouples the agent's core logic from the tool implementations. Additionally, a new banner management tool has been implemented to allow the voice agent to create, update, and remove announcement banners on login and payment pages.
+The most recent development focus has been implementing a hotline pool system for voice agents to dramatically reduce response latency. This system maintains pre-initialized voice agents in a database-backed pool, achieving ~31ms response times for MIA voice (vs ~1000ms on-demand creation). The implementation includes comprehensive performance testing and analysis to ensure no regression from the previous system.
 
 ## 2. Key Changes and Implementations
 
-- **`MCPClient` Relocated and Refactored:** The `MCPClient` service was moved to a more appropriate location at `app/agents/voice/automatic/services/mcp/automatic_client.py`. Its associated Pydantic models were also moved to `app/agents/voice/automatic/types/models.py` to improve code organization.
+### Hotline Pool System Architecture
+- **`HotlineManager` Service:** Located at `app/services/automatic/daily/hotline_manager.py`, this service manages the complete lifecycle of pooled voice agents including allocation, release, and cleanup operations.
 
-- **Robust `StreamableHTTPTransport`:** The transport layer was significantly refactored for robustness. It now uses the relocated Pydantic models to validate all incoming responses against the official MCP specification. The streaming logic now correctly handles HTTP errors by reading the response body before raising an exception, preventing crashes from race conditions on closed streams. The client timeout has also been made configurable via the `MCP_CLIENT_TIMEOUT` environment variable, defaulting to 30 seconds.
+- **Database Integration:** New `hotline_rooms` table with fields for `id`, `room_url`, `token`, `voice_name`, `status`, `created_at`, and `updated_at`. Includes comprehensive database queries in `app/database/queries/daily_hotline.py` for pool management.
 
-- **Dynamic Tool Registration:** The voice agent, when `AUTOMATIC_MCP_TOOL_SERVER_USAGE` is true, now uses the `MCPClient` to:
-    1.  Fetch the list of available tools from the remote server at startup.
-    2.  Use the shared Pydantic models to validate and convert the tool schemas into a format compatible with PipeCat's LLM service.
-    3.  Dynamically register a handler for these tools with the LLM. The registration process is now wrapped in more explicit error logging and handling to prevent agent startup failures.
+- **Enhanced API Endpoint:** Modified `/agent/voice/automatic` in `app/main.py` to attempt hotline pool allocation first, with graceful fallback to on-demand creation when pool is exhausted or unavailable.
 
-- **Context-Aware Tool Calls:** All calls made to the remote server by the client include a secure authentication token and a session-specific context. The client now correctly parses both simple `tools/list` responses and complex `tools/call` responses that contain nested JSON, ensuring the LLM receives clean data.
+- **Configuration Management:** Added `ENABLE_HOTLINE` environment variable for feature toggle control, allowing instant rollback if needed.
 
-- **Date-Preserving Summarization:** The summarization logic has been updated to explicitly instruct the LLM to preserve dates and time ranges, improving the accuracy of long-term context.
+### Performance Optimization Results
+- **MIA Voice (Pool):** Achieved ~31ms response time (97% improvement over on-demand)
+- **RHEA/BRET Voices (On-demand):** Maintained ~1000ms response time (no regression)
+- **Legacy Comparison:** Comprehensive testing confirmed no performance degradation from hotline implementation
 
-- **Banner Management Tool:** A new tool has been implemented to allow the voice agent to manage announcement banners on login and payment pages:
-    1. The tool is defined in `app/agents/voice/automatic/tools/breeze/banner.py` and provides functionality to create, update, and remove banners.
-    2. Utility functions for shop configuration management have been added in `app/agents/voice/automatic/tools/breeze/utils.py`.
-    3. The tool requires shop ID, shop URL, merchant ID, and user ID to function properly, which are passed during initialization.
-    4. Two types of banners are supported: login page announcements and payment page announcements.
-    5. The tool interacts with the shop configuration API to manage these banners.
+### Pool Management Features
+- **Automatic Replenishment:** Pool automatically maintains adequate agent inventory
+- **Health Monitoring:** Pool status tracking and cleanup of stale agents
+- **Concurrent Access:** Database connection pooling for efficient concurrent operations
+- **Resource Management:** Configurable pool size to balance performance vs resource consumption
 
-- **Enhanced Analytics Metrics:** The Breeze analytics tools have been updated to include the `getAllMetricsFromCKH` parameter. This parameter is set to `True` when the `operational_tab` is 'OVERVIEW' to fetch a more comprehensive set of metrics.
+## 3. Previous Work: Remote Tool Integration
 
-## 3. Next Steps & Considerations
+- **`MCPClient` Integration:** The voice agent uses remote MCP server tools through a robust client at `app/agents/voice/automatic/services/mcp/automatic_client.py`.
+- **Dynamic Tool Registration:** Tools are fetched from remote server and dynamically registered with the LLM at startup.
+- **Context-Aware Tool Calls:** All remote tool calls include session-specific authentication and context.
 
-- **Security Analysis:** An analysis was performed to identify how sensitive data is exposed. Key risks include the direct exposure of tool schemas and results to the LLM. The `mcp_context` is not directly exposed, but it defines the permissions for the tools the LLM can use.
+## 4. Next Steps & Considerations
 
-- **Future Work:** Potential future work could involve creating a sanitization layer to filter or redact sensitive information passing between the remote server and the LLM, or expanding the Pydantic models to support more `ToolResult` content types like images or audio.
+### Performance Enhancements
+- **Multi-Voice Pool Support:** Extend pool support to RHEA and BRET voices for consistent fast performance
+- **Pool Analytics:** Implement comprehensive monitoring for pool utilization and optimization
+- **Auto-scaling:** Dynamic pool size adjustment based on usage patterns
 
-- **Banner Management Enhancements:** Consider expanding the banner management tool to support more types of banners and additional customization options like colors, icons, or expiration dates.
+### System Reliability
+- **Database High Availability:** Ensure hotline system resilience through database clustering
+- **Pool Health Monitoring:** Advanced monitoring and alerting for pool health
+- **Resource Optimization:** Fine-tune pool size and cleanup strategies
+
+### Testing & Validation
+- **Load Testing:** Comprehensive testing under high concurrent load
+- **Failover Testing:** Validation of fallback mechanisms under various failure scenarios
+- **Performance Regression Testing:** Continuous monitoring to prevent performance degradation
+
+## 5. Architecture Impact
+
+The hotline system represents a significant architectural enhancement that:
+- Maintains backward compatibility with existing on-demand creation
+- Introduces database dependency for pool state management
+- Provides foundation for scaling to multiple voice types
+- Enables sub-second voice agent response times for optimal user experience

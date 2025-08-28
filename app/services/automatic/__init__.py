@@ -1,0 +1,3 @@
+"""
+Automatic services package.
+"""

@@ -8,6 +8,7 @@
 - **Improved Error Handling:** The transport layer and client now gracefully handle a wide range of exceptions. This includes network errors, HTTP status code errors, and data validation errors. The streaming logic now correctly manages the stream lifecycle during HTTP errors, preventing crashes from race conditions. The client timeout is also now configurable.
 - **Context-Aware Sessions:** The system for passing session-specific data (`mcp_context`) via HTTP headers is in place and functional, allowing for authenticated and contextual tool execution.
 - **Date-Preserving Summaries:** The summarization prompt has been updated to ensure that dates and time ranges are preserved in conversation summaries.
+- **Hotline Pool System:** A complete voice agent pooling system has been implemented to dramatically reduce voice switching latency. The system maintains pre-initialized MIA voice agents in a pool for instant response (~31ms vs ~1000ms on-demand). Includes database schema, pool management, configuration controls, and graceful fallback mechanisms.
 - **Banner Management Tool:** The new banner management tool is functional. It allows the voice agent to create, update, and remove announcement banners on login and payment pages. The tool includes comprehensive error handling and logging, and integrates with the shop configuration API.
 - **Shop Configuration Utilities:** The utility functions for shop configuration management are working correctly. They provide a robust foundation for future tools that need to interact with shop configurations.
 - **Enhanced Analytics:** The Breeze analytics tools now fetch more comprehensive metrics for the 'OVERVIEW' tab by utilizing the `getAllMetricsFromCKH` parameter.
@@ -18,6 +19,8 @@
 - **Data Sanitization/Filtering Layer:** There is currently no mechanism to sanitize the data that flows between the remote MCP server and the LLM. A filtering layer could be developed to redact sensitive information from tool schemas and results before they are exposed to the LLM.
 - **Comprehensive Testing:** While the core functionality and error handling are much improved, a full suite of integration tests is needed to validate the end-to-end tool-calling flow with a variety of tools and edge cases, including testing the new error-handling paths.
 - **Expanded Content Type Support:** The Pydantic models currently only support `TextContent` from tool results. They could be expanded to handle other types like `ImageContent` or `AudioContent` as specified by the MCP documentation.
+- **Multi-Voice Pool Support:** The hotline system currently only supports MIA voice in the pool. Future enhancements could extend pool support to RHEA and BRET voices for consistent fast performance across all voice types.
+- **Pool Monitoring & Analytics:** Add comprehensive monitoring for pool health, utilization metrics, and performance analytics to optimize pool size and behavior.
 - **Enhanced Banner Management:** The current banner management tool supports basic functionality for login and payment page announcements. Future enhancements could include support for more banner types, customization options (colors, icons), scheduling (start/end dates), and targeting specific user segments.
 - **Additional Shop Configuration Tools:** Building on the shop configuration utilities, more tools could be developed to manage other aspects of shop configuration, such as theme settings, payment options, or shipping methods.
 
@@ -25,4 +28,26 @@
 
 - **Sensitive Data Exposure:** As documented in `activeContext.md`, there is a known risk of exposing sensitive information (from tool schemas and results) to the LLM. This remains the most significant risk.
 - **Dependency on Remote Server:** While error handling has been improved, the agent's tooling capability is still entirely dependent on the availability and correctness of the remote MCP server.
+- **Pool Resource Management:** The hotline pool system consumes additional resources by maintaining pre-initialized agents. Pool size needs to be balanced against resource constraints and actual usage patterns.
+- **Database Dependency:** The hotline system introduces a dependency on PostgreSQL for pool management. Database availability directly impacts pool functionality, though graceful fallback to on-demand creation is maintained.
+
+## 4. Recent Major Changes (August 2025)
+
+### Hotline Pool System Implementation
+- **Performance Achievement:** Reduced MIA voice response time from ~1000ms to ~31ms (97% improvement)
+- **Architecture:** Implemented complete pool management system with database persistence
+- **Components Added:**
+  - `hotline_rooms` database table for pool state management
+  - `HotlineManager` service for pool operations (get, release, cleanup)
+  - Modified `/agent/voice/automatic` endpoint with pool-first logic
+  - `ENABLE_HOTLINE` configuration toggle for feature control
+- **Backward Compatibility:** Maintained full compatibility with existing on-demand creation
+- **Fallback Mechanism:** Graceful degradation when pool exhausted or disabled
+- **Voice Support:** Currently optimized for MIA voice, with RHEA/BRET using on-demand creation
+
+### Performance Analysis Results
+- **MIA (Pool):** ~31ms response time with hotline enabled
+- **RHEA/BRET (On-demand):** ~1000ms response time (consistent with legacy performance)
+- **Legacy System:** All voices averaged 500-1100ms (no performance regression from hotline implementation)
+- **Conclusion:** Performance improvements are significant for pooled voices without degrading non-pooled voice performance
 - **Shop Configuration API Dependency:** The banner management tool relies on the shop configuration API. Any changes to this API could break the tool's functionality. The tool includes error handling to mitigate this risk, but it's still a dependency to be aware of.

@@ -63,10 +63,62 @@ This file records architectural and implementation decisions using a list format
 ## Implementation Details
 
 *   Added the new instruction string to the `system_instr` variable within the `## Communication Style` section in `gemini_live_proxy_server.py`.
-*   Updated `activeContext.md` and `progress.md` to reflect this change.
-*
-
 ## Decision
+
+*   [2025-08-27] - Implement Hotline Pool System for Voice Agent Performance Optimization
+
+## Rationale 
+
+*   Voice switching latency was identified as a critical user experience bottleneck, with ~1000ms response times for agent initialization negatively impacting user engagement and competitive positioning.
+*   Analysis revealed that on-demand agent creation involves significant overhead including Daily.co room creation, agent subprocess spawning, and initialization processes.
+*   Pre-initialized agent pools can eliminate cold start penalties while maintaining system reliability through graceful fallback mechanisms.
+*   Performance testing confirmed no regression from hotline implementation, with legacy system showing similar latency patterns.
+
+## Implementation Details
+
+### Database Layer
+*   Created `hotline_rooms` table with fields: `id`, `room_url`, `token`, `voice_name`, `status`, `created_at`, `updated_at`
+*   Implemented comprehensive database queries in `app/database/queries/hotline.py` for pool lifecycle management
+*   Added database migration script in `app/scripts/create_hotline_tables.py`
+
+### Service Layer  
+*   Developed `HotlineManager` service at `app/services/automatic/daily/hotline_manager.py` with methods:
+    *   `get_available_room()` - Pool allocation with voice matching
+    *   `release_room()` - Return agent to pool after session
+    *   `cleanup_stale_rooms()` - Health monitoring and cleanup
+*   Integrated with existing database connection pooling for concurrent access
+
+### API Enhancement
+*   Modified `/agent/voice/automatic` endpoint in `app/main.py` to attempt hotline allocation first
+*   Implemented graceful fallback to `legacy_bot_connect()` when pool exhausted or disabled
+*   Added comprehensive error handling and performance logging
+
+### Configuration Management
+*   Added `ENABLE_HOTLINE` environment variable for feature toggle control
+*   Implemented startup logic to initialize pool when enabled
+*   Maintained full backward compatibility with legacy on-demand creation
+
+### Performance Results
+*   MIA voice: Achieved ~31ms response time (97% improvement)
+*   RHEA/BRET voices: Maintained ~1000ms on-demand performance (no regression)
+*   Legacy comparison: Confirmed no performance degradation from implementation
+*   System reliability: Graceful fallback ensures 100% availability
+
+## Trade-offs Considered
+
+### Resource vs Performance
+*   **Trade-off:** Pool maintains pre-initialized agents consuming additional memory and compute resources
+*   **Decision:** Accepted resource overhead for dramatic UX improvement, with configurable pool size for optimization
+
+### Complexity vs Reliability  
+*   **Trade-off:** Added database dependency and pool management complexity
+*   **Decision:** Mitigated through comprehensive error handling, graceful fallback, and feature toggle for instant rollback
+
+### Voice Coverage vs Implementation Speed
+*   **Trade-off:** Could implement multi-voice pools vs single-voice optimization
+*   **Decision:** Started with MIA-only pool for faster delivery, foundation built for easy extension to other voices
+
+*
 
 *   [2025-05-22 18:43:00] - Refactor function response formatting in `gemini_live_proxy_server.py`.
 

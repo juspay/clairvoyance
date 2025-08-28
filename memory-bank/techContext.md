@@ -14,12 +14,19 @@
 - **Google STT (Speech-to-Text):** The service used to transcribe user audio into text.
 - **Azure OpenAI:** The LLM provider used for natural language understanding, conversational logic, and function calling.
 - **TTS Services:** The agent is designed to be flexible with Text-to-Speech providers, with specific implementations for services like Google TTS.
+- **PostgreSQL:** Database service used for persisting hotline pool state, session data, and application configuration.
 
 ## 3. Tooling and Protocol
 
 - **Model Context Protocol (MCP):** The specification used for the external tooling system. The agent communicates with a remote server that adheres to this protocol.
 - **JSON-RPC 2.0:** The transport protocol used for MCP communication, specifically over a streaming HTTP connection.
 - **HTTPX:** The asynchronous HTTP client used to communicate with the remote MCP server.
+
+## 4. Performance Optimization Systems
+
+- **Hotline Pool System:** A pre-initialization system for voice agents that maintains ready-to-use agent instances in a database-backed pool. Currently optimized for MIA voice with ~31ms response times.
+- **Database Connection Pooling:** Efficient database connection management for concurrent access to hotline pool state.
+- **Graceful Fallback:** Automatic degradation to on-demand agent creation when pool is unavailable or exhausted.
 
 ## 4. Development and Environment
 
@@ -44,3 +51,23 @@ A suite of tools for interacting with the Juspay/Euler backend, enabling real-ti
 -   **`merchant_offer_analytics`**: Fetches performance data for all active merchant offers.
 -   **`create_euler_offer`**: Creates new promotional offers (discounts, cashbacks).
 -   **`list_offers_by_filter`**: **(Newly Added)** Lists promotional offers based on a wide variety of filters like status, offer code, payment method, and date range. This tool is designed to be interactive, prompting the user for clarifying details before execution.
+- **Environment Configuration:** Feature toggles and configuration management through environment variables (e.g., `ENABLE_HOTLINE` for pool system control).
+- **Database Migrations:** Scripts for database schema management and table creation located in `app/scripts/`.
+
+## 5. Architecture Components
+
+### Core Application Structure
+- **`app/main.py`:** FastAPI application with voice agent endpoints and lifecycle management
+- **`app/services/`:** Business logic services including HotlineManager for pool operations
+- **`app/database/`:** Database access layer with queries and connection management
+- **`app/agents/voice/automatic/`:** Voice agent implementation with MCP integration
+
+### Database Layer
+- **`hotline_rooms` table:** Stores pre-initialized agent pool state with fields for room_url, token, voice_name, and status
+- **Connection pooling:** Optimized for concurrent access and performance
+- **Migration scripts:** Located in `app/scripts/` for schema management
+
+### API Layer
+- **`/agent/voice/automatic`:** Enhanced endpoint with pool-first logic and on-demand fallback
+- **Performance monitoring:** Response time tracking and pool utilization metrics
+- **Error handling:** Comprehensive error handling with graceful degradation

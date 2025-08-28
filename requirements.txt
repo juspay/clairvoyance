@@ -37,6 +37,9 @@ langfuse
 # PostgreSQL database support
 asyncpg
 
+# Process management for hotline system
+psutil
+
 twilio
 pipecat-ai-flows
 
