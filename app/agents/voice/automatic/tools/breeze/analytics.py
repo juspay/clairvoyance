@@ -153,7 +153,8 @@ async def get_breeze_marketing_data(params: FunctionCallParams):
         "shops": [shop_url],
         "startTime": start_time_iso,
         "endTime": end_time_iso,
-        "shopType": shop_type
+        "shopType": shop_type,
+        "getAllMetricsFromCKH": ENABLE_ALL_METRICS_FROM_CKH
     }
     headers = {
         "Content-Type": "application/json",
