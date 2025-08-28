@@ -141,10 +141,13 @@ class LLMSpyProcessor(FrameProcessor):
             event = await self._conversation_manager.start_turn_with_events(self._session_id)
             if event:
                 await emit_rtvi_event(self._rtvi, event, self._session_id)
+            
+            await self.push_frame(frame, direction)
                 
         # LLM Output - accumulate streaming text
         elif isinstance(frame, LLMTextFrame) and self._is_collecting_response and self._enable_charts:
             self._accumulated_text += frame.text
+            await self.push_frame(frame, direction)
             
         # LLM Response Complete - send to ConversationManager
         elif isinstance(frame, LLMFullResponseEndFrame) and self._enable_charts:
@@ -157,6 +160,7 @@ class LLMSpyProcessor(FrameProcessor):
 
             self._accumulated_text = ""
             self._is_collecting_response = False
+            await self.push_frame(frame, direction)
 
         # Function Call Start - emit RTVI event and track in conversation
         elif isinstance(frame, FunctionCallInProgressFrame):
