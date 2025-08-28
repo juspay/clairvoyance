@@ -808,18 +808,9 @@ async def delete_euler_offer(params: FunctionCallParams):
 
 async def update_euler_offer(params: FunctionCallParams):
     """
-    Intelligently updates offer details or status in the Euler platform based on provided parameters.
-    
-    - If only 'status' is provided: Updates offer status (PAUSED/EXPIRED/ACTIVE) using status endpoint
-    - If other details are provided: Updates comprehensive offer details using v2/update endpoint
-    
-    This function automatically detects the intent and routes to the appropriate API endpoint.
-    
-    IMPORTANT: The following fields are IMMUTABLE and cannot be updated:
-    - startDate, endDate (offer validity period)
-    - offerDescription (offer description)
-    - sponsoredBy (sponsor information)
-    - paymentInstruments (payment methods)
+    Updates offer details or status in the Euler platform based on provided parameters.
+    This function handles status changes (PAUSED/EXPIRED/ACTIVE) and offer modifications.
+    When discount value is updated, the offer title and description are automatically updated to match.
     """
     try:
         offer_code = params.arguments.get("offerCode")
@@ -888,6 +879,25 @@ async def update_euler_offer(params: FunctionCallParams):
         sponsored_by = params.arguments.get("sponsoredBy")
         payment_instruments = params.arguments.get("paymentInstruments")
         offer_type = params.arguments.get("offerType")
+
+        # Auto-update title and description when discount value changes
+        if discount_value is not None:
+            # Get existing calculation type if not provided
+            existing_calc_type = calculation_type if calculation_type is not None else existing_offer.get("rule_dsl", {}).get("benefits", [{}])[0].get("calculation_rule", "ABSOLUTE")
+            
+            # Auto-generate title and description based on discount value and type
+            if existing_calc_type == "PERCENTAGE":
+                if offer_title is None:
+                    offer_title = f"Get {discount_value}% Off"
+                if offer_description is None:
+                    offer_description = f"Enjoy {discount_value}% discount on your order"
+            else:  # ABSOLUTE
+                if offer_title is None:
+                    offer_title = f"Get ₹{discount_value} Off"
+                if offer_description is None:
+                    offer_description = f"Save ₹{discount_value} on your order"
+            
+            logger.info(f"Auto-updated title to '{offer_title}' and description to '{offer_description}' for discount value {discount_value}")
 
         # Step 3.5: Intelligent routing - detect if this is status-only update or comprehensive update
         detail_params = [offer_title, offer_description, discount_value, calculation_type, 
