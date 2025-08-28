@@ -169,3 +169,7 @@ HITL_ACTIONS = [action.strip().lower() for action in _hitl_actions_str.split(","
 ENABLE_CHARTS = os.environ.get("ENABLE_CHARTS", "false").lower() == "true"
 
 BREEZE_DEFAULT_SALES_TAB = os.environ.get("BREEZE_DEFAULT_SALES_TAB", "SALES")
+AUTOMATIC_OPENAI_STT_PROMPT = os.environ.get(
+    "AUTOMATIC_OPENAI_STT_PROMPT", 
+    ""
+)

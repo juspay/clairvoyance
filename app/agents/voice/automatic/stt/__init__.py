@@ -26,7 +26,7 @@ def get_stt_service(voice_name: Optional[str] = None):
             model=config.OPENAI_STT_MODEL,
             language=Language.EN,
             # Optimized prompt for business analytics voice agent
-            prompt="Always strive to provide an accurate transcription in English, preserving the original meaning and context. Represent Indian number formats (lakhs, crores, etc.) in their natural spoken form. Capture business and financial terminology with precision. Ensure all proper names, numbers, and technical terms are recorded exactly as spoken, without any alterations.",
+            prompt=config.AUTOMATIC_OPENAI_STT_PROMPT, 
             temperature=0.0,  # Deterministic output for consistency
         )
     
@@ -52,7 +52,7 @@ def get_stt_service(voice_name: Optional[str] = None):
             model=config.OPENAI_STT_MODEL,
             language=Language.EN,
             # Optimized prompt for business analytics voice agent
-            prompt="Transcribe Indian languages accurately. Recognize and render Indian numbers (lakhs, crores, etc.) in their natural spoken form. Ensure business and financial terms are captured with precision. Always include proper names, numbers, and technical terms exactly as spoken, without modification.",
+            prompt=config.AUTOMATIC_OPENAI_STT_PROMPT,  
             temperature=0.0,  # Deterministic output for consistency
         )
     else:  # Default to Google STT
