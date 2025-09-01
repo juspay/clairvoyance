@@ -11,6 +11,7 @@ from app.core.logger import logger
 from app.schemas import CallOutcome, CallStatus, CallDataResponse
 from app.database.accessor.main import (
     get_call_data_by_status,
+    get_call_data_by_call_id,
     update_call_data_status,
     update_call_data_call_id,
     complete_call_data_update,
@@ -22,6 +23,7 @@ from app.core.config import (
     TWILIO_AUTH_TOKEN,
     TWILIO_FROM_NUMBER,
     TWILIO_WEBSOCKET_URL,
+    ORDER_CONFIRMATION_STATUS_CALLBACK_ENDPOINT,
 )
 
 
@@ -180,7 +182,9 @@ class CallQueueManager:
             call = self.twilio_client.calls.create(
                 to=call_payload.get("customer_mobile_number"),
                 from_=TWILIO_FROM_NUMBER,
-                twiml=str(voice_call_payload)
+                twiml=str(voice_call_payload),
+                status_callback=ORDER_CONFIRMATION_STATUS_CALLBACK_ENDPOINT,
+                status_callback_event=["initiated", "ringing", "answered", "completed", "busy", "no-answer", "failed"]
             )
             
             # Update call_id in database with Twilio SID
@@ -195,6 +199,40 @@ class CallQueueManager:
             # Process next call recursively
             await self.process_next_call()
     
+    async def complete_call_using_call_id(
+            self,
+            call_id: str,
+            outcome: CallOutcome,
+            call_end_time: Optional[str] = None,
+            transcription: Optional[Dict[str, Any]] = None,
+    ):
+        """
+        Complete a call using its call ID by updating its outcome, status, transcription, and call_end_time, then process next call.
+
+        Args:
+            call_id: call ID
+            outcome: Call outcome
+            transcription: Call transcription data
+            call_end_time: When the call ended
+            
+        Returns:
+            Updated CallDataResponse if successful
+        """
+
+        # Fetch call data by call_id
+        call_data = await get_call_data_by_call_id(call_id)
+
+        if not call_data:
+            logger.error(f"No ongoing call found with SID: {call_id}")
+            return
+        
+        await self.complete_call(
+            call_data_id=call_data.id,
+            outcome=outcome,
+            transcription=transcription,
+            call_end_time=call_end_time
+        )
+
     async def complete_call(
         self,
         call_data_id: str,

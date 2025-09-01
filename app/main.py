@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from typing import Any, Dict
 
 import aiohttp
-from fastapi import FastAPI, WebSocket, HTTPException, Depends
+from fastapi import FastAPI, WebSocket, HTTPException, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -34,7 +34,7 @@ from app.core.config import (
     MAX_DAILY_SESSION_LIMIT,
     ENABLE_AUTOMATIC_DAILY_RECORDING
 )
-from app.schemas import CallStatus, RequestedBy, Workflow
+from app.schemas import CallStatus, RequestedBy, Workflow, CallOutcome
 from app.database.accessor.main import create_call_data
 from uuid import uuid4
 from datetime import datetime
@@ -186,6 +186,30 @@ async def trigger_order_confirmation(
     except Exception as e:
         logger.error(f"Error processing order confirmation request: {e}")
         raise HTTPException(status_code=400, detail=str(e))
+
+@app.post("/callback/status")
+async def call_status(request: Request):
+    form = await request.form()
+    call_sid = form.get("CallSid")
+    call_status = form.get("CallStatus")
+
+    logger.info(f"Call {call_sid} status update: {call_status}")
+
+    if call_status in ("no-answer", "failed", "busy"):
+        logger.info(f"Call {call_sid} failed with status {call_status}. Updating call_data.")
+        
+        outcome = CallOutcome.NO_ANSWER
+        if call_status == "failed":
+            outcome = CallOutcome.FAILED
+        elif call_status == "busy":
+            outcome = CallOutcome.BUSY
+
+        await call_queue_manager.complete_call_using_call_id(
+            call_id=call_sid,
+            outcome=outcome,
+            call_end_time=datetime.now().isoformat()
+        )
+    return "OK"
 
 @app.websocket("/agent/voice/breeze-buddy/{serviceIdentifier}/callback/{workflow}")
 async def telephony_websocket_handler(serviceIdentifier: str, workflow: str, websocket: WebSocket):
