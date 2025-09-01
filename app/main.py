@@ -7,7 +7,9 @@ from contextlib import asynccontextmanager
 from typing import Any, Dict
 
 import aiohttp
-from fastapi import FastAPI, WebSocket, HTTPException, Depends
+import httpx
+import traceback
+from fastapi import FastAPI, WebSocket, HTTPException, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -19,8 +21,16 @@ from app.database import init_db_pool, close_db_pool, get_db_connection
 # Import necessary components from the new structure
 from app.ws.live_session import handle_websocket_session, get_active_connections, get_shutdown_event
 from app.core.logger import logger
-from app.core.config import DAILY_API_KEY, DAILY_API_URL, PORT, HOST
+from app.core.config import (
+    DAILY_API_KEY,
+    DAILY_API_URL,
+    PORT,
+    HOST,
+    TWILIO_ACCOUNT_SID,
+    TWILIO_AUTH_TOKEN,
+)
 from app.core.security.jwt import get_current_user
+from app.services.aws.s3 import s3
 from app import __version__
 from app.schemas import AutomaticVoiceUserConnectRequest, TokenData
 from app.agents.voice.breeze_buddy.breeze.order_confirmation.types import BreezeOrderData
@@ -332,6 +342,44 @@ async def bot_connect(request: AutomaticVoiceUserConnectRequest) -> Dict[str, An
 @app.get("/")
 async def get_client_html():
     return FileResponse("static/client.html")
+
+
+@app.post("/callback/record")
+async def record_callback(request: Request):
+    """
+    Downloads a recording from Twilio, uploads it to S3, and returns a 200 OK response.
+    """
+    try:
+        body = await request.form()
+        recording_url = body.get("RecordingUrl")
+        call_sid = body.get("CallSid")
+
+        if recording_url and call_sid:
+            logger.info(f"Received callback with RecordingUrl: {recording_url}")
+            mp3_url = f"{recording_url}.mp3"
+
+            # Fetch the MP3 file from Twilio
+            auth = (TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+            async with httpx.AsyncClient() as client:
+                response = await client.get(mp3_url, auth=auth)
+                response.raise_for_status()
+
+            # Upload the MP3 file to S3
+            file_name = f"breeze-buddy/recording/{call_sid}.mp3"
+            s3.upload_file(
+                file_name=file_name,
+                file_content=response.content,
+                content_type="audio/mpeg",
+            )
+
+            logger.info(f"Successfully uploaded recording to S3: {file_name}")
+
+        else:
+            logger.info(f"Received callback with body: {body}")
+    except Exception as e:
+        logger.error(f"Error processing callback: {e}\n{traceback.format_exc()}")
+
+    return {"status": "ok"}
 
 # Health check endpoint
 @app.get("/health")

@@ -173,3 +173,11 @@ AUTOMATIC_OPENAI_STT_PROMPT = os.environ.get(
     "AUTOMATIC_OPENAI_STT_PROMPT", 
     ""
 )
+
+ENABLE_BREEZE_BUDDY_CALL_RECORDING = os.environ.get("ENABLE_BREEZE_BUDDY_CALL_RECORDING", "false").lower() == "true"
+BREEZE_BUDDY_RECORD_CALLBACK_ENDPOINT = os.environ.get("BREEZE_BUDDY_RECORD_CALLBACK_ENDPOINT", "http://localhost:8000/callback/record")
+
+# AWS S3 Configuration
+AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID", "")
+AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY", "")
+AWS_S3_BUCKET_NAME = os.getenv("AWS_S3_BUCKET_NAME", "")

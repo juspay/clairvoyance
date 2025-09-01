@@ -22,6 +22,8 @@ from app.core.config import (
     TWILIO_AUTH_TOKEN,
     TWILIO_FROM_NUMBER,
     TWILIO_WEBSOCKET_URL,
+    ENABLE_BREEZE_BUDDY_CALL_RECORDING,
+    BREEZE_BUDDY_RECORD_CALLBACK_ENDPOINT,
 )
 
 
@@ -180,7 +182,9 @@ class CallQueueManager:
             call = self.twilio_client.calls.create(
                 to=call_payload.get("customer_mobile_number"),
                 from_=TWILIO_FROM_NUMBER,
-                twiml=str(voice_call_payload)
+                twiml=str(voice_call_payload),
+                record=ENABLE_BREEZE_BUDDY_CALL_RECORDING,
+                recording_status_callback=BREEZE_BUDDY_RECORD_CALLBACK_ENDPOINT
             )
             
             # Update call_id in database with Twilio SID

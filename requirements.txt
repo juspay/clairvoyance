@@ -45,3 +45,6 @@ PyJWT
 
 # Audio processing
 pydub
+
+# AWS SDK
+boto3
