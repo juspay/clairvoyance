@@ -16,8 +16,8 @@ jobs:
     env:
       PROJECT_NAME: clairvoyance
       AWS_REGION: ap-south-1
-      AWS_BETA_ACCOUNT_ID: "225681119357"
-      AWS_BETA_REPO: clairvoyance
+      AWS_BETA_ACCOUNT_ID: "701342709052"
+      AWS_BETA_REPO: breeze-clairvoyance
 
     steps:
       - name: Checkout code
@@ -27,7 +27,7 @@ jobs:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: arn:aws:iam::225681119357:role/breeze-test-role   # <-- create this in AWS Beta
+          role-to-assume: arn:aws:iam::701342709052:role/breeze-clairvoyance-ecr-role   # <-- create this in AWS Beta
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Login to Amazon ECR
