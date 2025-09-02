@@ -172,7 +172,7 @@ def update_call_data_call_id_query(call_data_id: str, call_id: str) -> Tuple[str
     return text, values
 
 def complete_call_data_update_query(
-    call_data_id: str,
+    call_id: str,
     outcome: Optional[CallOutcome] = None,
     status: Optional[CallStatus] = None,
     transcription: Optional[Dict[str, Any]] = None,
@@ -183,7 +183,7 @@ def complete_call_data_update_query(
     """
     # Build dynamic query based on what needs to be updated
     set_clauses = []
-    values = [call_data_id]
+    values = [call_id]
     param_count = 2
     
     if outcome is not None:
@@ -213,7 +213,7 @@ def complete_call_data_update_query(
     text = f"""
         UPDATE "{CALL_DATA_TABLE}" 
         SET {', '.join(set_clauses)}
-        WHERE "id" = $1 
+        WHERE "call_id" = $1 
         RETURNING *;
     """
     

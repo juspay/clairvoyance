@@ -2,7 +2,6 @@
 Call Queue Manager Service
 Handles call requests with simple recursive processing.
 """
-import json
 import asyncio
 from typing import Optional, Dict, Any
 from datetime import datetime, timezone
@@ -15,14 +14,9 @@ from app.database.accessor.main import (
     update_call_data_call_id,
     complete_call_data_update,
 )
-from twilio.rest import Client
-from twilio.twiml.voice_response import VoiceResponse, Connect, Stream
-from app.core.config import (
-    TWILIO_ACCOUNT_SID,
-    TWILIO_AUTH_TOKEN,
-    TWILIO_FROM_NUMBER,
-    TWILIO_WEBSOCKET_URL,
-)
+from app.agents.voice.breeze_buddy.call_providers.factory import get_voice_provider
+from app.core.config import BREEZE_BUDDY_CALL_PROVIDER
+from app.agents.voice.breeze_buddy.breeze.order_confirmation.types import BreezeOrderData
 
 
 class CallQueueManager:
@@ -30,9 +24,10 @@ class CallQueueManager:
     Simple call queue manager that processes one call at a time.
     """
     
-    def __init__(self):
+    def __init__(self, aiohttp_session):
         """Initialize the call queue manager."""
-        self.twilio_client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+        self.voice_provider = get_voice_provider(BREEZE_BUDDY_CALL_PROVIDER, aiohttp_session)
+        self.voice_provider.set_completion_callback(self.complete_call)
         self._lock = asyncio.Lock()
         
     def trigger_processing(self):
@@ -105,7 +100,7 @@ class CallQueueManager:
 
         if timed_out_call:
             await self.complete_call(
-                call_data_id=timed_out_call.id,
+                call_id=timed_out_call.call_id,
                 outcome=CallOutcome.NO_ANSWER,
                 call_end_time=datetime.now().isoformat()
             )
@@ -138,7 +133,7 @@ class CallQueueManager:
     
     async def _execute_call(self, call_data: CallDataResponse):
         """
-        Execute the actual Twilio call.
+        Execute the actual call using the configured voice provider.
         
         Args:
             call_data: The call data to execute
@@ -152,44 +147,16 @@ class CallQueueManager:
                 # Process next call recursively
                 await self.process_next_call()
                 return
+
+            call = self.voice_provider.make_call(call_data)
             
-            # Build Twilio voice response
-            ws_url = TWILIO_WEBSOCKET_URL
-            voice_call_payload = VoiceResponse()
-            connect = Connect()
-            stream = Stream(url=ws_url)
+            # Update call_id in database with call SID
+            await update_call_data_call_id(call_data.id, call.get("sid"))
             
-            # Add parameters from call payload
-            stream.parameter(name="call_data_id", value=call_data.id)
-            stream.parameter(name="order_id", value=call_payload.get("order_id"))
-            stream.parameter(name="customer_name", value=call_payload.get("customer_name"))
-            stream.parameter(name="shop_name", value=call_payload.get("shop_name"))
-            stream.parameter(name="total_price", value=call_payload.get("total_price"))
-            stream.parameter(name="customer_address", value=call_payload.get("customer_address"))
-            stream.parameter(name="customer_mobile_number", value=call_payload.get("customer_mobile_number"))
-            stream.parameter(name="order_data", value=json.dumps(call_payload.get("order_data", {})))
-            stream.parameter(name="identity", value=call_payload.get("identity"))
-            
-            if call_payload.get("reporting_webhook_url"):
-                stream.parameter(name="reporting_webhook_url", value=call_payload.get("reporting_webhook_url"))
-            
-            connect.append(stream)
-            voice_call_payload.append(connect)
-            
-            # Initiate Twilio call
-            call = self.twilio_client.calls.create(
-                to=call_payload.get("customer_mobile_number"),
-                from_=TWILIO_FROM_NUMBER,
-                twiml=str(voice_call_payload)
-            )
-            
-            # Update call_id in database with Twilio SID
-            await update_call_data_call_id(call_data.id, call.sid)
-            
-            logger.info(f"Twilio call initiated with SID: {call.sid} for call_data_id: {call_data.id}")
+            logger.info(f"Call initiated with SID: {call.get('sid')} for call_data_id: {call_data.id}")
             
         except Exception as e:
-            logger.error(f"Error executing Twilio call {call_data.id}: {e}")
+            logger.error(f"Error executing call {call_data.id}: {e}")
             # Mark call as error and try next call
             await update_call_data_status(call_data.id, CallStatus.ERROR)
             # Process next call recursively
@@ -197,7 +164,7 @@ class CallQueueManager:
     
     async def complete_call(
         self,
-        call_data_id: str,
+        call_id: str,
         outcome: CallOutcome,
         transcription: Optional[Dict[str, Any]] = None,
         call_end_time: Optional[str] = None
@@ -217,7 +184,7 @@ class CallQueueManager:
         try:
             # Update call with all completion data in one operation
             updated_call = await complete_call_data_update(
-                call_data_id=call_data_id,
+                call_id=call_id,
                 outcome=outcome,
                 status=CallStatus.FINISHED,
                 transcription=transcription,
@@ -239,6 +206,3 @@ class CallQueueManager:
             logger.error(f"Error completing call {call_data_id}: {e}")
             # Process next call recursively
             await self.process_next_call()
-
-# Global instance
-call_queue_manager = CallQueueManager()

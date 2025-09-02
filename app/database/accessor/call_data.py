@@ -188,7 +188,7 @@ async def update_call_data_call_id(call_data_id: str, call_id: str) -> Optional[
         return None
 
 async def complete_call_data_update(
-    call_data_id: str,
+    call_id: str,
     outcome: Optional[CallOutcome] = None,
     status: Optional[CallStatus] = None,
     transcription: Optional[Dict[str, Any]] = None,
@@ -197,11 +197,11 @@ async def complete_call_data_update(
     """
     Complete call data update with outcome, status, transcription, and call_end_time.
     """
-    logger.info(f"Completing call data update for ID: {call_data_id}")
+    logger.info(f"Completing call data update for ID: {call_id}")
     
     try:
         query_text, values = complete_call_data_update_query(
-            call_data_id=call_data_id,
+            call_id=call_id,
             outcome=outcome,
             status=status,
             transcription=transcription,

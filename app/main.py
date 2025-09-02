@@ -12,38 +12,39 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pipecat.transports.services.helpers.daily_rest import DailyRESTHelper, DailyRoomParams, DailyRoomProperties, DailyMeetingTokenParams, DailyMeetingTokenProperties
+from starlette.websockets import WebSocketDisconnect
 
 # Database imports
 from app.database import init_db_pool, close_db_pool, get_db_connection
 
 # Import necessary components from the new structure
 from app.core.logger import logger
-from app.core.config import DAILY_API_KEY, DAILY_API_URL, PORT, HOST
-from app.core.security.jwt import get_current_user
-from app import __version__
-from app.schemas import AutomaticVoiceUserConnectRequest, TokenData
-from app.agents.voice.breeze_buddy.breeze.order_confirmation.types import BreezeOrderData
-from app.agents.voice.breeze_buddy.breeze.order_confirmation.websocket_bot import main as telephony_websocket_conn
-from starlette.websockets import WebSocketDisconnect
 from app.core.config import (
-    TWILIO_ACCOUNT_SID,
-    TWILIO_AUTH_TOKEN,
-    TWILIO_FROM_NUMBER,
+    DAILY_API_KEY,
+    DAILY_API_URL,
+    PORT,
+    HOST,
     BREEZE_BUDDY_CALL_PROVIDER,
     MAX_DAILY_SESSION_LIMIT,
-    ENABLE_AUTOMATIC_DAILY_RECORDING
+    ENABLE_AUTOMATIC_DAILY_RECORDING,
+    EXOTEL_FROM_NUMBER,
+    TWILIO_FROM_NUMBER
 )
-from app.schemas import CallStatus, RequestedBy, Workflow
+from app.core.security.jwt import get_current_user
+from app import __version__
+from app.schemas import AutomaticVoiceUserConnectRequest, TokenData, CallStatus, RequestedBy, Workflow
+from app.agents.voice.breeze_buddy.breeze.order_confirmation.types import BreezeOrderData
+from app.services.call_queue_manager import CallQueueManager
 from app.database.accessor.main import create_call_data
 from uuid import uuid4
 from datetime import datetime
-from app.services.call_queue_manager import call_queue_manager
 
 # Dictionary to track bot processes: {pid: (process, room_url)}
 bot_procs = {}
 
 # Store Daily API helpers
 daily_helpers = {}
+call_queue_manager: CallQueueManager
 
 
 def cleanup():
@@ -72,6 +73,7 @@ def cleanup():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """FastAPI lifespan manager that handles startup and shutdown tasks."""
+    global call_queue_manager
     logger.info("Application startup...")
     
     # Initialize database and create tables if needed
@@ -88,6 +90,7 @@ async def lifespan(app: FastAPI):
         daily_api_url=DAILY_API_URL,
         aiohttp_session=aiohttp_session,
     )
+    call_queue_manager = CallQueueManager(aiohttp_session)
     logger.info("Daily REST helper initialized.")
     
     yield
@@ -129,11 +132,8 @@ async def trigger_order_confirmation(
     """
     if identity != "breeze":
         raise HTTPException(status_code=404, detail="Feature not supported")
-    
-    logger.info(f"Authenticated user {current_user.user_id} requesting order confirmation for order: {order.order_id} for {order.customer_name}")
 
-    if not all([TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM_NUMBER]):
-        raise HTTPException(status_code=500, detail="Twilio credentials are not configured.")
+    logger.info(f"Authenticated user {current_user.user_id} requesting order confirmation for order: {order.order_id} for {order.customer_name}")
 
     try:
         uuid = str(uuid4())
@@ -162,7 +162,7 @@ async def trigger_order_confirmation(
             requested_by=identity,
             workflow=workflow,
             call_payload=call_payload,
-            assigned_number=TWILIO_FROM_NUMBER
+            assigned_number=TWILIO_FROM_NUMBER if BREEZE_BUDDY_CALL_PROVIDER == "twilio" else EXOTEL_FROM_NUMBER,
         )
         
         if call_data:
@@ -184,22 +184,24 @@ async def trigger_order_confirmation(
         logger.error(f"Error processing order confirmation request: {e}")
         raise HTTPException(status_code=400, detail=str(e))
 
-@app.websocket("/agent/voice/breeze-buddy/{serviceIdentifier}/callback/{workflow}")
-async def telephony_websocket_handler(serviceIdentifier: str, workflow: str, websocket: WebSocket):
+@app.websocket("/agent/voice/breeze-buddy/{service_provider}/callback/{workflow}")
+async def telephony_websocket_handler(service_provider: str, workflow: str, websocket: WebSocket):
     """
     WebSocket endpoint that accepts a connection and passes it to the
     pipecat bot's main function.
     """
-
-    if serviceIdentifier != "twillio" or workflow != "order-confirmation":
+    if workflow != "order-confirmation":
         raise HTTPException(status_code=404, detail="Feature not supported for this service or workflow")
     
-    aiohttp_session = aiohttp.ClientSession()
+    logger.info(f"Handling websocket for {workflow}")
     
+    # Get the provider from the call queue manager
+    provider = call_queue_manager.voice_provider
+
     try:
         # The websocket_bot_main function handles the entire
         # lifecycle of the WebSocket connection, including accept().
-        await telephony_websocket_conn(websocket, aiohttp_session)
+        await provider.handle_websocket(websocket)
     except WebSocketDisconnect:
         logger.warning("WebSocket client disconnected.")
     except Exception as e:
@@ -213,12 +215,6 @@ async def telephony_websocket_handler(serviceIdentifier: str, workflow: str, web
         except Exception as close_error:
             logger.warning(f"Could not close websocket (likely already closed): {close_error}")
     finally:
-        # Always close the aiohttp session to prevent resource leaks
-        try:
-            await aiohttp_session.close()
-            logger.debug("Aiohttp session closed successfully.")
-        except Exception as session_close_error:
-            logger.warning(f"Error closing aiohttp session: {session_close_error}")
         logger.info("WebSocket client connection closed.")
 
 

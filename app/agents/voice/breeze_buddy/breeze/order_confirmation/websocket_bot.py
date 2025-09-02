@@ -5,7 +5,6 @@ from pydub import AudioSegment
 import audioop
 from dotenv import load_dotenv
 from datetime import datetime
-from twilio.http.http_client import TwilioHttpClient
 from fastapi import WebSocket
 from loguru import logger
 from pipecat.audio.vad.silero import SileroVADAnalyzer
@@ -14,28 +13,23 @@ from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
 from pipecat.processors.aggregators.openai_llm_context import OpenAILLMContext
-from pipecat.serializers.twilio import TwilioFrameSerializer
 from pipecat.transcriptions.language import Language
 from pipecat.transports.network.fastapi_websocket import (
     FastAPIWebsocketParams,
     FastAPIWebsocketTransport,
 )
-from pipecat.services.google.stt import GoogleSTTService
 from pipecat.services.elevenlabs.tts import ElevenLabsTTSService
 from pipecat.services.azure.llm import AzureLLMService
 from pipecat_flows import NodeConfig, FlowsFunctionSchema, FlowManager
-from twilio.rest import Client
 from pydantic import ValidationError
 
 from app.agents.voice.breeze_buddy.breeze.order_confirmation.types import OrderData
 from app.core.security.sha import calculate_hmac_sha256
 from app.agents.voice.breeze_buddy.breeze.order_confirmation.utils import indian_number_to_speech, OUTCOME_TO_ENUM, get_stt_service
 from app.schemas import CallOutcome
-from app.services.call_queue_manager import call_queue_manager
+from app.database.accessor.main import get_call_data_by_call_id
 
 from app.core.config import (
-    TWILIO_ACCOUNT_SID,
-    TWILIO_AUTH_TOKEN,
     AZURE_OPENAI_API_KEY,
     AZURE_OPENAI_ENDPOINT,
     AZURE_BREEZE_BUDDY_OPENAI_MODEL,
@@ -48,17 +42,13 @@ from app.core.config import (
     BREEZE_BUDDY_VAD_START_SECS,
     BREEZE_BUDDY_VAD_STOP_SECS,
     BREEZE_BUDDY_VAD_MIN_VOLUME,
+    BREEZE_BUDDY_CALL_PROVIDER,
 )
 
 load_dotenv(override=True)
 
-class CustomTwilioFrameSerializer(TwilioFrameSerializer):
-    async def _hang_up_call(self):
-        logger.info("Skipping automatic hang-up from serializer.")
-        pass
-
 class OrderConfirmationBot:
-    def __init__(self, ws: WebSocket, aiohttp_session):
+    def __init__(self, ws: WebSocket, aiohttp_session, serializer, hangup_function, completion_function):
         self.ws = ws
         self.aiohttp_session = aiohttp_session
         self.task: PipelineTask = None
@@ -67,14 +57,11 @@ class OrderConfirmationBot:
         self.conversation_ended = False
         self.reporting_webhook_url = None
         self.call_sid = None
-        self.call_data_id = None
         self.order_id = None
         self.shop_name = None
-        self.twilio_client = Client(
-            TWILIO_ACCOUNT_SID,
-            TWILIO_AUTH_TOKEN,
-            http_client=TwilioHttpClient(),
-        )
+        self.serializer = serializer
+        self.hangup_function = hangup_function
+        self.completion_function = completion_function
 
     async def run(self):
         logger.info("Starting WebSocket bot")
@@ -98,42 +85,49 @@ class OrderConfirmationBot:
                 logger.warning(f"Could not close websocket (likely already closed): {close_error}")
             return
 
-        stream_sid = call_data["start"]["streamSid"]
-        self.call_sid = call_data["start"]["callSid"]
-
-        try:
-            logger.info("Preparing to send initial audio message.")
-            wav_file_path = "app/agents/voice/breeze_buddy/breeze/order_confirmation/dial-tone.wav"
+        if BREEZE_BUDDY_CALL_PROVIDER == "twilio": # Twilio
+            stream_sid = call_data["start"]["streamSid"]
+            self.call_sid = call_data["start"]["callSid"]
             
-            # Load and convert audio
-            audio = AudioSegment.from_wav(wav_file_path)
-            audio = audio.set_frame_rate(8000).set_channels(1).set_sample_width(2)
-            pcm_data = audio.raw_data
-            mulaw_data = audioop.lin2ulaw(pcm_data, 2)
-            payload = base64.b64encode(mulaw_data).decode('utf-8')
+            try:
+                logger.info("Preparing to send initial audio message.")
+                wav_file_path = "app/agents/voice/breeze_buddy/breeze/order_confirmation/dial-tone.wav"
+                
+                # Load and convert audio
+                audio = AudioSegment.from_wav(wav_file_path)
+                audio = audio.set_frame_rate(8000).set_channels(1).set_sample_width(2)
+                pcm_data = audio.raw_data
+                mulaw_data = audioop.lin2ulaw(pcm_data, 2)
+                payload = base64.b64encode(mulaw_data).decode('utf-8')
 
-            # Create and send media message
-            media_message = {
-                "event": "media",
-                "streamSid": stream_sid,
-                "media": {
-                    "payload": payload
+                # Create and send media message
+                media_message = {
+                    "event": "media",
+                    "streamSid": stream_sid,
+                    "media": {
+                        "payload": payload
+                    }
                 }
-            }
-            await self.ws.send_text(json.dumps(media_message))
-            logger.info(f"Successfully sent initial media message for streamSid: {stream_sid}")
+                await self.ws.send_text(json.dumps(media_message))
+                logger.info(f"Successfully sent initial media message for streamSid: {stream_sid}")
 
-        except Exception as e:
-            logger.error(f"Failed to send initial media message: {e}")
+            except Exception as e:
+                logger.error(f"Failed to send initial media message: {e}")
+        
+        else: # Exotel
+            stream_sid = call_data.get("stream_sid")
+            self.call_sid = call_data.get("start").get("call_sid")
 
-        custom_parameters = call_data["start"]["customParameters"]
+        call_data_from_db = await get_call_data_by_call_id(self.call_sid)
+        if not call_data_from_db:
+            logger.error(f"Could not find call data for call_sid: {self.call_sid}")
+            return
 
-        self.call_data_id = custom_parameters.get("call_data_id")
-
-        self.order_id = custom_parameters.get("order_id", "N/A")
-        customer_name = custom_parameters.get("customer_name", "Valued Customer")
-        self.shop_name = custom_parameters.get("shop_name", "the shop")
-        total_price = custom_parameters.get("total_price")
+        call_payload = call_data_from_db.call_payload
+        self.order_id = call_payload.get("order_id", "N/A")
+        customer_name = call_payload.get("customer_name", "Valued Customer")
+        self.shop_name = call_payload.get("shop_name", "the shop")
+        total_price = call_payload.get("total_price", 0)
         try:
             price_num = float(total_price)
             price_int = round(price_num)
@@ -147,8 +141,13 @@ class OrderConfirmationBot:
                 logger.warning(f"Could not close websocket (likely already closed): {close_error}")
             return
 
-        order_product_data_str = custom_parameters.get("order_data", "{}")
+        order_product_data_payload = call_payload.get("order_data", "{}")
         try:
+            if isinstance(order_product_data_payload, dict):
+                order_product_data_str = json.dumps(order_product_data_payload)
+            else:
+                order_product_data_str = order_product_data_payload
+            
             order_product_data = OrderData.model_validate_json(order_product_data_str)
         except ValidationError as e:
             logger.error(f"Could not parse order_data: {e}")
@@ -159,7 +158,7 @@ class OrderConfirmationBot:
                 logger.warning(f"Could not close websocket (likely already closed): {close_error}")
             return
 
-        self.reporting_webhook_url = custom_parameters.get("reporting_webhook_url")
+        self.reporting_webhook_url = call_payload.get("reporting_webhook_url")
         logger.info(f"Parsed order_data: {order_product_data}")
 
         summary_parts = [
@@ -169,17 +168,10 @@ class OrderConfirmationBot:
         self.order_summary = ", ".join(summary_parts) or "your items"
 
         logger.info(
-            f"Connected to Twilio call: CallSid={self.call_sid}, StreamSid={stream_sid}"
+            f"Connected to call: CallSid={self.call_sid}, StreamSid={stream_sid}"
         )
         logger.info(
             f"Order Details: ID-{self.order_id}, Customer-{customer_name}, Summary-{self.order_summary}, Price-₹{total_price}"
-        )
-
-        serializer = CustomTwilioFrameSerializer(
-            stream_sid=stream_sid,
-            call_sid=self.call_sid,
-            account_sid=TWILIO_ACCOUNT_SID,
-            auth_token=TWILIO_AUTH_TOKEN,
         )
 
         transport = FastAPIWebsocketTransport(
@@ -197,7 +189,7 @@ class OrderConfirmationBot:
                         min_volume=BREEZE_BUDDY_VAD_MIN_VOLUME,
                     )
                 ),
-                serializer=serializer,
+                serializer=self.serializer(stream_sid, self.call_sid) if self.serializer else None,
             ),
         )
 
@@ -266,7 +258,7 @@ class OrderConfirmationBot:
                 self.conversation_ended = True
                 logger.info("Client disconnected unexpectedly. Updating call status directly.")
                 try:
-                    if self.call_data_id:
+                    if self.call_sid:
                         transcription = []
                         if self.context:
                             history = self.context.messages
@@ -276,17 +268,17 @@ class OrderConfirmationBot:
                                         {"role": msg["role"], "content": msg["content"]}
                                     )
                         
-                        await call_queue_manager.complete_call(
-                            call_data_id=self.call_data_id,
+                        await self.completion_function(
+                            call_id=self.call_sid,
                             outcome=CallOutcome.BUSY,
                             transcription={"messages": transcription, "call_sid": self.call_sid},
                             call_end_time=datetime.now().isoformat()
                         )
-                        logger.info(f"Updated database for call_data_id: {self.call_data_id} with outcome: INTERRUPTED")
+                        logger.info(f"Updated database for call_id: {self.call_sid} with outcome: INTERRUPTED")
                     else:
-                        logger.warning("No call_data_id found, skipping database update on disconnect.")
+                        logger.warning("No call_id found, skipping database update on disconnect.")
                 except Exception as e:
-                    logger.error(f"Error during direct DB update on disconnect for call_data_id {self.call_data_id}: {e}")
+                    logger.error(f"Error during direct DB update on disconnect for call_id {self.call_sid}: {e}")
 
             await self.task.cancel()
 
@@ -381,32 +373,32 @@ class OrderConfirmationBot:
                     except Exception as e:
                         logger.error(f"Error sending webhook: {e}")
 
-            self.twilio_client.calls(self.call_sid).update(status="completed")
-            logger.info(f"Twilio call {self.call_sid} hung up successfully.")
+            if self.hangup_function:
+                self.hangup_function(self.call_sid)
+                logger.info(f"Call {self.call_sid} hung up successfully.")
 
             # Update database with call completion
-            if self.call_data_id:
+            if self.call_sid:
                 try:
                     call_outcome = OUTCOME_TO_ENUM.get(self.outcome)
                     
                     if call_outcome:
-                        await call_queue_manager.complete_call(
-                            call_data_id=self.call_data_id,
+                        await self.completion_function(
+                            call_id=self.call_sid,
                             outcome=call_outcome,
                             transcription={"messages": transcription, "call_sid": self.call_sid},
                             call_end_time=datetime.now().isoformat()
                         )
-                        logger.info(f"Updated database for call_data_id: {self.call_data_id} with outcome: {call_outcome}")
+                        logger.info(f"Updated database for call_id: {self.call_sid} with outcome: {call_outcome}")
                     else:
-                        logger.warning(f"Unknown outcome '{self.outcome}' for call_data_id: {self.call_data_id}")
-                        
+                        logger.warning(f"Unknown outcome '{self.outcome}' for call_id: {self.call_sid}")
+
                 except Exception as e:
-                    logger.error(f"Error updating database for call_data_id {self.call_data_id}: {e}")
+                    logger.error(f"Error updating database for call_id {self.call_sid}: {e}")
             else:
-                logger.warning("No call_data_id found, skipping database update")
-            
+                logger.warning("No call_id found, skipping database update")
         except Exception as e:
-            logger.error(f"Failed to hang up Twilio call {self.call_sid}: {str(e)}")
+            logger.error(f"Failed to hang up call {self.call_sid}: {str(e)}")
         finally:
             await self.task.cancel()
 
@@ -523,6 +515,6 @@ class OrderConfirmationBot:
         )
 
 
-async def main(ws: WebSocket, aiohttp_session):
-    bot = OrderConfirmationBot(ws, aiohttp_session)
+async def main(ws: WebSocket, aiohttp_session, serializer, hangup_function, completion_function):
+    bot = OrderConfirmationBot(ws, aiohttp_session, serializer, hangup_function, completion_function)
     await bot.run()
