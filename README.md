@@ -1,14 +1,10 @@
 # Breeze Automatic
 
-Breeze Automatic is a sophisticated, dual-component server designed to power advanced conversational AI experiences. It comprises a **Gemini Live Proxy Server** for direct, low-level integration with Google's Gemini API and a **Pipecat-based Voice Agent** for building robust, real-time voice assistants.
+Breeze Automatic is a sophisticated server designed to power advanced conversational AI experiences, built around a **Pipecat-based Voice Agent** for robust, real-time voice assistants.
 
-## 1. Core Components
+## 1. Core Component: Pipecat Voice Agent
 
-### 1.1. Gemini Live Proxy Server
-A FastAPI-based server that acts as a direct proxy to the Gemini Live API. It handles WebSocket connections, pre-fetches and caches analytics data from various sources (Juspay, Breeze), and enriches the Gemini model's context for more informed, real-time conversations.
-
-### 1.2. Pipecat Voice Agent
-A standalone voice agent built on the Pipecat framework. It's launched as a subprocess by the main FastAPI server and handles the end-to-end voice conversation flow, including:
+The application's core is a standalone voice agent built on the Pipecat framework. It's launched as a subprocess by the main FastAPI server and handles the end-to-end voice conversation flow, including:
 *   Speech-to-Text (STT)
 *   Language Model (LLM) interaction with dynamic tool use
 *   Text-to-Speech (TTS)
@@ -19,25 +15,20 @@ A standalone voice agent built on the Pipecat framework. It's launched as a subp
 *   **Dynamic Tool Loading:** The voice agent dynamically loads tools based on the operating mode and provided credentials (e.g., Juspay and Breeze tools are only loaded in `live` mode with valid tokens).
 *   **Multi-Provider Analytics:** Integrates with both **Juspay** and **Breeze** APIs to fetch a wide range of analytics data, including sales, orders, marketing, and checkout metrics.
 *   **Personalized Prompts:** The agent's system prompt can be personalized with the user's name for a more engaging experience.
-*   **Real-time Audio Streaming:** Bidirectional audio streaming via WebSockets.
 *   **Environment-Driven Configuration:** All sensitive keys and settings are managed via environment variables.
 *   **Modular & Scalable Architecture:** The project is structured for clarity, maintainability, and easy extension with new tools or providers.
 
 ## 3. Project Structure
 
-The project is organized into two main parts: the FastAPI server (`app/`) and the Pipecat voice agent (`app/agents/voice/automatic/`).
+The project is organized into the main FastAPI server (`app/`) and the Pipecat voice agent (`app/agents/voice/automatic/`).
 
 ```
 .
 ├── app/
 │   ├── main.py                 # FastAPI app, agent endpoint, and subprocess management
-│   ├── ws/live_session.py      # WebSocket session handling for Gemini Live Proxy
-│   ├── services/gemini_service.py # Gemini API interaction logic for proxy
 │   ├── api/                    # API clients for Juspay, Breeze, etc.
 │   │   ├── juspay_metrics.py
 │   │   └── breeze_metrics.py
-│   ├── tools/                  # Tool definitions for the Gemini Live Proxy
-│   │   └── ...
 │   └── agents/voice/automatic/ # Pipecat Voice Agent
 │       ├── __init__.py         # Main agent logic, pipeline definition
 │       ├── prompts.py          # System prompts for the agent
@@ -58,7 +49,7 @@ The project is organized into two main parts: the FastAPI server (`app/`) and th
 ### Prerequisites
 
 *   Python 3.8+
-*   Access to Google Gemini, Azure OpenAI, and Daily.co APIs with valid keys.
+*   Access to Azure OpenAI and Daily.co APIs with valid keys.
 
 ### Installation Steps
 
