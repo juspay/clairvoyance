@@ -17,7 +17,6 @@ from pipecat.transports.services.helpers.daily_rest import DailyRESTHelper, Dail
 from app.database import init_db_pool, close_db_pool, get_db_connection
 
 # Import necessary components from the new structure
-from app.ws.live_session import handle_websocket_session, get_active_connections, get_shutdown_event
 from app.core.logger import logger
 from app.core.config import DAILY_API_KEY, DAILY_API_URL, PORT, HOST
 from app.core.security.jwt import get_current_user
@@ -101,8 +100,6 @@ async def lifespan(app: FastAPI):
     # Close aiohttp session
     await aiohttp_session.close()
     logger.info("Aiohttp session closed.")
-    # Gracefully shutdown websocket connections
-    await shutdown_server()
 
 
 app = FastAPI(title="Breeze Automatic Server", version=__version__, lifespan=lifespan)
@@ -225,11 +222,6 @@ async def telephony_websocket_handler(serviceIdentifier: str, workflow: str, web
         logger.info("WebSocket client connection closed.")
 
 
-# WebSocket endpoint for Gemini Live
-@app.websocket("/ws/live")
-async def websocket_endpoint(websocket: WebSocket):
-    await handle_websocket_session(websocket)
-
 # Pipecat bot endpoint
 @app.post("/agent/voice/automatic")
 async def bot_connect(request: AutomaticVoiceUserConnectRequest) -> Dict[str, Any]:
@@ -331,7 +323,7 @@ async def bot_connect(request: AutomaticVoiceUserConnectRequest) -> Dict[str, An
 # Serve client.html at the root
 @app.get("/")
 async def get_client_html():
-    return FileResponse("static/client.html")
+    return FileResponse("static/home.html")
 
 # Health check endpoint
 @app.get("/health")
@@ -378,25 +370,6 @@ async def database_health_check():
 async def get_version():
     """Get application version."""
     return JSONResponse({"version": __version__})
-
-# Graceful shutdown handling for WebSocket connections
-async def shutdown_server():
-    logger.info("Shutdown initiated, closing all WebSocket connections...")
-    shutdown_event = get_shutdown_event()
-    shutdown_event.set()
-    
-    active_connections = get_active_connections()
-    # Close all active WebSockets
-    for ws in list(active_connections): # Iterate over a copy
-        try:
-            await ws.close(code=1001, reason="Server shutting down")
-            if ws in active_connections:
-                active_connections.remove(ws)
-            logger.info(f"Closed WebSocket connection: {ws.client}")
-        except Exception as e:
-            logger.error(f"Error closing websocket during shutdown: {e}")
-    
-    logger.info("All WebSocket connections closed.")
 
 # The main block is now only for direct execution, which is not the recommended way.
 # Uvicorn running from run.py is the standard.

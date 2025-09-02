@@ -8,7 +8,7 @@ from pipecat.services.llm_service import FunctionCallParams
 from pipecat.adapters.schemas.function_schema import FunctionSchema
 from pipecat.adapters.schemas.tools_schema import ToolsSchema
 
-from app.data.dummy.analytics_data import (
+from app.agents.voice.automatic.data.dummy.juspay import (
     dummy_juspay_analytics_today,
     dummy_breeze_analytics_today,
     dummy_juspay_analytics_weekly,

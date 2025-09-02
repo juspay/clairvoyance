@@ -86,6 +86,11 @@ def get_tool_scope_instrucations() -> str:
                 - Example: User: "get my sales data", fetch data accordingly, and say "Here is your sales data for today: [shows data]. Do you want me to fetch for any other specific timeframe?"
             3. Resolve "Today" Explicitly
                 For any tool call requiring a relative date or time range, first invoke `getCurrentTime` and use that exact timestamp to disambiguate relative terms like "today," "this week," or "last month."
+            4. Interpret "Last X Days"
+                When a user asks for data for the "last X days", the period is inclusive of today. The start date should be calculated by subtracting (X-1) days from today's date. For example:
+                - "last 7 days": The start date is 6 days before today.
+                - "last 30 days": The start date is 29 days before today.
+                The end date is always today.
         Error & Clarification
             1. Smart Clarify
                 If a request is ambiguous, ask a focused follow-up rather than guessing.

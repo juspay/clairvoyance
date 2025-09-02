@@ -204,9 +204,9 @@ def remove_html_tags(html_text: str) -> str:
     # Find everything between <div>...</div>
     match = re.search(r"<div.*?>(.*?)</div>", html_text, flags=re.DOTALL)
     
-    if not match:
-        return ""
-        
-    content = match.group(1)
+    if match:
+        content = match.group(1)
+    else:
+        content = html_text
     clean_text = re.sub(r"<[^>]*>", "", content).strip()
     return clean_text
