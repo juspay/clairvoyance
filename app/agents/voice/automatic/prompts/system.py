@@ -1,7 +1,15 @@
 import datetime
 from app.core.logger import logger
-from app.core.config import ENABLE_SEARCH_GROUNDING, HITL_ENABLE, ENABLE_CHARTS
+from app.core.config import (
+    ENABLE_SEARCH_GROUNDING, 
+    HITL_ENABLE, 
+    ENABLE_CHARTS, 
+    ENABLE_LANGFUSE_PROMPTS,
+    AUTOMATIC_LANGFUSE_PROMPT_NAME,
+    AUTOMATIC_LANGFUSE_SYSTEM_PROMPT_LABEL
+)
 from app.agents.voice.automatic.types import TTSProvider
+from app.services.langfuse.prompts import fetch_prompt
 
 SYSTEM_PROMPT = f"""
     SYSTEM ROLE
@@ -233,11 +241,45 @@ def get_tts_based_instructions(tts_provider: TTSProvider | None) -> str:
         """
     return ""
 
+def process_langfuse_template_variables(prompt_content: str) -> str:
+    """
+    Replace template variables in the prompt with actual values.
+    
+    Args:
+        prompt_content: The prompt content with template variables
+        
+    Returns:
+        str: Prompt content with template variables replaced
+    """
+    # Replace {current_time} with actual current date
+    current_time = datetime.datetime.now().strftime("%B %d, %Y")
+    prompt_content = prompt_content.replace("{current_time}", current_time)
+    
+    return prompt_content
+
+
 def get_system_prompt(user_name: str | None, tts_provider: TTSProvider | None) -> str:
     """
     Generates a personalized system prompt based on the user's name and TTS service.
+    First attempts to fetch from LangFuse, then falls back to hardcoded prompt.
     """
-    prompt = SYSTEM_PROMPT
+    langfuse_prompt = None
+    
+    # Only try to fetch prompt from LangFuse if it's enabled
+    if ENABLE_LANGFUSE_PROMPTS:
+        langfuse_prompt = fetch_prompt(
+            prompt_name=AUTOMATIC_LANGFUSE_PROMPT_NAME,
+            label=AUTOMATIC_LANGFUSE_SYSTEM_PROMPT_LABEL
+        )
+    
+    if langfuse_prompt:
+        logger.info("Using dynamic prompt from LangFuse")
+        prompt = process_langfuse_template_variables(langfuse_prompt)
+    else:
+        logger.info("Using fallback hardcoded prompt")
+        prompt = SYSTEM_PROMPT
+    
+    # Append dynamic components that are always added locally
     prompt += get_chart_visualization_instructions()
     prompt += get_tts_based_instructions(tts_provider)
     prompt += get_tool_scope_instrucations()
