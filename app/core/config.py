@@ -168,6 +168,9 @@ HITL_ACTIONS = [action.strip().lower() for action in _hitl_actions_str.split(","
 # Chart Generation Configuration
 ENABLE_CHARTS = os.environ.get("ENABLE_CHARTS", "false").lower() == "true"
 
+# PTT VAD Filter Configuration
+DISABLE_VAD_FOR_PTT = os.environ.get("DISABLE_VAD_FOR_PTT", "true").lower() == "true"
+
 BREEZE_DEFAULT_SALES_TAB = os.environ.get("BREEZE_DEFAULT_SALES_TAB", "SALES")
 AUTOMATIC_OPENAI_STT_PROMPT = os.environ.get(
     "AUTOMATIC_OPENAI_STT_PROMPT", 

@@ -15,7 +15,7 @@ from pipecat.pipeline.task import PipelineParams, PipelineTask
 from app.agents.voice.automatic.services.llm_wrapper import LLMServiceWrapper
 from pipecat.services.azure.llm import AzureLLMService
 from pipecat.transcriptions.language import Language
-from pipecat.frames.frames import TTSSpeakFrame, BotSpeakingFrame, LLMFullResponseEndFrame
+from pipecat.frames.frames import TTSSpeakFrame, BotSpeakingFrame, LLMFullResponseEndFrame, EmulateUserStartedSpeakingFrame, EmulateUserStoppedSpeakingFrame
 from pipecat.transports.services.daily import DailyParams, DailyTransport
 from pipecat.processors.frameworks.rtvi import RTVIConfig, RTVIProcessor
 from pipecat.services.google.rtvi import GoogleRTVIObserver
@@ -24,6 +24,7 @@ from app.core import config
 from app.agents.voice.automatic.utils.session_context import create_session_context, set_current_session_id
 from app.agents.voice.automatic.services.mcp.automatic_client import MCPClient
 from .processors import LLMSpyProcessor
+from .processors.ptt_vad_filter import PTTVADFilter
 from .prompts import get_system_prompt
 from .tools import initialize_tools, shopify_buddy_test, breeze_buddy
 from .tts import get_tts_service
@@ -235,19 +236,30 @@ async def main():
     # Add custom LLMSpyProcessor for streaming function call events (RTVI and TTS created earlier)
     tool_call_processor = LLMSpyProcessor(rtvi, args.session_id, config.ENABLE_CHARTS, "LLMSpyProcessor")
 
-    pipeline = Pipeline(
-        [
-            transport.input(),
-            stt,
-            rtvi,
-            context_aggregator.user(),
-            llm,
-            tool_call_processor,
-            tts,
-            transport.output(),
-            context_aggregator.assistant(),
-        ]
-    )
+
+    # Build pipeline components list
+    pipeline_components = [
+        transport.input(),
+        stt,
+    ]
+    
+    # Add PTT VAD filter only if it's enabled
+    if config.DISABLE_VAD_FOR_PTT:
+        ptt_vad_filter = PTTVADFilter("PTTVADFilter")
+        pipeline_components.append(ptt_vad_filter)  # Filter VAD frames after STT
+    
+    # Add remaining components
+    pipeline_components.extend([
+        rtvi,
+        context_aggregator.user(),
+        llm,
+        tool_call_processor,
+        tts,
+        transport.output(),
+        context_aggregator.assistant(),
+    ])
+    
+    pipeline = Pipeline(pipeline_components)
 
     user_name = args.user_name or "guest"
     shopId = "euler" if args.euler_token and not args.shop_id else args.shop_id or "dummy"
@@ -276,23 +288,59 @@ async def main():
 
     @rtvi.event_handler("on_client_message")
     async def on_client_message(rtvi, message):
-        """Handle incoming messages from RTVI client, including function confirmation responses"""
+        """Handle incoming messages from RTVI client, including function confirmation responses and PTT events"""
         try:
-            if isinstance(message, dict) and message.get("type") == "function-confirmation-response":
-
-                confirmation_id = message.get("confirmationId")
-                approved = message.get("approved", False)
-                reason = message.get("reason", "")
+            if isinstance(message, dict):
+                message_type = message.get("type")
                 
-                if confirmation_id:
-                    response = {
-                        "approved": approved,
-                        "reason": reason
-                    }
-                    handle_confirmation_response(confirmation_id, response)
-                    logger.info(f"Processed function confirmation response: {confirmation_id} -> {approved}")
-                else:
-                    logger.warning("Received function confirmation response without confirmationId")
+                if message_type == "function-confirmation-response":
+                    confirmation_id = message.get("confirmationId")
+                    approved = message.get("approved", False)
+                    reason = message.get("reason", "")
+                    
+                    if confirmation_id:
+                        response = {
+                            "approved": approved,
+                            "reason": reason
+                        }
+                        handle_confirmation_response(confirmation_id, response)
+                        logger.info(f"Processed function confirmation response: {confirmation_id} -> {approved}")
+                    else:
+                        logger.warning("Received function confirmation response without confirmationId")
+                
+                elif message_type == "ptt-start":
+                    # Handle PTT start event
+                    logger.debug("PTT started - activating VAD filter")
+                    ptt_vad_filter.set_ptt_active(True)
+                    # Send emulated user started speaking frame
+                    await task.queue_frames([EmulateUserStartedSpeakingFrame()])
+
+                    
+                elif message_type == "ptt-end":
+                    # Handle PTT end event
+                    logger.debug("PTT ended - deactivating VAD filter and sending stop frame")
+                    ptt_vad_filter.set_ptt_active(False)
+                    # Send emulated user stopped speaking frame
+                    await task.queue_frames([EmulateUserStoppedSpeakingFrame()])
+                    
+                elif message_type == "ptt-sync":
+                    # Handle PTT state synchronization from client
+                    client_ptt_state = message.get("data", {}).get("ptt_active", False)
+                    current_state = ptt_vad_filter._ptt_active
+                    
+                    if client_ptt_state != current_state:
+                        logger.warning(f"PTT state mismatch! client: {client_ptt_state}, server: {current_state}")
+                        # Sync to client state (client is authoritative)
+                        ptt_vad_filter.set_ptt_active(client_ptt_state)
+                        logger.info(f"PTT state synchronized to: {client_ptt_state}")
+                        
+                        # Send appropriate frames for state change
+                        if client_ptt_state:
+                            await task.queue_frames([EmulateUserStartedSpeakingFrame()])
+                        else:
+                            await task.queue_frames([EmulateUserStoppedSpeakingFrame()])
+                    else:
+                        logger.debug(f"PTT state sync: states match (current_state: {current_state})")
                     
         except Exception as e:
             logger.error(f"Error handling RTVI client message: {e}")
@@ -315,13 +363,16 @@ async def main():
     @transport.event_handler("on_app_message")
     async def on_app_message(transport, message, sender):
         """Route function confirmation messages from Daily transport to RTVI"""
-        # Check if this is a function confirmation message and route to RTVI
-        if isinstance(message, dict) and message.get("type") == "function-confirmation-response":
-            # Manually trigger the RTVI handler since it might not be getting the message
-            try:
-                await on_client_message(rtvi, message)
-            except Exception as e:
-                logger.error(f"Error manually routing message to RTVI: {e}")
+        
+        # Check if this is a function confirmation message or PTT message and route to RTVI
+        if isinstance(message, dict):
+            message_type = message.get("type")
+            if message_type == "function-confirmation-response" or (config.DISABLE_VAD_FOR_PTT and message_type in ["ptt-start", "ptt-end", "ptt-sync"]):
+                # Manually trigger the RTVI handler since it might not be getting the message
+                try:
+                    await on_client_message(rtvi, message)
+                except Exception as e:
+                    logger.error(f"Error manually routing message to RTVI: {e}")
 
     @task.event_handler("on_pipeline_cancelled")
     async def on_pipeline_cancelled(task, frame):
