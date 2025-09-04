@@ -216,6 +216,9 @@ EXOTEL_API_TOKEN = os.getenv("EXOTEL_API_TOKEN", "")
 EXOTEL_SUBDOMAIN = os.getenv("EXOTEL_SUBDOMAIN", "api.exotel.com")
 EXOTEL_APPLET_APP_ID = os.getenv("EXOTEL_APPLET_APP_ID", "1044183")
 
+# Vayu Configuration
+AWS_VAYU_URL = get_required_env("AWS_VAYU_URL")
+AWS_VAYU_READ_API_KEY = get_required_env("AWS_VAYU_READ_API_KEY")
 
 # LangFuse Configuration
 ENABLE_LANGFUSE_PROMPTS = os.environ.get("ENABLE_LANGFUSE_PROMPTS", "false").lower() == "true"
