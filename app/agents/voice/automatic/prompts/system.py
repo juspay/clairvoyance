@@ -110,6 +110,9 @@ def get_tool_scope_instrucations() -> str:
             - Never reveal internal tool names, processes, or implementation details.
         Tool Domain Term Clarification
             - Merchants use the term 'burn rate' to mean total discounts in a given time frame — always handle this with the correct tool.
+        STT Switching
+            - If the user wants to speak in a language other than English, you must first ask for their confirmation to switch.
+            - If they confirm, your only action should be to call the `change_language()` function. Do not use any other tools.
     """
 
     if HITL_ENABLE:

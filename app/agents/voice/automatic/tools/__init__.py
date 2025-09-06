@@ -24,6 +24,7 @@ def initialize_tools(
     merchant_id: str | None = None,
     session_id: str | None = None,
     user_id: str | None = None,
+    stt_switcher: object = None,
 ):
     """
     Initializes tools based on the operating mode and available tokens.
@@ -51,7 +52,13 @@ def initialize_tools(
 
     # System tools are always available
     all_tools.extend(system_tools.standard_tools)
-    all_tool_functions.update(system_tool_functions)
+    for name, function in system_tool_functions.items():
+        if name == "change_language":
+            all_tool_functions[name] = lambda params: function(
+                params, context={"stt_switcher": stt_switcher}
+            )
+        else:
+            all_tool_functions[name] = function
     logger.info(f"Loaded {len(system_tools.standard_tools)} system tools.")
 
     # Internet tools are always available

@@ -14,11 +14,15 @@ from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
 from app.agents.voice.automatic.services.llm_wrapper import LLMServiceWrapper
 from pipecat.services.azure.llm import AzureLLMService
-from pipecat.transcriptions.language import Language
-from pipecat.frames.frames import TTSSpeakFrame, BotSpeakingFrame, LLMFullResponseEndFrame, EmulateUserStartedSpeakingFrame, EmulateUserStoppedSpeakingFrame
+from pipecat.frames.frames import TTSSpeakFrame, BotSpeakingFrame, LLMFullResponseEndFrame
 from pipecat.transports.services.daily import DailyParams, DailyTransport
 from pipecat.processors.frameworks.rtvi import RTVIConfig, RTVIProcessor
 from pipecat.services.google.rtvi import GoogleRTVIObserver
+from pipecat.pipeline.service_switcher import (
+    ServiceSwitcher,
+    ServiceSwitcherStrategyManual,
+)
+from pipecat.services.openai.stt import OpenAISTTService
 
 from app.core import config
 from app.agents.voice.automatic.utils.session_context import create_session_context, set_current_session_id
@@ -127,13 +131,24 @@ async def main():
         daily_params,
     )
 
-    stt = get_stt_service(voice_name=voice_name.value)
+    stt_1 = get_stt_service(voice_name=voice_name.value)
+    stt_2 = OpenAISTTService(
+            api_key=config.OPENAI_STT_API_KEY,
+            model=config.OPENAI_STT_MODEL,
+            prompt=config.AUTOMATIC_OPENAI_STT_PROMPT, 
+            temperature=0.0,  # Deterministic output for consistency
+        )
+
+    stt_switcher = ServiceSwitcher(
+        services=[stt_1, stt_2],
+        strategy_type=ServiceSwitcherStrategyManual,
+    )
 
     tts = get_tts_service(
-        tts_provider=tts_provider.value, 
-        voice_name=voice_name.value, 
-        session_id=args.session_id, 
-        enable_chart_text_filter=config.ENABLE_CHARTS
+        tts_provider=tts_provider.value,
+        voice_name=voice_name.value,
+        session_id=args.session_id,
+        enable_chart_text_filter=config.ENABLE_CHARTS,
     )
 
     llm = LLMServiceWrapper(AzureLLMService(
@@ -154,13 +169,15 @@ async def main():
                 merchant_id=args.merchant_id,
                 session_id=args.client_sid,  # Pass client_sid instead of session_id
                 user_id=args.user_name,
-                user_email=args.user_email
+                user_email=args.user_email,
+                stt_switcher=stt_switcher
             )
         else:
             tools, tool_functions = initialize_tools(
                 mode=mode.value,
                 merchant_id=args.merchant_id,
                 session_id=args.client_sid,  # Pass client_sid instead of session_id
+                stt_switcher=stt_switcher,
             )
             
         for name, function in tool_functions.items():
@@ -244,7 +261,7 @@ async def main():
     # Build pipeline components list
     pipeline_components = [
         transport.input(),
-        stt,
+        stt_switcher,
     ]
     
     # Add PTT VAD filter only if it's enabled
