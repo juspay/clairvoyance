@@ -63,7 +63,7 @@ async def _make_breeze_request(params: FunctionCallParams, operational_tab: str)
         "operationalTab": operational_tab,
         "granularityFilter": {"timeGranularity": "DAILY", "paymentMethods": "ALL"},
         "shopType": shop_type,
-        "getAllMetricsFromCKH": ENABLE_ALL_METRICS_FROM_CKH and operational_tab == "OVERVIEW"
+        "getAllMetricsFromCKH": ENABLE_ALL_METRICS_FROM_CKH
     }
     headers = {
         "Content-Type": "application/json",
