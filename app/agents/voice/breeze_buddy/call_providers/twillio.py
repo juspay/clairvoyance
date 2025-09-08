@@ -17,8 +17,6 @@ class TwilioProvider(VoiceCallProvider):
             pass
     def __init__(self, aiohttp_session):
         super().__init__(config, aiohttp_session)
-        if not all([self.config.TWILIO_ACCOUNT_SID, self.config.TWILIO_AUTH_TOKEN, self.config.TWILIO_FROM_NUMBER]):
-            raise ValueError("Twilio credentials are not configured.")
         self.client = Client(self.config.TWILIO_ACCOUNT_SID, self.config.TWILIO_AUTH_TOKEN)
 
     def hangup_call(self, call_sid: str):

@@ -229,7 +229,7 @@ async def bot_connect(request: AutomaticVoiceUserConnectRequest) -> Dict[str, An
     shop_url = request.shopUrl
     shop_id = request.shopId
     shop_type = request.shopType
-    user_email = request.userEmail
+    user_email = request.email
     user_name = request.userName
     tts_provider = request.ttsService.ttsProvider.value if request.ttsService else None
     voice_name = request.ttsService.voiceName.value if request.ttsService else None

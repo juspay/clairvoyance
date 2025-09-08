@@ -24,6 +24,7 @@ def initialize_tools(
     merchant_id: str | None = None,
     session_id: str | None = None,
     user_id: str | None = None,
+    user_email: str | None = None,
 ):
     """
     Initializes tools based on the operating mode and available tokens.
