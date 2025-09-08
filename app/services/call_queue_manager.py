@@ -198,11 +198,11 @@ class CallQueueManager:
                 # Process next call recursively
                 await self.process_next_call()
             else:
-                logger.error(f"Failed to complete call data update for {call_data_id}")
+                logger.error(f"Failed to complete call data update for {call_id}")
                 # Process next call recursively
                 await self.process_next_call()
                 
         except Exception as e:
-            logger.error(f"Error completing call {call_data_id}: {e}")
+            logger.error(f"Error completing call {call_id}: {e}")
             # Process next call recursively
             await self.process_next_call()

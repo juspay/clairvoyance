@@ -9,11 +9,7 @@ from pipecat.transcriptions.language import Language
 def get_stt_service():
     """
     Returns an STT service instance based on the environment configuration.
-    
-    Args:
-        voice_name: Voice name to determine STT provider override for specific voices
     """
-    # Check for MIA voice with OpenAI override
     if config.BREEZE_BUDDY_STT_SERVICE == 'openai':
         logger.info("Using OpenAI STT service for Breeze Buddy voice")
         return OpenAISTTService(
