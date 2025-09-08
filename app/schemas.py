@@ -70,7 +70,7 @@ class AutomaticVoiceUserConnectRequest(BaseModel):
     shopId: Optional[str] = None
     shopType: Optional[str] = None
     userName: Optional[str] = None
-    userEmail: Optional[str] = None
+    email: Optional[str] = None
     ttsService: Optional[AutomaticVoiceTTSServiceConfig] = None
     merchantId: Optional[str] = None
     platformIntegrations: Optional[List[str]] = None
