@@ -1,4 +1,5 @@
 import asyncio
+import random
 import sys
 import argparse
 from dotenv import load_dotenv
@@ -220,7 +221,17 @@ async def main():
                     "generate_donut_chart", 
                     "generate_single_stat_card"
                 ]:
-                    await tts.queue_frame(TTSSpeakFrame("Let me check on that."))
+                    phrases = [
+                        "Let me check on that.",
+                        "Give me a moment to do that.",
+                        "I'll get right on that.",
+                        "Working on that for you.",
+                        "One moment — I'm on it",
+                        "One second, boss.",
+                        "On it, boss!",
+                        "Just a second, captain."
+                    ]
+                    await tts.queue_frame(TTSSpeakFrame(random.choice(phrases)))
                     break
 
     messages = [
