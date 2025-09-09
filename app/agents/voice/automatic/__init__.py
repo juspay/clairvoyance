@@ -1,4 +1,5 @@
 import asyncio
+import random
 import sys
 import argparse
 from dotenv import load_dotenv
@@ -223,20 +224,36 @@ async def main():
     @llm.event_handler("on_turn_started")
     async def _on_turn_started(service, turn):
         _current_turn[service.session_id] += 1
-
+    
     @llm.event_handler("on_function_calls_started")
     async def _on_function_calls_started(service, function_calls):
-        # Only for Google TTS UX
-        if tts_provider != TTSProvider.GOOGLE:
+        # Google TTS only
+        if tts_provider != TTSProvider.GOOGLE or not function_calls:
             return
-        # If all are instant helpers, skip
+
+        # Skip if all are instant/visual helpers
         if all(fc.function_name in INSTANT_FUNCS for fc in function_calls):
             return
 
         sid = service.session_id
+        # Speak only once per assistant turn (per-turn gating)
         if _last_check_prompt_turn[sid] != _current_turn[sid]:
-            await tts.queue_frame(TTSSpeakFrame("Let me check on that."))
+            phrases = [
+                "Let me check on that.",
+                "Give me a moment to do that.",
+                "I'll get right on that.",
+                "Working on that for you.",
+                "One moment — I'm on it",
+                "One second, boss.",
+                "On it, boss!",
+                "Just a second, captain."
+            ]
+            await tts.queue_frame(TTSSpeakFrame(random.choice(phrases)))
             _last_check_prompt_turn[sid] = _current_turn[sid]
+
+
+
+
 
     messages = [
         {

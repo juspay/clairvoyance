@@ -1,7 +1,19 @@
+from datetime import time
 from typing import Optional, List, Dict, Any
 from pydantic import BaseModel, Field
 from enum import Enum
 from app.agents.voice.automatic.types.models import TTSProvider, VoiceName
+
+
+class OutboundNumberStatus(str, Enum):
+    AVAILABLE = "AVAILABLE"
+    IN_USE = "IN_USE"
+    DISABLED = "DISABLED"
+
+
+class CallProvider(str, Enum):
+    TWILIO = "TWILIO"
+    EXOTEL = "EXOTEL"
 
 class CallOutcome(str, Enum):
     CONFIRM = "CONFIRM"
@@ -56,6 +68,45 @@ class CallDataResponse(BaseModel):
     assigned_number: Optional[str] = None
     created_at: str
     updated_at: str
+
+class CreateOutboundNumberRequest(BaseModel):
+    number: str
+    provider: CallProvider
+    status: OutboundNumberStatus = OutboundNumberStatus.AVAILABLE
+    maximum_channels: Optional[int] = None
+
+class OutboundNumber(BaseModel):
+    id: str
+    number: str
+    provider: CallProvider
+    status: OutboundNumberStatus
+    channels: Optional[int] = None
+    maximum_channels: Optional[int] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+class CreateCallExecutionConfigRequest(BaseModel):
+    initial_offset: int
+    retry_offset: int
+    call_start_time: time
+    call_end_time: time
+    max_retry: int
+    calling_provider: CallProvider
+    merchant_id: str
+    workflow: Workflow
+
+class CallExecutionConfig(BaseModel):
+    id: str
+    initial_offset: int
+    retry_offset: int
+    call_start_time: time
+    call_end_time: time
+    max_retry: int
+    calling_provider: CallProvider
+    merchant_id: str
+    workflow: Workflow
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
 
 class AutomaticVoiceTTSServiceConfig(BaseModel):
     ttsProvider: TTSProvider

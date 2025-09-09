@@ -3,7 +3,7 @@ Main database accessor module.
 This module exports all database accessor functions.
 """
 
-from .call_data import (
+from .breeze_buddy.call_data import (
     create_call_data,
     get_call_data_by_id,
     get_call_data_by_call_id,
@@ -16,6 +16,18 @@ from .call_data import (
     get_call_data_by_requested_by,
     delete_call_data,
     get_all_call_data,
+)
+from .breeze_buddy.outbound_number import (
+    create_outbound_number,
+    get_outbound_number_by_id,
+    update_outbound_number_status,
+    disable_outbound_number,
+    get_all_outbound_numbers,
+    get_outbound_number_based_on_status_and_provider,
+)
+from .breeze_buddy.call_execution_config import (
+    create_call_execution_config,
+    get_call_execution_config_by_merchant_id,
 )
 
 __all__ = [
@@ -31,4 +43,12 @@ __all__ = [
     "get_call_data_by_requested_by",
     "delete_call_data",
     "get_all_call_data",
+    "create_outbound_number",
+    "get_outbound_number_by_id",
+    "update_outbound_number_status",
+    "disable_outbound_number",
+    "get_all_outbound_numbers",
+    "get_outbound_number_based_on_status_and_provider",
+    "create_call_execution_config",
+    "get_call_execution_config_by_merchant_id",
 ]
