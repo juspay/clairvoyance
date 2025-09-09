@@ -17,6 +17,14 @@ from .call_data import (
     delete_call_data,
     get_all_call_data,
 )
+from .outbound_number import (
+    create_outbound_number,
+    get_outbound_number_by_id,
+    update_outbound_number_status,
+    disable_outbound_number,
+    get_all_outbound_numbers,
+    get_outbound_number_based_on_status_and_provider,
+)
 
 __all__ = [
     "create_call_data",
@@ -31,4 +39,10 @@ __all__ = [
     "get_call_data_by_requested_by",
     "delete_call_data",
     "get_all_call_data",
+    "create_outbound_number",
+    "get_outbound_number_by_id",
+    "update_outbound_number_status",
+    "disable_outbound_number",
+    "get_all_outbound_numbers",
+    "get_outbound_number_based_on_status_and_provider",
 ]

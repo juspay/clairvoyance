@@ -22,6 +22,10 @@ async def init_db_pool():
     """
     global pool
     if pool is None:
+        db_env_vars = [POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_HOST, POSTGRES_PORT, POSTGRES_DB]
+        if not all(db_env_vars):
+            logger.warning("One or more database environment variables are missing. Skipping database initialization.")
+            return
         try:
             pool = await asyncpg.create_pool(
                 user=POSTGRES_USER,
