@@ -12,6 +12,7 @@ from app.schemas import (
     RequestedBy,
     Workflow,
     CreateOutboundNumberRequest,
+    CreateCallExecutionConfigRequest,
 )
 from app.agents.voice.breeze_buddy.breeze.order_confirmation.types import BreezeOrderData
 from app.services.call_queue_manager import CallQueueManager
@@ -21,6 +22,8 @@ from app.database.accessor.main import (
     get_outbound_number_by_id,
     get_all_outbound_numbers,
     disable_outbound_number,
+    get_call_execution_config_by_merchant_id,
+    create_call_execution_config,
 )
 
 router = APIRouter()
@@ -207,3 +210,61 @@ async def telephony_websocket_handler(service_provider: str, workflow: str, webs
             logger.warning(f"Could not close websocket (likely already closed): {close_error}")
     finally:
         logger.info("WebSocket client connection closed.")
+
+@router.post("/agent/voice/breeze-buddy/call-execution-config")
+async def add_call_execution_config(
+    config: CreateCallExecutionConfigRequest,
+    current_user: TokenData = Depends(get_current_user)
+):
+    """
+    Adds a new call execution config to the database.
+    Requires JWT authentication.
+    """
+    logger.info(f"Authenticated user {current_user.user_id} adding new call execution config for merchant: {config.merchant_id}")
+
+    try:
+        call_execution_config = await create_call_execution_config(
+            id=str(uuid4()),
+            initial_offset=config.initial_offset,
+            retry_offset=config.retry_offset,
+            call_start_time=config.call_start_time,
+            call_end_time=config.call_end_time,
+            max_retry=config.max_retry,
+            calling_provider=config.calling_provider,
+            merchant_id=config.merchant_id,
+            workflow=config.workflow,
+        )
+        
+        if call_execution_config:
+            logger.info(f"Call execution config for merchant {config.merchant_id} added successfully with ID {call_execution_config.id}")
+            return call_execution_config
+        else:
+            logger.error(f"Failed to add call execution config for merchant {config.merchant_id}")
+            raise HTTPException(status_code=400, detail="Failed to add call execution config")
+            
+    except Exception as e:
+        logger.error("Error disabling outbound number", exc_info=True)
+        raise HTTPException(status_code=400, detail="Unexpected error") from e
+
+@router.get("/agent/voice/breeze-buddy/call-execution-config/{merchant_id}")
+async def get_call_execution_config(
+    merchant_id: str,
+    current_user: TokenData = Depends(get_current_user)
+):
+    """
+    Gets a call execution config from the database based on the provided merchant ID.
+    Requires JWT authentication.
+    """
+    logger.info(f"Authenticated user {current_user.user_id} requesting call execution config for merchant: {merchant_id}")
+
+    try:
+        call_execution_configs = await get_call_execution_config_by_merchant_id(merchant_id)
+        if call_execution_configs:
+            return call_execution_configs
+        else:
+            raise HTTPException(status_code=404, detail="Call execution config not found")
+            
+    except Exception as e:
+        logger.error("Error getting call execution config", exc_info=True)
+        raise HTTPException(status_code=400, detail="Unexpected error") from e
+

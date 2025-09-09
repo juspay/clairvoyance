@@ -7,7 +7,7 @@ from app.core.logger import logger
 from app.schemas import CallDataResponse, CallOutcome, CallStatus, RequestedBy, Workflow
 from app.database.queries.main import run_parameterized_query
 from app.database.accessor.decoder import decode_call_data, decode_call_data_list
-from app.database.queries.call_data import (
+from app.database.queries.breeze_buddy.call_data import (
     insert_call_data_query,
     get_call_data_by_id_query,
     get_call_data_by_call_id_query,

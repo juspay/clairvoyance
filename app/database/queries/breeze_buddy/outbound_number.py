@@ -6,7 +6,7 @@ from datetime import datetime
 from app.schemas import OutboundNumberStatus, CallProvider
 
 # Table names
-OUTBOUND_NUMBER_TABLE = "outbound_numbers"
+OUTBOUND_NUMBER_TABLE = "outbound_number"
 
 # Outbound number queries
 def insert_outbound_number_query(

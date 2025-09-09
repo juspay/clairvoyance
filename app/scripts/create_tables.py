@@ -10,7 +10,29 @@ load_dotenv(override=True)
 
 # Table names
 CALL_DATA_TABLE = "call_data"
-OUTBOUND_NUMBERS_TABLE = "outbound_numbers"
+OUTBOUND_NUMBERS_TABLE = "outbound_number"
+CALL_EXECUTION_CONFIG_TABLE = "call_execution_config"
+
+def create_call_execution_config_table_query() -> str:
+    """
+    Generate query to create call_execution_configs table.
+    """
+    return f"""
+        CREATE TABLE IF NOT EXISTS "{CALL_EXECUTION_CONFIG_TABLE}" (
+            "id" VARCHAR(255) PRIMARY KEY,
+            "initial_offset" INTEGER NOT NULL,
+            "retry_offset" INTEGER NOT NULL,
+            "call_start_time" TIME NOT NULL,
+            "call_end_time" TIME NOT NULL,
+            "max_retry" INTEGER NOT NULL,
+            "calling_provider" VARCHAR(50) CHECK ("calling_provider" IN ('TWILIO', 'EXOTEL')) NOT NULL,
+            "merchant_id" VARCHAR(255) NOT NULL,
+            "workflow" VARCHAR(50) CHECK ("workflow" IN ('order-confirmation')) NOT NULL,
+            "created_at" TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
+            "updated_at" TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
+            UNIQUE("merchant_id", "workflow")
+        );
+    """
 
 def create_outbound_numbers_table_query() -> str:
     """
@@ -90,6 +112,20 @@ async def create_outbound_numbers_table():
         print(f"Error creating outbound_numbers table: {e}")
         return False
 
+async def create_call_execution_config_table():
+    """
+    Create the call_execution_configs table with all constraints and indexes.
+    """
+    try:
+        async for conn in get_db_connection():
+            print("Creating call_execution_configs table...")
+            await conn.execute(create_call_execution_config_table_query())
+            print("Call execution configs table created successfully")
+            return True
+    except Exception as e:
+        print(f"Error creating call_execution_configs table: {e}")
+        return False
+
 async def create_all_tables():
     """
     Create all database tables.
@@ -100,8 +136,9 @@ async def create_all_tables():
         # Create call_data table
         call_data_success = await create_call_data_table()
         outbound_numbers_success = await create_outbound_numbers_table()
+        call_execution_config_success = await create_call_execution_config_table()
         
-        if call_data_success and outbound_numbers_success:
+        if call_data_success and outbound_numbers_success and call_execution_config_success:
             print("All database tables created successfully")
             return True
         else:

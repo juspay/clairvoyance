@@ -7,7 +7,7 @@ from app.core.logger import logger
 from app.schemas import OutboundNumber, OutboundNumberStatus, CallProvider
 from app.database.queries.main import run_parameterized_query
 from app.database.accessor.decoder import decode_outbound_number, decode_outbound_number_list
-from app.database.queries.outbound_number import (
+from app.database.queries.breeze_buddy.outbound_number import (
     insert_outbound_number_query,
     get_outbound_number_by_id_query,
     update_outbound_number_status_query,
