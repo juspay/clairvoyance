@@ -20,6 +20,7 @@ from pipecat.frames.frames import TTSSpeakFrame, BotSpeakingFrame, LLMFullRespon
 from pipecat.transports.services.daily import DailyParams, DailyTransport
 from pipecat.processors.frameworks.rtvi import RTVIConfig, RTVIProcessor
 from pipecat.services.google.rtvi import GoogleRTVIObserver
+from app.services.mem0.memory import ImprovedMem0MemoryService
 
 from app.core import config
 from app.agents.voice.automatic.utils.session_context import create_session_context, set_current_session_id
@@ -263,10 +264,23 @@ async def main():
         ptt_vad_filter = PTTVADFilter("PTTVADFilter")
         pipeline_components.append(ptt_vad_filter)  # Filter VAD frames after STT
     
-    # Add remaining components
     pipeline_components.extend([
         rtvi,
-        context_aggregator.user(),
+        context_aggregator.user()
+    ])
+    
+    if config.MEM0_ENABLED:
+        logger.info("Initializing Mem0 memory service")
+        memory_params = ImprovedMem0MemoryService.InputParams()
+        memory = ImprovedMem0MemoryService(
+            api_key=config.MEM0_API_KEY,
+            user_id=args.user_email or args.user_name or args.session_id,  # Fallback: email → name → session_id
+            params= memory_params,
+        )
+        pipeline_components.append(memory)
+
+    # Add remaining components
+    pipeline_components.extend([
         llm,
         tool_call_processor,
         tts,

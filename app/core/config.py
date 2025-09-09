@@ -66,6 +66,14 @@ VAD_MIN_VOLUME = float(os.environ.get("VAD_MIN_VOLUME", 0.75))
 VAD_START_SECS = float(os.environ.get("VAD_START_SECS", 0.30))
 VAD_STOP_SECS = float(os.environ.get("VAD_STOP_SECS", 1.00))
 
+# Mem0 Configuration
+MEM0_API_KEY = os.getenv("MEM0_API_KEY", "")
+MEM0_ENABLED = os.getenv("MEM0_ENABLED", "false").lower() == "true"
+MEM0_MAX_FAILURES = int(os.getenv("MEM0_MAX_FAILURES", "3"))
+MEM0_RETRY_INTERVAL = int(os.getenv("MEM0_RETRY_INTERVAL", "300"))
+MEM0_SESSION_TIMEOUT = int(os.getenv("MEM0_SESSION_TIMEOUT", "3600"))
+MEM0_MIN_MESSAGE_LENGTH = int(os.getenv("MEM0_MIN_MESSAGE_LENGTH", "10"))
+
 # Tracing
 ENABLE_TRACING = os.environ.get("ENABLE_TRACING", "false").lower() == "true"
 OPEN_OBSERVE_BASE_URL = os.environ.get("OPEN_OBSERVE_BASE_URL", "https://periscope.breeze.in")

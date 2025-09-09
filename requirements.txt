@@ -19,8 +19,8 @@ starlette>=0.27.0
 # Logging and environment
 python-dotenv>=1.0.0
 
-pipecat-ai[daily,google,assembly,silero,openai,azure,elevenlabs]
-pipecat-ai[noisereduce]
+pipecat-ai[daily,google,assembly,silero,openai,azure,elevenlabs,noisereduce,mem0]
+pipecat-ai-flows
 
 # Google Cloud Speech
 google-cloud-speech
@@ -38,7 +38,6 @@ langfuse
 asyncpg
 
 twilio
-pipecat-ai-flows
 
 # JWT Authentication
 PyJWT
