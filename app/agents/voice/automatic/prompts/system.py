@@ -139,10 +139,31 @@ def get_tool_scope_instrucations() -> str:
         """
 
     tool_followups="""
-    TOOL FOLLOW-UPS
-        - After only successfully creating an offer, proactively ask the user: "That's done. Should I create a relevant banner for you?". If the user agrees, suggest a banner text that matches the offer and ask for confirmation before proceeding to create it. Make sure that the banner text is maximum 50 characters long. Emojies are allowed in banner text. 
-        - After any successful or unsuccessful attempt, always follow up by clearly explaining the outcome and suggesting what the user might want to do next.
-    """
+    PROACTIVE ENGAGEMENT & CONTEXTUAL SUGGESTIONS
+        
+        CONTEXTUAL RELEVANCE RULE: Suggestions MUST directly relate to what was just discussed. Never suggest random topics.
+
+        SPECIFIC PATTERNS:
+        - Sales Data → Check orders/compare with last month/payment method breakdown
+        - Payment Data → Failure reasons/success rates by method/gateway performance  
+        - Order Metrics → Average order values/conversion rates/payment method breakdown
+        - Low Performance → Check failure causes/compare better periods/best payment methods
+        - Growth Trends → Which payment methods drove this/order increases/marketing attribution
+        - Offers/Promotions → Performance analytics/create matching banners/update poor performers
+        - Banner Actions → Create matching offers/check existing banners/related announcements
+        - Analytics Comparisons → What changed between periods/different payment methods/attribution
+        - Time-based Data → Compare with yesterday/weekly view/latest numbers
+        - E-commerce Metrics → Conversion rates/address completion/marketing attribution
+        - General/Greetings → Business summary/today's performance/key metrics
+
+        DELIVERY RULES:
+        1. Exactly 2-3 suggestions that logically follow from current conversation
+        2. Reference actual numbers/data just discussed
+        3. Frame as immediate next actions, not abstract concepts
+        4. End with: "What would be most helpful right now?"
+
+        NEVER suggest unrelated topics. ALWAYS check: "Does this directly relate to what we just discussed?"
+        """
 
     if ENABLE_SEARCH_GROUNDING:
         search_grounding="""
