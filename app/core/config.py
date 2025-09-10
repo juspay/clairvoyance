@@ -103,11 +103,25 @@ logger.info(f"Using Gemini search result model: {GEMINI_SEARCH_RESULT_API_MODEL}
 
 #Automatic MCP Tool Server
 AUTOMATIC_MCP_TOOL_SERVER_USAGE=os.environ.get("AUTOMATIC_MCP_TOOL_SERVER_USAGE", "false").lower() == "true"
-AUTOMATIC_TOOL_MCP_SERVER_URL=os.environ.get("AUTOMATIC_TOOL_MCP_SERVER_URL", "https://portal.breeze.in/ai/mcp")
+AUTOMATIC_TOOL_MCP_SERVER_URL=os.environ.get("AUTOMATIC_TOOL_MCP_SERVER_URL", "https://portal.breeze.in/ai/neurolink")
 MCP_CLIENT_TIMEOUT = int(os.environ.get("MCP_CLIENT_TIMEOUT", 30)) #seconds
 
-_shops_for_mcp_str = os.environ.get("SHOPS_FOR_AUTOMATIC_MCP_SERVER", "")
-SHOPS_FOR_AUTOMATIC_MCP_SERVER = [shop.strip() for shop in _shops_for_mcp_str.split(',') if shop.strip()]
+shops_raw = os.environ.get("SHOPS_FOR_AUTOMATIC_MCP_SERVER", "")
+if shops_raw.strip().startswith("[") and shops_raw.strip().endswith("]"):
+    # Handle JSON array format
+    import json
+    try:
+        SHOPS_FOR_AUTOMATIC_MCP_SERVER = json.loads(shops_raw)
+    except json.JSONDecodeError:
+        SHOPS_FOR_AUTOMATIC_MCP_SERVER = []
+else:
+    # Handle comma-separated format
+    SHOPS_FOR_AUTOMATIC_MCP_SERVER = shops_raw.split(",")
+    SHOPS_FOR_AUTOMATIC_MCP_SERVER = [shop.strip() for shop in SHOPS_FOR_AUTOMATIC_MCP_SERVER if shop.strip()]
+
+def is_neurolink_shop(shop_id: str) -> bool:
+    """Check if shop should use neurolink server"""
+    return shop_id in SHOPS_FOR_AUTOMATIC_MCP_SERVER
 
 # Selective MCP Functions (used when AUTOMATIC_MCP_TOOL_SERVER_USAGE is true)
 _selective_mcp_functions_str = os.environ.get("SELECTIVE_MCP_FUNCTIONS", "")
@@ -121,8 +135,8 @@ ENABLE_ALL_METRICS_FROM_CKH = os.environ.get("ENABLE_ALL_METRICS_FROM_CKH", "tru
 
 # Context Summarization Configuration
 ENABLE_SUMMARIZATION = os.environ.get("ENABLE_SUMMARIZATION", "true").lower() == "true"
-MAX_TURNS_BEFORE_SUMMARY = int(os.environ.get("MAX_TURNS_BEFORE_SUMMARY", 10))
-KEEP_RECENT_TURNS = int(os.environ.get("KEEP_RECENT_TURNS", 2))
+MAX_TURNS_BEFORE_SUMMARY = int(os.environ.get("MAX_TURNS_BEFORE_SUMMARY", 1))
+KEEP_RECENT_TURNS = int(os.environ.get("KEEP_RECENT_TURNS", 1))
 
 BREEZE_BUDDY_CALL_PROVIDER = os.environ.get("BREEZE_BUDDY_CALL_PROVIDER", "twilio")
 AZURE_BREEZE_BUDDY_OPENAI_MODEL = os.environ.get("AZURE_BREEZE_BUDDY_OPENAI_MODEL", "gpt-4o-automatic")

@@ -183,16 +183,45 @@ async def main():
             "merchantId": args.merchant_id,
             "platformIntegrations": args.platform_integrations
         }
-        mcp_client = MCPClient(
-            server_url=config.AUTOMATIC_TOOL_MCP_SERVER_URL,
-            auth_token=args.breeze_token,
-            context=mcp_context,
+        
+        # Only use MCP server for shops in SHOPS_FOR_AUTOMATIC_MCP_SERVER
+        if args.shop_id in config.SHOPS_FOR_AUTOMATIC_MCP_SERVER:
+            logger.info(f"Using MCP neurolink server for shop_id: {args.shop_id}")
+            mcp_client = MCPClient(
+                server_url=config.AUTOMATIC_TOOL_MCP_SERVER_URL,
+                auth_token=args.breeze_token,
+                context=mcp_context,
             session_context=session_context,
             enable_chart=config.ENABLE_CHARTS
-        )
+            )
 
-        selective_functions = config.SELECTIVE_MCP_FUNCTIONS if len(config.SELECTIVE_MCP_FUNCTIONS) > 0 else []
-        tools = await mcp_client.register_tools(llm, selective_functions)
+            selective_functions = config.SELECTIVE_MCP_FUNCTIONS if len(config.SELECTIVE_MCP_FUNCTIONS) > 0 else []
+            tools = await mcp_client.register_tools(llm, selective_functions)
+        else:
+            logger.info(f"Using original clairvoyance tools for shop_id: {args.shop_id}")
+            # Use the original clairvoyance tools logic
+            if mode == Mode.LIVE:
+                tools, tool_functions = initialize_tools(
+                    mode=mode.value,
+                    breeze_token=args.breeze_token,
+                    euler_token=args.euler_token,
+                    shop_url=args.shop_url,
+                    shop_id=args.shop_id,
+                    shop_type=args.shop_type,
+                    merchant_id=args.merchant_id,
+                    session_id=args.client_sid,
+                    user_id=args.user_name,
+                )
+            else:
+                tools, tool_functions = initialize_tools(
+                    mode=mode.value,
+                    merchant_id=args.merchant_id,
+                    session_id=args.client_sid,
+                )
+                
+            for name, function in tool_functions.items():
+                logger.info("Initializing the default function tools")
+                llm.register_function(name, function)
 
         if args.shop_url == config.BREEZE_BUDDY_TEST_SHOPIFY_SHOP_URL:
             tools.standard_tools.extend(shopify_buddy_test.tools.standard_tools)
