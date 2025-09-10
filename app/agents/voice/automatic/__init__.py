@@ -268,16 +268,27 @@ async def main():
         rtvi,
         context_aggregator.user()
     ])
-    
-    if config.MEM0_ENABLED:
-        logger.info("Initializing Mem0 memory service")
-        memory_params = ImprovedMem0MemoryService.InputParams()
-        memory = ImprovedMem0MemoryService(
-            api_key=config.MEM0_API_KEY,
-            user_id=args.user_email or args.user_name or args.session_id,  # Fallback: email → name → session_id
-            params= memory_params,
-        )
-        pipeline_components.append(memory)
+    if config.MEM0_ENABLED and args.user_email and args.user_email.strip() and config.MEM0_API_KEY and config.MEM0_API_KEY.strip():
+        try:
+            logger.info("Initializing Mem0 memory service")
+            memory_params = ImprovedMem0MemoryService.InputParams()
+            memory = ImprovedMem0MemoryService(
+                api_key=config.MEM0_API_KEY,
+                user_id=args.user_email,
+                params=memory_params,
+            )
+            pipeline_components.append(memory)
+            logger.info("Mem0 memory service initialized successfully")
+        except (ValueError, Exception) as e:
+            logger.error(f"Failed to initialize Mem0 memory service: {e}")
+            logger.warning("Continuing without memory service - conversation will work normally")
+    elif config.MEM0_ENABLED:
+        if not args.user_email:
+            logger.info("Skipping Mem0 memory service - no user email provided (guest flow)")
+        elif not config.MEM0_API_KEY or not config.MEM0_API_KEY.strip():
+            logger.warning("MEM0_API_KEY is not provided - skipping memory service")
+    else:
+        logger.debug("Mem0 memory service disabled via config")
 
     # Add remaining components
     pipeline_components.extend([
