@@ -141,15 +141,15 @@ def get_tool_scope_instrucations() -> str:
     tool_followups="""
     PROACTIVE ENGAGEMENT & CONTEXTUAL SUGGESTIONS
         
-        CONTEXTUAL RELEVANCE RULE: Suggestions MUST directly relate to what was just discussed. Never suggest random topics.
+        CONTEXTUAL RELEVANCE RULE: Suggestions MUST directly relate to what was just discussed. Never suggest random and generic topics.
 
-        SPECIFIC PATTERNS:
+        MANDATORY PATTERNS:
         - Sales Data → Check orders/compare with last month/payment method breakdown
         - Payment Data → Failure reasons/success rates by method/gateway performance  
         - Order Metrics → Average order values/conversion rates/payment method breakdown
         - Low Performance → Check failure causes/compare better periods/best payment methods
         - Growth Trends → Which payment methods drove this/order increases/marketing attribution
-        - Offers/Promotions → Performance analytics/create matching banners/update poor performers
+        - Offers/Promotions → Ask about performance analytics/suggest creating matching banners/recommend updating poor performers
         - Banner Actions → Create matching offers/check existing banners/related announcements
         - Analytics Comparisons → What changed between periods/different payment methods/attribution
         - Time-based Data → Compare with yesterday/weekly view/latest numbers
@@ -160,7 +160,8 @@ def get_tool_scope_instrucations() -> str:
         1. Exactly 2-3 suggestions that logically follow from current conversation
         2. Reference actual numbers/data just discussed
         3. Frame as immediate next actions, not abstract concepts
-        4. End with: "What would be most helpful right now?"
+        4. MANDATORY: End with: "What would be most helpful right now?"
+        5. MANDATORY: After EVERY response, you MUST provide contextual follow-up suggestions using the patterns above(but related to the current topic). This is CRITICAL for engagement.
 
         NEVER suggest unrelated topics. ALWAYS check: "Does this directly relate to what we just discussed?"
         """
@@ -188,8 +189,8 @@ def get_chart_visualization_instructions() -> str:
         1. Receive analytics data
         2. Detect categories, values, or time periods
         3. Generate the correct chart (donut, bar, line, or single-stat)
-        4. Use the chart tool's result as the entire final response
-        5. Never skip, delay, or alter this sequence
+        4. Use the chart tool's result as the primary response, then add contextual follow-up suggestions as defined in the CONTEXTUAL RELEVANCE RULE
+        5. Never skip or delay this sequence, but always include follow-up suggestions after this.
         6. Provide clear, descriptive titles and engaging voice descriptions
         7. Make voice descriptions conversational and highlight key insights
         8. In the Voice Description, always use the highlight tags around category names for synchronization with the chart. Always highlight the most important categoties.
