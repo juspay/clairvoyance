@@ -1,6 +1,5 @@
 import asyncio
 import random
-import sys
 import argparse
 from dotenv import load_dotenv
 from datetime import datetime
@@ -10,6 +9,7 @@ from app.core.logger import logger, configure_session_logger
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.vad.vad_analyzer import VADParams
 from pipecat.audio.filters.noisereduce_filter import NoisereduceFilter
+from pipecat.audio.filters.aic_filter import AICFilter
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
@@ -115,12 +115,28 @@ async def main():
         audio_out_enabled=True,
         vad_analyzer=vad_analyzer,
     )
-
-    if config.ENABLE_NOISE_REDUCE_FILTER:
-        logger.info("Noise reduction filter enabled.")
+    
+    # Audio filter configuration
+    if config.ENABLE_AIC_FILTER and config.AICOUSTICS_LICENSE_KEY:
+        try:
+            aic_filter = AICFilter(
+                license_key=config.AICOUSTICS_LICENSE_KEY,
+                enhancement_level=config.AIC_ENHANCEMENT_LEVEL,
+                voice_gain=config.AIC_VOICE_GAIN,
+                noise_gate_enable=config.AIC_NOISE_GATE_ENABLE,
+            )
+            daily_params.audio_in_filter = aic_filter
+            logger.info(f"AIC Filter: ENABLED (enhancement_level={config.AIC_ENHANCEMENT_LEVEL}, voice_gain={config.AIC_VOICE_GAIN}, noise_gate={config.AIC_NOISE_GATE_ENABLE})")
+            
+        except Exception as e:
+            logger.error(f"AIC Filter failed: {e}")
+            
+    elif config.ENABLE_NOISE_REDUCE_FILTER:
         daily_params.audio_in_filter = NoisereduceFilter()
+        logger.info("Audio Filter: NoiseReduce Enabled")
+        
     else:
-        logger.info("Noise reduction filter disabled.")
+        logger.info("No Audio Filter enabled")
 
     transport = DailyTransport(
         args.url,
@@ -252,7 +268,6 @@ async def main():
     # Add custom LLMSpyProcessor for streaming function call events (RTVI and TTS created earlier)
     tool_call_processor = LLMSpyProcessor(rtvi, args.session_id, config.ENABLE_CHARTS, "LLMSpyProcessor")
 
-
     # Build pipeline components list
     pipeline_components = [
         transport.input(),
@@ -298,6 +313,7 @@ async def main():
         transport.output(),
         context_aggregator.assistant(),
     ])
+    
     
     pipeline = Pipeline(pipeline_components)
 
@@ -385,11 +401,13 @@ async def main():
         except Exception as e:
             logger.error(f"Error handling RTVI client message: {e}")
 
+
     @transport.event_handler("on_first_participant_joined")
     async def on_first_participant_joined(transport, participant):
         logger.info(f"First participant joined: {participant['id']}")
         if config.ENABLE_AUTOMATIC_DAILY_RECORDING:
             await transport.start_recording()
+        
         await task.queue_frames([context_aggregator.user().get_context_frame()])
 
     @transport.event_handler("on_participant_left")

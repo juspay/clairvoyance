@@ -37,6 +37,13 @@ AZURE_OPENAI_ENDPOINT = get_required_env("AZURE_OPENAI_ENDPOINT")
 AZURE_OPENAI_MODEL = os.environ.get("AZURE_OPENAI_MODEL", "gpt-4o-automatic")
 GOOGLE_CREDENTIALS_JSON = get_required_env("GOOGLE_CREDENTIALS_JSON")
 ENABLE_NOISE_REDUCE_FILTER = os.environ.get("ENABLE_NOISE_REDUCE_FILTER", "true").lower() == "true"
+ENABLE_AIC_FILTER = os.environ.get("ENABLE_AIC_FILTER", "false").lower() == "true"
+AICOUSTICS_LICENSE_KEY = os.environ.get("AICOUSTICS_LICENSE_KEY", "")
+
+# AIC Filter Parameters (simplified for tuning)
+AIC_ENHANCEMENT_LEVEL = float(os.environ.get("AIC_ENHANCEMENT_LEVEL", "1.0"))
+AIC_VOICE_GAIN = float(os.environ.get("AIC_VOICE_GAIN", "1.2"))
+AIC_NOISE_GATE_ENABLE = os.environ.get("AIC_NOISE_GATE_ENABLE", "true").lower() == "true"
 
 # TTS Configuration
 ELEVENLABS_API_KEY = os.environ.get("ELEVENLABS_API_KEY")
