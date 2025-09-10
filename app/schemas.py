@@ -1,4 +1,4 @@
-from datetime import time
+from datetime import time, datetime
 from typing import Optional, List, Dict, Any
 from pydantic import BaseModel, Field
 from enum import Enum
@@ -34,12 +34,44 @@ class RequestedBy(str, Enum):
 class Workflow(str, Enum):
     ORDER_CONFIRMATION = "order-confirmation"
 
+class LeadCallStatus(str, Enum):
+    BACKLOG = "BACKLOG"
+    PROCESSING = "PROCESSING"
+    FINISHED = "FINISHED"
+    RETRY = "RETRY"
+
+class LeadCallOutcome(str, Enum):
+    NO_ANSWER = "NO_ANSWER"
+    BUSY = "BUSY"
+    CANCEL = "CANCEL"
+    CONFIRM = "CONFIRM"
+    UNKNOWN = "UNKNOWN"
+
+class LeadCallTracker(BaseModel):
+    id: str
+    outbound_number_id: Optional[str] = None
+    merchant_id: RequestedBy
+    workflow: Workflow
+    attempt_count: int = 0
+    next_attempt_at: Optional[datetime] = None
+    payload: Optional[Dict[str, Any]] = None
+    metaData: Optional[Dict[str, Any]] = None
+    recording_url: Optional[str] = None
+    status: LeadCallStatus = LeadCallStatus.BACKLOG
+    outcome: Optional[LeadCallOutcome] = None
+    call_id: Optional[str] = None
+    call_initiated_time: Optional[datetime] = None
+    call_end_time: Optional[datetime] = None
+    cost: Optional[float] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
 class CallDataCreate(BaseModel):
     id: str
     outcome: Optional[CallOutcome] = None
     transcription: Optional[Dict[str, Any]] = None
-    call_start_time: str
-    call_end_time: Optional[str] = None
+    call_start_time: datetime
+    call_end_time: Optional[datetime] = None
     call_id: Optional[str] = None
     provider: str
     status: CallStatus = CallStatus.BACKLOG
@@ -57,8 +89,8 @@ class CallDataResponse(BaseModel):
     id: str
     outcome: Optional[str] = None
     transcription: Optional[Dict[str, Any]] = None
-    call_start_time: str
-    call_end_time: Optional[str] = None
+    call_start_time: datetime
+    call_end_time: Optional[datetime] = None
     call_id: Optional[str] = None
     provider: str
     status: str
@@ -66,8 +98,8 @@ class CallDataResponse(BaseModel):
     workflow: str
     call_payload: Optional[Dict[str, Any]] = None
     assigned_number: Optional[str] = None
-    created_at: str
-    updated_at: str
+    created_at: datetime
+    updated_at: datetime
 
 class CreateOutboundNumberRequest(BaseModel):
     number: str
@@ -82,8 +114,8 @@ class OutboundNumber(BaseModel):
     status: OutboundNumberStatus
     channels: Optional[int] = None
     maximum_channels: Optional[int] = None
-    created_at: Optional[str] = None
-    updated_at: Optional[str] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
 
 class CreateCallExecutionConfigRequest(BaseModel):
     initial_offset: int
@@ -105,8 +137,8 @@ class CallExecutionConfig(BaseModel):
     calling_provider: CallProvider
     merchant_id: str
     workflow: Workflow
-    created_at: Optional[str] = None
-    updated_at: Optional[str] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
 
 class AutomaticVoiceTTSServiceConfig(BaseModel):
     ttsProvider: TTSProvider

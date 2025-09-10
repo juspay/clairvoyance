@@ -1,14 +1,12 @@
 from fastapi import APIRouter, Depends, HTTPException, WebSocket
 from starlette.websockets import WebSocketDisconnect
 from uuid import uuid4
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 from app.core.logger import logger
-from app.core.config import BREEZE_BUDDY_CALL_PROVIDER, EXOTEL_FROM_NUMBER, TWILIO_FROM_NUMBER
 from app.core.security.jwt import get_current_user
 from app.schemas import (
     TokenData,
-    CallStatus,
     RequestedBy,
     Workflow,
     CreateOutboundNumberRequest,
@@ -17,13 +15,13 @@ from app.schemas import (
 from app.agents.voice.breeze_buddy.breeze.order_confirmation.types import BreezeOrderData
 from app.services.call_queue_manager import CallQueueManager
 from app.database.accessor.main import (
-    create_call_data,
     create_outbound_number,
     get_outbound_number_by_id,
     get_all_outbound_numbers,
     disable_outbound_number,
     get_call_execution_config_by_merchant_id,
     create_call_execution_config,
+    create_lead_call_tracker,
 )
 
 router = APIRouter()
@@ -117,8 +115,7 @@ async def trigger_order_confirmation(
     identity: RequestedBy,
     workflow: Workflow,
     order: BreezeOrderData,
-    current_user: TokenData = Depends(get_current_user),
-    call_queue_manager: CallQueueManager = Depends(CallQueueManager)
+    current_user: TokenData = Depends(get_current_user)
 ):
     """
     Receives order details and triggers a order confirmation workflow.
@@ -130,6 +127,15 @@ async def trigger_order_confirmation(
     logger.info(f"Authenticated user {current_user.user_id} requesting order confirmation for order: {order.order_id} for {order.customer_name}")
 
     try:
+        # Get call execution config
+        call_execution_configs = await get_call_execution_config_by_merchant_id(identity.value)
+        if not call_execution_configs:
+            raise HTTPException(status_code=404, detail="Call execution config not found for this merchant")
+
+        config = next((c for c in call_execution_configs if c.workflow == workflow), None)
+        if not config:
+            raise HTTPException(status_code=404, detail=f"Call execution config not found for workflow: {workflow}")
+        
         uuid = str(uuid4())
         call_payload = {
             "order_id": order.order_id,
@@ -143,40 +149,33 @@ async def trigger_order_confirmation(
             "reporting_webhook_url": order.reporting_webhook_url
         }
         
-        # Insert call request into database
-        call_data = await create_call_data(
+        # Calculate next attempt time
+        next_attempt_at = datetime.now(timezone.utc) + timedelta(seconds=config.initial_offset)
+
+        # Insert lead call tracker record
+        lead_call_tracker = await create_lead_call_tracker(
             id=uuid,
-            outcome=None,
-            transcription=None,
-            call_start_time=datetime.now().isoformat(),
-            call_end_time=None,
-            call_id=None,
-            provider=BREEZE_BUDDY_CALL_PROVIDER,
-            status=CallStatus.BACKLOG,
-            requested_by=identity,
+            merchant_id=identity,
             workflow=workflow,
-            call_payload=call_payload,
-            assigned_number=TWILIO_FROM_NUMBER if BREEZE_BUDDY_CALL_PROVIDER == "twilio" else EXOTEL_FROM_NUMBER,
+            next_attempt_at=next_attempt_at,
+            payload=call_payload,
         )
         
-        if call_data:
-            logger.info(f"Call request {order.order_id} added to queue with ID {uuid}")
-            
-            call_queue_manager.trigger_processing()
+        if lead_call_tracker:
+            logger.info(f"Lead call tracker {order.order_id} added to queue with ID {uuid}")
             
             return {
                 "status": "queued",
-                "call_data_id": uuid,
+                "lead_call_tracker_id": uuid,
                 "order_id": order.order_id,
                 "message": "Call request added to queue for processing"
             }
         else:
-            logger.error(f"Failed to add call request {order.order_id} to queue")
-            raise HTTPException(status_code=400, detail="Failed to add call request to queue")
-            
+            logger.error(f"Failed to add lead call tracker {order.order_id} to queue")
+            raise HTTPException(status_code=400, detail="Failed to add lead call tracker to queue")
     except Exception as e:
-        logger.error(f"Error processing order confirmation request: {e}")
-        raise HTTPException(status_code=400, detail=str(e))
+        logger.error("Error processing order confirmation request", exc_info=True)
+        raise HTTPException(status_code=400, detail="Unexpected error") from e
 
 @router.websocket("/{service_provider}/callback/{workflow}")
 async def telephony_websocket_handler(service_provider: str, workflow: str, websocket: WebSocket, call_queue_manager: CallQueueManager = Depends(CallQueueManager)):
@@ -211,7 +210,7 @@ async def telephony_websocket_handler(service_provider: str, workflow: str, webs
     finally:
         logger.info("WebSocket client connection closed.")
 
-@router.post("/agent/voice/breeze-buddy/call-execution-config")
+@router.post("/call-execution-config")
 async def add_call_execution_config(
     config: CreateCallExecutionConfigRequest,
     current_user: TokenData = Depends(get_current_user)
@@ -246,7 +245,7 @@ async def add_call_execution_config(
         logger.error("Error disabling outbound number", exc_info=True)
         raise HTTPException(status_code=400, detail="Unexpected error") from e
 
-@router.get("/agent/voice/breeze-buddy/call-execution-config/{merchant_id}")
+@router.get("/call-execution-config/{merchant_id}")
 async def get_call_execution_config(
     merchant_id: str,
     current_user: TokenData = Depends(get_current_user)
@@ -267,4 +266,3 @@ async def get_call_execution_config(
     except Exception as e:
         logger.error("Error getting call execution config", exc_info=True)
         raise HTTPException(status_code=400, detail="Unexpected error") from e
-

@@ -17,7 +17,7 @@ from app.agents.voice.automatic.services.llm_wrapper import LLMServiceWrapper
 from pipecat.services.azure.llm import AzureLLMService
 from pipecat.transcriptions.language import Language
 from pipecat.frames.frames import TTSSpeakFrame, BotSpeakingFrame, LLMFullResponseEndFrame, EmulateUserStartedSpeakingFrame, EmulateUserStoppedSpeakingFrame
-from pipecat.transports.services.daily import DailyParams, DailyTransport
+from pipecat.transports.daily.transport import DailyParams, DailyTransport
 from pipecat.processors.frameworks.rtvi import RTVIConfig, RTVIProcessor
 from pipecat.services.google.rtvi import GoogleRTVIObserver
 from app.services.mem0.memory import ImprovedMem0MemoryService

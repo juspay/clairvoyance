@@ -29,6 +29,9 @@ from .breeze_buddy.call_execution_config import (
     create_call_execution_config,
     get_call_execution_config_by_merchant_id,
 )
+from .breeze_buddy.lead_call_tracker import (
+    create_lead_call_tracker,
+)
 
 __all__ = [
     "create_call_data",
@@ -51,4 +54,5 @@ __all__ = [
     "get_outbound_number_based_on_status_and_provider",
     "create_call_execution_config",
     "get_call_execution_config_by_merchant_id",
+    "create_lead_call_tracker",
 ]

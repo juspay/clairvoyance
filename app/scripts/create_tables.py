@@ -12,6 +12,33 @@ load_dotenv(override=True)
 CALL_DATA_TABLE = "call_data"
 OUTBOUND_NUMBERS_TABLE = "outbound_number"
 CALL_EXECUTION_CONFIG_TABLE = "call_execution_config"
+LEAD_CALL_TRACKER_TABLE = "lead_call_tracker"
+
+def create_lead_call_tracker_table_query() -> str:
+    """
+    Generate query to create lead_call_tracker table.
+    """
+    return f"""
+        CREATE TABLE IF NOT EXISTS "{LEAD_CALL_TRACKER_TABLE}" (
+            "id" VARCHAR(255) PRIMARY KEY,
+            "outbound_number_id" VARCHAR(255),
+            "merchant_id" VARCHAR(100) NOT NULL,
+            "workflow" VARCHAR(50) CHECK ("workflow" IN ('order-confirmation')) NOT NULL,
+            "attempt_count" INTEGER DEFAULT 0,
+            "next_attempt_at" TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+            "payload" JSONB,
+            "meta_data" JSONB,
+            "recording_url" VARCHAR(500),
+            "status" VARCHAR(50) CHECK ("status" IN ('BACKLOG', 'PROCESSING', 'FINISHED', 'RETRY')) NOT NULL,
+            "outcome" VARCHAR(50) CHECK ("outcome" IN ('NO_ANSWER', 'BUSY', 'CANCEL', 'CONFIRM', 'UNKNOWN')),
+            "call_id" VARCHAR(100),
+            "call_initiated_time" TIMESTAMP WITH TIME ZONE,
+            "call_end_time" TIMESTAMP WITH TIME ZONE,
+            "cost" REAL,
+            "created_at" TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
+            "updated_at" TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL
+        );
+    """
 
 def create_call_execution_config_table_query() -> str:
     """
@@ -126,6 +153,20 @@ async def create_call_execution_config_table():
         print(f"Error creating call_execution_configs table: {e}")
         return False
 
+async def create_lead_call_tracker_table():
+    """
+    Create the lead_call_tracker table with all constraints and indexes.
+    """
+    try:
+        async for conn in get_db_connection():
+            print("Creating lead_call_tracker table...")
+            await conn.execute(create_lead_call_tracker_table_query())
+            print("Lead call tracker table created successfully")
+            return True
+    except Exception as e:
+        print(f"Error creating lead_call_tracker table: {e}")
+        return False
+
 async def create_all_tables():
     """
     Create all database tables.
@@ -137,8 +178,9 @@ async def create_all_tables():
         call_data_success = await create_call_data_table()
         outbound_numbers_success = await create_outbound_numbers_table()
         call_execution_config_success = await create_call_execution_config_table()
+        lead_call_tracker_success = await create_lead_call_tracker_table()
         
-        if call_data_success and outbound_numbers_success and call_execution_config_success:
+        if call_data_success and outbound_numbers_success and call_execution_config_success and lead_call_tracker_success:
             print("All database tables created successfully")
             return True
         else:
