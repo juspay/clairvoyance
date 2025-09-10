@@ -181,6 +181,10 @@ ENABLE_CHARTS = os.environ.get("ENABLE_CHARTS", "false").lower() == "true"
 DISABLE_VAD_FOR_PTT = os.environ.get("DISABLE_VAD_FOR_PTT", "true").lower() == "true"
 
 BREEZE_DEFAULT_SALES_TAB = os.environ.get("BREEZE_DEFAULT_SALES_TAB", "SALES")
+
+# Breeze Portal URLs
+AWS_BREEZE_PORTAL_URL = os.environ.get("AWS_BREEZE_PORTAL_URL", "https://portal.breeze.in")
+GCP_BREEZE_PORTAL_URL = os.environ.get("GCP_BREEZE_PORTAL_URL", "https://portal.breezesdk.store")
 AUTOMATIC_OPENAI_STT_PROMPT = os.environ.get(
     "AUTOMATIC_OPENAI_STT_PROMPT", 
     ""

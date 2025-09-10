@@ -5,6 +5,7 @@ import pytz
 
 from app.core.logger import logger
 from app.core.config import ENABLE_ALL_METRICS_FROM_CKH, BREEZE_DEFAULT_SALES_TAB
+from app.utils.common import get_breeze_portal_url
 from pipecat.services.llm_service import FunctionCallParams
 from pipecat.adapters.schemas.function_schema import FunctionSchema
 from pipecat.adapters.schemas.tools_schema import ToolsSchema
@@ -15,6 +16,7 @@ shop_id: str | None = None
 shop_url: str | None = None
 shop_type: str | None = None
 sessionId: str | None = None
+reseller_id: str | None = None
 
 async def _make_breeze_request(params: FunctionCallParams, operational_tab: str):
     """Generic helper to make requests to the Breeze analytics API."""
@@ -54,7 +56,9 @@ async def _make_breeze_request(params: FunctionCallParams, operational_tab: str)
         await params.result_callback({"error": f"Invalid time format. Please use 'YYYY-MM-DD HH:MM:SS'. Error: {e}"})
         return
 
-    api_url = "https://portal.breeze.in/analytics"
+    base_url = get_breeze_portal_url(reseller_id)
+    api_url = f"{base_url}/analytics"
+        
     payload = {
         "shopIds": [shop_id],
         "shops": [shop_url],
@@ -147,7 +151,9 @@ async def get_breeze_marketing_data(params: FunctionCallParams):
         await params.result_callback({"error": f"Invalid time format. Please use 'YYYY-MM-DD HH:MM:SS'. Error: {e}"})
         return
 
-    api_url = "https://portal.breeze.in/analytics/marketing"
+    base_url = get_breeze_portal_url(reseller_id)
+    api_url = f"{base_url}/analytics/marketing"
+        
     payload = {
         "shopIds": [shop_id],
         "shops": [shop_url],
@@ -215,7 +221,9 @@ async def get_breeze_address_data(params: FunctionCallParams):
         await params.result_callback({"error": f"Invalid time format. Please use 'YYYY-MM-DD HH:MM:SS'. Error: {e}"})
         return
 
-    api_url = "https://portal.breeze.in/analytics/address"
+    base_url = get_breeze_portal_url(reseller_id)
+    api_url = f"{base_url}/analytics/address"
+        
     payload = {
         "shopIds": [shop_id],
         "shops": [shop_url],

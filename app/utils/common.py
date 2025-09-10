@@ -2,6 +2,7 @@ from datetime import datetime
 from typing import Optional, Dict, Any
 import json
 from app.core.logger import logger
+from app.core.config import AWS_BREEZE_PORTAL_URL, GCP_BREEZE_PORTAL_URL
 
 def parse_iso_datetime(iso_string: Optional[str]) -> Optional[datetime]:
     """
@@ -48,3 +49,20 @@ def parse_iso_datetime(iso_string: Optional[str]) -> Optional[datetime]:
 
 def parse_json(row, key) -> Optional[Dict[str, Any]]:
     return row[key] if isinstance(row[key], dict) else json.loads(row[key]) if row[key] else None
+
+
+def get_breeze_portal_url(reseller_id: str | None = None) -> str:
+    """
+    Get the appropriate Breeze portal base URL based on reseller ID.
+    
+    Args:
+        reseller_id: The reseller identifier. If "super_reseller", returns the SDK store URL.
+                    Otherwise, returns the standard portal URL.
+    
+    Returns:
+        str: The base URL for the Breeze portal
+    """
+    if reseller_id == "super_reseller":
+        return GCP_BREEZE_PORTAL_URL
+    else:
+        return AWS_BREEZE_PORTAL_URL

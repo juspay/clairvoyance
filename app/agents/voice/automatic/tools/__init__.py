@@ -25,6 +25,7 @@ def initialize_tools(
     session_id: str | None = None,
     user_id: str | None = None,
     user_email: str | None = None,
+    reseller_id: str | None = None,
 ):
     """
     Initializes tools based on the operating mode and available tokens.
@@ -97,6 +98,7 @@ def initialize_tools(
             breeze.analytics.shop_url = shop_url
             breeze.analytics.shop_type = shop_type
             breeze.analytics.sessionId = session_id
+            breeze.analytics.reseller_id = reseller_id
             all_tools.extend(breeze.tools.standard_tools)
             all_tool_functions.update(breeze.tool_functions)
             logger.info(f"Loaded {len(breeze.tools.standard_tools)} real-time Breeze analytics tools.")

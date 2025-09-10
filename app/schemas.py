@@ -125,6 +125,7 @@ class AutomaticVoiceUserConnectRequest(BaseModel):
     ttsService: Optional[AutomaticVoiceTTSServiceConfig] = None
     merchantId: Optional[str] = None
     platformIntegrations: Optional[List[str]] = None
+    resellerId: Optional[str] = None
 
 class TokenData(BaseModel):
     """Token data model for JWT payload"""

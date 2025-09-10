@@ -25,6 +25,7 @@ from app.services.mem0.memory import ImprovedMem0MemoryService
 from app.core import config
 from app.agents.voice.automatic.utils.session_context import create_session_context, set_current_session_id
 from app.agents.voice.automatic.services.mcp.automatic_client import MCPClient
+from app.utils.common import get_breeze_portal_url
 from .processors import LLMSpyProcessor
 from .processors.ptt_vad_filter import PTTVADFilter
 from .prompts import get_system_prompt
@@ -73,6 +74,7 @@ async def main():
     parser.add_argument("--voice-name", type=str, help="Voice name to use")
     parser.add_argument("--merchant-id", type=str, help="Merchant Id of the Shop")
     parser.add_argument("--platform-integrations",type=str, nargs="+", help="Platform Integrations that are supported by the shop (string array)")
+    parser.add_argument("--reseller-id", type=str, help="Reseller ID")
     args = parser.parse_args()
 
     # Configure logger with session ID and client session ID for all logs in this subprocess
@@ -156,13 +158,15 @@ async def main():
                 merchant_id=args.merchant_id,
                 session_id=args.client_sid,  # Pass client_sid instead of session_id
                 user_id=args.user_name,
-                user_email=args.user_email
+                user_email=args.user_email,
+                reseller_id=args.reseller_id
             )
         else:
             tools, tool_functions = initialize_tools(
                 mode=mode.value,
                 merchant_id=args.merchant_id,
                 session_id=args.client_sid,  # Pass client_sid instead of session_id
+                reseller_id=args.reseller_id
             )
             
         for name, function in tool_functions.items():
@@ -183,8 +187,12 @@ async def main():
             "merchantId": args.merchant_id,
             "platformIntegrations": args.platform_integrations
         }
+        # Calculate MCP URL based on reseller_id
+        base_url = get_breeze_portal_url(args.reseller_id)
+        mcp_url = f"{base_url}/ai/mcp"
+        
         mcp_client = MCPClient(
-            server_url=config.AUTOMATIC_TOOL_MCP_SERVER_URL,
+            server_url=mcp_url,
             auth_token=args.breeze_token,
             context=mcp_context,
             session_context=session_context,
