@@ -1,16 +1,13 @@
-from typing import List
-
 from app.core.logger import logger
-from app.core.config import ENABLE_SEARCH_GROUNDING, BREEZE_BUDDY_TEST_SHOPIFY_SHOP_URL, ENABLE_CHARTS
+from app.core.config import ENABLE_SEARCH_GROUNDING, ENABLE_CHARTS, AUTOMATIC_WRITE_ACTIONS_AUTHORIZED_USERS
 from pipecat.adapters.schemas.tools_schema import ToolsSchema
 from app.agents.voice.automatic.types import Mode
+from app.agents.voice.automatic.tools.utils import filter_tools_by_authorization
 from .dummy import tools as dummy_tools, tool_functions as dummy_tool_functions
 from .system import tools as system_tools, tool_functions as system_tool_functions
 from . import juspay
 from . import breeze
 from . import internet
-from . import shopify_buddy_test
-from . import breeze_buddy
 from . import charts
 
 
@@ -63,15 +60,6 @@ def initialize_tools(
     else:
         logger.info("Internet search tools are disabled.")
 
-    if shop_url == BREEZE_BUDDY_TEST_SHOPIFY_SHOP_URL:
-        all_tools.extend(shopify_buddy_test.tools.standard_tools)
-        all_tool_functions.update(shopify_buddy_test.tool_functions)
-        logger.info(f"Loaded {len(shopify_buddy_test.tools.standard_tools)} shopify tools.")
-
-        all_tools.extend(breeze_buddy.tools.standard_tools)
-        all_tool_functions.update(breeze_buddy.tool_functions)
-        logger.info(f"Loaded {len(breeze_buddy.tools.standard_tools)} breeze buddy tools.")
-
     if ENABLE_CHARTS:
         all_tools.extend(charts.generate_ui.standard_tools)
         all_tool_functions.update(charts.tool_functions)
@@ -110,11 +98,20 @@ def initialize_tools(
             all_tool_functions.update(breeze.configuration_tool_functions)
             logger.info(f"Loaded {len(breeze.configuration_tools.standard_tools)} real-time Breeze configuration tools.")
 
-    # Create a single ToolsSchema with all aggregated tools
-    final_tools = ToolsSchema(standard_tools=all_tools)
-    logger.info(f"Total tools initialized: {len(all_tools)}")
+    tools = ToolsSchema(standard_tools=all_tools)
 
-    return final_tools, all_tool_functions
+    if AUTOMATIC_WRITE_ACTIONS_AUTHORIZED_USERS:
+        logger.info(f"Total tools before filtering: {len(all_tools)}")
+        
+        filtered_tools, filtered_tool_functions = filter_tools_by_authorization(
+            all_tools, all_tool_functions, user_email
+        )
+
+        logger.info(f"Total tools after filtering: {len(filtered_tools)}")
+        return ToolsSchema(standard_tools=filtered_tools), filtered_tool_functions
+
+    logger.info(f"Total tools initialized: {len(all_tools)}")
+    return tools, all_tool_functions
 
 
 __all__ = ["initialize_tools"]

@@ -28,7 +28,7 @@ from app.agents.voice.automatic.services.mcp.automatic_client import MCPClient
 from .processors import LLMSpyProcessor
 from .processors.ptt_vad_filter import PTTVADFilter
 from .prompts import get_system_prompt
-from .tools import initialize_tools, shopify_buddy_test, breeze_buddy
+from .tools import initialize_tools
 from .tts import get_tts_service
 from .stt import get_stt_service
 from app.agents.voice.automatic.processors.llm_spy import handle_confirmation_response
@@ -193,18 +193,6 @@ async def main():
 
         selective_functions = config.SELECTIVE_MCP_FUNCTIONS if len(config.SELECTIVE_MCP_FUNCTIONS) > 0 else []
         tools = await mcp_client.register_tools(llm, selective_functions)
-
-        if args.shop_url == config.BREEZE_BUDDY_TEST_SHOPIFY_SHOP_URL:
-            tools.standard_tools.extend(shopify_buddy_test.tools.standard_tools)
-            for name, function in shopify_buddy_test.tool_functions.items():
-                llm.register_function(name, function)
-            logger.info(f"Loaded {len(shopify_buddy_test.tools.standard_tools)} shopify tools.")
-
-            tools.standard_tools.extend(breeze_buddy.tools.standard_tools)
-            for name, function in breeze_buddy.tool_functions.items():
-                llm.register_function(name, function)
-            logger.info(f"Loaded {len(breeze_buddy.tools.standard_tools)} breeze buddy tools.")
-
 
     rtvi = RTVIProcessor(config=RTVIConfig(config=[]))
 
