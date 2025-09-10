@@ -119,6 +119,19 @@ logger.info(f"Selective MCP functions enabled: {SELECTIVE_MCP_FUNCTIONS}")
 LIGHTHOUSE_APP_URL = os.environ.get("LIGHTHOUSE_APP_URL", "http://localhost:5173")
 ENABLE_ALL_METRICS_FROM_CKH = os.environ.get("ENABLE_ALL_METRICS_FROM_CKH", "true").lower() == "true"
 
+# MCP Write Access Control Configuration
+WRITE_ACTIONS_AUTHORIZED_USERS = os.environ.get("WRITE_ACTIONS_AUTHORIZED_USERS", "")
+
+WRITE_ACTIONS_AUTHORIZED_USERS = [email.strip().lower() for email in WRITE_ACTIONS_AUTHORIZED_USERS.strip().split(',') if email.strip()]
+
+if not WRITE_ACTIONS_AUTHORIZED_USERS:
+    logger.warning("No MCP authorized users configured - write operations is ALLOWED for all users")
+else:
+    logger.info(f"MCP authorized users: {WRITE_ACTIONS_AUTHORIZED_USERS}")
+
+WRITE_ACTIONS = os.environ.get("WRITE_ACTIONS", "")
+WRITE_ACTIONS = [action.strip().lower() for action in WRITE_ACTIONS.strip().split(',') if action.strip()]
+
 # Context Summarization Configuration
 ENABLE_SUMMARIZATION = os.environ.get("ENABLE_SUMMARIZATION", "true").lower() == "true"
 MAX_TURNS_BEFORE_SUMMARY = int(os.environ.get("MAX_TURNS_BEFORE_SUMMARY", 10))

@@ -4,6 +4,7 @@ from app.core.logger import logger
 from app.core.config import ENABLE_SEARCH_GROUNDING, BREEZE_BUDDY_TEST_SHOPIFY_SHOP_URL, ENABLE_CHARTS
 from pipecat.adapters.schemas.tools_schema import ToolsSchema
 from app.agents.voice.automatic.types import Mode
+from app.utils.tool_filter import filter_tools_by_authorization
 from .dummy import tools as dummy_tools, tool_functions as dummy_tool_functions
 from .system import tools as system_tools, tool_functions as system_tool_functions
 from . import juspay
@@ -110,11 +111,21 @@ def initialize_tools(
             all_tool_functions.update(breeze.configuration_tool_functions)
             logger.info(f"Loaded {len(breeze.configuration_tools.standard_tools)} real-time Breeze configuration tools.")
 
-    # Create a single ToolsSchema with all aggregated tools
-    final_tools = ToolsSchema(standard_tools=all_tools)
-    logger.info(f"Total tools initialized: {len(all_tools)}")
+    # Apply write tool filtering based on user authorization
 
-    return final_tools, all_tool_functions
+    logger.info(f"Total schemas before filtering: {len(all_tools)}")
+    logger.info(f"Tools before filtering: {len(all_tool_functions)}")
+    logger.info("Applying tool filtering based on user authorization...")
+    filtered_tools, filtered_tool_functions = filter_tools_by_authorization(
+        all_tools, all_tool_functions, user_email
+    )
+
+    # Create a single ToolsSchema with all filtered tools
+    final_tools = ToolsSchema(standard_tools=filtered_tools)
+    logger.info(f"Total schemas after filtering: {len(final_tools.standard_tools)}")
+    logger.info(f"Total tools after filtering: {len(filtered_tools)}")
+
+    return final_tools, filtered_tool_functions
 
 
 __all__ = ["initialize_tools"]

@@ -12,6 +12,8 @@
 - **Shop Configuration Utilities:** The utility functions for shop configuration management are working correctly. They provide a robust foundation for future tools that need to interact with shop configurations.
 - **Enhanced Analytics:** The Breeze analytics tools now fetch more comprehensive metrics for all the tabs by utilizing the `getAllMetricsFromCKH` parameter.
 - **Markdown Sanitization for TTS:** The system now correctly sanitizes AI-generated text to remove markdown formatting before sending it to the Text-to-Speech (TTS) service. This is handled in the `LLMSpyProcessor` by modifying the `TextFrame` in-place, which is a stable and performant solution.
+- **Email Authentication & Authorization:** User email flows through the entire system from API requests to tool initialization, enabling per-user authorization controls.
+- **Write Access Control:** Configuration-based system controls which users can perform write operations through tools like `create_euler_offer`.
 
 ## 2. What's Left to Build
 

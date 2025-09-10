@@ -51,6 +51,14 @@ It is optional, but recommended to be updated as the project evolves.
         *   Improves error handling and logging for better debugging and user experience.
     *   **Impact:** Establishes a pattern for future tools that need to interact with shop configurations, ensuring consistency and reducing code duplication.
 
+*   **[2025-01-09] - Email Authentication Flow Pattern:**
+    *   **Description:** User email is threaded through the entire system from API request to tool execution for authorization purposes.
+        *   **Flow:** `AutomaticVoiceUserConnectRequest.email` → CLI args → tool initialization → individual tool functions
+        *   **Authorization Layer:** `auth.py` provides centralized authorization logic using `is_user_authorized(email)`
+        *   **Configuration Control:** `WRITE_ACTIONS_AUTHORIZED_USERS` and `WRITE_ACTIONS`
+    *   **Rationale:** Enables fine-grained access control for sensitive operations while maintaining security through centralized configuration.
+    *   **Impact:** Adds security layer to prevent unauthorized users from executing sensitive tools like offer creation.
+
 ## Testing Patterns
 
 *
