@@ -158,6 +158,7 @@ async def generate_line_chart(params) -> None:
         series_data = params.arguments.get("series_data")
         voice_description = params.arguments.get("voice_description")
         subtitle = params.arguments.get("subtitle")
+        data_type = params.arguments.get("data_type", "unknown")
         session_id = params.arguments.get("session_id") or get_current_session_id()
 
         # Generate chart ID using MCP format
@@ -184,6 +185,7 @@ async def generate_line_chart(params) -> None:
                 "title": title,
                 "subtitle": subtitle,
                 "categories": categories,
+                "dataType": data_type,
                 "series": [
                     {
                         "name": s.get("name", "Trend"),
