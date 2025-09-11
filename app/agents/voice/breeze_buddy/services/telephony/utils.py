@@ -1,6 +1,6 @@
 
 from app.agents.voice.breeze_buddy.services.telephony.exotel.exotel import ExotelProvider
-from app.agents.voice.breeze_buddy.services.telephony.twilio.twillio import TwilioProvider
+from app.agents.voice.breeze_buddy.services.telephony.twilio.twilio import TwilioProvider
 from app.agents.voice.breeze_buddy.services.telephony.base_provider import VoiceCallProvider
 from app.schemas import CallProvider
 
