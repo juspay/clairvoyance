@@ -2,17 +2,17 @@ import asyncio
 import datetime
 import hashlib
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
-from loguru import logger
+from app.core.logger import logger
 from pipecat.services.mem0.memory import Mem0MemoryService
 from pipecat.frames.frames import Frame
 from pipecat.processors.frame_processor import FrameDirection
 from pipecat.processors.aggregators.openai_llm_context import OpenAILLMContext, OpenAILLMContextFrame
-from pipecat.frames.frames import LLMMessagesFrame, ErrorFrame
+from pipecat.frames.frames import LLMMessagesFrame
 from app.core import config
 try:
-    from mem0 import Memory, MemoryClient  # noqa: F401
+    from mem0 import Memory  # noqa: F401
 except ModuleNotFoundError as e:
     logger.error(f"Exception: {e}")
     logger.error(

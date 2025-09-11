@@ -6,7 +6,7 @@ import audioop
 from dotenv import load_dotenv
 from datetime import datetime
 from fastapi import WebSocket
-from loguru import logger
+from app.core.logger import logger
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.vad.vad_analyzer import VADParams
 from pipecat.pipeline.pipeline import Pipeline
@@ -26,7 +26,7 @@ from pydantic import ValidationError
 from app.agents.voice.breeze_buddy.workflows.order_confirmation.types import OrderData
 from app.core.security.sha import calculate_hmac_sha256
 from app.agents.voice.breeze_buddy.workflows.order_confirmation.utils import indian_number_to_speech, OUTCOME_TO_ENUM, get_stt_service
-from app.schemas import CallOutcome
+from app.schemas import LeadCallOutcome, CallProvider
 from app.database.accessor import get_lead_by_call_id
 
 from app.core.config import (
@@ -85,7 +85,7 @@ class OrderConfirmationBot:
                 logger.warning(f"Could not close websocket (likely already closed): {close_error}")
             return
 
-        if self.provider.upper() == "TWILIO": # Twilio
+        if self.provider == CallProvider.TWILIO:
             stream_sid = call_data["start"]["streamSid"]
             self.call_sid = call_data["start"]["callSid"]
             
@@ -270,7 +270,7 @@ class OrderConfirmationBot:
                         
                         await self.completion_function(
                             call_id=self.call_sid,
-                            outcome=CallOutcome.BUSY,
+                            outcome=LeadCallOutcome.BUSY,
                             transcription={"messages": transcription, "call_sid": self.call_sid},
                             call_end_time=datetime.now()
                         )
@@ -515,6 +515,6 @@ class OrderConfirmationBot:
         )
 
 
-async def main(ws: WebSocket, aiohttp_session, serializer, hangup_function, completion_function, provider: str):
+async def main(ws: WebSocket, aiohttp_session, serializer, hangup_function, completion_function, provider: CallProvider):
     bot = OrderConfirmationBot(ws, aiohttp_session, serializer, hangup_function, completion_function, provider)
     await bot.run()

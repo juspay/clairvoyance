@@ -1,4 +1,5 @@
-from fastapi import APIRouter, Depends, HTTPException, WebSocket, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, WebSocket, BackgroundTasks, Request
+from starlette.responses import Response
 from starlette.websockets import WebSocketDisconnect
 from uuid import uuid4
 from datetime import datetime, timedelta, timezone
@@ -14,7 +15,7 @@ from app.schemas import (
 )
 from app.agents.voice.breeze_buddy.workflows.order_confirmation.types import BreezeOrderData
 import aiohttp
-from app.agents.voice.breeze_buddy.managers.calls import process_backlog_leads, handle_call_completion
+from app.agents.voice.breeze_buddy.managers.calls import process_backlog_leads, handle_call_completion, handle_unanswered_calls
 from app.agents.voice.breeze_buddy.services.telephony.utils import get_voice_provider
 from app.database.accessor import (
     create_outbound_number,
@@ -27,6 +28,31 @@ from app.database.accessor import (
 )
 
 router = APIRouter()
+
+
+@router.post("/{provider}/callback/status")
+async def callback_status(request: Request, provider: str):
+    """
+    Logs the request body and returns a 200 OK response.
+    """
+    form = await request.form()
+    logger.info(f"Received callback from {provider} with form data: {form}")
+
+    call_sid = form.get("CallSid")
+    call_status = None
+
+    if provider.lower() == "twilio":
+        call_status = form.get("CallStatus")
+    elif provider.lower() == "exotel":
+        call_status = form.get("Status")
+
+    logger.info(f"Extracted call_sid: {call_sid} and call_status: {call_status} from {provider}")
+
+    if call_status in ("no-answer", "failed", "busy"):
+        logger.info(f"Call with SID {call_sid} failed with status: {call_status}")
+        await handle_unanswered_calls(call_sid)
+
+    return Response(status_code=200)
 
 @router.post("/outbound-number")
 async def add_outbound_number(

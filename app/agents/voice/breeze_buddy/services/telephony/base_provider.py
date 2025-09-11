@@ -1,6 +1,8 @@
 from abc import ABC, abstractmethod
 from fastapi import WebSocket
 
+from app.schemas import CallProvider
+
 
 class VoiceCallProvider(ABC):
     """
@@ -13,7 +15,7 @@ class VoiceCallProvider(ABC):
         self.completion_callback = None
 
     @abstractmethod
-    async def handle_websocket(self, websocket: WebSocket, provider: str):
+    async def handle_websocket(self, websocket: WebSocket, provider: CallProvider):
         """
         Handle the WebSocket connection for the voice provider.
         """

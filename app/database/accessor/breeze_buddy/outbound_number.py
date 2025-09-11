@@ -108,6 +108,10 @@ async def update_outbound_number_channels(outbound_number_id: str, channels: int
     Update outbound number channels.
     """
     logger.info(f"Updating outbound number channels for ID: {outbound_number_id}, new channels: {channels}")
+
+    if channels < 0:
+        logger.error(f"Invalid channels value: {channels}")
+        return None
     
     try:
         query_text, values = update_outbound_number_channels_query(outbound_number_id, channels)

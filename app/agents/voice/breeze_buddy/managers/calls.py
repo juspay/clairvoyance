@@ -17,7 +17,7 @@ from app.database.accessor import (
     create_lead_call_tracker,
     update_lead_call_completion_details,
 )
-from app.schemas import LeadCallStatus, OutboundNumberStatus, LeadCallOutcome
+from app.schemas import LeadCallStatus, OutboundNumberStatus, LeadCallOutcome, CallProvider
 from app.agents.voice.breeze_buddy.services.telephony.utils import get_voice_provider
 
 async def process_backlog_leads():
@@ -48,7 +48,7 @@ async def process_backlog_leads():
                         continue
 
                     number_to_use = None
-                    if config.calling_provider.value == "EXOTEL":
+                    if config.calling_provider == CallProvider.EXOTEL:
                         for number in numbers:
                             if number.channels < number.maximum_channels:
                                 number_to_use = number
@@ -60,9 +60,9 @@ async def process_backlog_leads():
                         logger.warning(f"No available channels for provider: {config.calling_provider}")
                         continue
                     
-                    if config.calling_provider.value == "TWILIO":
+                    if config.calling_provider == CallProvider.TWILIO:
                         await update_outbound_number_status(number_to_use.id, OutboundNumberStatus.IN_USE)
-                    elif config.calling_provider.value == "EXOTEL":
+                    elif config.calling_provider == CallProvider.EXOTEL:
                         await update_outbound_number_channels(number_to_use.id, number_to_use.channels + 1)
                     
                     call_provider = get_voice_provider(config.calling_provider.value, session)
@@ -88,9 +88,9 @@ async def handle_call_completion(call_id: str, outcome: LeadCallOutcome, transcr
     configs = await get_call_execution_config_by_merchant_id(lead.merchant_id)
     config = next((c for c in configs if c.workflow == lead.workflow), None)
 
-    if config.calling_provider.value == "TWILIO":
+    if config.calling_provider == CallProvider.TWILIO:
         await update_outbound_number_status(lead.outbound_number_id, OutboundNumberStatus.AVAILABLE)
-    elif config.calling_provider.value == "EXOTEL":
+    elif config.calling_provider == CallProvider.EXOTEL:
         outbound_number = await get_outbound_number_by_id(lead.outbound_number_id)
         if outbound_number:
             await update_outbound_number_channels(lead.outbound_number_id, outbound_number.channels - 1)
@@ -124,3 +124,42 @@ async def handle_call_completion(call_id: str, outcome: LeadCallOutcome, transcr
                 payload=lead.payload,
                 attempt_count=lead.attempt_count + 1,
             )
+
+async def handle_unanswered_calls(call_id: str):
+    """
+    Handles unanswered call events.
+    """
+    logger.info(f"Handling unanswered call for call_id: {call_id}")
+    lead = await get_lead_by_call_id(call_id)
+    if not lead:
+        logger.error(f"Could not find lead for call_id: {call_id}")
+        return
+
+    configs = await get_call_execution_config_by_merchant_id(lead.merchant_id)
+    config = next((c for c in configs if c.workflow == lead.workflow), None)
+
+    if config.calling_provider.value == "TWILIO":
+        await update_outbound_number_status(lead.outbound_number_id, OutboundNumberStatus.AVAILABLE)
+    elif config.calling_provider.value == "EXOTEL":
+        outbound_number = await get_outbound_number_by_id(lead.outbound_number_id)
+        if outbound_number:
+            await update_outbound_number_channels(lead.outbound_number_id, outbound_number.channels - 1)
+
+    await update_lead_call_completion_details(
+        id=lead.id,
+        status=LeadCallStatus.FINISHED,
+        outcome=LeadCallOutcome.NO_ANSWER,
+        meta_data={},
+        call_end_time=datetime.now(timezone.utc),
+    )
+
+    if lead.attempt_count < config.max_retry:
+        next_attempt_at = datetime.now(timezone.utc) + timedelta(seconds=config.retry_offset)
+        await create_lead_call_tracker(
+            id=str(uuid.uuid4()),
+            merchant_id=lead.merchant_id,
+            workflow=lead.workflow,
+            next_attempt_at=next_attempt_at,
+            payload=lead.payload,
+            attempt_count=lead.attempt_count + 1,
+        )

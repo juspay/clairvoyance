@@ -10,22 +10,9 @@ class OutboundNumberStatus(str, Enum):
     IN_USE = "IN_USE"
     DISABLED = "DISABLED"
 
-
 class CallProvider(str, Enum):
     TWILIO = "TWILIO"
     EXOTEL = "EXOTEL"
-
-class CallOutcome(str, Enum):
-    CONFIRM = "CONFIRM"
-    BUSY = "BUSY"
-    CANCEL = "CANCEL"
-    NO_ANSWER = "NO_ANSWER"
-
-class CallStatus(str, Enum):
-    BACKLOG = "backlog"
-    FINISHED = "finished"
-    ONGOING = "ongoing"
-    ERROR = "error"
 
 class RequestedBy(str, Enum):
     BREEZE = "breeze"

@@ -12,7 +12,7 @@ from app.core.config import (
     POSTGRES_POOL_SIZE,
     POSTGRES_MAX_OVERFLOW,
 )
-from loguru import logger
+from app.core.logger import logger
 
 pool = None
 

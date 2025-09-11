@@ -5,7 +5,7 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from opentelemetry import trace
 
-from loguru import logger
+from app.core.logger import logger
 
 from app.core.config import ENABLE_TRACING
 

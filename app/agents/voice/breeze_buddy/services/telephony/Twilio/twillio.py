@@ -6,7 +6,8 @@ from app.agents.voice.breeze_buddy.services.telephony.base_provider import Voice
 from app.core import config
 from app.agents.voice.breeze_buddy.workflows.order_confirmation.websocket_bot import main as telephony_websocket_conn
 from pipecat.serializers.twilio import TwilioFrameSerializer
-from loguru import logger
+from app.core.logger import logger
+from app.schemas import CallProvider
 
 
 class TwilioProvider(VoiceCallProvider):
@@ -21,12 +22,12 @@ class TwilioProvider(VoiceCallProvider):
     def hangup_call(self, call_sid: str):
         self.client.calls(call_sid).update(status="completed")
 
-    async def handle_websocket(self, websocket: WebSocket, provider: str):
+    async def handle_websocket(self, websocket: WebSocket, provider: CallProvider):
         serializer = lambda stream_sid, call_sid: self.CustomTwilioFrameSerializer(
             stream_sid=stream_sid,
             call_sid=call_sid,
             account_sid=self.config.TWILIO_ACCOUNT_SID,
-            auth_token=self.config.TWILIO_AUTH_TOKEN,
+            auth_token=self.config.TWILIO_AUTH_TOKEN
         )
         await telephony_websocket_conn(websocket, self.aiohttp_session, serializer, self.hangup_call, self.completion_callback, provider)
 
@@ -43,7 +44,8 @@ class TwilioProvider(VoiceCallProvider):
             call = self.client.calls.create(
                 to=customer_mobile_number,
                 from_=outbound_number,
-                twiml=str(voice_call_payload)
+                twiml=str(voice_call_payload),
+                status_callback=(self.config.APP_BASE_URL + "/agent/voice/breeze-buddy/twilio/callback/status")
             )
             return {"status": "call_initiated", "sid": call.sid}
         except Exception as e:

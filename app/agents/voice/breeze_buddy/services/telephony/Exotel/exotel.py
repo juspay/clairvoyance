@@ -1,20 +1,21 @@
 import json
 from fastapi import WebSocket, HTTPException
 import requests
-from loguru import logger
+
+from app.core.logger import logger
 
 from pipecat.serializers.exotel import ExotelFrameSerializer
 
 from app.agents.voice.breeze_buddy.services.telephony.base_provider import VoiceCallProvider
 from app.core import config
 from app.agents.voice.breeze_buddy.workflows.order_confirmation.websocket_bot import main as telephony_websocket_conn
-
+from app.schemas import CallProvider
 
 class ExotelProvider(VoiceCallProvider):
     def __init__(self, aiohttp_session):
         super().__init__(config, aiohttp_session)
 
-    async def handle_websocket(self, websocket: WebSocket, provider: str):
+    async def handle_websocket(self, websocket: WebSocket, provider: CallProvider):
         serializer = lambda stream_sid, call_sid: ExotelFrameSerializer(
             stream_sid=stream_sid,
             call_sid=call_sid,
@@ -27,7 +28,8 @@ class ExotelProvider(VoiceCallProvider):
         payload = {
             "From": customer_mobile_number,
             "CallerId": outbound_number,
-            "Url": flow_url
+            "Url": flow_url,
+            "StatusCallback": (self.config.APP_BASE_URL + "/agent/voice/breeze-buddy/exotel/callback/status"),
         }
         url = f"https://{self.config.EXOTEL_API_KEY}:{self.config.EXOTEL_API_TOKEN}@{self.config.EXOTEL_SUBDOMAIN}/v1/Accounts/{self.config.EXOTEL_ACCOUNT_SID}/Calls/connect.json"
         

@@ -17,6 +17,7 @@ def get_required_env(var_name: str) -> str:
 # Environment
 ENVIRONMENT = os.environ.get("ENVIRONMENT", "production")
 PROD_LOG_LEVEL = os.environ.get("PROD_LOG_LEVEL", "INFO")
+APP_BASE_URL = os.environ.get("APP_BASE_URL", "")
 
 # Uvicorn
 PORT = int(os.environ.get("PORT", 8000))

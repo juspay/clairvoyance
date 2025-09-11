@@ -1,4 +1,4 @@
-from app.schemas import CallOutcome
+from app.schemas import LeadCallOutcome
 from app.core.logger import logger
 from app.core import config
 
@@ -29,11 +29,11 @@ def get_stt_service():
             credentials=config.GOOGLE_CREDENTIALS_JSON
         )
 
-# Mapping dictionary for outcome strings to CallOutcome enum values
+# Mapping dictionary for outcome strings to LeadCallOutcome enum values
 OUTCOME_TO_ENUM = {
-    "confirmed": CallOutcome.CONFIRM,
-    "cancelled": CallOutcome.CANCEL,
-    "busy": CallOutcome.BUSY,
+    "confirmed": LeadCallOutcome.CONFIRM,
+    "cancelled": LeadCallOutcome.CANCEL,
+    "busy": LeadCallOutcome.BUSY,
 }
 
 def indian_number_to_speech(number: int) -> str:
