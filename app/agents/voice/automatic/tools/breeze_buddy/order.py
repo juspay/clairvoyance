@@ -3,6 +3,7 @@ from pipecat.services.llm_service import FunctionCallParams
 from app.agents.voice.breeze_buddy.breeze.order_confirmation.types import BreezeOrderData
 from app.core.config import ORDER_CONFIRMATION_ENDPOINT, ORDER_CONFIRMATION_TOKEN
 from app.core.logger import logger
+from app.utils.http_client import create_http_client
 
 async def initiate_order_confirmation_call(params: FunctionCallParams):
     """
@@ -26,7 +27,7 @@ async def initiate_order_confirmation_call(params: FunctionCallParams):
     # Assuming order_data can be directly converted to BreezeOrderData
     breeze_order_data = BreezeOrderData(**order_data)
     
-    async with httpx.AsyncClient() as client:
+    async with create_http_client() as client:
         try:
             response = await client.post(url, headers=headers, json=breeze_order_data.model_dump(exclude_none=True))
             response.raise_for_status()

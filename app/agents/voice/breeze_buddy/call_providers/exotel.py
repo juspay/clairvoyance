@@ -1,7 +1,7 @@
 import json
 from fastapi import WebSocket, HTTPException
-import requests
 from loguru import logger
+import httpx
 
 from pipecat.serializers.exotel import ExotelFrameSerializer
 
@@ -9,6 +9,7 @@ from app.agents.voice.breeze_buddy.call_providers.main import VoiceCallProvider
 from app.core import config
 from app.schemas import CallDataResponse
 from app.agents.voice.breeze_buddy.breeze.order_confirmation.websocket_bot import main as telephony_websocket_conn
+from app.utils.http_client import create_http_client
 
 
 class ExotelProvider(VoiceCallProvider):
@@ -22,7 +23,7 @@ class ExotelProvider(VoiceCallProvider):
         )
         await telephony_websocket_conn(websocket, self.aiohttp_session, serializer, None, self.completion_callback)
 
-    def make_call(self, call_data: CallDataResponse):
+    async def make_call(self, call_data: CallDataResponse):
         flow_url = f"http://my.exotel.com/{self.config.EXOTEL_ACCOUNT_SID}/exoml/start_voice/{self.config.EXOTEL_APPLET_APP_ID}"
 
         payload = {
@@ -36,12 +37,15 @@ class ExotelProvider(VoiceCallProvider):
         logger.info(f"Payload: {payload}")
         
         try:
-            resp = requests.post(url, data=payload)
+            # Use centralized HTTP client with conditional proxy logic
+            async with create_http_client() as client:
+                resp = await client.post(url, data=payload)
+                
             logger.info(f"Exotel API response status: {resp.status_code}")
             logger.info(f"Exotel API response headers: {dict(resp.headers)}")
             logger.info(f"Exotel API response content: {resp.text}")
             
-            if not resp.ok:
+            if not resp.is_success:
                 logger.error(f"Exotel API error: {resp.status_code} - {resp.text}")
                 raise HTTPException(resp.status_code, resp.text)
             
@@ -64,15 +68,15 @@ class ExotelProvider(VoiceCallProvider):
                 logger.error(f"Response content: {resp.text}")
                 return {"status": "error", "message": "Failed to parse JSON response", "response": resp.text}
                 
-        except requests.exceptions.ConnectionError as e:
+        except httpx.ConnectError as e:
             logger.error(f"Connection error when calling Exotel API: {e}")
-            raise HTTPException(503, f"Failed to connect to Exotel API: {str(e)}")
-        except requests.exceptions.Timeout as e:
+            raise HTTPException(400, f"Failed to connect to Exotel API: {str(e)}")
+        except httpx.TimeoutException as e:
             logger.error(f"Timeout error when calling Exotel API: {e}")
-            raise HTTPException(504, f"Exotel API request timed out: {str(e)}")
-        except requests.exceptions.RequestException as e:
+            raise HTTPException(400, f"Exotel API request timed out: {str(e)}")
+        except httpx.RequestError as e:
             logger.error(f"Request error when calling Exotel API: {e}")
-            raise HTTPException(500, f"Request error: {str(e)}")
+            raise HTTPException(400, f"Request error: {str(e)}")
         except Exception as e:
             logger.error(f"Unexpected error when calling Exotel API: {e}")
-            raise HTTPException(500, f"Unexpected error: {str(e)}")
+            raise HTTPException(400, f"Unexpected error: {str(e)}")

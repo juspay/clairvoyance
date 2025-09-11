@@ -148,7 +148,7 @@ class CallQueueManager:
                 await self.process_next_call()
                 return
 
-            call = self.voice_provider.make_call(call_data)
+            call = await self.voice_provider.make_call(call_data)
             
             # Update call_id in database with call SID
             await update_call_data_call_id(call_data.id, call.get("sid"))

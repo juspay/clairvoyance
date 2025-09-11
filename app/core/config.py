@@ -198,3 +198,10 @@ AUTOMATIC_LANGFUSE_SYSTEM_PROMPT_LABEL = os.environ.get("AUTOMATIC_LANGFUSE_SYST
 logger.info(f"LangFuse prompts enabled: {ENABLE_LANGFUSE_PROMPTS}")
 if ENABLE_LANGFUSE_PROMPTS:
     logger.info(f"LangFuse system prompt: {AUTOMATIC_LANGFUSE_PROMPT_NAME} (label: {AUTOMATIC_LANGFUSE_SYSTEM_PROMPT_LABEL})")
+
+# Proxy Configuration
+AWS_PROXY_HOST = os.environ.get("AWS_PROXY_HOST")
+AWS_PROXY_PORT = os.environ.get("AWS_PROXY_PORT")
+
+# Cloud Provider Configuration
+CLOUD_PROVIDER = os.environ.get("CLOUD_PROVIDER", "").upper()  # AWS, GCP, AZURE, etc.

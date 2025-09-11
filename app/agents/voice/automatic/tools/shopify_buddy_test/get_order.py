@@ -4,6 +4,7 @@ from pipecat.services.llm_service import FunctionCallParams
 from app.core.config import BREEZE_BUDDY_TEST_SHOPIFY_SHOP_URL, BREEZE_BUDDY_TEST_SHOPIFY_ADMIN_TOKEN
 from app.core.logger import logger
 from app.agents.voice.breeze_buddy.breeze.order_confirmation.types import BreezeOrderData, OrderData, OrderItem
+from app.utils.http_client import create_http_client
 
 def _transform_shopify_to_breeze(order_node: dict, shop_name: str) -> BreezeOrderData:
     """Transforms a Shopify order node into a BreezeOrderData object."""
@@ -114,7 +115,7 @@ async def get_shopify_orders(params: FunctionCallParams):
     """
     data = {"query": query, "variables": {}}
     logger.info(f"Requesting Shopify orders with payload: {json.dumps(data)}")
-    async with httpx.AsyncClient() as client:
+    async with create_http_client() as client:
         try:
             response = await client.post(url, headers=headers, data=json.dumps(data))
             response.raise_for_status()

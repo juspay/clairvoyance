@@ -18,6 +18,7 @@ from app.database import init_db_pool, close_db_pool, get_db_connection
 
 # Import necessary components from the new structure
 from app.core.logger import logger
+from app.utils.http_client import get_proxy_config
 from app.core.config import (
     DAILY_API_KEY,
     DAILY_API_URL,
@@ -77,8 +78,23 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Failed to initialize database: {e}")
     
-    # Initialize aiohttp session
-    aiohttp_session = aiohttp.ClientSession()
+    # Initialize aiohttp session with proxy configuration
+    proxy_url = get_proxy_config()
+    connector_kwargs = {}
+    if proxy_url:
+        logger.info(f"Creating aiohttp session with proxy: {proxy_url}")
+        connector_kwargs["connector"] = aiohttp.TCPConnector()
+    else:
+        logger.info("Creating aiohttp session without proxy")
+    
+    aiohttp_session = aiohttp.ClientSession(
+        connector=connector_kwargs.get("connector")
+    )
+    
+    # Set proxy for the session if configured
+    if proxy_url:
+        aiohttp_session._connector._proxy = proxy_url
+    
     daily_helpers["rest"] = DailyRESTHelper(
         daily_api_key=DAILY_API_KEY,
         daily_api_url=DAILY_API_URL,

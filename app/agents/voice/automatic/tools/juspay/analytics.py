@@ -10,6 +10,7 @@ from pipecat.services.llm_service import FunctionCallParams
 from pipecat.adapters.schemas.function_schema import FunctionSchema
 from pipecat.adapters.schemas.tools_schema import ToolsSchema
 from app.agents.voice.automatic.types.models import ApiFailure, ApiSuccess, GeniusApiResponse
+from app.utils.http_client import create_http_client
 
 # This token will be set when the tools are initialized
 euler_token: str | None = None
@@ -92,7 +93,7 @@ async def _make_genius_api_request(params: FunctionCallParams, payload_details: 
         f"Requesting Juspay Genius API with payload: {json.dumps(full_payload)}")
 
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        async with create_http_client(timeout=10.0) as client:
             response = await client.post(GENIUS_API_URL, json=full_payload, headers=headers)
             response.raise_for_status()
             response_text = response.text
@@ -264,7 +265,7 @@ async def list_offers_by_filter(params: FunctionCallParams):
 
         logger.info(f"Requesting Euler offers list from: {endpoint} | Payload: {json.dumps(payload, indent=2)}")
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with create_http_client(timeout=30.0) as client:
             response = await client.post(endpoint, json=payload, headers=headers)
 
             if response.status_code != 200:
@@ -581,7 +582,7 @@ async def create_euler_offer(params: FunctionCallParams):
 
         logger.info(f"Making offer creation request to: {endpoint} | Payload: {json.dumps(api_payload, indent=2)}")
 
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        async with create_http_client(timeout=10.0) as client:
             response = await client.post(endpoint, json=api_payload, headers=headers)
             
             if response.status_code == 200:
@@ -700,7 +701,7 @@ async def find_offer_by_code(offer_code: str) -> dict | None:
 
         logger.info(f"Searching for offer with code '{offer_code}' using endpoint: {endpoint}")
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with create_http_client(timeout=30.0) as client:
             response = await client.post(endpoint, json=search_payload, headers=headers)
             
             if response.status_code == 200:
@@ -776,7 +777,7 @@ async def delete_euler_offer(params: FunctionCallParams):
 
         logger.info(f"Deleting offer with ID '{offer_id}' using endpoint: {delete_endpoint}")
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with create_http_client(timeout=30.0) as client:
             response = await client.post(delete_endpoint, json=delete_payload, headers=headers)
             
             if response.status_code == 200:
@@ -927,7 +928,7 @@ async def update_euler_offer(params: FunctionCallParams):
 
             logger.info(f"Using status-only endpoint: {status_endpoint}")
             
-            async with httpx.AsyncClient(timeout=30.0) as client:
+            async with create_http_client(timeout=30.0) as client:
                 response = await client.post(status_endpoint, json=status_payload, headers=headers)
                 
                 if response.status_code == 200:
@@ -1139,7 +1140,7 @@ async def update_euler_offer(params: FunctionCallParams):
         logger.info(f"Updating offer details with ID '{offer_id}' using endpoint: {update_endpoint}")
         logger.info(f"Payload: {json.dumps(api_payload, indent=2)}")
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with create_http_client(timeout=30.0) as client:
             response = await client.put(update_endpoint, json=api_payload, headers=headers)
             
             if response.status_code == 200:
