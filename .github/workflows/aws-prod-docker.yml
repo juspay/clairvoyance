@@ -1,0 +1,49 @@
+name: Build & Push Docker Image to AWS ECR (PROD)
+
+on:
+  push:
+    branches:
+      - release   # triggers when you push to release branch
+
+permissions:
+  id-token: write   # required for AWS OIDC
+  contents: read
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+
+    env:
+      AWS_REGION: ap-south-1
+      AWS_REPO: clairvoyance
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # OIDC auth → assumes role in AWS PROD account
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::671255721112:role/breeze-clairvoyance-ecr-role   # <-- create this in AWS Prod
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Extract short SHA
+        run: echo "SHORT_SHA=${GITHUB_SHA:0:8}" >> $GITHUB_ENV
+
+      - name: Build and Push Docker Image to AWS ECR (PROD)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64
+          tags: ${{ steps.login-ecr.outputs.registry }}/${{ env.AWS_REPO }}:${{ env.SHORT_SHA }}
+          provenance: false
+          sbom: false
