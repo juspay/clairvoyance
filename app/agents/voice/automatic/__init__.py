@@ -13,14 +13,13 @@ from pipecat.audio.filters.aic_filter import AICFilter
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
-from app.agents.voice.automatic.services.llm_wrapper import LLMServiceWrapper
+from app.agents.voice.automatic.features.llm_wrapper import LLMServiceWrapper
 from pipecat.services.azure.llm import AzureLLMService
-from pipecat.transcriptions.language import Language
 from pipecat.frames.frames import TTSSpeakFrame, BotSpeakingFrame, LLMFullResponseEndFrame, EmulateUserStartedSpeakingFrame, EmulateUserStoppedSpeakingFrame
 from pipecat.transports.daily.transport import DailyParams, DailyTransport
 from pipecat.processors.frameworks.rtvi import RTVIConfig, RTVIProcessor
 from pipecat.services.google.rtvi import GoogleRTVIObserver
-from app.services.mem0.memory import ImprovedMem0MemoryService
+from app.agents.voice.automatic.services.mem0.memory import ImprovedMem0MemoryService
 
 from app.core import config
 from app.agents.voice.automatic.utils.session_context import create_session_context, set_current_session_id

@@ -1,7 +1,7 @@
 from typing import Dict, Any
 from app.core.logger import logger
 
-from app.agents.voice.automatic.services.charts.chart_tools import _register_pending_chart_emission
+from app.agents.voice.automatic.features.charts.chart_tools import _register_pending_chart_emission
 
 
 async def _store_ui_components_from_mcp(self, ui_components: list[Dict[str, Any]]) -> None:

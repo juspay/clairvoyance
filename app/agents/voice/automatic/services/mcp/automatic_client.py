@@ -15,7 +15,7 @@ from app.agents.voice.automatic.types.models import (
     MCPTool
 )
 
-from app.agents.voice.automatic.services.charts.mcp.utils import _store_ui_components_from_mcp
+from app.agents.voice.automatic.features.charts.mcp.utils import _store_ui_components_from_mcp
 
 class StreamableHTTPTransport:
     """Handles JSON-RPC 2.0 over streaming HTTP with custom headers."""

@@ -7,7 +7,7 @@ from pipecat.services.google.tts import GoogleTTSService
 from pipecat.services.elevenlabs.tts import ElevenLabsTTSService
 from pipecat.transcriptions.language import Language
 
-from app.agents.voice.automatic.services.charts.highlight_filter import HighlightedChartTextFilter
+from app.agents.voice.automatic.features.charts.highlight_filter import HighlightedChartTextFilter
 
 def get_tts_service(
     tts_provider: str | None = None, 

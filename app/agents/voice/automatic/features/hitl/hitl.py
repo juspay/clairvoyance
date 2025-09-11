@@ -5,11 +5,11 @@ from datetime import datetime
 from app.core import config
 from app.core.logger import logger
 from app.agents.voice.automatic.processors.llm_spy import get_rtvi_processor, register_pending_confirmation, wait_for_confirmation_response
-from app.agents.voice.automatic.services.hitl.utils import (
+from app.agents.voice.automatic.features.hitl.utils import (
     get_action_description,
     generate_success_message,
 )
-from app.agents.voice.automatic.services.hitl.exceptions import (
+from app.agents.voice.automatic.features.hitl.exceptions import (
     HITLUserRejectedOperationError,
     HITLOperationTimeoutError,
     HITLConfirmationError

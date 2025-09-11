@@ -1,4 +1,4 @@
-from app.agents.voice.automatic.services.charts.chart_tools import (
+from app.agents.voice.automatic.features.charts.chart_tools import (
         generate_bar_chart,
         generate_line_chart, 
         generate_donut_chart,

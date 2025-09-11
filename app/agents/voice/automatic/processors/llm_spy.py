@@ -21,10 +21,10 @@ from pipecat.frames.frames import (
 )
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.processors.frameworks.rtvi import RTVIProcessor, RTVIServerMessageFrame
-from ..services.markdown import sanitize_markdown
+from ..features.text_sanitizer.tts_sanitizer import sanitize_markdown
 from app.agents.voice.automatic.utils.conversation_manager import get_conversation_manager
 from app.agents.voice.automatic.rtvi.rtvi import emit_rtvi_event
-from app.agents.voice.automatic.services.charts.rtvi.rtvi import emit_chart_components
+from app.agents.voice.automatic.features.charts.rtvi.rtvi import emit_chart_components
 
 # Global RTVI processor reference for function confirmations
 _rtvi_processor = None

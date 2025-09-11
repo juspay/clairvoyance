@@ -7,9 +7,10 @@ from typing import List, Dict, Any
 from datetime import datetime
 
 from app.core.logger import logger
-from app.agents.voice.automatic.services.charts.types.ui_components import UIComponentEvent
-from app.agents.voice.automatic.services.charts.utils.highlight_parser import HighlightTagParser
+from app.agents.voice.automatic.features.charts.types.ui_components import UIComponentEvent
+from app.agents.voice.automatic.features.charts.utils.highlight_parser import HighlightTagParser
 from app.agents.voice.automatic.utils.session_context import get_current_session_id
+from app.agents.voice.automatic.features.charts.session_storage import get_session_storage
 
 # Color constants matching MCP implementation
 DEFAULT_COLORS = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b']
@@ -30,7 +31,6 @@ def get_pending_ui_components(session_id: str) -> List[UIComponentEvent]:
     Called by WebSocket handler to get components to emit.
     """
     try:
-        from app.agents.voice.automatic.services.charts.session_storage import get_session_storage
         storage = get_session_storage()
         return storage.get_pending_ui_components(session_id)
     except Exception as e:
