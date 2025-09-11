@@ -5,12 +5,13 @@ from typing import Any, Dict, List, Optional
 import asyncpg
 from app.core.logger import logger
 from app.schemas import OutboundNumber, OutboundNumberStatus, CallProvider
-from app.database.queries.main import run_parameterized_query
-from app.database.accessor.decoder import decode_outbound_number, decode_outbound_number_list
+from app.database.queries import run_parameterized_query
+from app.database.decoder.breeze_buddy.outbound_number import decode_outbound_number, decode_outbound_number_list
 from app.database.queries.breeze_buddy.outbound_number import (
     insert_outbound_number_query,
     get_outbound_number_by_id_query,
     update_outbound_number_status_query,
+    update_outbound_number_channels_query,
     disable_outbound_number_query,
     get_all_outbound_numbers_query,
     get_outbound_number_based_on_status_and_provider_query,
@@ -102,6 +103,28 @@ async def update_outbound_number_status(outbound_number_id: str, status: Outboun
         logger.error(f"Error updating outbound number status: {e}")
         return None
 
+async def update_outbound_number_channels(outbound_number_id: str, channels: int) -> Optional[OutboundNumber]:
+    """
+    Update outbound number channels.
+    """
+    logger.info(f"Updating outbound number channels for ID: {outbound_number_id}, new channels: {channels}")
+    
+    try:
+        query_text, values = update_outbound_number_channels_query(outbound_number_id, channels)
+        result = await run_parameterized_query(query_text, values)
+        
+        if result and get_row_count(result) > 0:
+            decoded_result = decode_outbound_number(result)
+            logger.info(f"Outbound number channels updated: {decoded_result}")
+            return decoded_result
+        
+        logger.error(f"Failed to update outbound number channels for ID: {outbound_number_id}")
+        return None
+        
+    except Exception as e:
+        logger.error(f"Error updating outbound number channels: {e}")
+        return None
+
 async def disable_outbound_number(outbound_number_id: str) -> Optional[OutboundNumber]:
     """
     Disable outbound number by ID.
@@ -146,24 +169,24 @@ async def get_all_outbound_numbers() -> List[OutboundNumber]:
         logger.error(f"Error getting all outbound numbers: {e}")
         return []
 
-async def get_outbound_number_based_on_status_and_provider(status: OutboundNumberStatus, provider: CallProvider) -> Optional[OutboundNumber]:
+async def get_outbound_number_based_on_status_and_provider(status: OutboundNumberStatus, provider: CallProvider) -> List[OutboundNumber]:
     """
-    Get outbound number by status and provider.
+    Get outbound numbers by status and provider.
     """
-    logger.info(f"Getting outbound number with status: {status} and provider: {provider}")
+    logger.info(f"Getting outbound numbers with status: {status} and provider: {provider}")
     
     try:
         query_text, values = get_outbound_number_based_on_status_and_provider_query(status, provider)
         result = await run_parameterized_query(query_text, values)
         
-        if result and get_row_count(result) > 0:
-            decoded_result = decode_outbound_number(result)
-            logger.info(f"Outbound number found: {decoded_result}")
+        if result:
+            decoded_result = decode_outbound_number_list(result)
+            logger.info(f"Found {len(decoded_result)} outbound numbers")
             return decoded_result
         
-        logger.info(f"No outbound number found with status: {status} and provider: {provider}")
-        return None
+        logger.info(f"No outbound numbers found with status: {status} and provider: {provider}")
+        return []
         
     except Exception as e:
-        logger.error(f"Error getting outbound number: {e}")
-        return None
+        logger.error(f"Error getting outbound numbers: {e}")
+        return []

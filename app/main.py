@@ -29,9 +29,7 @@ from app.core.config import (
 from app import __version__
 from app.schemas import (
     AutomaticVoiceUserConnectRequest,
-    TokenData,
 )
-from app.services.call_queue_manager import CallQueueManager
 from app.api.routers import breeze_buddy
 
 # Dictionary to track bot processes: {pid: (process, room_url)}
@@ -39,7 +37,6 @@ bot_procs = {}
 
 # Store Daily API helpers
 daily_helpers = {}
-call_queue_manager: CallQueueManager
 
 
 def cleanup():
@@ -68,7 +65,6 @@ def cleanup():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """FastAPI lifespan manager that handles startup and shutdown tasks."""
-    global call_queue_manager
     logger.info("Application startup...")
     
     # Initialize database and create tables if needed
@@ -84,7 +80,6 @@ async def lifespan(app: FastAPI):
         daily_api_url=DAILY_API_URL,
         aiohttp_session=aiohttp_session,
     )
-    call_queue_manager = CallQueueManager(aiohttp_session)
     logger.info("Daily REST helper initialized.")
     
     yield
@@ -112,11 +107,6 @@ app.add_middleware(
 
 # Mount static files directory
 app.mount("/static", StaticFiles(directory="static"), name="static")
-
-def get_call_queue_manager():
-    return call_queue_manager
-
-app.dependency_overrides[CallQueueManager] = get_call_queue_manager
 
 app.include_router(breeze_buddy.router, prefix="/agent/voice/breeze-buddy", tags=["Breeze Buddy"])
 

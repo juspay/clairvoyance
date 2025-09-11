@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, WebSocket
+from fastapi import APIRouter, Depends, HTTPException, WebSocket, BackgroundTasks
 from starlette.websockets import WebSocketDisconnect
 from uuid import uuid4
 from datetime import datetime, timedelta, timezone
@@ -12,9 +12,11 @@ from app.schemas import (
     CreateOutboundNumberRequest,
     CreateCallExecutionConfigRequest,
 )
-from app.agents.voice.breeze_buddy.breeze.order_confirmation.types import BreezeOrderData
-from app.services.call_queue_manager import CallQueueManager
-from app.database.accessor.main import (
+from app.agents.voice.breeze_buddy.workflows.order_confirmation.types import BreezeOrderData
+import aiohttp
+from app.agents.voice.breeze_buddy.managers.calls import process_backlog_leads, handle_call_completion
+from app.agents.voice.breeze_buddy.services.telephony.utils import get_voice_provider
+from app.database.accessor import (
     create_outbound_number,
     get_outbound_number_by_id,
     get_all_outbound_numbers,
@@ -83,7 +85,6 @@ async def get_outbound_number(
         logger.error(f"Error getting outbound number: {e}")
         raise HTTPException(status_code=400, detail=str(e))
 
-
 @router.delete("/outbound-number/{number_id}")
 async def delete_outbound_number(
     number_id: str,
@@ -108,7 +109,6 @@ async def delete_outbound_number(
     except Exception as e:
         logger.error(f"Error disabling outbound number: {e}")
         raise HTTPException(status_code=400, detail=str(e))
-
 
 @router.post("/{identity}/{workflow}")
 async def trigger_order_confirmation(
@@ -159,6 +159,7 @@ async def trigger_order_confirmation(
             workflow=workflow,
             next_attempt_at=next_attempt_at,
             payload=call_payload,
+            attempt_count=0
         )
         
         if lead_call_tracker:
@@ -177,8 +178,9 @@ async def trigger_order_confirmation(
         logger.error("Error processing order confirmation request", exc_info=True)
         raise HTTPException(status_code=400, detail="Unexpected error") from e
 
+
 @router.websocket("/{service_provider}/callback/{workflow}")
-async def telephony_websocket_handler(service_provider: str, workflow: str, websocket: WebSocket, call_queue_manager: CallQueueManager = Depends(CallQueueManager)):
+async def telephony_websocket_handler(service_provider: str, workflow: str, websocket: WebSocket):
     """
     WebSocket endpoint that accepts a connection and passes it to the
     pipecat bot's main function.
@@ -188,27 +190,24 @@ async def telephony_websocket_handler(service_provider: str, workflow: str, webs
     
     logger.info(f"Handling websocket for {workflow}")
     
-    # Get the provider from the call queue manager
-    provider = call_queue_manager.voice_provider
-
-    try:
-        # The websocket_bot_main function handles the entire
-        # lifecycle of the WebSocket connection, including accept().
-        await provider.handle_websocket(websocket)
-    except WebSocketDisconnect:
-        logger.warning("WebSocket client disconnected.")
-    except Exception as e:
-        error_type = type(e).__name__
-        error_message = str(e)
-        logger.error(f"An error occurred in the WebSocket handler - Type: {error_type}, Message: '{error_message}', Args: {e.args}", exc_info=True)
-        # Only try to close the websocket if it's still open
+    async with aiohttp.ClientSession() as session:
         try:
-            if websocket.client_state.name != "DISCONNECTED":
-                await websocket.close(code=1011, reason="Internal Server Error")
-        except Exception as close_error:
-            logger.warning(f"Could not close websocket (likely already closed): {close_error}")
-    finally:
-        logger.info("WebSocket client connection closed.")
+            provider = get_voice_provider(service_provider.upper(), session)
+            provider.set_completion_callback(handle_call_completion)
+            await provider.handle_websocket(websocket, service_provider.upper())
+        except WebSocketDisconnect:
+            logger.warning("WebSocket client disconnected.")
+        except Exception as e:
+            error_type = type(e).__name__
+            error_message = str(e)
+            logger.error(f"An error occurred in the WebSocket handler - Type: {error_type}, Message: '{error_message}', Args: {e.args}", exc_info=True)
+            try:
+                if websocket.client_state.name != "DISCONNECTED":
+                    await websocket.close(code=1011, reason="Internal Server Error")
+            except Exception as close_error:
+                logger.warning(f"Could not close websocket (likely already closed): {close_error}")
+        finally:
+            logger.info("WebSocket client connection closed.")
 
 @router.post("/call-execution-config")
 async def add_call_execution_config(
@@ -244,6 +243,18 @@ async def add_call_execution_config(
     except Exception as e:
         logger.error("Error disabling outbound number", exc_info=True)
         raise HTTPException(status_code=400, detail="Unexpected error") from e
+
+@router.get("/cron/initiate")
+async def initiate_cron(
+    background_tasks: BackgroundTasks,
+    current_user: TokenData = Depends(get_current_user)
+):
+    """
+    Initiates the cron job to process backlog leads.
+    """
+    logger.info(f"Authenticated user {current_user.user_id} initiating cron job")
+    background_tasks.add_task(process_backlog_leads)
+    return {"status": "success", "message": "Lead processing initiated"}
 
 @router.get("/call-execution-config/{merchant_id}")
 async def get_call_execution_config(

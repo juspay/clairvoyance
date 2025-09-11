@@ -5,29 +5,28 @@ from loguru import logger
 
 from pipecat.serializers.exotel import ExotelFrameSerializer
 
-from app.agents.voice.breeze_buddy.call_providers.main import VoiceCallProvider
+from app.agents.voice.breeze_buddy.services.telephony.base_provider import VoiceCallProvider
 from app.core import config
-from app.schemas import CallDataResponse
-from app.agents.voice.breeze_buddy.breeze.order_confirmation.websocket_bot import main as telephony_websocket_conn
+from app.agents.voice.breeze_buddy.workflows.order_confirmation.websocket_bot import main as telephony_websocket_conn
 
 
 class ExotelProvider(VoiceCallProvider):
     def __init__(self, aiohttp_session):
         super().__init__(config, aiohttp_session)
 
-    async def handle_websocket(self, websocket: WebSocket):
+    async def handle_websocket(self, websocket: WebSocket, provider: str):
         serializer = lambda stream_sid, call_sid: ExotelFrameSerializer(
             stream_sid=stream_sid,
             call_sid=call_sid,
         )
-        await telephony_websocket_conn(websocket, self.aiohttp_session, serializer, None, self.completion_callback)
+        await telephony_websocket_conn(websocket, self.aiohttp_session, serializer, None, self.completion_callback, provider)
 
-    def make_call(self, call_data: CallDataResponse):
+    def make_call(self, customer_mobile_number: str, outbound_number: str):
         flow_url = f"http://my.exotel.com/{self.config.EXOTEL_ACCOUNT_SID}/exoml/start_voice/{self.config.EXOTEL_APPLET_APP_ID}"
 
         payload = {
-            "From": call_data.call_payload.get("customer_mobile_number"),
-            "CallerId": self.config.EXOTEL_FROM_NUMBER,
+            "From": customer_mobile_number,
+            "CallerId": outbound_number,
             "Url": flow_url
         }
         url = f"https://{self.config.EXOTEL_API_KEY}:{self.config.EXOTEL_API_TOKEN}@{self.config.EXOTEL_SUBDOMAIN}/v1/Accounts/{self.config.EXOTEL_ACCOUNT_SID}/Calls/connect.json"

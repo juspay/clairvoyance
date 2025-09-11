@@ -66,41 +66,6 @@ class LeadCallTracker(BaseModel):
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
-class CallDataCreate(BaseModel):
-    id: str
-    outcome: Optional[CallOutcome] = None
-    transcription: Optional[Dict[str, Any]] = None
-    call_start_time: datetime
-    call_end_time: Optional[datetime] = None
-    call_id: Optional[str] = None
-    provider: str
-    status: CallStatus = CallStatus.BACKLOG
-    requested_by: RequestedBy
-    workflow: Workflow
-    call_payload: Optional[Dict[str, Any]] = None
-    assigned_number: Optional[str] = None
-
-class CallDataUpdate(BaseModel):
-    outcome: Optional[CallOutcome] = None
-    status: Optional[CallStatus] = None
-    assigned_number: Optional[str] = None
-
-class CallDataResponse(BaseModel):
-    id: str
-    outcome: Optional[str] = None
-    transcription: Optional[Dict[str, Any]] = None
-    call_start_time: datetime
-    call_end_time: Optional[datetime] = None
-    call_id: Optional[str] = None
-    provider: str
-    status: str
-    requested_by: str
-    workflow: str
-    call_payload: Optional[Dict[str, Any]] = None
-    assigned_number: Optional[str] = None
-    created_at: datetime
-    updated_at: datetime
-
 class CreateOutboundNumberRequest(BaseModel):
     number: str
     provider: CallProvider

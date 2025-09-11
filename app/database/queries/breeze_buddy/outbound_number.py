@@ -69,6 +69,19 @@ def update_outbound_number_status_query(outbound_number_id: str, status: Outboun
     values = [outbound_number_id, status.value]
     return text, values
 
+def update_outbound_number_channels_query(outbound_number_id: str, channels: int) -> Tuple[str, List[Any]]:
+    """
+    Generate query to update outbound number channels.
+    """
+    text = f"""
+        UPDATE "{OUTBOUND_NUMBER_TABLE}" 
+        SET "channels" = $2, "updated_at" = NOW() 
+        WHERE "id" = $1 
+        RETURNING *;
+    """
+    values = [outbound_number_id, channels]
+    return text, values
+
 def disable_outbound_number_query(outbound_number_id: str) -> Tuple[str, List[Any]]:
     """
     Generate query to disable outbound number by ID.
@@ -101,7 +114,6 @@ def get_outbound_number_based_on_status_and_provider_query(status: OutboundNumbe
         SELECT * FROM "{OUTBOUND_NUMBER_TABLE}" 
         WHERE "status" = $1 AND "provider" = $2
         ORDER BY "created_at" DESC;
-        LIMIT 1;
     """
     values = [status.value, provider.value]
     return text, values

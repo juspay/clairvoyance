@@ -9,7 +9,6 @@ from app.database import init_db_pool, close_db_pool, get_db_connection
 load_dotenv(override=True)
 
 # Table names
-CALL_DATA_TABLE = "call_data"
 OUTBOUND_NUMBERS_TABLE = "outbound_number"
 CALL_EXECUTION_CONFIG_TABLE = "call_execution_config"
 LEAD_CALL_TRACKER_TABLE = "lead_call_tracker"
@@ -38,6 +37,10 @@ def create_lead_call_tracker_table_query() -> str:
             "created_at" TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
             "updated_at" TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL
         );
+        CREATE INDEX IF NOT EXISTS "idx_lead_call_tracker_merchant_id" ON "{LEAD_CALL_TRACKER_TABLE}" ("merchant_id");
+        CREATE INDEX IF NOT EXISTS "idx_lead_call_tracker_status" ON "{LEAD_CALL_TRACKER_TABLE}" ("status");
+        CREATE INDEX IF NOT EXISTS "idx_lead_call_tracker_outcome" ON "{LEAD_CALL_TRACKER_TABLE}" ("outcome");
+        CREATE INDEX IF NOT EXISTS "idx_lead_call_tracker_created_at" ON "{LEAD_CALL_TRACKER_TABLE}" ("created_at");
     """
 
 def create_call_execution_config_table_query() -> str:
@@ -59,6 +62,7 @@ def create_call_execution_config_table_query() -> str:
             "updated_at" TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
             UNIQUE("merchant_id", "workflow")
         );
+        CREATE INDEX IF NOT EXISTS "idx_call_execution_config_created_at" ON "{CALL_EXECUTION_CONFIG_TABLE}" ("created_at");
     """
 
 def create_outbound_numbers_table_query() -> str:
@@ -80,50 +84,6 @@ def create_outbound_numbers_table_query() -> str:
         CREATE INDEX IF NOT EXISTS idx_outbound_numbers_status ON "{OUTBOUND_NUMBERS_TABLE}" ("status");
         CREATE INDEX IF NOT EXISTS idx_outbound_numbers_provider ON "{OUTBOUND_NUMBERS_TABLE}" ("provider");
     """
-
-def create_call_data_table_query() -> str:
-    """
-    Generate query to create call_data table.
-    """
-    return f"""
-        CREATE TABLE IF NOT EXISTS "{CALL_DATA_TABLE}" (
-            "id" VARCHAR(255) PRIMARY KEY,
-            "outcome" VARCHAR(50) CHECK ("outcome" IN ('CONFIRM', 'BUSY', 'CANCEL', 'NO_ANSWER')),
-            "transcription" JSONB,
-            "call_start_time" TIMESTAMP WITH TIME ZONE NOT NULL,
-            "call_end_time" TIMESTAMP WITH TIME ZONE,
-            "call_id" VARCHAR(255),
-            "provider" VARCHAR(255) NOT NULL,
-            "status" VARCHAR(50) CHECK ("status" IN ('backlog', 'finished', 'ongoing', 'error')) DEFAULT 'backlog',
-            "requested_by" VARCHAR(50) CHECK ("requested_by" IN ('breeze', 'shopify')) NOT NULL,
-            "workflow" VARCHAR(50) NOT NULL,
-            "call_payload" JSONB,
-            "assigned_number" VARCHAR(50),
-            "created_at" TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
-            "updated_at" TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL
-        );
-        
-        CREATE INDEX IF NOT EXISTS idx_call_data_status ON "{CALL_DATA_TABLE}" ("status");
-        CREATE INDEX IF NOT EXISTS idx_call_data_provider ON "{CALL_DATA_TABLE}" ("provider");
-        CREATE INDEX IF NOT EXISTS idx_call_data_requested_by ON "{CALL_DATA_TABLE}" ("requested_by");
-        CREATE INDEX IF NOT EXISTS idx_call_data_workflow ON "{CALL_DATA_TABLE}" ("workflow");
-        CREATE INDEX IF NOT EXISTS idx_call_data_call_id ON "{CALL_DATA_TABLE}" ("call_id");
-        CREATE INDEX IF NOT EXISTS idx_call_data_created_at ON "{CALL_DATA_TABLE}" ("created_at");
-    """
-
-async def create_call_data_table():
-    """
-    Create the call_data table with all constraints and indexes.
-    """
-    try:
-        async for conn in get_db_connection():
-            print("Creating call_data table...")
-            await conn.execute(create_call_data_table_query())
-            print("Call data table created successfully")
-            return True
-    except Exception as e:
-        print(f"Error creating call_data table: {e}")
-        return False
 
 async def create_outbound_numbers_table():
     """
@@ -174,13 +134,11 @@ async def create_all_tables():
     print("Starting database table creation...")
     
     try:
-        # Create call_data table
-        call_data_success = await create_call_data_table()
         outbound_numbers_success = await create_outbound_numbers_table()
         call_execution_config_success = await create_call_execution_config_table()
         lead_call_tracker_success = await create_lead_call_tracker_table()
-        
-        if call_data_success and outbound_numbers_success and call_execution_config_success and lead_call_tracker_success:
+
+        if outbound_numbers_success and call_execution_config_success and lead_call_tracker_success:
             print("All database tables created successfully")
             return True
         else:

@@ -14,7 +14,7 @@ from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
 from pipecat.processors.aggregators.openai_llm_context import OpenAILLMContext
 from pipecat.transcriptions.language import Language
-from pipecat.transports.network.fastapi_websocket import (
+from pipecat.transports.websocket.fastapi import (
     FastAPIWebsocketParams,
     FastAPIWebsocketTransport,
 )
@@ -23,11 +23,11 @@ from pipecat.services.azure.llm import AzureLLMService
 from pipecat_flows import NodeConfig, FlowsFunctionSchema, FlowManager
 from pydantic import ValidationError
 
-from app.agents.voice.breeze_buddy.breeze.order_confirmation.types import OrderData
+from app.agents.voice.breeze_buddy.workflows.order_confirmation.types import OrderData
 from app.core.security.sha import calculate_hmac_sha256
-from app.agents.voice.breeze_buddy.breeze.order_confirmation.utils import indian_number_to_speech, OUTCOME_TO_ENUM, get_stt_service
+from app.agents.voice.breeze_buddy.workflows.order_confirmation.utils import indian_number_to_speech, OUTCOME_TO_ENUM, get_stt_service
 from app.schemas import CallOutcome
-from app.database.accessor.main import get_call_data_by_call_id
+from app.database.accessor import get_lead_by_call_id
 
 from app.core.config import (
     AZURE_OPENAI_API_KEY,
@@ -42,15 +42,15 @@ from app.core.config import (
     BREEZE_BUDDY_VAD_START_SECS,
     BREEZE_BUDDY_VAD_STOP_SECS,
     BREEZE_BUDDY_VAD_MIN_VOLUME,
-    BREEZE_BUDDY_CALL_PROVIDER,
 )
 
 load_dotenv(override=True)
 
 class OrderConfirmationBot:
-    def __init__(self, ws: WebSocket, aiohttp_session, serializer, hangup_function, completion_function):
+    def __init__(self, ws: WebSocket, aiohttp_session, serializer, hangup_function, completion_function, provider: str):
         self.ws = ws
         self.aiohttp_session = aiohttp_session
+        self.provider = provider
         self.task: PipelineTask = None
         self.outcome = "unknown"
         self.context: OpenAILLMContext = None
@@ -85,14 +85,14 @@ class OrderConfirmationBot:
                 logger.warning(f"Could not close websocket (likely already closed): {close_error}")
             return
 
-        if BREEZE_BUDDY_CALL_PROVIDER == "twilio": # Twilio
+        if self.provider.upper() == "TWILIO": # Twilio
             stream_sid = call_data["start"]["streamSid"]
             self.call_sid = call_data["start"]["callSid"]
             
             try:
                 logger.info("Preparing to send initial audio message.")
-                wav_file_path = "app/agents/voice/breeze_buddy/breeze/order_confirmation/dial-tone.wav"
-                
+                wav_file_path = "app/agents/voice/breeze_buddy/static/audio/dial-tone.wav"
+
                 # Load and convert audio
                 audio = AudioSegment.from_wav(wav_file_path)
                 audio = audio.set_frame_rate(8000).set_channels(1).set_sample_width(2)
@@ -118,12 +118,12 @@ class OrderConfirmationBot:
             stream_sid = call_data.get("stream_sid")
             self.call_sid = call_data.get("start").get("call_sid")
 
-        call_data_from_db = await get_call_data_by_call_id(self.call_sid)
-        if not call_data_from_db:
-            logger.error(f"Could not find call data for call_sid: {self.call_sid}")
+        lead = await get_lead_by_call_id(self.call_sid)
+        if not lead:
+            logger.error(f"Could not find lead for call_sid: {self.call_sid}")
             return
 
-        call_payload = call_data_from_db.call_payload
+        call_payload = lead.payload
         self.order_id = call_payload.get("order_id", "N/A")
         customer_name = call_payload.get("customer_name", "Valued Customer")
         self.shop_name = call_payload.get("shop_name", "the shop")
@@ -272,7 +272,7 @@ class OrderConfirmationBot:
                             call_id=self.call_sid,
                             outcome=CallOutcome.BUSY,
                             transcription={"messages": transcription, "call_sid": self.call_sid},
-                            call_end_time=datetime.now().isoformat()
+                            call_end_time=datetime.now()
                         )
                         logger.info(f"Updated database for call_id: {self.call_sid} with outcome: INTERRUPTED")
                     else:
@@ -387,7 +387,7 @@ class OrderConfirmationBot:
                             call_id=self.call_sid,
                             outcome=call_outcome,
                             transcription={"messages": transcription, "call_sid": self.call_sid},
-                            call_end_time=datetime.now().isoformat()
+                            call_end_time=datetime.now()
                         )
                         logger.info(f"Updated database for call_id: {self.call_sid} with outcome: {call_outcome}")
                     else:
@@ -515,6 +515,6 @@ class OrderConfirmationBot:
         )
 
 
-async def main(ws: WebSocket, aiohttp_session, serializer, hangup_function, completion_function):
-    bot = OrderConfirmationBot(ws, aiohttp_session, serializer, hangup_function, completion_function)
+async def main(ws: WebSocket, aiohttp_session, serializer, hangup_function, completion_function, provider: str):
+    bot = OrderConfirmationBot(ws, aiohttp_session, serializer, hangup_function, completion_function, provider)
     await bot.run()

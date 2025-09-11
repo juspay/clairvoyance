@@ -5,9 +5,9 @@ from typing import List, Optional
 import asyncpg
 from app.core.logger import logger
 from app.schemas import CallExecutionConfig, Workflow, CallProvider
-from app.database.queries.main import run_parameterized_query
+from app.database.queries import run_parameterized_query
 from datetime import time
-from app.database.accessor.decoder import decode_call_execution_config, decode_call_execution_config_list
+from app.database.decoder.breeze_buddy.call_execution_config import decode_call_execution_config, decode_call_execution_config_list
 from app.database.queries.breeze_buddy.call_execution_config import (
     insert_call_execution_config_query,
     get_call_execution_config_by_merchant_id_query,

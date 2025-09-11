@@ -1,6 +1,5 @@
 from abc import ABC, abstractmethod
 from fastapi import WebSocket
-from app.agents.voice.breeze_buddy.breeze.order_confirmation.types import BreezeOrderData
 
 
 class VoiceCallProvider(ABC):
@@ -14,14 +13,14 @@ class VoiceCallProvider(ABC):
         self.completion_callback = None
 
     @abstractmethod
-    async def handle_websocket(self, websocket: WebSocket):
+    async def handle_websocket(self, websocket: WebSocket, provider: str):
         """
         Handle the WebSocket connection for the voice provider.
         """
         pass
 
     @abstractmethod
-    def make_call(self, order: BreezeOrderData):
+    def make_call(self, customer_mobile_number: str, outbound_number: str):
         """
         Initiate a call.
         """
@@ -32,3 +31,4 @@ class VoiceCallProvider(ABC):
         Set the callback function to be called when the call is completed.
         """
         self.completion_callback = callback
+
