@@ -101,6 +101,7 @@ STT_PROVIDER = os.environ.get("STT_PROVIDER", "google").lower()  # "google", "as
 ASSEMBLYAI_API_KEY = os.getenv("ASSEMBLYAI_API_KEY")
 OPENAI_STT_API_KEY = os.getenv("OPENAI_STT_API_KEY")
 OPENAI_STT_MODEL = os.environ.get("OPENAI_STT_MODEL", "gpt-4o-transcribe")  # or "whisper-1"
+ENFORCED_OPENAI_STT_MODEL = os.environ.get("ENFORCED_OPENAI_STT_MODEL", "whisper-1")
 ENABLE_OPENAI_FOR_MIA = os.environ.get("ENABLE_OPENAI_FOR_MIA", "false").lower() == "true"
 
 logger.info(f"Using Gemini model: {GEMINI_MODEL}")

@@ -20,10 +20,10 @@ def get_stt_service(voice_name: Optional[str] = None):
         if not config.OPENAI_STT_API_KEY:
             raise ValueError("OPENAI_STT_API_KEY is required when ENABLE_OPENAI_FOR_MIA=true and voice is MIA")
         
-        logger.info("Using OpenAI STT service for MIA voice (override enabled)")
+        logger.info(f"Using OpenAI STT service for MIA voice (override enabled) with model: {config.ENFORCED_OPENAI_STT_MODEL}")
         return OpenAISTTService(
             api_key=config.OPENAI_STT_API_KEY,
-            model=config.OPENAI_STT_MODEL,
+            model=config.ENFORCED_OPENAI_STT_MODEL,
             language=Language.EN,
             # Optimized prompt for business analytics voice agent
             prompt=config.AUTOMATIC_OPENAI_STT_PROMPT, 
