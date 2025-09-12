@@ -22,6 +22,7 @@ from .breeze_buddy.lead_call_tracker import (
     update_lead_call_details,
     get_lead_by_call_id,
     update_lead_call_completion_details,
+    update_lead_call_recording_url,
 )
 
 __all__ = [
@@ -39,4 +40,5 @@ __all__ = [
     "update_lead_call_details",
     "get_lead_by_call_id",
     "update_lead_call_completion_details",
+    "update_lead_call_recording_url",
 ]

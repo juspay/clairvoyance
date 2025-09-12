@@ -16,6 +16,7 @@ from app.database.accessor import (
     get_lead_by_call_id,
     create_lead_call_tracker,
     update_lead_call_completion_details,
+    update_lead_call_recording_url,
 )
 from app.schemas import LeadCallStatus, OutboundNumberStatus, LeadCallOutcome, CallProvider
 from app.agents.voice.breeze_buddy.services.telephony.utils import get_voice_provider
@@ -114,7 +115,7 @@ async def handle_call_completion(call_id: str, outcome: LeadCallOutcome, transcr
             logger.warning(f"No call execution config found for workflow: {lead.workflow}")
             return
             
-        if lead.attempt_count < config.max_retry:
+        if lead.attempt_count < config.max_retry - 1:
             next_attempt_at = datetime.now(timezone.utc) + timedelta(seconds=config.retry_offset)
             await create_lead_call_tracker(
                 id=str(uuid.uuid4()),
@@ -153,7 +154,7 @@ async def handle_unanswered_calls(call_id: str):
         call_end_time=datetime.now(timezone.utc),
     )
 
-    if lead.attempt_count < config.max_retry:
+    if lead.attempt_count < config.max_retry - 1:
         next_attempt_at = datetime.now(timezone.utc) + timedelta(seconds=config.retry_offset)
         await create_lead_call_tracker(
             id=str(uuid.uuid4()),
@@ -163,3 +164,15 @@ async def handle_unanswered_calls(call_id: str):
             payload=lead.payload,
             attempt_count=lead.attempt_count + 1,
         )
+
+async def update_call_recording(call_id: str, recording_url: str):
+    """
+    Updates the call recording URL for a lead.
+    """
+    logger.info(f"Updating call recording for call_id: {call_id}")
+    lead = await get_lead_by_call_id(call_id)
+    if not lead:
+        logger.error(f"Could not find lead for call_id: {call_id}")
+        return
+
+    await update_lead_call_recording_url(call_id, recording_url)

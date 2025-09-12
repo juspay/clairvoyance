@@ -15,7 +15,7 @@ from app.schemas import (
 )
 from app.agents.voice.breeze_buddy.workflows.order_confirmation.types import BreezeOrderData
 import aiohttp
-from app.agents.voice.breeze_buddy.managers.calls import process_backlog_leads, handle_call_completion, handle_unanswered_calls
+from app.agents.voice.breeze_buddy.managers.calls import process_backlog_leads, handle_call_completion, handle_unanswered_calls, update_call_recording
 from app.agents.voice.breeze_buddy.services.telephony.utils import get_voice_provider
 from app.database.accessor import (
     create_outbound_number,
@@ -29,6 +29,22 @@ from app.database.accessor import (
 
 router = APIRouter()
 
+@router.get("/{provider}/callback/details")
+async def callback_status(request: Request, provider: str):
+    query_params = dict(request.query_params)
+    logger.info(f"Received call-details with {provider} query params: {query_params}")
+
+    if provider.lower() != "exotel":
+        raise HTTPException(status_code=404, detail="Feature not supported for this service provider")
+    
+    recording_url = query_params.get("Stream[RecordingUrl]")
+    call_sid = query_params.get("CallSid")
+
+    if recording_url and call_sid:
+        logger.info(f"Extracted recording_url: {recording_url} and call_sid: {call_sid}")
+        await update_call_recording(call_sid, recording_url)
+
+    return Response(status_code=200)
 
 @router.post("/{provider}/callback/status")
 async def callback_status(request: Request, provider: str):

@@ -100,6 +100,20 @@ def get_lead_by_call_id_query(call_id: str) -> Tuple[str, List[Any]]:
     return text, values
 
 
+def update_lead_call_recording_url_query(call_id: str, recording_url: str) -> Tuple[str, List[Any]]:
+    """
+    Generate query to update lead call recording url.
+    """
+    text = f"""
+        UPDATE "{LEAD_CALL_TRACKER_TABLE}"
+        SET "recording_url" = $1, "updated_at" = NOW()
+        WHERE "call_id" = $2
+        RETURNING *;
+    """
+    values = [recording_url, call_id]
+    return text, values
+
+
 def update_lead_call_completion_details_query(
     id: str,
     status: LeadCallStatus,
