@@ -9,6 +9,7 @@ from app.core.logger import logger, configure_session_logger
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.vad.vad_analyzer import VADParams
 from pipecat.audio.filters.noisereduce_filter import NoisereduceFilter
+from pipecat.audio.filters.aic_filter import AICFilter
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
@@ -116,22 +117,22 @@ async def main():
         vad_analyzer=vad_analyzer,
     )
     
+            
     # Audio filter configuration
-    # if config.ENABLE_AIC_FILTER and config.AICOUSTICS_LICENSE_KEY:
-    #     try:
-    #         aic_filter = AICFilter(
-    #             license_key=config.AICOUSTICS_LICENSE_KEY,
-    #             enhancement_level=config.AIC_ENHANCEMENT_LEVEL,
-    #             voice_gain=config.AIC_VOICE_GAIN,
-    #             noise_gate_enable=config.AIC_NOISE_GATE_ENABLE,
-    #         )
-    #         daily_params.audio_in_filter = aic_filter
-    #         logger.info(f"AIC Filter: ENABLED (enhancement_level={config.AIC_ENHANCEMENT_LEVEL}, voice_gain={config.AIC_VOICE_GAIN}, noise_gate={config.AIC_NOISE_GATE_ENABLE})")
+    if config.ENABLE_AIC_FILTER and config.AICOUSTICS_LICENSE_KEY:
+        try:
+            aic_filter = AICFilter(
+                license_key=config.AICOUSTICS_LICENSE_KEY,
+                enhancement_level=config.AIC_ENHANCEMENT_LEVEL,
+                voice_gain=config.AIC_VOICE_GAIN,
+                noise_gate_enable=config.AIC_NOISE_GATE_ENABLE,
+            )
+            daily_params.audio_in_filter = aic_filter
+            logger.info(f"AIC Filter: ENABLED (enhancement_level={config.AIC_ENHANCEMENT_LEVEL}, voice_gain={config.AIC_VOICE_GAIN}, noise_gate={config.AIC_NOISE_GATE_ENABLE})")
             
-    #     except Exception as e:
-    #         logger.error(f"AIC Filter failed: {e}")
-            
-    if config.ENABLE_NOISE_REDUCE_FILTER:
+        except Exception as e:
+            logger.error(f"AIC Filter failed: {e}")
+    elif config.ENABLE_NOISE_REDUCE_FILTER:
         daily_params.audio_in_filter = NoisereduceFilter()
         logger.info("Audio Filter: NoiseReduce Enabled")
     else:

@@ -6,7 +6,8 @@ uvicorn==0.34.2
 aiohttp>=3.8.4
 
 # Google Generative AI
-google-genai>=1.14.0,<1.15.0
+# Commenting out to avoid dependency conflicts with pipecat-ai latest version
+# google-genai>=1.14.0,<1.15.0
 
 # Additional utilities
 pytz==2025.2
@@ -19,7 +20,7 @@ starlette>=0.27.0
 # Logging and environment
 python-dotenv>=1.0.0
 
-pipecat-ai[daily,google,assembly,silero,openai,azure,elevenlabs,noisereduce,mem0]
+pipecat-ai[daily,google,assembly,silero,openai,azure,elevenlabs,noisereduce,mem0,aic,anthropic]
 pipecat-ai-flows
 
 # Google Cloud Speech

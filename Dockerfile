@@ -5,7 +5,8 @@ FROM python:3.11-slim
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PYTHONPATH=/app \
-    PORT=8000
+    PORT=8000 \
+    NLTK_DATA=/usr/local/nltk_data
 
 # Install system dependencies required for audio processing and compilation
 # Removed 'git' and 'curl' as they are not required for the build
@@ -29,6 +30,10 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
+# Create NLTK data directory and download required data
+RUN mkdir -p /usr/local/nltk_data && \
+    python -m nltk.downloader punkt punkt_tab -d /usr/local/nltk_data
+
 # Copy application code
 COPY . .
 
@@ -37,7 +42,8 @@ RUN chmod +x run.py
 
 # Create non-root user for security
 RUN groupadd -r appuser && useradd -r -g appuser appuser
-RUN chown -R appuser:appuser /app
+RUN chown -R appuser:appuser /app && \
+    chown -R appuser:appuser /usr/local/nltk_data
 USER appuser
 
 # Expose port
