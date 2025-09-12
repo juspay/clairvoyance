@@ -5,10 +5,6 @@ uvicorn==0.34.2
 # Async HTTP client
 aiohttp>=3.8.4
 
-# Google Generative AI
-# Commenting out to avoid dependency conflicts with pipecat-ai latest version
-# google-genai>=1.14.0,<1.15.0
-
 # Additional utilities
 pytz==2025.2
 python-multipart>=0.0.6
