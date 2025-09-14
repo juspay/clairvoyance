@@ -13,7 +13,9 @@ def update_version(new_version):
     """Update version in __version__.py"""
     version_file = Path("app/__version__.py")
     content = version_file.read_text()
-    updated = re.sub(r'__version__ = "[^"]*"', f'__version__ = "{new_version}"', content)
+    updated = re.sub(
+        r'__version__ = "[^"]*"', f'__version__ = "{new_version}"', content
+    )
     version_file.write_text(updated)
     print(new_version)
 
@@ -30,11 +32,11 @@ def main():
     if len(sys.argv) < 2:
         print(get_current_version())
         return
-    
+
     command = sys.argv[1]
     current = get_current_version()
-    major, minor, patch = map(int, current.split('.'))
-    
+    major, minor, patch = map(int, current.split("."))
+
     if command == "patch":
         update_version(f"{major}.{minor}.{patch + 1}")
     elif command == "minor":
@@ -47,5 +49,5 @@ def main():
         print(current)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

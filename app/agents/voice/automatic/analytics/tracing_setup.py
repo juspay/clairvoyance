@@ -9,6 +9,7 @@ from app.core.logger import logger
 
 from app.core.config import ENABLE_TRACING
 
+
 def setup_tracing(service_name: str):
     if not ENABLE_TRACING:
         logger.info("Tracing is disabled. Skipping setup.")

@@ -1,5 +1,9 @@
 from app.core.logger import logger
-from app.core.config import ENABLE_SEARCH_GROUNDING, ENABLE_CHARTS, AUTOMATIC_WRITE_ACTIONS_AUTHORIZED_USERS
+from app.core.config import (
+    ENABLE_SEARCH_GROUNDING,
+    ENABLE_CHARTS,
+    AUTOMATIC_WRITE_ACTIONS_AUTHORIZED_USERS,
+)
 from pipecat.adapters.schemas.tools_schema import ToolsSchema
 from app.agents.voice.automatic.types import Mode
 from app.agents.voice.automatic.tools.utils import filter_tools_by_authorization
@@ -70,7 +74,9 @@ def initialize_tools(
     if mode == Mode.TEST.value:
         all_tools.extend(dummy_tools.standard_tools)
         all_tool_functions.update(dummy_tool_functions)
-        logger.info(f"Loaded {len(dummy_tools.standard_tools)} dummy tools for test mode.")
+        logger.info(
+            f"Loaded {len(dummy_tools.standard_tools)} dummy tools for test mode."
+        )
     else:
         logger.info("Skipping dummy tools in live mode.")
         if "euler" in providers:
@@ -78,7 +84,9 @@ def initialize_tools(
             juspay.analytics.merchant_id = merchant_id
             all_tools.extend(juspay.tools.standard_tools)
             all_tool_functions.update(juspay.tool_functions)
-            logger.info(f"Loaded {len(juspay.tools.standard_tools)} real-time Juspay tools.")
+            logger.info(
+                f"Loaded {len(juspay.tools.standard_tools)} real-time Juspay tools."
+            )
             logger.info(f"Set merchant_id for Juspay tools: {merchant_id}")
         if "breeze" in providers and shop_id and shop_url and shop_type:
             breeze.analytics.breeze_token = breeze_token
@@ -89,8 +97,16 @@ def initialize_tools(
             breeze.analytics.reseller_id = reseller_id
             all_tools.extend(breeze.tools.standard_tools)
             all_tool_functions.update(breeze.tool_functions)
-            logger.info(f"Loaded {len(breeze.tools.standard_tools)} real-time Breeze analytics tools.")
-        if "breeze" in providers and breeze_token and shop_id and shop_url and merchant_id:
+            logger.info(
+                f"Loaded {len(breeze.tools.standard_tools)} real-time Breeze analytics tools."
+            )
+        if (
+            "breeze" in providers
+            and breeze_token
+            and shop_id
+            and shop_url
+            and merchant_id
+        ):
             breeze.configuration.shop_id = shop_id
             breeze.configuration.shop_url = shop_url
             breeze.configuration.merchant_id = merchant_id
@@ -98,13 +114,15 @@ def initialize_tools(
             breeze.configuration.breeze_token = breeze_token
             all_tools.extend(breeze.configuration_tools.standard_tools)
             all_tool_functions.update(breeze.configuration_tool_functions)
-            logger.info(f"Loaded {len(breeze.configuration_tools.standard_tools)} real-time Breeze configuration tools.")
+            logger.info(
+                f"Loaded {len(breeze.configuration_tools.standard_tools)} real-time Breeze configuration tools."
+            )
 
     tools = ToolsSchema(standard_tools=all_tools)
 
     if AUTOMATIC_WRITE_ACTIONS_AUTHORIZED_USERS:
         logger.info(f"Total tools before filtering: {len(all_tools)}")
-        
+
         filtered_tools, filtered_tool_functions = filter_tools_by_authorization(
             all_tools, all_tool_functions, user_email
         )

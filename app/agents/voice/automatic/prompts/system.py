@@ -1,12 +1,12 @@
 import datetime
 from app.core.logger import logger
 from app.core.config import (
-    ENABLE_SEARCH_GROUNDING, 
-    HITL_ENABLE, 
-    ENABLE_CHARTS, 
+    ENABLE_SEARCH_GROUNDING,
+    HITL_ENABLE,
+    ENABLE_CHARTS,
     ENABLE_LANGFUSE_PROMPTS,
     AUTOMATIC_LANGFUSE_PROMPT_NAME,
-    AUTOMATIC_LANGFUSE_SYSTEM_PROMPT_LABEL
+    AUTOMATIC_LANGFUSE_SYSTEM_PROMPT_LABEL,
 )
 from app.agents.voice.automatic.types import TTSProvider
 from app.services.langfuse.prompts import fetch_prompt
@@ -67,8 +67,9 @@ SYSTEM_PROMPT = f"""
     Never mention or describe your internal architecture, training methods, underlying model, or who built you. Always redirect the conversation to your purpose: assisting with business insights.
 """
 
+
 def get_tool_scope_instrucations() -> str:
-    tool_scope="""
+    tool_scope = """
     TOOLS & SCOPE
         Use-Case-Driven:
             - Invoke external tools when they directly address the user's request.
@@ -113,7 +114,7 @@ def get_tool_scope_instrucations() -> str:
     """
 
     if HITL_ENABLE:
-        HITL_scope= """
+        HITL_scope = """
         TOOL CALL RETRY & RESULT HANDLING
 
         Tool Retry Policy
@@ -130,22 +131,22 @@ def get_tool_scope_instrucations() -> str:
             - The user may retry any deletion any number of times without restrictions.
         """
 
-    else :
-        HITL_scope= """
+    else:
+        HITL_scope = """
         TOOL CALL RETRY & RESULT HANDLING
 
         Tool Retry Policy:
-        - Automated Retry: If a tool call fails for a recoverable reason (e.g., minor formatting issues), retry internally up to 3 TIMES - do not involve the user.  
+        - Automated Retry: If a tool call fails for a recoverable reason (e.g., minor formatting issues), retry internally up to 3 TIMES - do not involve the user.
         """
 
-    tool_followups="""
+    tool_followups = """
     PROACTIVE ENGAGEMENT & CONTEXTUAL SUGGESTIONS
-        
+
         CONTEXTUAL RELEVANCE RULE: Suggestions MUST directly relate to what was just discussed. Never suggest random and generic topics.
 
         MANDATORY PATTERNS:
         - Sales Data → Check orders/compare with last month/payment method breakdown
-        - Payment Data → Failure reasons/success rates by method/gateway performance  
+        - Payment Data → Failure reasons/success rates by method/gateway performance
         - Order Metrics → Average order values/conversion rates/payment method breakdown
         - Low Performance → Check failure causes/compare better periods/best payment methods
         - Growth Trends → Which payment methods drove this/order increases/marketing attribution
@@ -167,13 +168,14 @@ def get_tool_scope_instrucations() -> str:
         """
 
     if ENABLE_SEARCH_GROUNDING:
-        search_grounding="""
+        search_grounding = """
         INTERNET TOOL USAGE:
             - Internet access : You have tool to access internet for questions you are not aware of. But before using internet search tool you should ALWAYS ask user confirmation whether to search internet or not. If user says yes, then you can use internet search tool.
         """
     else:
-        search_grounding=""""""
-    return tool_scope + HITL_scope+tool_followups+search_grounding;
+        search_grounding = """"""
+    return tool_scope + HITL_scope + tool_followups + search_grounding
+
 
 def get_chart_visualization_instructions() -> str:
     """
@@ -248,6 +250,7 @@ def append_user_info(user_name: str) -> str:
         Avoid using the name in closing lines, suggestions, or tool-generated follow-ups unless absolutely necessary. Never repeat the name within the same message. Prioritize a warm, natural tone — use the name only when it feels truly warranted in spoken conversation.
     """
 
+
 def get_tts_based_instructions(tts_provider: TTSProvider | None) -> str:
     """
     Returns TTS-specific instructions.
@@ -257,26 +260,27 @@ def get_tts_based_instructions(tts_provider: TTSProvider | None) -> str:
             CURRENCY & NUMBER HANDLING
             Do not include any currency symbols (₹, $, etc.) in your spoken responses.
 
-            For any number with more than two digits, expand it using a **digit-word hybrid format** for natural speech. Say numbers using digits for major units and words for place values.  
-            - Example: “322” → say “3 hundred 22 rupees”  
+            For any number with more than two digits, expand it using a **digit-word hybrid format** for natural speech. Say numbers using digits for major units and words for place values.
+            - Example: “322” → say “3 hundred 22 rupees”
             - Example: “45,099” → say “45 thousand 99 rupees”
         """
     return ""
 
+
 def process_langfuse_template_variables(prompt_content: str) -> str:
     """
     Replace template variables in the prompt with actual values.
-    
+
     Args:
         prompt_content: The prompt content with template variables
-        
+
     Returns:
         str: Prompt content with template variables replaced
     """
     # Replace {current_time} with actual current date
     current_time = datetime.datetime.now().strftime("%B %d, %Y")
     prompt_content = prompt_content.replace("{current_time}", current_time)
-    
+
     return prompt_content
 
 
@@ -286,21 +290,21 @@ def get_system_prompt(user_name: str | None, tts_provider: TTSProvider | None) -
     First attempts to fetch from LangFuse, then falls back to hardcoded prompt.
     """
     langfuse_prompt = None
-    
+
     # Only try to fetch prompt from LangFuse if it's enabled
     if ENABLE_LANGFUSE_PROMPTS:
         langfuse_prompt = fetch_prompt(
             prompt_name=AUTOMATIC_LANGFUSE_PROMPT_NAME,
-            label=AUTOMATIC_LANGFUSE_SYSTEM_PROMPT_LABEL
+            label=AUTOMATIC_LANGFUSE_SYSTEM_PROMPT_LABEL,
         )
-    
+
     if langfuse_prompt:
         logger.info("Using dynamic prompt from LangFuse")
         prompt = process_langfuse_template_variables(langfuse_prompt)
     else:
         logger.info("Using fallback hardcoded prompt")
         prompt = SYSTEM_PROMPT
-    
+
     # Append dynamic components that are always added locally
     prompt += get_chart_visualization_instructions()
     prompt += get_tts_based_instructions(tts_provider)

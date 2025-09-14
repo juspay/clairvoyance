@@ -25,7 +25,11 @@ from pydantic import ValidationError
 
 from app.agents.voice.breeze_buddy.workflows.order_confirmation.types import OrderData
 from app.core.security.sha import calculate_hmac_sha256
-from app.agents.voice.breeze_buddy.workflows.order_confirmation.utils import indian_number_to_speech, OUTCOME_TO_ENUM, get_stt_service
+from app.agents.voice.breeze_buddy.workflows.order_confirmation.utils import (
+    indian_number_to_speech,
+    OUTCOME_TO_ENUM,
+    get_stt_service,
+)
 from app.schemas import LeadCallOutcome, CallProvider
 from app.database.accessor import get_lead_by_call_id
 
@@ -46,8 +50,17 @@ from app.core.config import (
 
 load_dotenv(override=True)
 
+
 class OrderConfirmationBot:
-    def __init__(self, ws: WebSocket, aiohttp_session, serializer, hangup_function, completion_function, provider: str):
+    def __init__(
+        self,
+        ws: WebSocket,
+        aiohttp_session,
+        serializer,
+        hangup_function,
+        completion_function,
+        provider: str,
+    ):
         self.ws = ws
         self.aiohttp_session = aiohttp_session
         self.provider = provider
@@ -82,39 +95,43 @@ class OrderConfirmationBot:
                 if self.ws.client_state.name != "DISCONNECTED":
                     await self.ws.close(code=4000, reason="Invalid JSON data")
             except Exception as close_error:
-                logger.warning(f"Could not close websocket (likely already closed): {close_error}")
+                logger.warning(
+                    f"Could not close websocket (likely already closed): {close_error}"
+                )
             return
 
         if self.provider == CallProvider.TWILIO:
             stream_sid = call_data["start"]["streamSid"]
             self.call_sid = call_data["start"]["callSid"]
-            
+
             try:
                 logger.info("Preparing to send initial audio message.")
-                wav_file_path = "app/agents/voice/breeze_buddy/static/audio/dial-tone.wav"
+                wav_file_path = (
+                    "app/agents/voice/breeze_buddy/static/audio/dial-tone.wav"
+                )
 
                 # Load and convert audio
                 audio = AudioSegment.from_wav(wav_file_path)
                 audio = audio.set_frame_rate(8000).set_channels(1).set_sample_width(2)
                 pcm_data = audio.raw_data
                 mulaw_data = audioop.lin2ulaw(pcm_data, 2)
-                payload = base64.b64encode(mulaw_data).decode('utf-8')
+                payload = base64.b64encode(mulaw_data).decode("utf-8")
 
                 # Create and send media message
                 media_message = {
                     "event": "media",
                     "streamSid": stream_sid,
-                    "media": {
-                        "payload": payload
-                    }
+                    "media": {"payload": payload},
                 }
                 await self.ws.send_text(json.dumps(media_message))
-                logger.info(f"Successfully sent initial media message for streamSid: {stream_sid}")
+                logger.info(
+                    f"Successfully sent initial media message for streamSid: {stream_sid}"
+                )
 
             except Exception as e:
                 logger.error(f"Failed to send initial media message: {e}")
-        
-        else: # Exotel
+
+        else:  # Exotel
             stream_sid = call_data.get("stream_sid")
             self.call_sid = call_data.get("start").get("call_sid")
 
@@ -136,9 +153,13 @@ class OrderConfirmationBot:
             logger.error(f"Could not parse total_price: {total_price}")
             try:
                 if self.ws.client_state.name != "DISCONNECTED":
-                    await self.ws.close(code=4000, reason=f"Invalid total_price: {total_price}")
+                    await self.ws.close(
+                        code=4000, reason=f"Invalid total_price: {total_price}"
+                    )
             except Exception as close_error:
-                logger.warning(f"Could not close websocket (likely already closed): {close_error}")
+                logger.warning(
+                    f"Could not close websocket (likely already closed): {close_error}"
+                )
             return
 
         order_product_data_payload = call_payload.get("order_data", "{}")
@@ -147,7 +168,7 @@ class OrderConfirmationBot:
                 order_product_data_str = json.dumps(order_product_data_payload)
             else:
                 order_product_data_str = order_product_data_payload
-            
+
             order_product_data = OrderData.model_validate_json(order_product_data_str)
         except ValidationError as e:
             logger.error(f"Could not parse order_data: {e}")
@@ -155,15 +176,16 @@ class OrderConfirmationBot:
                 if self.ws.client_state.name != "DISCONNECTED":
                     await self.ws.close(code=4000, reason=f"Invalid order_data: {e}")
             except Exception as close_error:
-                logger.warning(f"Could not close websocket (likely already closed): {close_error}")
+                logger.warning(
+                    f"Could not close websocket (likely already closed): {close_error}"
+                )
             return
 
         self.reporting_webhook_url = call_payload.get("reporting_webhook_url")
         logger.info(f"Parsed order_data: {order_product_data}")
 
         summary_parts = [
-            f"{item.quantity} {item.product_name}"
-            for item in order_product_data.items
+            f"{item.quantity} {item.product_name}" for item in order_product_data.items
         ]
         self.order_summary = ", ".join(summary_parts) or "your items"
 
@@ -187,9 +209,11 @@ class OrderConfirmationBot:
                         start_secs=BREEZE_BUDDY_VAD_START_SECS,
                         stop_secs=BREEZE_BUDDY_VAD_STOP_SECS,
                         min_volume=BREEZE_BUDDY_VAD_MIN_VOLUME,
-                    )
+                    ),
                 ),
-                serializer=self.serializer(stream_sid, self.call_sid) if self.serializer else None,
+                serializer=self.serializer(stream_sid, self.call_sid)
+                if self.serializer
+                else None,
             ),
         )
 
@@ -209,7 +233,11 @@ class OrderConfirmationBot:
         )
 
         self.system_prompt = self._get_system_prompt(
-            self.shop_name, customer_name, self.order_id, self.order_summary, price_words
+            self.shop_name,
+            customer_name,
+            self.order_id,
+            self.order_summary,
+            price_words,
         )
         messages = [{"role": "system", "content": self.system_prompt}]
 
@@ -256,39 +284,56 @@ class OrderConfirmationBot:
             logger.info(f"Client disconnected: {client}")
             if not self.conversation_ended:
                 self.conversation_ended = True
-                logger.info("Client disconnected unexpectedly. Updating call status directly.")
+                logger.info(
+                    "Client disconnected unexpectedly. Updating call status directly."
+                )
                 try:
                     if self.call_sid:
                         transcription = []
                         if self.context:
                             history = self.context.messages
                             for msg in history:
-                                if isinstance(msg, dict) and "role" in msg and "content" in msg and isinstance(msg["content"], str):
+                                if (
+                                    isinstance(msg, dict)
+                                    and "role" in msg
+                                    and "content" in msg
+                                    and isinstance(msg["content"], str)
+                                ):
                                     transcription.append(
                                         {"role": msg["role"], "content": msg["content"]}
                                     )
-                        
+
                         await self.completion_function(
                             call_id=self.call_sid,
                             outcome=LeadCallOutcome.BUSY,
-                            transcription={"messages": transcription, "call_sid": self.call_sid},
-                            call_end_time=datetime.now()
+                            transcription={
+                                "messages": transcription,
+                                "call_sid": self.call_sid,
+                            },
+                            call_end_time=datetime.now(),
                         )
-                        logger.info(f"Updated database for call_id: {self.call_sid} with outcome: INTERRUPTED")
+                        logger.info(
+                            f"Updated database for call_id: {self.call_sid} with outcome: INTERRUPTED"
+                        )
                     else:
-                        logger.warning("No call_id found, skipping database update on disconnect.")
+                        logger.warning(
+                            "No call_id found, skipping database update on disconnect."
+                        )
                 except Exception as e:
-                    logger.error(f"Error during direct DB update on disconnect for call_id {self.call_sid}: {e}")
+                    logger.error(
+                        f"Error during direct DB update on disconnect for call_id {self.call_sid}: {e}"
+                    )
 
             await self.task.cancel()
 
         runner = PipelineRunner(handle_sigint=False, force_gc=True)
+
         async def run_pipeline():
             try:
                 await runner.run(self.task)
             except asyncio.CancelledError:
                 logger.info("Main task cancelled. Exiting gracefully.")
-        
+
         await run_pipeline()
 
     def _get_system_prompt(
@@ -298,9 +343,9 @@ class OrderConfirmationBot:
             You are Rhea, a friendly human and natural-sounding customer care representative from {shop_name}. Your goal is to confirm a Cash on Delivery (COD) order with the customer.
 
             IMPORTANT: You are a text-to-speech voice agent. Generate all responses as plain, unformatted text without any special characters, markdown formatting, asterisks, underscores, or other unnecessary symbols. Keep your text simple and clean for natural speech conversion.
-            
+
             Never use the word "great" in your responses. Instead, use polite alternatives like "thank you", "thanks", or "appreciate it". Avoid any phrases that sound overly enthusiastic or robotic.
-            
+
             Never reveal or suggest that you are a bot or automated system. You must always sound and respond as a real human representative from {shop_name}.
 
             Before starting the conversation, identify whether the customer name "{customer_name}" is typically male or female in India. Based on this:
@@ -337,31 +382,38 @@ class OrderConfirmationBot:
             if self.context:
                 history = self.context.messages
                 for msg in history:
-                    if isinstance(msg, dict) and "role" in msg and "content" in msg and isinstance(msg["content"], str):
+                    if (
+                        isinstance(msg, dict)
+                        and "role" in msg
+                        and "content" in msg
+                        and isinstance(msg["content"], str)
+                    ):
                         transcription.append(
                             {"role": msg["role"], "content": msg["content"]}
                         )
                 summary_data = {
                     "callSid": self.call_sid,
                     "outcome": OUTCOME_TO_ENUM.get(self.outcome),
-                    "orderId": self.order_id
+                    "orderId": self.order_id,
                 }
                 logger.info(f"Call summary data: {summary_data}")
                 if self.reporting_webhook_url:
                     try:
                         payload = json.dumps(summary_data).replace(" ", "")
-                        signature = calculate_hmac_sha256(payload, ORDER_CONFIRMATION_WEBHOOK_SECRET_KEY)
+                        signature = calculate_hmac_sha256(
+                            payload, ORDER_CONFIRMATION_WEBHOOK_SECRET_KEY
+                        )
                         headers = {
-                            'Content-Type': 'application/json',
+                            "Content-Type": "application/json",
                         }
-                        
+
                         if signature:
-                            headers['checksum'] = signature
+                            headers["checksum"] = signature
 
                         async with self.aiohttp_session.post(
                             self.reporting_webhook_url,
                             json=summary_data,
-                            headers=headers
+                            headers=headers,
                         ) as response:
                             if response.status == 200:
                                 logger.info("Successfully sent call summary webhook.")
@@ -381,20 +433,29 @@ class OrderConfirmationBot:
             if self.call_sid:
                 try:
                     call_outcome = OUTCOME_TO_ENUM.get(self.outcome)
-                    
+
                     if call_outcome:
                         await self.completion_function(
                             call_id=self.call_sid,
                             outcome=call_outcome,
-                            transcription={"messages": transcription, "call_sid": self.call_sid},
-                            call_end_time=datetime.now()
+                            transcription={
+                                "messages": transcription,
+                                "call_sid": self.call_sid,
+                            },
+                            call_end_time=datetime.now(),
                         )
-                        logger.info(f"Updated database for call_id: {self.call_sid} with outcome: {call_outcome}")
+                        logger.info(
+                            f"Updated database for call_id: {self.call_sid} with outcome: {call_outcome}"
+                        )
                     else:
-                        logger.warning(f"Unknown outcome '{self.outcome}' for call_id: {self.call_sid}")
+                        logger.warning(
+                            f"Unknown outcome '{self.outcome}' for call_id: {self.call_sid}"
+                        )
 
                 except Exception as e:
-                    logger.error(f"Error updating database for call_id {self.call_sid}: {e}")
+                    logger.error(
+                        f"Error updating database for call_id {self.call_sid}: {e}"
+                    )
             else:
                 logger.warning("No call_id found, skipping database update")
         except Exception as e:
@@ -465,10 +526,10 @@ class OrderConfirmationBot:
             task_messages=[
                 {
                     "role": "system",
-                    "content": f"I'm not able to help you with that right now, but you can find all the latest details on the {self.shop_name} website. Regarding your order for {self.order_summary}, would you like to confirm it?"
+                    "content": f"I'm not able to help you with that right now, but you can find all the latest details on the {self.shop_name} website. Regarding your order for {self.order_summary}, would you like to confirm it?",
                 }
             ],
-            functions=self._get_flow_functions()
+            functions=self._get_flow_functions(),
         )
 
     async def _handle_unrelated_question_handler(self, flow_manager):
@@ -504,7 +565,7 @@ class OrderConfirmationBot:
                 handler=self._handle_unrelated_question_handler,
                 properties={},
                 required=[],
-            )
+            ),
         ]
 
     def _create_initial_node(self) -> NodeConfig:
@@ -515,6 +576,15 @@ class OrderConfirmationBot:
         )
 
 
-async def main(ws: WebSocket, aiohttp_session, serializer, hangup_function, completion_function, provider: CallProvider):
-    bot = OrderConfirmationBot(ws, aiohttp_session, serializer, hangup_function, completion_function, provider)
+async def main(
+    ws: WebSocket,
+    aiohttp_session,
+    serializer,
+    hangup_function,
+    completion_function,
+    provider: CallProvider,
+):
+    bot = OrderConfirmationBot(
+        ws, aiohttp_session, serializer, hangup_function, completion_function, provider
+    )
     await bot.run()

@@ -33,4 +33,3 @@ class VoiceCallProvider(ABC):
         Set the callback function to be called when the call is completed.
         """
         self.completion_callback = callback
-

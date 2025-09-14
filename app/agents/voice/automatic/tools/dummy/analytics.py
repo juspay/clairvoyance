@@ -72,16 +72,14 @@ async def get_weekly_success_transactional_data(params: FunctionCallParams):
     await params.result_callback(juspay_weekly["success_volume_by_payment_method"])
 
 
-async def get_weekly_gmv_order_value_payment_method_wise(
-        params: FunctionCallParams):
+async def get_weekly_gmv_order_value_payment_method_wise(params: FunctionCallParams):
     logger.info("Retrieving dummy Juspay weekly GMV by payment method data")
     await params.result_callback(juspay_weekly["gmv_by_payment_method"])
 
 
 async def get_weekly_average_ticket_payment_wise(params: FunctionCallParams):
     logger.info("Retrieving dummy Juspay weekly average ticket size data")
-    await params.result_callback(
-        juspay_weekly["average_ticket_size_by_payment_method"])
+    await params.result_callback(juspay_weekly["average_ticket_size_by_payment_method"])
 
 
 async def get_breeze_daily_sales_breakdown(params: FunctionCallParams):

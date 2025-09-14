@@ -8,7 +8,7 @@ It is optional, but recommended to be updated as the project evolves.
 
 ## Coding Patterns
 
-*   
+*
 
 ## Architectural Patterns
 

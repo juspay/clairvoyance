@@ -18,8 +18,14 @@ from app.database.accessor import (
     update_lead_call_completion_details,
     update_lead_call_recording_url,
 )
-from app.schemas import LeadCallStatus, OutboundNumberStatus, LeadCallOutcome, CallProvider
+from app.schemas import (
+    LeadCallStatus,
+    OutboundNumberStatus,
+    LeadCallOutcome,
+    CallProvider,
+)
 from app.agents.voice.breeze_buddy.services.telephony.utils import get_voice_provider
+
 
 async def process_backlog_leads():
     """
@@ -28,24 +34,38 @@ async def process_backlog_leads():
     logger.info("Processing backlog leads...")
     async with aiohttp.ClientSession() as session:
         try:
-            leads = await get_leads_based_on_status_and_next_attempt(LeadCallStatus.BACKLOG, datetime.now(timezone.utc))
+            leads = await get_leads_based_on_status_and_next_attempt(
+                LeadCallStatus.BACKLOG, datetime.now(timezone.utc)
+            )
             logger.info(f"Found {len(leads)} leads to process.")
             for lead in leads:
                 try:
                     logger.info(f"Processing lead: {lead.id}")
-                    configs = await get_call_execution_config_by_merchant_id(lead.merchant_id)
+                    configs = await get_call_execution_config_by_merchant_id(
+                        lead.merchant_id
+                    )
                     if not configs:
-                        logger.warning(f"No call execution config found for merchant: {lead.merchant_id}")
+                        logger.warning(
+                            f"No call execution config found for merchant: {lead.merchant_id}"
+                        )
                         continue
 
-                    config = next((c for c in configs if c.workflow == lead.workflow), None)
+                    config = next(
+                        (c for c in configs if c.workflow == lead.workflow), None
+                    )
                     if not config:
-                        logger.warning(f"No call execution config found for workflow: {lead.workflow}")
+                        logger.warning(
+                            f"No call execution config found for workflow: {lead.workflow}"
+                        )
                         continue
 
-                    numbers = await get_outbound_number_based_on_status_and_provider(OutboundNumberStatus.AVAILABLE, config.calling_provider)
+                    numbers = await get_outbound_number_based_on_status_and_provider(
+                        OutboundNumberStatus.AVAILABLE, config.calling_provider
+                    )
                     if not numbers:
-                        logger.warning(f"No available outbound numbers found for provider: {config.calling_provider}")
+                        logger.warning(
+                            f"No available outbound numbers found for provider: {config.calling_provider}"
+                        )
                         continue
 
                     number_to_use = None
@@ -58,17 +78,33 @@ async def process_backlog_leads():
                         number_to_use = numbers[0]
 
                     if not number_to_use:
-                        logger.warning(f"No available channels for provider: {config.calling_provider}")
+                        logger.warning(
+                            f"No available channels for provider: {config.calling_provider}"
+                        )
                         continue
-                    
+
                     if config.calling_provider == CallProvider.TWILIO:
-                        await update_outbound_number_status(number_to_use.id, OutboundNumberStatus.IN_USE)
+                        await update_outbound_number_status(
+                            number_to_use.id, OutboundNumberStatus.IN_USE
+                        )
                     elif config.calling_provider == CallProvider.EXOTEL:
-                        await update_outbound_number_channels(number_to_use.id, number_to_use.channels + 1)
-                    
-                    call_provider = get_voice_provider(config.calling_provider.value, session)
-                    call = call_provider.make_call(lead.payload.get("customer_mobile_number"), number_to_use.number)
-                    await update_lead_call_details(lead.id, LeadCallStatus.PROCESSING, call.get("sid"), datetime.now(timezone.utc), number_to_use.id)
+                        await update_outbound_number_channels(
+                            number_to_use.id, number_to_use.channels + 1
+                        )
+
+                    call_provider = get_voice_provider(
+                        config.calling_provider.value, session
+                    )
+                    call = call_provider.make_call(
+                        lead.payload.get("customer_mobile_number"), number_to_use.number
+                    )
+                    await update_lead_call_details(
+                        lead.id,
+                        LeadCallStatus.PROCESSING,
+                        call.get("sid"),
+                        datetime.now(timezone.utc),
+                        number_to_use.id,
+                    )
 
                 except Exception as e:
                     logger.error(f"Error processing lead {lead.id}: {e}")
@@ -76,7 +112,10 @@ async def process_backlog_leads():
         except Exception as e:
             logger.error(f"Error processing backlog leads: {e}")
 
-async def handle_call_completion(call_id: str, outcome: LeadCallOutcome, transcription: dict, call_end_time: datetime):
+
+async def handle_call_completion(
+    call_id: str, outcome: LeadCallOutcome, transcription: dict, call_end_time: datetime
+):
     """
     Handles call completion events.
     """
@@ -90,11 +129,15 @@ async def handle_call_completion(call_id: str, outcome: LeadCallOutcome, transcr
     config = next((c for c in configs if c.workflow == lead.workflow), None)
 
     if config.calling_provider == CallProvider.TWILIO:
-        await update_outbound_number_status(lead.outbound_number_id, OutboundNumberStatus.AVAILABLE)
+        await update_outbound_number_status(
+            lead.outbound_number_id, OutboundNumberStatus.AVAILABLE
+        )
     elif config.calling_provider == CallProvider.EXOTEL:
         outbound_number = await get_outbound_number_by_id(lead.outbound_number_id)
         if outbound_number:
-            await update_outbound_number_channels(lead.outbound_number_id, outbound_number.channels - 1)
+            await update_outbound_number_channels(
+                lead.outbound_number_id, outbound_number.channels - 1
+            )
 
     await update_lead_call_completion_details(
         id=lead.id,
@@ -107,16 +150,22 @@ async def handle_call_completion(call_id: str, outcome: LeadCallOutcome, transcr
     if outcome in [LeadCallOutcome.BUSY, LeadCallOutcome.NO_ANSWER]:
         configs = await get_call_execution_config_by_merchant_id(lead.merchant_id)
         if not configs:
-            logger.warning(f"No call execution config found for merchant: {lead.merchant_id}")
+            logger.warning(
+                f"No call execution config found for merchant: {lead.merchant_id}"
+            )
             return
 
         config = next((c for c in configs if c.workflow == lead.workflow), None)
         if not config:
-            logger.warning(f"No call execution config found for workflow: {lead.workflow}")
+            logger.warning(
+                f"No call execution config found for workflow: {lead.workflow}"
+            )
             return
-            
+
         if lead.attempt_count < config.max_retry - 1:
-            next_attempt_at = datetime.now(timezone.utc) + timedelta(seconds=config.retry_offset)
+            next_attempt_at = datetime.now(timezone.utc) + timedelta(
+                seconds=config.retry_offset
+            )
             await create_lead_call_tracker(
                 id=str(uuid.uuid4()),
                 merchant_id=lead.merchant_id,
@@ -125,6 +174,7 @@ async def handle_call_completion(call_id: str, outcome: LeadCallOutcome, transcr
                 payload=lead.payload,
                 attempt_count=lead.attempt_count + 1,
             )
+
 
 async def handle_unanswered_calls(call_id: str):
     """
@@ -140,11 +190,15 @@ async def handle_unanswered_calls(call_id: str):
     config = next((c for c in configs if c.workflow == lead.workflow), None)
 
     if config.calling_provider.value == "TWILIO":
-        await update_outbound_number_status(lead.outbound_number_id, OutboundNumberStatus.AVAILABLE)
+        await update_outbound_number_status(
+            lead.outbound_number_id, OutboundNumberStatus.AVAILABLE
+        )
     elif config.calling_provider.value == "EXOTEL":
         outbound_number = await get_outbound_number_by_id(lead.outbound_number_id)
         if outbound_number:
-            await update_outbound_number_channels(lead.outbound_number_id, outbound_number.channels - 1)
+            await update_outbound_number_channels(
+                lead.outbound_number_id, outbound_number.channels - 1
+            )
 
     await update_lead_call_completion_details(
         id=lead.id,
@@ -155,7 +209,9 @@ async def handle_unanswered_calls(call_id: str):
     )
 
     if lead.attempt_count < config.max_retry - 1:
-        next_attempt_at = datetime.now(timezone.utc) + timedelta(seconds=config.retry_offset)
+        next_attempt_at = datetime.now(timezone.utc) + timedelta(
+            seconds=config.retry_offset
+        )
         await create_lead_call_tracker(
             id=str(uuid.uuid4()),
             merchant_id=lead.merchant_id,
@@ -164,6 +220,7 @@ async def handle_unanswered_calls(call_id: str):
             payload=lead.payload,
             attempt_count=lead.attempt_count + 1,
         )
+
 
 async def update_call_recording(call_id: str, recording_url: str):
     """

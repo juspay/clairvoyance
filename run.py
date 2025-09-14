@@ -21,5 +21,5 @@ if __name__ == "__main__":
         reload=UVICORN_RELOAD,
         log_level=UVICORN_LOG_LEVEL,
         log_config=None,  # Disable Uvicorn's default logging config
-        access_log=True   # Keep access logs but route through our interceptor
+        access_log=True,  # Keep access logs but route through our interceptor
     )

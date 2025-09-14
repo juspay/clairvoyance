@@ -11,8 +11,9 @@ from app.core.logger import logger
 @dataclass
 class SessionContext:
     """Context object containing session information."""
+
     session_id: str
-    
+
     def __post_init__(self):
         logger.info(f"Created session context with ID: {self.session_id}")
 

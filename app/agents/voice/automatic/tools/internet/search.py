@@ -16,7 +16,6 @@ from pipecat.processors.frame_processor import FrameDirection
 from google.genai.types import GenerateContentConfig
 
 
-
 # ---------- 1. Set up Gemini (Google) LLM for search-only use ----------
 search_tool = {"google_search": {}}
 tools_list = [search_tool]
@@ -38,13 +37,11 @@ async def gemini_search_fn(params: FunctionCallParams):
     logger.info(f"Performing Gemini search for query: {query}")
 
     try:
-        ctx = GoogleLLMContext(messages=[
-            {"role": "user", "content": query}
-        ])
+        ctx = GoogleLLMContext(messages=[{"role": "user", "content": query}])
 
         # Include current date in system message to provide context for the search
         current_date = datetime.now().strftime("%Y-%m-%d")
-        
+
         ctx.system_message = (
             f"You are a helpful assistant that will always search the web for up-to-date information. "
             f"The current date is {current_date}. "
@@ -76,13 +73,17 @@ async def gemini_search_fn(params: FunctionCallParams):
                         result_parts.append(part.text)
 
         full_result = "".join(result_parts).strip()
-        
+
         if full_result:
             logger.info(f"Gemini search for '{query}' returned: {full_result[:100]}...")
             await params.result_callback({"results": full_result})
         else:
-            logger.warning(f"Gemini search for query '{query}' returned no text results.")
-            await params.result_callback({"results": "No information found for your query."})
+            logger.warning(
+                f"Gemini search for query '{query}' returned no text results."
+            )
+            await params.result_callback(
+                {"results": "No information found for your query."}
+            )
 
     except Exception as e:
         logger.error(f"Error during Gemini search: {e}", exc_info=True)
@@ -93,10 +94,8 @@ async def gemini_search_fn(params: FunctionCallParams):
 search_tool_function = FunctionSchema(
     name="search_web",
     description="Search the web for up-to-date information.",
-    properties={
-        "query": {"type": "string", "description": "Search query"}
-    },
-    required=["query"]
+    properties={"query": {"type": "string", "description": "Search query"}},
+    required=["query"],
 )
 
 tools = ToolsSchema(

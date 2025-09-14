@@ -13,6 +13,7 @@ OUTBOUND_NUMBERS_TABLE = "outbound_number"
 CALL_EXECUTION_CONFIG_TABLE = "call_execution_config"
 LEAD_CALL_TRACKER_TABLE = "lead_call_tracker"
 
+
 def create_lead_call_tracker_table_query() -> str:
     """
     Generate query to create lead_call_tracker table.
@@ -43,6 +44,7 @@ def create_lead_call_tracker_table_query() -> str:
         CREATE INDEX IF NOT EXISTS "idx_lead_call_tracker_created_at" ON "{LEAD_CALL_TRACKER_TABLE}" ("created_at");
     """
 
+
 def create_call_execution_config_table_query() -> str:
     """
     Generate query to create call_execution_configs table.
@@ -65,6 +67,7 @@ def create_call_execution_config_table_query() -> str:
         CREATE INDEX IF NOT EXISTS "idx_call_execution_config_created_at" ON "{CALL_EXECUTION_CONFIG_TABLE}" ("created_at");
     """
 
+
 def create_outbound_numbers_table_query() -> str:
     """
     Generate query to create outbound_numbers table.
@@ -80,10 +83,11 @@ def create_outbound_numbers_table_query() -> str:
             "created_at" TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
             "updated_at" TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL
         );
-        
+
         CREATE INDEX IF NOT EXISTS idx_outbound_numbers_status ON "{OUTBOUND_NUMBERS_TABLE}" ("status");
         CREATE INDEX IF NOT EXISTS idx_outbound_numbers_provider ON "{OUTBOUND_NUMBERS_TABLE}" ("provider");
     """
+
 
 async def create_outbound_numbers_table():
     """
@@ -99,6 +103,7 @@ async def create_outbound_numbers_table():
         print(f"Error creating outbound_numbers table: {e}")
         return False
 
+
 async def create_call_execution_config_table():
     """
     Create the call_execution_configs table with all constraints and indexes.
@@ -112,6 +117,7 @@ async def create_call_execution_config_table():
     except Exception as e:
         print(f"Error creating call_execution_configs table: {e}")
         return False
+
 
 async def create_lead_call_tracker_table():
     """
@@ -127,24 +133,29 @@ async def create_lead_call_tracker_table():
         print(f"Error creating lead_call_tracker table: {e}")
         return False
 
+
 async def create_all_tables():
     """
     Create all database tables.
     """
     print("Starting database table creation...")
-    
+
     try:
         outbound_numbers_success = await create_outbound_numbers_table()
         call_execution_config_success = await create_call_execution_config_table()
         lead_call_tracker_success = await create_lead_call_tracker_table()
 
-        if outbound_numbers_success and call_execution_config_success and lead_call_tracker_success:
+        if (
+            outbound_numbers_success
+            and call_execution_config_success
+            and lead_call_tracker_success
+        ):
             print("All database tables created successfully")
             return True
         else:
             print("Failed to create some database tables")
             return False
-            
+
     except Exception as e:
         print(f"Error during table creation: {e}")
         return False
@@ -157,29 +168,31 @@ async def list_all_tables():
     try:
         async for conn in get_db_connection():
             query = """
-                SELECT table_name 
-                FROM information_schema.tables 
+                SELECT table_name
+                FROM information_schema.tables
                 WHERE table_schema = 'public'
                 ORDER BY table_name;
             """
             rows = await conn.fetch(query)
-            return [row['table_name'] for row in rows]
+            return [row["table_name"] for row in rows]
     except Exception as e:
         print(f"Error listing tables: {e}")
         return []
+
 
 def main():
     """
     Main function to run table creation.
     """
     import sys
-    
+
     if len(sys.argv) > 1:
         command = sys.argv[1].lower()
-        
+
         if command == "create":
             asyncio.run(create_all_tables())
         elif command == "list":
+
             async def list_tables():
                 await init_db_pool()
                 try:
@@ -189,10 +202,11 @@ def main():
                         print(f"  - {table}")
                 finally:
                     await close_db_pool()
-            
+
             asyncio.run(list_tables())
         else:
             print("Usage: python -m app.scripts.create_tables [create|list]")
+
 
 if __name__ == "__main__":
     main()

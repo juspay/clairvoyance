@@ -3,8 +3,15 @@ Decoder functions for lead call tracker.
 """
 from typing import List, Optional
 import asyncpg
-from app.schemas import LeadCallTracker, Workflow, LeadCallStatus, LeadCallOutcome, RequestedBy
+from app.schemas import (
+    LeadCallTracker,
+    Workflow,
+    LeadCallStatus,
+    LeadCallOutcome,
+    RequestedBy,
+)
 from app.utils.common import parse_json
+
 
 def decode_lead_call_tracker(row: asyncpg.Record) -> Optional[LeadCallTracker]:
     """
@@ -12,7 +19,7 @@ def decode_lead_call_tracker(row: asyncpg.Record) -> Optional[LeadCallTracker]:
     """
     if not row:
         return None
-    
+
     return LeadCallTracker(
         id=row["id"],
         outbound_number_id=row["outbound_number_id"],

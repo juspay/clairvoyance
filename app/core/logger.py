@@ -8,6 +8,7 @@ logger.remove()
 
 from app.core.config import ENVIRONMENT, PROD_LOG_LEVEL
 
+
 def json_sink(message):
     """
     Custom sink function for JSON output in production environments.
@@ -28,11 +29,13 @@ def json_sink(message):
     }
     print(json.dumps(log_entry))
 
+
 class InterceptHandler(logging.Handler):
     """
     Intercept standard logging messages toward Loguru sinks.
     This allows us to capture logs from libraries like Uvicorn.
     """
+
     def emit(self, record):
         # Get corresponding Loguru level if it exists
         try:
@@ -46,9 +49,14 @@ class InterceptHandler(logging.Handler):
             frame = frame.f_back
             depth += 1
 
-        logger.opt(depth=depth, exception=record.exc_info).log(level, record.getMessage())
+        logger.opt(depth=depth, exception=record.exc_info).log(
+            level, record.getMessage()
+        )
 
-def _setup_logger_sinks(include_session_id: bool = False, include_client_sid: bool = False):
+
+def _setup_logger_sinks(
+    include_session_id: bool = False, include_client_sid: bool = False
+):
     """
     Internal function to set up logger sinks based on environment.
     Reduces code duplication between initial setup and session configuration.
@@ -58,15 +66,21 @@ def _setup_logger_sinks(include_session_id: bool = False, include_client_sid: bo
     def filter_spam_logs(record):
         logger_name = record["name"]
         return not (
-            logger_name.startswith("websockets") or 
-            logger_name.startswith("daily_core") or
-            logger_name.startswith("openai._base_client")  # Only block _base_client logs, not all openai logs
+            logger_name.startswith("websockets")
+            or logger_name.startswith("daily_core")
+            or logger_name.startswith(
+                "openai._base_client"
+            )  # Only block _base_client logs, not all openai logs
         )
 
     if ENVIRONMENT == "dev":
         # Development mode format
-        session_part = "<cyan>[{extra[session_id]}]</cyan> | " if include_session_id else ""
-        client_sid_part = "<yellow>[{extra[client_sid]}]</yellow> | " if include_client_sid else ""
+        session_part = (
+            "<cyan>[{extra[session_id]}]</cyan> | " if include_session_id else ""
+        )
+        client_sid_part = (
+            "<yellow>[{extra[client_sid]}]</yellow> | " if include_client_sid else ""
+        )
         stdout_fmt = (
             "<green>{time:YYYY-MM-DD HH:mm:ss}</green> | "
             "<level>{level: <8}</level> | "
@@ -75,8 +89,10 @@ def _setup_logger_sinks(include_session_id: bool = False, include_client_sid: bo
             "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - "
             "<level>{message}</level>"
         )
-        stderr_fmt = stdout_fmt.replace("<green>", "<red>").replace("</green>", "</red>")
-        
+        stderr_fmt = stdout_fmt.replace("<green>", "<red>").replace(
+            "</green>", "</red>"
+        )
+
         logger.add(
             sys.stdout,
             level="DEBUG",
@@ -86,7 +102,7 @@ def _setup_logger_sinks(include_session_id: bool = False, include_client_sid: bo
             backtrace=False,
             colorize=True,
         )
-        
+
         logger.add(
             sys.stderr,
             level="WARNING",
@@ -103,31 +119,35 @@ def _setup_logger_sinks(include_session_id: bool = False, include_client_sid: bo
             level=PROD_LOG_LEVEL,  # Configurable log level via PROD_LOG_LEVEL env var defaulting to INFO
             enqueue=True,
             backtrace=False,  # Keep JSON logs concise and predictable
-            diagnose=False,   # Prevent sensitive data leakage and performance overhead
+            diagnose=False,  # Prevent sensitive data leakage and performance overhead
         )
 
-        DEBUG_LOGS_TO_UPLEVEL = {"pipecat.transports.base_input", "pipecat.transports.base_output"}
+        DEBUG_LOGS_TO_UPLEVEL = {
+            "pipecat.transports.base_input",
+            "pipecat.transports.base_output",
+        }
 
         # 2) Secondary "promote" sink for exactly those two DEBUG records
         def promote_debug_logs(record):
             name = record["name"]
-            lvl  = record["level"].name
+            lvl = record["level"].name
             # target only required debug logs
             if name in DEBUG_LOGS_TO_UPLEVEL and lvl == "DEBUG":
                 # bump them up to INFO so that they pass the PROD_LOG_LEVEL filter
                 record["level"].name = "INFO"
-                record["level"].no   = logger.level("INFO").no
+                record["level"].no = logger.level("INFO").no
                 return True
             return False
 
         logger.add(
-            json_sink,               # same JSON formatter
-            level="DEBUG",           # catch DEBUGs…
+            json_sink,  # same JSON formatter
+            level="DEBUG",  # catch DEBUGs…
             filter=promote_debug_logs,
             enqueue=True,
             backtrace=False,
             diagnose=False,
         )
+
 
 def configure_session_logger(session_id: str, client_sid: str = None):
     """
@@ -136,14 +156,15 @@ def configure_session_logger(session_id: str, client_sid: str = None):
     """
     logger.remove()
     _setup_logger_sinks(include_session_id=True, include_client_sid=bool(client_sid))
-    
+
     extra_context = {"session_id": session_id}
     if client_sid:
         extra_context["client_sid"] = client_sid
-        
+
     logger.configure(extra=extra_context)
     # Also set up logging interception for session-based logging
     setup_logging_interception()
+
 
 def setup_logging_interception():
     """
@@ -162,6 +183,7 @@ def setup_logging_interception():
     # Completely disable logs from websockets and daily_core to avoid spamming
     logging.getLogger("websockets").disabled = True
     logging.getLogger("daily_core").disabled = True
+
 
 # Initial logger configuration
 _setup_logger_sinks(include_session_id=False)

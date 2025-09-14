@@ -5,6 +5,7 @@ from pipecat.services.llm_service import FunctionCallParams
 from pipecat.adapters.schemas.function_schema import FunctionSchema
 from pipecat.adapters.schemas.tools_schema import ToolsSchema
 
+
 async def get_current_time(params: FunctionCallParams):
     timezone_str = params.arguments.get("timezone", "Asia/Kolkata")
     try:
@@ -13,6 +14,7 @@ async def get_current_time(params: FunctionCallParams):
         await params.result_callback({"time": current_time})
     except Exception as e:
         await params.result_callback({"error": str(e)})
+
 
 get_current_time_function = FunctionSchema(
     name="get_current_time",

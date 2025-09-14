@@ -5,13 +5,16 @@ from typing import List, Optional
 import asyncpg
 from app.schemas import Workflow, CallExecutionConfig, CallProvider
 
-def decode_call_execution_config_list(result: List[asyncpg.Record]) -> List[CallExecutionConfig]:
+
+def decode_call_execution_config_list(
+    result: List[asyncpg.Record],
+) -> List[CallExecutionConfig]:
     """
     Decode multiple call execution config records from database result using Pydantic models.
     """
     if not result:
         return []
-    
+
     return [
         CallExecutionConfig(
             id=row["id"],
@@ -29,13 +32,16 @@ def decode_call_execution_config_list(result: List[asyncpg.Record]) -> List[Call
         for row in result
     ]
 
-def decode_call_execution_config(result: List[asyncpg.Record]) -> Optional[CallExecutionConfig]:
+
+def decode_call_execution_config(
+    result: List[asyncpg.Record],
+) -> Optional[CallExecutionConfig]:
     """
     Decode call execution config from database result using Pydantic model.
     """
     if not result or len(result) == 0:
         return None
-    
+
     row = result[0]
     return CallExecutionConfig(
         id=row["id"],

@@ -6,15 +6,16 @@ from pipecat.services.google.stt import GoogleSTTService
 from pipecat.services.openai.stt import OpenAISTTService
 from pipecat.transcriptions.language import Language
 
+
 def get_stt_service():
     """
     Returns an STT service instance based on the environment configuration.
-    
+
     Args:
         voice_name: Voice name to determine STT provider override for specific voices
     """
     # Check for MIA voice with OpenAI override
-    if config.BREEZE_BUDDY_STT_SERVICE == 'openai':
+    if config.BREEZE_BUDDY_STT_SERVICE == "openai":
         logger.info("Using OpenAI STT service for Breeze Buddy voice")
         return OpenAISTTService(
             api_key=config.OPENAI_STT_API_KEY,
@@ -25,9 +26,12 @@ def get_stt_service():
     else:
         logger.info("Using Google STT service with VAD-based turn detection")
         return GoogleSTTService(
-            params=GoogleSTTService.InputParams(languages=[Language.EN_US, Language.EN_IN], enable_interim_results=False),
-            credentials=config.GOOGLE_CREDENTIALS_JSON
+            params=GoogleSTTService.InputParams(
+                languages=[Language.EN_US, Language.EN_IN], enable_interim_results=False
+            ),
+            credentials=config.GOOGLE_CREDENTIALS_JSON,
         )
+
 
 # Mapping dictionary for outcome strings to LeadCallOutcome enum values
 OUTCOME_TO_ENUM = {
@@ -35,6 +39,7 @@ OUTCOME_TO_ENUM = {
     "cancelled": LeadCallOutcome.CANCEL,
     "busy": LeadCallOutcome.BUSY,
 }
+
 
 def indian_number_to_speech(number: int) -> str:
     if number < 100:
@@ -77,4 +82,4 @@ def indian_number_to_speech(number: int) -> str:
             h_part += f" {rest}"
         parts[-1] = h_part
 
-    return ' '.join(parts) + " rupees"
+    return " ".join(parts) + " rupees"

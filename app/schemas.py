@@ -10,16 +10,20 @@ class OutboundNumberStatus(str, Enum):
     IN_USE = "IN_USE"
     DISABLED = "DISABLED"
 
+
 class CallProvider(str, Enum):
     TWILIO = "TWILIO"
     EXOTEL = "EXOTEL"
+
 
 class RequestedBy(str, Enum):
     BREEZE = "breeze"
     SHOPIFY = "shopify"
 
+
 class Workflow(str, Enum):
     ORDER_CONFIRMATION = "order-confirmation"
+
 
 class LeadCallStatus(str, Enum):
     BACKLOG = "BACKLOG"
@@ -27,12 +31,14 @@ class LeadCallStatus(str, Enum):
     FINISHED = "FINISHED"
     RETRY = "RETRY"
 
+
 class LeadCallOutcome(str, Enum):
     NO_ANSWER = "NO_ANSWER"
     BUSY = "BUSY"
     CANCEL = "CANCEL"
     CONFIRM = "CONFIRM"
     UNKNOWN = "UNKNOWN"
+
 
 class LeadCallTracker(BaseModel):
     id: str
@@ -53,11 +59,13 @@ class LeadCallTracker(BaseModel):
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
+
 class CreateOutboundNumberRequest(BaseModel):
     number: str
     provider: CallProvider
     status: OutboundNumberStatus = OutboundNumberStatus.AVAILABLE
     maximum_channels: Optional[int] = None
+
 
 class OutboundNumber(BaseModel):
     id: str
@@ -69,6 +77,7 @@ class OutboundNumber(BaseModel):
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
+
 class CreateCallExecutionConfigRequest(BaseModel):
     initial_offset: int
     retry_offset: int
@@ -78,6 +87,7 @@ class CreateCallExecutionConfigRequest(BaseModel):
     calling_provider: CallProvider
     merchant_id: str
     workflow: Workflow
+
 
 class CallExecutionConfig(BaseModel):
     id: str
@@ -92,9 +102,11 @@ class CallExecutionConfig(BaseModel):
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
+
 class AutomaticVoiceTTSServiceConfig(BaseModel):
     ttsProvider: TTSProvider
     voiceName: VoiceName
+
 
 class AutomaticVoiceUserConnectRequest(BaseModel):
     sessionId: Optional[str] = None
@@ -111,8 +123,10 @@ class AutomaticVoiceUserConnectRequest(BaseModel):
     platformIntegrations: Optional[List[str]] = None
     resellerId: Optional[str] = None
 
+
 class TokenData(BaseModel):
     """Token data model for JWT payload"""
+
     user_id: Optional[str] = None
     username: Optional[str] = None
     email: Optional[str] = None

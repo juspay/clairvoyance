@@ -44,7 +44,7 @@ def insert_lead_call_tracker_query(
         )
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING *;
     """
-    
+
     values = [
         id,
         merchant_id.value,
@@ -58,12 +58,15 @@ def insert_lead_call_tracker_query(
         attempt_count,
         cost,
         datetime.now(),
-        datetime.now()
+        datetime.now(),
     ]
-    
+
     return text, values
 
-def get_leads_based_on_status_and_next_attempt_query(status: LeadCallStatus, time: datetime) -> Tuple[str, List[Any]]:
+
+def get_leads_based_on_status_and_next_attempt_query(
+    status: LeadCallStatus, time: datetime
+) -> Tuple[str, List[Any]]:
     """
     Generate query to select leads based on status and next attempt time.
     """
@@ -75,7 +78,14 @@ def get_leads_based_on_status_and_next_attempt_query(status: LeadCallStatus, tim
     values = [status.value, time]
     return text, values
 
-def update_lead_call_details_query(id: str, status: LeadCallStatus, call_id: str, call_initiated_time: datetime, outbound_number_id: str) -> Tuple[str, List[Any]]:
+
+def update_lead_call_details_query(
+    id: str,
+    status: LeadCallStatus,
+    call_id: str,
+    call_initiated_time: datetime,
+    outbound_number_id: str,
+) -> Tuple[str, List[Any]]:
     """
     Generate query to update lead call details.
     """
@@ -87,6 +97,7 @@ def update_lead_call_details_query(id: str, status: LeadCallStatus, call_id: str
     """
     values = [status.value, call_id, call_initiated_time, outbound_number_id, id]
     return text, values
+
 
 def get_lead_by_call_id_query(call_id: str) -> Tuple[str, List[Any]]:
     """
@@ -100,7 +111,9 @@ def get_lead_by_call_id_query(call_id: str) -> Tuple[str, List[Any]]:
     return text, values
 
 
-def update_lead_call_recording_url_query(call_id: str, recording_url: str) -> Tuple[str, List[Any]]:
+def update_lead_call_recording_url_query(
+    call_id: str, recording_url: str
+) -> Tuple[str, List[Any]]:
     """
     Generate query to update lead call recording url.
     """

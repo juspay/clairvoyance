@@ -36,7 +36,7 @@ This file records architectural and implementation decisions using a list format
 
 *   [2025-05-22 18:35:00] - Implement and populate the Memory Bank.
 
-## Rationale 
+## Rationale
 
 *   To maintain project context, track progress, log decisions, and document system patterns effectively across chat sessions and for different modes. This enhances continuity and understanding of the project's evolution.
 

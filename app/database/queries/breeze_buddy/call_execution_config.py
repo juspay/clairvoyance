@@ -40,7 +40,7 @@ def insert_call_execution_config_query(
         )
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *;
     """
-    
+
     values = [
         id,
         initial_offset,
@@ -52,12 +52,15 @@ def insert_call_execution_config_query(
         merchant_id,
         workflow.value,
         datetime.now(),
-        datetime.now()
+        datetime.now(),
     ]
-    
+
     return text, values
 
-def get_call_execution_config_by_merchant_id_query(merchant_id: str) -> Tuple[str, List[Any]]:
+
+def get_call_execution_config_by_merchant_id_query(
+    merchant_id: str,
+) -> Tuple[str, List[Any]]:
     """
     Generate query to get call execution config by merchant ID.
     """
