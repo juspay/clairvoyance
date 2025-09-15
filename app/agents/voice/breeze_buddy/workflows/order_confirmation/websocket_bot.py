@@ -77,6 +77,8 @@ class OrderConfirmationBot:
         self.serializer = serializer
         self.hangup_function = hangup_function
         self.completion_function = completion_function
+        self.vad_analyzer = None
+        self.transport = None
 
     async def run(self):
         logger.info("Starting WebSocket bot")
@@ -199,21 +201,24 @@ class OrderConfirmationBot:
             f"Order Details: ID-{self.order_id}, Customer-{customer_name}, Summary-{self.order_summary}, Price-₹{total_price}"
         )
 
-        transport = FastAPIWebsocketTransport(
+        # Create VAD analyzer and store reference for muting
+        self.vad_analyzer = SileroVADAnalyzer(
+            sample_rate=16000,
+            params=VADParams(
+                confidence=BREEZE_BUDDY_VAD_CONFIDENCE,
+                start_secs=BREEZE_BUDDY_VAD_START_SECS,
+                stop_secs=BREEZE_BUDDY_VAD_STOP_SECS,
+                min_volume=BREEZE_BUDDY_VAD_MIN_VOLUME,
+            ),
+        )
+
+        self.transport = FastAPIWebsocketTransport(
             websocket=self.ws,
             params=FastAPIWebsocketParams(
                 audio_in_enabled=True,
                 audio_out_enabled=True,
                 add_wav_header=False,
-                vad_analyzer=SileroVADAnalyzer(
-                    sample_rate=16000,
-                    params=VADParams(
-                        confidence=BREEZE_BUDDY_VAD_CONFIDENCE,
-                        start_secs=BREEZE_BUDDY_VAD_START_SECS,
-                        stop_secs=BREEZE_BUDDY_VAD_STOP_SECS,
-                        min_volume=BREEZE_BUDDY_VAD_MIN_VOLUME,
-                    ),
-                ),
+                vad_analyzer=self.vad_analyzer,
                 serializer=(
                     self.serializer(stream_sid, self.call_sid)
                     if self.serializer
@@ -228,6 +233,8 @@ class OrderConfirmationBot:
             endpoint=AZURE_OPENAI_ENDPOINT,
             model=AZURE_BREEZE_BUDDY_OPENAI_MODEL,
         )
+
+        # Create TTS with event handlers for VAD muting
         tts = ElevenLabsTTSService(
             api_key=ELEVENLABS_API_KEY,
             voice_id=ELEVENLABS_BB_VOICE_ID,
@@ -236,6 +243,38 @@ class OrderConfirmationBot:
                 speed=ELEVENLABS_VOICE_SPEED, language=Language.EN_IN
             ),
         )
+
+        # Add event handlers to TTS for VAD control
+        async def set_vad_state(self, enabled: bool):
+            action = "enable" if enabled else "disable"
+            logger.info(f"Attempting to {action} VAD/audio_in.")
+
+            if self.vad_analyzer:
+                if hasattr(self.vad_analyzer, "set_enabled"):
+                    self.vad_analyzer.set_enabled(enabled)
+                    logger.info(f"VAD {action}d via set_enabled.")
+                else:
+                    logger.warning("VAD analyzer does not have set_enabled method.")
+            elif self.transport:
+                if hasattr(self.transport, "enable_audio_in"):
+                    await self.transport.enable_audio_in(enabled)
+                    logger.info(f"Audio_in {action}d on transport.")
+                else:
+                    logger.warning("Transport does not have enable_audio_in method.")
+            else:
+                logger.error(
+                    f"Could not {action} VAD: No VAD analyzer or transport found."
+                )
+
+        @tts.event_handler("on_tts_started")
+        async def on_tts_started(tts, text):
+            logger.info(f"TTS started event triggered, muting VAD: {text[:50]}...")
+            await self.set_vad_state(False)
+
+        @tts.event_handler("on_tts_stopped")
+        async def on_tts_stopped(tts, text):
+            logger.info("TTS stopped event triggered, unmuting VAD.")
+            await self.set_vad_state(True)
 
         self.system_prompt = self._get_system_prompt(
             self.shop_name,
@@ -252,12 +291,12 @@ class OrderConfirmationBot:
 
         pipeline = Pipeline(
             [
-                transport.input(),
+                self.transport.input(),
                 stt,
                 context_aggregator.user(),
                 llm,
                 tts,
-                transport.output(),
+                self.transport.output(),
                 context_aggregator.assistant(),
             ]
         )
@@ -277,15 +316,15 @@ class OrderConfirmationBot:
             task=self.task,
             llm=llm,
             context_aggregator=context_aggregator,
-            transport=transport,
+            transport=self.transport,
         )
 
-        @transport.event_handler("on_client_connected")
+        @self.transport.event_handler("on_client_connected")
         async def on_client_connected(transport, client):
             logger.info(f"Client connected: {client}")
             await self.flow_manager.initialize(self._create_initial_node())
 
-        @transport.event_handler("on_client_disconnected")
+        @self.transport.event_handler("on_client_disconnected")
         async def on_client_disconnected(transport, client):
             logger.info(f"Client disconnected: {client}")
             if not self.conversation_ended:
