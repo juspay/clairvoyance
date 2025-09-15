@@ -1,12 +1,14 @@
 """
 Database query functions for the application.
 """
+
 from typing import Any, List, Tuple
 from datetime import datetime, time
 from app.schemas import Workflow, CallProvider
 
 # Table names
 CALL_EXECUTION_CONFIG_TABLE = "call_execution_config"
+
 
 # Call execution config queries
 def insert_call_execution_config_query(

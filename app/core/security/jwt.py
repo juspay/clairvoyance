@@ -129,6 +129,7 @@ jwt_manager = JWTManager()
 # HTTP Bearer security scheme
 security = HTTPBearer()
 
+
 # Dependency functions for FastAPI
 async def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(security),

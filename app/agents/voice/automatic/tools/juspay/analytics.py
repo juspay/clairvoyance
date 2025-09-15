@@ -710,9 +710,11 @@ async def create_euler_offer(params: FunctionCallParams):
                             "validTo": end_date,
                             "minAmount": min_order_amount,
                             "sponsoredBy": sponsored_by,
-                            "paymentMethods": payment_instruments
-                            if payment_instruments
-                            else "All payment methods",
+                            "paymentMethods": (
+                                payment_instruments
+                                if payment_instruments
+                                else "All payment methods"
+                            ),
                         },
                     }
                     await params.result_callback({"data": json.dumps(success_result)})
@@ -1268,22 +1270,32 @@ async def update_euler_offer(params: FunctionCallParams):
             "offer_code": offer_code,
             "batch_id": existing_offer.get("batch_id", ""),
             "offer_description": {
-                "title": offer_title
-                if offer_title is not None
-                else existing_offer.get("offer_description", {}).get("title", ""),
-                "description": offer_description
-                if offer_description is not None
-                else existing_offer.get("offer_description", {}).get("description", ""),
-                "tnc": existing_offer.get("offer_description", {}).get("tnc", ""),
-                "sponsored_by": sponsored_by
-                if sponsored_by is not None
-                else existing_offer.get("offer_description", {}).get(
-                    "sponsored_by", "BREEZE"
+                "title": (
+                    offer_title
+                    if offer_title is not None
+                    else existing_offer.get("offer_description", {}).get("title", "")
                 ),
-                "display_title": offer_title
-                if offer_title is not None
-                else existing_offer.get("offer_description", {}).get(
-                    "display_title", ""
+                "description": (
+                    offer_description
+                    if offer_description is not None
+                    else existing_offer.get("offer_description", {}).get(
+                        "description", ""
+                    )
+                ),
+                "tnc": existing_offer.get("offer_description", {}).get("tnc", ""),
+                "sponsored_by": (
+                    sponsored_by
+                    if sponsored_by is not None
+                    else existing_offer.get("offer_description", {}).get(
+                        "sponsored_by", "BREEZE"
+                    )
+                ),
+                "display_title": (
+                    offer_title
+                    if offer_title is not None
+                    else existing_offer.get("offer_description", {}).get(
+                        "display_title", ""
+                    )
                 ),
             },
             "ui_configs": existing_offer.get(
@@ -1307,11 +1319,13 @@ async def update_euler_offer(params: FunctionCallParams):
                     "max_order_amount": existing_offer.get("rule_dsl", {})
                     .get("order", {})
                     .get("max_order_amount"),
-                    "min_order_amount": str(min_order_amount)
-                    if min_order_amount is not None
-                    else existing_offer.get("rule_dsl", {})
-                    .get("order", {})
-                    .get("min_order_amount", "1"),
+                    "min_order_amount": (
+                        str(min_order_amount)
+                        if min_order_amount is not None
+                        else existing_offer.get("rule_dsl", {})
+                        .get("order", {})
+                        .get("min_order_amount", "1")
+                    ),
                     "currency": existing_offer.get("rule_dsl", {})
                     .get("order", {})
                     .get("currency", "INR"),
@@ -1322,9 +1336,13 @@ async def update_euler_offer(params: FunctionCallParams):
                 "additional_payment_filters": existing_offer.get("rule_dsl", {}).get(
                     "additional_payment_filters"
                 ),
-                "payment_instrument": payment_instruments_payload
-                if payment_instruments_payload is not None
-                else existing_offer.get("rule_dsl", {}).get("payment_instrument", []),
+                "payment_instrument": (
+                    payment_instruments_payload
+                    if payment_instruments_payload is not None
+                    else existing_offer.get("rule_dsl", {}).get(
+                        "payment_instrument", []
+                    )
+                ),
                 "counters": existing_offer.get("rule_dsl", {}).get("counters", []),
                 "txn_type": existing_offer.get("rule_dsl", {}).get(
                     "txn_type", ["ORDER"]
@@ -1334,29 +1352,37 @@ async def update_euler_offer(params: FunctionCallParams):
                 ),
                 "benefits": [
                     {
-                        "type": offer_type
-                        if offer_type is not None
-                        else existing_offer.get("rule_dsl", {})
-                        .get("benefits", [{}])[0]
-                        .get("type", "DISCOUNT"),
-                        "calculation_rule": calculation_type
-                        if calculation_type is not None
-                        else existing_offer.get("rule_dsl", {})
-                        .get("benefits", [{}])[0]
-                        .get("calculation_rule", "ABSOLUTE"),
-                        "value": discount_value
-                        if discount_value is not None
-                        else existing_offer.get("rule_dsl", {})
-                        .get("benefits", [{}])[0]
-                        .get("value", 0),
+                        "type": (
+                            offer_type
+                            if offer_type is not None
+                            else existing_offer.get("rule_dsl", {})
+                            .get("benefits", [{}])[0]
+                            .get("type", "DISCOUNT")
+                        ),
+                        "calculation_rule": (
+                            calculation_type
+                            if calculation_type is not None
+                            else existing_offer.get("rule_dsl", {})
+                            .get("benefits", [{}])[0]
+                            .get("calculation_rule", "ABSOLUTE")
+                        ),
+                        "value": (
+                            discount_value
+                            if discount_value is not None
+                            else existing_offer.get("rule_dsl", {})
+                            .get("benefits", [{}])[0]
+                            .get("value", 0)
+                        ),
                         "amount_info": existing_offer.get("rule_dsl", {})
                         .get("benefits", [{}])[0]
                         .get("amount_info", []),
-                        "max_amount": max_discount_amount
-                        if max_discount_amount is not None
-                        else existing_offer.get("rule_dsl", {})
-                        .get("benefits", [{}])[0]
-                        .get("max_amount"),
+                        "max_amount": (
+                            max_discount_amount
+                            if max_discount_amount is not None
+                            else existing_offer.get("rule_dsl", {})
+                            .get("benefits", [{}])[0]
+                            .get("max_amount")
+                        ),
                         "global_max_amount": existing_offer.get("rule_dsl", {})
                         .get("benefits", [{}])[0]
                         .get("global_max_amount"),
@@ -1366,15 +1392,19 @@ async def update_euler_offer(params: FunctionCallParams):
                     "filters", {"blacklist": [], "whitelist": []}
                 ),
             },
-            "status": status
-            if status is not None
-            else existing_offer.get("status", "ACTIVE"),
-            "start_time": start_date_iso
-            if start_date_iso is not None
-            else existing_offer.get("start_time"),
-            "end_time": end_date_iso
-            if end_date_iso is not None
-            else existing_offer.get("end_time"),
+            "status": (
+                status if status is not None else existing_offer.get("status", "ACTIVE")
+            ),
+            "start_time": (
+                start_date_iso
+                if start_date_iso is not None
+                else existing_offer.get("start_time")
+            ),
+            "end_time": (
+                end_date_iso
+                if end_date_iso is not None
+                else existing_offer.get("end_time")
+            ),
             "metadata": {
                 "analytics_offer_code": offer_code,
                 "customerResetPeriodType": existing_offer.get("metadata", {}).get(
@@ -1395,12 +1425,16 @@ async def update_euler_offer(params: FunctionCallParams):
                 "productUpiResetPeriodType": existing_offer.get("metadata", {}).get(
                     "productUpiResetPeriodType", "offerPeriod"
                 ),
-                "start_date": start_date_iso
-                if start_date_iso is not None
-                else existing_offer.get("metadata", {}).get("start_date"),
-                "end_date": end_date_iso
-                if end_date_iso is not None
-                else existing_offer.get("metadata", {}).get("end_date"),
+                "start_date": (
+                    start_date_iso
+                    if start_date_iso is not None
+                    else existing_offer.get("metadata", {}).get("start_date")
+                ),
+                "end_date": (
+                    end_date_iso
+                    if end_date_iso is not None
+                    else existing_offer.get("metadata", {}).get("end_date")
+                ),
             },
             "udf1": existing_offer.get("udf1"),
             "udf2": existing_offer.get("udf2"),

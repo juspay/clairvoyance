@@ -1,6 +1,7 @@
 """
 Database accessor functions for the application.
 """
+
 from typing import Any, Dict, List, Optional
 import asyncpg
 from app.core.logger import logger

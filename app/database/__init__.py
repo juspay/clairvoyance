@@ -2,6 +2,7 @@
 Database module for the application.
 This module contains database connection and models.
 """
+
 import asyncpg
 from app.core.config import (
     POSTGRES_USER,

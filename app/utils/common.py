@@ -55,9 +55,7 @@ def parse_json(row, key) -> Optional[Dict[str, Any]]:
     return (
         row[key]
         if isinstance(row[key], dict)
-        else json.loads(row[key])
-        if row[key]
-        else None
+        else json.loads(row[key]) if row[key] else None
     )
 
 

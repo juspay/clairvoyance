@@ -1,6 +1,7 @@
 """
 Cron manager for handling background tasks.
 """
+
 from datetime import datetime, timezone, timedelta
 from app.core.logger import logger
 import uuid
@@ -114,7 +115,11 @@ async def process_backlog_leads():
 
 
 async def handle_call_completion(
-    call_id: str, outcome: LeadCallOutcome, transcription: dict, call_end_time: datetime
+    call_id: str,
+    outcome: LeadCallOutcome,
+    transcription: dict,
+    call_end_time: datetime,
+    updated_address: str | None = None,
 ):
     """
     Handles call completion events.
@@ -143,7 +148,11 @@ async def handle_call_completion(
         id=lead.id,
         status=LeadCallStatus.FINISHED,
         outcome=outcome,
-        meta_data={"transcription": transcription},
+        meta_data=(
+            {"transcription": transcription, "updated_address": updated_address}
+            if updated_address
+            else {"transcription": transcription}
+        ),
         call_end_time=call_end_time,
     )
 

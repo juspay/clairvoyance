@@ -1,6 +1,7 @@
 """
 Database accessor functions for the application.
 """
+
 from typing import Any, Dict, List, Optional
 from datetime import datetime
 import asyncpg

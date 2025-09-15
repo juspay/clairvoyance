@@ -1,10 +1,12 @@
 """
 Database query functions for the application.
 """
+
 from typing import Any, List, Optional
 import asyncpg
 from app.core.logger import logger
 from app.database import get_db_connection
+
 
 # Helper function to execute parameterized queries
 async def run_parameterized_query(

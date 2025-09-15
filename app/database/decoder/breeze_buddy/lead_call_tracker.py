@@ -1,6 +1,7 @@
 """
 Decoder functions for lead call tracker.
 """
+
 from typing import List, Optional
 import asyncpg
 from app.schemas import (

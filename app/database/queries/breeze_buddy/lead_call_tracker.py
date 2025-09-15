@@ -1,6 +1,7 @@
 """
 Database query functions for the application.
 """
+
 from typing import Any, Dict, List, Optional, Tuple
 from datetime import datetime
 from app.schemas import Workflow, LeadCallStatus, LeadCallOutcome, RequestedBy
@@ -8,6 +9,7 @@ import json
 
 # Table names
 LEAD_CALL_TRACKER_TABLE = "lead_call_tracker"
+
 
 # Lead call tracker queries
 def insert_lead_call_tracker_query(

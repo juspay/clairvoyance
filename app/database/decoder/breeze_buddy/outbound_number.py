@@ -1,6 +1,7 @@
 """
 Decoder functions for outbound number.
 """
+
 from typing import List, Optional
 import asyncpg
 from app.schemas import OutboundNumber, OutboundNumberStatus, CallProvider

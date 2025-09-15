@@ -37,6 +37,7 @@ class ApiFailure:
 # A union type to represent either outcome
 GeniusApiResponse = Union[ApiSuccess, ApiFailure]
 
+
 # --- MCP-Compliant Pydantic Models ---
 class ToolInputSchema(BaseModel):
     type: str = "object"

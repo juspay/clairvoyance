@@ -1,0 +1,16 @@
+#!/bin/sh
+echo "Running Black formatter before commit..."
+
+# Activate virtual environment
+source venv/bin/activate
+
+# Ensure dependencies are installed
+pip install -r requirements-dev.txt
+
+# Format all python files
+python -m black .
+
+# Stage updated files (if black changed them)
+git add -u
+
+echo "Black formatting complete."

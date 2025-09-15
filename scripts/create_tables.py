@@ -2,6 +2,7 @@
 Database table creation script.
 This module handles the creation of all database tables and their indexes.
 """
+
 from dotenv import load_dotenv
 import asyncio
 from app.database import init_db_pool, close_db_pool, get_db_connection
@@ -30,7 +31,7 @@ def create_lead_call_tracker_table_query() -> str:
             "meta_data" JSONB,
             "recording_url" VARCHAR(500),
             "status" VARCHAR(50) CHECK ("status" IN ('BACKLOG', 'PROCESSING', 'FINISHED', 'RETRY')) NOT NULL,
-            "outcome" VARCHAR(50) CHECK ("outcome" IN ('NO_ANSWER', 'BUSY', 'CANCEL', 'CONFIRM', 'UNKNOWN')),
+            "outcome" VARCHAR(50) CHECK ("outcome" IN ('NO_ANSWER', 'BUSY', 'CANCEL', 'CONFIRM', 'UNKNOWN', 'ADDRESS_UPDATED')),
             "call_id" VARCHAR(100),
             "call_initiated_time" TIMESTAMP WITH TIME ZONE,
             "call_end_time" TIMESTAMP WITH TIME ZONE,

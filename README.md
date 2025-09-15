@@ -54,7 +54,7 @@ The project is organized into a main FastAPI application (`app/`) with a clear s
 
 ### Prerequisites
 
-*   Python 3.8+
+*   Python 3.10+
 *   Database (e.g., PostgreSQL)
 *   Access to required third-party APIs (e.g., Azure OpenAI, Daily.co, Twilio/Exotel) with valid keys.
 
@@ -70,12 +70,17 @@ The project is organized into a main FastAPI application (`app/`) with a clear s
     ```bash
     pip install -r requirements.txt
     ```
-4.  **Set up Environment Variables:**
+4.  **Run the setup script:**
+    This script will handle any additional setup required for the project.
+    ```bash
+    ./scripts/setup.sh
+    ```
+5.  **Set up Environment Variables:**
     Create a `.env` file in the project root by copying `.env.example` and filling in the required values for the database, API keys, and other configurations.
-5.  **Initialize the Database:**
+6.  **Initialize the Database:**
     Run the script to create the necessary tables in your database.
     ```bash
-    python -m app.scripts.create_tables
+    python -m scripts.create_tables create
     ```
 
 ## 5. Running the Server

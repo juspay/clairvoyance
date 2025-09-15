@@ -513,9 +513,11 @@ async def main():
                 user_id=args.user_email,
                 session_id=args.session_id,
                 tags=[
-                    voice_name.value
-                    if hasattr(voice_name, "value")
-                    else str(voice_name)
+                    (
+                        voice_name.value
+                        if hasattr(voice_name, "value")
+                        else str(voice_name)
+                    )
                 ],
             )
             await run_pipeline()

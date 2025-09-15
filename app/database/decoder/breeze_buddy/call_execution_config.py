@@ -1,6 +1,7 @@
 """
 Decoder functions for call execution config.
 """
+
 from typing import List, Optional
 import asyncpg
 from app.schemas import Workflow, CallExecutionConfig, CallProvider

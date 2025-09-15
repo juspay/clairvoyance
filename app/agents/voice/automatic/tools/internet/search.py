@@ -26,6 +26,7 @@ gemini_llm = GoogleLLMService(
     tools=tools_list,
 )
 
+
 # ---------- 2. Define a function that uses Gemini to perform web search ----------
 async def gemini_search_fn(params: FunctionCallParams):
     query = params.arguments.get("query")

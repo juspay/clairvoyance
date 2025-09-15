@@ -319,9 +319,9 @@ class ConversationEvent(BaseModel):
                 "turn_id": turn.id,
                 "turn_number": turn.turn_number,
                 "status": turn.status,
-                "user_message": turn.user_message.model_dump()
-                if turn.user_message
-                else None,
+                "user_message": (
+                    turn.user_message.model_dump() if turn.user_message else None
+                ),
                 "tool_calls": [],  # Empty at start
                 "tool_results": [],  # Empty at start
                 "tool_count": 0,  # Zero at start
@@ -422,8 +422,8 @@ class ConversationEvent(BaseModel):
             payload={
                 "conversation": conversation.model_dump(),
                 "turn_count": len(conversation.turns),
-                "summary": conversation.summary.model_dump()
-                if conversation.summary
-                else None,
+                "summary": (
+                    conversation.summary.model_dump() if conversation.summary else None
+                ),
             },
         )

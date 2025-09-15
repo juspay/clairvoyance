@@ -217,9 +217,11 @@ class ImprovedMem0MemoryService(Mem0MemoryService):
                         dict_messages.append(
                             {
                                 "role": msg["role"],
-                                "content": str(msg["content"])
-                                if not isinstance(msg["content"], str)
-                                else msg["content"],
+                                "content": (
+                                    str(msg["content"])
+                                    if not isinstance(msg["content"], str)
+                                    else msg["content"]
+                                ),
                             }
                         )
                 else:

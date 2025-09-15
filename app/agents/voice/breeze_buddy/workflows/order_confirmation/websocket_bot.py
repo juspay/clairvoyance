@@ -72,6 +72,8 @@ class OrderConfirmationBot:
         self.call_sid = None
         self.order_id = None
         self.shop_name = None
+        self.address = None
+        self.updated_address = None
         self.serializer = serializer
         self.hangup_function = hangup_function
         self.completion_function = completion_function
@@ -144,6 +146,7 @@ class OrderConfirmationBot:
         self.order_id = call_payload.get("order_id", "N/A")
         customer_name = call_payload.get("customer_name", "Valued Customer")
         self.shop_name = call_payload.get("shop_name", "the shop")
+        self.address = call_payload.get("customer_address", "your address")
         total_price = call_payload.get("total_price", 0)
         try:
             price_num = float(total_price)
@@ -211,9 +214,11 @@ class OrderConfirmationBot:
                         min_volume=BREEZE_BUDDY_VAD_MIN_VOLUME,
                     ),
                 ),
-                serializer=self.serializer(stream_sid, self.call_sid)
-                if self.serializer
-                else None,
+                serializer=(
+                    self.serializer(stream_sid, self.call_sid)
+                    if self.serializer
+                    else None
+                ),
             ),
         )
 
@@ -238,6 +243,7 @@ class OrderConfirmationBot:
             self.order_id,
             self.order_summary,
             price_words,
+            self.address,
         )
         messages = [{"role": "system", "content": self.system_prompt}]
 
@@ -267,7 +273,7 @@ class OrderConfirmationBot:
             ),
         )
 
-        flow_manager = FlowManager(
+        self.flow_manager = FlowManager(
             task=self.task,
             llm=llm,
             context_aggregator=context_aggregator,
@@ -277,7 +283,7 @@ class OrderConfirmationBot:
         @transport.event_handler("on_client_connected")
         async def on_client_connected(transport, client):
             logger.info(f"Client connected: {client}")
-            await flow_manager.initialize(self._create_initial_node())
+            await self.flow_manager.initialize(self._create_initial_node())
 
         @transport.event_handler("on_client_disconnected")
         async def on_client_disconnected(transport, client):
@@ -337,7 +343,13 @@ class OrderConfirmationBot:
         await run_pipeline()
 
     def _get_system_prompt(
-        self, shop_name, customer_name, order_id, order_summary, total_price_words
+        self,
+        shop_name,
+        customer_name,
+        order_id,
+        order_summary,
+        total_price_words,
+        address,
     ):
         return f"""
             You are Rhea, a friendly human and natural-sounding customer care representative from {shop_name}. Your goal is to confirm a Cash on Delivery (COD) order with the customer.
@@ -361,6 +373,7 @@ class OrderConfirmationBot:
             Your main job is to verify the following order details:
             - Items: {order_summary}
             - Total Price: {total_price_words}
+            - Delivery Address: {address}
 
             Speak in a warm, casual, and human-like tone. Avoid robotic language.
 
@@ -369,6 +382,8 @@ class OrderConfirmationBot:
             - `cancel_order()`: If the customer wants to cancel the order.
             - `user_busy()`: If the user says they are busy or it's not a good time to talk.
             - `handle_unrelated_question()`: If the user asks a question about anything other than confirming or cancelling the order.
+            - `address_correct()`: If the user confirms the address is correct.
+            - `address_incorrect()`: If the user says the address is incorrect or wants to update it.
 
             Your only role is to confirm or cancel this specific order. If the user asks about anything else (e.g. product details, delivery times, other products), you MUST call `handle_unrelated_question()` immediately. Do not try to answer these questions yourself.
         """
@@ -443,6 +458,7 @@ class OrderConfirmationBot:
                                 "call_sid": self.call_sid,
                             },
                             call_end_time=datetime.now(),
+                            updated_address=self.updated_address,
                         )
                         logger.info(
                             f"Updated database for call_id: {self.call_sid} with outcome: {call_outcome}"
@@ -463,81 +479,8 @@ class OrderConfirmationBot:
         finally:
             await self.task.cancel()
 
-    def _create_confirmation_node(self) -> NodeConfig:
-        return NodeConfig(
-            name="order_confirmation_and_end",
-            task_messages=[
-                {
-                    "role": "system",
-                    "content": f"The order is confirmed. Say: 'Thank you for confirming your order. Your order for {self.order_summary} will be delivered soon. Have a good day'",
-                }
-            ],
-            post_actions=[
-                {"type": "function", "handler": self._end_conversation_handler}
-            ],
-        )
-
-    def _create_cancellation_node(self) -> NodeConfig:
-        return NodeConfig(
-            name="order_cancellation_and_end",
-            task_messages=[
-                {
-                    "role": "system",
-                    "content": "The order is cancelled. Say: 'I understand you don't want to proceed with this order. I am cancelling your order. Thank you for your time.'",
-                }
-            ],
-            post_actions=[
-                {"type": "function", "handler": self._end_conversation_handler}
-            ],
-        )
-
-    async def _confirm_order_handler(self, flow_manager):
-        logger.info("Order confirmed. Transitioning to confirmation node.")
-        self.outcome = "confirmed"
-        return {}, self._create_confirmation_node()
-
-    async def _deny_order_handler(self, flow_manager):
-        logger.info("Order denied. Transitioning to cancellation node.")
-        self.outcome = "cancelled"
-        return {}, self._create_cancellation_node()
-
-    def _create_busy_node(self) -> NodeConfig:
-        return NodeConfig(
-            name="user_busy_and_end",
-            task_messages=[
-                {
-                    "role": "system",
-                    "content": "The user is busy. Say: 'I understand. I will call you back later. Thank you for your time.'",
-                }
-            ],
-            post_actions=[
-                {"type": "function", "handler": self._end_conversation_handler}
-            ],
-        )
-
-    async def _user_busy_handler(self, flow_manager):
-        logger.info("User is busy. Transitioning to busy node.")
-        self.outcome = "busy"
-        return {}, self._create_busy_node()
-
-    def _create_reprompt_node(self) -> NodeConfig:
-        return NodeConfig(
-            name="reprompt",
-            task_messages=[
-                {
-                    "role": "system",
-                    "content": f"I'm not able to help you with that right now, but you can find all the latest details on the {self.shop_name} website. Regarding your order for {self.order_summary}, would you like to confirm it?",
-                }
-            ],
-            functions=self._get_flow_functions(),
-        )
-
-    async def _handle_unrelated_question_handler(self, flow_manager):
-        logger.info("User asked an unrelated question. Steering back to confirmation.")
-        return {}, self._create_reprompt_node()
-
-    def _get_flow_functions(self):
-        return [
+    def _get_flow_config(self):
+        flow_functions = [
             FlowsFunctionSchema(
                 name="confirm_order",
                 description="Call this function to confirm the user's order.",
@@ -566,14 +509,217 @@ class OrderConfirmationBot:
                 properties={},
                 required=[],
             ),
+            FlowsFunctionSchema(
+                name="address_correct",
+                description="User confirms the address is correct.",
+                handler=self._handle_address_correct,
+                properties={},
+                required=[],
+            ),
+            FlowsFunctionSchema(
+                name="address_incorrect",
+                description="User wants to update the address.",
+                handler=self._handle_address_incorrect,
+                properties={},
+                required=[],
+            ),
         ]
 
-    def _create_initial_node(self) -> NodeConfig:
+        return {
+            "initial_node": "initial",
+            "nodes": {
+                "initial": {
+                    "name": "initial",
+                    "task_messages": [
+                        {"role": "system", "content": self.system_prompt}
+                    ],
+                    "functions": flow_functions,
+                },
+                "order_confirmation_and_end": {
+                    "name": "order_confirmation_and_end",
+                    "task_messages": [
+                        {
+                            "role": "system",
+                            "content": f"The order is confirmed. Say: 'Thank you for confirming your order. Your order for {self.order_summary} will be delivered soon. Have a good day'",
+                        }
+                    ],
+                    "post_actions": [
+                        {"type": "function", "handler": self._end_conversation_handler}
+                    ],
+                },
+                "order_cancellation_and_end": {
+                    "name": "order_cancellation_and_end",
+                    "task_messages": [
+                        {
+                            "role": "system",
+                            "content": "The order is cancelled. Say: 'I understand you don't want to proceed with this order. I am cancelling your order. Thank you for your time.'",
+                        }
+                    ],
+                    "post_actions": [
+                        {"type": "function", "handler": self._end_conversation_handler}
+                    ],
+                },
+                "user_busy_and_end": {
+                    "name": "user_busy_and_end",
+                    "task_messages": [
+                        {
+                            "role": "system",
+                            "content": "The user is busy. Say: 'I understand. I will call you back later. Thank you for your time.'",
+                        }
+                    ],
+                    "post_actions": [
+                        {"type": "function", "handler": self._end_conversation_handler}
+                    ],
+                },
+                "reprompt": {
+                    "name": "reprompt",
+                    "task_messages": [
+                        {
+                            "role": "system",
+                            "content": f"I'm not able to help you with that right now, but you can find all the latest details on the {self.shop_name} website. Regarding your order for {self.order_summary}, would you like to confirm it?",
+                        }
+                    ],
+                    "functions": flow_functions,
+                },
+                "get_address_part1": {
+                    "name": "get_address_part1",
+                    "task_messages": [
+                        {
+                            "role": "system",
+                            "content": "Sure, I can help with that. What is the full address, including the house number, street name, locality, and nearest landmark?",
+                        }
+                    ],
+                    "functions": [
+                        FlowsFunctionSchema(
+                            name="update_address_part1",
+                            description="User provides the first part of the address.",
+                            handler=self._handle_address_part1,
+                            properties={
+                                "address_line": {"type": "string"},
+                                "locality": {"type": "string"},
+                                "landmark": {"type": "string"},
+                            },
+                            required=[],
+                        )
+                    ],
+                },
+                "get_pincode": {
+                    "name": "get_pincode",
+                    "task_messages": [
+                        {"role": "system", "content": "Perfect. What's the pincode?"}
+                    ],
+                    "functions": [
+                        FlowsFunctionSchema(
+                            name="update_pincode",
+                            description="User provides the pincode.",
+                            handler=self._handle_pincode,
+                            properties={"pincode": {"type": "string"}},
+                            required=[],
+                        )
+                    ],
+                },
+                "get_city": {
+                    "name": "get_city",
+                    "task_messages": [
+                        {"role": "system", "content": "Almost done. What is the city?"}
+                    ],
+                    "functions": [
+                        FlowsFunctionSchema(
+                            name="update_city",
+                            description="User provides the city.",
+                            handler=self._handle_city,
+                            properties={"city": {"type": "string"}},
+                            required=[],
+                        )
+                    ],
+                },
+                "final_order_confirmation": {
+                    "name": "final_order_confirmation",
+                    "task_messages": [
+                        {
+                            "role": "system",
+                            "content": f"Thank you for confirming the address. Your updated address is: {self.updated_address}. Shall I go ahead and confirm your order?",
+                        }
+                    ],
+                    "functions": flow_functions,
+                },
+            },
+        }
+
+    def _create_node_from_config(self, node_name: str) -> NodeConfig:
+        if not hasattr(self, "flow_config"):
+            self.flow_config = self._get_flow_config()
+
+        node_data = self.flow_config["nodes"][node_name]
+
         return NodeConfig(
-            name="initial",
-            task_messages=[{"role": "system", "content": self.system_prompt}],
-            functions=self._get_flow_functions(),
+            name=node_data["name"],
+            task_messages=node_data.get("task_messages", []),
+            functions=node_data.get("functions", []),
+            post_actions=node_data.get("post_actions", []),
         )
+
+    async def _confirm_order_handler(self):
+        logger.info("Order confirmed. Transitioning to confirmation node.")
+        if self.outcome != "address_updated":
+            self.outcome = "confirmed"
+        return {}, self._create_node_from_config("order_confirmation_and_end")
+
+    async def _deny_order_handler(self):
+        logger.info("Order denied. Transitioning to cancellation node.")
+        self.outcome = "cancelled"
+        return {}, self._create_node_from_config("order_cancellation_and_end")
+
+    async def _user_busy_handler(self):
+        logger.info("User is busy. Transitioning to busy node.")
+        self.outcome = "busy"
+        return {}, self._create_node_from_config("user_busy_and_end")
+
+    async def _handle_unrelated_question_handler(self):
+        logger.info("User asked an unrelated question. Steering back to confirmation.")
+        return {}, self._create_node_from_config("reprompt")
+
+    def _create_initial_node(self) -> NodeConfig:
+        return self._create_node_from_config("initial")
+
+    async def _handle_address_correct(self):
+        logger.info("Address confirmed. Proceeding to final order confirmation.")
+        return {}, self._create_node_from_config("final_order_confirmation")
+
+    async def _handle_address_incorrect(self):
+        logger.info("Address incorrect. Proceeding to update address.")
+        return {}, self._create_node_from_config("get_address_part1")
+
+    async def _handle_address_part1(
+        self, address_line: str = None, locality: str = None, landmark: str = None
+    ):
+        if address_line:
+            self.flow_manager.state["address_line"] = str(address_line)
+        if locality:
+            self.flow_manager.state["locality"] = str(locality)
+        if landmark:
+            self.flow_manager.state["landmark"] = str(landmark)
+        return {}, self._create_node_from_config("get_pincode")
+
+    async def _handle_pincode(self, pincode: str = None):
+        if pincode:
+            self.flow_manager.state["pincode"] = str(pincode)
+        return {}, self._create_node_from_config("get_city")
+
+    async def _handle_city(self, city: str = None):
+        if city:
+            self.flow_manager.state["city"] = str(city)
+        address_parts = [
+            self.flow_manager.state.get("address_line"),
+            self.flow_manager.state.get("locality"),
+            self.flow_manager.state.get("landmark"),
+            self.flow_manager.state.get("city"),
+            self.flow_manager.state.get("pincode"),
+        ]
+        self.updated_address = ", ".join(filter(None, address_parts))
+        self.outcome = "address_updated"
+        logger.info(f"Address updated to: {self.updated_address}")
+        return {}, self._create_node_from_config("final_order_confirmation")
 
 
 async def main(

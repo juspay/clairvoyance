@@ -38,6 +38,9 @@ OUTCOME_TO_ENUM = {
     "confirmed": LeadCallOutcome.CONFIRM,
     "cancelled": LeadCallOutcome.CANCEL,
     "busy": LeadCallOutcome.BUSY,
+    "address_updated": LeadCallOutcome.ADDRESS_UPDATED,
+    "no_answer": LeadCallOutcome.NO_ANSWER,
+    "unknown": LeadCallOutcome.UNKNOWN,
 }
 
 

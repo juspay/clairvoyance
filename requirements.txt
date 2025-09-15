@@ -19,9 +19,6 @@ python-dotenv>=1.0.0
 pipecat-ai[daily,google,assembly,silero,openai,azure,elevenlabs,noisereduce,mem0,aic,anthropic]
 pipecat-ai-flows
 
-# Google Cloud Speech
-google-cloud-speech
-
 # Misc
 loguru
 
@@ -41,6 +38,3 @@ PyJWT
 
 # Audio processing
 pydub
-
-black
-pre-commit

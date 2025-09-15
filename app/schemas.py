@@ -37,6 +37,7 @@ class LeadCallOutcome(str, Enum):
     BUSY = "BUSY"
     CANCEL = "CANCEL"
     CONFIRM = "CONFIRM"
+    ADDRESS_UPDATED = "ADDRESS_UPDATED"
     UNKNOWN = "UNKNOWN"
 
 

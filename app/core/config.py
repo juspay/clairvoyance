@@ -6,6 +6,7 @@ load_dotenv()
 
 # --- Configuration ---
 
+
 # A helper function to get a required environment variable
 def get_required_env(var_name: str) -> str:
     value = os.environ.get(var_name)
