@@ -7,7 +7,76 @@ from loguru import logger
 # Remove the default sink to have full control over logging.
 logger.remove()
 
-from app.core.config import ENVIRONMENT, PROD_LOG_LEVEL
+from app.core.config import ENABLE_OTEL_LOGGING, ENVIRONMENT, PROD_LOG_LEVEL
+
+# Import OTEL functions from separate module
+try:
+    from app.core.logger.otel import OTEL_AVAILABLE, get_otel_handler, get_otel_logger
+except ImportError:
+    OTEL_AVAILABLE = False
+    get_otel_logger = lambda: None
+    get_otel_handler = lambda: None
+
+
+def otel_sink(message):
+    """Custom OTEL sink that preserves full structured data like JSON sink"""
+    if not ENABLE_OTEL_LOGGING or not OTEL_AVAILABLE:
+        return
+
+    # Prevent recursive logging of OTEL export errors
+    if "Exception while exporting" in str(message.record.get("message", "")):
+        return
+
+    otel_logger = get_otel_logger()
+    if not otel_logger:
+        return
+
+    otel_handler = get_otel_handler()
+    if not otel_handler:
+        return
+
+    try:
+        record = message.record
+
+        # Create the full structured data like your JSON sink
+        structured_data = {
+            "timestamp": record["time"].isoformat(),
+            "level": record["level"].name,
+            "logger": record["name"],
+            "function": record["function"],
+            "line": record["line"],
+            "message": record["message"],
+            "module": record["module"],
+            "process": record["process"].id if record["process"] else None,
+            "thread": record["thread"].id if record["thread"] else None,
+        }
+
+        # Add session context if available
+        if record["extra"]:
+            for key, value in record["extra"].items():
+                if value is not None:
+                    structured_data[key] = value
+
+        # Create LogRecord with the full structured data as the formatted message
+        log_record = logging.LogRecord(
+            name=structured_data["logger"],
+            level=getattr(logging, structured_data["level"], logging.INFO),
+            pathname="",
+            lineno=structured_data["line"],
+            msg=json.dumps(structured_data),  # Put full JSON as the message itself
+            args=(),
+            exc_info=None,
+        )
+
+        # Set the timestamp to match our original log
+        log_record.created = record["time"].timestamp()
+
+        # Emit through the OTEL handler
+        otel_handler.emit(log_record)
+
+    except Exception as e:
+        # Don't let OTEL issues break the application
+        pass
 
 
 def json_sink(message):
@@ -122,6 +191,19 @@ def _setup_logger_sinks(
             backtrace=False,  # Keep JSON logs concise and predictable
             diagnose=False,  # Prevent sensitive data leakage and performance overhead
         )
+
+        # NEW: Add OTEL custom sink in production only
+        if ENABLE_OTEL_LOGGING:
+            logger.add(
+                otel_sink,  # Use custom sink that preserves structured data
+                level=PROD_LOG_LEVEL,
+                enqueue=True,
+                backtrace=False,
+                diagnose=False,
+            )
+            logger.info(
+                "OTEL custom sink added - structured logs will be sent to collector"
+            )
 
         DEBUG_LOGS_TO_UPLEVEL = {
             "pipecat.transports.base_input",

@@ -23,7 +23,7 @@ numpy
 # Misc
 loguru
 
-# OpenTelemetry for Langfuse tracing
+# OpenTelemetry for Langfuse tracing and logging
 opentelemetry-api
 opentelemetry-sdk
 opentelemetry-exporter-otlp-proto-http
