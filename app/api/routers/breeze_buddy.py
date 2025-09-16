@@ -23,7 +23,7 @@ from app.schemas import (
 from app.agents.voice.breeze_buddy.workflows.order_confirmation.types import (
     BreezeOrderData,
 )
-import aiohttp
+from app.core.transport.http_client import create_aiohttp_session
 from app.agents.voice.breeze_buddy.managers.calls import (
     process_backlog_leads,
     handle_call_completion,
@@ -286,7 +286,7 @@ async def telephony_websocket_handler(
 
     logger.info(f"Handling websocket for {workflow}")
 
-    async with aiohttp.ClientSession() as session:
+    async with create_aiohttp_session() as session:
         try:
             provider = get_voice_provider(service_provider.upper(), session)
             provider.set_completion_callback(handle_call_completion)

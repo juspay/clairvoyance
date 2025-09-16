@@ -24,6 +24,7 @@ from app.database import init_db_pool, close_db_pool, get_db_connection
 
 # Import necessary components from the new structure
 from app.core.logger import logger
+from app.core.transport.http_client import create_aiohttp_session
 from app.core.config import (
     DAILY_API_KEY,
     DAILY_API_URL,
@@ -81,14 +82,14 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Failed to initialize database: {e}")
 
-    # Initialize aiohttp session
-    aiohttp_session = aiohttp.ClientSession()
+    # Initialize aiohttp session with proxy support for Daily API
+    aiohttp_session = create_aiohttp_session()
     daily_helpers["rest"] = DailyRESTHelper(
         daily_api_key=DAILY_API_KEY,
         daily_api_url=DAILY_API_URL,
         aiohttp_session=aiohttp_session,
     )
-    logger.info("Daily REST helper initialized.")
+    logger.info("Daily REST helper initialized with proxy support.")
 
     yield
 

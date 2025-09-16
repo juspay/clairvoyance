@@ -3,6 +3,7 @@ from fastapi import WebSocket, HTTPException
 import requests
 
 from app.core.logger import logger
+from app.core.transport.http_client import create_aiohttp_session
 
 from pipecat.serializers.exotel import ExotelFrameSerializer
 
@@ -52,7 +53,11 @@ class ExotelProvider(VoiceCallProvider):
         logger.info(f"Payload: {payload}")
 
         try:
-            resp = requests.post(url, data=payload)
+            # Use centralized proxy configuration
+            proxy_url = get_proxy_config()
+            proxies = {"https": proxy_url, "http": proxy_url} if proxy_url else None
+
+            resp = requests.post(url, data=payload, proxies=proxies)
             logger.info(f"Exotel API response status: {resp.status_code}")
             logger.info(f"Exotel API response headers: {dict(resp.headers)}")
             logger.info(f"Exotel API response content: {resp.text}")

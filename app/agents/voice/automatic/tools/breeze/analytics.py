@@ -9,6 +9,7 @@ from app.utils.common import get_breeze_portal_url
 from pipecat.services.llm_service import FunctionCallParams
 from pipecat.adapters.schemas.function_schema import FunctionSchema
 from pipecat.adapters.schemas.tools_schema import ToolsSchema
+from app.core.transport.http_client import create_http_client
 
 # These will be set by the initializer
 breeze_token: str | None = None
@@ -94,7 +95,7 @@ async def _make_breeze_request(params: FunctionCallParams, operational_tab: str)
     )
 
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with create_http_client(timeout=30.0) as client:
             response = await client.post(api_url, json=payload, headers=headers)
             response.raise_for_status()  # Raise an exception for bad status codes
             response_json = response.json()
@@ -205,7 +206,7 @@ async def get_breeze_marketing_data(params: FunctionCallParams):
     logger.info(f"Requesting Breeze marketing data with payload: {json.dumps(payload)}")
 
     try:
-        async with httpx.AsyncClient() as client:
+        async with create_http_client() as client:
             response = await client.post(api_url, json=payload, headers=headers)
             response.raise_for_status()
             response_json = response.json()
@@ -294,7 +295,7 @@ async def get_breeze_address_data(params: FunctionCallParams):
     logger.info(f"Requesting Breeze address data with payload: {json.dumps(payload)}")
 
     try:
-        async with httpx.AsyncClient() as client:
+        async with create_http_client() as client:
             response = await client.post(api_url, json=payload, headers=headers)
             response.raise_for_status()
             response_json = response.json()

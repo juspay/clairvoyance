@@ -13,6 +13,7 @@ from urllib.parse import urlparse
 
 from app.core.logger import logger
 from app.core.config import LIGHTHOUSE_APP_URL
+from app.core.transport.http_client import create_http_client
 
 
 def safe_construct_url(url: str) -> Optional[urlparse]:
@@ -115,7 +116,7 @@ async def get_current_shop_config_data(shop_url: str) -> Dict[str, Any]:
 
     try:
         logger.info(f"Fetching shop config from: {url}")
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with create_http_client(timeout=30.0) as client:
             response = await client.get(url)
             response.raise_for_status()
             config_data = response.json()
@@ -165,7 +166,7 @@ async def patch_shop_config(
         "x-auth-token": breeze_token,
     }
     try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
+        async with create_http_client(timeout=timeout) as client:
             response = await client.patch(url, headers=headers, json=config_data)
             response.raise_for_status()
             return response.json()

@@ -5,7 +5,7 @@ Cron manager for handling background tasks.
 from datetime import datetime, timezone, timedelta
 from app.core.logger import logger
 import uuid
-import aiohttp
+from app.core.transport.http_client import create_aiohttp_session
 from app.database.accessor import (
     get_leads_based_on_status_and_next_attempt,
     get_call_execution_config_by_merchant_id,
@@ -33,7 +33,7 @@ async def process_backlog_leads():
     Processes backlog leads and initiates calls.
     """
     logger.info("Processing backlog leads...")
-    async with aiohttp.ClientSession() as session:
+    async with create_aiohttp_session() as session:
         try:
             leads = await get_leads_based_on_status_and_next_attempt(
                 LeadCallStatus.BACKLOG, datetime.now(timezone.utc)

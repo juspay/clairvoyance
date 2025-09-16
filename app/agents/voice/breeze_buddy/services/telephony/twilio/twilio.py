@@ -1,11 +1,13 @@
 from fastapi import WebSocket, HTTPException
 from twilio.rest import Client
+from twilio.http.http_client import TwilioHttpClient
 from twilio.twiml.voice_response import VoiceResponse, Connect, Stream
 
 from app.agents.voice.breeze_buddy.services.telephony.base_provider import (
     VoiceCallProvider,
 )
 from app.core import config
+from app.core.transport.http_client import create_aiohttp_session
 from app.agents.voice.breeze_buddy.workflows.order_confirmation.websocket_bot import (
     main as telephony_websocket_conn,
 )
@@ -22,9 +24,29 @@ class TwilioProvider(VoiceCallProvider):
 
     def __init__(self, aiohttp_session):
         super().__init__(config, aiohttp_session)
-        self.client = Client(
-            self.config.TWILIO_ACCOUNT_SID, self.config.TWILIO_AUTH_TOKEN
-        )
+
+        # Create Twilio client with proper proxy configuration
+        self.client = self._create_twilio_client()
+
+    def _create_twilio_client(self) -> Client:
+        """Create Twilio client with proper proxy configuration using TwilioHttpClient"""
+        proxy_url = get_proxy_config()
+        account_sid = self.config.TWILIO_ACCOUNT_SID
+        auth_token = self.config.TWILIO_AUTH_TOKEN
+
+        if proxy_url:
+            logger.info(f"Configuring Twilio client with proxy: {proxy_url}")
+            # Use TwilioHttpClient with proxy configuration
+            proxy_client = TwilioHttpClient(
+                proxy={
+                    "http": proxy_url,
+                    "https": proxy_url,
+                }
+            )
+            return Client(account_sid, auth_token, http_client=proxy_client)
+        else:
+            logger.info("Creating Twilio client without proxy")
+            return Client(account_sid, auth_token)
 
     def hangup_call(self, call_sid: str):
         self.client.calls(call_sid).update(status="completed")

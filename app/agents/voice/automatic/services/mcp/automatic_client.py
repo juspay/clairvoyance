@@ -7,6 +7,7 @@ from app.agents.voice.automatic.utils.session_context import SessionContext
 
 from app.core.config import MCP_CLIENT_TIMEOUT
 from app.core.logger import logger
+from app.core.transport.http_client import create_http_client
 from pipecat.adapters.schemas.tools_schema import ToolsSchema
 from pipecat.adapters.schemas.function_schema import FunctionSchema
 from app.agents.voice.automatic.types.models import (
@@ -33,7 +34,7 @@ class StreamableHTTPTransport:
         self._server_url = server_url.strip()
         self._auth_token = auth_token
         self._context_b64 = base64.b64encode(json.dumps(context).encode()).decode()
-        self._client = httpx.AsyncClient(timeout=MCP_CLIENT_TIMEOUT)
+        self._client = create_http_client(timeout=MCP_CLIENT_TIMEOUT)
         self._demo_mode = context.get("enableDemoMode", False)
 
     async def post(

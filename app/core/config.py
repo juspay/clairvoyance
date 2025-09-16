@@ -281,6 +281,10 @@ EXOTEL_API_TOKEN = os.getenv("EXOTEL_API_TOKEN", "")
 EXOTEL_SUBDOMAIN = os.getenv("EXOTEL_SUBDOMAIN", "api.exotel.com")
 EXOTEL_APPLET_APP_ID = os.getenv("EXOTEL_APPLET_APP_ID", "1044183")
 
+# Proxy Configuration
+AWS_PROXY_HOST = os.environ.get("AWS_PROXY_HOST")
+AWS_PROXY_PORT = os.environ.get("AWS_PROXY_PORT")
+CLOUD_ENVIRONMENT = os.environ.get("CLOUD_ENVIRONMENT", "GCP")  # AWS, GCP, AZURE, etc.
 
 # LangFuse Configuration
 ENABLE_LANGFUSE_PROMPTS = (
