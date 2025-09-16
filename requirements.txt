@@ -31,6 +31,9 @@ langfuse
 # PostgreSQL database support
 asyncpg
 
+# AWS SDK for KMS
+boto3
+
 twilio
 
 # JWT Authentication

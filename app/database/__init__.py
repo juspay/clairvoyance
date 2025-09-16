@@ -13,6 +13,7 @@ from app.core.config import (
     POSTGRES_POOL_SIZE,
     POSTGRES_MAX_OVERFLOW,
 )
+from app.services.aws.kms import decrypt_kms
 from app.core.logger import logger
 
 pool = None
@@ -36,10 +37,19 @@ async def init_db_pool():
                 "One or more database environment variables are missing. Skipping database initialization."
             )
             return
+
+        # Decrypt PostgreSQL password using KMS if needed
+        decrypted_postgres_password = await decrypt_kms(POSTGRES_PASSWORD)
+
+        # If decryption fails, use the original password
+        if decrypted_postgres_password is None:
+            logger.warning("KMS decryption failed, using original password")
+            return
+
         try:
             pool = await asyncpg.create_pool(
                 user=POSTGRES_USER,
-                password=POSTGRES_PASSWORD,
+                password=decrypted_postgres_password,
                 database=POSTGRES_DB,
                 host=POSTGRES_HOST,
                 port=POSTGRES_PORT,
