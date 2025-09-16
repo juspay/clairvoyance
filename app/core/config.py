@@ -100,6 +100,11 @@ DISABLE_SILERO_VAD = (
     os.environ.get("DISABLE_SILERO_VAD", "false").lower() == "true"
 )  # Disable Silero VAD (use when STT provider has built-in VAD)
 
+# Smart Turn Configuration
+ENABLE_PIPECAT_SMART_TURN = (
+    os.environ.get("ENABLE_PIPECAT_SMART_TURN", "false").lower() == "true"
+)
+
 # Mem0 Configuration
 MEM0_API_KEY = os.getenv("MEM0_API_KEY", "")
 MEM0_ENABLED = os.getenv("MEM0_ENABLED", "false").lower() == "true"
@@ -201,7 +206,7 @@ SONIOX_LANGUAGE_HINTS = os.environ.get(
 )  # Language hints for transcription (comma-separated: en,hi,es)
 SONIOX_CONTEXT = os.environ.get(
     "SONIOX_CONTEXT",
-    "PSR, GMV, UPI, ROAS, AOV, RTO, COD, Sales, Cart, Abandonment, Sales, Split",
+    "PSR, GMV, UPI, ROAS, AOV, RTO, COD, Sales, Cart, Abandonment, Sales, Split, What",
 )  # Business context for better transcription of domain-specific terms
 SONIOX_ENABLE_NON_FINAL_TOKENS = (
     os.environ.get("SONIOX_ENABLE_NON_FINAL_TOKENS", "false").lower() == "true"
@@ -219,6 +224,7 @@ logger.info(f"Using response modality: {RESPONSE_MODALITY}")
 logger.info(f"Tracing enabled: {ENABLE_TRACING}")
 logger.info(f"Search grounding enabled: {ENABLE_SEARCH_GROUNDING}")
 logger.info(f"Using Gemini search result model: {GEMINI_SEARCH_RESULT_API_MODEL}")
+logger.info(f"SMART_DEBUG: Smart Turn V3 enabled: {ENABLE_PIPECAT_SMART_TURN}")
 
 # Automatic MCP Tool Server
 AUTOMATIC_MCP_TOOL_SERVER_USAGE = (
