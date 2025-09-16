@@ -206,7 +206,7 @@ def main():
 
             asyncio.run(list_tables())
         else:
-            print("Usage: python -m app.scripts.create_tables [create|list]")
+            print("Usage: python -m scripts.create_tables [create|list]")
 
 
 if __name__ == "__main__":

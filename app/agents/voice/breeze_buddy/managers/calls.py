@@ -60,6 +60,31 @@ async def process_backlog_leads():
                         )
                         continue
 
+                    # FIRST STEP: Check if current time is within allowed calling hours (handles overnight windows)
+                    current_time = datetime.now(timezone.utc).time()
+                    if config.call_start_time <= config.call_end_time:
+                        # Normal case (e.g., 09:00–17:00)
+                        within_hours = (
+                            config.call_start_time
+                            <= current_time
+                            <= config.call_end_time
+                        )
+                    else:
+                        # Overnight case (e.g., 22:00–06:00)
+                        within_hours = (
+                            current_time >= config.call_start_time
+                            or current_time <= config.call_end_time
+                        )
+
+                    if not within_hours:
+                        logger.info(
+                            f"Skipping lead {lead.id} - outside calling hours. "
+                            f"Current time: {current_time}, "
+                            f"Allowed window: {config.call_start_time} - {config.call_end_time}"
+                        )
+                        continue
+
+                    # Only proceed if within calling hours
                     numbers = await get_outbound_number_based_on_status_and_provider(
                         OutboundNumberStatus.AVAILABLE, config.calling_provider
                     )
