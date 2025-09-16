@@ -16,6 +16,7 @@ from app.agents.voice.automatic.features.charts.utils.highlight_parser import (
 from app.agents.voice.automatic.utils.session_context import get_current_session_id
 from app.agents.voice.automatic.features.charts.session_storage import (
     get_session_storage,
+    register_chart_for_navigation,
 )
 
 # Color constants matching MCP implementation
@@ -129,6 +130,9 @@ async def generate_bar_chart(params) -> None:
 
         # Store for RTVI emission
         _register_pending_chart_emission(session_id, ui_component)
+        
+        # Register chart for navigation
+        register_chart_for_navigation(session_id, ui_component)
 
         logger.info(
             f"[{session_id}] Generated bar chart: {title} with {len(categories)} categories"
@@ -205,6 +209,9 @@ async def generate_line_chart(params) -> None:
 
         # Store for RTVI emission
         _register_pending_chart_emission(session_id, ui_component)
+        
+        # Register chart for navigation
+        register_chart_for_navigation(session_id, ui_component)
 
         logger.info(
             f"[{session_id}] Generated line chart: {title} with {len(categories)} time points"
@@ -314,6 +321,9 @@ async def generate_donut_chart(params) -> None:
 
         # Store for RTVI emission
         _register_pending_chart_emission(session_id, ui_component)
+        
+        # Register chart for navigation
+        register_chart_for_navigation(session_id, ui_component)
 
         logger.info(
             f"[{session_id}] Generated donut chart: {title} with {len(categories)} segments"
@@ -413,6 +423,9 @@ async def generate_single_stat_card(params) -> None:
 
         # Store for RTVI emission
         _register_pending_chart_emission(session_id, ui_component)
+        
+        # Register chart for navigation
+        register_chart_for_navigation(session_id, ui_component)
 
         logger.info(
             f"[{session_id}] Generated single stat card: {title} - {metric_name}"

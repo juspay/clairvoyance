@@ -13,6 +13,7 @@ from . import juspay
 from . import breeze
 from . import internet
 from . import charts
+from . import navigation
 
 
 def initialize_tools(
@@ -69,6 +70,11 @@ def initialize_tools(
         all_tools.extend(charts.generate_ui.standard_tools)
         all_tool_functions.update(charts.tool_functions)
         logger.info(f"Loaded {len(charts.tool_functions)} chart tools.")
+        
+        # Add navigation tools when charts are enabled
+        all_tools.extend(navigation.tools.standard_tools)
+        all_tool_functions.update(navigation.tool_functions)
+        logger.info(f"Loaded {len(navigation.tool_functions)} navigation tools.")
 
     # Dummy tools are only available in test mode
     if mode == Mode.TEST.value:

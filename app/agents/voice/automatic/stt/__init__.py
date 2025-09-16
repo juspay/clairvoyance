@@ -16,6 +16,15 @@ def get_stt_service(voice_name: Optional[str] = None):
     Args:
         voice_name: Voice name to determine STT provider override for specific voices
     """
+
+    return OpenAISTTService(
+            api_key=config.OPENAI_STT_API_KEY,
+            model=config.OPENAI_STT_MODEL,
+            language=Language.EN,
+            # Optimized prompt for business analytics voice agent
+            prompt=config.AUTOMATIC_OPENAI_STT_PROMPT, 
+            temperature=0.0,  # Deterministic output for consistency
+        )
     # Check for MIA voice with OpenAI override
     if voice_name == VoiceName.MIA.value and config.ENABLE_OPENAI_FOR_MIA:
         if not config.OPENAI_STT_API_KEY:

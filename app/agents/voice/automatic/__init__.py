@@ -9,7 +9,12 @@ from app.core.logger import logger, configure_session_logger
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.vad.vad_analyzer import VADParams
 from pipecat.audio.filters.noisereduce_filter import NoisereduceFilter
-from pipecat.audio.filters.aic_filter import AICFilter
+try:
+    from pipecat.audio.filters.aic_filter import AICFilter
+    AIC_FILTER_AVAILABLE = True
+except ImportError:
+    AIC_FILTER_AVAILABLE = False
+    AICFilter = None
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
@@ -22,7 +27,7 @@ from pipecat.frames.frames import (
     EmulateUserStartedSpeakingFrame,
     EmulateUserStoppedSpeakingFrame,
 )
-from pipecat.transports.daily.transport import DailyParams, DailyTransport
+from pipecat.transports.services.daily import DailyParams, DailyTransport
 from pipecat.processors.frameworks.rtvi import RTVIConfig, RTVIProcessor
 from pipecat.services.google.rtvi import GoogleRTVIObserver
 from app.agents.voice.automatic.services.mem0.memory import ImprovedMem0MemoryService
@@ -34,7 +39,8 @@ from app.agents.voice.automatic.utils.session_context import (
 )
 from app.agents.voice.automatic.services.mcp.automatic_client import MCPClient
 from app.utils.common import get_breeze_portal_url
-from .processors import LLMSpyProcessor
+from .processors import LLMSpyProcessor, ChartNavigator
+from .services.navigation import LLMNavigationHandler
 from .processors.ptt_vad_filter import PTTVADFilter
 from .prompts import get_system_prompt
 from .tools import initialize_tools
@@ -301,15 +307,24 @@ async def main():
     if config.DISABLE_VAD_FOR_PTT:
         ptt_vad_filter = PTTVADFilter("PTTVADFilter")
         pipeline_components.append(ptt_vad_filter)  # Filter VAD frames after STT
-
-    pipeline_components.extend([rtvi, context_aggregator.user()])
-    if (
-        config.MEM0_ENABLED
-        and args.user_email
-        and args.user_email.strip()
-        and config.MEM0_API_KEY
-        and config.MEM0_API_KEY.strip()
-    ):
+    
+    # Add chart navigator after STT/PTT but before RTVI
+    chart_navigator = ChartNavigator("ChartNavigator")
+    
+    # Initialize LLM navigation handler for complex navigation commands
+    navigation_handler = LLMNavigationHandler()
+    chart_navigator.set_navigation_handler(navigation_handler)
+    
+    # Set RTVI processor for chart navigation responses  
+    chart_navigator.set_rtvi_processor(rtvi)
+    
+    pipeline_components.append(chart_navigator)
+    
+    pipeline_components.extend([
+        rtvi,
+        context_aggregator.user()
+    ])
+    if config.MEM0_ENABLED and args.user_email and args.user_email.strip() and config.MEM0_API_KEY and config.MEM0_API_KEY.strip():
         try:
             logger.info("Initializing Mem0 memory service")
             memory_params = ImprovedMem0MemoryService.InputParams()
@@ -433,10 +448,24 @@ async def main():
                         else:
                             await task.queue_frames([EmulateUserStoppedSpeakingFrame()])
                     else:
-                        logger.debug(
-                            f"PTT state sync: states match (current_state: {current_state})"
-                        )
-
+                        logger.debug(f"PTT state sync: states match (current_state: {current_state})")
+                
+                elif message_type == "minimap-state-changed":
+                    # Handle minimap state changes from frontend
+                    data = message.get("data", {})
+                    minimap_active = data.get("minimap_active", False)
+                    focused_component_id = data.get("focused_component_id")
+                    
+                    # Update the navigation filter state
+                    chart_navigator.set_minimap_active(minimap_active)
+                    
+                    logger.info(f"Minimap state updated: active={minimap_active}, focused_component={focused_component_id}")
+                    
+                    if minimap_active:
+                        logger.debug("ChartNavigator now active - will filter navigation commands")
+                    else:
+                        logger.debug("ChartNavigator now inactive - will pass all transcripts")
+                    
         except Exception as e:
             logger.error(f"Error handling RTVI client message: {e}")
 
@@ -463,10 +492,7 @@ async def main():
         # Check if this is a function confirmation message or PTT message and route to RTVI
         if isinstance(message, dict):
             message_type = message.get("type")
-            if message_type == "function-confirmation-response" or (
-                config.DISABLE_VAD_FOR_PTT
-                and message_type in ["ptt-start", "ptt-end", "ptt-sync"]
-            ):
+            if message_type == "function-confirmation-response" or (config.DISABLE_VAD_FOR_PTT and message_type in ["ptt-start", "ptt-end", "ptt-sync"]) or message_type == "minimap-state-changed":
                 # Manually trigger the RTVI handler since it might not be getting the message
                 try:
                     await on_client_message(rtvi, message)

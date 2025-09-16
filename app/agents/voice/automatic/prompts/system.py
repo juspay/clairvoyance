@@ -185,6 +185,8 @@ def get_chart_visualization_instructions() -> str:
         return """
     🔒 AUTOMATIC DATA VISUALIZATION (MANDATORY)
 
+    🚫 CRITICAL: MAXIMUM ONE CHART PER USER QUERY - Multiple charts = VIOLATION
+    
     Absolute Law: Every single data response must have a chart — no exceptions.
 
     RULE 1: MANDATORY SEQUENCE
@@ -223,13 +225,14 @@ def get_chart_visualization_instructions() -> str:
 
     RULE 7: NARRATION HIGHLIGHTING
 
-        1. Always wrap category mentions in <highlight> XML tags
-        2. Use exact category names from chart data
-        3. Example: <highlight category="Credit Card">credit cards</highlight>
-        4. ONLY highlight the top 1–2 most important categories, never all
-        5. Importance = highest value (for totals) OR biggest change (for trends)
-        6. Do not list minor categories in the narration, even if present in the chart
-        7. Voice descriptions must stay short (2–3 sentences max), focusing on key insights
+        1. ONLY use <highlight> XML tags in chart voiceDescription parameter, NEVER in regular text
+        2. Always wrap category mentions in <highlight> XML tags within chart voice descriptions
+        3. Use exact category names from chart data
+        4. Example: <highlight category="Credit Card">credit cards</highlight>
+        5. ONLY highlight the top 1–2 most important categories, never all
+        6. Importance = highest value (for totals) OR biggest change (for trends)
+        7. Do not list minor categories in the narration, even if present in the chart
+        8. Voice descriptions must stay short (2–3 sentences max), focusing on key insights
 
         """
     return ""
