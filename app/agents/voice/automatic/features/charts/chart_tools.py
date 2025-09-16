@@ -41,7 +41,9 @@ def get_pending_ui_components(session_id: str) -> List[UIComponentEvent]:
         storage = get_session_storage()
         return storage.get_pending_ui_components(session_id)
     except Exception as e:
-        logger.error(f"[{session_id}] Failed to retrieve UI components: {e}")
+        logger.error(
+            f"Tool Error: [get_pending_ui_components] [{session_id}] Failed to retrieve UI components: {e}"
+        )
         return []
 
 
@@ -76,7 +78,7 @@ async def generate_bar_chart(params) -> None:
         # Validate series_data - only one series allowed like MCP
         if len(series_data) > 1:
             await params.result_callback(
-                "Error: Only one series allowed for bar charts"
+                "Tool Error: [generate_bar_chart] Only one series allowed for bar charts"
             )
             return
 
@@ -139,8 +141,12 @@ async def generate_bar_chart(params) -> None:
 
     except Exception as e:
         error_message = str(e)
-        logger.error(f"[{session_id}] Error generating bar chart: {error_message}")
-        await params.result_callback(f"Error generating chart: {error_message}")
+        logger.error(
+            f"Tool Error: [generate_bar_chart] [{session_id}] Error generating bar chart: {error_message}"
+        )
+        await params.result_callback(
+            f"Tool Error: [generate_bar_chart] Error generating bar chart: {error_message}"
+        )
 
 
 async def generate_line_chart(params) -> None:
@@ -215,8 +221,12 @@ async def generate_line_chart(params) -> None:
 
     except Exception as e:
         error_message = str(e)
-        logger.error(f"[{session_id}] Error generating line chart: {error_message}")
-        await params.result_callback(f"Error generating chart: {error_message}")
+        logger.error(
+            f"Tool Error: [generate_line_chart] [{session_id}] Error generating line chart: {error_message}"
+        )
+        await params.result_callback(
+            f"Tool Error: [generate_line_chart] Error generating line chart: {error_message}"
+        )
 
 
 async def generate_donut_chart(params) -> None:
@@ -236,7 +246,7 @@ async def generate_donut_chart(params) -> None:
         valid_data_types = ["currency", "numericalValue", "percentage", "unknown"]
         if data_type not in valid_data_types:
             await params.result_callback(
-                f"Error: Invalid data_type. Must be one of: {valid_data_types}"
+                f"Tool Error: [generate_donut_chart] Invalid data_type. Must be one of: {valid_data_types}"
             )
             return
 
@@ -324,8 +334,12 @@ async def generate_donut_chart(params) -> None:
 
     except Exception as e:
         error_message = str(e)
-        logger.error(f"[{session_id}] Error generating donut chart: {error_message}")
-        await params.result_callback(f"Error generating chart: {error_message}")
+        logger.error(
+            f"Tool Error: [generate_donut_chart] [{session_id}] Error generating donut chart: {error_message}"
+        )
+        await params.result_callback(
+            f"Tool Error: [generate_donut_chart] Error generating donut chart: {error_message}"
+        )
 
 
 async def generate_single_stat_card(params) -> None:
@@ -424,6 +438,8 @@ async def generate_single_stat_card(params) -> None:
     except Exception as e:
         error_message = str(e)
         logger.error(
-            f"[{session_id}] Error generating single stat card: {error_message}"
+            f"Tool Error: [generate_single_stat_card] [{session_id}] Error generating start_card : {error_message}"
         )
-        await params.result_callback(f"Error generating chart: {error_message}")
+        await params.result_callback(
+            f"Tool Error: [generate_single_stat_card] Error generating start_card : {error_message}"
+        )

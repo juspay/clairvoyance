@@ -47,7 +47,10 @@ async def manage_announcement_banner(params: FunctionCallParams):
         # Validate action
         if not action:
             await params.result_callback(
-                {"success": False, "error": "Action is required."}
+                {
+                    "success": False,
+                    "Tool Error": " [manage_announcement_banner] Action is required.",
+                }
             )
             return
 
@@ -55,11 +58,13 @@ async def manage_announcement_banner(params: FunctionCallParams):
 
         # For all actions, we need shop_url
         if not shop_url:
-            logger.error("Banner operation called without required shop URL.")
+            logger.error(
+                "Tool Error: [manage_announcement_banner] Banner operation called without required shop URL."
+            )
             await params.result_callback(
                 {
                     "success": False,
-                    "error": "Banner tool is not configured with shop information.",
+                    "Tool Error": "[manage_announcement_banner] Banner tool is not configured with shop information.",
                 }
             )
             return
@@ -68,11 +73,13 @@ async def manage_announcement_banner(params: FunctionCallParams):
         try:
             config = await get_current_shop_config_data(shop_url)
         except ValueError as e:
-            logger.error(f"Failed to get shop configuration: {str(e)}")
+            logger.error(
+                f"Tool Error: [manage_announcement_banner] Failed to get shop configuration: {str(e)}"
+            )
             await params.result_callback(
                 {
                     "success": False,
-                    "error": f"Could not retrieve shop configuration: {str(e)}",
+                    "error": f"Tool Error: [manage_announcement_banner] Could not retrieve shop configuration: {str(e)}",
                 }
             )
             return
@@ -115,12 +122,12 @@ async def manage_announcement_banner(params: FunctionCallParams):
         # For all other actions, we need full shop information
         if not shop_id or not merchant_id or not breeze_token:
             logger.error(
-                "Banner operation called without required context (breezeToken, shopId, merchantId)."
+                "Tool Error: [manage_announcement_banner] Banner operation called without required context (breezeToken, shopId, merchantId)."
             )
             await params.result_callback(
                 {
                     "success": False,
-                    "error": "Banner tool is not configured with shop information.",
+                    "Tool Error": " [manage_announcement_banner] Banner tool is not configured with shop information.",
                 }
             )
             return
@@ -132,7 +139,7 @@ async def manage_announcement_banner(params: FunctionCallParams):
             await params.result_callback(
                 {
                     "success": False,
-                    "error": "Description is required when adding or updating a banner.",
+                    "Tool Error": " [manage_announcement_banner] Description is required when adding or updating a banner.",
                 }
             )
             return
@@ -181,7 +188,9 @@ async def manage_announcement_banner(params: FunctionCallParams):
                         f"Updated shop configuration: {json.dumps(updated_config)}"
                     )
                 except ValueError as e:
-                    logger.error(f"Failed to fetch updated configuration: {e}")
+                    logger.error(
+                        f"Tool Error: [manage_announcement_banner] Failed to fetch updated configuration: {e}"
+                    )
 
             # Return the patch_result
             await params.result_callback(patch_result)
@@ -189,15 +198,20 @@ async def manage_announcement_banner(params: FunctionCallParams):
             await params.result_callback(
                 {
                     "success": False,
-                    "error": "Merchant ID mismatch. Cannot update configuration.",
+                    "Tool Error": "[manage_announcement_banner] Merchant ID mismatch. Cannot update configuration.",
                 }
             )
             return
 
     except Exception as e:
         error_message = str(e)
-        logger.error(f"manageAnnouncementBanner error: {error_message}")
-        await params.result_callback({"success": False, "error": error_message})
+        logger.error(f"Tool Error: [manage_announcement_banner] Error: {error_message}")
+        await params.result_callback(
+            {
+                "success": False,
+                "Tool Error": f" [manage_announcement_banner] Error: {error_message}",
+            }
+        )
 
 
 manage_announcement_banner_function = FunctionSchema(

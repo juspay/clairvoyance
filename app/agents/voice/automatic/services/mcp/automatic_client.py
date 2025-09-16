@@ -151,7 +151,7 @@ class MCPClient:
             if response_dict.get("error"):
                 error_details = response_dict["error"]
                 logger.error(
-                    f"Received JSON-RPC error when listing tools: {error_details}"
+                    f"Tool Error: [mcp_tool_registration] Received JSON-RPC error when listing tools: {error_details}"
                 )
                 raise RuntimeError(f"JSON-RPC Error listing tools: {error_details}")
 
@@ -189,7 +189,9 @@ class MCPClient:
             logger.info(f"Successfully registered {len(converted_tools)} remote tools.")
             return ToolsSchema(standard_tools=converted_tools)
         except Exception as e:
-            logger.error(f"Failed to register tools from remote server: {e}")
+            logger.error(
+                f"Tool Error: [mcp_tool_registration] Failed to register tools from remote server: {e}"
+            )
             return ToolsSchema(standard_tools=[])
 
     def _convert_schema(self, tool_data: Dict[str, Any]) -> FunctionSchema:
@@ -212,7 +214,9 @@ class MCPClient:
         logger.debug(f"LLM called MCP tool: {function_name} with args: {arguments}")
 
         if not result_callback:
-            logger.error(f"No result_callback found for MCP function {function_name}")
+            logger.error(
+                f"Tool Error: [{function_name}] No result_callback found for MCP function"
+            )
             return
 
         await self._call_tool(function_name, arguments, result_callback)
@@ -284,8 +288,10 @@ class MCPClient:
             await result_callback(text_response)
 
         except Exception as e:
-            logger.error(f"Failed to call tool '{function_name}': {e}")
-            await result_callback(f"Error: Could not execute tool {function_name}.")
+            logger.error(f"Tool Error: [{function_name}] Failed to call tool: {e}")
+            await result_callback(
+                f"Tool Error: [{function_name}]: Could not execute tool {function_name}."
+            )
 
     async def close(self):
         await self._client.aclose()

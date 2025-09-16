@@ -4,6 +4,7 @@ from datetime import datetime
 from pipecat.services.llm_service import FunctionCallParams
 from pipecat.adapters.schemas.function_schema import FunctionSchema
 from pipecat.adapters.schemas.tools_schema import ToolsSchema
+from app.core.logger import logger
 
 
 async def get_current_time(params: FunctionCallParams):
@@ -13,7 +14,10 @@ async def get_current_time(params: FunctionCallParams):
         current_time = datetime.now(tz).isoformat()
         await params.result_callback({"time": current_time})
     except Exception as e:
-        await params.result_callback({"error": str(e)})
+        logger.error(f"Tool Error: [get_current_time] Error getting current time: {e}")
+        await params.result_callback(
+            {"Tool Error: ": f"[get_current_time] Error: {str(e)}"}
+        )
 
 
 get_current_time_function = FunctionSchema(

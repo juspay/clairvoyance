@@ -87,8 +87,10 @@ async def gemini_search_fn(params: FunctionCallParams):
             )
 
     except Exception as e:
-        logger.error(f"Error during Gemini search: {e}", exc_info=True)
-        await params.result_callback({"error": str(e)})
+        logger.error(
+            f"Tool Error: [search_web] Error during Gemini search: {e}", exc_info=True
+        )
+        await params.result_callback({"Tool Error: [search_web] error": str(e)})
 
 
 # ---------- 3. Define a search tool schema for GPT ----------

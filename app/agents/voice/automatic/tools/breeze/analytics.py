@@ -23,16 +23,20 @@ async def _make_breeze_request(params: FunctionCallParams, operational_tab: str)
     """Generic helper to make requests to the Breeze analytics API."""
     if not all([breeze_token, shop_id, shop_url, shop_type]):
         logger.error(
-            "Breeze tool called without required context (token, shopId, shopUrl, shopType)."
+            "Tool Error: [breeze_analytics] Breeze tool called without required context (token, shopId, shopUrl, shopType)."
         )
-        await params.result_callback({"error": "Breeze tool is not configured."})
+        await params.result_callback(
+            {"Tool Error": " [breeze_analytics] Breeze tool is not configured."}
+        )
         return
 
     start_time_ist_str = params.arguments.get("startTime")
     end_time_ist_str = params.arguments.get("endTime")
 
     if not start_time_ist_str:
-        await params.result_callback({"error": "startTime is a required parameter."})
+        await params.result_callback(
+            {"Tool Error": "[breeze_analytics] startTime is a required parameter."}
+        )
         return
 
     try:
@@ -59,10 +63,10 @@ async def _make_breeze_request(params: FunctionCallParams, operational_tab: str)
         end_time_iso = end_time_utc.isoformat().replace("+00:00", "Z")
 
     except Exception as e:
-        logger.error(f"Error converting time: {e}")
+        logger.error(f"Tool Error: [breeze_analytics] Error converting time: {e}")
         await params.result_callback(
             {
-                "error": f"Invalid time format. Please use 'YYYY-MM-DD HH:MM:SS'. Error: {e}"
+                "Tool Error": f" [breeze_analytics] Invalid time format. Please use 'YYYY-MM-DD HH:MM:SS'. Error: {e}"
             }
         )
         return
@@ -107,17 +111,21 @@ async def _make_breeze_request(params: FunctionCallParams, operational_tab: str)
 
     except httpx.HTTPStatusError as e:
         logger.error(
-            f"HTTP error calling Breeze API: {e.response.status_code} - {e.response.text}"
+            f"Tool Error: [breeze_analytics] HTTP error calling Breeze API: {e.response.status_code} - {e.response.text}"
         )
         await params.result_callback(
             {
-                "error": f"Breeze API error: {e.response.status_code}",
+                "Tool Error": f" [breeze_analytics] Breeze API error: {e.response.status_code}",
                 "details": e.response.text,
             }
         )
     except Exception as e:
-        logger.error(f"Unexpected error calling Breeze API: {e}")
-        await params.result_callback({"error": f"An unexpected error occurred: {e}"})
+        logger.error(
+            f"Tool Error: [breeze_analytics] Unexpected error calling Breeze API: {e}"
+        )
+        await params.result_callback(
+            {"Tool Error": f"[breeze_analytics] An unexpected error occurred: {e}"}
+        )
 
 
 async def get_breeze_sales_data(params: FunctionCallParams):
@@ -144,16 +152,24 @@ async def get_breeze_marketing_data(params: FunctionCallParams):
     """Fetches marketing attribution data from the Breeze analytics API."""
     if not all([breeze_token, shop_id, shop_url, shop_type]):
         logger.error(
-            "Breeze tool called without required context (token, shopId, shopUrl, shopType)."
+            "Tool Error: [get_breeze_marketing_data] Breeze tool called without required context (token, shopId, shopUrl, shopType)."
         )
-        await params.result_callback({"error": "Breeze tool is not configured."})
+        await params.result_callback(
+            {
+                "Tool Error:": "[get_breeze_marketing_data] Breeze tool is not configured."
+            }
+        )
         return
 
     start_time_ist_str = params.arguments.get("startTime")
     end_time_ist_str = params.arguments.get("endTime")
 
     if not start_time_ist_str:
-        await params.result_callback({"error": "startTime is a required parameter."})
+        await params.result_callback(
+            {
+                "Tool Error:": "[get_breeze_marketing_data] startTime is a required parameter."
+            }
+        )
         return
 
     try:
@@ -177,10 +193,12 @@ async def get_breeze_marketing_data(params: FunctionCallParams):
         end_time_iso = end_time_utc.isoformat().replace("+00:00", "Z")
 
     except Exception as e:
-        logger.error(f"Error converting time: {e}")
+        logger.error(
+            f"Tool Error: [get_breeze_marketing_data] Error converting time: {e}"
+        )
         await params.result_callback(
             {
-                "error": f"Invalid time format. Please use 'YYYY-MM-DD HH:MM:SS'. Error: {e}"
+                "Tool Error:": f"[get_breeze_marketing_data] Invalid time format. Please use 'YYYY-MM-DD HH:MM:SS'. Error: {e}"
             }
         )
         return
@@ -218,33 +236,45 @@ async def get_breeze_marketing_data(params: FunctionCallParams):
 
     except httpx.HTTPStatusError as e:
         logger.error(
-            f"HTTP error calling Breeze Marketing API: {e.response.status_code} - {e.response.text}"
+            f"Tool Error: [get_breeze_marketing_data] HTTP error calling Breeze Marketing API: {e.response.status_code} - {e.response.text}"
         )
         await params.result_callback(
             {
-                "error": f"Breeze API error: {e.response.status_code}",
+                "Tool Error:": f" [get_breeze_marketing_data] Breeze API error: {e.response.status_code}",
                 "details": e.response.text,
             }
         )
     except Exception as e:
-        logger.error(f"Unexpected error calling Breeze Marketing API: {e}")
-        await params.result_callback({"error": f"An unexpected error occurred: {e}"})
+        logger.error(
+            f"Tool Error: [get_breeze_marketing_data] Unexpected error calling Breeze Marketing API: {e}"
+        )
+        await params.result_callback(
+            {
+                "Tool Error:": f" [get_breeze_marketing_data] An unexpected error occurred: {e}"
+            }
+        )
 
 
 async def get_breeze_address_data(params: FunctionCallParams):
     """Fetches address-related analytics from the Breeze API."""
     if not all([breeze_token, shop_id, shop_url, shop_type]):
         logger.error(
-            "Breeze tool called without required context (token, shopId, shopUrl, shopType)."
+            "Tool Error: [get_breeze_address_data] Breeze tool called without required context (token, shopId, shopUrl, shopType)."
         )
-        await params.result_callback({"error": "Breeze tool is not configured."})
+        await params.result_callback(
+            {"Tool Error:": "[get_breeze_address_data] Breeze tool is not configured."}
+        )
         return
 
     start_time_ist_str = params.arguments.get("startTime")
     end_time_ist_str = params.arguments.get("endTime")
 
     if not start_time_ist_str:
-        await params.result_callback({"error": "startTime is a required parameter."})
+        await params.result_callback(
+            {
+                "Tool Error:": " [get_breeze_address_data] startTime is a required parameter."
+            }
+        )
         return
 
     try:
@@ -268,10 +298,12 @@ async def get_breeze_address_data(params: FunctionCallParams):
         end_time_iso = end_time_utc.isoformat().replace("+00:00", "Z")
 
     except Exception as e:
-        logger.error(f"Error converting time: {e}")
+        logger.error(
+            f"Tool Error: [get_breeze_address_data] Error converting time: {e}"
+        )
         await params.result_callback(
             {
-                "error": f"Invalid time format. Please use 'YYYY-MM-DD HH:MM:SS'. Error: {e}"
+                "Tool Error:": f"[get_breeze_address_data] Invalid time format. Please use 'YYYY-MM-DD HH:MM:SS'. Error: {e}"
             }
         )
         return
@@ -307,17 +339,23 @@ async def get_breeze_address_data(params: FunctionCallParams):
 
     except httpx.HTTPStatusError as e:
         logger.error(
-            f"HTTP error calling Breeze Address API: {e.response.status_code} - {e.response.text}"
+            f"Tool Error: [get_breeze_address_data] HTTP error calling Breeze Address API: {e.response.status_code} - {e.response.text}"
         )
         await params.result_callback(
             {
-                "error": f"Breeze API error: {e.response.status_code}",
+                "Tool Error:": f"[get_breeze_address_data] Breeze API error: {e.response.status_code}",
                 "details": e.response.text,
             }
         )
     except Exception as e:
-        logger.error(f"Unexpected error calling Breeze Address API: {e}")
-        await params.result_callback({"error": f"An unexpected error occurred: {e}"})
+        logger.error(
+            f"Tool Error: [get_breeze_address_data] Unexpected error calling Breeze Address API: {e}"
+        )
+        await params.result_callback(
+            {
+                "Tool Error:": f"[get_breeze_address_data] An unexpected error occurred: {e}"
+            }
+        )
 
 
 get_breeze_sales_data_function = FunctionSchema(

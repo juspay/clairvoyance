@@ -29,4 +29,6 @@ async def _store_ui_components_from_mcp(
             logger.info(f"[{session_id}] Stored UI component from MCP: {component_id}")
 
     except Exception as e:
-        logger.error(f"Error storing UI components from MCP: {e}")
+        logger.error(
+            f"Tool Error: [mcp_ui_components] Error storing UI components from MCP: {e}"
+        )

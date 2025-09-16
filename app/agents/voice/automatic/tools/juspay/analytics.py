@@ -57,8 +57,12 @@ async def _make_genius_api_request(
     Returns a GeniusApiResponse object.
     """
     if not euler_token:
-        logger.error("Juspay tool called without required euler_token.")
-        return ApiFailure(error={"error": "Juspay tool is not configured."})
+        logger.error(
+            "Tool Error: [genius_api_request] Juspay tool called without required euler_token."
+        )
+        return ApiFailure(
+            error={"Tool Error": "[genius_api_request] Juspay tool is not configured."}
+        )
 
     start_time_str = params.arguments.get("startTime")
     end_time_str = params.arguments.get("endTime")
@@ -87,10 +91,12 @@ async def _make_genius_api_request(
         end_time_iso = end_time_utc.isoformat().replace("+00:00", "Z")
 
     except Exception as e:
-        logger.error(f"Error converting time for Juspay API: {e}")
+        logger.error(
+            f"Tool Error: [genius_api_request] Error converting time for Juspay API: {e}"
+        )
         return ApiFailure(
             error={
-                "error": f"Invalid time format provided. Please use 'YYYY-MM-DD HH:MM:SS' in IST. Error: {e}"
+                "Tool Error": f" [genius_api_request] Invalid time format provided. Please use 'YYYY-MM-DD HH:MM:SS' in IST. Error: {e}"
             }
         )
 
@@ -118,23 +124,33 @@ async def _make_genius_api_request(
             logger.info(f"Received Raw Juspay API text response: {response_text}")
             return ApiSuccess(data=response_text)
     except httpx.TimeoutException:
-        logger.error("Juspay API request timed out after 10 seconds.")
-        return ApiFailure(
-            error={"error": "It is taking too much time to process. Please try again."}
-        )
-    except httpx.HTTPStatusError as e:
         logger.error(
-            f"HTTP error calling Juspay API: {e.response.status_code} - {e.response.text}"
+            "Tool Error: [genius_api_request] Juspay API request timed out after 10 seconds."
         )
         return ApiFailure(
             error={
-                "error": f"Juspay API error: {e.response.status_code}",
+                "Tool Error": "[genius_api_request] It is taking too much time to process. Please try again."
+            }
+        )
+    except httpx.HTTPStatusError as e:
+        logger.error(
+            f"Tool Error: [genius_api_request] HTTP error calling Juspay API: {e.response.status_code} - {e.response.text}"
+        )
+        return ApiFailure(
+            error={
+                "Tool Error": f" [genius_api_request] Juspay API error: {e.response.status_code}",
                 "details": e.response.text,
             }
         )
     except Exception as e:
-        logger.error(f"Unexpected error calling Juspay API: {e}")
-        return ApiFailure(error={"error": f"An unexpected error occurred: {e}"})
+        logger.error(
+            f"Tool Error: [genius_api_request] Unexpected error calling Juspay API: {e}"
+        )
+        return ApiFailure(
+            error={
+                "Tool Error": f" [genius_api_request] An unexpected error occurred: {e}"
+            }
+        )
 
 
 def handle_genius_response(func):
@@ -151,11 +167,18 @@ def handle_genius_response(func):
             if isinstance(result, ApiSuccess):
                 await params.result_callback({"data": result.data})
             else:
-                await params.result_callback(result.error)
+                await params.result_callback(
+                    {"Tool Error": f"[handle_genius_response] {result.error}"}
+                )
+
         except Exception as e:
-            logger.error(f"Critical error in {func.__name__}: {e}", exc_info=True)
+            logger.error(
+                f"Tool Error: [{func.__name__}] Critical error: {e}", exc_info=True
+            )
             await params.result_callback(
-                {"error": f"A critical error occurred in the tool function: {e}"}
+                {
+                    "Tool Error": f"error: [{func.__name__}] A critical error occurred in the tool function: {e}"
+                }
             )
 
     return wrapper
@@ -223,10 +246,13 @@ async def get_payment_analytics_by_dimension(params: FunctionCallParams):
 
     except Exception as e:
         logger.error(
-            f"Critical error in get_payment_analytics_by_dimension: {e}", exc_info=True
+            f"Tool Error: [get_payment_analytics_by_dimension] Critical error: {e}",
+            exc_info=True,
         )
         await params.result_callback(
-            {"error": f"A critical error occurred in the tool function: {e}"}
+            {
+                "Tool Error": f"[get_payment_analytics_by_dimension] A critical error occurred in the tool function: {e}"
+            }
         )
 
 
@@ -239,7 +265,9 @@ async def list_offers_by_filter(params: FunctionCallParams):
 
         if not merchant_id or not euler_token:
             await params.result_callback(
-                {"error": "Authentication token or Merchant ID is missing."}
+                {
+                    "Tool Error": "[list_offers_by_filter] Authentication token or Merchant ID is missing."
+                }
             )
             return
 
@@ -272,10 +300,12 @@ async def list_offers_by_filter(params: FunctionCallParams):
             else:
                 end_time_ist = now_utc.astimezone(ist)
         except Exception as e:
-            logger.error(f"Error converting user-provided time: {e}")
+            logger.error(
+                f"Tool Error: [list_offers_by_filter] Error converting user-provided time: {e}"
+            )
             await params.result_callback(
                 {
-                    "error": f"Invalid time format. Please use 'YYYY-MM-DD HH:MM:SS' in IST. Error: {e}"
+                    "Tool Error": f"[list_offers_by_filter] Invalid time format. Please use 'YYYY-MM-DD HH:MM:SS' in IST. Error: {e}"
                 }
             )
             return
@@ -320,11 +350,11 @@ async def list_offers_by_filter(params: FunctionCallParams):
             if response.status_code != 200:
                 error_text = response.text
                 logger.error(
-                    f"Failed to list offers: {response.status_code} - {error_text}"
+                    f"Tool Error: [list_offers_by_filter] Failed to list offers: {response.status_code} - {error_text}"
                 )
                 await params.result_callback(
                     {
-                        "error": f"Failed to list offers: HTTP {response.status_code}",
+                        "Tool Error": f"list_offers_by_filter] Failed to list offers: HTTP {response.status_code}",
                         "details": error_text,
                     }
                 )
@@ -333,12 +363,22 @@ async def list_offers_by_filter(params: FunctionCallParams):
             await params.result_callback({"data": response.text})
 
     except httpx.TimeoutException:
-        logger.error("List offers request timed out.")
-        await params.result_callback({"error": "Request timed out. Please try again."})
-    except Exception as e:
-        logger.error(f"Critical error in list_offers_by_filter: {e}", exc_info=True)
+        logger.error(
+            "Tool Error: [list_offers_by_filter] List offers request timed out."
+        )
         await params.result_callback(
-            {"error": f"An unexpected error occurred: {str(e)}"}
+            {
+                "Tool Error": "[list_offers_by_filter] Request timed out. Please try again."
+            }
+        )
+    except Exception as e:
+        logger.error(
+            f"Tool Error: [list_offers_by_filter] Critical error: {e}", exc_info=True
+        )
+        await params.result_callback(
+            {
+                "Tool Error": f"[list_offers_by_filter] An unexpected error occurred: {str(e)}"
+            }
         )
 
 
@@ -409,7 +449,9 @@ async def get_gmv_order_value_payment_method_wise_by_time(params: FunctionCallPa
                         )
                     processed_data.append(item)
                 except json.JSONDecodeError as e:
-                    logger.error(f"Error decoding JSON line: {line}. Error: {e}")
+                    logger.error(
+                        f"Tool Error: [get_gmv_order_value_payment_method_wise_by_time] Error decoding JSON line: {line}. Error: {e}"
+                    )
                     continue
 
             total_gmv = sum(
@@ -427,13 +469,15 @@ async def get_gmv_order_value_payment_method_wise_by_time(params: FunctionCallPa
             await params.result_callback(result.error)
     except Exception as e:
         logger.error(
-            f"Unexpected error in get_gmv_order_value_payment_method_wise_by_time: {e}",
+            f"Tool Error: [get_gmv_order_value_payment_method_wise_by_time] Unexpected error in get_gmv_order_value_payment_method_wise_by_time: {e}",
             exc_info=True,
         )
         await params.result_callback(
             {
                 "data": json.dumps(
-                    {"error": f"Unexpected error occurred in the tool function: {e}"}
+                    {
+                        "Tool Error": f"Unexpected error occurred in the tool function: {e}"
+                    }
                 )
             }
         )
@@ -589,10 +633,12 @@ async def create_euler_offer(params: FunctionCallParams):
             end_date_iso = end_date_ist.isoformat()
 
         except Exception as e:
-            logger.error(f"Error converting date format for offer creation: {e}")
+            logger.error(
+                f"Tool Error: [create_euler_offer] Error converting date format for offer creation: {e}"
+            )
             await params.result_callback(
                 {
-                    "error": f"Invalid date format provided. Please use 'YYYY-MM-DD HH:MM:SS' in IST. Error: {e}"
+                    "error": f"Tool Error: [create_euler_offer] Invalid date format provided. Please use 'YYYY-MM-DD HH:MM:SS' in IST. Error: {e}"
                 }
             )
             return
@@ -720,27 +766,42 @@ async def create_euler_offer(params: FunctionCallParams):
                     await params.result_callback({"data": json.dumps(success_result)})
                 else:
                     error_message = response_data.get(
-                        "error_message", "API call failed to return an offer ID."
+                        "Tool Error:",
+                        "[create_euler_offer] API call failed to return an offer ID.",
                     )
                     await params.result_callback(
-                        {"error": f"Failed to create offer: {error_message}"}
+                        {
+                            "Tool Error:": f"[create_euler_offer] Failed to create offer: {error_message}"
+                        }
                     )
             else:
                 error_text = response.text
                 logger.error(
-                    f"Offer creation failed: {response.status_code} - {error_text}"
+                    f"Tool Error: [create_euler_offer] Offer creation failed: {response.status_code} - {error_text}"
                 )
                 await params.result_callback(
-                    {"error": f"Failed to create offer: HTTP {response.status_code}"}
+                    {
+                        "error": f"Tool Error: [create_euler_offer] Failed to create offer: HTTP {response.status_code}"
+                    }
                 )
 
     except httpx.TimeoutException:
-        logger.error("Offer creation request timed out after 30 seconds.")
-        await params.result_callback({"error": "Request timed out. Please try again."})
-    except Exception as e:
-        logger.error(f"Critical error in create_euler_offer: {e}", exc_info=True)
+        logger.error(
+            "Tool Error: [create_euler_offer] Offer creation request timed out after 30 seconds."
+        )
         await params.result_callback(
-            {"error": f"An unexpected error occurred: {str(e)}"}
+            {
+                "error": "Tool Error: [create_euler_offer] Request timed out. Please try again."
+            }
+        )
+    except Exception as e:
+        logger.error(
+            f"Tool Error: [create_euler_offer] Critical error: {e}", exc_info=True
+        )
+        await params.result_callback(
+            {
+                "error": f"Tool Error: [create_euler_offer] An unexpected error occurred: {str(e)}"
+            }
         )
 
 
@@ -788,7 +849,9 @@ async def merchant_offer_analytics(params: FunctionCallParams):
         await params.result_callback({"data": json.dumps(combined_data)})
 
     except Exception as e:
-        logger.error(f"Critical error in merchant_offer_analytics: {e}", exc_info=True)
+        logger.error(
+            f"Tool Error: [merchant_offer_analytics] Critical error: {e}", exc_info=True
+        )
         await params.result_callback(
             {"error": f"A critical error occurred in the tool function: {e}"}
         )
@@ -800,7 +863,9 @@ async def find_offer_by_code(offer_code: str) -> dict | None:
     Returns the complete offer data if found, None otherwise.
     """
     if not euler_token or not merchant_id:
-        logger.error("Missing authentication token or merchant ID for offer search")
+        logger.error(
+            "Tool Error: [find_offer_by_code] Missing authentication token or merchant ID for offer search"
+        )
         return None
 
     try:
@@ -843,12 +908,14 @@ async def find_offer_by_code(offer_code: str) -> dict | None:
                     return None
             else:
                 logger.error(
-                    f"Failed to search for offer: {response.status_code} - {response.text}"
+                    f"Tool Error: [find_offer_by_code] Failed to search for offer: {response.status_code} - {response.text}"
                 )
                 return None
 
     except Exception as e:
-        logger.error(f"Error searching for offer by code '{offer_code}': {e}")
+        logger.error(
+            f"Tool Error: [find_offer_by_code] Error searching for offer by code '{offer_code}': {e}"
+        )
         return None
 
 
@@ -938,21 +1005,31 @@ async def delete_euler_offer(params: FunctionCallParams):
             else:
                 error_text = response.text
                 logger.error(
-                    f"Failed to delete offer '{offer_code}': {response.status_code} - {error_text}"
+                    f"Tool Error: [delete_euler_offer] Failed to delete offer '{offer_code}': {response.status_code} - {error_text}"
                 )
                 await params.result_callback(
                     {
-                        "error": f"Failed to delete offer '{offer_code}': HTTP {response.status_code}. {error_text}"
+                        "error": f"Tool Error: [delete_euler_offer] Failed to delete offer '{offer_code}': HTTP {response.status_code}. {error_text}"
                     }
                 )
 
     except httpx.TimeoutException:
-        logger.error(f"Delete offer request timed out for offer '{offer_code}'")
-        await params.result_callback({"error": "Request timed out. Please try again."})
-    except Exception as e:
-        logger.error(f"Critical error in delete_euler_offer: {e}", exc_info=True)
+        logger.error(
+            f"Tool Error: [delete_euler_offer] Delete offer request timed out for offer '{offer_code}'"
+        )
         await params.result_callback(
-            {"error": f"An unexpected error occurred: {str(e)}"}
+            {
+                "error": "Tool Error: [delete_euler_offer] Request timed out. Please try again."
+            }
+        )
+    except Exception as e:
+        logger.error(
+            f"Tool Error: [delete_euler_offer] Critical error: {e}", exc_info=True
+        )
+        await params.result_callback(
+            {
+                "error": f"Tool Error: [delete_euler_offer] An unexpected error occurred: {str(e)}"
+            }
         )
 
 
@@ -1148,11 +1225,11 @@ async def update_euler_offer(params: FunctionCallParams):
                 else:
                     error_text = response.text
                     logger.error(
-                        f"Failed to update offer '{offer_code}' status: {response.status_code} - {error_text}"
+                        f"Tool Error: [update_euler_offer] Failed to update offer '{offer_code}' status: {response.status_code} - {error_text}"
                     )
                     await params.result_callback(
                         {
-                            "error": f"Failed to update offer '{offer_code}' status: HTTP {response.status_code}. {error_text}"
+                            "error": f"Tool Error: [update_euler_offer] Failed to update offer '{offer_code}' status: HTTP {response.status_code}. {error_text}"
                         }
                     )
                     return
@@ -1507,23 +1584,29 @@ async def update_euler_offer(params: FunctionCallParams):
             else:
                 error_text = response.text
                 logger.error(
-                    f"Failed to update offer '{offer_code}' details: {response.status_code} - {error_text}"
+                    f"Tool Error: [update_euler_offer] Failed to update offer '{offer_code}' details: {response.status_code} - {error_text}"
                 )
                 await params.result_callback(
                     {
-                        "error": f"Failed to update offer '{offer_code}' details: HTTP {response.status_code}. {error_text}"
+                        "error": f"Tool Error: [update_euler_offer] Failed to update offer '{offer_code}' details: HTTP {response.status_code}. {error_text}"
                     }
                 )
 
     except httpx.TimeoutException:
-        logger.error(f"Update offer details request timed out for offer '{offer_code}'")
-        await params.result_callback({"error": "Request timed out. Please try again."})
-    except Exception as e:
         logger.error(
-            f"Critical error in update_euler_offer_details: {e}", exc_info=True
+            f"Tool Error: [update_euler_offer] Update offer details request timed out for offer '{offer_code}'"
         )
         await params.result_callback(
-            {"error": f"An unexpected error occurred: {str(e)}"}
+            {"Tool Error:": "[update_euler_offer] Request timed out. Please try again."}
+        )
+    except Exception as e:
+        logger.error(
+            f"Tool Error: [update_euler_offer] Critical error: {e}", exc_info=True
+        )
+        await params.result_callback(
+            {
+                "Tool Error:": f" [update_euler_offer] An unexpected error occurred: {str(e)}"
+            }
         )
 
 
