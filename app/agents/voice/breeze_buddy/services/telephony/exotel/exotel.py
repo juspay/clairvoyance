@@ -3,7 +3,7 @@ from fastapi import WebSocket, HTTPException
 import requests
 
 from app.core.logger import logger
-from app.core.transport.http_client import create_aiohttp_session
+from app.core.transport.http_client import get_proxy_config
 
 from pipecat.serializers.exotel import ExotelFrameSerializer
 

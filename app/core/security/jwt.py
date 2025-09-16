@@ -1,9 +1,8 @@
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any
 import jwt
-from fastapi import HTTPException, status, Depends, Request
+from fastapi import HTTPException, status, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from pydantic import BaseModel
 
 from app.core.config import (
     JWT_SECRET_KEY,

@@ -10,8 +10,6 @@ class HITLUserRejectedOperationError(Exception):
     But can be retried if user changes their mind.
     """
 
-    pass
-
 
 class HITLOperationTimeoutError(Exception):
     """
@@ -19,13 +17,9 @@ class HITLOperationTimeoutError(Exception):
     This signals to the LLM that the operation should not be retried.
     """
 
-    pass
-
 
 class HITLConfirmationError(Exception):
     """
     Raised when confirmation process fails due to system errors.
     This signals to the LLM that the operation should not be retried.
     """
-
-    pass

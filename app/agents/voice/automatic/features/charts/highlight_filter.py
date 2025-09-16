@@ -2,7 +2,6 @@ import re
 from typing import Any, Mapping
 
 from pipecat.utils.text.base_text_filter import BaseTextFilter
-from app.core.logger import logger
 
 
 class HighlightedChartTextFilter(BaseTextFilter):
@@ -28,12 +27,9 @@ class HighlightedChartTextFilter(BaseTextFilter):
 
     async def update_settings(self, settings: Mapping[str, Any]) -> None:
         """Update filter settings."""
-        pass
 
     async def reset_interruption(self) -> None:
         """Reset filter state on interruption."""
-        pass
 
     async def handle_interruption(self) -> None:
         """Handle filter interruption."""
-        pass

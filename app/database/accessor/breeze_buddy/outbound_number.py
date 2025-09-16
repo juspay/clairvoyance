@@ -2,7 +2,7 @@
 Database accessor functions for the application.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import List, Optional
 import asyncpg
 from app.core.logger import logger
 from app.schemas import OutboundNumber, OutboundNumberStatus, CallProvider

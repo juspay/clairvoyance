@@ -1,6 +1,5 @@
 import json
 from enum import Enum
-from typing import Optional, Dict, Any
 
 from app.core.logger import logger
 from pipecat.services.llm_service import FunctionCallParams

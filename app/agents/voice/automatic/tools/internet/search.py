@@ -1,18 +1,11 @@
-import os
 from datetime import datetime
 
 from app.core.logger import logger
 from app.core.config import GEMINI_SEARCH_RESULT_API_MODEL, GEMINI_API_KEY
-from pipecat.frames.frames import LLMMessagesFrame
-from pipecat.pipeline.pipeline import Pipeline
-from pipecat.pipeline.runner import PipelineRunner
-from pipecat.pipeline.task import PipelineTask
-from pipecat.processors.aggregators.openai_llm_context import OpenAILLMContext
 from pipecat.services.google.llm import GoogleLLMService, GoogleLLMContext
 from pipecat.services.llm_service import FunctionCallParams
 from pipecat.adapters.schemas.function_schema import FunctionSchema
 from pipecat.adapters.schemas.tools_schema import ToolsSchema
-from pipecat.processors.frame_processor import FrameDirection
 from google.genai.types import GenerateContentConfig
 
 

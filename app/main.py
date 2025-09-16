@@ -6,7 +6,6 @@ from pathlib import Path
 from contextlib import asynccontextmanager
 from typing import Any, Dict
 
-import aiohttp
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse

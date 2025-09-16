@@ -2,7 +2,6 @@
 import asyncio
 from typing import List, Dict, Any, Optional
 from pipecat.processors.aggregators.openai_llm_context import OpenAILLMContext
-from pipecat.frames.frames import Frame, LLMMessagesFrame
 from app.core.config import KEEP_RECENT_TURNS, MAX_TURNS_BEFORE_SUMMARY
 from app.core.logger import logger
 

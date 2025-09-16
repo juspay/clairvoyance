@@ -7,7 +7,7 @@ from app.agents.voice.breeze_buddy.services.telephony.base_provider import (
     VoiceCallProvider,
 )
 from app.core import config
-from app.core.transport.http_client import create_aiohttp_session
+from app.core.transport.http_client import get_proxy_config
 from app.agents.voice.breeze_buddy.workflows.order_confirmation.websocket_bot import (
     main as telephony_websocket_conn,
 )
@@ -20,7 +20,6 @@ class TwilioProvider(VoiceCallProvider):
     class CustomTwilioFrameSerializer(TwilioFrameSerializer):
         async def _hang_up_call(self):
             logger.info("Skipping automatic hang-up from serializer.")
-            pass
 
     def __init__(self, aiohttp_session):
         super().__init__(config, aiohttp_session)

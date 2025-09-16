@@ -4,8 +4,7 @@ Parses highlight XML tags and correlates them with chart context.
 """
 
 import re
-from typing import List, Dict, Any, Tuple, Optional
-from app.core.logger import logger
+from typing import Dict, Any, Optional
 
 
 class HighlightTagParser:

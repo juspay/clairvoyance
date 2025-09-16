@@ -1,6 +1,6 @@
 import asyncio
 import uuid
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 from datetime import datetime
 from app.core import config
 from app.core.logger import logger

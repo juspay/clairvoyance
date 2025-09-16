@@ -19,14 +19,12 @@ class VoiceCallProvider(ABC):
         """
         Handle the WebSocket connection for the voice provider.
         """
-        pass
 
     @abstractmethod
     def make_call(self, customer_mobile_number: str, outbound_number: str):
         """
         Initiate a call.
         """
-        pass
 
     def set_completion_callback(self, callback):
         """

@@ -4,7 +4,6 @@ Contains data models for chart components and other UI elements.
 """
 
 from typing import List, Dict, Any, Optional, Union
-from datetime import datetime
 from pydantic import BaseModel
 
 
