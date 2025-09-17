@@ -2,22 +2,29 @@
 Database accessor functions for the application.
 """
 
-from typing import Any, Dict, List, Optional
 from datetime import datetime
+from typing import Any, Dict, List, Optional
+
 import asyncpg
+
 from app.core.logger import logger
-from app.schemas import LeadCallTracker, LeadCallStatus, Workflow, RequestedBy
-from app.database.queries import run_parameterized_query
 from app.database.decoder.breeze_buddy.lead_call_tracker import decode_lead_call_tracker
+from app.database.queries import run_parameterized_query
 from app.database.queries.breeze_buddy.lead_call_tracker import (
-    insert_lead_call_tracker_query,
-    get_leads_based_on_status_and_next_attempt_query,
-    update_lead_call_details_query,
     get_lead_by_call_id_query,
+    get_leads_based_on_status_and_next_attempt_query,
+    insert_lead_call_tracker_query,
     update_lead_call_completion_details_query,
+    update_lead_call_details_query,
     update_lead_call_recording_url_query,
 )
-from app.schemas import LeadCallOutcome
+from app.schemas import (
+    LeadCallOutcome,
+    LeadCallStatus,
+    LeadCallTracker,
+    RequestedBy,
+    Workflow,
+)
 
 
 def get_row_count(result: Optional[List[asyncpg.Record]]) -> int:

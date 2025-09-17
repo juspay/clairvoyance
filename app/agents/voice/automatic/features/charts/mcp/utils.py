@@ -1,9 +1,9 @@
-from typing import Dict, Any
-from app.core.logger import logger
+from typing import Any, Dict
 
 from app.agents.voice.automatic.features.charts.chart_tools import (
     _register_pending_chart_emission,
 )
+from app.core.logger import logger
 
 
 async def _store_ui_components_from_mcp(

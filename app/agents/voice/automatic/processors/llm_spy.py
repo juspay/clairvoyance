@@ -3,30 +3,33 @@ LLM Spy Processor for intercepting function calls and conversation events.
 Lightweight frame processor that delegates business logic to ConversationManager.
 """
 
-import time
 import asyncio
-from typing import Dict, Optional, Any
 import json
+import time
+from typing import Any, Dict, Optional
+
 from opentelemetry import trace
-from app.core import config
-from app.core.logger import logger
 from pipecat.frames.frames import (
     Frame,
     FunctionCallInProgressFrame,
     FunctionCallResultFrame,
-    LLMTextFrame,
-    LLMFullResponseStartFrame,
     LLMFullResponseEndFrame,
+    LLMFullResponseStartFrame,
+    LLMTextFrame,
     TextFrame,
 )
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.processors.frameworks.rtvi import RTVIProcessor, RTVIServerMessageFrame
-from ..features.text_sanitizer.tts_sanitizer import sanitize_markdown
+
+from app.agents.voice.automatic.features.charts.rtvi.rtvi import emit_chart_components
+from app.agents.voice.automatic.rtvi.rtvi import emit_rtvi_event
 from app.agents.voice.automatic.utils.conversation_manager import (
     get_conversation_manager,
 )
-from app.agents.voice.automatic.rtvi.rtvi import emit_rtvi_event
-from app.agents.voice.automatic.features.charts.rtvi.rtvi import emit_chart_components
+from app.core import config
+from app.core.logger import logger
+
+from ..features.text_sanitizer.tts_sanitizer import sanitize_markdown
 
 # Global RTVI processor reference for function confirmations
 _rtvi_processor = None

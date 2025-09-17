@@ -1,15 +1,16 @@
-import httpx
 import json
 from datetime import datetime
-import pytz
 
-from app.core.logger import logger
-from app.core.config import ENABLE_ALL_METRICS_FROM_CKH, BREEZE_DEFAULT_SALES_TAB
-from app.utils.common import get_breeze_portal_url
-from pipecat.services.llm_service import FunctionCallParams
+import httpx
+import pytz
 from pipecat.adapters.schemas.function_schema import FunctionSchema
 from pipecat.adapters.schemas.tools_schema import ToolsSchema
+from pipecat.services.llm_service import FunctionCallParams
+
+from app.core.config import BREEZE_DEFAULT_SALES_TAB, ENABLE_ALL_METRICS_FROM_CKH
+from app.core.logger import logger
 from app.core.transport.http_client import create_http_client
+from app.utils.common import get_breeze_portal_url
 
 # These will be set by the initializer
 breeze_token: str | None = None

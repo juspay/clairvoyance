@@ -4,17 +4,18 @@ This module contains database connection and models.
 """
 
 import asyncpg
+
 from app.core.config import (
-    POSTGRES_USER,
-    POSTGRES_PASSWORD,
-    POSTGRES_HOST,
-    POSTGRES_PORT,
     POSTGRES_DB,
-    POSTGRES_POOL_SIZE,
+    POSTGRES_HOST,
     POSTGRES_MAX_OVERFLOW,
+    POSTGRES_PASSWORD,
+    POSTGRES_POOL_SIZE,
+    POSTGRES_PORT,
+    POSTGRES_USER,
 )
-from app.services.aws.kms import decrypt_kms
 from app.core.logger import logger
+from app.services.aws.kms import decrypt_kms
 
 pool = None
 

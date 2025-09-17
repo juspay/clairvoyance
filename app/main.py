@@ -1,42 +1,43 @@
-import uvicorn
 import subprocess
-import uuid
 import time
-from pathlib import Path
+import uuid
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any, Dict
 
+import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pipecat.transports.daily.utils import (
+    DailyMeetingTokenParams,
+    DailyMeetingTokenProperties,
     DailyRESTHelper,
     DailyRoomParams,
     DailyRoomProperties,
-    DailyMeetingTokenParams,
-    DailyMeetingTokenProperties,
 )
 
-# Database imports
-from app.database import init_db_pool, close_db_pool, get_db_connection
+from app import __version__
+from app.api.routers import breeze_buddy
+from app.core.config import (
+    DAILY_API_KEY,
+    DAILY_API_URL,
+    ENABLE_AUTOMATIC_DAILY_RECORDING,
+    HOST,
+    MAX_DAILY_SESSION_LIMIT,
+    PORT,
+)
 
 # Import necessary components from the new structure
 from app.core.logger import logger
 from app.core.transport.http_client import create_aiohttp_session
-from app.core.config import (
-    DAILY_API_KEY,
-    DAILY_API_URL,
-    PORT,
-    HOST,
-    MAX_DAILY_SESSION_LIMIT,
-    ENABLE_AUTOMATIC_DAILY_RECORDING,
-)
-from app import __version__
+
+# Database imports
+from app.database import close_db_pool, get_db_connection, init_db_pool
 from app.schemas import (
     AutomaticVoiceUserConnectRequest,
 )
-from app.api.routers import breeze_buddy
 
 # Dictionary to track bot processes: {pid: (process, room_url)}
 bot_procs = {}

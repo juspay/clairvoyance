@@ -1,24 +1,26 @@
 import asyncio
 import uuid
-from typing import Dict, Any
 from datetime import datetime
-from app.core import config
-from app.core.logger import logger
+from typing import Any, Dict
+
+from pipecat.processors.frameworks.rtvi import RTVIServerMessageFrame
+
+from app.agents.voice.automatic.features.hitl.exceptions import (
+    HITLConfirmationError,
+    HITLOperationTimeoutError,
+    HITLUserRejectedOperationError,
+)
+from app.agents.voice.automatic.features.hitl.utils import (
+    generate_success_message,
+    get_action_description,
+)
 from app.agents.voice.automatic.processors.llm_spy import (
     get_rtvi_processor,
     register_pending_confirmation,
     wait_for_confirmation_response,
 )
-from app.agents.voice.automatic.features.hitl.utils import (
-    get_action_description,
-    generate_success_message,
-)
-from app.agents.voice.automatic.features.hitl.exceptions import (
-    HITLUserRejectedOperationError,
-    HITLOperationTimeoutError,
-    HITLConfirmationError,
-)
-from pipecat.processors.frameworks.rtvi import RTVIServerMessageFrame
+from app.core import config
+from app.core.logger import logger
 
 
 class HITLManager:

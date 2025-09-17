@@ -1,15 +1,15 @@
-from app.core.logger import logger
-from app.core import config
-from app.agents.voice.automatic.types import TTSProvider, VoiceName
 from typing import Optional
 
-from pipecat.services.google.tts import GoogleTTSService
 from pipecat.services.elevenlabs.tts import ElevenLabsTTSService
+from pipecat.services.google.tts import GoogleTTSService
 from pipecat.transcriptions.language import Language
 
 from app.agents.voice.automatic.features.charts.highlight_filter import (
     HighlightedChartTextFilter,
 )
+from app.agents.voice.automatic.types import TTSProvider, VoiceName
+from app.core import config
+from app.core.logger import logger
 
 
 def get_tts_service(

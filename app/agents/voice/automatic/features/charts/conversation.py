@@ -3,9 +3,10 @@ Conversation data models for LLM debugging and frontend display.
 These types define the structure of conversation data sent to the debug panel.
 """
 
-from typing import Dict, List, Optional, Any, Union
-from pydantic import BaseModel, Field, field_validator
 import time
+from typing import Any, Dict, List, Optional, Union
+
+from pydantic import BaseModel, Field, field_validator
 
 
 class ToolCall(BaseModel):

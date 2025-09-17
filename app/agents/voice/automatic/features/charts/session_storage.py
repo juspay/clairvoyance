@@ -3,7 +3,8 @@ Simple session storage for UI components.
 Stores pending UI components that need to be emitted via WebSocket.
 """
 
-from typing import Dict, List, Any
+from typing import Any, Dict, List
+
 from app.agents.voice.automatic.features.charts.types.ui_components import (
     UIComponentEvent,
 )

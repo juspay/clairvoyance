@@ -1,7 +1,9 @@
 # app/agents/voice/automatic/context_summarizer.py
 import asyncio
-from typing import List, Dict, Any, Optional
+from typing import Any, Dict, List, Optional
+
 from pipecat.processors.aggregators.openai_llm_context import OpenAILLMContext
+
 from app.core.config import KEEP_RECENT_TURNS, MAX_TURNS_BEFORE_SUMMARY
 from app.core.logger import logger
 

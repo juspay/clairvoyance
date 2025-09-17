@@ -3,9 +3,11 @@ Database table creation script.
 This module handles the creation of all database tables and their indexes.
 """
 
-from dotenv import load_dotenv
 import asyncio
-from app.database import init_db_pool, close_db_pool, get_db_connection
+
+from dotenv import load_dotenv
+
+from app.database import close_db_pool, get_db_connection, init_db_pool
 
 load_dotenv(override=True)
 

@@ -3,13 +3,15 @@ Decoder functions for lead call tracker.
 """
 
 from typing import Optional
+
 import asyncpg
+
 from app.schemas import (
-    LeadCallTracker,
-    Workflow,
-    LeadCallStatus,
     LeadCallOutcome,
+    LeadCallStatus,
+    LeadCallTracker,
     RequestedBy,
+    Workflow,
 )
 from app.utils.common import parse_json
 

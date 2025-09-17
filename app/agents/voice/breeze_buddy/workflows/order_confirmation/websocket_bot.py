@@ -1,52 +1,52 @@
-import json
 import asyncio
-import base64
-from pydub import AudioSegment
 import audioop
-from dotenv import load_dotenv
+import base64
+import json
 from datetime import datetime
+
+from dotenv import load_dotenv
 from fastapi import WebSocket
-from app.core.logger import logger
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.vad.vad_analyzer import VADParams
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
 from pipecat.processors.aggregators.openai_llm_context import OpenAILLMContext
+from pipecat.services.azure.llm import AzureLLMService
+from pipecat.services.elevenlabs.tts import ElevenLabsTTSService
 from pipecat.transcriptions.language import Language
 from pipecat.transports.websocket.fastapi import (
     FastAPIWebsocketParams,
     FastAPIWebsocketTransport,
 )
-from pipecat.services.elevenlabs.tts import ElevenLabsTTSService
-from pipecat.services.azure.llm import AzureLLMService
-from pipecat_flows import NodeConfig, FlowsFunctionSchema, FlowManager
+from pipecat_flows import FlowManager, FlowsFunctionSchema, NodeConfig
 from pydantic import ValidationError
+from pydub import AudioSegment
 
 from app.agents.voice.breeze_buddy.workflows.order_confirmation.types import OrderData
-from app.core.security.sha import calculate_hmac_sha256
 from app.agents.voice.breeze_buddy.workflows.order_confirmation.utils import (
-    indian_number_to_speech,
     OUTCOME_TO_ENUM,
     get_stt_service,
+    indian_number_to_speech,
 )
-from app.schemas import LeadCallOutcome, CallProvider
-from app.database.accessor import get_lead_by_call_id
-
 from app.core.config import (
+    AZURE_BREEZE_BUDDY_OPENAI_MODEL,
     AZURE_OPENAI_API_KEY,
     AZURE_OPENAI_ENDPOINT,
-    AZURE_BREEZE_BUDDY_OPENAI_MODEL,
+    BREEZE_BUDDY_VAD_CONFIDENCE,
+    BREEZE_BUDDY_VAD_MIN_VOLUME,
+    BREEZE_BUDDY_VAD_START_SECS,
+    BREEZE_BUDDY_VAD_STOP_SECS,
     ELEVENLABS_API_KEY,
     ELEVENLABS_BB_VOICE_ID,
     ELEVENLABS_MODEL_ID,
     ELEVENLABS_VOICE_SPEED,
     ORDER_CONFIRMATION_WEBHOOK_SECRET_KEY,
-    BREEZE_BUDDY_VAD_CONFIDENCE,
-    BREEZE_BUDDY_VAD_START_SECS,
-    BREEZE_BUDDY_VAD_STOP_SECS,
-    BREEZE_BUDDY_VAD_MIN_VOLUME,
 )
+from app.core.logger import logger
+from app.core.security.sha import calculate_hmac_sha256
+from app.database.accessor import get_lead_by_call_id
+from app.schemas import CallProvider, LeadCallOutcome
 
 load_dotenv(override=True)
 

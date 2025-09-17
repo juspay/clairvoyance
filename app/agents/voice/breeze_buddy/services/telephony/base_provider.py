@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+
 from fastapi import WebSocket
 
 from app.schemas import CallProvider

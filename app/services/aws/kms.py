@@ -5,8 +5,9 @@ Only performs decryption when CLOUD_ENVIRONMENT=AWS, otherwise returns the origi
 
 import base64
 from typing import Optional
-from app.core.logger import logger
+
 from app.core import config
+from app.core.logger import logger
 from app.services.aws.utils import get_aws_client
 
 

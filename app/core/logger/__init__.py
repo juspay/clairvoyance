@@ -1,6 +1,7 @@
-import sys
 import json
 import logging
+import sys
+
 from loguru import logger
 
 # Remove the default sink to have full control over logging.

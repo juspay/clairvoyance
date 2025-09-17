@@ -1,12 +1,13 @@
-from app.core.logger import logger
-from app.core import config
+from typing import Optional
 
-from pipecat.services.google.stt import GoogleSTTService
 from pipecat.services.assemblyai.stt import AssemblyAISTTService
+from pipecat.services.google.stt import GoogleSTTService
 from pipecat.services.openai.stt import OpenAISTTService
 from pipecat.transcriptions.language import Language
+
 from app.agents.voice.automatic.types import VoiceName
-from typing import Optional
+from app.core import config
+from app.core.logger import logger
 
 
 def get_stt_service(voice_name: Optional[str] = None):

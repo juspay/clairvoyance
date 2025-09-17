@@ -3,23 +3,25 @@ Database accessor functions for the application.
 """
 
 from typing import List, Optional
+
 import asyncpg
+
 from app.core.logger import logger
-from app.schemas import OutboundNumber, OutboundNumberStatus, CallProvider
-from app.database.queries import run_parameterized_query
 from app.database.decoder.breeze_buddy.outbound_number import (
     decode_outbound_number,
     decode_outbound_number_list,
 )
+from app.database.queries import run_parameterized_query
 from app.database.queries.breeze_buddy.outbound_number import (
-    insert_outbound_number_query,
-    get_outbound_number_by_id_query,
-    update_outbound_number_status_query,
-    update_outbound_number_channels_query,
     disable_outbound_number_query,
     get_all_outbound_numbers_query,
     get_outbound_number_based_on_status_and_provider_query,
+    get_outbound_number_by_id_query,
+    insert_outbound_number_query,
+    update_outbound_number_channels_query,
+    update_outbound_number_status_query,
 )
+from app.schemas import CallProvider, OutboundNumber, OutboundNumberStatus
 
 
 def get_row_count(result: Optional[List[asyncpg.Record]]) -> int:

@@ -1,19 +1,20 @@
-import httpx
-import json
 import functools
-
+import json
 from datetime import datetime
+
+import httpx
 import pytz
-from app.core.logger import logger
-from app.core.config import GENIUS_API_URL, EULER_DASHBOARD_API_URL
-from pipecat.services.llm_service import FunctionCallParams
 from pipecat.adapters.schemas.function_schema import FunctionSchema
 from pipecat.adapters.schemas.tools_schema import ToolsSchema
+from pipecat.services.llm_service import FunctionCallParams
+
 from app.agents.voice.automatic.types.models import (
     ApiFailure,
     ApiSuccess,
     GeniusApiResponse,
 )
+from app.core.config import EULER_DASHBOARD_API_URL, GENIUS_API_URL
+from app.core.logger import logger
 from app.core.transport.http_client import create_http_client
 
 # This token will be set when the tools are initialized

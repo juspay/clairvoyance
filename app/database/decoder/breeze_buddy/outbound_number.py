@@ -3,8 +3,10 @@ Decoder functions for outbound number.
 """
 
 from typing import List, Optional
+
 import asyncpg
-from app.schemas import OutboundNumber, OutboundNumberStatus, CallProvider
+
+from app.schemas import CallProvider, OutboundNumber, OutboundNumberStatus
 
 
 def decode_outbound_number(result: List[asyncpg.Record]) -> Optional[OutboundNumber]:

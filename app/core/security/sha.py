@@ -1,6 +1,6 @@
-import hmac
-import hashlib
 import base64
+import hashlib
+import hmac
 
 
 def calculate_hmac_sha256(value: str, sign_key: str) -> str:

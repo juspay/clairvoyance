@@ -1,18 +1,18 @@
-from fastapi import WebSocket, HTTPException
-from twilio.rest import Client
+from fastapi import HTTPException, WebSocket
+from pipecat.serializers.twilio import TwilioFrameSerializer
 from twilio.http.http_client import TwilioHttpClient
-from twilio.twiml.voice_response import VoiceResponse, Connect, Stream
+from twilio.rest import Client
+from twilio.twiml.voice_response import Connect, Stream, VoiceResponse
 
 from app.agents.voice.breeze_buddy.services.telephony.base_provider import (
     VoiceCallProvider,
 )
-from app.core import config
-from app.core.transport.http_client import get_proxy_config
 from app.agents.voice.breeze_buddy.workflows.order_confirmation.websocket_bot import (
     main as telephony_websocket_conn,
 )
-from pipecat.serializers.twilio import TwilioFrameSerializer
+from app.core import config
 from app.core.logger import logger
+from app.core.transport.http_client import get_proxy_config
 from app.schemas import CallProvider
 
 

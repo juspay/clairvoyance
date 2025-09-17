@@ -1,13 +1,13 @@
-import uvicorn
 import os
+
+import uvicorn
 from dotenv import load_dotenv
 
 # Load environment variables from .env file
 load_dotenv()
 
+from app.core.config import HOST, PORT, UVICORN_LOG_LEVEL, UVICORN_RELOAD
 from app.core.logger import logger
-
-from app.core.config import PORT, HOST, UVICORN_RELOAD, UVICORN_LOG_LEVEL
 
 if __name__ == "__main__":
     logger.info(f"Starting Uvicorn server on {HOST}:{PORT}")

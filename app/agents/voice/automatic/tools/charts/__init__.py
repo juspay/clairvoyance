@@ -1,7 +1,7 @@
 from app.agents.voice.automatic.features.charts.chart_tools import (
     generate_bar_chart,
-    generate_line_chart,
     generate_donut_chart,
+    generate_line_chart,
     generate_single_stat_card,
 )
 

@@ -1,14 +1,16 @@
 import json
 from enum import Enum
 
-from app.core.logger import logger
-from pipecat.services.llm_service import FunctionCallParams
 from pipecat.adapters.schemas.function_schema import FunctionSchema
 from pipecat.adapters.schemas.tools_schema import ToolsSchema
+from pipecat.services.llm_service import FunctionCallParams
+
+from app.core.logger import logger
+
 from .utils import (
+    format_announcement_html,
     get_current_shop_config_data,
     patch_shop_config,
-    format_announcement_html,
     remove_html_tags,
 )
 

@@ -1,17 +1,16 @@
 import json
 
-
-from app.core.logger import logger
-from pipecat.services.llm_service import FunctionCallParams
 from pipecat.adapters.schemas.function_schema import FunctionSchema
 from pipecat.adapters.schemas.tools_schema import ToolsSchema
+from pipecat.services.llm_service import FunctionCallParams
 
 from app.agents.voice.automatic.data.dummy.juspay import (
-    dummy_juspay_analytics_today,
     dummy_breeze_analytics_today,
-    dummy_juspay_analytics_weekly,
     dummy_breeze_analytics_weekly,
+    dummy_juspay_analytics_today,
+    dummy_juspay_analytics_weekly,
 )
+from app.core.logger import logger
 
 # Load dummy data
 juspay_today = json.loads(dummy_juspay_analytics_today)

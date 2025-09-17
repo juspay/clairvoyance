@@ -4,9 +4,11 @@ Provides reusable AWS client creation for various AWS services
 """
 
 from typing import Optional
+
 import boto3
-from app.core.logger import logger
+
 from app.core import config
+from app.core.logger import logger
 
 
 def get_aws_client(service_name: str) -> Optional[any]:

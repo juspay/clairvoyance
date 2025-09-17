@@ -1,13 +1,12 @@
 # tracing_setup.py
+from opentelemetry import trace
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk.resources import SERVICE_NAME, Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
-from opentelemetry import trace
-
-from app.core.logger import logger
 
 from app.core.config import ENABLE_TRACING
+from app.core.logger import logger
 
 
 def setup_tracing(service_name: str):

@@ -1,10 +1,10 @@
-from app.schemas import LeadCallOutcome
-from app.core.logger import logger
-from app.core import config
-
 from pipecat.services.google.stt import GoogleSTTService
 from pipecat.services.openai.stt import OpenAISTTService
 from pipecat.transcriptions.language import Language
+
+from app.core import config
+from app.core.logger import logger
+from app.schemas import LeadCallOutcome
 
 
 def get_stt_service():

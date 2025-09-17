@@ -8,6 +8,8 @@ source venv/bin/activate
 pip install -r requirements-dev.txt
 
 # Format all python files
+python -m isort . --profile black
+
 python -m black .
 
 # Stage updated files (if black changed them)

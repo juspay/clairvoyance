@@ -3,8 +3,10 @@ Decoder functions for call execution config.
 """
 
 from typing import List, Optional
+
 import asyncpg
-from app.schemas import Workflow, CallExecutionConfig, CallProvider
+
+from app.schemas import CallExecutionConfig, CallProvider, Workflow
 
 
 def decode_call_execution_config_list(

@@ -1,61 +1,62 @@
+import argparse
 import asyncio
 import random
-import argparse
-from dotenv import load_dotenv
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from app.core.logger import logger, configure_session_logger
+from dotenv import load_dotenv
+from langfuse import get_client
+from opentelemetry import trace
+from pipecat.audio.filters.aic_filter import AICFilter
+from pipecat.audio.filters.noisereduce_filter import NoisereduceFilter
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.vad.vad_analyzer import VADParams
-from pipecat.audio.filters.noisereduce_filter import NoisereduceFilter
-from pipecat.audio.filters.aic_filter import AICFilter
+from pipecat.frames.frames import (
+    BotSpeakingFrame,
+    EmulateUserStartedSpeakingFrame,
+    EmulateUserStoppedSpeakingFrame,
+    LLMFullResponseEndFrame,
+    TTSSpeakFrame,
+)
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
-from app.agents.voice.automatic.features.llm_wrapper import LLMServiceWrapper
-from pipecat.services.azure.llm import AzureLLMService
-from pipecat.frames.frames import (
-    TTSSpeakFrame,
-    BotSpeakingFrame,
-    LLMFullResponseEndFrame,
-    EmulateUserStartedSpeakingFrame,
-    EmulateUserStoppedSpeakingFrame,
-)
-from pipecat.transports.daily.transport import DailyParams, DailyTransport
 from pipecat.processors.frameworks.rtvi import RTVIConfig, RTVIProcessor
+from pipecat.services.azure.llm import AzureLLMService
 from pipecat.services.google.rtvi import GoogleRTVIObserver
-from app.agents.voice.automatic.services.mem0.memory import ImprovedMem0MemoryService
+from pipecat.transports.daily.transport import DailyParams, DailyTransport
 
-from app.core import config
+from app.agents.voice.automatic.features.llm_wrapper import LLMServiceWrapper
+from app.agents.voice.automatic.processors.llm_spy import handle_confirmation_response
+from app.agents.voice.automatic.services.mcp.automatic_client import MCPClient
+from app.agents.voice.automatic.services.mem0.memory import ImprovedMem0MemoryService
+from app.agents.voice.automatic.types import (
+    Mode,
+    TTSProvider,
+    decode_mode,
+    decode_tts_provider,
+    decode_voice_name,
+)
 from app.agents.voice.automatic.utils.session_context import (
     create_session_context,
     set_current_session_id,
 )
-from app.agents.voice.automatic.services.mcp.automatic_client import MCPClient
+from app.core import config
+from app.core.logger import configure_session_logger, logger
 from app.utils.common import get_breeze_portal_url
+
 from .processors import LLMSpyProcessor
 from .processors.ptt_vad_filter import PTTVADFilter
 from .prompts import get_system_prompt
+from .stt import get_stt_service
 from .tools import initialize_tools
 from .tts import get_tts_service
-from .stt import get_stt_service
-from app.agents.voice.automatic.processors.llm_spy import handle_confirmation_response
-from app.agents.voice.automatic.types import (
-    TTSProvider,
-    Mode,
-    decode_tts_provider,
-    decode_voice_name,
-    decode_mode,
-)
-from opentelemetry import trace
-from langfuse import get_client
 from .types import (
-    TTSProvider,
     Mode,
+    TTSProvider,
+    decode_mode,
     decode_tts_provider,
     decode_voice_name,
-    decode_mode,
 )
 
 load_dotenv(override=True)

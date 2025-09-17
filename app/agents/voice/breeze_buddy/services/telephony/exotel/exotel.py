@@ -1,19 +1,18 @@
 import json
-from fastapi import WebSocket, HTTPException
+
 import requests
-
-from app.core.logger import logger
-from app.core.transport.http_client import get_proxy_config
-
+from fastapi import HTTPException, WebSocket
 from pipecat.serializers.exotel import ExotelFrameSerializer
 
 from app.agents.voice.breeze_buddy.services.telephony.base_provider import (
     VoiceCallProvider,
 )
-from app.core import config
 from app.agents.voice.breeze_buddy.workflows.order_confirmation.websocket_bot import (
     main as telephony_websocket_conn,
 )
+from app.core import config
+from app.core.logger import logger
+from app.core.transport.http_client import get_proxy_config
 from app.schemas import CallProvider
 
 

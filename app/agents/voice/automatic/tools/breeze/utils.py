@@ -4,14 +4,15 @@ configuration management, and announcement formatting.
 """
 
 import json
-import httpx
-import time
 import re
-from typing import Optional, Dict, Any
+import time
+from typing import Any, Dict, Optional
 from urllib.parse import urlparse
 
-from app.core.logger import logger
+import httpx
+
 from app.core.config import LIGHTHOUSE_APP_URL
+from app.core.logger import logger
 from app.core.transport.http_client import create_http_client
 
 

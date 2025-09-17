@@ -7,14 +7,16 @@ and for a small cooldown period after PTT release.
 
 from datetime import datetime, timedelta, timezone
 from typing import Optional
+
 from pipecat.frames.frames import (
     Frame,
-    VADUserStartedSpeakingFrame,
-    VADUserStoppedSpeakingFrame,
     UserStartedSpeakingFrame,
     UserStoppedSpeakingFrame,
+    VADUserStartedSpeakingFrame,
+    VADUserStoppedSpeakingFrame,
 )
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
+
 from app.core.logger import logger
 
 # PTT cooldown configuration (in seconds)

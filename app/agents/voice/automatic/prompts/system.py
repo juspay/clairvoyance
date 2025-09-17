@@ -1,14 +1,15 @@
 import datetime
-from app.core.logger import logger
+
+from app.agents.voice.automatic.types import TTSProvider
 from app.core.config import (
-    ENABLE_SEARCH_GROUNDING,
-    HITL_ENABLE,
-    ENABLE_CHARTS,
-    ENABLE_LANGFUSE_PROMPTS,
     AUTOMATIC_LANGFUSE_PROMPT_NAME,
     AUTOMATIC_LANGFUSE_SYSTEM_PROMPT_LABEL,
+    ENABLE_CHARTS,
+    ENABLE_LANGFUSE_PROMPTS,
+    ENABLE_SEARCH_GROUNDING,
+    HITL_ENABLE,
 )
-from app.agents.voice.automatic.types import TTSProvider
+from app.core.logger import logger
 from app.services.langfuse.prompts import fetch_prompt
 
 SYSTEM_PROMPT = f"""

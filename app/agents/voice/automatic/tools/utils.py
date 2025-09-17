@@ -1,4 +1,5 @@
-from typing import Dict, List, Any, Optional
+from typing import Any, Dict, List, Optional
+
 from app.core.config import (
     AUTOMATIC_ACTIONS_REQUIRE_AUTH,
     AUTOMATIC_WRITE_ACTIONS_AUTHORIZED_USERS,

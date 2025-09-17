@@ -2,9 +2,10 @@
 Database query functions for the application.
 """
 
-from typing import Any, List, Tuple
 from datetime import datetime, time
-from app.schemas import Workflow, CallProvider
+from typing import Any, List, Tuple
+
+from app.schemas import CallProvider, Workflow
 
 # Table names
 CALL_EXECUTION_CONFIG_TABLE = "call_execution_config"

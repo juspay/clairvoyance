@@ -1,13 +1,13 @@
 from datetime import datetime
 
-from app.core.logger import logger
-from app.core.config import GEMINI_SEARCH_RESULT_API_MODEL, GEMINI_API_KEY
-from pipecat.services.google.llm import GoogleLLMService, GoogleLLMContext
-from pipecat.services.llm_service import FunctionCallParams
+from google.genai.types import GenerateContentConfig
 from pipecat.adapters.schemas.function_schema import FunctionSchema
 from pipecat.adapters.schemas.tools_schema import ToolsSchema
-from google.genai.types import GenerateContentConfig
+from pipecat.services.google.llm import GoogleLLMContext, GoogleLLMService
+from pipecat.services.llm_service import FunctionCallParams
 
+from app.core.config import GEMINI_API_KEY, GEMINI_SEARCH_RESULT_API_MODEL
+from app.core.logger import logger
 
 # ---------- 1. Set up Gemini (Google) LLM for search-only use ----------
 search_tool = {"google_search": {}}

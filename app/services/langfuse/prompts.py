@@ -4,8 +4,9 @@ Handles fetching and processing prompts from LangFuse.
 """
 
 from typing import Optional
-from app.core.logger import logger
+
 from app.core.config import ENABLE_LANGFUSE_PROMPTS
+from app.core.logger import logger
 from app.services.langfuse.main import langfuse_client
 
 

@@ -1,13 +1,14 @@
 import uuid
-from typing import List, Dict, Any, Optional, Callable
+from typing import Any, Callable, Dict, List, Optional
+
+from app.agents.voice.automatic.features.hitl.hitl import get_hitl_manager
+from app.agents.voice.automatic.features.hitl.utils import is_dangerous_operation
 from app.agents.voice.automatic.features.summarizer.context_summarizer import (
     ContextSummarizer,
 )
 from app.core import config
-from app.core.logger import logger
-from app.agents.voice.automatic.features.hitl.utils import is_dangerous_operation
-from app.agents.voice.automatic.features.hitl.hitl import get_hitl_manager
 from app.core.config import HITL_ENABLE
+from app.core.logger import logger
 
 
 class LLMServiceWrapper:

@@ -3,10 +3,12 @@ Chart generation tools for LLM function calling.
 The LLM can call these tools to generate interactive charts with voice narration.
 """
 
-from typing import List, Dict, Any
 from datetime import datetime
+from typing import Any, Dict, List
 
-from app.core.logger import logger
+from app.agents.voice.automatic.features.charts.session_storage import (
+    get_session_storage,
+)
 from app.agents.voice.automatic.features.charts.types.ui_components import (
     UIComponentEvent,
 )
@@ -14,9 +16,7 @@ from app.agents.voice.automatic.features.charts.utils.highlight_parser import (
     HighlightTagParser,
 )
 from app.agents.voice.automatic.utils.session_context import get_current_session_id
-from app.agents.voice.automatic.features.charts.session_storage import (
-    get_session_storage,
-)
+from app.core.logger import logger
 
 # Color constants matching MCP implementation
 DEFAULT_COLORS = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b"]

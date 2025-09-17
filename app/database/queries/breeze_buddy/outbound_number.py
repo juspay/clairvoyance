@@ -2,9 +2,10 @@
 Database query functions for the application.
 """
 
-from typing import Any, List, Optional, Tuple
 from datetime import datetime
-from app.schemas import OutboundNumberStatus, CallProvider
+from typing import Any, List, Optional, Tuple
+
+from app.schemas import CallProvider, OutboundNumberStatus
 
 # Table names
 OUTBOUND_NUMBER_TABLE = "outbound_number"

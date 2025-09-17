@@ -3,7 +3,9 @@ Database query functions for the application.
 """
 
 from typing import Any, List, Optional
+
 import asyncpg
+
 from app.core.logger import logger
 from app.database import get_db_connection
 

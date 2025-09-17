@@ -5,6 +5,7 @@ Provides session information through explicit context passing and global session
 
 from dataclasses import dataclass
 from typing import Optional
+
 from app.core.logger import logger
 
 

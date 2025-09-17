@@ -4,9 +4,11 @@ Handles LangFuse client setup and configuration.
 """
 
 from typing import Optional
+
 from langfuse import Langfuse
+
+from app.core.config import LANGFUSE_BASEURL, LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY
 from app.core.logger import logger
-from app.core.config import LANGFUSE_SECRET_KEY, LANGFUSE_PUBLIC_KEY, LANGFUSE_BASEURL
 
 
 class LangFuseClient:

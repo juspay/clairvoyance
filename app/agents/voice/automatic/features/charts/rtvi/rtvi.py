@@ -1,9 +1,9 @@
 from pipecat.processors.frameworks.rtvi import RTVIProcessor, RTVIServerMessageFrame
 
-from app.core.logger import logger
 from app.agents.voice.automatic.features.charts.chart_tools import (
     get_pending_chart_emissions,
 )
+from app.core.logger import logger
 
 
 async def emit_chart_components(

@@ -3,10 +3,12 @@ Centralized HTTP client factory with proxy support for both httpx and aiohttp
 """
 
 from typing import Optional
-import httpx
+
 import aiohttp
-from app.core.logger import logger
+import httpx
+
 from app.core import config
+from app.core.logger import logger
 
 
 def get_proxy_config() -> Optional[str]:

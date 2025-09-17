@@ -2,30 +2,31 @@
 Cron manager for handling background tasks.
 """
 
-from datetime import datetime, timezone, timedelta
-from app.core.logger import logger
 import uuid
+from datetime import datetime, timedelta, timezone
+
+from app.agents.voice.breeze_buddy.services.telephony.utils import get_voice_provider
+from app.core.logger import logger
 from app.core.transport.http_client import create_aiohttp_session
 from app.database.accessor import (
-    get_leads_based_on_status_and_next_attempt,
+    create_lead_call_tracker,
     get_call_execution_config_by_merchant_id,
+    get_lead_by_call_id,
+    get_leads_based_on_status_and_next_attempt,
     get_outbound_number_based_on_status_and_provider,
     get_outbound_number_by_id,
-    update_outbound_number_status,
-    update_outbound_number_channels,
-    update_lead_call_details,
-    get_lead_by_call_id,
-    create_lead_call_tracker,
     update_lead_call_completion_details,
+    update_lead_call_details,
     update_lead_call_recording_url,
+    update_outbound_number_channels,
+    update_outbound_number_status,
 )
 from app.schemas import (
+    CallProvider,
+    LeadCallOutcome,
     LeadCallStatus,
     OutboundNumberStatus,
-    LeadCallOutcome,
-    CallProvider,
 )
-from app.agents.voice.breeze_buddy.services.telephony.utils import get_voice_provider
 
 
 async def process_backlog_leads():
