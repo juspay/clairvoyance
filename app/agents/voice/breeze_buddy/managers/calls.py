@@ -62,7 +62,8 @@ async def process_backlog_leads():
                         continue
 
                     # FIRST STEP: Check if current time is within allowed calling hours (handles overnight windows)
-                    current_time = datetime.now(timezone.utc).time()
+                    IST = timezone(timedelta(hours=5, minutes=30))
+                    current_time = datetime.now(IST).time()
                     if config.call_start_time <= config.call_end_time:
                         # Normal case (e.g., 09:00–17:00)
                         within_hours = (
