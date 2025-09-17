@@ -138,7 +138,7 @@ async def main():
     daily_params = DailyParams(
         audio_in_enabled=True,
         audio_out_enabled=True,
-        vad_analyzer=vad_analyzer,
+        vad_analyzer=None if config.DISABLE_SILERO_VAD else vad_analyzer,
     )
 
     # Audio filter configuration
