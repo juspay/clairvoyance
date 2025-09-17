@@ -21,6 +21,7 @@ pipecat-ai-flows
 
 # Misc
 loguru
+numpy
 
 # OpenTelemetry for Langfuse tracing
 opentelemetry-api

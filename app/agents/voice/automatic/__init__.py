@@ -1,5 +1,6 @@
 import argparse
 import asyncio
+import os
 import random
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -28,6 +29,7 @@ from pipecat.transports.daily.transport import DailyParams, DailyTransport
 
 from app.agents.voice.automatic.features.llm_wrapper import LLMServiceWrapper
 from app.agents.voice.automatic.processors.llm_spy import handle_confirmation_response
+from app.agents.voice.automatic.services.filters.krisp.noise import NoiseFilterFromKrisp
 from app.agents.voice.automatic.services.mcp.automatic_client import MCPClient
 from app.agents.voice.automatic.services.mem0.memory import ImprovedMem0MemoryService
 from app.agents.voice.automatic.types import (
@@ -142,7 +144,18 @@ async def main():
     )
 
     # Audio filter configuration
-    if config.ENABLE_AIC_FILTER and config.AICOUSTICS_LICENSE_KEY:
+    if (
+        config.ENABLE_KRISP_FILTER
+        and config.KRISP_MODEL_PATH
+        and os.path.isfile(config.KRISP_MODEL_PATH)
+    ):
+        try:
+            daily_params.audio_in_filter = NoiseFilterFromKrisp(
+                model_path=config.KRISP_MODEL_PATH
+            )
+        except Exception as e:
+            logger.error(f"Krisp Filter failed: {e}")
+    elif config.ENABLE_AIC_FILTER and config.AICOUSTICS_LICENSE_KEY:
         try:
             aic_filter = AICFilter(
                 license_key=config.AICOUSTICS_LICENSE_KEY,

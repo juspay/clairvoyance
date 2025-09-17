@@ -33,6 +33,11 @@ jobs:
       - name: Extract short SHA
         run: echo "SHORT_SHA=${GITHUB_SHA:0:8}" >> $GITHUB_ENV
 
+      - name: Get GCP Access Token for Docker Build
+        run: |
+          ACCESS_TOKEN=$(gcloud auth print-access-token)
+          echo "GCP_ACCESS_TOKEN=$ACCESS_TOKEN" >> $GITHUB_ENV
+
       - name: Build and Push Docker Image to Artifact Registry
         uses: docker/build-push-action@v5
         with:
@@ -40,5 +45,8 @@ jobs:
           push: true
           platforms: linux/amd64
           tags: asia-south1-docker.pkg.dev/breeze-uat-453414/clairvoyance/clairvoyance:${{ env.SHORT_SHA }}
+          build-args: |
+            KRISP_BUCKET_PATH=gs://clairvoyance-models/krisp
+            GCP_ACCESS_TOKEN=${{ env.GCP_ACCESS_TOKEN }}
           provenance: false
           sbom: false

@@ -53,6 +53,12 @@ AIC_NOISE_GATE_ENABLE = (
     os.environ.get("AIC_NOISE_GATE_ENABLE", "true").lower() == "true"
 )
 
+# Krisp Audio Filter Configuration
+ENABLE_KRISP_FILTER = os.environ.get("ENABLE_KRISP_FILTER", "false").lower() == "true"
+KRISP_MODEL_PATH = os.environ.get(
+    "KRISP_MODEL_PATH", "/app/models/voice/krisp/krisp-viva-tel-v2.kef"
+)
+
 # TTS Configuration
 ELEVENLABS_API_KEY = os.environ.get("ELEVENLABS_API_KEY")
 ELEVENLABS_VOICE_ID = os.environ.get(
