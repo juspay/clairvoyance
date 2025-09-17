@@ -312,3 +312,21 @@ if ENABLE_LANGFUSE_PROMPTS:
     logger.info(
         f"LangFuse system prompt: {AUTOMATIC_LANGFUSE_PROMPT_NAME} (label: {AUTOMATIC_LANGFUSE_SYSTEM_PROMPT_LABEL})"
     )
+
+# Redis Session Tracking and Conversation Storage Configuration
+ENABLE_REDIS_SESSION_TRACKING = (
+    os.environ.get("ENABLE_REDIS_SESSION_TRACKING", "false").lower() == "true"
+)
+REDIS_HOST = os.environ.get("REDIS_HOST", "localhost")
+REDIS_PORT = int(os.environ.get("REDIS_PORT", "6379"))
+REDIS_PASSWORD = os.environ.get("REDIS_PASSWORD", "")
+REDIS_DB = int(os.environ.get("REDIS_DB", "0"))
+REDIS_SESSION_KEY_PREFIX = os.environ.get("REDIS_SESSION_KEY_PREFIX", "automatic:conversation")
+REDIS_CONVERSATION_KEY_PREFIX = os.environ.get("REDIS_CONVERSATION_KEY_PREFIX", "automatic:conversation")
+REDIS_SESSION_TTL = int(os.environ.get("REDIS_SESSION_TTL", "86400"))  # 1 day default
+
+logger.info(f"Redis session tracking enabled: {ENABLE_REDIS_SESSION_TRACKING}")
+if ENABLE_REDIS_SESSION_TRACKING:
+    logger.info(f"Redis configuration: {REDIS_HOST}:{REDIS_PORT} (DB: {REDIS_DB})")
+    logger.info(f"Redis session key prefix: {REDIS_SESSION_KEY_PREFIX}")
+    logger.info(f"Redis session TTL: {REDIS_SESSION_TTL} seconds")

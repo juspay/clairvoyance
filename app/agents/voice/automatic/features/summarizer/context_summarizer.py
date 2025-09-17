@@ -6,6 +6,7 @@ from pipecat.processors.aggregators.openai_llm_context import OpenAILLMContext
 
 from app.core.config import KEEP_RECENT_TURNS, MAX_TURNS_BEFORE_SUMMARY
 from app.core.logger import logger
+from app.agents.voice.automatic.utils.session_context import get_current_session_id
 
 
 class ContextSummarizer(OpenAILLMContext):
@@ -22,6 +23,8 @@ class ContextSummarizer(OpenAILLMContext):
         keep_recent_turns: int = KEEP_RECENT_TURNS,
         enable_summarization: bool = True,
         llm_service=None,
+        redis_session_manager=None,
+        user_email=None,
     ):
         super().__init__(messages, tools)
         self._max_turns_before_summary = max_turns_before_summary
@@ -30,6 +33,8 @@ class ContextSummarizer(OpenAILLMContext):
         self._turn_count = 0
         self._llm_service = llm_service
         self._is_summarizing = False
+        self._redis_session_manager = redis_session_manager
+        self._user_email = user_email
         self._original_system_message = (
             messages[0] if messages and messages[0]["role"] == "system" else None
         )
@@ -37,12 +42,29 @@ class ContextSummarizer(OpenAILLMContext):
     def add_message(self, message: Dict[str, Any]):
         """Adds a message to the context and increments the turn count if it's a user message."""
         super().add_message(message)
+                
+        # Store message in Redis if session manager is available
+        if self._redis_session_manager and self._redis_session_manager.is_enabled():
+            session_id = get_current_session_id()
+            if session_id:
+                # Create async task to store message in Redis
+                asyncio.create_task(self._store_message_in_redis(session_id, message))
+        
         if message["role"] == "user":
             self._turn_count += 1
             logger.debug(
                 f"--- Summarizer: Turn count incremented to: {self._turn_count} ---"
             )
             asyncio.create_task(self._check_if_summary_needed())
+
+    async def _store_message_in_redis(self, session_id: str, message: Dict[str, Any]):
+        """Store message in Redis for persistence."""
+        
+        if message.get("role") in ["user", "assistant"]:
+            try:
+                await self._redis_session_manager.add_message(session_id, message, self._user_email)
+            except Exception as e:
+                logger.error(f"Failed to store message in Redis: {e}")
 
     async def _check_if_summary_needed(self):
         """Checks if the turn count has reached the threshold to trigger summarization."""

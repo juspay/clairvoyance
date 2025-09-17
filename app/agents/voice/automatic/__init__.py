@@ -41,6 +41,7 @@ from app.agents.voice.automatic.utils.session_context import (
     create_session_context,
     set_current_session_id,
 )
+from app.services.redis import RedisSessionManager
 from app.core import config
 from app.core.logger import configure_session_logger, logger
 from app.utils.common import get_breeze_portal_url
@@ -109,6 +110,27 @@ async def main():
 
     # Set global session ID for chart tools
     set_current_session_id(args.session_id)
+
+    # Initialize Redis session manager and track user session
+    redis_session_manager = None
+    if config.ENABLE_REDIS_SESSION_TRACKING and args.user_email:
+        try:
+            redis_session_manager = RedisSessionManager()
+            if redis_session_manager.is_enabled():
+                # Add session to user's session set in Redis
+                await redis_session_manager.add_user_session(args.user_email, args.session_id)
+                logger.info(f"Redis session tracking: Added session {args.session_id} for user {args.user_email}")
+            else:
+                logger.warning("Redis session manager initialized but not enabled/connected")
+                redis_session_manager = None
+        except Exception as e:
+            logger.error(f"Failed to initialize Redis session manager: {e}")
+            redis_session_manager = None
+    elif config.ENABLE_REDIS_SESSION_TRACKING:
+        if not args.user_email:
+            logger.info("Redis session tracking: Skipping - no user email provided (guest flow)")
+        else:
+            logger.info("Redis session tracking: Disabled via configuration")
 
     # Decode TTS parameters
     tts_provider = decode_tts_provider(args.tts_provider)
@@ -283,6 +305,8 @@ async def main():
     context = llm.create_summarizing_context(
         messages,
         tools,
+        redis_session_manager=redis_session_manager,
+        user_email=args.user_email,
     )
 
     context_aggregator = llm.create_context_aggregator(context)

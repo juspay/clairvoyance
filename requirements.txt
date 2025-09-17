@@ -41,3 +41,6 @@ PyJWT
 
 # Audio processing
 pydub
+
+# Redis for session tracking and conversation storage
+redis>=5.0.0

@@ -126,6 +126,8 @@ class LLMServiceWrapper:
         self,
         messages: List[Dict[str, Any]],
         tools: Optional[List[Dict[str, Any]]] = None,
+        redis_session_manager=None,
+        user_email=None,
     ) -> ContextSummarizer:
         """Create a summarizing context with the given parameters"""
         context = ContextSummarizer(
@@ -135,6 +137,8 @@ class LLMServiceWrapper:
             max_turns_before_summary=config.MAX_TURNS_BEFORE_SUMMARY,
             keep_recent_turns=config.KEEP_RECENT_TURNS,
             enable_summarization=config.ENABLE_SUMMARIZATION,
+            redis_session_manager=redis_session_manager,
+            user_email=user_email,
         )
         return context
 
