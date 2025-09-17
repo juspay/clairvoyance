@@ -6,6 +6,9 @@ from datetime import datetime, timezone, timedelta
 from app.core.logger import logger
 import uuid
 import aiohttp
+
+# Define IST timezone (UTC+5:30)
+IST = timezone(timedelta(hours=5, minutes=30))
 from app.database.accessor import (
     get_leads_based_on_status_and_next_attempt,
     get_call_execution_config_by_merchant_id,
@@ -61,7 +64,8 @@ async def process_backlog_leads():
                         continue
 
                     # FIRST STEP: Check if current time is within allowed calling hours (handles overnight windows)
-                    current_time = datetime.now(timezone.utc).time()
+                    current_time = datetime.now(IST).time()
+
                     if config.call_start_time <= config.call_end_time:
                         # Normal case (e.g., 09:00–17:00)
                         within_hours = (
@@ -79,7 +83,7 @@ async def process_backlog_leads():
                     if not within_hours:
                         logger.info(
                             f"Skipping lead {lead.id} - outside calling hours. "
-                            f"Current time: {current_time}, "
+                            f"Current time (IST): {current_time}, "
                             f"Allowed window: {config.call_start_time} - {config.call_end_time}"
                         )
                         continue
