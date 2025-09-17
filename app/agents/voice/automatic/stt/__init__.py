@@ -1,12 +1,12 @@
 from typing import Optional
 
+from deepgram import LiveOptions
 from pipecat.services.assemblyai.stt import AssemblyAISTTService
+from pipecat.services.deepgram.stt import DeepgramSTTService
 from pipecat.services.google.stt import GoogleSTTService
 from pipecat.services.openai.stt import OpenAISTTService
-from pipecat.services.deepgram.stt import DeepgramSTTService
 from pipecat.transcriptions.language import Language
 
-from deepgram import LiveOptions
 from app.agents.voice.automatic.types import VoiceName
 from app.core import config
 from app.core.logger import logger
@@ -71,15 +71,15 @@ def get_stt_service(voice_name: Optional[str] = None):
         )
     elif config.STT_PROVIDER == "deepgram":
         if not config.DEEPGRAM_API_KEY:
-            raise ValueError(
-                "DEEPGRAM_API_KEY is required when STT_PROVIDER=deepgram"
-            )
+            raise ValueError("DEEPGRAM_API_KEY is required when STT_PROVIDER=deepgram")
 
         # Determine language configuration based on settings
         if config.DEEPGRAM_AUTO_DETECT_LANGUAGE:
-            language_config = 'multi'  # Automatic detection
+            language_config = "multi"  # Automatic detection
         else:
-            language_config = config.DEEPGRAM_LANGUAGE  # Single language (current behavior)
+            language_config = (
+                config.DEEPGRAM_LANGUAGE
+            )  # Single language (current behavior)
 
         # Configure Deepgram with smart turn detection and audio enhancement
         live_options = LiveOptions(
@@ -88,14 +88,14 @@ def get_stt_service(voice_name: Optional[str] = None):
             smart_format=config.DEEPGRAM_SMART_FORMAT,
             punctuate=config.DEEPGRAM_PUNCTUATE,
             endpointing=config.DEEPGRAM_ENDPOINTING,  # Smart turn detection
-            vad_events=config.DEEPGRAM_VAD_EVENTS,    # Built-in VAD
+            vad_events=config.DEEPGRAM_VAD_EVENTS,  # Built-in VAD
             utterance_end_ms=config.DEEPGRAM_UTTERANCE_END_MS,
-            no_delay=config.DEEPGRAM_NO_DELAY,       # Real-time processing
+            no_delay=config.DEEPGRAM_NO_DELAY,  # Real-time processing
             interim_results=True,
             profanity_filter=config.DEEPGRAM_PROFANITY_FILTER,
             # Enhanced for Indian English and business terms
-            numerals=config.DEEPGRAM_NUMERALS,       # Better number recognition
-            diarize=config.DEEPGRAM_DIARIZE          # Speaker identification
+            numerals=config.DEEPGRAM_NUMERALS,  # Better number recognition
+            diarize=config.DEEPGRAM_DIARIZE,  # Speaker identification
         )
 
         logger.info(
@@ -104,8 +104,7 @@ def get_stt_service(voice_name: Optional[str] = None):
             f"(VAD: {config.DEEPGRAM_VAD_EVENTS}, Endpointing: {config.DEEPGRAM_ENDPOINTING})"
         )
         return DeepgramSTTService(
-            api_key=config.DEEPGRAM_API_KEY,
-            live_options=live_options
+            api_key=config.DEEPGRAM_API_KEY, live_options=live_options
         )
     else:  # Default to Google STT
         logger.info("Using Google STT service with VAD-based turn detection")

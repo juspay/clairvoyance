@@ -90,7 +90,9 @@ VAD_CONFIDENCE = float(os.environ.get("VAD_CONFIDENCE", 0.85))
 VAD_MIN_VOLUME = float(os.environ.get("VAD_MIN_VOLUME", 0.75))
 VAD_START_SECS = float(os.environ.get("VAD_START_SECS", 0.30))
 VAD_STOP_SECS = float(os.environ.get("VAD_STOP_SECS", 1.00))
-DISABLE_SILERO_VAD = os.environ.get("DISABLE_SILERO_VAD", "false").lower() == "true"  # Disable Silero VAD (use when STT provider has built-in VAD)
+DISABLE_SILERO_VAD = (
+    os.environ.get("DISABLE_SILERO_VAD", "false").lower() == "true"
+)  # Disable Silero VAD (use when STT provider has built-in VAD)
 
 # Mem0 Configuration
 MEM0_API_KEY = os.getenv("MEM0_API_KEY", "")
@@ -139,20 +141,46 @@ ENABLE_OPENAI_FOR_MIA = (
 )
 
 # --- Deepgram STT Configuration ---
-DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")  # Required API key for Deepgram authentication
-DEEPGRAM_MODEL = os.environ.get("DEEPGRAM_MODEL", "nova-3-general")  # Deepgram model (nova-3-general recommended for balanced accuracy/speed)
-DEEPGRAM_LANGUAGE = os.environ.get("DEEPGRAM_LANGUAGE", "en")  # Language code for transcription (en, en-US, en-IN, etc.)
-DEEPGRAM_ENDPOINTING = os.environ.get("DEEPGRAM_ENDPOINTING", "true").lower() == "true"  # Enable smart endpointing for automatic turn detection
-DEEPGRAM_VAD_EVENTS = os.environ.get("DEEPGRAM_VAD_EVENTS", "true").lower() == "true"  # Enable Voice Activity Detection events (SpeechStarted/UtteranceEnd)
-DEEPGRAM_UTTERANCE_END_MS = int(os.environ.get("DEEPGRAM_UTTERANCE_END_MS", "1000"))  # Milliseconds to wait before considering utterance ended
-DEEPGRAM_NO_DELAY = os.environ.get("DEEPGRAM_NO_DELAY", "true").lower() == "true"  # Enable real-time processing with minimal delay
-DEEPGRAM_SMART_FORMAT = os.environ.get("DEEPGRAM_SMART_FORMAT", "true").lower() == "true"  # Apply smart formatting (phone numbers, dates, currency)
-DEEPGRAM_PUNCTUATE = os.environ.get("DEEPGRAM_PUNCTUATE", "true").lower() == "true"  # Add punctuation to transcription for readability
-DEEPGRAM_NUMERALS = os.environ.get("DEEPGRAM_NUMERALS", "true").lower() == "true"  # Convert spoken numbers to numerals (critical for Indian lakhs/crores)
-DEEPGRAM_PROFANITY_FILTER = os.environ.get("DEEPGRAM_PROFANITY_FILTER", "false").lower() == "true"  # Filter profanity (disabled for business context)
-DEEPGRAM_DIARIZE = os.environ.get("DEEPGRAM_DIARIZE", "false").lower() == "true"  # Enable speaker diarization (disabled for single-speaker voice agent)
+DEEPGRAM_API_KEY = os.getenv(
+    "DEEPGRAM_API_KEY"
+)  # Required API key for Deepgram authentication
+DEEPGRAM_MODEL = os.environ.get(
+    "DEEPGRAM_MODEL", "nova-3-general"
+)  # Deepgram model (nova-3-general recommended for balanced accuracy/speed)
+DEEPGRAM_LANGUAGE = os.environ.get(
+    "DEEPGRAM_LANGUAGE", "en"
+)  # Language code for transcription (en, en-US, en-IN, etc.)
+DEEPGRAM_ENDPOINTING = (
+    os.environ.get("DEEPGRAM_ENDPOINTING", "true").lower() == "true"
+)  # Enable smart endpointing for automatic turn detection
+DEEPGRAM_VAD_EVENTS = (
+    os.environ.get("DEEPGRAM_VAD_EVENTS", "true").lower() == "true"
+)  # Enable Voice Activity Detection events (SpeechStarted/UtteranceEnd)
+DEEPGRAM_UTTERANCE_END_MS = int(
+    os.environ.get("DEEPGRAM_UTTERANCE_END_MS", "1000")
+)  # Milliseconds to wait before considering utterance ended
+DEEPGRAM_NO_DELAY = (
+    os.environ.get("DEEPGRAM_NO_DELAY", "true").lower() == "true"
+)  # Enable real-time processing with minimal delay
+DEEPGRAM_SMART_FORMAT = (
+    os.environ.get("DEEPGRAM_SMART_FORMAT", "true").lower() == "true"
+)  # Apply smart formatting (phone numbers, dates, currency)
+DEEPGRAM_PUNCTUATE = (
+    os.environ.get("DEEPGRAM_PUNCTUATE", "true").lower() == "true"
+)  # Add punctuation to transcription for readability
+DEEPGRAM_NUMERALS = (
+    os.environ.get("DEEPGRAM_NUMERALS", "true").lower() == "true"
+)  # Convert spoken numbers to numerals (critical for Indian lakhs/crores)
+DEEPGRAM_PROFANITY_FILTER = (
+    os.environ.get("DEEPGRAM_PROFANITY_FILTER", "false").lower() == "true"
+)  # Filter profanity (disabled for business context)
+DEEPGRAM_DIARIZE = (
+    os.environ.get("DEEPGRAM_DIARIZE", "false").lower() == "true"
+)  # Enable speaker diarization (disabled for single-speaker voice agent)
 # Language detection options (streaming API only supports 'multi' for auto-detection or single language)
-DEEPGRAM_AUTO_DETECT_LANGUAGE = os.environ.get("DEEPGRAM_AUTO_DETECT_LANGUAGE", "false").lower() == "true"  # Enable automatic language detection (uses 'multi' parameter)
+DEEPGRAM_AUTO_DETECT_LANGUAGE = (
+    os.environ.get("DEEPGRAM_AUTO_DETECT_LANGUAGE", "false").lower() == "true"
+)  # Enable automatic language detection (uses 'multi' parameter)
 
 logger.info(f"Using Gemini model: {GEMINI_MODEL}")
 logger.info(f"Using response modality: {RESPONSE_MODALITY}")

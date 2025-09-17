@@ -350,7 +350,11 @@ class OrderConfirmationBot:
 
                         await self.completion_function(
                             call_id=self.call_sid,
-                            outcome=LeadCallOutcome.BUSY,
+                            outcome=(
+                                LeadCallOutcome.BUSY
+                                if self.outcome == "unknown"
+                                else OUTCOME_TO_ENUM.get(self.outcome)
+                            ),
                             transcription={
                                 "messages": transcription,
                                 "call_sid": self.call_sid,
@@ -416,14 +420,21 @@ class OrderConfirmationBot:
 
             Speak in a warm, casual, and human-like tone. Avoid robotic language.
 
-            You must use the following functions:
-            - `confirm_order()`: If the customer confirms all the details.
-            - `cancel_order()`: If the customer wants to cancel the order.
-            - `user_busy()`: If the user says they are busy or it's not a good time to talk.
-            - `handle_unrelated_question()`: If the user asks a question about anything other than confirming or cancelling the order.
-            - `address_correct()`: If the user confirms the address is correct.
-            - `address_incorrect()`: If the user says the address is incorrect or wants to update it.
+            You can only use the following functions when responding to the customer:
 
+            confirm_order() - Call this if the customer confirms all the order details.
+            cancel_order() - Call this if the customer chooses to cancel the order.
+            user_busy() - Call this if the customer says they are busy or it's not a good time.
+            handle_unrelated_question() - Call this if the customer asks about anything not related to confirming or cancelling the order.
+            address_correct() - Call this if the customer confirms that the address is correct.
+            address_incorrect() - Call this if the customer says the address is incorrect or wants to update it. (Note: only landmark, pincode, or city can be updated.)
+            update_landmark() - Call this if the customer wants to update the landmark in their address.
+            update_pincode() - Call this if the customer wants to update the pincode in their address.
+            update_city() - Call this if the customer wants to update the city in their address.
+            update_locality() - Call this if the customer wants to update the locality in their address.
+
+            ⚠️ You must not use any features other than the ones listed above. If the customer says anything unrelated to these functions, always call handle_unrelated_question().
+            
             Your only role is to confirm or cancel this specific order. If the user asks about anything else (e.g. product details, delivery times, other products), you MUST call `handle_unrelated_question()` immediately. Do not try to answer these questions yourself.
         """
 
@@ -562,6 +573,34 @@ class OrderConfirmationBot:
                 properties={},
                 required=[],
             ),
+            FlowsFunctionSchema(
+                name="update_landmark",
+                description="User wants to update the landmark of the address.",
+                handler=self._handle_landmark,
+                properties={"landmark": {"type": "string"}},
+                required=["landmark"],
+            ),
+            FlowsFunctionSchema(
+                name="update_pincode",
+                description="User provides the pincode.",
+                handler=self._handle_pincode,
+                properties={"pincode": {"type": "string"}},
+                required=["pincode"],
+            ),
+            FlowsFunctionSchema(
+                name="update_city",
+                description="User provides the city.",
+                handler=self._handle_city,
+                properties={"city": {"type": "string"}},
+                required=["city"],
+            ),
+            FlowsFunctionSchema(
+                name="update_locality",
+                description="User provides the locality.",
+                handler=self._handle_locality,
+                properties={"locality": {"type": "string"}},
+                required=["locality"],
+            ),
         ]
 
         return {
@@ -620,64 +659,22 @@ class OrderConfirmationBot:
                     ],
                     "functions": flow_functions,
                 },
-                "get_address_part1": {
-                    "name": "get_address_part1",
+                "update_address": {
+                    "name": "update_address",
                     "task_messages": [
                         {
                             "role": "system",
-                            "content": "Sure, I can help with that. What is the full address, including the house number, street name, locality, and nearest landmark?",
+                            "content": "Sure, I can help with that. What part of the address would you like to update? You can update the locality, landmark, pincode, city.",
                         }
                     ],
-                    "functions": [
-                        FlowsFunctionSchema(
-                            name="update_address_part1",
-                            description="User provides the first part of the address.",
-                            handler=self._handle_address_part1,
-                            properties={
-                                "address_line": {"type": "string"},
-                                "locality": {"type": "string"},
-                                "landmark": {"type": "string"},
-                            },
-                            required=[],
-                        )
-                    ],
+                    "functions": flow_functions,
                 },
-                "get_pincode": {
-                    "name": "get_pincode",
-                    "task_messages": [
-                        {"role": "system", "content": "Perfect. What's the pincode?"}
-                    ],
-                    "functions": [
-                        FlowsFunctionSchema(
-                            name="update_pincode",
-                            description="User provides the pincode.",
-                            handler=self._handle_pincode,
-                            properties={"pincode": {"type": "string"}},
-                            required=[],
-                        )
-                    ],
-                },
-                "get_city": {
-                    "name": "get_city",
-                    "task_messages": [
-                        {"role": "system", "content": "Almost done. What is the city?"}
-                    ],
-                    "functions": [
-                        FlowsFunctionSchema(
-                            name="update_city",
-                            description="User provides the city.",
-                            handler=self._handle_city,
-                            properties={"city": {"type": "string"}},
-                            required=[],
-                        )
-                    ],
-                },
-                "final_order_confirmation": {
-                    "name": "final_order_confirmation",
+                "confirm_address_update": {
+                    "name": "confirm_address_update",
                     "task_messages": [
                         {
                             "role": "system",
-                            "content": f"Thank you for confirming the address. Your updated address is: {self.updated_address}. Shall I go ahead and confirm your order?",
+                            "content": f"Got it. Your updated address is now: {self.updated_address}. Is there anything else you would like to update, or should I go ahead and confirm the order with this address?",
                         }
                     ],
                     "functions": flow_functions,
@@ -727,38 +724,41 @@ class OrderConfirmationBot:
 
     async def _handle_address_incorrect(self):
         logger.info("Address incorrect. Proceeding to update address.")
-        return {}, self._create_node_from_config("get_address_part1")
+        return {}, self._create_node_from_config("update_address")
 
-    async def _handle_address_part1(
-        self, address_line: str = None, locality: str = None, landmark: str = None
-    ):
-        if address_line:
-            self.flow_manager.state["address_line"] = str(address_line)
-        if locality:
-            self.flow_manager.state["locality"] = str(locality)
-        if landmark:
-            self.flow_manager.state["landmark"] = str(landmark)
-        return {}, self._create_node_from_config("get_pincode")
-
-    async def _handle_pincode(self, pincode: str = None):
-        if pincode:
-            self.flow_manager.state["pincode"] = str(pincode)
-        return {}, self._create_node_from_config("get_city")
-
-    async def _handle_city(self, city: str = None):
-        if city:
-            self.flow_manager.state["city"] = str(city)
-        address_parts = [
-            self.flow_manager.state.get("address_line"),
-            self.flow_manager.state.get("locality"),
-            self.flow_manager.state.get("landmark"),
-            self.flow_manager.state.get("city"),
-            self.flow_manager.state.get("pincode"),
-        ]
-        self.updated_address = ", ".join(filter(None, address_parts))
+    async def _handle_landmark(self, landmark: str):
+        logger.info(f"Updating landmark to: {landmark}")
+        self.updated_address = self.updated_address or self.address
+        self.updated_address = f"{self.updated_address.split(',')[0]}, {landmark}, {', '.join(self.updated_address.split(',')[2:])}"
         self.outcome = "address_updated"
-        logger.info(f"Address updated to: {self.updated_address}")
-        return {}, self._create_node_from_config("final_order_confirmation")
+        return {}, self._create_node_from_config("confirm_address_update")
+
+    async def _handle_pincode(self, pincode: str):
+        logger.info(f"Updating pincode to: {pincode}")
+        self.updated_address = self.updated_address or self.address
+        self.updated_address = (
+            f"{', '.join(self.updated_address.split(',')[:-1])}, {pincode}"
+        )
+        self.outcome = "address_updated"
+        return {}, self._create_node_from_config("confirm_address_update")
+
+    async def _handle_city(self, city: str):
+        logger.info(f"Updating city to: {city}")
+        self.updated_address = self.updated_address or self.address
+        parts = self.updated_address.split(",")
+        parts[-2] = f" {city}"
+        self.updated_address = ",".join(parts)
+        self.outcome = "address_updated"
+        return {}, self._create_node_from_config("confirm_address_update")
+
+    async def _handle_locality(self, locality: str):
+        logger.info(f"Updating locality to: {locality}")
+        self.updated_address = self.updated_address or self.address
+        parts = self.updated_address.split(",")
+        parts[1] = f" {locality}"
+        self.updated_address = ",".join(parts)
+        self.outcome = "address_updated"
+        return {}, self._create_node_from_config("confirm_address_update")
 
 
 async def main(
