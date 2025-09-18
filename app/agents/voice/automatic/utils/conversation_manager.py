@@ -127,6 +127,13 @@ class ConversationManager:
         self, session_id: str, content: str, message_id: Optional[str] = None
     ) -> ConversationMessage:
         """Add a user message and start a new turn"""
+        # Reset audio manager for new user input - CRITICAL for allowing audio on new inputs
+        from app.agents.voice.automatic.audio.audio_manager import get_audio_manager
+        audio_manager = get_audio_manager()
+        if audio_manager:
+            audio_manager.reset_for_new_input()
+            logger.debug(f"Reset audio manager for new user input: {content[:50]}...")
+        
         user_message = ConversationMessage.create_user_message(content, message_id)
         turn = self.start_turn(session_id, user_message)
         return user_message
