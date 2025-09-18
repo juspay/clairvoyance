@@ -1,4 +1,6 @@
 import os
+import sys
+import traceback
 
 import numpy as np
 from pipecat.audio.filters.base_audio_filter import BaseAudioFilter
@@ -12,9 +14,20 @@ try:
     import krisp_audio
 
     KRISP_AVAILABLE = True
-except ImportError:
+    logger.info("Krisp audio module imported successfully")
+except ImportError as e:
     KRISP_AVAILABLE = False
     krisp_audio = None
+    logger.error(f"Failed to import krisp_audio: {e}")
+    logger.error(f"Import error type: {type(e).__name__}")
+    # Try to get more detailed error info
+
+    logger.error(f"Full traceback: {traceback.format_exc()}")
+except Exception as e:
+    KRISP_AVAILABLE = False
+    krisp_audio = None
+    logger.error(f"Unexpected error importing krisp_audio: {e}")
+    logger.error(f"Error type: {type(e).__name__}")
 
 
 def log_callback(log_message, log_level):
@@ -55,6 +68,22 @@ class NoiseFilterFromKrisp(BaseAudioFilter):
 
     def __init__(self, model_path: str = None):
         super().__init__()
+
+        logger.info(f"Python executable: {sys.executable}")
+        logger.info(f"Python path: {sys.path}")
+
+        # Check if krisp package directory exists
+        for path in sys.path:
+            krisp_path = os.path.join(path, "krisp_audio")
+            if os.path.exists(krisp_path):
+                logger.info(f"Found krisp_audio directory at: {krisp_path}")
+                try:
+                    logger.info(f"Contents: {os.listdir(krisp_path)}")
+                except Exception as e:
+                    logger.error(f"Could not list krisp_audio directory contents: {e}")
+                break
+        else:
+            logger.error("krisp_audio directory not found in any sys.path location")
 
         # Only validate model path if krisp is available and enabled
         if KRISP_AVAILABLE and ENABLE_KRISP_FILTER:

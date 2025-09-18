@@ -78,6 +78,25 @@ RUN if ls /tmp/*linux_*.whl 1> /dev/null 2>&1; then \
         echo "Warning: No Krisp wheel files found, skipping installation"; \
     fi
 
+# Verify krisp installation immediately after install
+RUN echo "=== Verifying Krisp Installation ===" && \
+    python -c "\
+import sys; \
+print('Python version:', sys.version); \
+print('Python executable:', sys.executable); \
+print('Python path:', sys.path); \
+try: \
+    import krisp_audio; \
+    print('✓ Krisp import: SUCCESS'); \
+    print('Krisp version:', krisp_audio.getVersion() if hasattr(krisp_audio, 'getVersion') else 'Version method not found'); \
+except Exception as e: \
+    print('✗ Krisp import: FAILED'); \
+    print('Error:', str(e)); \
+    print('Error type:', type(e).__name__); \
+    import traceback; \
+    traceback.print_exc(); \
+" && echo "=== Krisp Verification Complete ==="
+
 # Create NLTK data directory and download required data
 RUN pip install --no-cache-dir nltk && \
     mkdir -p /usr/local/nltk_data && \
