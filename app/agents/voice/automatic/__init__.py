@@ -3,10 +3,14 @@ import asyncio
 import json
 import os
 import random
+import argparse
+from dotenv import load_dotenv
 import sys
 import wave
 from datetime import datetime
 from zoneinfo import ZoneInfo
+from pydub import AudioSegment
+import audioop
 
 from dotenv import load_dotenv
 from langfuse import get_client
@@ -22,7 +26,12 @@ from pipecat.frames.frames import (
     LLMFullResponseEndFrame,
     OutputAudioRawFrame,
     TTSSpeakFrame,
+    OutputAudioRawFrame,
+    LLMFullResponseStartFrame,
+    FunctionCallInProgressFrame,
+    FunctionCallResultFrame
 )
+
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
@@ -56,10 +65,23 @@ from app.core.transport.http_client import get_proxy_config
 
 from .processors import LLMSpyProcessor
 from .processors.ptt_vad_filter import PTTVADFilter
+from .processors.user_speaking_audio import UserSpeakingAudioProcessor
 from .prompts import get_system_prompt
 from .stt import get_stt_service
 from .tools import initialize_tools
 from .tts import get_tts_service
+from .stt import get_stt_service
+from .audio.audio_manager import initialize_audio_manager, get_audio_manager
+from app.agents.voice.automatic.processors.llm_spy import handle_confirmation_response
+from app.agents.voice.automatic.types import (
+    TTSProvider,
+    Mode,
+    decode_tts_provider,
+    decode_voice_name,
+    decode_mode,
+)
+from opentelemetry import trace
+from langfuse import get_client
 
 # Load tool call sound
 tool_call_sound = None
@@ -361,6 +383,9 @@ async def run_normal_mode(args):
         enable_chart_text_filter=config.ENABLE_CHARTS,
     )
 
+    # Initialize audio manager for looping waiting audio
+    audio_manager = initialize_audio_manager(tts)
+
     llm = LLMServiceWrapper(
         AzureLLMService(
             api_key=config.AZURE_OPENAI_API_KEY,
@@ -423,39 +448,57 @@ async def run_normal_mode(args):
 
     rtvi = RTVIProcessor(config=RTVIConfig(config=[]))
 
-    # Simplified event handler for TTS feedback
+    # LLM response started handler - DO NOT start audio here
+    # Audio should only start when user stops speaking, not when LLM processes
+    @llm.event_handler("on_llm_response_started")
+    async def on_llm_response_started(service,function_calls):
+        logger.info(f"Function calls started event triggered with {len(function_calls)} calls")
+
+        # commented out older waiting audio start code - audio is now managed by user speech events
+        # # Just log that LLM started - audio is managed by user speech events
+        # if tts_provider == TTSProvider.GOOGLE:
+        #     for function_call in function_calls:
+        #         # Skip "checking" message for instant functions and chart tools
+        #         if function_call.function_name not in [
+        #             "get_current_time",
+        #             "generate_bar_chart",
+        #             "generate_line_chart",
+        #             "generate_donut_chart",
+        #             "generate_single_stat_card",
+        #         ]:
+        #             phrases = [
+        #                 "Let me check on that.",
+        #                 "Give me a moment to do that.",
+        #                 "I'll get right on that.",
+        #                 "Working on that for you.",
+        #                 "One moment — I'm on it",
+        #                 "One second, boss.",
+        #                 "On it, boss!",
+        #                 "Just a second, captain.",
+        #             ]
+        #             await tts.queue_frame(TTSSpeakFrame(random.choice(phrases)))
+        #             break
+        
+    # Keep function call handler for debugging
     @llm.event_handler("on_function_calls_started")
     async def on_function_calls_started(service, function_calls):
-        # Only play the "checking" message if using Google TTS
-        if tts_provider == TTSProvider.GOOGLE:
-            for function_call in function_calls:
-                # Skip "checking" message for instant functions and chart tools
-                instant_functions = [
-                    "get_current_time",
-                    "utility__getCurrentTime",  # NeuroLink equivalent
-                    "utility__generateTimestamp",  # NeuroLink timestamp tool
-                    "generate_bar_chart",
-                    "generate_line_chart",
-                    "generate_donut_chart",
-                    "generate_single_stat_card",
-                ]
-                if function_call.function_name not in instant_functions:
-                    # Play tool call sound if enabled, otherwise use phrases
-                    if tool_call_sound:
-                        await transport.send_audio(tool_call_sound)
-                    else:
-                        phrases = [
-                            "Let me check on that.",
-                            "Give me a moment to do that.",
-                            "I'll get right on that.",
-                            "Working on that for you.",
-                            "One moment — I'm on it",
-                            "One second, boss.",
-                            "On it, boss!",
-                            "Just a second, captain.",
-                        ]
-                        await tts.queue_frame(TTSSpeakFrame(random.choice(phrases)))
-                    break
+        logger.info(f"Function calls started event triggered with {len(function_calls)} calls")
+        # Audio already started by LLM response started, just log
+        for function_call in function_calls:
+            logger.debug(f"Function call: {function_call.function_name}")  
+                       
+
+    # Remove duplicate LLM response started handler - moved above
+
+    # Only stop audio when function calls complete if audio is actually playing
+    @llm.event_handler("on_function_calls_finished")
+    async def on_function_calls_finished(service):
+        # Only stop if audio is enabled/playing - don't stop for every function completion
+        if audio_manager.audio_enabled or audio_manager.is_playing:
+            await audio_manager.stop_and_disable_audio()
+            logger.info("Stopped waiting audio - function calls finished")
+        else:
+            logger.info("Function calls finished - audio not playing, no action needed")
 
     messages = [
         {"role": "system", "content": system_prompt},
@@ -483,6 +526,12 @@ async def run_normal_mode(args):
     if config.DISABLE_VAD_FOR_PTT:
         ptt_vad_filter = PTTVADFilter("PTTVADFilter")
         pipeline_components.append(ptt_vad_filter)  # Filter VAD frames after STT
+
+    # Add user speaking audio processor - manages audio based on user speech
+    logger.info("🔧 Creating UserSpeakingAudioProcessor...")
+    user_speaking_processor = UserSpeakingAudioProcessor("UserSpeakingAudioProcessor")
+    pipeline_components.append(user_speaking_processor)  # Add after STT/PTT, before RTVI
+    logger.info(f"✅ UserSpeakingAudioProcessor added to pipeline at position {len(pipeline_components)-1}")
 
     pipeline_components.extend([rtvi, context_aggregator.user()])
     if (
