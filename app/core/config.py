@@ -135,7 +135,7 @@ GEMINI_SEARCH_RESULT_API_MODEL = os.environ.get(
 # --- STT Configuration ---
 STT_PROVIDER = os.environ.get(
     "STT_PROVIDER", "google"
-).lower()  # "google", "assemblyai", "openai", or "deepgram"
+).lower()  # "google", "assemblyai", "openai", "deepgram", or "soniox"
 ASSEMBLYAI_API_KEY = os.getenv("ASSEMBLYAI_API_KEY")
 OPENAI_STT_API_KEY = os.getenv("OPENAI_STT_API_KEY")
 OPENAI_STT_MODEL = os.environ.get(
@@ -187,6 +187,26 @@ DEEPGRAM_DIARIZE = (
 DEEPGRAM_AUTO_DETECT_LANGUAGE = (
     os.environ.get("DEEPGRAM_AUTO_DETECT_LANGUAGE", "false").lower() == "true"
 )  # Enable automatic language detection (uses 'multi' parameter)
+
+# --- Soniox STT Configuration ---
+# Soniox is optimized to solve the 0.5-second speech pause issue experienced with Deepgram
+SONIOX_API_KEY = os.getenv("SONIOX_API_KEY")  # Required API key for Soniox authentication
+SONIOX_MODEL = os.environ.get("SONIOX_MODEL", "stt-rt-preview")  # Soniox model optimized for real-time conversation
+SONIOX_LANGUAGE_HINTS = os.environ.get("SONIOX_LANGUAGE_HINTS", "en")  # Language hints for transcription (comma-separated: en,hi,es)
+SONIOX_CONTEXT = os.environ.get(
+    "SONIOX_CONTEXT",
+    "PSR, GMV, UPI, ROAS, AOV, RTO, COD, Sales, Cart, Abandonment, Sales, Split"
+)  # Business context for better transcription of domain-specific terms
+SONIOX_ENABLE_NON_FINAL_TOKENS = (
+    os.environ.get("SONIOX_ENABLE_NON_FINAL_TOKENS", "false").lower() == "true"
+)  # Enable interim/non-final tokens for real-time feedback
+SONIOX_MAX_NON_FINAL_TOKENS_DURATION_MS = int(
+    os.environ.get("SONIOX_MAX_NON_FINAL_TOKENS_DURATION_MS", "0")
+)  # Maximum duration for non-final tokens (0 = no limit)
+SONIOX_VAD_FORCE_TURN_ENDPOINT = (
+    os.environ.get("SONIOX_VAD_FORCE_TURN_ENDPOINT", "false").lower() == "true"
+)  # CRITICAL: false = Use Soniox intelligent endpoint detection
+     # true = Use external VAD (Silero)
 
 logger.info(f"Using Gemini model: {GEMINI_MODEL}")
 logger.info(f"Using response modality: {RESPONSE_MODALITY}")

@@ -5,6 +5,7 @@ from pipecat.services.assemblyai.stt import AssemblyAISTTService
 from pipecat.services.deepgram.stt import DeepgramSTTService
 from pipecat.services.google.stt import GoogleSTTService
 from pipecat.services.openai.stt import OpenAISTTService
+from pipecat.services.soniox.stt import SonioxSTTService, SonioxInputParams
 from pipecat.transcriptions.language import Language
 
 from app.agents.voice.automatic.types import VoiceName
@@ -105,6 +106,41 @@ def get_stt_service(voice_name: Optional[str] = None):
         )
         return DeepgramSTTService(
             api_key=config.DEEPGRAM_API_KEY, live_options=live_options
+        )
+    elif config.STT_PROVIDER == "soniox":
+        if not config.SONIOX_API_KEY:
+            raise ValueError("SONIOX_API_KEY is required when STT_PROVIDER=soniox")
+
+        # Parse language hints from comma-separated string
+        language_hints = None
+        if config.SONIOX_LANGUAGE_HINTS:
+            lang_list = [lang.strip() for lang in config.SONIOX_LANGUAGE_HINTS.split(",")]
+            language_hints = [Language(lang) for lang in lang_list if lang]
+
+        # Configure Soniox with supported parameters only
+        soniox_params = SonioxInputParams(
+            model=config.SONIOX_MODEL,
+            language_hints=language_hints,
+            context=config.SONIOX_CONTEXT if config.SONIOX_CONTEXT else None,
+            enable_non_final_tokens=config.SONIOX_ENABLE_NON_FINAL_TOKENS,
+            max_non_final_tokens_duration_ms=(
+                config.SONIOX_MAX_NON_FINAL_TOKENS_DURATION_MS
+                if config.SONIOX_MAX_NON_FINAL_TOKENS_DURATION_MS > 0
+                else None
+            ),
+            client_reference_id=None,
+        )
+
+        logger.info(
+            f"Using Soniox STT service with model: {config.SONIOX_MODEL}, "
+            f"language_hints: {config.SONIOX_LANGUAGE_HINTS}, "
+            f"VAD force endpoint: {config.SONIOX_VAD_FORCE_TURN_ENDPOINT}, "
+            f"non_final_tokens: {config.SONIOX_ENABLE_NON_FINAL_TOKENS}"
+        )
+        return SonioxSTTService(
+            api_key=config.SONIOX_API_KEY,
+            params=soniox_params,
+            vad_force_turn_endpoint=config.SONIOX_VAD_FORCE_TURN_ENDPOINT,
         )
     else:  # Default to Google STT
         logger.info("Using Google STT service with VAD-based turn detection")
