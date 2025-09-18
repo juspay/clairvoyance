@@ -5,7 +5,7 @@ from pipecat.services.assemblyai.stt import AssemblyAISTTService
 from pipecat.services.deepgram.stt import DeepgramSTTService
 from pipecat.services.google.stt import GoogleSTTService
 from pipecat.services.openai.stt import OpenAISTTService
-from pipecat.services.soniox.stt import SonioxSTTService, SonioxInputParams
+from pipecat.services.soniox.stt import SonioxInputParams, SonioxSTTService
 from pipecat.transcriptions.language import Language
 
 from app.agents.voice.automatic.types import VoiceName
@@ -114,7 +114,9 @@ def get_stt_service(voice_name: Optional[str] = None):
         # Parse language hints from comma-separated string
         language_hints = None
         if config.SONIOX_LANGUAGE_HINTS:
-            lang_list = [lang.strip() for lang in config.SONIOX_LANGUAGE_HINTS.split(",")]
+            lang_list = [
+                lang.strip() for lang in config.SONIOX_LANGUAGE_HINTS.split(",")
+            ]
             language_hints = [Language(lang) for lang in lang_list if lang]
 
         # Configure Soniox with supported parameters only

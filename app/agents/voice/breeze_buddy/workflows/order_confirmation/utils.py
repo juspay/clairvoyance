@@ -1,5 +1,6 @@
 from pipecat.services.google.stt import GoogleSTTService
 from pipecat.services.openai.stt import OpenAISTTService
+from pipecat.services.soniox.stt import SonioxInputParams, SonioxSTTService
 from pipecat.transcriptions.language import Language
 
 from app.core import config
@@ -10,11 +11,7 @@ from app.schemas import LeadCallOutcome
 def get_stt_service():
     """
     Returns an STT service instance based on the environment configuration.
-
-    Args:
-        voice_name: Voice name to determine STT provider override for specific voices
     """
-    # Check for MIA voice with OpenAI override
     if config.BREEZE_BUDDY_STT_SERVICE == "openai":
         logger.info("Using OpenAI STT service for Breeze Buddy voice")
         return OpenAISTTService(
@@ -23,6 +20,39 @@ def get_stt_service():
             language=Language.EN,
             temperature=0.0,
         )
+    elif config.BREEZE_BUDDY_STT_SERVICE == "soniox":
+        language_hints = None
+        if config.BREEZE_BUDDY_SONIOX_LANGUAGE_HINTS:
+            lang_list = [
+                lang.strip()
+                for lang in config.BREEZE_BUDDY_SONIOX_LANGUAGE_HINTS.split(",")
+            ]
+            language_hints = [Language(lang) for lang in lang_list if lang]
+
+        # Configure Soniox with supported parameters only
+        soniox_params = SonioxInputParams(
+            model=config.BREEZE_BUDDY_SONIOX_MODEL,
+            language_hints=language_hints,
+            context=(
+                config.BREEZE_BUDDY_SONIOX_CONTEXT
+                if config.BREEZE_BUDDY_SONIOX_CONTEXT
+                else None
+            ),
+            enable_non_final_tokens=config.BREEZE_BUDDY_SONIOX_ENABLE_NON_FINAL_TOKENS,
+            max_non_final_tokens_duration_ms=(
+                config.BREEZE_BUDDY_SONIOX_MAX_NON_FINAL_TOKENS_DURATION_MS
+                if config.BREEZE_BUDDY_SONIOX_MAX_NON_FINAL_TOKENS_DURATION_MS > 0
+                else None
+            ),
+            client_reference_id=None,
+        )
+
+        return SonioxSTTService(
+            api_key=config.SONIOX_API_KEY,
+            params=soniox_params,
+            vad_force_turn_endpoint=config.BREEZE_BUDDY_SONIOX_VAD_FORCE_TURN_ENDPOINT,
+        )
+
     else:
         logger.info("Using Google STT service with VAD-based turn detection")
         return GoogleSTTService(

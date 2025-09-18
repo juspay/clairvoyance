@@ -190,12 +190,18 @@ DEEPGRAM_AUTO_DETECT_LANGUAGE = (
 
 # --- Soniox STT Configuration ---
 # Soniox is optimized to solve the 0.5-second speech pause issue experienced with Deepgram
-SONIOX_API_KEY = os.getenv("SONIOX_API_KEY")  # Required API key for Soniox authentication
-SONIOX_MODEL = os.environ.get("SONIOX_MODEL", "stt-rt-preview")  # Soniox model optimized for real-time conversation
-SONIOX_LANGUAGE_HINTS = os.environ.get("SONIOX_LANGUAGE_HINTS", "en")  # Language hints for transcription (comma-separated: en,hi,es)
+SONIOX_API_KEY = os.getenv(
+    "SONIOX_API_KEY"
+)  # Required API key for Soniox authentication
+SONIOX_MODEL = os.environ.get(
+    "SONIOX_MODEL", "stt-rt-preview"
+)  # Soniox model optimized for real-time conversation
+SONIOX_LANGUAGE_HINTS = os.environ.get(
+    "SONIOX_LANGUAGE_HINTS", "en"
+)  # Language hints for transcription (comma-separated: en,hi,es)
 SONIOX_CONTEXT = os.environ.get(
     "SONIOX_CONTEXT",
-    "PSR, GMV, UPI, ROAS, AOV, RTO, COD, Sales, Cart, Abandonment, Sales, Split"
+    "PSR, GMV, UPI, ROAS, AOV, RTO, COD, Sales, Cart, Abandonment, Sales, Split",
 )  # Business context for better transcription of domain-specific terms
 SONIOX_ENABLE_NON_FINAL_TOKENS = (
     os.environ.get("SONIOX_ENABLE_NON_FINAL_TOKENS", "false").lower() == "true"
@@ -206,7 +212,7 @@ SONIOX_MAX_NON_FINAL_TOKENS_DURATION_MS = int(
 SONIOX_VAD_FORCE_TURN_ENDPOINT = (
     os.environ.get("SONIOX_VAD_FORCE_TURN_ENDPOINT", "false").lower() == "true"
 )  # CRITICAL: false = Use Soniox intelligent endpoint detection
-     # true = Use external VAD (Silero)
+# true = Use external VAD (Silero)
 
 logger.info(f"Using Gemini model: {GEMINI_MODEL}")
 logger.info(f"Using response modality: {RESPONSE_MODALITY}")
@@ -315,7 +321,7 @@ BREEZE_BUDDY_VAD_MIN_VOLUME = os.getenv(
     "BREEZE_BUDDY_VAD_MIN_VOLUME", 0.6
 )  # More tolerant for soft voice
 BREEZE_BUDDY_STT_SERVICE = os.getenv(
-    "BREEZE_BUDDY_STT_SERVICE", "google"
+    "BREEZE_BUDDY_STT_SERVICE", "soniox"
 ).lower()  # "google" or "openai"
 
 # Session inactivity timeout
@@ -383,3 +389,25 @@ if ENABLE_LANGFUSE_PROMPTS:
     logger.info(
         f"LangFuse system prompt: {AUTOMATIC_LANGFUSE_PROMPT_NAME} (label: {AUTOMATIC_LANGFUSE_SYSTEM_PROMPT_LABEL})"
     )
+
+BREEZE_BUDDY_SONIOX_MODEL = os.environ.get(
+    "BREEZE_BUDDY_SONIOX_MODEL", "stt-rt-preview"
+)
+BREEZE_BUDDY_SONIOX_LANGUAGE_HINTS = os.environ.get(
+    "BREEZE_BUDDY_SONIOX_LANGUAGE_HINTS", "en,hi"
+)
+BREEZE_BUDDY_SONIOX_CONTEXT = os.environ.get(
+    "BREEZE_BUDDY_SONIOX_CONTEXT",
+    "State, Yes, Yeah, Good, Time, Yep, Later, Available, Busy, Confirm, Cancel, Repeat",
+)
+BREEZE_BUDDY_SONIOX_ENABLE_NON_FINAL_TOKENS = (
+    os.environ.get("BREEZE_BUDDY_SONIOX_ENABLE_NON_FINAL_TOKENS", "false").lower()
+    == "true"
+)
+BREEZE_BUDDY_SONIOX_MAX_NON_FINAL_TOKENS_DURATION_MS = int(
+    os.environ.get("BREEZE_BUDDY_SONIOX_MAX_NON_FINAL_TOKENS_DURATION_MS", "0")
+)
+BREEZE_BUDDY_SONIOX_VAD_FORCE_TURN_ENDPOINT = (
+    os.environ.get("BREEZE_BUDDY_SONIOX_VAD_FORCE_TURN_ENDPOINT", "false").lower()
+    == "true"
+)
