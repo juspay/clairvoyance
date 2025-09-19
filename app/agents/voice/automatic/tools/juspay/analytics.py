@@ -1,6 +1,6 @@
 import functools
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import httpx
 import pytz
@@ -261,6 +261,7 @@ async def get_payment_analytics_by_dimension(params: FunctionCallParams):
 async def list_offers_by_filter(params: FunctionCallParams):
     """
     Lists promotional offers. Fetches offers based on user-provided criteria.
+    By default, it fetches offers from the last 30 days.
     """
     try:
         logger.info(f"Fetching offers with filters: {params.arguments}")
@@ -278,55 +279,56 @@ async def list_offers_by_filter(params: FunctionCallParams):
 
         # Determine the date range for the API call in UTC.
         now_utc = datetime.now(utc)
-        start_of_month_utc = now_utc.replace(
-            day=1, hour=0, minute=0, second=0, microsecond=0
-        )
 
-        user_created_at = params.arguments.get("created_at", {})
-        start_time_str = user_created_at.get("gte")
-        end_time_str = user_created_at.get("lte")
+        fetch_all = params.arguments.get("fetchAll", False)
 
-        try:
-            # If user provides time in IST, convert it to ISO format with timezone.
-            if start_time_str:
-                start_time_ist = ist.localize(
-                    datetime.strptime(start_time_str, "%Y-%m-%d %H:%M:%S")
-                )
-            else:
-                start_time_ist = start_of_month_utc.astimezone(ist)
-
-            if end_time_str:
-                end_time_ist = ist.localize(
-                    datetime.strptime(end_time_str, "%Y-%m-%d %H:%M:%S")
-                )
-            else:
-                end_time_ist = now_utc.astimezone(ist)
-        except Exception as e:
-            logger.error(
-                f"Tool Error: [list_offers_by_filter] Error converting user-provided time: {e}"
+        if fetch_all:
+            start_time_ist = ist.localize(
+                datetime.strptime("2021-12-31 18:30:00", "%Y-%m-%d %H:%M:%S")
             )
-            await params.result_callback(
-                {
-                    "Tool Error": f"[list_offers_by_filter] Invalid time format. Please use 'YYYY-MM-DD HH:MM:SS' in IST. Error: {e}"
-                }
-            )
-            return
+            end_time_ist = now_utc.astimezone(ist)
+        else:
+            thirty_days_ago_utc = now_utc - timedelta(days=30)
+            user_created_at = params.arguments.get("created_at", {})
+            start_time_str = user_created_at.get("gte")
+            end_time_str = user_created_at.get("lte")
+
+            try:
+                start_time_ist = (
+                    ist.localize(datetime.strptime(start_time_str, "%Y-%m-%d %H:%M:%S"))
+                    if start_time_str
+                    else thirty_days_ago_utc.astimezone(ist)
+                )
+                end_time_ist = (
+                    ist.localize(datetime.strptime(end_time_str, "%Y-%m-%d %H:%M:%S"))
+                    if end_time_str
+                    else now_utc.astimezone(ist)
+                )
+            except Exception as e:
+                logger.error(f"Error converting user-provided time: {e}")
+                await params.result_callback(
+                    {
+                        "error": f"Invalid time format. Please use 'YYYY-MM-DD HH:MM:SS' in IST. Error: {e}"
+                    }
+                )
+                return
 
         # Prepare the payload for the API call.
-        filters = {}
-        for key in [
-            "offerId",
-            "offerCode",
-            "paymentMethodType",
-            "isCouponBased",
-            "currency",
-        ]:
-            if key in params.arguments:
-                filters[key] = params.arguments[key]
+        filters = {
+            key: params.arguments[key]
+            for key in [
+                "offerId",
+                "offerCode",
+                "paymentMethodType",
+                "isCouponBased",
+                "currency",
+            ]
+            if key in params.arguments
+        }
 
         payload = {
             "status": params.arguments.get("status", ["ACTIVE"]),
-            "limit": params.arguments.get("limit", 50),
+            "limit": params.arguments.get("limit", 10),
             "created_at": {
                 "gte": start_time_ist.isoformat(),
                 "lte": end_time_ist.isoformat(),
@@ -1764,13 +1766,18 @@ create_euler_offer_function = FunctionSchema(
 
 list_offers_by_filter_function = FunctionSchema(
     name="list_offers_by_filter",
-    description="""Fetches and filters promotional offers. It defaults to fetching active offers from the start of current month to today's date.
+    description="""Fetches and filters promotional offers. It defaults to fetching active offers from the last 30 days.
 
 **Behavior:**
-- **Default:** Returns active offers from the start of current month to today's date.
+- **Default:** Fetches the first 10 active offers from the last 30 days.
+- **Fetch All:** If the user asks for "all" offers, set `fetchAll: true` to retrieve all offers since the beginning.
 - **Status Filter:** If the user specifies a status (e.g., "paused", "expired"), it will filter for that status.
 - **Date Filter:** If the user provides a start (`gte`) or end (`lte`) date, the tool will process accordingly.""",
     properties={
+        "fetchAll": {
+            "type": "boolean",
+            "description": "Set to true to fetch all offers, ignoring date filters. This is useful when the user asks for 'all offers'.",
+        },
         "status": {
             "type": "array",
             "items": {"type": "string", "enum": ["ACTIVE", "EXPIRED", "PAUSED", "NEW"]},
@@ -1811,23 +1818,27 @@ list_offers_by_filter_function = FunctionSchema(
             "type": "boolean",
             "description": "Filter offers based on whether they are coupon-based.",
         },
+        "currency": {
+            "type": "string",
+            "description": "Filter offers by currency code (e.g., 'INR').",
+        },
         "limit": {
             "type": "number",
-            "description": "The maximum number of offers to return. Defaults to 15.",
+            "description": "The maximum number of offers to return. Defaults to 10.",
         },
         "created_at": {
             "type": "object",
             "properties": {
                 "gte": {
                     "type": "string",
-                    "description": "Optional: The start of the date range in 'YYYY-MM-DD HH:MM:SS' format. Interpreted as IST. If not provided, defaults to start of current month.",
+                    "description": "Optional: The start of the date range in 'YYYY-MM-DD HH:MM:SS' format. Interpreted as IST. If not provided, defaults to 30 days ago.",
                 },
                 "lte": {
                     "type": "string",
                     "description": "Optional: The end of the date range in 'YYYY-MM-DD HH:MM:SS' format. Interpreted as IST. If not provided, defaults to current date and time.",
                 },
             },
-            "description": "Optional: The date range to search for offers. If not provided, defaults to start of current month to current date. When provided, processing will be done accordingly.",
+            "description": "Optional: The date range to search for offers. If not provided, defaults to the last 30 days. When provided, processing will be done accordingly.",
         },
     },
     required=[],
