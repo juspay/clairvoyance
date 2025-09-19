@@ -126,13 +126,30 @@ async def process_backlog_leads():
                     call = call_provider.make_call(
                         lead.payload.get("customer_mobile_number"), number_to_use.number
                     )
-                    await update_lead_call_details(
-                        lead.id,
-                        LeadCallStatus.PROCESSING,
-                        call.get("sid"),
-                        datetime.now(timezone.utc),
-                        number_to_use.id,
-                    )
+                    if call.get("sid") != None:
+                        await update_lead_call_details(
+                            lead.id,
+                            LeadCallStatus.PROCESSING,
+                            call.get("sid"),
+                            datetime.now(timezone.utc),
+                            number_to_use.id,
+                        )
+                    else:
+                        logger.error(
+                            f"Failed to initiate call for lead {lead.id}. Call response: {call}"
+                        )
+                        if config.calling_provider == CallProvider.TWILIO:
+                            await update_outbound_number_status(
+                                number_to_use.id, OutboundNumberStatus.AVAILABLE
+                            )
+                        elif config.calling_provider == CallProvider.EXOTEL:
+                            outbound_number = await get_outbound_number_by_id(
+                                number_to_use.id
+                            )
+                            if outbound_number:
+                                await update_outbound_number_channels(
+                                    number_to_use.id, outbound_number.channels - 1
+                                )
 
                 except Exception as e:
                     logger.error(f"Error processing lead {lead.id}: {e}")
