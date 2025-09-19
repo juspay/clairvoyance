@@ -87,4 +87,5 @@ class TwilioProvider(VoiceCallProvider):
             )
             return {"status": "call_initiated", "sid": call.sid}
         except Exception as e:
-            raise HTTPException(status_code=400, detail=str(e))
+            logger.error(f"Error when making call via Twilio: {e}")
+            return None

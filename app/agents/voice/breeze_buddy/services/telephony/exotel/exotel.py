@@ -63,7 +63,7 @@ class ExotelProvider(VoiceCallProvider):
 
             if not resp.ok:
                 logger.error(f"Exotel API error: {resp.status_code} - {resp.text}")
-                raise HTTPException(resp.status_code, resp.text)
+                return None
 
             # Check if response has content
             if not resp.text.strip():
@@ -98,13 +98,13 @@ class ExotelProvider(VoiceCallProvider):
 
         except requests.exceptions.ConnectionError as e:
             logger.error(f"Connection error when calling Exotel API: {e}")
-            raise HTTPException(503, f"Failed to connect to Exotel API: {str(e)}")
+            return None
         except requests.exceptions.Timeout as e:
             logger.error(f"Timeout error when calling Exotel API: {e}")
-            raise HTTPException(504, f"Exotel API request timed out: {str(e)}")
+            return None
         except requests.exceptions.RequestException as e:
             logger.error(f"Request error when calling Exotel API: {e}")
-            raise HTTPException(500, f"Request error: {str(e)}")
+            return None
         except Exception as e:
             logger.error(f"Unexpected error when calling Exotel API: {e}")
-            raise HTTPException(500, f"Unexpected error: {str(e)}")
+            return None
