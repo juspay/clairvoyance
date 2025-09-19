@@ -10,7 +10,6 @@ from langfuse import get_client
 from opentelemetry import trace
 from pipecat.audio.filters.aic_filter import AICFilter
 from pipecat.audio.filters.noisereduce_filter import NoisereduceFilter
-from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import LocalSmartTurnAnalyzerV3
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.vad.vad_analyzer import VADParams
 from pipecat.frames.frames import (
@@ -141,25 +140,10 @@ async def main():
         params=vad_params,
     )
 
-    # Configure Smart Turn analyzer for transport-level integration
-    smart_turn_analyzer = None
-    if config.ENABLE_PIPECAT_SMART_TURN:
-        try:
-            smart_turn_analyzer = LocalSmartTurnAnalyzerV3()
-            logger.info(
-                "SMART_DEBUG: Pipecat Smart Turn analyzer configured for transport-level integration"
-            )
-        except Exception as e:
-            logger.warning(
-                f"SMART_DEBUG: Pipecat Smart Turn not available ({type(e).__name__}): {e}"
-            )
-            smart_turn_analyzer = None
-
     daily_params = DailyParams(
         audio_in_enabled=True,
         audio_out_enabled=True,
         vad_analyzer=None if config.DISABLE_SILERO_VAD else vad_analyzer,
-        turn_analyzer=smart_turn_analyzer,
     )
 
     # Audio filter configuration

@@ -100,11 +100,6 @@ DISABLE_SILERO_VAD = (
     os.environ.get("DISABLE_SILERO_VAD", "false").lower() == "true"
 )  # Disable Silero VAD (use when STT provider has built-in VAD)
 
-# Smart Turn Configuration
-ENABLE_PIPECAT_SMART_TURN = (
-    os.environ.get("ENABLE_PIPECAT_SMART_TURN", "false").lower() == "true"
-)
-
 # Mem0 Configuration
 MEM0_API_KEY = os.getenv("MEM0_API_KEY", "")
 MEM0_ENABLED = os.getenv("MEM0_ENABLED", "false").lower() == "true"
@@ -224,7 +219,6 @@ logger.info(f"Using response modality: {RESPONSE_MODALITY}")
 logger.info(f"Tracing enabled: {ENABLE_TRACING}")
 logger.info(f"Search grounding enabled: {ENABLE_SEARCH_GROUNDING}")
 logger.info(f"Using Gemini search result model: {GEMINI_SEARCH_RESULT_API_MODEL}")
-logger.info(f"SMART_DEBUG: Smart Turn V3 enabled: {ENABLE_PIPECAT_SMART_TURN}")
 
 # Automatic MCP Tool Server
 AUTOMATIC_MCP_TOOL_SERVER_USAGE = (
