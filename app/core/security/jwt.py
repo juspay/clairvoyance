@@ -1,17 +1,27 @@
+import json
 from datetime import datetime, timedelta
 from typing import Any, Dict, Optional
 
 import jwt
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.core.config import (
+    ENABLE_LIGHTHOUSE_AUTH,
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES,
     JWT_ALGORITHM,
     JWT_SECRET_KEY,
+    LIGHTHOUSE_JWT_SECRET,
 )
 from app.core.logger import logger
 from app.schemas import TokenData
+
+# Common credential exception
+CREDENTIALS_EXCEPTION = HTTPException(
+    status_code=status.HTTP_401_UNAUTHORIZED,
+    detail="Could not validate credentials",
+    headers={"WWW-Authenticate": "Bearer"},
+)
 
 
 class JWTManager:
@@ -74,12 +84,6 @@ class JWTManager:
         Raises:
             HTTPException: If token is invalid or expired
         """
-        credentials_exception = HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Could not validate credentials",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
         try:
             payload = jwt.decode(token, self.secret_key, algorithms=[self.algorithm])
 
@@ -87,7 +91,7 @@ class JWTManager:
             exp = payload.get("exp")
             if exp is None:
                 logger.warning("Token missing expiration claim")
-                raise credentials_exception
+                raise CREDENTIALS_EXCEPTION
 
             if datetime.utcnow() > datetime.fromtimestamp(exp):
                 logger.warning("Token has expired")
@@ -117,10 +121,68 @@ class JWTManager:
             )
         except jwt.InvalidTokenError as e:
             logger.warning(f"Invalid JWT token: {e}")
-            raise credentials_exception
+            raise CREDENTIALS_EXCEPTION
         except Exception as e:
             logger.error(f"Unexpected error verifying token: {e}")
-            raise credentials_exception
+            raise CREDENTIALS_EXCEPTION
+
+    def verify_breeze_token(self, breeze_token: str) -> Dict[str, Any]:
+        """
+        Verify the breezeToken JWT from lighthouse
+
+        Args:
+            breeze_token: JWT token string from lighthouse
+
+        Returns:
+            Dictionary containing user context from the token
+
+        Raises:
+            HTTPException: If token is invalid or expired
+        """
+        try:
+            # Use lighthouse's JWT secret (same as ACCESS_JWT_SECRET from lighthouse)
+            # Decode the JWT token using lighthouse's secret
+            if not LIGHTHOUSE_JWT_SECRET:
+                logger.error("LIGHTHOUSE_JWT_SECRET is not configured")
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Server misconfiguration",
+                )
+            payload = jwt.decode(
+                breeze_token,
+                LIGHTHOUSE_JWT_SECRET,
+                algorithms=["HS256"],  # Same algorithm lighthouse uses
+            )
+
+            # Extract user information from the decoded payload
+            user_context = {
+                "name": payload.get("name"),
+                "email": payload.get("email"),
+                "scopes": payload.get("scopes", []),
+                "merchantName": payload.get("merchantName"),
+                "merchantId": payload.get("merchantId"),
+                "shopURL": payload.get("shopURL"),
+                "context": payload.get("context"),
+                "platformToken": payload.get("platformToken"),
+                "breezeTokenData": payload.get("breezeTokenData"),
+                "resellerId": payload.get("resellerId"),
+            }
+
+            logger.info(user_context)
+            return user_context
+
+        except jwt.ExpiredSignatureError:
+            logger.warning("Breeze token has expired")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Breeze token has expired",
+            )
+        except jwt.InvalidTokenError as e:
+            logger.warning(f"Invalid breeze token: {e}")
+            raise CREDENTIALS_EXCEPTION
+        except Exception as e:
+            logger.error(f"Unexpected error verifying breeze token: {e}")
+            raise CREDENTIALS_EXCEPTION
 
 
 # Initialize JWT manager
@@ -154,3 +216,56 @@ async def get_current_user(
         )
 
     return jwt_manager.verify_token(credentials.credentials)
+
+
+# Breeze Authentication Functions
+
+
+async def validate_breeze_user(raw_request: Request) -> Optional[Dict[str, Any]]:
+    """
+    FastAPI dependency to get user context from breezeToken in request body
+
+    Args:
+        raw_request: FastAPI Request object to read raw body
+
+    Returns:
+        Dictionary containing user context from verified breezeToken if ENABLE_LIGHTHOUSE_AUTH is True,
+        None if ENABLE_LIGHTHOUSE_AUTH is False
+
+    Raises:
+        HTTPException: If ENABLE_LIGHTHOUSE_AUTH is True and token is missing, invalid, or expired
+    """
+    # If authentication is disabled, return None
+    if not ENABLE_LIGHTHOUSE_AUTH:
+        return None
+
+    try:
+        body = await raw_request.body()
+        data = json.loads(body)
+        breeze_token = data.get("breezeToken")
+
+        if not breeze_token:
+            logger.error("Missing breezeToken in request body")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="breezeToken is required in request body",
+            )
+
+        user_context = jwt_manager.verify_breeze_token(breeze_token)
+        logger.info(
+            f"Body-based breeze token verified for user: {user_context['email']}"
+        )
+        return user_context
+
+    except json.JSONDecodeError:
+        logger.error("Invalid JSON in request body")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid JSON in request body",
+        )
+    except Exception as e:
+        logger.error(f"Unexpected error reading request body: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Error processing request body",
+        )

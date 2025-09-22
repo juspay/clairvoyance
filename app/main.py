@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Dict
 
 import uvicorn
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -31,6 +31,7 @@ from app.core.config import (
 
 # Import necessary components from the new structure
 from app.core.logger import logger
+from app.core.security.jwt import validate_breeze_user
 from app.core.transport.http_client import create_aiohttp_session
 
 # Database imports
@@ -124,10 +125,19 @@ app.include_router(
 
 # Pipecat bot endpoint
 @app.post("/agent/voice/automatic")
-async def bot_connect(request: AutomaticVoiceUserConnectRequest) -> Dict[str, Any]:
+async def bot_connect(
+    request: AutomaticVoiceUserConnectRequest,
+    user_context=Depends(validate_breeze_user),
+) -> Dict[str, Any]:
     logger.info(
         f"Received new user connect request payload: {request.model_dump_json(exclude_none=True)}"
     )
+
+    if user_context:
+        logger.info(
+            f"Authenticated user: {user_context['email']} (merchant: {user_context['merchantId']})"
+        )
+
     # 1. Validate request
     raw_mode = request.mode
     euler_tok = request.eulerToken
