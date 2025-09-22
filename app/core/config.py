@@ -221,27 +221,18 @@ logger.info(f"Search grounding enabled: {ENABLE_SEARCH_GROUNDING}")
 logger.info(f"Using Gemini search result model: {GEMINI_SEARCH_RESULT_API_MODEL}")
 
 # Automatic MCP Tool Server
-AUTOMATIC_MCP_TOOL_SERVER_USAGE = (
-    os.environ.get("AUTOMATIC_MCP_TOOL_SERVER_USAGE", "false").lower() == "true"
-)
+ENABLE_BREEZE_MCP = os.environ.get("ENABLE_BREEZE_MCP", "false").lower() == "true"
 AUTOMATIC_TOOL_MCP_SERVER_URL = os.environ.get(
     "AUTOMATIC_TOOL_MCP_SERVER_URL", "https://portal.breeze.in/ai/mcp"
 )
 MCP_CLIENT_TIMEOUT = int(os.environ.get("MCP_CLIENT_TIMEOUT", 30))  # seconds
-
-_shops_for_mcp_str = os.environ.get("SHOPS_FOR_AUTOMATIC_MCP_SERVER", "")
-SHOPS_FOR_AUTOMATIC_MCP_SERVER = [
-    shop.strip() for shop in _shops_for_mcp_str.split(",") if shop.strip()
+BREEZE_MCP_ENDPOINT_PATH = os.environ.get("BREEZE_MCP_ENDPOINT_PATH", "/ai/neurolink")
+shops_for_mcp = os.environ.get("SHOPS_FOR_BREEZE_MCP", "")
+SHOPS_FOR_BREEZE_MCP = [
+    shop.strip() for shop in shops_for_mcp.split(",") if shop.strip()
 ]
 
-# Selective MCP Functions (used when AUTOMATIC_MCP_TOOL_SERVER_USAGE is true)
-_selective_mcp_functions_str = os.environ.get("SELECTIVE_MCP_FUNCTIONS", "")
-SELECTIVE_MCP_FUNCTIONS = [
-    func.strip() for func in _selective_mcp_functions_str.split(",") if func.strip()
-]
-
-logger.info(f"Shops enabled for Automatic MCP Server: {SHOPS_FOR_AUTOMATIC_MCP_SERVER}")
-logger.info(f"Selective MCP functions enabled: {SELECTIVE_MCP_FUNCTIONS}")
+logger.info(f"Shops enabled for Breeze MCP Server: {SHOPS_FOR_BREEZE_MCP}")
 
 LIGHTHOUSE_APP_URL = os.environ.get("LIGHTHOUSE_APP_URL", "http://localhost:5173")
 ENABLE_ALL_METRICS_FROM_CKH = (

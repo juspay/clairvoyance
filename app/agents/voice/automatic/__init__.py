@@ -30,8 +30,11 @@ from pipecat.transports.daily.transport import DailyParams, DailyTransport
 from app.agents.voice.automatic.features.llm_wrapper import LLMServiceWrapper
 from app.agents.voice.automatic.processors.llm_spy import handle_confirmation_response
 from app.agents.voice.automatic.services.filters.krisp.noise import NoiseFilterFromKrisp
-from app.agents.voice.automatic.services.mcp.automatic_client import MCPClient
+from app.agents.voice.automatic.services.mcp import init_breeze_mcp_tools
 from app.agents.voice.automatic.services.mem0.memory import ImprovedMem0MemoryService
+from app.agents.voice.automatic.tools.charts import (
+    tool_functions as chart_tool_functions,
+)
 from app.agents.voice.automatic.types import (
     Mode,
     TTSProvider,
@@ -120,8 +123,9 @@ async def main():
     # Initialize tools based on the mode and provided tokens
     # Only pass tokens if in live mode
 
-    use_automatic_mcp_server = config.AUTOMATIC_MCP_TOOL_SERVER_USAGE or (
-        args.shop_id and args.shop_id in config.SHOPS_FOR_AUTOMATIC_MCP_SERVER
+    use_breeze_mcp_server = config.ENABLE_BREEZE_MCP and (
+        not config.SHOPS_FOR_BREEZE_MCP  # Empty list = all shops
+        or args.shop_id in config.SHOPS_FOR_BREEZE_MCP  # Specific shops only
     )
 
     # Personalize the system prompt if a user name is provided
@@ -203,7 +207,7 @@ async def main():
         )
     )
 
-    if not use_automatic_mcp_server:
+    if not use_breeze_mcp_server:
         if mode == Mode.LIVE:
             tools, tool_functions = initialize_tools(
                 mode=mode.value,
@@ -244,24 +248,15 @@ async def main():
             "merchantId": args.merchant_id,
             "platformIntegrations": args.platform_integrations,
         }
-        # Calculate MCP URL based on reseller_id
-        base_url = get_breeze_portal_url(args.reseller_id)
-        mcp_url = f"{base_url}/ai/mcp"
 
-        mcp_client = MCPClient(
-            server_url=mcp_url,
-            auth_token=args.breeze_token,
-            context=mcp_context,
-            session_context=session_context,
-            enable_chart=config.ENABLE_CHARTS,
+        tools = await init_breeze_mcp_tools(
+            llm=llm,
+            mcp_context=mcp_context,
+            breeze_token=args.breeze_token,
+            reseller_id=args.reseller_id,
+            mode=mode,
+            args=args,
         )
-
-        selective_functions = (
-            config.SELECTIVE_MCP_FUNCTIONS
-            if len(config.SELECTIVE_MCP_FUNCTIONS) > 0
-            else []
-        )
-        tools = await mcp_client.register_tools(llm, selective_functions)
 
     rtvi = RTVIProcessor(config=RTVIConfig(config=[]))
 
@@ -272,13 +267,16 @@ async def main():
         if tts_provider == TTSProvider.GOOGLE:
             for function_call in function_calls:
                 # Skip "checking" message for instant functions and chart tools
-                if function_call.function_name not in [
+                instant_functions = [
                     "get_current_time",
+                    "utility__getCurrentTime",  # NeuroLink equivalent
+                    "utility__generateTimestamp",  # NeuroLink timestamp tool
                     "generate_bar_chart",
                     "generate_line_chart",
                     "generate_donut_chart",
                     "generate_single_stat_card",
-                ]:
+                ]
+                if function_call.function_name not in instant_functions:
                     phrases = [
                         "Let me check on that.",
                         "Give me a moment to do that.",

@@ -15,8 +15,7 @@ starlette>=0.27.0
 
 # Logging and environment
 python-dotenv>=1.0.0
-
-pipecat-ai[daily,google,assemblyai,silero,openai,azure,elevenlabs,noisereduce,mem0,aic,anthropic,deepgram,soniox]
+pipecat-ai[daily,google,assemblyai,silero,openai,azure,elevenlabs,noisereduce,mem0,aic,anthropic,deepgram,soniox,mcp]
 pipecat-ai-flows
 
 numpy
