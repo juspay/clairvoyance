@@ -201,7 +201,7 @@ SONIOX_LANGUAGE_HINTS = os.environ.get(
 )  # Language hints for transcription (comma-separated: en,hi,es)
 SONIOX_CONTEXT = os.environ.get(
     "SONIOX_CONTEXT",
-    "PSR, GMV, UPI, ROAS, AOV, RTO, COD, Sales, Cart, Abandonment, Sales, Split, What",
+    "PSR, GMV, UPI, ROAS, AOV, RTO, COD, Sales, Cart, Abandonment, Sales, Split, What, Yesterday",
 )  # Business context for better transcription of domain-specific terms
 SONIOX_ENABLE_NON_FINAL_TOKENS = (
     os.environ.get("SONIOX_ENABLE_NON_FINAL_TOKENS", "false").lower() == "true"
