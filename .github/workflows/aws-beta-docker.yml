@@ -3,7 +3,7 @@ name: Build & Push Docker Image to AWS ECR (Beta)
 on:
   push:
     branches:
-      - beta   # triggers when you push to release branch
+      - beta   # triggers when you push to beta branch
 
 permissions:
   id-token: write   # required for AWS OIDC
@@ -25,7 +25,7 @@ jobs:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: arn:aws:iam::225681119357:role/breeze-test-role   # <-- create this in AWS Beta
+          role-to-assume: arn:aws:iam::701342709052:role/breeze-clairvoyance-ecr-role 
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Login to Amazon ECR
