@@ -222,9 +222,6 @@ logger.info(f"Using Gemini search result model: {GEMINI_SEARCH_RESULT_API_MODEL}
 
 # Automatic MCP Tool Server
 ENABLE_BREEZE_MCP = os.environ.get("ENABLE_BREEZE_MCP", "false").lower() == "true"
-AUTOMATIC_TOOL_MCP_SERVER_URL = os.environ.get(
-    "AUTOMATIC_TOOL_MCP_SERVER_URL", "https://portal.breeze.in/ai/mcp"
-)
 MCP_CLIENT_TIMEOUT = int(os.environ.get("MCP_CLIENT_TIMEOUT", 30))  # seconds
 BREEZE_MCP_ENDPOINT_PATH = os.environ.get("BREEZE_MCP_ENDPOINT_PATH", "/ai/neurolink")
 shops_for_mcp = os.environ.get("SHOPS_FOR_BREEZE_MCP", "")

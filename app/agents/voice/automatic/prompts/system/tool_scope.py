@@ -25,7 +25,7 @@ def get_tool_scope_instrucations() -> str:
                 c) Present the data with "Here is your [data type] for today: [data]"
                 d) ONLY AFTER showing the data, ask: "Do you want me to fetch for any other specific timeframe?"
                 - **DO NOT ASK FIRST** - Always fetch today's data automatically
-                - Example: User: "get my sales data" → call get_current_time, then breeze-analytics__SalesDetailedBreakdownInsights with today's date, then say "Here is your sales data for today: [shows data]. Do you want me to fetch for any other specific timeframe?"
+                - Example: User: "get my sales data", fetch data accordingly, and say "Here is your sales data for today: [shows data]. Do you want me to fetch for any other specific timeframe?"
             3. Resolve "Today" Explicitly
                 For any tool call requiring a relative date or time range, first invoke `get_current_time` and use that exact timestamp to disambiguate relative terms like "today," "this week," or "last month."
                 When a user asks for data for the "last X days", the period is inclusive of today. The start date should be calculated by subtracting (X-1) days from today's date. For example:
