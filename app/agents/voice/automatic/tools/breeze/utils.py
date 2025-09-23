@@ -12,6 +12,9 @@ from urllib.parse import urlparse
 import httpx
 
 from app.core.config import (
+    AWS_VAYU_READ_API_KEY,
+    AWS_VAYU_URL,
+    AWS_VAYU_WRITE_API_KEY,
     DEFAULT_ANNOUNCEMENT_BANNER_BACKGROUND_COLOR,
     DEFAULT_ANNOUNCEMENT_BANNER_TEXT_COLOR,
     LIGHTHOUSE_APP_URL,
@@ -20,6 +23,59 @@ from app.core.logger import logger
 from app.core.transport.http_client import create_http_client
 
 from ..utils import _rupees_to_paisa
+
+async def call_vayu(
+    method: str,
+    endpoint: str,
+    session_id: Optional[str] = None,
+    request_id: Optional[str] = None,
+    payload: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """
+    Generic function to make requests to the Vayu API.
+    """
+    url = f"{AWS_VAYU_URL}{endpoint}"
+
+    is_write_operation = method.upper() in ["POST", "PUT", "PATCH", "DELETE"]
+
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": (
+            AWS_VAYU_WRITE_API_KEY if is_write_operation else AWS_VAYU_READ_API_KEY
+        ),
+    }
+
+    if session_id:
+        headers["X-Session-Id"] = session_id
+    if request_id:
+        headers["X-Request-Id"] = request_id
+
+    logger.info(f"Making {method.upper()} request to Vayu: {url}")
+    if payload:
+        logger.info(f"Payload: {json.dumps(payload)}")
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            if method.upper() == "GET":
+                response = await client.get(url, headers=headers)
+            elif method.upper() == "POST":
+                response = await client.post(url, headers=headers, json=payload)
+            elif method.upper() == "DELETE":
+                response = await client.delete(url, headers=headers)
+            else:
+                raise ValueError(f"Unsupported HTTP method: {method}")
+
+            response.raise_for_status()
+            return response.json()
+
+    except httpx.HTTPStatusError as e:
+        logger.error(
+            f"HTTP error from Vayu {method.upper()} request: {e.response.status_code} - {e.response.text}"
+        )
+        raise ValueError(f"Vayu API error: {e.response.status_code}")
+    except Exception as e:
+        logger.error(f"Unexpected error in call_vayu: {e}")
+        raise ValueError(f"An unexpected error occurred: {e}")
 
 
 def safe_construct_url(url: str) -> Optional[urlparse]:

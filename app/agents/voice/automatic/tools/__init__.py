@@ -119,6 +119,16 @@ def initialize_tools(
                 f"Loaded {len(breeze.configuration_tools.standard_tools)} real-time Breeze configuration tools."
             )
 
+            breeze.partial_payment.shop_id = shop_id
+            breeze.partial_payment.breeze_token = breeze_token
+            breeze.partial_payment.session_id = session_id
+            breeze.partial_payment.client_sid = session_id
+            all_tools.extend(breeze.partial_payment_tools.standard_tools)
+            all_tool_functions.update(breeze.partial_payment_tool_functions)
+            logger.info(
+                f"Loaded {len(breeze.partial_payment_tools.standard_tools)} real-time Breeze partial payment tools."
+            )
+
     tools = ToolsSchema(standard_tools=all_tools)
 
     if AUTOMATIC_WRITE_ACTIONS_AUTHORIZED_USERS:

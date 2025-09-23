@@ -404,6 +404,11 @@ AWS_PROXY_HOST = os.environ.get("AWS_PROXY_HOST")
 AWS_PROXY_PORT = os.environ.get("AWS_PROXY_PORT")
 CLOUD_ENVIRONMENT = os.environ.get("CLOUD_ENVIRONMENT", "GCP")  # AWS, GCP, AZURE, etc.
 
+# Vayu Configuration
+AWS_VAYU_URL = get_required_env("AWS_VAYU_URL")
+AWS_VAYU_READ_API_KEY = get_required_env("AWS_VAYU_READ_API_KEY")
+AWS_VAYU_WRITE_API_KEY = get_required_env("AWS_VAYU_WRITE_API_KEY")
+
 # LangFuse Configuration
 ENABLE_LANGFUSE_PROMPTS = (
     os.environ.get("ENABLE_LANGFUSE_PROMPTS", "false").lower() == "true"
