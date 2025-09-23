@@ -148,7 +148,8 @@ class OrderConfirmationBot:
         self.order_id = call_payload.get("order_id", "N/A")
         customer_name = call_payload.get("customer_name", "Valued Customer")
         self.shop_name = call_payload.get("shop_name", "the shop")
-        self.address = call_payload.get("customer_address", "your address")
+        customer_address = call_payload.get("customer_address", "your address")
+        self.address = customer_address.replace(", India", "").strip()
         total_price = call_payload.get("total_price", 0)
         try:
             price_num = float(total_price)
@@ -364,6 +365,46 @@ class OrderConfirmationBot:
                         logger.info(
                             f"Updated database for call_id: {self.call_sid} with outcome: INTERRUPTED"
                         )
+                        summary_data = {
+                            "callSid": self.call_sid,
+                            "outcome": (
+                                LeadCallOutcome.BUSY
+                                if self.outcome == "unknown"
+                                else OUTCOME_TO_ENUM.get(self.outcome)
+                            ),
+                            "orderId": self.order_id,
+                        }
+                        if self.reporting_webhook_url:
+                            try:
+                                payload = json.dumps(summary_data).replace(" ", "")
+                                signature = calculate_hmac_sha256(
+                                    payload, ORDER_CONFIRMATION_WEBHOOK_SECRET_KEY
+                                )
+                                headers = {
+                                    "Content-Type": "application/json",
+                                }
+
+                                if signature:
+                                    headers["checksum"] = signature
+
+                                async with self.aiohttp_session.post(
+                                    self.reporting_webhook_url,
+                                    json=summary_data,
+                                    headers=headers,
+                                ) as response:
+                                    if response.status == 200:
+                                        logger.info(
+                                            "Successfully sent call summary webhook on disconnect."
+                                        )
+                                    else:
+                                        response_text = await response.text()
+                                        logger.error(
+                                            f"Failed to send call summary webhook on disconnect. Status: {response.status}, Body: {response_text}"
+                                        )
+                            except Exception as e:
+                                logger.error(
+                                    f"Error sending webhook on disconnect: {e}"
+                                )
                     else:
                         logger.warning(
                             "No call_id found, skipping database update on disconnect."
@@ -433,9 +474,9 @@ class OrderConfirmationBot:
             update_city() - Call this if the customer wants to update the city in their address.
             update_locality() - Call this if the customer wants to update the locality in their address.
 
-            ⚠️ You must not use any features other than the ones listed above. If the customer says anything unrelated to these functions, always call handle_unrelated_question().
+            ⚠️ You must not use any features other than the ones listed above. If the customer says anything unrelated to these functions, always call the function handle_unrelated_question().
             
-            Your only role is to confirm or cancel this specific order. If the user asks about anything else (e.g. product details, delivery times, other products), you MUST call `handle_unrelated_question()` immediately. Do not try to answer these questions yourself.
+            Your only role is to confirm or cancel this specific order. If the user asks about anything else (e.g. product details, delivery times, other products), you MUST call the function `handle_unrelated_question()` immediately. Do not try to answer these questions yourself.
         """
 
     async def _end_conversation_handler(self, flow_manager, args):
