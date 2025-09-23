@@ -36,6 +36,22 @@ RESPONSE_MODALITY = os.environ.get("RESPONSE_MODALITY", "AUDIO")
 # Pipecat Agent Configuration
 DAILY_API_KEY = get_required_env("DAILY_API_KEY")
 DAILY_API_URL = os.environ.get("DAILY_API_URL", "https://api.daily.co/v1")
+
+# Daily.co API Performance Optimization
+DAILY_API_TIMEOUT = int(os.environ.get("DAILY_API_TIMEOUT", 30))  # seconds
+DAILY_API_CONNECTION_POOL_SIZE = int(os.environ.get("DAILY_API_CONNECTION_POOL_SIZE", 20))
+DAILY_API_KEEPALIVE_TIMEOUT = int(os.environ.get("DAILY_API_KEEPALIVE_TIMEOUT", 60))  # seconds
+
+# Daily.co Room Pool Configuration
+ROOM_POOL_ENABLED = os.environ.get("ROOM_POOL_ENABLED", "true").lower() == "true"  # Enabled for testing
+ROOM_POOL_TARGET_SIZE = int(os.environ.get("ROOM_POOL_TARGET_SIZE", 15))
+ROOM_POOL_MIN_SIZE = int(os.environ.get("ROOM_POOL_MIN_SIZE", 5))
+ROOM_POOL_MAX_SIZE = int(os.environ.get("ROOM_POOL_MAX_SIZE", 50))
+ROOM_EXPIRY_BUFFER_MINUTES = int(os.environ.get("ROOM_EXPIRY_BUFFER_MINUTES", 2))
+
+# Room Pool Gradual Rollout
+ROOM_POOL_GRADUAL_ROLLOUT = os.environ.get("ROOM_POOL_GRADUAL_ROLLOUT", "false").lower() == "true"
+ROOM_POOL_ROLLOUT_PERCENTAGE = int(os.environ.get("ROOM_POOL_ROLLOUT_PERCENTAGE", 0))
 AZURE_OPENAI_API_KEY = get_required_env("AZURE_OPENAI_API_KEY")
 AZURE_OPENAI_ENDPOINT = get_required_env("AZURE_OPENAI_ENDPOINT")
 AZURE_OPENAI_MODEL = os.environ.get("AZURE_OPENAI_MODEL", "gpt-4o-automatic")

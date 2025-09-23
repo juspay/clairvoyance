@@ -27,6 +27,9 @@ from app.core.config import (
     HOST,
     MAX_DAILY_SESSION_LIMIT,
     PORT,
+    ROOM_POOL_ENABLED,
+    ROOM_POOL_GRADUAL_ROLLOUT,
+    ROOM_POOL_ROLLOUT_PERCENTAGE,
 )
 
 # Import necessary components from the new structure
@@ -44,6 +47,9 @@ bot_procs = {}
 
 # Store Daily API helpers
 daily_helpers = {}
+
+# Global room pool instance
+room_pool = None
 
 
 def cleanup():
@@ -71,10 +77,72 @@ def cleanup():
     logger.info("All bot processes have been handled.")
 
 
+async def _get_room_and_token_simple(session_id: str, client_session_id: str, metadata: Dict[str, Any]) -> tuple[str, str]:
+    """Simple room+token retrieval from pool or fallback"""
+    global room_pool
+
+    if room_pool and ROOM_POOL_ENABLED:
+        try:
+            return await room_pool.get_room_and_token(session_id)
+        except Exception as e:
+            logger.error(f"Pool failed for {session_id}: {e}")
+            # Fall through to direct creation
+
+    # Direct creation (original fallback logic)
+    return await _create_room_and_token_direct(session_id, client_session_id, metadata)
+
+
+async def _create_room_and_token_direct(session_id: str, client_session_id: str = None, metadata: Dict[str, Any] = None) -> tuple[str, str]:
+    """Direct room+token creation (fallback)"""
+    logger.info(f"Creating room and token directly for session {session_id}")
+
+    try:
+        # Create room
+        room_params = DailyRoomParams(
+            properties=DailyRoomProperties(
+                exp=time.time() + MAX_DAILY_SESSION_LIMIT,
+                eject_at_room_exp=True,
+                enable_recording="cloud" if ENABLE_AUTOMATIC_DAILY_RECORDING else None,
+            )
+        )
+
+        room = await daily_helpers["rest"].create_room(params=room_params)
+
+        # Generate token with proper structure
+        token_params = DailyMeetingTokenParams(
+            properties=DailyMeetingTokenProperties(
+                user_id=session_id,
+                user_name=client_session_id or session_id,
+                eject_after_elapsed=MAX_DAILY_SESSION_LIMIT,
+                is_owner=True,
+                # Note: Custom metadata removed from permissions to avoid Daily.co API errors
+                # session_id, client_id are tracked via user_id and user_name fields
+            )
+        )
+
+        token = await daily_helpers["rest"].get_token(
+            room.url,
+            expiry_time=MAX_DAILY_SESSION_LIMIT,
+            eject_at_token_exp=True,
+            owner=True,
+            params=token_params
+        )
+
+        logger.bind(session_id=session_id, room_url=room.url).info("Room and token created directly")
+        return room.url, token
+
+    except Exception as e:
+        logger.error(f"Failed to create room and token for session {session_id}: {e}")
+        raise Exception(f"Unable to create Daily.co room and token: {str(e)}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """FastAPI lifespan manager that handles startup and shutdown tasks."""
-    logger.info("Application startup...")
+    global room_pool
+
+    logger.info("" \
+    "...")
 
     # Initialize database and create tables if needed
     try:
@@ -91,9 +159,32 @@ async def lifespan(app: FastAPI):
     )
     logger.info("Daily REST helper initialized with proxy support.")
 
+    # Initialize simplified room pool if enabled
+    if ROOM_POOL_ENABLED:
+        try:
+            from app.services.daily_room_pool import SimpleDailyRoomPool
+            room_pool = SimpleDailyRoomPool(daily_helpers["rest"])
+            await room_pool.start()
+            logger.info("Simplified room pool service started successfully")
+        except Exception as e:
+            logger.error(f"Failed to start room pool service: {e}")
+            logger.warning("Continuing without room pool - will use direct room creation")
+            room_pool = None
+    else:
+        logger.info("Room pool service disabled via configuration")
+
     yield
 
     logger.info("Application shutdown event triggered...")
+
+    # Stop room pool service
+    if room_pool:
+        try:
+            await room_pool.stop()
+            logger.info("Room pool service stopped")
+        except Exception as e:
+            logger.error(f"Error stopping room pool service: {e}")
+
     # Cleanup bot processes
     cleanup()
     # Close database pool
@@ -143,36 +234,7 @@ async def bot_connect(request: AutomaticVoiceUserConnectRequest) -> Dict[str, An
     platform_integrations = request.platformIntegrations
     reseller_id = request.resellerId
 
-    # 2. Create room + token
-
-    daily_room_properties = DailyRoomProperties(
-        exp=time.time() + MAX_DAILY_SESSION_LIMIT,
-        eject_at_room_exp=True,
-    )
-
-    # Enable recording only if configured
-    if ENABLE_AUTOMATIC_DAILY_RECORDING:
-        daily_room_properties.enable_recording = "cloud"
-
-    room = await daily_helpers["rest"].create_room(
-        params=DailyRoomParams(properties=daily_room_properties)
-    )
-
-    token_params = DailyMeetingTokenParams(
-        properties=DailyMeetingTokenProperties(
-            eject_after_elapsed=MAX_DAILY_SESSION_LIMIT,
-        )
-    )
-
-    token = await daily_helpers["rest"].get_token(
-        room.url,
-        expiry_time=MAX_DAILY_SESSION_LIMIT,
-        eject_at_token_exp=True,
-        owner=True,
-        params=token_params,
-    )
-
-    # 3. Generate unique session ID and client session ID for this subprocess
+    # 2. Generate unique session ID and client session ID for this subprocess
     session_id = str(uuid.uuid4())  # Always generate random session ID
     client_sid = request.sessionId or str(
         uuid.uuid4()
@@ -184,6 +246,17 @@ async def bot_connect(request: AutomaticVoiceUserConnectRequest) -> Dict[str, An
         f"Using client session ID for new voice agent: {client_sid}"
     )
 
+    # 3. Get room and token (using simplified pool or fallback)
+    room_url, token = await _get_room_and_token_simple(session_id, client_sid, {
+        "user_email": user_email,
+        "user_name": user_name,
+        "shop_id": shop_id,
+        "shop_type": shop_type,
+        "merchant_id": merchant_id,
+        "mode": raw_mode,
+        "reseller_id": reseller_id,
+    })
+
     # 4. Build command args list
     bot_file = "app.agents.voice.automatic"
     cmd = [
@@ -191,7 +264,7 @@ async def bot_connect(request: AutomaticVoiceUserConnectRequest) -> Dict[str, An
         "-m",
         bot_file,
         "-u",
-        room.url,
+        room_url,
         "-t",
         token,
         "--mode",
@@ -238,10 +311,10 @@ async def bot_connect(request: AutomaticVoiceUserConnectRequest) -> Dict[str, An
         cwd=Path(__file__).parent.parent,
         bufsize=1,
     )
-    bot_procs[proc.pid] = (proc, room.url)
+    bot_procs[proc.pid] = (proc, room_url)
     logger.bind(session_id=session_id).info(f"Subprocess started with PID: {proc.pid}")
 
-    return {"room_url": room.url, "token": token}
+    return {"room_url": room_url, "token": token}
 
 
 # Serve client.html at the root
@@ -299,6 +372,103 @@ async def database_health_check():
 async def get_version():
     """Get application version."""
     return JSONResponse({"version": __version__})
+
+
+# Simplified room pool health check endpoints
+@app.get("/health/room-pool")
+async def simple_room_pool_health():
+    """Simple room pool health check"""
+    if not ROOM_POOL_ENABLED or not room_pool:
+        return JSONResponse({
+            "status": "disabled",
+            "pool_enabled": False
+        })
+
+    try:
+        stats = room_pool.get_stats()
+        current_size = room_pool.ready_rooms.qsize()
+
+        status = stats.health_status
+        warnings = []
+
+        if current_size == 0:
+            warnings.append("No rooms available in pool")
+        elif current_size < 3:
+            warnings.append("Low room availability")
+
+        return JSONResponse({
+            "status": status,
+            "pool_size": current_size,
+            "target_size": room_pool.config.target_pool_size,
+            "pool_hit_rate_pct": round(stats.pool_hit_rate, 2),
+            "stats": {
+                "rooms_created": stats.rooms_created,
+                "rooms_served": stats.rooms_served,
+                "fallback_used": stats.fallback_used,
+                "creation_errors": stats.creation_errors,
+                "expired_cleaned": stats.expired_cleaned,
+                "uptime_hours": round(stats.uptime_hours, 2)
+            },
+            "warnings": warnings,
+            "timestamp": time.time()
+        })
+
+    except Exception as e:
+        return JSONResponse(
+            status_code=503,
+            content={"status": "error", "message": str(e)}
+        )
+
+
+@app.get("/health/room-pool/metrics")
+async def simple_room_pool_metrics():
+    """Get basic room pool metrics"""
+    if not ROOM_POOL_ENABLED or not room_pool:
+        return JSONResponse(
+            status_code=404,
+            content={"error": "Room pool service not available"}
+        )
+
+    try:
+        stats = room_pool.get_stats()
+        metrics_dict = room_pool.metrics.get_stats_dict()
+
+        return JSONResponse({
+            "pool_stats": {
+                "current_size": room_pool.ready_rooms.qsize(),
+                "target_size": room_pool.config.target_pool_size,
+                "health_status": stats.health_status,
+            },
+            "performance": {
+                "pool_hit_rate_pct": round(stats.pool_hit_rate, 2),
+                "uptime_hours": round(stats.uptime_hours, 2),
+            },
+            "counters": metrics_dict,
+            "timestamp": time.time()
+        })
+
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"error": f"Failed to retrieve metrics: {str(e)}"}
+        )
+
+
+@app.get("/health/room-pool/rollout")
+async def simple_room_pool_rollout():
+    """Get simplified room pool rollout status"""
+    if not ROOM_POOL_ENABLED:
+        return JSONResponse({
+            "status": "disabled",
+            "rollout_enabled": False
+        })
+
+    return JSONResponse({
+        "status": "enabled" if ROOM_POOL_ENABLED else "disabled",
+        "rollout_enabled": ROOM_POOL_GRADUAL_ROLLOUT,
+        "rollout_percentage": ROOM_POOL_ROLLOUT_PERCENTAGE,
+        "effective_percentage": ROOM_POOL_ROLLOUT_PERCENTAGE if ROOM_POOL_GRADUAL_ROLLOUT else 100
+    })
 
 
 # The main block is now only for direct execution, which is not the recommended way.
