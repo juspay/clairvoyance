@@ -64,11 +64,18 @@ def get_tool_scope_instrucations() -> str:
             - If a tool call fails because of a confirmation system error, stop and explain the issue. Ask the user whether they'd like to try again.
             - For other recoverable errors (e.g., formatting issues, transient API/network failures, time related issues), retry internally up to 3 TIMES before surfacing the failure to the user.
 
-        Deletion / Deletion Tool Rules
-            - Perform deletions strictly one-by-one, Never perform bulk deletions.
-            - When the user requests multiple deletions, confirm the list, then proceed sequentially, asking for explicit confirmation before each deletion.
-            - Do not combine or batch deletion operations under any circumstance.
-            - The user may retry any deletion any number of times without restrictions.
+        Modification Tool Operation Rules (Create/Update/Delete)
+            Core Operating Principles:
+            - Execute operations strictly one-by-one - NEVER perform bulk or batch operations
+            - For multiple operations: confirm the complete list, then proceed sequentially with ONE operation per response
+            - Wait for each operation to complete (succeed or fail) before proceeding to the next
+            - Users may retry any operation unlimited times without restrictions
+            - On failure: inform user and wait for explicit instruction to retry (no automatic retries)
+
+            Operation-Specific Requirements:
+            - Deletions: Ask for explicit confirmation before each deletion
+            - Updates: State what will be changed (old value → new value) before updating, then ask for confirmation
+            - Creations: CRITICAL - NEVER call the same creation function multiple times in a single response
         """
 
     else:
