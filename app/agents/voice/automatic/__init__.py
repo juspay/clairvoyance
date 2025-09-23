@@ -26,6 +26,9 @@ from pipecat.processors.frameworks.rtvi import RTVIConfig, RTVIProcessor
 from pipecat.services.azure.llm import AzureLLMService
 from pipecat.services.google.rtvi import GoogleRTVIObserver
 from pipecat.transports.daily.transport import DailyParams, DailyTransport
+from pipecat.utils.tracing.conversation_context_provider import (
+    ConversationContextProvider,
+)
 
 from app.agents.voice.automatic.features.llm_wrapper import LLMServiceWrapper
 from app.agents.voice.automatic.processors.llm_spy import handle_confirmation_response
@@ -535,6 +538,16 @@ async def main():
                     )
                 ],
             )
+
+            # Set Pipecat conversation context for proper tool call nesting
+            provider = ConversationContextProvider.get_instance()
+            provider.set_current_conversation_context(
+                root_span.get_span_context(), conversation_id
+            )
+            logger.info(
+                f"Set Pipecat conversation context with span ID: {root_span.get_span_context().span_id}"
+            )
+
             await run_pipeline()
     else:
         await run_pipeline()
