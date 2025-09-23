@@ -7,7 +7,12 @@ from typing import Optional
 
 from langfuse import Langfuse
 
-from app.core.config import LANGFUSE_BASEURL, LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY
+from app.core.config import (
+    ENABLE_LANGFUSE_PROMPTS,
+    LANGFUSE_BASEURL,
+    LANGFUSE_PUBLIC_KEY,
+    LANGFUSE_SECRET_KEY,
+)
 from app.core.logger import logger
 
 
@@ -23,6 +28,12 @@ class LangFuseClient:
     def _initialize_client(self) -> None:
         """Initialize the LangFuse client with error handling."""
         try:
+            if not ENABLE_LANGFUSE_PROMPTS:
+                logger.debug(
+                    "LangFuse prompts are disabled. Skipping client initialization."
+                )
+                return
+
             if not LANGFUSE_SECRET_KEY or not LANGFUSE_PUBLIC_KEY:
                 logger.warning("LangFuse credentials not found, using fallback prompts")
                 return
