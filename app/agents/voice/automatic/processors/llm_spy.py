@@ -17,10 +17,14 @@ from pipecat.frames.frames import (
     LLMFullResponseStartFrame,
     LLMTextFrame,
     TextFrame,
+    UserStartedSpeakingFrame,
 )
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.processors.frameworks.rtvi import RTVIProcessor, RTVIServerMessageFrame
 
+from app.agents.voice.automatic.features.charts.chart_tools import (
+    reset_chart_turn_count,
+)
 from app.agents.voice.automatic.features.charts.rtvi.rtvi import emit_chart_components
 from app.agents.voice.automatic.rtvi.rtvi import emit_rtvi_event
 from app.agents.voice.automatic.utils.conversation_manager import (
@@ -164,6 +168,10 @@ class LLMSpyProcessor(FrameProcessor):
                 )
             else:
                 await self.push_frame(frame, direction)
+
+        elif isinstance(frame, UserStartedSpeakingFrame) and self._enable_charts:
+            reset_chart_turn_count(self._session_id)
+            await self.push_frame(frame, direction)
 
         # LLM Response Start - begin collecting text and start conversation turn
         elif isinstance(frame, LLMFullResponseStartFrame) and self._enable_charts:

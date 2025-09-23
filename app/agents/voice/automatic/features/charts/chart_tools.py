@@ -16,14 +16,56 @@ from app.agents.voice.automatic.features.charts.utils.highlight_parser import (
     HighlightTagParser,
 )
 from app.agents.voice.automatic.utils.session_context import get_current_session_id
+from app.core import config
 from app.core.logger import logger
 
 # Color constants matching MCP implementation
 DEFAULT_COLORS = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b"]
 DONUT_COLORS = ["#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b", "#e377c2"]
 
-# Global registry for pending chart emissions
-_pending_chart_emissions: Dict[str, List[Dict[str, Any]]] = {}
+
+class ChartTurnManager:
+    """Manages chart emission tracking per session to enforce turn limits."""
+
+    def __init__(self):
+        self._pending_chart_emissions: Dict[str, List[Dict[str, Any]]] = {}
+        self._chart_turn_counts: Dict[str, int] = {}
+
+    def reset_chart_turn_count(self, session_id: str) -> None:
+        """Reset the chart count for a new LLM turn."""
+        self._chart_turn_counts[session_id] = 0
+
+    def register_pending_chart_emission(
+        self, session_id: str, component_data: Dict[str, Any]
+    ) -> None:
+        """
+        Register a chart component for RTVI emission.
+        """
+        if session_id not in self._chart_turn_counts:
+            self._chart_turn_counts[session_id] = 0
+
+        if self._chart_turn_counts[session_id] >= config.MAX_CHARTS_PER_TURN:
+            logger.warning(
+                f"[{session_id}] Silently rejecting chart '{component_data.get('props', {}).get('title', 'Unknown')}' - "
+                f"maximum {config.MAX_CHARTS_PER_TURN} charts per turn exceeded (count: {self._chart_turn_counts[session_id] + 1})"
+            )
+            return
+
+        self._chart_turn_counts[session_id] += 1
+
+        if session_id not in self._pending_chart_emissions:
+            self._pending_chart_emissions[session_id] = []
+        self._pending_chart_emissions[session_id].append(component_data)
+
+    def get_pending_chart_emissions(self, session_id: str) -> List[Dict[str, Any]]:
+        """Get and clear pending chart emissions for a session."""
+        charts = self._pending_chart_emissions.get(session_id, [])
+        if session_id in self._pending_chart_emissions:
+            del self._pending_chart_emissions[session_id]
+        return charts
+
+
+_default_chart_turn_manager = ChartTurnManager()
 
 
 def generate_chart_id(chart_type: str) -> str:
@@ -47,21 +89,23 @@ def get_pending_ui_components(session_id: str) -> List[UIComponentEvent]:
         return []
 
 
-def _register_pending_chart_emission(session_id: str, component_data: Dict[str, Any]):
-    """Register a chart component for RTVI emission"""
-    global _pending_chart_emissions
-    if session_id not in _pending_chart_emissions:
-        _pending_chart_emissions[session_id] = []
-    _pending_chart_emissions[session_id].append(component_data)
+def reset_chart_turn_count(session_id: str) -> None:
+    """Reset the chart count for a new LLM turn."""
+    _default_chart_turn_manager.reset_chart_turn_count(session_id)
+
+
+def _register_pending_chart_emission(
+    session_id: str, component_data: Dict[str, Any]
+) -> None:
+    """Register a chart component for RTVI emission."""
+    _default_chart_turn_manager.register_pending_chart_emission(
+        session_id, component_data
+    )
 
 
 def get_pending_chart_emissions(session_id: str) -> List[Dict[str, Any]]:
-    """Get and clear pending chart emissions for a session"""
-    global _pending_chart_emissions
-    charts = _pending_chart_emissions.get(session_id, [])
-    if session_id in _pending_chart_emissions:
-        del _pending_chart_emissions[session_id]
-    return charts
+    """Get and clear pending chart emissions for a session."""
+    return _default_chart_turn_manager.get_pending_chart_emissions(session_id)
 
 
 async def generate_bar_chart(params) -> None:

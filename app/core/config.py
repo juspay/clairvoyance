@@ -334,6 +334,7 @@ HITL_ACTIONS = [
 
 # Chart Generation Configuration
 ENABLE_CHARTS = os.environ.get("ENABLE_CHARTS", "false").lower() == "true"
+MAX_CHARTS_PER_TURN = int(os.environ.get("MAX_CHARTS_PER_TURN", "1"))
 
 # PTT VAD Filter Configuration
 DISABLE_VAD_FOR_PTT = os.environ.get("DISABLE_VAD_FOR_PTT", "true").lower() == "true"

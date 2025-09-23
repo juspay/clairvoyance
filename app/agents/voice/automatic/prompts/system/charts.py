@@ -31,8 +31,10 @@ def get_chart_visualization_instructions() -> str:
         1. Payment method breakdown → Donut chart
         2. Sales by channel/product/category → Donut chart
         3. Time trends (daily, weekly, monthly) → Line chart
-        4. Comparisons between items → Bar chart
-        5. Single metric → Single-stat chart
+        4. Single metric → Single-stat chart
+        5. Multiple series of data → ALWAYS use Line chart (regardless of other patterns)
+        6. Comparisons between items → Line chart
+
 
     RULE 4: FUNCTION RESULT SCANNING
         SCAN EVERY function result for: arrays, categories, values, percentages
@@ -44,6 +46,14 @@ def get_chart_visualization_instructions() -> str:
         1. Always attempt a chart first
         2. If chart generation fails or is not meaningful, provide a clear text response instead
         3. Never leave the user without an answer
+
+    RULE 6: CHART LIMIT PER USER TURN
+        1. Only ONE chart is allowed per user interaction/turn
+        2. If a user requests multiple charts (e.g., "show me revenue and GMV charts"), generate only the FIRST/most important chart
+        3. Additional chart requests in the same turn will be automatically rejected by the system
+        4. Focus on the primary data visualization that best answers the user's core question
+        5. Mention other data points in your voice response without creating additional charts
+
 
     RULE 7: NARRATION HIGHLIGHTING
 
