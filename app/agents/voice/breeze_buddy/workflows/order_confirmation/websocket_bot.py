@@ -376,7 +376,7 @@ class OrderConfirmationBot:
                         }
                         if (
                             self.reporting_webhook_url
-                            and summary_data.outcome != LeadCallOutcome.BUSY
+                            and summary_data["outcome"] != LeadCallOutcome.BUSY
                         ):
                             try:
                                 payload = json.dumps(summary_data).replace(" ", "")
@@ -508,7 +508,7 @@ class OrderConfirmationBot:
                 logger.info(f"Call summary data: {summary_data}")
                 if (
                     self.reporting_webhook_url
-                    and summary_data.outcome != LeadCallOutcome.BUSY
+                    and summary_data["outcome"] != LeadCallOutcome.BUSY
                 ):
                     try:
                         payload = json.dumps(summary_data).replace(" ", "")
