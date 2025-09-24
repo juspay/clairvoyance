@@ -76,6 +76,12 @@ ELEVENLABS_BB_VOICE_ID = os.environ.get(
 GOOGLE_BRET_VOICE = os.environ.get("GOOGLE_BRET_VOICE", "en-IN-Chirp3-HD-Sadaltager")
 GOOGLE_MIA_VOICE = os.environ.get("GOOGLE_MIA_VOICE", "en-IN-Chirp3-HD-Despina")
 
+# Tool Call Sound Configuration
+ENABLE_TOOL_CALL_SOUND = (
+    os.environ.get("ENABLE_TOOL_CALL_SOUND", "false").lower() == "true"
+)
+TOOL_CALL_SOUND_FILE = os.environ.get("TOOL_CALL_SOUND_FILE", "assets/sounds/think.wav")
+
 # WebSocket keepalive settings
 PING_INTERVAL = int(os.environ.get("WS_PING_INTERVAL", 5))  # seconds
 PING_TIMEOUT = int(os.environ.get("WS_PING_TIMEOUT", 10))  # seconds

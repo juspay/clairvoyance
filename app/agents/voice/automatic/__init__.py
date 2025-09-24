@@ -2,6 +2,7 @@ import argparse
 import asyncio
 import os
 import random
+import wave
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -17,6 +18,7 @@ from pipecat.frames.frames import (
     EmulateUserStartedSpeakingFrame,
     EmulateUserStoppedSpeakingFrame,
     LLMFullResponseEndFrame,
+    OutputAudioRawFrame,
     TTSSpeakFrame,
 )
 from pipecat.pipeline.pipeline import Pipeline
@@ -65,6 +67,17 @@ from .types import (
 )
 
 load_dotenv(override=True)
+
+# Load tool call sound
+tool_call_sound = None
+if config.ENABLE_TOOL_CALL_SOUND and os.path.exists(config.TOOL_CALL_SOUND_FILE):
+    with wave.open(config.TOOL_CALL_SOUND_FILE) as audio_file:
+        tool_call_sound = OutputAudioRawFrame(
+            audio_file.readframes(-1),
+            audio_file.getframerate(),
+            audio_file.getnchannels(),
+        )
+
 
 # import setup_tracing from tracing_setup.py file
 from app.agents.voice.automatic.analytics.tracing_setup import setup_tracing
@@ -277,17 +290,21 @@ async def main():
                     "generate_single_stat_card",
                 ]
                 if function_call.function_name not in instant_functions:
-                    phrases = [
-                        "Let me check on that.",
-                        "Give me a moment to do that.",
-                        "I'll get right on that.",
-                        "Working on that for you.",
-                        "One moment — I'm on it",
-                        "One second, boss.",
-                        "On it, boss!",
-                        "Just a second, captain.",
-                    ]
-                    await tts.queue_frame(TTSSpeakFrame(random.choice(phrases)))
+                    # Play tool call sound if enabled, otherwise use phrases
+                    if tool_call_sound:
+                        await transport.send_audio(tool_call_sound)
+                    else:
+                        phrases = [
+                            "Let me check on that.",
+                            "Give me a moment to do that.",
+                            "I'll get right on that.",
+                            "Working on that for you.",
+                            "One moment — I'm on it",
+                            "One second, boss.",
+                            "On it, boss!",
+                            "Just a second, captain.",
+                        ]
+                        await tts.queue_frame(TTSSpeakFrame(random.choice(phrases)))
                     break
 
     messages = [
