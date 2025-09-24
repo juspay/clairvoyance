@@ -1,410 +1,467 @@
 import os
+from typing import List, Optional
 
 from dotenv import load_dotenv
 from loguru import logger
 
+# --- Initial Setup ---
 load_dotenv()
 
-# --- Configuration ---
 
-
-# A helper function to get a required environment variable
-def get_required_env(var_name: str) -> str:
+def _get_required_env(var_name: str) -> str:
+    """A private helper to retrieve a required environment variable."""
     value = os.environ.get(var_name)
     if not value:
-        logger.error(f"{var_name} environment variable is required")
-        raise ValueError(f"{var_name} environment variable is required")
+        error_msg = f"{var_name} environment variable is required"
+        logger.error(error_msg)
+        raise ValueError(error_msg)
     return value
 
 
-# Environment
-ENVIRONMENT = os.environ.get("ENVIRONMENT", "production")
-PROD_LOG_LEVEL = os.environ.get("PROD_LOG_LEVEL", "INFO")
-APP_BASE_URL = os.environ.get("APP_BASE_URL", "")
+class Config:
+    """
+    Centralized application config, loaded from environment variables.
+    Configurations are grouped by functionality in nested classes.
+    """
 
-# Uvicorn
-PORT = int(os.environ.get("PORT", 8000))
-HOST = os.environ.get("HOST", "0.0.0.0")
-UVICORN_RELOAD = os.environ.get("UVICORN_RELOAD", "true").lower() == "true"
-UVICORN_LOG_LEVEL = os.environ.get("UVICORN_LOG_LEVEL", "info")
+    class Server:
+        """Uvicorn server settings."""
 
-# Gemini Proxy Configuration
-GEMINI_API_KEY = get_required_env("GEMINI_API_KEY")
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash-live-001")
-RESPONSE_MODALITY = os.environ.get("RESPONSE_MODALITY", "AUDIO")
+        PORT: int = int(os.environ.get("PORT", 8000))
+        HOST: str = os.environ.get("HOST", "0.0.0.0")
+        UVICORN_RELOAD: bool = (
+            os.environ.get("UVICORN_RELOAD", "true").lower() == "true"
+        )
+        UVICORN_LOG_LEVEL: str = os.environ.get("UVICORN_LOG_LEVEL", "info")
+        ENVIRONMENT: str = os.environ.get("ENVIRONMENT", "production")
+        APP_BASE_URL: str = os.environ.get("APP_BASE_URL", "")
+        CLOUD_ENVIRONMENT: str = os.environ.get("CLOUD_ENVIRONMENT", "GCP")
 
-# Pipecat Agent Configuration
-DAILY_API_KEY = get_required_env("DAILY_API_KEY")
-DAILY_API_URL = os.environ.get("DAILY_API_URL", "https://api.daily.co/v1")
-AZURE_OPENAI_API_KEY = get_required_env("AZURE_OPENAI_API_KEY")
-AZURE_OPENAI_ENDPOINT = get_required_env("AZURE_OPENAI_ENDPOINT")
-AZURE_OPENAI_MODEL = os.environ.get("AZURE_OPENAI_MODEL", "gpt-4o-automatic")
-GOOGLE_CREDENTIALS_JSON = get_required_env("GOOGLE_CREDENTIALS_JSON")
-ENABLE_NOISE_REDUCE_FILTER = (
-    os.environ.get("ENABLE_NOISE_REDUCE_FILTER", "true").lower() == "true"
-)
-ENABLE_AIC_FILTER = os.environ.get("ENABLE_AIC_FILTER", "false").lower() == "true"
-AICOUSTICS_LICENSE_KEY = os.environ.get("AICOUSTICS_LICENSE_KEY", "")
+    class Logging:
+        """Logging, tracing, and observability settings."""
 
-# AIC Filter Parameters (simplified for tuning)
-AIC_ENHANCEMENT_LEVEL = float(os.environ.get("AIC_ENHANCEMENT_LEVEL", "1.0"))
-AIC_VOICE_GAIN = float(os.environ.get("AIC_VOICE_GAIN", "1.2"))
-AIC_NOISE_GATE_ENABLE = (
-    os.environ.get("AIC_NOISE_GATE_ENABLE", "true").lower() == "true"
-)
+        PROD_LOG_LEVEL: str = os.environ.get("PROD_LOG_LEVEL", "INFO")
+        ENABLE_TRACING: bool = (
+            os.environ.get("ENABLE_TRACING", "false").lower() == "true"
+        )
+        OPEN_OBSERVE_BASE_URL: str = os.environ.get(
+            "OPEN_OBSERVE_BASE_URL", "https://periscope.breeze.in"
+        )
 
-# Krisp Audio Filter Configuration
-ENABLE_KRISP_FILTER = os.environ.get("ENABLE_KRISP_FILTER", "false").lower() == "true"
-KRISP_MODEL_PATH = os.environ.get(
-    "KRISP_MODEL_PATH", "/app/models/voice/krisp/krisp-viva-tel-v2.kef"
-)
+    class Langfuse:
+        ENABLE_LANGFUSE_PROMPTS: bool = (
+            os.environ.get("ENABLE_LANGFUSE_PROMPTS", "false").lower() == "true"
+        )
+        LANGFUSE_SECRET_KEY: str = os.environ.get("LANGFUSE_SECRET_KEY", "")
+        LANGFUSE_PUBLIC_KEY: str = os.environ.get("LANGFUSE_PUBLIC_KEY", "")
+        LANGFUSE_BASEURL: str = os.environ.get(
+            "LANGFUSE_BASEURL", "https://us.cloud.langfuse.com"
+        )
+        AUTOMATIC_LANGFUSE_PROMPT_NAME: str = os.environ.get(
+            "AUTOMATIC_LANGFUSE_PROMPT_NAME", "AUTOMATIC_VOICE_LANGFUSE_PROMPT"
+        )
+        AUTOMATIC_LANGFUSE_SYSTEM_PROMPT_LABEL: str = os.environ.get(
+            "AUTOMATIC_LANGFUSE_SYSTEM_PROMPT_LABEL", "automatic_system_langfuse_prompt"
+        )
 
-# TTS Configuration
-ELEVENLABS_API_KEY = os.environ.get("ELEVENLABS_API_KEY")
-ELEVENLABS_VOICE_ID = os.environ.get(
-    "ELEVENLABS_VOICE_ID", "bQQWtYx9EodAqMdkrNAc"
-)  # bQQWtYx9EodAqMdkrNAc
-ELEVENLABS_RHEA_VOICE_ID = os.environ.get(
-    "ELEVENLABS_RHEA_VOICE_ID", "bQQWtYx9EodAqMdkrNAc"
-)
-ELEVENLABS_MODEL_ID = os.environ.get("ELEVENLABS_MODEL_ID", "eleven_flash_v2_5")
-ELEVENLABS_VOICE_SPEED = float(os.environ.get("ELEVENLABS_VOICE_SPEED", 1.15))
-ELEVENLABS_TTS_SPEED = float(os.environ.get("ELEVENLABS_TTS_SPEED", "1.10"))
-ELEVENLABS_BB_VOICE_ID = os.environ.get(
-    "ELEVENLABS_BB_VOICE_ID", "fG9s0SXJb213f4UxVHyG"
-)
-GOOGLE_BRET_VOICE = os.environ.get("GOOGLE_BRET_VOICE", "en-IN-Chirp3-HD-Sadaltager")
-GOOGLE_MIA_VOICE = os.environ.get("GOOGLE_MIA_VOICE", "en-IN-Chirp3-HD-Despina")
+    class AI:
+        """Core AI and Large Language Model (LLM) settings."""
 
-# Tool Call Sound Configuration
-ENABLE_TOOL_CALL_SOUND = (
-    os.environ.get("ENABLE_TOOL_CALL_SOUND", "false").lower() == "true"
-)
-TOOL_CALL_SOUND_FILE = os.environ.get("TOOL_CALL_SOUND_FILE", "assets/sounds/think.wav")
+        GEMINI_API_KEY: str = _get_required_env("GEMINI_API_KEY")
+        ENABLE_SEARCH_GROUNDING: bool = (
+            os.environ.get("ENABLE_SEARCH_GROUNDING", "true").lower() == "true"
+        )
+        GEMINI_SEARCH_RESULT_API_MODEL: str = os.environ.get(
+            "GEMINI_SEARCH_RESULT_API_MODEL", "gemini-2.5-flash-lite-preview-06-17"
+        )
+        GOOGLE_CREDENTIALS_JSON: str = _get_required_env("GOOGLE_CREDENTIALS_JSON")
+        AZURE_OPENAI_API_KEY: str = _get_required_env("AZURE_OPENAI_API_KEY")
+        AZURE_OPENAI_ENDPOINT: str = _get_required_env("AZURE_OPENAI_ENDPOINT")
+        AZURE_OPENAI_MODEL: str = os.environ.get(
+            "AZURE_OPENAI_MODEL", "gpt-4o-automatic"
+        )
 
-# WebSocket keepalive settings
-PING_INTERVAL = int(os.environ.get("WS_PING_INTERVAL", 5))  # seconds
-PING_TIMEOUT = int(os.environ.get("WS_PING_TIMEOUT", 10))  # seconds
+    class Daily:
+        """Daily framework settings."""
 
-# Juspay API configuration
-GENIUS_API_URL = "https://portal.juspay.in/api/q/query?api-type=genius-query"
-EULER_DASHBOARD_API_URL = os.environ.get(
-    "EULER_DASHBOARD_API_URL", "https://portal.juspay.in"
-)
+        DAILY_API_KEY: str = _get_required_env("DAILY_API_KEY")
+        DAILY_API_URL: str = os.environ.get("DAILY_API_URL", "https://api.daily.co/v1")
+        MAX_DAILY_SESSION_LIMIT: int = int(
+            os.environ.get("MAX_DAILY_SESSION_LIMIT", 1800)
+        )
+        ENABLE_AUTOMATIC_DAILY_RECORDING: bool = (
+            os.environ.get("ENABLE_AUTOMATIC_DAILY_RECORDING", "false").lower()
+            == "true"
+        )
 
-# VAD & framing for client-side audio chunking
-SAMPLE_RATE = 16000
-FRAME_DURATION = 30  # ms
-FRAME_SIZE = (
-    int(SAMPLE_RATE * FRAME_DURATION / 1000) * 2
-)  # bytes per frame (16-bit PCM)
-VAD_CONFIDENCE = float(os.environ.get("VAD_CONFIDENCE", 0.85))
-VAD_MIN_VOLUME = float(os.environ.get("VAD_MIN_VOLUME", 0.75))
-VAD_START_SECS = float(os.environ.get("VAD_START_SECS", 0.30))
-VAD_STOP_SECS = float(os.environ.get("VAD_STOP_SECS", 1.00))
-DISABLE_SILERO_VAD = (
-    os.environ.get("DISABLE_SILERO_VAD", "false").lower() == "true"
-)  # Disable Silero VAD (use when STT provider has built-in VAD)
+    class STT:
+        """Speech-to-Text (STT) provider settings."""
 
-# Mem0 Configuration
-MEM0_API_KEY = os.getenv("MEM0_API_KEY", "")
-MEM0_ENABLED = os.getenv("MEM0_ENABLED", "false").lower() == "true"
-MEM0_MAX_FAILURES = int(os.getenv("MEM0_MAX_FAILURES", "3"))
-MEM0_RETRY_INTERVAL = int(os.getenv("MEM0_RETRY_INTERVAL", "300"))
-MEM0_SESSION_TIMEOUT = int(os.getenv("MEM0_SESSION_TIMEOUT", "3600"))
-MEM0_MIN_MESSAGE_LENGTH = int(os.getenv("MEM0_MIN_MESSAGE_LENGTH", "10"))
+        STT_PROVIDER: str = os.environ.get("STT_PROVIDER", "google").lower()
 
-# Tracing
-ENABLE_TRACING = os.environ.get("ENABLE_TRACING", "false").lower() == "true"
-OPEN_OBSERVE_BASE_URL = os.environ.get(
-    "OPEN_OBSERVE_BASE_URL", "https://periscope.breeze.in"
-)
+        # OpenAI
+        OPENAI_STT_API_KEY: Optional[str] = os.getenv("OPENAI_STT_API_KEY")
+        OPENAI_STT_MODEL: str = os.environ.get("OPENAI_STT_MODEL", "gpt-4o-transcribe")
+        ENFORCED_OPENAI_STT_MODEL: str = os.environ.get(
+            "ENFORCED_OPENAI_STT_MODEL", "whisper-1"
+        )
+        AUTOMATIC_OPENAI_STT_PROMPT: str = os.environ.get(
+            "AUTOMATIC_OPENAI_STT_PROMPT", ""
+        )
 
-# Text sanitization
-SANITIZE_TEXT_FOR_TTS = (
-    os.environ.get("SANITIZE_TEXT_FOR_TTS", "false").lower() == "true"
-)
+        ENABLE_OPENAI_FOR_MIA: bool = (
+            os.environ.get("ENABLE_OPENAI_FOR_MIA", "false").lower() == "true"
+        )
 
-# Audio recording
-ENABLE_AUTOMATIC_DAILY_RECORDING = (
-    os.environ.get("ENABLE_AUTOMATIC_DAILY_RECORDING", "false").lower() == "true"
-)
+        # AssemblyAI
+        ASSEMBLYAI_API_KEY: Optional[str] = os.getenv("ASSEMBLYAI_API_KEY")
 
-# Search
-ENABLE_SEARCH_GROUNDING = (
-    os.environ.get("ENABLE_SEARCH_GROUNDING", "true").lower() == "true"
-)
-GEMINI_SEARCH_RESULT_API_MODEL = os.environ.get(
-    "GEMINI_SEARCH_RESULT_API_MODEL", "gemini-2.5-flash-lite-preview-06-17"
-)
+        # Deepgram
+        DEEPGRAM_API_KEY: Optional[str] = os.getenv("DEEPGRAM_API_KEY")
+        DEEPGRAM_MODEL: str = os.environ.get("DEEPGRAM_MODEL", "nova-3-general")
+        DEEPGRAM_LANGUAGE: str = os.environ.get("DEEPGRAM_LANGUAGE", "en")
+        DEEPGRAM_ENDPOINTING: bool = (
+            os.environ.get("DEEPGRAM_ENDPOINTING", "true").lower() == "true"
+        )
+        DEEPGRAM_VAD_EVENTS: bool = (
+            os.environ.get("DEEPGRAM_VAD_EVENTS", "true").lower() == "true"
+        )
+        DEEPGRAM_UTTERANCE_END_MS: int = int(
+            os.environ.get("DEEPGRAM_UTTERANCE_END_MS", "1000")
+        )
+        DEEPGRAM_NO_DELAY: bool = (
+            os.environ.get("DEEPGRAM_NO_DELAY", "true").lower() == "true"
+        )
+        DEEPGRAM_SMART_FORMAT: bool = (
+            os.environ.get("DEEPGRAM_SMART_FORMAT", "true").lower() == "true"
+        )
+        DEEPGRAM_PUNCTUATE: bool = (
+            os.environ.get("DEEPGRAM_PUNCTUATE", "true").lower() == "true"
+        )
+        DEEPGRAM_NUMERALS: bool = (
+            os.environ.get("DEEPGRAM_NUMERALS", "true").lower() == "true"
+        )
+        DEEPGRAM_PROFANITY_FILTER: bool = (
+            os.environ.get("DEEPGRAM_PROFANITY_FILTER", "false").lower() == "true"
+        )
+        DEEPGRAM_DIARIZE: bool = (
+            os.environ.get("DEEPGRAM_DIARIZE", "false").lower() == "true"
+        )
+        DEEPGRAM_AUTO_DETECT_LANGUAGE: bool = (
+            os.environ.get("DEEPGRAM_AUTO_DETECT_LANGUAGE", "false").lower() == "true"
+        )
 
-# --- STT Configuration ---
-STT_PROVIDER = os.environ.get(
-    "STT_PROVIDER", "google"
-).lower()  # "google", "assemblyai", "openai", "deepgram", or "soniox"
-ASSEMBLYAI_API_KEY = os.getenv("ASSEMBLYAI_API_KEY")
-OPENAI_STT_API_KEY = os.getenv("OPENAI_STT_API_KEY")
-OPENAI_STT_MODEL = os.environ.get(
-    "OPENAI_STT_MODEL", "gpt-4o-transcribe"
-)  # or "whisper-1"
-ENFORCED_OPENAI_STT_MODEL = os.environ.get("ENFORCED_OPENAI_STT_MODEL", "whisper-1")
-ENABLE_OPENAI_FOR_MIA = (
-    os.environ.get("ENABLE_OPENAI_FOR_MIA", "false").lower() == "true"
-)
+        # Soniox
+        SONIOX_API_KEY: Optional[str] = os.getenv("SONIOX_API_KEY")
+        SONIOX_MODEL: str = os.environ.get("SONIOX_MODEL", "stt-rt-preview")
+        SONIOX_LANGUAGE_HINTS: str = os.environ.get("SONIOX_LANGUAGE_HINTS", "en")
+        SONIOX_CONTEXT: str = os.environ.get(
+            "SONIOX_CONTEXT",
+            "PSR, GMV, UPI, ROAS, AOV, RTO, COD, Sales, Cart, Abandonment, Sales, Split, What",
+        )
+        SONIOX_ENABLE_NON_FINAL_TOKENS: bool = (
+            os.environ.get("SONIOX_ENABLE_NON_FINAL_TOKENS", "false").lower() == "true"
+        )
+        SONIOX_VAD_FORCE_TURN_ENDPOINT: bool = (
+            os.environ.get("SONIOX_VAD_FORCE_TURN_ENDPOINT", "false").lower() == "true"
+        )
+        SONIOX_MAX_NON_FINAL_TOKENS_DURATION_MS = int(
+            os.environ.get("SONIOX_MAX_NON_FINAL_TOKENS_DURATION_MS", "0")
+        )
 
-# --- Deepgram STT Configuration ---
-DEEPGRAM_API_KEY = os.getenv(
-    "DEEPGRAM_API_KEY"
-)  # Required API key for Deepgram authentication
-DEEPGRAM_MODEL = os.environ.get(
-    "DEEPGRAM_MODEL", "nova-3-general"
-)  # Deepgram model (nova-3-general recommended for balanced accuracy/speed)
-DEEPGRAM_LANGUAGE = os.environ.get(
-    "DEEPGRAM_LANGUAGE", "en"
-)  # Language code for transcription (en, en-US, en-IN, etc.)
-DEEPGRAM_ENDPOINTING = (
-    os.environ.get("DEEPGRAM_ENDPOINTING", "true").lower() == "true"
-)  # Enable smart endpointing for automatic turn detection
-DEEPGRAM_VAD_EVENTS = (
-    os.environ.get("DEEPGRAM_VAD_EVENTS", "true").lower() == "true"
-)  # Enable Voice Activity Detection events (SpeechStarted/UtteranceEnd)
-DEEPGRAM_UTTERANCE_END_MS = int(
-    os.environ.get("DEEPGRAM_UTTERANCE_END_MS", "1000")
-)  # Milliseconds to wait before considering utterance ended
-DEEPGRAM_NO_DELAY = (
-    os.environ.get("DEEPGRAM_NO_DELAY", "true").lower() == "true"
-)  # Enable real-time processing with minimal delay
-DEEPGRAM_SMART_FORMAT = (
-    os.environ.get("DEEPGRAM_SMART_FORMAT", "true").lower() == "true"
-)  # Apply smart formatting (phone numbers, dates, currency)
-DEEPGRAM_PUNCTUATE = (
-    os.environ.get("DEEPGRAM_PUNCTUATE", "true").lower() == "true"
-)  # Add punctuation to transcription for readability
-DEEPGRAM_NUMERALS = (
-    os.environ.get("DEEPGRAM_NUMERALS", "true").lower() == "true"
-)  # Convert spoken numbers to numerals (critical for Indian lakhs/crores)
-DEEPGRAM_PROFANITY_FILTER = (
-    os.environ.get("DEEPGRAM_PROFANITY_FILTER", "false").lower() == "true"
-)  # Filter profanity (disabled for business context)
-DEEPGRAM_DIARIZE = (
-    os.environ.get("DEEPGRAM_DIARIZE", "false").lower() == "true"
-)  # Enable speaker diarization (disabled for single-speaker voice agent)
-# Language detection options (streaming API only supports 'multi' for auto-detection or single language)
-DEEPGRAM_AUTO_DETECT_LANGUAGE = (
-    os.environ.get("DEEPGRAM_AUTO_DETECT_LANGUAGE", "false").lower() == "true"
-)  # Enable automatic language detection (uses 'multi' parameter)
+    class TTS:
+        """Text-to-Speech (TTS) provider settings."""
 
-# --- Soniox STT Configuration ---
-# Soniox is optimized to solve the 0.5-second speech pause issue experienced with Deepgram
-SONIOX_API_KEY = os.getenv(
-    "SONIOX_API_KEY"
-)  # Required API key for Soniox authentication
-SONIOX_MODEL = os.environ.get(
-    "SONIOX_MODEL", "stt-rt-preview"
-)  # Soniox model optimized for real-time conversation
-SONIOX_LANGUAGE_HINTS = os.environ.get(
-    "SONIOX_LANGUAGE_HINTS", "en"
-)  # Language hints for transcription (comma-separated: en,hi,es)
-SONIOX_CONTEXT = os.environ.get(
-    "SONIOX_CONTEXT",
-    "PSR, GMV, UPI, ROAS, AOV, RTO, COD, Sales, Cart, Abandonment, Sales, Split, What, Yesterday",
-)  # Business context for better transcription of domain-specific terms
-SONIOX_ENABLE_NON_FINAL_TOKENS = (
-    os.environ.get("SONIOX_ENABLE_NON_FINAL_TOKENS", "false").lower() == "true"
-)  # Enable interim/non-final tokens for real-time feedback
-SONIOX_MAX_NON_FINAL_TOKENS_DURATION_MS = int(
-    os.environ.get("SONIOX_MAX_NON_FINAL_TOKENS_DURATION_MS", "0")
-)  # Maximum duration for non-final tokens (0 = no limit)
-SONIOX_VAD_FORCE_TURN_ENDPOINT = (
-    os.environ.get("SONIOX_VAD_FORCE_TURN_ENDPOINT", "false").lower() == "true"
-)  # CRITICAL: false = Use Soniox intelligent endpoint detection
-# true = Use external VAD (Silero)
+        SANITIZE_TEXT_FOR_TTS: bool = (
+            os.environ.get("SANITIZE_TEXT_FOR_TTS", "false").lower() == "true"
+        )
 
-logger.info(f"Using Gemini model: {GEMINI_MODEL}")
-logger.info(f"Using response modality: {RESPONSE_MODALITY}")
-logger.info(f"Tracing enabled: {ENABLE_TRACING}")
-logger.info(f"Search grounding enabled: {ENABLE_SEARCH_GROUNDING}")
-logger.info(f"Using Gemini search result model: {GEMINI_SEARCH_RESULT_API_MODEL}")
+        # ElevenLabs
+        ELEVENLABS_API_KEY: Optional[str] = os.environ.get("ELEVENLABS_API_KEY")
+        ELEVENLABS_VOICE_ID: str = os.environ.get(
+            "ELEVENLABS_VOICE_ID", "bQQWtYx9EodAqMdkrNAc"
+        )
+        ELEVENLABS_RHEA_VOICE_ID: str = os.environ.get(
+            "ELEVENLABS_RHEA_VOICE_ID", "bQQWtYx9EodAqMdkrNAc"
+        )
+        ELEVENLABS_BB_VOICE_ID: str = os.environ.get(
+            "ELEVENLABS_BB_VOICE_ID", "fG9s0SXJb213f4UxVHyG"
+        )
+        ELEVENLABS_MODEL_ID: str = os.environ.get(
+            "ELEVENLABS_MODEL_ID", "eleven_flash_v2_5"
+        )
+        ELEVENLABS_VOICE_SPEED: float = float(
+            os.environ.get("ELEVENLABS_VOICE_SPEED", 1.15)
+        )
+        ELEVENLABS_TTS_SPEED: float = float(
+            os.environ.get("ELEVENLABS_TTS_SPEED", "1.10")
+        )
 
-# Automatic MCP Tool Server
-ENABLE_BREEZE_MCP = os.environ.get("ENABLE_BREEZE_MCP", "false").lower() == "true"
-MCP_CLIENT_TIMEOUT = int(os.environ.get("MCP_CLIENT_TIMEOUT", 30))  # seconds
-BREEZE_MCP_ENDPOINT_PATH = os.environ.get("BREEZE_MCP_ENDPOINT_PATH", "/ai/neurolink")
-shops_for_mcp = os.environ.get("SHOPS_FOR_BREEZE_MCP", "")
-SHOPS_FOR_BREEZE_MCP = [
-    shop.strip() for shop in shops_for_mcp.split(",") if shop.strip()
-]
+        # Google
+        GOOGLE_BRET_VOICE: str = os.environ.get(
+            "GOOGLE_BRET_VOICE", "en-IN-Chirp3-HD-Sadaltager"
+        )
+        GOOGLE_MIA_VOICE: str = os.environ.get(
+            "GOOGLE_MIA_VOICE", "en-IN-Chirp3-HD-Despina"
+        )
 
-logger.info(f"Shops enabled for Breeze MCP Server: {SHOPS_FOR_BREEZE_MCP}")
+    class Audio:
+        """Audio processing, VAD, and filtering settings."""
 
-LIGHTHOUSE_APP_URL = os.environ.get("LIGHTHOUSE_APP_URL", "http://localhost:5173")
-ENABLE_ALL_METRICS_FROM_CKH = (
-    os.environ.get("ENABLE_ALL_METRICS_FROM_CKH", "true").lower() == "true"
-)
+        SAMPLE_RATE: int = 16000
+        FRAME_DURATION: int = 30  # ms
+        FRAME_SIZE: int = int(SAMPLE_RATE * FRAME_DURATION / 1000) * 2
 
-# Get authorized users from environment, split and normalize
-AUTOMATIC_WRITE_ACTIONS_AUTHORIZED_USERS = [
-    email.strip().lower()
-    for email in os.environ.get("AUTOMATIC_WRITE_ACTIONS_AUTHORIZED_USERS", "").split(
-        ","
-    )
-    if email.strip()
-]
+        # VAD & Turn Management
+        VAD_CONFIDENCE: float = float(os.environ.get("VAD_CONFIDENCE", 0.85))
+        VAD_MIN_VOLUME: float = float(os.environ.get("VAD_MIN_VOLUME", 0.75))
+        VAD_START_SECS: float = float(os.environ.get("VAD_START_SECS", 0.30))
+        VAD_STOP_SECS: float = float(os.environ.get("VAD_STOP_SECS", 1.00))
+        DISABLE_SILERO_VAD: bool = (
+            os.environ.get("DISABLE_SILERO_VAD", "false").lower() == "true"
+        )
+        DISABLE_VAD_FOR_PTT: bool = (
+            os.environ.get("DISABLE_VAD_FOR_PTT", "true").lower() == "true"
+        )
 
-# Get write actions from environment, split and normalize
-AUTOMATIC_ACTIONS_REQUIRE_AUTH = [
-    action.strip().lower()
-    for action in os.environ.get("AUTOMATIC_ACTIONS_REQUIRE_AUTH", "").split(",")
-    if action.strip()
-]
+        # Filters
+        ENABLE_NOISE_REDUCE_FILTER: bool = (
+            os.environ.get("ENABLE_NOISE_REDUCE_FILTER", "true").lower() == "true"
+        )
+        ENABLE_AIC_FILTER: bool = (
+            os.environ.get("ENABLE_AIC_FILTER", "false").lower() == "true"
+        )
+        AICOUSTICS_LICENSE_KEY: str = os.environ.get("AICOUSTICS_LICENSE_KEY", "")
+        AIC_ENHANCEMENT_LEVEL: float = float(
+            os.environ.get("AIC_ENHANCEMENT_LEVEL", "1.0")
+        )
+        AIC_VOICE_GAIN: float = float(os.environ.get("AIC_VOICE_GAIN", "1.2"))
+        AIC_NOISE_GATE_ENABLE: bool = (
+            os.environ.get("AIC_NOISE_GATE_ENABLE", "true").lower() == "true"
+        )
+        ENABLE_KRISP_FILTER: bool = (
+            os.environ.get("ENABLE_KRISP_FILTER", "false").lower() == "true"
+        )
+        KRISP_MODEL_PATH: str = os.environ.get(
+            "KRISP_MODEL_PATH", "/app/models/voice/krisp/krisp-viva-tel-v2.kef"
+        )
 
-# Context Summarization Configuration
-ENABLE_SUMMARIZATION = os.environ.get("ENABLE_SUMMARIZATION", "true").lower() == "true"
-MAX_TURNS_BEFORE_SUMMARY = int(os.environ.get("MAX_TURNS_BEFORE_SUMMARY", 10))
-KEEP_RECENT_TURNS = int(os.environ.get("KEEP_RECENT_TURNS", 2))
+    class BreezeBuddy:
+        """Specific settings for the 'Breeze Buddy' persona/agent."""
 
-AZURE_BREEZE_BUDDY_OPENAI_MODEL = os.environ.get(
-    "AZURE_BREEZE_BUDDY_OPENAI_MODEL", "gpt-4o-automatic"
-)
+        # VAD
+        BREEZE_BUDDY_VAD_CONFIDENCE: float = float(
+            os.getenv("BREEZE_BUDDY_VAD_CONFIDENCE", 0.7)
+        )
+        BREEZE_BUDDY_VAD_START_SECS: float = float(
+            os.getenv("BREEZE_BUDDY_VAD_START_SECS", 0.2)
+        )
+        BREEZE_BUDDY_VAD_STOP_SECS: float = float(
+            os.getenv("BREEZE_BUDDY_VAD_STOP_SECS", 0.8)
+        )
+        BREEZE_BUDDY_VAD_MIN_VOLUME: float = float(
+            os.getenv("BREEZE_BUDDY_VAD_MIN_VOLUME", 0.6)
+        )
 
-# Twilio settings
-TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "")
-TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "")
-TWILIO_WEBSOCKET_URL = os.getenv("TWILIO_WEBSOCKET_URL", "")
-# Webhook Authentication
-ORDER_CONFIRMATION_WEBHOOK_SECRET_KEY = os.getenv(
-    "ORDER_CONFIRMATION_WEBHOOK_SECRET_KEY", ""
-)
-ORDER_CONFIRMATION_TOKEN = os.getenv("ORDER_CONFIRMATION_TOKEN", "")
+        # STT
+        BREEZE_BUDDY_STT_SERVICE: str = os.getenv(
+            "BREEZE_BUDDY_STT_SERVICE", "soniox"
+        ).lower()
 
-# PostgreSQL Database Configuration
-POSTGRES_USER = os.getenv("POSTGRES_USER", "")
-POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "")
-POSTGRES_HOST = os.getenv("POSTGRES_HOST", "")
-POSTGRES_PORT = os.getenv("POSTGRES_PORT", "")
-POSTGRES_DB = os.getenv("POSTGRES_DB", "")
+        # Soniox specific for Breeze Buddy
+        BREEZE_BUDDY_SONIOX_MODEL: str = os.environ.get(
+            "BREEZE_BUDDY_SONIOX_MODEL", "stt-rt-preview"
+        )
+        BREEZE_BUDDY_SONIOX_LANGUAGE_HINTS: str = os.environ.get(
+            "BREEZE_BUDDY_SONIOX_LANGUAGE_HINTS", "en,hi"
+        )
+        BREEZE_BUDDY_SONIOX_CONTEXT: str = os.environ.get(
+            "BREEZE_BUDDY_SONIOX_CONTEXT",
+            "State, Yes, Yeah, Good, Time, Yep, Later, Available, Busy, Confirm, Cancel, Repeat",
+        )
+        BREEZE_BUDDY_SONIOX_ENABLE_NON_FINAL_TOKENS: bool = (
+            os.environ.get(
+                "BREEZE_BUDDY_SONIOX_ENABLE_NON_FINAL_TOKENS", "false"
+            ).lower()
+            == "true"
+        )
+        BREEZE_BUDDY_SONIOX_MAX_NON_FINAL_TOKENS_DURATION_MS: int = int(
+            os.environ.get("BREEZE_BUDDY_SONIOX_MAX_NON_FINAL_TOKENS_DURATION_MS", "0")
+        )
+        BREEZE_BUDDY_SONIOX_VAD_FORCE_TURN_ENDPOINT: bool = (
+            os.environ.get(
+                "BREEZE_BUDDY_SONIOX_VAD_FORCE_TURN_ENDPOINT", "false"
+            ).lower()
+            == "true"
+        )
+        AZURE_BREEZE_BUDDY_OPENAI_MODEL: str = os.environ.get(
+            "AZURE_BREEZE_BUDDY_OPENAI_MODEL", "gpt-4o-automatic"
+        )
 
-# Connection pool settings
-POSTGRES_POOL_SIZE = int(os.getenv("POSTGRES_POOL_SIZE", "5"))
-POSTGRES_MAX_OVERFLOW = int(os.getenv("POSTGRES_MAX_OVERFLOW", "10"))
-POSTGRES_POOL_RECYCLE = int(os.getenv("POSTGRES_POOL_RECYCLE", "3600"))  # 1 hour
+    class Session:
+        """Conversation, memory, and session management settings."""
 
-# KMS Configuration
-SKIP_KMS_DECRYPT = os.getenv("SKIP_KMS_DECRYPT", "false").lower() == "true"
-AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
-AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID", "")
-AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY", "")
+        # Mem0
+        MEM0_API_KEY: str = os.getenv("MEM0_API_KEY", "")
+        MEM0_ENABLED: bool = os.getenv("MEM0_ENABLED", "false").lower() == "true"
+        MEM0_MAX_FAILURES: int = int(os.getenv("MEM0_MAX_FAILURES", "3"))
+        MEM0_RETRY_INTERVAL: int = int(os.getenv("MEM0_RETRY_INTERVAL", "300"))
+        MEM0_SESSION_TIMEOUT: int = int(os.getenv("MEM0_SESSION_TIMEOUT", "3600"))
+        MEM0_MIN_MESSAGE_LENGTH: int = int(os.getenv("MEM0_MIN_MESSAGE_LENGTH", "10"))
 
-# JWT Authentication Configuration
-JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "")
-JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "")
-JWT_ACCESS_TOKEN_EXPIRE_MINUTES = int(
-    os.getenv("JWT_ACCESS_TOKEN_EXPIRE_MINUTES", "60")
-)
-LIGHTHOUSE_JWT_SECRET = os.getenv("LIGHTHOUSE_JWT_SECRET", "")
-ENABLE_LIGHTHOUSE_AUTH = os.getenv("ENABLE_LIGHTHOUSE_AUTH", "false").lower() == "true"
+        # Context Summarization
+        ENABLE_SUMMARIZATION: bool = (
+            os.environ.get("ENABLE_SUMMARIZATION", "true").lower() == "true"
+        )
+        MAX_TURNS_BEFORE_SUMMARY: int = int(
+            os.environ.get("MAX_TURNS_BEFORE_SUMMARY", 10)
+        )
+        KEEP_RECENT_TURNS: int = int(os.environ.get("KEEP_RECENT_TURNS", 2))
 
-BREEZE_BUDDY_VAD_CONFIDENCE = os.getenv(
-    "BREEZE_BUDDY_VAD_CONFIDENCE", 0.7
-)  # Require stronger confidence
-BREEZE_BUDDY_VAD_START_SECS = os.getenv(
-    "BREEZE_BUDDY_VAD_START_SECS", 0.2
-)  # Pick up quicker
-BREEZE_BUDDY_VAD_STOP_SECS = os.getenv(
-    "BREEZE_BUDDY_VAD_STOP_SECS", 0.8
-)  # Allow small pauses
-BREEZE_BUDDY_VAD_MIN_VOLUME = os.getenv(
-    "BREEZE_BUDDY_VAD_MIN_VOLUME", 0.6
-)  # More tolerant for soft voice
-BREEZE_BUDDY_STT_SERVICE = os.getenv(
-    "BREEZE_BUDDY_STT_SERVICE", "soniox"
-).lower()  # "google" or "openai"
+        # Timeouts
+        AUTOMATIC_SESSION_INACTIVITY_TIMEOUT: float = float(
+            os.environ.get("AUTOMATIC_SESSION_INACTIVITY_TIMEOUT", 900.0)
+        )
 
-# Session inactivity timeout
-AUTOMATIC_SESSION_INACTIVITY_TIMEOUT = float(
-    os.environ.get("AUTOMATIC_SESSION_INACTIVITY_TIMEOUT", 900.0)
-)
-MAX_DAILY_SESSION_LIMIT = int(os.environ.get("MAX_DAILY_SESSION_LIMIT", 1800))
+    class HITL:
+        """Human-in-the-Loop (HITL) settings."""
 
-# Human-in-the-Loop (HITL) Configuration
-HITL_ENABLE = os.environ.get("HITL_ENABLE", "true").lower() == "true"
-FUNCTION_CONFIRMATION_TIMEOUT = int(
-    os.environ.get("FUNCTION_CONFIRMATION_TIMEOUT", "30")
-)
+        HITL_ENABLE: bool = os.environ.get("HITL_ENABLE", "true").lower() == "true"
+        FUNCTION_CONFIRMATION_TIMEOUT: int = int(
+            os.environ.get("FUNCTION_CONFIRMATION_TIMEOUT", "30")
+        )
+        _actions_str = os.environ.get("HITL_ACTIONS", "delete")
+        HITL_ACTIONS: List[str] = [
+            action.strip().lower()
+            for action in _actions_str.split(",")
+            if action.strip()
+        ]
 
-# HITL Actions Configuration
-_hitl_actions_str = os.environ.get("HITL_ACTIONS", "delete")
-HITL_ACTIONS = [
-    action.strip().lower() for action in _hitl_actions_str.split(",") if action.strip()
-]
+    class Tools:
+        """Settings for external tools, function calling, and features."""
 
-# Chart Generation Configuration
-ENABLE_CHARTS = os.environ.get("ENABLE_CHARTS", "false").lower() == "true"
-MAX_CHARTS_PER_TURN = int(os.environ.get("MAX_CHARTS_PER_TURN", "1"))
+        ENABLE_CHARTS: bool = os.environ.get("ENABLE_CHARTS", "false").lower() == "true"
+        MAX_CHARTS_PER_TURN = int(os.environ.get("MAX_CHARTS_PER_TURN", "1"))
+        ENABLE_ALL_METRICS_FROM_CKH: bool = (
+            os.environ.get("ENABLE_ALL_METRICS_FROM_CKH", "true").lower() == "true"
+        )
+        BREEZE_DEFAULT_SALES_TAB: str = os.environ.get(
+            "BREEZE_DEFAULT_SALES_TAB", "SALES"
+        )
+        MCP_CLIENT_TIMEOUT: int = int(os.environ.get("MCP_CLIENT_TIMEOUT", 30))
+        ENABLE_TOOL_CALL_SOUND = (
+            os.environ.get("ENABLE_TOOL_CALL_SOUND", "false").lower() == "true"
+        )
+        TOOL_CALL_SOUND_FILE = os.environ.get(
+            "TOOL_CALL_SOUND_FILE", "assets/sounds/think.wav"
+        )
 
-# PTT VAD Filter Configuration
-DISABLE_VAD_FOR_PTT = os.environ.get("DISABLE_VAD_FOR_PTT", "true").lower() == "true"
+        # Breeze MCP
+        ENABLE_BREEZE_MCP: bool = (
+            os.environ.get("ENABLE_BREEZE_MCP", "false").lower() == "true"
+        )
+        BREEZE_MCP_ENDPOINT_PATH: str = os.environ.get(
+            "BREEZE_MCP_ENDPOINT_PATH", "/ai/neurolink"
+        )
+        _shops_for_mcp = os.environ.get("SHOPS_FOR_BREEZE_MCP", "")
+        SHOPS_FOR_BREEZE_MCP: List[str] = [
+            shop.strip() for shop in _shops_for_mcp.split(",") if shop.strip()
+        ]
 
-BREEZE_DEFAULT_SALES_TAB = os.environ.get("BREEZE_DEFAULT_SALES_TAB", "SALES")
+    class ExternalAPIs:
+        """Credentials and URLs for external services."""
 
-# Breeze Portal URLs
-AWS_BREEZE_PORTAL_URL = os.environ.get(
-    "AWS_BREEZE_PORTAL_URL", "https://portal.breeze.in"
-)
-GCP_BREEZE_PORTAL_URL = os.environ.get(
-    "GCP_BREEZE_PORTAL_URL", "https://portal.breezesdk.store"
-)
-AUTOMATIC_OPENAI_STT_PROMPT = os.environ.get("AUTOMATIC_OPENAI_STT_PROMPT", "")
+        # Juspay
+        GENIUS_API_URL: str = (
+            "https://portal.juspay.in/api/q/query?api-type=genius-query"
+        )
+        EULER_DASHBOARD_API_URL: str = os.environ.get(
+            "EULER_DASHBOARD_API_URL", "https://portal.juspay.in"
+        )
 
-EXOTEL_ACCOUNT_SID = os.getenv("EXOTEL_ACCOUNT_SID", "")
-EXOTEL_API_KEY = os.getenv("EXOTEL_API_KEY", "")
-EXOTEL_API_TOKEN = os.getenv("EXOTEL_API_TOKEN", "")
-EXOTEL_SUBDOMAIN = os.getenv("EXOTEL_SUBDOMAIN", "api.exotel.com")
-EXOTEL_APPLET_APP_ID = os.getenv("EXOTEL_APPLET_APP_ID", "1044183")
+        # Twilio
+        TWILIO_ACCOUNT_SID: str = os.getenv("TWILIO_ACCOUNT_SID", "")
+        TWILIO_AUTH_TOKEN: str = os.getenv("TWILIO_AUTH_TOKEN", "")
+        TWILIO_WEBSOCKET_URL: str = os.getenv("TWILIO_WEBSOCKET_URL", "")
 
-# Proxy Configuration
-AWS_PROXY_HOST = os.environ.get("AWS_PROXY_HOST")
-AWS_PROXY_PORT = os.environ.get("AWS_PROXY_PORT")
-CLOUD_ENVIRONMENT = os.environ.get("CLOUD_ENVIRONMENT", "GCP")  # AWS, GCP, AZURE, etc.
+        # Exotel
+        EXOTEL_ACCOUNT_SID: str = os.getenv("EXOTEL_ACCOUNT_SID", "")
+        EXOTEL_API_KEY: str = os.getenv("EXOTEL_API_KEY", "")
+        EXOTEL_API_TOKEN: str = os.getenv("EXOTEL_API_TOKEN", "")
+        EXOTEL_SUBDOMAIN: str = os.getenv("EXOTEL_SUBDOMAIN", "api.exotel.com")
+        EXOTEL_APPLET_APP_ID: str = os.getenv("EXOTEL_APPLET_APP_ID", "1044183")
 
-# LangFuse Configuration
-ENABLE_LANGFUSE_PROMPTS = (
-    os.environ.get("ENABLE_LANGFUSE_PROMPTS", "false").lower() == "true"
-)
-LANGFUSE_SECRET_KEY = os.environ.get("LANGFUSE_SECRET_KEY", "")
-LANGFUSE_PUBLIC_KEY = os.environ.get("LANGFUSE_PUBLIC_KEY", "")
-LANGFUSE_BASEURL = os.environ.get("LANGFUSE_BASEURL", "https://us.cloud.langfuse.com")
-AUTOMATIC_LANGFUSE_PROMPT_NAME = os.environ.get(
-    "AUTOMATIC_LANGFUSE_PROMPT_NAME", "AUTOMATIC_VOICE_LANGFUSE_PROMPT"
-)
-AUTOMATIC_LANGFUSE_SYSTEM_PROMPT_LABEL = os.environ.get(
-    "AUTOMATIC_LANGFUSE_SYSTEM_PROMPT_LABEL", "automatic_system_langfuse_prompt"
-)
+        # Breeze Portal
+        LIGHTHOUSE_APP_URL: str = os.environ.get(
+            "LIGHTHOUSE_APP_URL", "http://localhost:5173"
+        )
+        AWS_BREEZE_PORTAL_URL: str = os.environ.get(
+            "AWS_BREEZE_PORTAL_URL", "https://portal.breeze.in"
+        )
+        GCP_BREEZE_PORTAL_URL: str = os.environ.get(
+            "GCP_BREEZE_PORTAL_URL", "https://portal.breezesdk.store"
+        )
 
-logger.info(f"LangFuse prompts enabled: {ENABLE_LANGFUSE_PROMPTS}")
-if ENABLE_LANGFUSE_PROMPTS:
-    logger.info(
-        f"LangFuse system prompt: {AUTOMATIC_LANGFUSE_PROMPT_NAME} (label: {AUTOMATIC_LANGFUSE_SYSTEM_PROMPT_LABEL})"
-    )
+    class Database:
+        """PostgreSQL database and connection pool settings."""
 
-BREEZE_BUDDY_SONIOX_MODEL = os.environ.get(
-    "BREEZE_BUDDY_SONIOX_MODEL", "stt-rt-preview"
-)
-BREEZE_BUDDY_SONIOX_LANGUAGE_HINTS = os.environ.get(
-    "BREEZE_BUDDY_SONIOX_LANGUAGE_HINTS", "en,hi"
-)
-BREEZE_BUDDY_SONIOX_CONTEXT = os.environ.get(
-    "BREEZE_BUDDY_SONIOX_CONTEXT",
-    "State, Yes, Yeah, Good, Time, Yep, Later, Available, Busy, Confirm, Cancel, Repeat",
-)
-BREEZE_BUDDY_SONIOX_ENABLE_NON_FINAL_TOKENS = (
-    os.environ.get("BREEZE_BUDDY_SONIOX_ENABLE_NON_FINAL_TOKENS", "false").lower()
-    == "true"
-)
-BREEZE_BUDDY_SONIOX_MAX_NON_FINAL_TOKENS_DURATION_MS = int(
-    os.environ.get("BREEZE_BUDDY_SONIOX_MAX_NON_FINAL_TOKENS_DURATION_MS", "0")
-)
-BREEZE_BUDDY_SONIOX_VAD_FORCE_TURN_ENDPOINT = (
-    os.environ.get("BREEZE_BUDDY_SONIOX_VAD_FORCE_TURN_ENDPOINT", "false").lower()
-    == "true"
-)
+        POSTGRES_USER: str = os.getenv("POSTGRES_USER", "")
+        POSTGRES_PASSWORD: str = os.getenv("POSTGRES_PASSWORD", "")
+        POSTGRES_HOST: str = os.getenv("POSTGRES_HOST", "")
+        POSTGRES_PORT: str = os.getenv("POSTGRES_PORT", "")
+        POSTGRES_DB: str = os.getenv("POSTGRES_DB", "")
+        POSTGRES_POOL_SIZE: int = int(os.getenv("POSTGRES_POOL_SIZE", "5"))
+        POSTGRES_MAX_OVERFLOW: int = int(os.getenv("POSTGRES_MAX_OVERFLOW", "10"))
+        POSTGRES_POOL_RECYCLE: int = int(os.getenv("POSTGRES_POOL_RECYCLE", "3600"))
+
+    class Security:
+        """Settings for authentication, authorization, and encryption."""
+
+        # JWT
+        JWT_SECRET_KEY: str = os.getenv("JWT_SECRET_KEY", "")
+        JWT_ALGORITHM: str = os.getenv("JWT_ALGORITHM", "")
+        JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = int(
+            os.getenv("JWT_ACCESS_TOKEN_EXPIRE_MINUTES", "60")
+        )
+
+        # AWS KMS
+        SKIP_KMS_DECRYPT: bool = (
+            os.getenv("SKIP_KMS_DECRYPT", "false").lower() == "true"
+        )
+        AWS_REGION: str = os.getenv("AWS_REGION", "us-east-1")
+        AWS_ACCESS_KEY_ID: str = os.getenv("AWS_ACCESS_KEY_ID", "")
+        AWS_SECRET_ACCESS_KEY: str = os.getenv("AWS_SECRET_ACCESS_KEY", "")
+
+        # Webhook
+        ORDER_CONFIRMATION_WEBHOOK_SECRET_KEY: str = os.getenv(
+            "ORDER_CONFIRMATION_WEBHOOK_SECRET_KEY", ""
+        )
+        ORDER_CONFIRMATION_TOKEN: str = os.getenv("ORDER_CONFIRMATION_TOKEN", "")
+
+        # User & Action Authorization
+        _auth_users_str = os.environ.get("AUTOMATIC_WRITE_ACTIONS_AUTHORIZED_USERS", "")
+        AUTOMATIC_WRITE_ACTIONS_AUTHORIZED_USERS: List[str] = [
+            email.strip().lower()
+            for email in _auth_users_str.split(",")
+            if email.strip()
+        ]
+        _auth_actions_str = os.environ.get("AUTOMATIC_ACTIONS_REQUIRE_AUTH", "")
+        AUTOMATIC_ACTIONS_REQUIRE_AUTH: List[str] = [
+            action.strip().lower()
+            for action in _auth_actions_str.split(",")
+            if action.strip()
+        ]
+        LIGHTHOUSE_JWT_SECRET = os.getenv("LIGHTHOUSE_JWT_SECRET", "")
+        ENABLE_LIGHTHOUSE_AUTH = (
+            os.getenv("ENABLE_LIGHTHOUSE_AUTH", "false").lower() == "true"
+        )
+
+    class Network:
+        """Network settings for WebSockets and proxies."""
+
+        AWS_PROXY_HOST: Optional[str] = os.environ.get("AWS_PROXY_HOST")
+        AWS_PROXY_PORT: Optional[str] = os.environ.get("AWS_PROXY_PORT")
+
+
+# --- Singleton Instance ---
+config = Config()

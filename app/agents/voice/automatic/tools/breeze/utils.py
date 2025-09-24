@@ -11,7 +11,7 @@ from urllib.parse import urlparse
 
 import httpx
 
-from app.core.config import LIGHTHOUSE_APP_URL
+from app.core.config import config
 from app.core.logger import logger
 from app.core.transport.http_client import create_http_client
 
@@ -158,7 +158,7 @@ async def patch_shop_config(
     Returns:
         Response data from the API or error details dictionary
     """
-    url = f"{LIGHTHOUSE_APP_URL}/shop/config"
+    url = f"{config.ExternalAPIs.LIGHTHOUSE_APP_URL}/shop/config"
     headers = {
         "Content-Type": "application/json",
         "x-shop-url": shop_url,

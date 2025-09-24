@@ -1,11 +1,11 @@
-from app.core.config import ENABLE_CHARTS
+from app.core.config import config
 
 
 def get_chart_visualization_instructions() -> str:
     """
     Returns chart visualization instructions if charts are enabled.
     """
-    if ENABLE_CHARTS:
+    if config.Tools.ENABLE_CHARTS:
         return """
     🔒 AUTOMATIC DATA VISUALIZATION (MANDATORY)
 

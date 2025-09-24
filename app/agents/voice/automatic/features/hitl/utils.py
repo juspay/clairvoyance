@@ -1,8 +1,8 @@
-from app.core.config import HITL_ACTIONS
+from app.core.config import config
 
 
 def get_hitl_actions():
-    return HITL_ACTIONS
+    return config.HITL.HITL_ACTIONS
 
 
 def is_dangerous_operation(function_name: str) -> bool:

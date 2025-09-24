@@ -11,7 +11,7 @@ from app.agents.voice.automatic.tools.charts import (
     tool_functions as chart_tool_functions,
 )
 from app.agents.voice.automatic.types import Mode
-from app.core import config
+from app.core.config import config
 from app.core.logger import logger
 from app.utils.common import get_breeze_portal_url
 
@@ -32,25 +32,25 @@ async def init_breeze_mcp_tools(
     try:
         # Use Pipecat MCP client directly (standard MCP protocol only)
         server_params = StreamableHttpParameters(
-            url=f"{get_breeze_portal_url(reseller_id)}{config.BREEZE_MCP_ENDPOINT_PATH}",
+            url=f"{get_breeze_portal_url(reseller_id)}{config.Tools.BREEZE_MCP_ENDPOINT_PATH}",
             headers={
                 "x-auth-token": breeze_token,
                 "x-context": base64.b64encode(
                     json.dumps(mcp_context).encode()
                 ).decode(),
             },
-            timeout=timedelta(seconds=config.MCP_CLIENT_TIMEOUT),
-            sse_read_timeout=timedelta(seconds=config.MCP_CLIENT_TIMEOUT),
+            timeout=timedelta(seconds=config.Tools.MCP_CLIENT_TIMEOUT),
+            sse_read_timeout=timedelta(seconds=config.Tools.MCP_CLIENT_TIMEOUT),
             terminate_on_close=True,
         )
 
         mcp_client = PipecatMCPClient(server_params=server_params)
         tools = await asyncio.wait_for(
-            mcp_client.register_tools(llm), timeout=config.MCP_CLIENT_TIMEOUT
+            mcp_client.register_tools(llm), timeout=config.Tools.MCP_CLIENT_TIMEOUT
         )
 
         # register chart tools if enabled
-        if config.ENABLE_CHARTS:
+        if config.Tools.ENABLE_CHARTS:
             for name, function in chart_tool_functions.items():
                 logger.info(f"Registering essential chart tool: {name}")
                 llm.register_function(name, function)

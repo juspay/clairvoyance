@@ -5,15 +5,7 @@ This module contains database connection and models.
 
 import asyncpg
 
-from app.core.config import (
-    POSTGRES_DB,
-    POSTGRES_HOST,
-    POSTGRES_MAX_OVERFLOW,
-    POSTGRES_PASSWORD,
-    POSTGRES_POOL_SIZE,
-    POSTGRES_PORT,
-    POSTGRES_USER,
-)
+from app.core.config import config
 from app.core.logger import logger
 from app.services.aws.kms import decrypt_kms
 
@@ -27,11 +19,11 @@ async def init_db_pool():
     global pool
     if pool is None:
         db_env_vars = [
-            POSTGRES_USER,
-            POSTGRES_PASSWORD,
-            POSTGRES_HOST,
-            POSTGRES_PORT,
-            POSTGRES_DB,
+            config.Database.POSTGRES_USER,
+            config.Database.POSTGRES_PASSWORD,
+            config.Database.POSTGRES_HOST,
+            config.Database.POSTGRES_PORT,
+            config.Database.POSTGRES_DB,
         ]
         if not all(db_env_vars):
             logger.warning(
@@ -40,7 +32,9 @@ async def init_db_pool():
             return
 
         # Decrypt PostgreSQL password using KMS if needed
-        decrypted_postgres_password = await decrypt_kms(POSTGRES_PASSWORD)
+        decrypted_postgres_password = await decrypt_kms(
+            config.Database.POSTGRES_PASSWORD
+        )
 
         # If decryption fails, use the original password
         if decrypted_postgres_password is None:
@@ -49,13 +43,14 @@ async def init_db_pool():
 
         try:
             pool = await asyncpg.create_pool(
-                user=POSTGRES_USER,
+                user=config.Database.POSTGRES_USER,
                 password=decrypted_postgres_password,
-                database=POSTGRES_DB,
-                host=POSTGRES_HOST,
-                port=POSTGRES_PORT,
-                min_size=POSTGRES_POOL_SIZE,
-                max_size=POSTGRES_POOL_SIZE + POSTGRES_MAX_OVERFLOW,
+                database=config.Database.POSTGRES_DB,
+                host=config.Database.POSTGRES_HOST,
+                port=config.Database.POSTGRES_PORT,
+                min_size=config.Database.POSTGRES_POOL_SIZE,
+                max_size=config.Database.POSTGRES_POOL_SIZE
+                + config.Database.POSTGRES_MAX_OVERFLOW,
             )
             logger.info("Database pool initialized successfully.")
         except Exception as e:

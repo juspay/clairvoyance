@@ -10,7 +10,7 @@ from app.agents.voice.breeze_buddy.services.telephony.base_provider import (
 from app.agents.voice.breeze_buddy.workflows.order_confirmation.websocket_bot import (
     main as telephony_websocket_conn,
 )
-from app.core import config
+from app.core.config import config
 from app.core.logger import logger
 from app.core.transport.http_client import get_proxy_config
 from app.schemas import CallProvider
@@ -22,7 +22,7 @@ class TwilioProvider(VoiceCallProvider):
             logger.info("Skipping automatic hang-up from serializer.")
 
     def __init__(self, aiohttp_session):
-        super().__init__(config, aiohttp_session)
+        super().__init__(aiohttp_session)
 
         # Create Twilio client with proper proxy configuration
         self.client = self._create_twilio_client()
@@ -30,8 +30,8 @@ class TwilioProvider(VoiceCallProvider):
     def _create_twilio_client(self) -> Client:
         """Create Twilio client with proper proxy configuration using TwilioHttpClient"""
         proxy_url = get_proxy_config()
-        account_sid = self.config.TWILIO_ACCOUNT_SID
-        auth_token = self.config.TWILIO_AUTH_TOKEN
+        account_sid = config.ExternalAPIs.TWILIO_ACCOUNT_SID
+        auth_token = config.ExternalAPIs.TWILIO_AUTH_TOKEN
 
         if proxy_url:
             logger.info(f"Configuring Twilio client with proxy: {proxy_url}")
@@ -54,8 +54,8 @@ class TwilioProvider(VoiceCallProvider):
         serializer = lambda stream_sid, call_sid: self.CustomTwilioFrameSerializer(
             stream_sid=stream_sid,
             call_sid=call_sid,
-            account_sid=self.config.TWILIO_ACCOUNT_SID,
-            auth_token=self.config.TWILIO_AUTH_TOKEN,
+            account_sid=config.ExternalAPIs.TWILIO_ACCOUNT_SID,
+            auth_token=config.ExternalAPIs.TWILIO_AUTH_TOKEN,
         )
         await telephony_websocket_conn(
             websocket,
@@ -67,7 +67,7 @@ class TwilioProvider(VoiceCallProvider):
         )
 
     def make_call(self, customer_mobile_number: str, outbound_number: str):
-        ws_url = self.config.TWILIO_WEBSOCKET_URL
+        ws_url = config.ExternalAPIs.TWILIO_WEBSOCKET_URL
 
         voice_call_payload = VoiceResponse()
         connect = Connect()
@@ -82,11 +82,11 @@ class TwilioProvider(VoiceCallProvider):
                 twiml=str(voice_call_payload),
                 record=True,
                 recording_status_callback=(
-                    self.config.APP_BASE_URL
+                    config.Server.APP_BASE_URL
                     + "/agent/voice/breeze-buddy/twilio/callback/details"
                 ),
                 status_callback=(
-                    self.config.APP_BASE_URL
+                    config.Server.APP_BASE_URL
                     + "/agent/voice/breeze-buddy/twilio/callback/status"
                 ),
             )

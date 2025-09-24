@@ -13,7 +13,7 @@ from app.agents.voice.automatic.types.models import (
     ApiSuccess,
     GeniusApiResponse,
 )
-from app.core.config import EULER_DASHBOARD_API_URL, GENIUS_API_URL
+from app.core.config import config
 from app.core.logger import logger
 from app.core.transport.http_client import create_http_client
 
@@ -119,7 +119,7 @@ async def _make_genius_api_request(
     try:
         async with create_http_client(timeout=10.0) as client:
             response = await client.post(
-                GENIUS_API_URL, json=full_payload, headers=headers
+                config.ExternalAPIs.GENIUS_API_URL, json=full_payload, headers=headers
             )
             response.raise_for_status()
             response_text = response.text
@@ -339,7 +339,7 @@ async def list_offers_by_filter(params: FunctionCallParams):
             "sort_offers": {"order": "DESCENDING", "field": "CREATED_AT"},
         }
 
-        endpoint = f"{EULER_DASHBOARD_API_URL}/api/offers/dashboard/dashboard-list"
+        endpoint = f"{config.ExternalAPIs.EULER_DASHBOARD_API_URL}/api/offers/dashboard/dashboard-list"
         headers = {"Content-Type": "application/json", "x-web-logintoken": euler_token}
 
         logger.info(
@@ -885,7 +885,7 @@ async def find_offer_by_code(offer_code: str) -> dict | None:
             "sort_offers": {"order": "DESCENDING", "field": "CREATED_AT"},
         }
 
-        endpoint = f"{EULER_DASHBOARD_API_URL}/api/offers/dashboard/dashboard-list?merchant_id={merchant_id}"
+        endpoint = f"{config.ExternalAPIs.EULER_DASHBOARD_API_URL}/api/offers/dashboard/dashboard-list?merchant_id={merchant_id}"
         headers = {"Content-Type": "application/json", "x-web-logintoken": euler_token}
 
         logger.info(
@@ -974,9 +974,7 @@ async def delete_euler_offer(params: FunctionCallParams):
             return
 
         # Step 2: Delete the offer using the found ID
-        delete_endpoint = (
-            f"{EULER_DASHBOARD_API_URL}/api/offers/dashboard/{offer_id}/delete"
-        )
+        delete_endpoint = f"{config.ExternalAPIs.EULER_DASHBOARD_API_URL}/api/offers/dashboard/{offer_id}/delete"
         delete_payload = {"merchant_id": merchant_id, "offer_id": offer_id}
 
         headers = {"Content-Type": "application/json", "x-web-logintoken": euler_token}
@@ -1186,7 +1184,7 @@ async def update_euler_offer(params: FunctionCallParams):
                 return
 
             # Use status-only endpoint
-            status_endpoint = f"{EULER_DASHBOARD_API_URL}/api/offers/dashboard/{offer_id}/status/update"
+            status_endpoint = f"{config.ExternalAPIs.EULER_DASHBOARD_API_URL}/api/offers/dashboard/{offer_id}/status/update"
             status_payload = {"status": status}
 
             headers = {
@@ -1535,9 +1533,7 @@ async def update_euler_offer(params: FunctionCallParams):
         }
 
         # Step 7: Update offer using v2/update endpoint
-        update_endpoint = (
-            f"{EULER_DASHBOARD_API_URL}/api/offers/dashboard/{offer_id}/v2/update"
-        )
+        update_endpoint = f"{config.ExternalAPIs.EULER_DASHBOARD_API_URL}/api/offers/dashboard/{offer_id}/v2/update"
 
         headers = {"Content-Type": "application/json", "x-web-logintoken": euler_token}
 

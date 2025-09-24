@@ -11,11 +11,7 @@ from app.agents.voice.automatic.prompts.system.utils import (
     process_langfuse_template_variables,
 )
 from app.agents.voice.automatic.types import TTSProvider
-from app.core.config import (
-    AUTOMATIC_LANGFUSE_PROMPT_NAME,
-    AUTOMATIC_LANGFUSE_SYSTEM_PROMPT_LABEL,
-    ENABLE_LANGFUSE_PROMPTS,
-)
+from app.core.config import config
 from app.core.logger import logger
 from app.services.langfuse.prompts import fetch_prompt
 
@@ -28,10 +24,10 @@ def get_system_prompt(user_name: str | None, tts_provider: TTSProvider | None) -
     langfuse_prompt = None
 
     # Only try to fetch prompt from LangFuse if it's enabled
-    if ENABLE_LANGFUSE_PROMPTS:
+    if config.Langfuse.ENABLE_LANGFUSE_PROMPTS:
         langfuse_prompt = fetch_prompt(
-            prompt_name=AUTOMATIC_LANGFUSE_PROMPT_NAME,
-            label=AUTOMATIC_LANGFUSE_SYSTEM_PROMPT_LABEL,
+            prompt_name=config.Langfuse.AUTOMATIC_LANGFUSE_PROMPT_NAME,
+            label=config.Langfuse.AUTOMATIC_LANGFUSE_SYSTEM_PROMPT_LABEL,
         )
 
     if langfuse_prompt:

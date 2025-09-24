@@ -1,4 +1,4 @@
-from app.core.config import ENABLE_SEARCH_GROUNDING, HITL_ENABLE
+from app.core.config import config
 
 
 def get_tool_scope_instrucations() -> str:
@@ -45,7 +45,7 @@ def get_tool_scope_instrucations() -> str:
             - Merchants use the term 'burn rate' to mean total discounts in a given time frame — always handle this with the correct tool.
     """
 
-    if ENABLE_SEARCH_GROUNDING:
+    if config.AI.ENABLE_SEARCH_GROUNDING:
         search_grounding = """
         INTERNET TOOL USAGE:
             - Internet access : You have tool to access internet for questions you are not aware of. But before using internet search tool you should ALWAYS ask user confirmation whether to search internet or not. If user says yes, then you can use internet search tool.
@@ -53,7 +53,7 @@ def get_tool_scope_instrucations() -> str:
     else:
         search_grounding = """"""
 
-    if HITL_ENABLE:
+    if config.HITL.HITL_ENABLE:
         hitl_scope = """
         TOOL CALL RETRY & RESULT HANDLING
 

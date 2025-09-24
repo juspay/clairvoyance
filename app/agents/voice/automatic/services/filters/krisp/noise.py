@@ -6,7 +6,7 @@ import numpy as np
 from pipecat.audio.filters.base_audio_filter import BaseAudioFilter
 from pipecat.frames.frames import FilterControlFrame, FilterEnableFrame
 
-from app.core.config import ENABLE_KRISP_FILTER, KRISP_MODEL_PATH
+from app.core.config import config
 from app.core.logger import logger
 
 # Optional import for krisp_audio
@@ -36,7 +36,7 @@ def log_callback(log_message, log_level):
 
 class NoiseFilterFromKrisp(BaseAudioFilter):
     # Initialize krisp-specific constants only if available and enabled
-    if KRISP_AVAILABLE and ENABLE_KRISP_FILTER:
+    if KRISP_AVAILABLE and config.Audio.ENABLE_KRISP_FILTER:
         krisp_audio.globalInit("", log_callback, krisp_audio.LogLevel.Off)
         SDK_VERSION = krisp_audio.getVersion()
         logger.info(
@@ -61,7 +61,7 @@ class NoiseFilterFromKrisp(BaseAudioFilter):
             44100: 44100,
             48000: 48000,
         }
-        if ENABLE_KRISP_FILTER and not KRISP_AVAILABLE:
+        if config.Audio.ENABLE_KRISP_FILTER and not KRISP_AVAILABLE:
             logger.warning(
                 "Krisp filter is enabled but krisp_audio module is not available. Audio will pass through unfiltered."
             )
@@ -86,8 +86,8 @@ class NoiseFilterFromKrisp(BaseAudioFilter):
             logger.error("krisp_audio directory not found in any sys.path location")
 
         # Only validate model path if krisp is available and enabled
-        if KRISP_AVAILABLE and ENABLE_KRISP_FILTER:
-            model_path = model_path or KRISP_MODEL_PATH
+        if KRISP_AVAILABLE and config.Audio.ENABLE_KRISP_FILTER:
+            model_path = model_path or config.Audio.KRISP_MODEL_PATH
             if not model_path:
                 raise Exception("Model path is not set")
             if not model_path.endswith(".kef"):
@@ -95,14 +95,14 @@ class NoiseFilterFromKrisp(BaseAudioFilter):
             if not os.path.isfile(model_path):
                 raise Exception(f"Model file not found: {model_path}")
         elif not model_path:
-            model_path = KRISP_MODEL_PATH or ""
+            model_path = config.Audio.KRISP_MODEL_PATH or ""
 
         self._model_path = model_path
-        self._filtering = ENABLE_KRISP_FILTER
+        self._filtering = config.Audio.ENABLE_KRISP_FILTER
         self._session = None
         self._samples_per_frame = None
         self._noise_suppression_level = 100
-        self._krisp_functional = KRISP_AVAILABLE and ENABLE_KRISP_FILTER
+        self._krisp_functional = KRISP_AVAILABLE and config.Audio.ENABLE_KRISP_FILTER
 
     def _int_to_sample_rate(self, sample_rate):
         if sample_rate not in self.SAMPLE_RATES:

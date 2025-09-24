@@ -2,7 +2,7 @@ import json
 from datetime import datetime
 from typing import Any, Dict, Optional
 
-from app.core.config import AWS_BREEZE_PORTAL_URL, GCP_BREEZE_PORTAL_URL
+from app.core.config import config
 from app.core.logger import logger
 
 
@@ -72,6 +72,6 @@ def get_breeze_portal_url(reseller_id: str | None = None) -> str:
         str: The base URL for the Breeze portal
     """
     if reseller_id == "super_reseller":
-        return GCP_BREEZE_PORTAL_URL
+        return config.ExternalAPIs.GCP_BREEZE_PORTAL_URL
     else:
-        return AWS_BREEZE_PORTAL_URL
+        return config.ExternalAPIs.AWS_BREEZE_PORTAL_URL

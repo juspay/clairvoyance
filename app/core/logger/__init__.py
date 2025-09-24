@@ -7,7 +7,7 @@ from loguru import logger
 # Remove the default sink to have full control over logging.
 logger.remove()
 
-from app.core.config import ENVIRONMENT, PROD_LOG_LEVEL
+from app.core.config import config
 
 
 def json_sink(message):
@@ -74,7 +74,7 @@ def _setup_logger_sinks(
             )  # Only block _base_client logs, not all openai logs
         )
 
-    if ENVIRONMENT == "dev":
+    if config.Server.ENVIRONMENT == "dev":
         # Development mode format
         session_part = (
             "<cyan>[{extra[session_id]}]</cyan> | " if include_session_id else ""
@@ -117,7 +117,7 @@ def _setup_logger_sinks(
         # Production mode - JSON automatically includes session_id and client_sid from extra
         logger.add(
             json_sink,
-            level=PROD_LOG_LEVEL,  # Configurable log level via PROD_LOG_LEVEL env var defaulting to INFO
+            level=config.Logging.PROD_LOG_LEVEL,  # Configurable log level via PROD_LOG_LEVEL env var defaulting to INFO
             enqueue=True,
             backtrace=False,  # Keep JSON logs concise and predictable
             diagnose=False,  # Prevent sensitive data leakage and performance overhead

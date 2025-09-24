@@ -20,14 +20,7 @@ from pipecat.transports.daily.utils import (
 
 from app import __version__
 from app.api.routers import breeze_buddy
-from app.core.config import (
-    DAILY_API_KEY,
-    DAILY_API_URL,
-    ENABLE_AUTOMATIC_DAILY_RECORDING,
-    HOST,
-    MAX_DAILY_SESSION_LIMIT,
-    PORT,
-)
+from app.core.config import config
 
 # Import necessary components from the new structure
 from app.core.logger import logger
@@ -86,8 +79,8 @@ async def lifespan(app: FastAPI):
     # Initialize aiohttp session with proxy support for Daily API
     aiohttp_session = create_aiohttp_session()
     daily_helpers["rest"] = DailyRESTHelper(
-        daily_api_key=DAILY_API_KEY,
-        daily_api_url=DAILY_API_URL,
+        daily_api_key=config.Daily.DAILY_API_KEY,
+        daily_api_url=config.Daily.DAILY_API_URL,
         aiohttp_session=aiohttp_session,
     )
     logger.info("Daily REST helper initialized with proxy support.")
@@ -156,12 +149,12 @@ async def bot_connect(
     # 2. Create room + token
 
     daily_room_properties = DailyRoomProperties(
-        exp=time.time() + MAX_DAILY_SESSION_LIMIT,
+        exp=time.time() + config.Daily.MAX_DAILY_SESSION_LIMIT,
         eject_at_room_exp=True,
     )
 
     # Enable recording only if configured
-    if ENABLE_AUTOMATIC_DAILY_RECORDING:
+    if config.Daily.ENABLE_AUTOMATIC_DAILY_RECORDING:
         daily_room_properties.enable_recording = "cloud"
 
     room = await daily_helpers["rest"].create_room(
@@ -170,13 +163,13 @@ async def bot_connect(
 
     token_params = DailyMeetingTokenParams(
         properties=DailyMeetingTokenProperties(
-            eject_after_elapsed=MAX_DAILY_SESSION_LIMIT,
+            eject_after_elapsed=config.Daily.MAX_DAILY_SESSION_LIMIT,
         )
     )
 
     token = await daily_helpers["rest"].get_token(
         room.url,
-        expiry_time=MAX_DAILY_SESSION_LIMIT,
+        expiry_time=config.Daily.MAX_DAILY_SESSION_LIMIT,
         eject_at_token_exp=True,
         owner=True,
         params=token_params,
@@ -314,4 +307,4 @@ async def get_version():
 # The main block is now only for direct execution, which is not the recommended way.
 # Uvicorn running from run.py is the standard.
 if __name__ == "__main__":
-    uvicorn.run(app, host=HOST, port=PORT, log_level="info")
+    uvicorn.run(app, host=config.Server.HOST, port=config.Server.PORT, log_level="info")

@@ -4,7 +4,7 @@ from typing import Any, Dict, List, Optional
 
 from pipecat.processors.aggregators.openai_llm_context import OpenAILLMContext
 
-from app.core.config import KEEP_RECENT_TURNS, MAX_TURNS_BEFORE_SUMMARY
+from app.core.config import config
 from app.core.logger import logger
 
 
@@ -18,8 +18,8 @@ class ContextSummarizer(OpenAILLMContext):
         self,
         messages: List[Dict[str, Any]],
         tools: Optional[List[Dict[str, Any]]] = None,
-        max_turns_before_summary: int = MAX_TURNS_BEFORE_SUMMARY,
-        keep_recent_turns: int = KEEP_RECENT_TURNS,
+        max_turns_before_summary: int = config.Session.MAX_TURNS_BEFORE_SUMMARY,
+        keep_recent_turns: int = config.Session.KEEP_RECENT_TURNS,
         enable_summarization: bool = True,
         llm_service=None,
     ):

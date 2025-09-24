@@ -1,20 +1,21 @@
 from typing import Any, Dict, List, Optional
 
-from app.core.config import (
-    AUTOMATIC_ACTIONS_REQUIRE_AUTH,
-    AUTOMATIC_WRITE_ACTIONS_AUTHORIZED_USERS,
-)
+from app.core.config import config
 from app.core.logger import logger
 
 
 def is_user_authorized_for_actions(email: Optional[str]) -> bool:
-    if not AUTOMATIC_WRITE_ACTIONS_AUTHORIZED_USERS:
+    if not config.Security.AUTOMATIC_WRITE_ACTIONS_AUTHORIZED_USERS:
         return True
-    return bool(email and email in AUTOMATIC_WRITE_ACTIONS_AUTHORIZED_USERS)
+    return bool(
+        email and email in config.Security.AUTOMATIC_WRITE_ACTIONS_AUTHORIZED_USERS
+    )
 
 
 def is_tool_actionable(tool_name: Optional[str]) -> bool:
-    return bool(tool_name and tool_name in AUTOMATIC_ACTIONS_REQUIRE_AUTH)
+    return bool(
+        tool_name and tool_name in config.Security.AUTOMATIC_ACTIONS_REQUIRE_AUTH
+    )
 
 
 def filter_tools_by_authorization(

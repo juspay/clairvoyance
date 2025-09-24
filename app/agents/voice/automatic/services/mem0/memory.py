@@ -12,7 +12,7 @@ from pipecat.processors.aggregators.openai_llm_context import (
 from pipecat.processors.frame_processor import FrameDirection
 from pipecat.services.mem0.memory import Mem0MemoryService
 
-from app.core import config
+from app.core.config import config
 from app.core.logger import logger
 
 try:
@@ -61,13 +61,17 @@ class ImprovedMem0MemoryService(Mem0MemoryService):
         super().__init__(*args, **kwargs)
 
         # Extract configuration from kwargs with config fallbacks
-        self._max_failures = kwargs.get("max_failures", config.MEM0_MAX_FAILURES)
-        self._retry_interval = kwargs.get("retry_interval", config.MEM0_RETRY_INTERVAL)
+        self._max_failures = kwargs.get(
+            "max_failures", config.Session.MEM0_MAX_FAILURES
+        )
+        self._retry_interval = kwargs.get(
+            "retry_interval", config.Session.MEM0_RETRY_INTERVAL
+        )
         self._session_timeout = kwargs.get(
-            "session_timeout", config.MEM0_SESSION_TIMEOUT
+            "session_timeout", config.Session.MEM0_SESSION_TIMEOUT
         )
         self._min_message_length = kwargs.get(
-            "min_message_length", config.MEM0_MIN_MESSAGE_LENGTH
+            "min_message_length", config.Session.MEM0_MIN_MESSAGE_LENGTH
         )
 
         # Incremental message tracking (replaces hash-based deduplication)

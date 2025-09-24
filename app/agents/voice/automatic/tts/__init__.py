@@ -8,7 +8,7 @@ from app.agents.voice.automatic.features.charts.highlight_filter import (
     HighlightedChartTextFilter,
 )
 from app.agents.voice.automatic.types import TTSProvider, VoiceName
-from app.core import config
+from app.core.config import config
 from app.core.logger import logger
 
 
@@ -40,19 +40,19 @@ def get_tts_service(
     ):
         logger.info("Using ElevenLabs TTS service for RHEA voice.")
         return ElevenLabsTTSService(
-            api_key=config.ELEVENLABS_API_KEY,
-            voice_id=config.ELEVENLABS_RHEA_VOICE_ID,
-            model_id=config.ELEVENLABS_MODEL_ID,
+            api_key=config.TTS.ELEVENLABS_API_KEY,
+            voice_id=config.TTS.ELEVENLABS_RHEA_VOICE_ID,
+            model_id=config.TTS.ELEVENLABS_MODEL_ID,
             params=ElevenLabsTTSService.InputParams(
-                speed=config.ELEVENLABS_TTS_SPEED, language=Language.EN_IN
+                speed=config.TTS.ELEVENLABS_TTS_SPEED, language=Language.EN_IN
             ),
             text_filters=text_filters,
         )
 
-    voice_id = config.GOOGLE_BRET_VOICE  # Default to BRET
+    voice_id = config.TTS.GOOGLE_BRET_VOICE  # Default to BRET
     if tts_provider == TTSProvider.GOOGLE.value:
         if voice_name == VoiceName.MIA.value:
-            voice_id = config.GOOGLE_MIA_VOICE
+            voice_id = config.TTS.GOOGLE_MIA_VOICE
             logger.info(f"Using Google TTS service with MIA voice.")
         else:
             logger.info(f"Using Google TTS service with BRET voice.")
@@ -62,6 +62,6 @@ def get_tts_service(
         params=GoogleTTSService.InputParams(
             language=Language.EN_IN,
         ),
-        credentials=config.GOOGLE_CREDENTIALS_JSON,
+        credentials=config.AI.GOOGLE_CREDENTIALS_JSON,
         text_filters=text_filters,
     )

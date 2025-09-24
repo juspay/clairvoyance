@@ -48,7 +48,7 @@ from app.agents.voice.automatic.utils.session_context import (
     create_session_context,
     set_current_session_id,
 )
-from app.core import config
+from app.core.config import config
 from app.core.logger import configure_session_logger, logger
 from app.utils.common import get_breeze_portal_url
 
@@ -70,8 +70,10 @@ load_dotenv(override=True)
 
 # Load tool call sound
 tool_call_sound = None
-if config.ENABLE_TOOL_CALL_SOUND and os.path.exists(config.TOOL_CALL_SOUND_FILE):
-    with wave.open(config.TOOL_CALL_SOUND_FILE) as audio_file:
+if config.Tools.ENABLE_TOOL_CALL_SOUND and os.path.exists(
+    config.Tools.TOOL_CALL_SOUND_FILE
+):
+    with wave.open(config.Tools.TOOL_CALL_SOUND_FILE) as audio_file:
         tool_call_sound = OutputAudioRawFrame(
             audio_file.readframes(-1),
             audio_file.getframerate(),
@@ -136,9 +138,9 @@ async def main():
     # Initialize tools based on the mode and provided tokens
     # Only pass tokens if in live mode
 
-    use_breeze_mcp_server = config.ENABLE_BREEZE_MCP and (
-        not config.SHOPS_FOR_BREEZE_MCP  # Empty list = all shops
-        or args.shop_id in config.SHOPS_FOR_BREEZE_MCP  # Specific shops only
+    use_breeze_mcp_server = config.Tools.ENABLE_BREEZE_MCP and (
+        not config.Tools.SHOPS_FOR_BREEZE_MCP  # Empty list = all shops
+        or args.shop_id in config.Tools.SHOPS_FOR_BREEZE_MCP  # Specific shops only
     )
 
     # Personalize the system prompt if a user name is provided
@@ -146,51 +148,51 @@ async def main():
 
     # Configure VAD - use normal timeout for both cases
     vad_params = VADParams(
-        confidence=config.VAD_CONFIDENCE,
-        start_secs=config.VAD_START_SECS,
-        stop_secs=config.VAD_STOP_SECS,  # Use normal timeout - Smart Turn will intercept and decide
-        min_volume=config.VAD_MIN_VOLUME,
+        confidence=config.Audio.VAD_CONFIDENCE,
+        start_secs=config.Audio.VAD_START_SECS,
+        stop_secs=config.Audio.VAD_STOP_SECS,  # Use normal timeout - Smart Turn will intercept and decide
+        min_volume=config.Audio.VAD_MIN_VOLUME,
     )
 
     vad_analyzer = SileroVADAnalyzer(
-        sample_rate=config.SAMPLE_RATE,
+        sample_rate=config.Audio.SAMPLE_RATE,
         params=vad_params,
     )
 
     daily_params = DailyParams(
         audio_in_enabled=True,
         audio_out_enabled=True,
-        vad_analyzer=None if config.DISABLE_SILERO_VAD else vad_analyzer,
+        vad_analyzer=None if config.Audio.DISABLE_SILERO_VAD else vad_analyzer,
     )
 
     # Audio filter configuration
     if (
-        config.ENABLE_KRISP_FILTER
-        and config.KRISP_MODEL_PATH
-        and os.path.isfile(config.KRISP_MODEL_PATH)
+        config.Audio.ENABLE_KRISP_FILTER
+        and config.Audio.KRISP_MODEL_PATH
+        and os.path.isfile(config.Audio.KRISP_MODEL_PATH)
     ):
         try:
             daily_params.audio_in_filter = NoiseFilterFromKrisp(
-                model_path=config.KRISP_MODEL_PATH
+                model_path=config.Audio.KRISP_MODEL_PATH
             )
         except Exception as e:
             logger.error(f"Krisp Filter failed: {e}")
-    elif config.ENABLE_AIC_FILTER and config.AICOUSTICS_LICENSE_KEY:
+    elif config.Audio.ENABLE_AIC_FILTER and config.Audio.AICOUSTICS_LICENSE_KEY:
         try:
             aic_filter = AICFilter(
-                license_key=config.AICOUSTICS_LICENSE_KEY,
-                enhancement_level=config.AIC_ENHANCEMENT_LEVEL,
-                voice_gain=config.AIC_VOICE_GAIN,
-                noise_gate_enable=config.AIC_NOISE_GATE_ENABLE,
+                license_key=config.Audio.AICOUSTICS_LICENSE_KEY,
+                enhancement_level=config.Audio.AIC_ENHANCEMENT_LEVEL,
+                voice_gain=config.Audio.AIC_VOICE_GAIN,
+                noise_gate_enable=config.Audio.AIC_NOISE_GATE_ENABLE,
             )
             daily_params.audio_in_filter = aic_filter
             logger.info(
-                f"AIC Filter: ENABLED (enhancement_level={config.AIC_ENHANCEMENT_LEVEL}, voice_gain={config.AIC_VOICE_GAIN}, noise_gate={config.AIC_NOISE_GATE_ENABLE})"
+                f"AIC Filter: ENABLED (enhancement_level={config.Audio.AIC_ENHANCEMENT_LEVEL}, voice_gain={config.Audio.AIC_VOICE_GAIN}, noise_gate={config.Audio.AIC_NOISE_GATE_ENABLE})"
             )
 
         except Exception as e:
             logger.error(f"AIC Filter failed: {e}")
-    elif config.ENABLE_NOISE_REDUCE_FILTER:
+    elif config.Audio.ENABLE_NOISE_REDUCE_FILTER:
         daily_params.audio_in_filter = NoisereduceFilter()
         logger.info("Audio Filter: NoiseReduce Enabled")
     else:
@@ -209,14 +211,14 @@ async def main():
         tts_provider=tts_provider.value,
         voice_name=voice_name.value,
         session_id=args.session_id,
-        enable_chart_text_filter=config.ENABLE_CHARTS,
+        enable_chart_text_filter=config.Tools.ENABLE_CHARTS,
     )
 
     llm = LLMServiceWrapper(
         AzureLLMService(
-            api_key=config.AZURE_OPENAI_API_KEY,
-            endpoint=config.AZURE_OPENAI_ENDPOINT,
-            model=config.AZURE_OPENAI_MODEL,
+            api_key=config.AI.AZURE_OPENAI_API_KEY,
+            endpoint=config.AI.AZURE_OPENAI_ENDPOINT,
+            model=config.AI.AZURE_OPENAI_MODEL,
         )
     )
 
@@ -320,7 +322,7 @@ async def main():
 
     # Add custom LLMSpyProcessor for streaming function call events (RTVI and TTS created earlier)
     tool_call_processor = LLMSpyProcessor(
-        rtvi, args.session_id, config.ENABLE_CHARTS, "LLMSpyProcessor"
+        rtvi, args.session_id, config.Tools.ENABLE_CHARTS, "LLMSpyProcessor"
     )
 
     # Build pipeline components list
@@ -330,23 +332,23 @@ async def main():
     ]
 
     # Add PTT VAD filter only if it's enabled
-    if config.DISABLE_VAD_FOR_PTT:
+    if config.Audio.DISABLE_VAD_FOR_PTT:
         ptt_vad_filter = PTTVADFilter("PTTVADFilter")
         pipeline_components.append(ptt_vad_filter)  # Filter VAD frames after STT
 
     pipeline_components.extend([rtvi, context_aggregator.user()])
     if (
-        config.MEM0_ENABLED
+        config.Session.MEM0_ENABLED
         and args.user_email
         and args.user_email.strip()
-        and config.MEM0_API_KEY
-        and config.MEM0_API_KEY.strip()
+        and config.Session.MEM0_API_KEY
+        and config.Session.MEM0_API_KEY.strip()
     ):
         try:
             logger.info("Initializing Mem0 memory service")
             memory_params = ImprovedMem0MemoryService.InputParams()
             memory = ImprovedMem0MemoryService(
-                api_key=config.MEM0_API_KEY,
+                api_key=config.Session.MEM0_API_KEY,
                 user_id=args.user_email,
                 params=memory_params,
             )
@@ -357,12 +359,12 @@ async def main():
             logger.warning(
                 "Continuing without memory service - conversation will work normally"
             )
-    elif config.MEM0_ENABLED:
+    elif config.Session.MEM0_ENABLED:
         if not args.user_email:
             logger.info(
                 "Skipping Mem0 memory service - no user email provided (guest flow)"
             )
-        elif not config.MEM0_API_KEY or not config.MEM0_API_KEY.strip():
+        elif not config.Session.MEM0_API_KEY or not config.Session.MEM0_API_KEY.strip():
             logger.warning("MEM0_API_KEY is not provided - skipping memory service")
     else:
         logger.debug("Mem0 memory service disabled via config")
@@ -389,14 +391,14 @@ async def main():
     conversation_id = f"{user_name}-{shopId}-{timestamp}"
 
     task_params = {
-        "idle_timeout_secs": config.AUTOMATIC_SESSION_INACTIVITY_TIMEOUT,
+        "idle_timeout_secs": config.Session.AUTOMATIC_SESSION_INACTIVITY_TIMEOUT,
         "idle_timeout_frames": (BotSpeakingFrame, LLMFullResponseEndFrame),
         "params": PipelineParams(allow_interruptions=True),
         "cancel_on_idle_timeout": True,
         "observers": [GoogleRTVIObserver(rtvi)],
     }
 
-    if config.ENABLE_TRACING:
+    if config.Logging.ENABLE_TRACING:
         setup_tracing("breeze-voice-agent")
         task_params["conversation_id"] = conversation_id
         task_params["enable_tracing"] = True
@@ -475,7 +477,7 @@ async def main():
     @transport.event_handler("on_first_participant_joined")
     async def on_first_participant_joined(transport, participant):
         logger.info(f"First participant joined: {participant['id']}")
-        if config.ENABLE_AUTOMATIC_DAILY_RECORDING:
+        if config.Daily.ENABLE_AUTOMATIC_DAILY_RECORDING:
             await transport.start_recording()
 
         await task.queue_frames([context_aggregator.user().get_context_frame()])
@@ -483,7 +485,7 @@ async def main():
     @transport.event_handler("on_participant_left")
     async def on_participant_left(transport, participant, reason):
         logger.info(f"Participant left: {participant['id']}")
-        if config.ENABLE_AUTOMATIC_DAILY_RECORDING:
+        if config.Daily.ENABLE_AUTOMATIC_DAILY_RECORDING:
             await transport.stop_recording()
         await task.cancel()
 
@@ -496,7 +498,7 @@ async def main():
         if isinstance(message, dict):
             message_type = message.get("type")
             if message_type == "function-confirmation-response" or (
-                config.DISABLE_VAD_FOR_PTT
+                config.Audio.DISABLE_VAD_FOR_PTT
                 and message_type in ["ptt-start", "ptt-end", "ptt-sync"]
             ):
                 # Manually trigger the RTVI handler since it might not be getting the message
@@ -521,7 +523,7 @@ async def main():
         except Exception as e:
             logger.error(f"Pipeline runner error: {e}")
 
-    if config.ENABLE_TRACING:
+    if config.Logging.ENABLE_TRACING:
         langfuse_client = get_client()
         tracer = trace.get_tracer(__name__)
         with tracer.start_as_current_span(conversation_id) as root_span:

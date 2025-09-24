@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from app.agents.voice.breeze_buddy.services.telephony.utils import get_voice_provider
-from app.core.config import ORDER_CONFIRMATION_WEBHOOK_SECRET_KEY
+from app.core.config import config as application_config
 from app.core.logger import logger
 from app.core.security.sha import calculate_hmac_sha256
 from app.core.transport.http_client import create_aiohttp_session
@@ -147,7 +147,8 @@ async def _retry_call(
                     async with create_aiohttp_session() as session:
                         payload = json.dumps(summary_data).replace(" ", "")
                         signature = calculate_hmac_sha256(
-                            payload, ORDER_CONFIRMATION_WEBHOOK_SECRET_KEY
+                            payload,
+                            application_config.Security.ORDER_CONFIRMATION_WEBHOOK_SECRET_KEY,
                         )
                         headers = {
                             "Content-Type": "application/json",

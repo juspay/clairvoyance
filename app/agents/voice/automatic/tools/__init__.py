@@ -2,11 +2,7 @@ from pipecat.adapters.schemas.tools_schema import ToolsSchema
 
 from app.agents.voice.automatic.tools.utils import filter_tools_by_authorization
 from app.agents.voice.automatic.types import Mode
-from app.core.config import (
-    AUTOMATIC_WRITE_ACTIONS_AUTHORIZED_USERS,
-    ENABLE_CHARTS,
-    ENABLE_SEARCH_GROUNDING,
-)
+from app.core.config import config
 from app.core.logger import logger
 
 from . import breeze, charts, internet, juspay
@@ -59,14 +55,14 @@ def initialize_tools(
     logger.info(f"Loaded {len(system_tools.standard_tools)} system tools.")
 
     # Internet tools are always available
-    if ENABLE_SEARCH_GROUNDING:
+    if config.AI.ENABLE_SEARCH_GROUNDING:
         all_tools.extend(internet.tools.standard_tools)
         all_tool_functions.update(internet.tool_functions)
         logger.info(f"Loaded {len(internet.tools.standard_tools)} internet tools.")
     else:
         logger.info("Internet search tools are disabled.")
 
-    if ENABLE_CHARTS:
+    if config.Tools.ENABLE_CHARTS:
         all_tools.extend(charts.generate_ui.standard_tools)
         all_tool_functions.update(charts.tool_functions)
         logger.info(f"Loaded {len(charts.tool_functions)} chart tools.")
@@ -121,7 +117,7 @@ def initialize_tools(
 
     tools = ToolsSchema(standard_tools=all_tools)
 
-    if AUTOMATIC_WRITE_ACTIONS_AUTHORIZED_USERS:
+    if config.Security.AUTOMATIC_WRITE_ACTIONS_AUTHORIZED_USERS:
         logger.info(f"Total tools before filtering: {len(all_tools)}")
 
         filtered_tools, filtered_tool_functions = filter_tools_by_authorization(

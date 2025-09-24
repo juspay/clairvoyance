@@ -29,20 +29,7 @@ from app.agents.voice.breeze_buddy.workflows.order_confirmation.utils import (
     get_stt_service,
     indian_number_to_speech,
 )
-from app.core.config import (
-    AZURE_BREEZE_BUDDY_OPENAI_MODEL,
-    AZURE_OPENAI_API_KEY,
-    AZURE_OPENAI_ENDPOINT,
-    BREEZE_BUDDY_VAD_CONFIDENCE,
-    BREEZE_BUDDY_VAD_MIN_VOLUME,
-    BREEZE_BUDDY_VAD_START_SECS,
-    BREEZE_BUDDY_VAD_STOP_SECS,
-    ELEVENLABS_API_KEY,
-    ELEVENLABS_BB_VOICE_ID,
-    ELEVENLABS_MODEL_ID,
-    ELEVENLABS_VOICE_SPEED,
-    ORDER_CONFIRMATION_WEBHOOK_SECRET_KEY,
-)
+from app.core.config import config
 from app.core.logger import logger
 from app.core.security.sha import calculate_hmac_sha256
 from app.database.accessor import get_lead_by_call_id
@@ -206,10 +193,10 @@ class OrderConfirmationBot:
         self.vad_analyzer = SileroVADAnalyzer(
             sample_rate=16000,
             params=VADParams(
-                confidence=BREEZE_BUDDY_VAD_CONFIDENCE,
-                start_secs=BREEZE_BUDDY_VAD_START_SECS,
-                stop_secs=BREEZE_BUDDY_VAD_STOP_SECS,
-                min_volume=BREEZE_BUDDY_VAD_MIN_VOLUME,
+                confidence=config.BreezeBuddy.BREEZE_BUDDY_VAD_CONFIDENCE,
+                start_secs=config.BreezeBuddy.BREEZE_BUDDY_VAD_START_SECS,
+                stop_secs=config.BreezeBuddy.BREEZE_BUDDY_VAD_STOP_SECS,
+                min_volume=config.BreezeBuddy.BREEZE_BUDDY_VAD_MIN_VOLUME,
             ),
         )
 
@@ -230,18 +217,18 @@ class OrderConfirmationBot:
 
         stt = get_stt_service()
         llm = AzureLLMService(
-            api_key=AZURE_OPENAI_API_KEY,
-            endpoint=AZURE_OPENAI_ENDPOINT,
-            model=AZURE_BREEZE_BUDDY_OPENAI_MODEL,
+            api_key=config.AI.AZURE_OPENAI_API_KEY,
+            endpoint=config.AI.AZURE_OPENAI_ENDPOINT,
+            model=config.BreezeBuddy.AZURE_BREEZE_BUDDY_OPENAI_MODEL,
         )
 
         # Create TTS with event handlers for VAD muting
         tts = ElevenLabsTTSService(
-            api_key=ELEVENLABS_API_KEY,
-            voice_id=ELEVENLABS_BB_VOICE_ID,
-            model_id=ELEVENLABS_MODEL_ID,
+            api_key=config.TTS.ELEVENLABS_API_KEY,
+            voice_id=config.TTS.ELEVENLABS_BB_VOICE_ID,
+            model_id=config.TTS.ELEVENLABS_MODEL_ID,
             params=ElevenLabsTTSService.InputParams(
-                speed=ELEVENLABS_VOICE_SPEED, language=Language.EN_IN
+                speed=config.TTS.ELEVENLABS_VOICE_SPEED, language=Language.EN_IN
             ),
         )
 
@@ -513,7 +500,8 @@ class OrderConfirmationBot:
                     try:
                         payload = json.dumps(summary_data).replace(" ", "")
                         signature = calculate_hmac_sha256(
-                            payload, ORDER_CONFIRMATION_WEBHOOK_SECRET_KEY
+                            payload,
+                            config.Security.ORDER_CONFIRMATION_WEBHOOK_SECRET_KEY,
                         )
                         headers = {
                             "Content-Type": "application/json",

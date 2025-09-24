@@ -10,8 +10,7 @@ class VoiceCallProvider(ABC):
     Abstract base class for voice call providers.
     """
 
-    def __init__(self, config, aiohttp_session):
-        self.config = config
+    def __init__(self, aiohttp_session):
         self.aiohttp_session = aiohttp_session
         self.completion_callback = None
 

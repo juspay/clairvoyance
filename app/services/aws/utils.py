@@ -7,7 +7,7 @@ from typing import Optional
 
 import boto3
 
-from app.core import config
+from app.core.config import config
 from app.core.logger import logger
 
 
@@ -23,20 +23,23 @@ def get_aws_client(service_name: str) -> Optional[any]:
     """
     try:
         # Check if AWS credentials are available
-        if not config.AWS_ACCESS_KEY_ID or not config.AWS_SECRET_ACCESS_KEY:
+        if (
+            not config.Security.AWS_ACCESS_KEY_ID
+            or not config.Security.AWS_SECRET_ACCESS_KEY
+        ):
             logger.error(f"AWS credentials missing for {service_name} client")
             return None
 
         # Create the AWS client
         client = boto3.client(
             service_name,
-            aws_access_key_id=config.AWS_ACCESS_KEY_ID,
-            aws_secret_access_key=config.AWS_SECRET_ACCESS_KEY,
-            region_name=config.AWS_REGION,
+            aws_access_key_id=config.Security.AWS_ACCESS_KEY_ID,
+            aws_secret_access_key=config.Security.AWS_SECRET_ACCESS_KEY,
+            region_name=config.Security.AWS_REGION,
         )
 
         logger.info(
-            f"AWS {service_name} client initialized for region: {config.AWS_REGION}"
+            f"AWS {service_name} client initialized for region: {config.Security.AWS_REGION}"
         )
         return client
 

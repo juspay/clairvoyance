@@ -10,7 +10,7 @@ from app.agents.voice.breeze_buddy.services.telephony.base_provider import (
 from app.agents.voice.breeze_buddy.workflows.order_confirmation.websocket_bot import (
     main as telephony_websocket_conn,
 )
-from app.core import config
+from app.core.config import config
 from app.core.logger import logger
 from app.core.transport.http_client import get_proxy_config
 from app.schemas import CallProvider
@@ -18,7 +18,7 @@ from app.schemas import CallProvider
 
 class ExotelProvider(VoiceCallProvider):
     def __init__(self, aiohttp_session):
-        super().__init__(config, aiohttp_session)
+        super().__init__(aiohttp_session)
 
     async def handle_websocket(self, websocket: WebSocket, provider: CallProvider):
         serializer = lambda stream_sid, call_sid: ExotelFrameSerializer(
@@ -35,20 +35,22 @@ class ExotelProvider(VoiceCallProvider):
         )
 
     def make_call(self, customer_mobile_number: str, outbound_number: str):
-        flow_url = f"http://my.exotel.com/{self.config.EXOTEL_ACCOUNT_SID}/exoml/start_voice/{self.config.EXOTEL_APPLET_APP_ID}"
+        flow_url = f"http://my.exotel.com/{config.ExternalAPIs.EXOTEL_ACCOUNT_SID}/exoml/start_voice/{config.ExternalAPIs.EXOTEL_APPLET_APP_ID}"
 
         payload = {
             "From": customer_mobile_number,
             "CallerId": outbound_number,
             "Url": flow_url,
             "StatusCallback": (
-                self.config.APP_BASE_URL
+                config.Server.APP_BASE_URL
                 + "/agent/voice/breeze-buddy/exotel/callback/status"
             ),
         }
-        url = f"https://{self.config.EXOTEL_API_KEY}:{self.config.EXOTEL_API_TOKEN}@{self.config.EXOTEL_SUBDOMAIN}/v1/Accounts/{self.config.EXOTEL_ACCOUNT_SID}/Calls/connect.json"
+        url = f"https://{config.ExternalAPIs.EXOTEL_API_KEY}:{config.ExternalAPIs.EXOTEL_API_TOKEN}@{config.ExternalAPIs.EXOTEL_SUBDOMAIN}/v1/Accounts/{config.ExternalAPIs.EXOTEL_ACCOUNT_SID}/Calls/connect.json"
 
-        logger.info(f"Making Exotel API call to: {self.config.EXOTEL_SUBDOMAIN}")
+        logger.info(
+            f"Making Exotel API call to: {config.ExternalAPIs.EXOTEL_SUBDOMAIN}"
+        )
         logger.info(f"Payload: {payload}")
 
         try:

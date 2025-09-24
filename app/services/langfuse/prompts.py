@@ -5,7 +5,7 @@ Handles fetching and processing prompts from LangFuse.
 
 from typing import Optional
 
-from app.core.config import ENABLE_LANGFUSE_PROMPTS
+from app.core.config import config
 from app.core.logger import logger
 from app.services.langfuse.main import langfuse_client
 
@@ -21,7 +21,7 @@ def fetch_prompt(prompt_name: str, label: str) -> Optional[str]:
     Returns:
         str: Prompt content if successful, None if failed
     """
-    if not ENABLE_LANGFUSE_PROMPTS:
+    if not config.Langfuse.ENABLE_LANGFUSE_PROMPTS:
         logger.debug("LangFuse prompts not enabled, using fallback")
         return None
 

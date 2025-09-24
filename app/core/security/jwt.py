@@ -6,13 +6,7 @@ import jwt
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from app.core.config import (
-    ENABLE_LIGHTHOUSE_AUTH,
-    JWT_ACCESS_TOKEN_EXPIRE_MINUTES,
-    JWT_ALGORITHM,
-    JWT_SECRET_KEY,
-    LIGHTHOUSE_JWT_SECRET,
-)
+from app.core.config import config
 from app.core.logger import logger
 from app.schemas import TokenData
 
@@ -28,9 +22,11 @@ class JWTManager:
     """JWT token management class"""
 
     def __init__(self):
-        self.secret_key = JWT_SECRET_KEY
-        self.algorithm = JWT_ALGORITHM
-        self.access_token_expire_minutes = JWT_ACCESS_TOKEN_EXPIRE_MINUTES
+        self.secret_key = config.Security.JWT_SECRET_KEY
+        self.algorithm = config.Security.JWT_ALGORITHM
+        self.access_token_expire_minutes = (
+            config.Security.JWT_ACCESS_TOKEN_EXPIRE_MINUTES
+        )
 
     def create_access_token(
         self, data: Dict[str, Any], expires_delta: Optional[timedelta] = None
@@ -142,7 +138,7 @@ class JWTManager:
         try:
             # Use lighthouse's JWT secret (same as ACCESS_JWT_SECRET from lighthouse)
             # Decode the JWT token using lighthouse's secret
-            if not LIGHTHOUSE_JWT_SECRET:
+            if not config.Security.LIGHTHOUSE_JWT_SECRET:
                 logger.error("LIGHTHOUSE_JWT_SECRET is not configured")
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -150,7 +146,7 @@ class JWTManager:
                 )
             payload = jwt.decode(
                 breeze_token,
-                LIGHTHOUSE_JWT_SECRET,
+                config.Security.LIGHTHOUSE_JWT_SECRET,
                 algorithms=["HS256"],  # Same algorithm lighthouse uses
             )
 
