@@ -50,13 +50,18 @@ async def callback_status(request: Request, provider: str):
     query_params = dict(request.query_params)
     logger.info(f"Received call-details with {provider} query params: {query_params}")
 
-    if provider.lower() != "exotel":
+    if provider.lower() != "exotel" and provider.lower() != "twilio":
         raise HTTPException(
             status_code=404, detail="Feature not supported for this service provider"
         )
 
-    recording_url = query_params.get("Stream[RecordingUrl]")
     call_sid = query_params.get("CallSid")
+    recording_url = None
+
+    if provider.lower() == "twilio":
+        recording_url = query_params.get("RecordingUrl")
+    elif provider.lower() == "exotel":
+        recording_url = query_params.get("Stream[RecordingUrl]")
 
     if recording_url and call_sid:
         logger.info(

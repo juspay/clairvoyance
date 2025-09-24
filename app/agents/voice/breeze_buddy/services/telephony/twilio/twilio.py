@@ -81,6 +81,10 @@ class TwilioProvider(VoiceCallProvider):
                 from_=outbound_number,
                 twiml=str(voice_call_payload),
                 record=True,
+                recording_status_callback=(
+                    self.config.APP_BASE_URL
+                    + "/agent/voice/breeze-buddy/twilio/callback/details"
+                ),
                 status_callback=(
                     self.config.APP_BASE_URL
                     + "/agent/voice/breeze-buddy/twilio/callback/status"
