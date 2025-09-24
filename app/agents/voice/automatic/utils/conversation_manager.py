@@ -127,12 +127,18 @@ class ConversationManager:
         self, session_id: str, content: str, message_id: Optional[str] = None
     ) -> ConversationMessage:
         """Add a user message and start a new turn"""
-        # Reset audio manager for new user input - CRITICAL for allowing audio on new inputs
+        # MINIMAL QUEUE: Only reset audio for ACTUAL user input, not function calls
         from app.agents.voice.automatic.audio.audio_manager import get_audio_manager
         audio_manager = get_audio_manager()
         if audio_manager:
-            audio_manager.reset_for_new_input()
-            logger.debug(f"Reset audio manager for new user input: {content[:50]}...")
+            # Check if this is a real user input or just function call processing
+            is_real_user_input = not content.startswith("[Inferred from voice]") and "function" not in content.lower()
+            
+            if is_real_user_input:
+                audio_manager.reset_for_new_input()
+                logger.debug(f"MINIMAL QUEUE: Reset audio for real user input: {content[:50]}...")
+            else:
+                logger.debug(f"MINIMAL QUEUE: Skipping reset for function/inferred content: {content[:50]}...")
         
         user_message = ConversationMessage.create_user_message(content, message_id)
         turn = self.start_turn(session_id, user_message)

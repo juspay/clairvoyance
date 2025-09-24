@@ -61,7 +61,7 @@ class UserSpeakingAudioProcessor(FrameProcessor):
                         logger.info(f"🛑 Stopped playing audio - user started speaking")
                     
                     # Then enable for new input
-                    audio_manager.enable_for_user_input()
+                    audio_manager.set_user_input()
                     logger.info(f"✅ Audio enabled - user started speaking ({type(frame).__name__})")
                 else:
                     logger.error("❌ No audio manager found!")
@@ -80,7 +80,7 @@ class UserSpeakingAudioProcessor(FrameProcessor):
                 audio_manager = get_audio_manager()
                 if audio_manager:
                     # Start audio immediately when user stops speaking
-                    await audio_manager.start_for_user_input()
+                    await audio_manager.start_audio()
                     logger.info(f"🎵 Audio started - user stopped speaking ({type(frame).__name__})")
                 else:
                     logger.error("❌ No audio manager found!")

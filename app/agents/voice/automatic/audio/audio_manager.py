@@ -1,117 +1,108 @@
 """
-Improved Audio Manager with dynamic duration detection and proper looping
+Simplified Audio Manager - Minimal variables, seamless playback, immediate stop capability
 """
 
-import time
 import asyncio
 from typing import Optional
 from pydub import AudioSegment
 from pipecat.frames.frames import OutputAudioRawFrame
 from app.core.logger import logger
 
-# Configurable audio length constant - change this to test different audio lengths
-AUDIO_LENGTH_SECONDS = 1  # Default duration in seconds
+# Configurable audio length constant
+AUDIO_LENGTH_SECONDS = 6  # Default duration in seconds
 
 
 class AudioManager:
-    """Audio manager that plays waiting audio with proper looping based on actual audio duration."""
+    """Simplified audio manager with minimal state and seamless chunked playback."""
     
     def __init__(self, tts_service, transport=None):
         self.tts_service = tts_service
-        self.transport = transport  # Keep for future use if needed
-        self.waiting_audio_data = None
-        self.audio_duration_seconds = AUDIO_LENGTH_SECONDS
+        self.transport = transport  # Keep for compatibility
+        
+        # MINIMAL STATE - Only 4 variables needed
         self.is_playing = False
+        self.loop_count = 0  # Track completed loops (max 3 = 18 seconds total)
+        self.audio_chunks = []  # 1-second audio chunks for seamless playback
+        self.user_has_input = False  # Ensure audio only starts after user input
+        
+        # Internal task management
         self.loop_task: Optional[asyncio.Task] = None
         
-        # New simplified state management
-        self.audio_enabled = False  # Enable when user starts speaking
-        self.user_is_speaking = False  # Track if user is currently speaking
-        
-        # Legacy flags (keep for compatibility during transition)
-        self.user_input_active = False
-        self.stop_requested = False
-        self.response_started = False
-        self.audio_played_for_current_input = False
-        self.bot_speaking = False
-        self.function_calls_active = False
         self._load_waiting_audio()
     
     def _load_waiting_audio(self):
-        f"""Load the {AUDIO_LENGTH_SECONDS}-second waiting audio."""
+        """Load waiting audio and split into 1-second chunks for seamless playback."""
         try:
             wav_file_path = f"app/agents/voice/automatic/audio/waiting_{int(AUDIO_LENGTH_SECONDS)}sec.wav"
-
             
             audio = AudioSegment.from_wav(wav_file_path)
             # Convert to pipeline format
             audio = audio.set_frame_rate(16000).set_channels(1).set_sample_width(2)
-            self.waiting_audio_data = audio.raw_data
             
-            # Set duration from constant
-            self.audio_duration_seconds = AUDIO_LENGTH_SECONDS
+            # Split into clean 1-second chunks
+            self.audio_chunks = []
+            chunk_duration_ms = 1000  # 1 second in milliseconds
             
-            logger.info(f"Loaded {AUDIO_LENGTH_SECONDS}-second waiting audio: {len(self.waiting_audio_data)} bytes")
+            for i in range(0, len(audio), chunk_duration_ms):
+                chunk = audio[i:i + chunk_duration_ms]
+                
+                # Ensure chunk is exactly 1 second (pad if necessary)
+                if len(chunk) < chunk_duration_ms:
+                    silence_needed = chunk_duration_ms - len(chunk)
+                    silence = AudioSegment.silent(duration=silence_needed, frame_rate=16000)
+                    chunk = chunk + silence
+                
+                self.audio_chunks.append(chunk.raw_data)
+            
+            logger.info(f"Loaded {AUDIO_LENGTH_SECONDS}-second waiting audio: {len(self.audio_chunks)} chunks")
 
         except Exception as e:
             logger.error(f"Failed to load waiting_{int(AUDIO_LENGTH_SECONDS)}sec.wav: {e}")
-            self.waiting_audio_data = None
-            self.audio_duration_seconds = AUDIO_LENGTH_SECONDS
+            self.audio_chunks = []
     
-    async def start_for_user_input(self):
-        """Start waiting audio for a new user input (only once per input)."""
-       
-        # Check if we should skip audio start
-        blocking_conditions = {
-            'user_input_active': self.user_input_active,
-            'no_audio_data': not self.waiting_audio_data,
-            'response_started': self.response_started,
-            'audio_played_for_current_input': self.audio_played_for_current_input,
-            'bot_speaking': self.bot_speaking,
-            'function_calls_active': self.function_calls_active,
-            'is_playing': self.is_playing
-        }
+    def set_user_input(self):
+        """Mark that user has provided input - required for audio to start."""
+        self.user_has_input = True
+        logger.info("🎤 User input detected - audio enabled")
+    
+    async def start_audio(self):
+        """Start seamless chunked audio playback (only if user has provided input)."""
         
-        blocking_flags = [k for k, v in blocking_conditions.items() if v]
-        
-        if blocking_flags:
-            logger.warning(f"🚫 AUDIO BLOCKED by: {', '.join(blocking_flags)}")
-            logger.info(f"Full state: {blocking_conditions}")
-            return
-        
-        self.user_input_active = True
-        self.is_playing = True
-        self.stop_requested = False
-        self.response_started = False
-        self.function_calls_active = True  # Mark function calls as active
-        self.audio_played_for_current_input = True  # Mark that audio is playing for this input
-        
-        # Add small delay to prevent immediate audio playback
-        await asyncio.sleep(0.3)
-        
-        # Check again if we should still play (conditions might have changed)
-        if self.stop_requested or self.response_started or self.bot_speaking:
-            logger.info("⚠️ Conditions changed during delay, not starting audio")
-            self.user_input_active = False
-            self.is_playing = False
-            self.function_calls_active = False
+        # Check prerequisites
+        if not self.user_has_input:
+            logger.info("🚫 No user input detected - audio blocked")
             return
             
-        # Use the new improved loop instead of old one
-        self.loop_task = asyncio.create_task(self._loop_until_bot_speaks())
-        logger.info("Started waiting audio loop (will loop until response)")
-    
-    async def stop_for_response(self):
-        """Stop waiting audio when response is ready - simple and effective."""
-        if not self.user_input_active or self.stop_requested:
+        if not self.audio_chunks:
+            logger.warning("🚫 No audio chunks available")
+            return
+            
+        if self.is_playing:
+            logger.info("🔄 Audio already playing - skipping")
             return
         
-        self.stop_requested = True
-        self.user_input_active = False
-        self.is_playing = False
-        self.response_started = True  # Mark that response has started
-        self.function_calls_active = False  # Reset function calls state
+        # Start audio
+        self.is_playing = True
+        self.loop_count = 0
         
+        # Cancel any existing task
+        if self.loop_task and not self.loop_task.done():
+            self.loop_task.cancel()
+        
+        # Start seamless audio streaming
+        self.loop_task = asyncio.create_task(self._stream_seamless_audio())
+        logger.info(f"🎵 Started seamless audio - max 3 loops (18s total)")
+    
+    async def stop_and_disable_audio(self):
+        """Stop audio immediately and disable until next user input."""
+        logger.info("🛑 Stopping audio immediately")
+        
+        # Set stop flags
+        self.is_playing = False
+        self.user_has_input = False  # Require new user input for next audio
+        self.loop_count = 0
+        
+        # Cancel audio task
         if self.loop_task and not self.loop_task.done():
             self.loop_task.cancel()
             try:
@@ -119,194 +110,118 @@ class AudioManager:
             except asyncio.CancelledError:
                 pass
         
-        # Only log once to reduce spam
-        logger.info("Stopped waiting audio - response ready")
-    
-    async def stop_waiting_audio_loop(self):
-        """Alias for stop_for_response to maintain compatibility."""
-        await self.stop_for_response()
-    
-    def enable_for_user_input(self):
-        """Enable audio when user starts speaking - NEW METHOD"""
+        # Clear audio queue aggressively
+        await self._clear_audio_queue()
         
-        # Force reset all blocking flags to ensure audio can start
-        self._force_reset_blocking_flags()
-        
-        self.audio_enabled = True
-        self.user_is_speaking = True
+        logger.info("✅ Audio stopped and disabled")
+    
+    def reset(self):
+        """Reset for new conversation cycle."""
         self.is_playing = False
-        self.stop_requested = False
+        self.user_has_input = False
+        self.loop_count = 0
         
-        # Cancel any existing tasks
         if self.loop_task and not self.loop_task.done():
             self.loop_task.cancel()
         
-    
-    def _force_reset_blocking_flags(self):
-        """Force reset all flags that could block audio from starting"""
-
-        
-        # Reset the critical user_input_active flag that was blocking audio
-        self.user_input_active = False
-        self.response_started = False
-        self.audio_played_for_current_input = False
-        self.bot_speaking = False
-        self.function_calls_active = False
-        
-    
-    async def start_playing_audio(self):
-        """Start playing audio when user stops speaking - NEW METHOD"""
-        
-        if not self.audio_enabled:
-            logger.info("Audio not enabled - skipping")
-            return
-        if self.is_playing:
-            logger.info("Audio already playing - skipping")
-            return
-        if not self.waiting_audio_data:
-            logger.info("No waiting audio data - skipping")
-            return
-        
-        self.user_is_speaking = False
-        self.is_playing = True
-        self.stop_requested = False  # Ensure stop flag is clear
-        self.loop_task = asyncio.create_task(self._loop_until_bot_speaks())
-        logger.info("Started playing audio - user stopped speaking - will loop continuously until bot responds")
-    
-    async def stop_and_disable_audio(self):
-        """Stop audio and disable until next user input - NEW METHOD"""
-        logger.info(f"🛑 STOP_AND_DISABLE_AUDIO called - current state: enabled={self.audio_enabled}, playing={self.is_playing}, task_running={self.loop_task and not self.loop_task.done() if self.loop_task else False}")
-        
-        self.audio_enabled = False
-        self.is_playing = False
-        self.user_is_speaking = False
-        self.stop_requested = True
-        
-        if self.loop_task and not self.loop_task.done():
-            logger.info("🔄 Cancelling audio loop task...")
-            self.loop_task.cancel()
-            try:
-                await self.loop_task
-                logger.info("✅ Audio loop task cancelled successfully")
-            except asyncio.CancelledError:
-                logger.info("✅ Audio loop task cancellation confirmed")
-        
-        logger.info("🛑 Audio stopped and disabled - bot speaking")
-    
-    def reset_for_new_input(self):
-        """Reset the audio manager for a new user input cycle - LEGACY METHOD"""
-        # Don't reset if audio is currently enabled and should be playing
-        # This prevents premature resets during function calls
-        if self.audio_enabled and not self.bot_speaking and not self.response_started:
-            logger.info("🚫 Skipping reset - audio is enabled and should be playing")
-            return
-            
-        # Stop any active audio first
-        if self.is_playing or self.user_input_active:
-            self.stop_requested = True
-            self.is_playing = False
-            self.user_input_active = False
-            if self.loop_task and not self.loop_task.done():
-                self.loop_task.cancel()
-        
-        # Reset all state flags
-        self.response_started = False
-        self.audio_played_for_current_input = False
-        self.bot_speaking = False
-        self.function_calls_active = False
-        self.stop_requested = False
-        
-        # Reset new flags too
-        self.audio_enabled = False
-        self.user_is_speaking = False
-        
-        logger.info("Reset audio manager for new user input - all state cleared")
+        logger.info("🔄 Audio manager reset for new conversation")
     
     def set_bot_speaking(self, speaking: bool):
         """Track when bot starts/stops speaking to prevent audio during speech."""
-        self.bot_speaking = speaking
         if speaking and self.is_playing:
-            # Stop audio immediately when bot starts speaking
-            asyncio.create_task(self.stop_for_response())
-            logger.debug("Stopped audio - bot started speaking")
+            logger.info("🛑 Bot started speaking - stopping audio")
+            asyncio.create_task(self.stop_and_disable_audio())
     
-    async def _loop_until_response(self):
-        """Loop waiting audio until response arrives (but only start once per user input)."""
+    async def _stream_seamless_audio(self):
+        """Stream audio chunks seamlessly with minimal buffer for immediate stopping."""
         try:
-            while self.is_playing and self.user_input_active and not self.stop_requested:
-                if self.waiting_audio_data:
-                    # Create and queue audio frame
-                    audio_frame = OutputAudioRawFrame(
-                        audio=self.waiting_audio_data,
-                        sample_rate=16000,
-                        num_channels=1
-                    )
-                    await self.tts_service.queue_frame(audio_frame)
-                    logger.debug("Playing waiting audio (will loop until response)")
-                    
-                    # Wait 4 seconds for audio to finish, then loop seamlessly
-                    # Check every 0.1 seconds if we should stop
-                    for _ in range(40):  # 40 * 0.1 = 4 seconds
-                        if not self.is_playing or self.stop_requested:
-                            return
-                        await asyncio.sleep(0.1)
-                else:
-                    await asyncio.sleep(0.1)
-                    
+            if not self.audio_chunks:
+                return
+            
+            total_chunks = len(self.audio_chunks)  # 6 chunks = 6 seconds
+            max_loops = 3  # Maximum 3 loops = 18 seconds total
+            chunk_index = 0
+            
+            logger.info(f"🚀 Starting seamless streaming: {total_chunks} chunks, max {max_loops} loops")
+            
+            # Pre-queue 1 chunk for seamless start (minimal buffer)
+            if self.is_playing:
+                audio_frame = OutputAudioRawFrame(
+                    audio=self.audio_chunks[chunk_index],
+                    sample_rate=16000,
+                    num_channels=1
+                )
+                await self.tts_service.queue_frame(audio_frame)
+                logger.info(f"🔊 Pre-queued chunk 1/{total_chunks}")
+                chunk_index = 1
+            
+            # Continue streaming with optimal timing for seamless playback
+            while self.is_playing and self.loop_count < max_loops:
+                
+                # Wait 0.8 seconds before queuing next chunk (seamless timing)
+                await asyncio.sleep(0.8)
+                
+                # Check if we should stop
+                if not self.is_playing:
+                    break
+                
+                # Queue next chunk
+                current_chunk = self.audio_chunks[chunk_index % total_chunks]
+                audio_frame = OutputAudioRawFrame(
+                    audio=current_chunk,
+                    sample_rate=16000,
+                    num_channels=1
+                )
+                await self.tts_service.queue_frame(audio_frame)
+                
+                chunk_index += 1
+                
+                # Update loop count when we complete a full cycle
+                if chunk_index % total_chunks == 0:
+                    self.loop_count += 1
+                    logger.info(f"🔄 Completed loop {self.loop_count}/{max_loops}")
+                
+                logger.debug(f"🔊 Queued chunk {(chunk_index % total_chunks) + 1}/{total_chunks}")
+            
+            # Natural completion
+            if self.loop_count >= max_loops:
+                logger.info(f"🏁 Completed maximum {max_loops} loops - stopping naturally")
+            
         except asyncio.CancelledError:
-            pass  # Don't log cancellation - it's expected
+            logger.info("🛑 Audio streaming cancelled")
         except Exception as e:
-            logger.error(f"Error in audio loop: {e}")
+            logger.error(f"❌ Error in audio streaming: {e}")
         finally:
             self.is_playing = False
-            self.user_input_active = False
-            self.function_calls_active = False
-            # Don't reset response_started here - let it be reset by new user input
+            logger.info("🔄 Audio streaming finished")
     
-    async def _loop_until_bot_speaks(self):
-        """Loop waiting audio until response arrives (max 10 loops)."""
-        loop_count = 0
-        MAX_LOOPS = 10
-        logger.info(f"isPlaying>> {self.is_playing}, stopRequested>> {self.stop_requested}, maxLoops>> {MAX_LOOPS}, loopCount>> {loop_count},{self.is_playing and not self.stop_requested and loop_count < MAX_LOOPS}")
-
+    async def _clear_audio_queue(self):
+        """Clear audio queue to prevent delayed audio after stop."""
         try:
-            # logger.info(f"isPlaying>>33 {self.is_playing}, stopRequested>> {self.stop_requested}, maxLoops>> {MAX_LOOPS}, loopCount>> {loop_count},{self.is_playing and not self.stop_requested and loop_count < MAX_LOOPS}")
-            while self.is_playing and not self.stop_requested and loop_count < MAX_LOOPS:
-
-                if self.waiting_audio_data:
-                    logger.info(f"if self.waiting_audio_data>>")
-                    loop_count += 1
-                    logger.info(f"loop_count incremented to {loop_count}>>")
-
-                    # Create and queue audio frame
-                    audio_frame = OutputAudioRawFrame(
-                        audio=self.waiting_audio_data,
-                        sample_rate=16000,
-                        num_channels=1
-                    )
-                    await self.tts_service.queue_frame(audio_frame)
-                    logger.info(f"🔊 Playing waiting audio (loop #{loop_count}/{MAX_LOOPS})")
-                    
-                    # Wait for audio duration, checking every 0.1 seconds if we should stop
-                    for _ in range(int(self.audio_duration_seconds * 10)):  # Check every 0.1 seconds
-                        if not self.is_playing or self.stop_requested:
-                            return
-                        await asyncio.sleep(0.1)
+            # Try to interrupt TTS service
+            if hasattr(self.tts_service, 'interrupt'):
+                if asyncio.iscoroutinefunction(self.tts_service.interrupt):
+                    await self.tts_service.interrupt()
                 else:
-                    logger.info(f"else self.waiting_audio_data>>22")
-                    await asyncio.sleep(0.1)
+                    self.tts_service.interrupt()
+                logger.info("🚨 Interrupted TTS service")
             
-            # If we completed all loops without being stopped
-                if loop_count >= MAX_LOOPS:
-                    logger.info(f"🏁 Completed all {MAX_LOOPS} loops - stopping naturally")
+            # Send brief silence to flush pipeline
+            silence_duration = 0.01  # 10ms silence
+            sample_rate = 16000
+            silence_samples = int(silence_duration * sample_rate)
+            silence_data = b'\x00' * (silence_samples * 2)  # 16-bit silence
             
-                    
-        except asyncio.CancelledError:
-            pass  # Don't log cancellation - it's expected
+            silence_frame = OutputAudioRawFrame(
+                audio=silence_data,
+                sample_rate=16000,
+                num_channels=1
+            )
+            await self.tts_service.queue_frame(silence_frame)
+            logger.info("🔇 Queued silence to flush audio pipeline")
+            
         except Exception as e:
-            logger.error(f"Error in audio loop: {e}")
-        finally:
-            self.is_playing = False
+            logger.debug(f"Audio queue clearing failed: {e}")
 
 
 # Global audio manager instance
@@ -331,15 +246,44 @@ def initialize_audio_manager(tts_service, transport=None) -> AudioManager:
     return audio_manager
 
 
-# Simple helper function to stop audio from anywhere
+# Simple helper functions for external use
 async def stop_audio_immediately():
-    """Simple function to stop audio immediately from anywhere in the code."""
+    """Stop audio immediately from anywhere in the code."""
     audio_manager = get_audio_manager()
     if audio_manager:
-        await audio_manager.stop_for_response()
+        await audio_manager.stop_and_disable_audio()
+
 
 def set_bot_speaking_state(speaking: bool):
-    """Global function to set bot speaking state from anywhere."""
+    """Set bot speaking state from anywhere."""
     audio_manager = get_audio_manager()
     if audio_manager:
         audio_manager.set_bot_speaking(speaking)
+
+
+def mark_user_input():
+    """Mark that user has provided input - enables audio."""
+    audio_manager = get_audio_manager()
+    if audio_manager:
+        audio_manager.set_user_input()
+
+
+# Legacy compatibility methods (simplified)
+async def start_for_user_input():
+    """Legacy method - start audio for user input."""
+    audio_manager = get_audio_manager()
+    if audio_manager:
+        audio_manager.set_user_input()
+        await audio_manager.start_audio()
+
+
+async def stop_for_response():
+    """Legacy method - stop audio for response."""
+    await stop_audio_immediately()
+
+
+def reset_for_new_input():
+    """Legacy method - reset for new input."""
+    audio_manager = get_audio_manager()
+    if audio_manager:
+        audio_manager.reset()

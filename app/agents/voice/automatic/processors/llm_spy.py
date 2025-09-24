@@ -37,6 +37,17 @@ from app.core.logger import logger
 from ..features.text_sanitizer.tts_sanitizer import sanitize_markdown
 from app.agents.voice.automatic.audio.audio_manager import get_audio_manager, stop_audio_immediately
 
+def _stop_audio_immediately(context: str = "unknown") -> bool:
+    """INSTANT audio stopping using simplified AudioManager API."""
+    audio_manager = get_audio_manager()
+    if audio_manager and (audio_manager.user_has_input or audio_manager.is_playing):
+        # Use the simplified stop method
+        asyncio.create_task(audio_manager.stop_and_disable_audio())
+        
+        logger.info(f"🚨 INSTANT AUDIO STOP: {context} - simplified stop triggered")
+        return True
+    return False
+
 # Global RTVI processor reference for function confirmations
 _rtvi_processor = None
 
@@ -163,13 +174,15 @@ class LLMSpyProcessor(FrameProcessor):
         """Process frames and delegate conversation logic to ConversationManager."""
         await super().process_frame(frame, direction)
 
+        # TextFrame - INSTANT AUDIO INTERRUPTION (highest priority)
         if isinstance(frame, TextFrame):
-            # Stop and disable audio when TTS text starts (bot is about to speak)
-            audio_manager = get_audio_manager()
-            if audio_manager and (audio_manager.audio_enabled or audio_manager.is_playing):
-                logger.info(f"🤖 TextFrame detected - bot starting to speak, stopping audio")
-                audio_manager.set_bot_speaking(True)  # Mark bot as speaking
-                await audio_manager.stop_and_disable_audio()  # Use new method
+            # INSTANT STOP: Any text output means immediate audio interruption
+            if frame.text.strip():  # Only stop for non-empty text
+                if _stop_audio_immediately("TextFrame - Bot Speaking"):
+                    audio_manager = get_audio_manager()
+                    if audio_manager:
+                        audio_manager.set_bot_speaking(True)
+                        logger.info(f"🚨 INSTANT STOP: TextFrame detected - audio interrupted immediately")
             
             if config.SANITIZE_TEXT_FOR_TTS:
                 await self.push_frame(
@@ -181,55 +194,10 @@ class LLMSpyProcessor(FrameProcessor):
         elif isinstance(frame, UserStartedSpeakingFrame) and self._enable_charts:
             reset_chart_turn_count(self._session_id)
             await self.push_frame(frame, direction)
-        
-        # Stop waiting audio when TTS starts speaking
-        # elif isinstance(frame, TTSSpeakFrame):
-        #     audio_manager = get_audio_manager()
-        #     if audio_manager:
-        #         await audio_manager.stop_waiting_audio_loop()
-        #         logger.debug("Stopped waiting audio - TTS started speaking")
-        #     await self.push_frame(frame, direction)
-        
-        # # Stop waiting audio when TTS starts speaking
-        # elif isinstance(frame, TTSSpeakFrame):
-        #     audio_manager = get_audio_manager()
-        #     if audio_manager:
-        #         await audio_manager.stop_waiting_audio_loop()
-        #         logger.debug("Stopped waiting audio - TTS started speaking")
-        #     await self.push_frame(frame, direction)
-        
-        # # Stop waiting audio when TTS starts speaking
-        # elif isinstance(frame, TTSSpeakFrame):
-        #     audio_manager = get_audio_manager()
-        #     if audio_manager:
-        #         await audio_manager.stop_waiting_audio_loop()
-        #         logger.debug("Stopped waiting audio - TTS started speaking")
-        #     await self.push_frame(frame, direction)
-        
-        # # Stop waiting audio when TTS starts speaking
-        # elif isinstance(frame, TTSSpeakFrame):
-        #     audio_manager = get_audio_manager()
-        #     if audio_manager:
-        #         await audio_manager.stop_waiting_audio_loop()
-        #         logger.debug("Stopped waiting audio - TTS speak frame detected")
-        #     await self.push_frame(frame, direction)
 
-        # # TTS Speak Frame - stop waiting audio when bot starts speaking
-        # elif isinstance(frame, TTSSpeakFrame):
-        #     # Stop waiting audio immediately when TTS starts
-        #     audio_manager = get_audio_manager()
-        #     if audio_manager:
-        #         await audio_manager.stop_waiting_audio_loop()
-        #         logger.debug("Stopped waiting audio - TTS speak frame received")
-            
-        #     await self.push_frame(frame, direction)
-
-        # LLM Response Start - begin collecting text but don't stop audio yet
+        # LLM Response Start - PREPARE FOR INSTANT STOP (but don't stop yet)
         elif isinstance(frame, LLMFullResponseStartFrame):
-            # Don't stop audio here - let it continue until actual TextFrame (bot speaking)
-            logger.info(f"🤖 LLM response starting - keeping audio playing until bot speaks")
-            audio_manager = get_audio_manager()
-            # Audio will be stopped when TextFrame is detected (actual bot speech)
+            logger.debug(f"🤖 LLM processing started - audio continues, preparing for instant stop on text output")
             
             if self._enable_charts:
                 self._is_collecting_response = True
@@ -244,20 +212,30 @@ class LLMSpyProcessor(FrameProcessor):
 
             await self.push_frame(frame, direction)
 
-        # LLM Output - accumulate streaming text
-        elif (
-            isinstance(frame, LLMTextFrame)
-            and self._is_collecting_response
-            and self._enable_charts
-        ):
-            self._accumulated_text += frame.text
+        # LLM Output - INSTANT AUDIO INTERRUPTION (zero-delay)
+        elif isinstance(frame, LLMTextFrame):
+            # INSTANT STOP: Any LLM text output triggers immediate audio stop
+            if frame.text.strip():  # Only stop for non-empty text
+                _stop_audio_immediately("LLMTextFrame - LLM Output")
+                logger.info(f"🚨 INSTANT STOP: LLMTextFrame detected - audio interrupted with zero delay")
+            
+            if self._is_collecting_response and self._enable_charts:
+                self._accumulated_text += frame.text
+            
             await self.push_frame(frame, direction)
 
-        # LLM Response Complete - send to ConversationManager
+        # LLM Response Complete - FINAL AUDIO STOP CONFIRMATION
         elif isinstance(frame, LLMFullResponseEndFrame) and self._enable_charts:
-            if self._accumulated_text.strip():
+            # Check if there was actual text output BEFORE clearing it
+            has_text_output = self._accumulated_text.strip()
+            
+            if has_text_output:
+                _stop_audio_immediately("Response Complete - Final Stop")
+                logger.info(f"🚨 FINAL STOP: LLM response complete with text output - audio fully stopped")
+                
+                # Send the response to conversation manager
                 event = await self._conversation_manager.add_llm_response_with_events(
-                    self._session_id, self._accumulated_text.strip()
+                    self._session_id, has_text_output
                 )
                 if event:
                     await emit_rtvi_event(self._rtvi, event, self._session_id)
@@ -265,17 +243,21 @@ class LLMSpyProcessor(FrameProcessor):
             self._accumulated_text = ""
             self._is_collecting_response = False
             
-            # Mark bot as finished speaking when response ends
-            # NOTE: Don't reset here - let the bot actually start speaking first
+            # Handle case where no text was produced
             audio_manager = get_audio_manager()
             if audio_manager:
+                if not has_text_output:
+                    logger.info(f"🔍 LLM response ended with no text output - audio may resume if stopped")
+                
                 audio_manager.set_bot_speaking(False)
-                # Removed reset_for_new_input() - it was clearing audio state too early
+                logger.debug(f"🤖 LLM response ended - bot marked as not speaking")
             
             await self.push_frame(frame, direction)
 
-        # Function Call Start - emit RTVI event and track in conversation
+        # Function Call Start - NO ACTION (let audio continue)
         elif isinstance(frame, FunctionCallInProgressFrame):
+            logger.debug(f"🔧 Function call started: {frame.function_name} - audio continues (no interruption)")
+            
             if self._tracer:
                 span = self._tracer.start_span(
                     f"Tool: {frame.function_name}", kind=trace.SpanKind.CLIENT
@@ -319,12 +301,9 @@ class LLMSpyProcessor(FrameProcessor):
                 if event:
                     await emit_rtvi_event(self._rtvi, event, self._session_id)
 
-        # Function Call Result - emit RTVI event and track in conversation
+        # Function Call Result - NO ACTION (let audio continue)
         elif isinstance(frame, FunctionCallResultFrame):
-            # Only stop audio if it's actually enabled/playing - don't stop for every function result
-            audio_manager = get_audio_manager()
-            if audio_manager and (audio_manager.audio_enabled or audio_manager.is_playing):
-                await audio_manager.stop_and_disable_audio()
+            logger.debug(f"🔧 Function result: {frame.function_name} - audio continues (no interruption)")
             
             # Emit tool-call-result event
             if self._tracer and frame.tool_call_id in self._active_spans:
