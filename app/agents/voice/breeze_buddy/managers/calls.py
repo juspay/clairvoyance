@@ -2,12 +2,15 @@
 Cron manager for handling background tasks.
 """
 
+import json
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from app.agents.voice.breeze_buddy.services.telephony.utils import get_voice_provider
+from app.core.config import ORDER_CONFIRMATION_WEBHOOK_SECRET_KEY
 from app.core.logger import logger
+from app.core.security.sha import calculate_hmac_sha256
 from app.core.transport.http_client import create_aiohttp_session
 from app.database.accessor import (
     create_lead_call_tracker,
@@ -113,7 +116,9 @@ async def _release_number(number_id: str, provider: CallProvider):
             )
 
 
-async def _retry_call(lead: LeadCallTracker, config: CallExecutionConfig):
+async def _retry_call(
+    lead: LeadCallTracker, config: CallExecutionConfig, outcome: LeadCallOutcome
+):
     """
     Schedules a retry for a call.
     """
@@ -129,6 +134,44 @@ async def _retry_call(lead: LeadCallTracker, config: CallExecutionConfig):
             payload=lead.payload,
             attempt_count=lead.attempt_count + 1,
         )
+    else:
+        if outcome == LeadCallOutcome.NO_ANSWER:
+            reporting_webhook_url = lead.payload.get("reporting_webhook_url")
+            if reporting_webhook_url:
+                summary_data = {
+                    "callSid": lead.call_id,
+                    "outcome": outcome.value,
+                    "orderId": lead.payload.get("order_id"),
+                }
+                try:
+                    async with create_aiohttp_session() as session:
+                        payload = json.dumps(summary_data).replace(" ", "")
+                        signature = calculate_hmac_sha256(
+                            payload, ORDER_CONFIRMATION_WEBHOOK_SECRET_KEY
+                        )
+                        headers = {
+                            "Content-Type": "application/json",
+                        }
+
+                        if signature:
+                            headers["checksum"] = signature
+
+                        async with session.post(
+                            reporting_webhook_url,
+                            json=summary_data,
+                            headers=headers,
+                        ) as response:
+                            if response.status == 200:
+                                logger.info(
+                                    "Successfully sent call summary webhook on no_answer."
+                                )
+                            else:
+                                response_text = await response.text()
+                                logger.error(
+                                    f"Failed to send call summary webhook on no_answer. Status: {response.status}, Body: {response_text}"
+                                )
+                except Exception as e:
+                    logger.error(f"Error sending webhook on no_answer: {e}")
 
 
 async def process_backlog_leads():
@@ -242,11 +285,17 @@ async def handle_call_completion(
         logger.error(f"Could not find lead for call_id: {call_id}")
         return
 
+    outbound_number = await get_outbound_number_by_id(lead.outbound_number_id)
+    if outbound_number:
+        await _release_number(outbound_number.id, outbound_number.provider)
+    else:
+        logger.error(
+            f"Could not find outbound number with id: {lead.outbound_number_id} to release."
+        )
+
     config = await _get_lead_config(lead)
     if not config:
         return
-
-    await _release_number(lead.outbound_number_id, config.calling_provider)
 
     meta_data = {"transcription": transcription}
     if updated_address:
@@ -261,7 +310,7 @@ async def handle_call_completion(
     )
 
     if outcome in [LeadCallOutcome.BUSY, LeadCallOutcome.NO_ANSWER]:
-        await _retry_call(lead, config)
+        await _retry_call(lead, config, outcome)
 
 
 async def handle_unanswered_calls(call_id: str):
@@ -274,11 +323,17 @@ async def handle_unanswered_calls(call_id: str):
         logger.error(f"Could not find lead for call_id: {call_id}")
         return
 
+    outbound_number = await get_outbound_number_by_id(lead.outbound_number_id)
+    if outbound_number:
+        await _release_number(outbound_number.id, outbound_number.provider)
+    else:
+        logger.error(
+            f"Could not find outbound number with id: {lead.outbound_number_id} to release."
+        )
+
     config = await _get_lead_config(lead)
     if not config:
         return
-
-    await _release_number(lead.outbound_number_id, config.calling_provider)
 
     await update_lead_call_completion_details(
         id=lead.id,
@@ -288,7 +343,7 @@ async def handle_unanswered_calls(call_id: str):
         call_end_time=datetime.now(timezone.utc),
     )
 
-    await _retry_call(lead, config)
+    await _retry_call(lead, config, LeadCallOutcome.NO_ANSWER)
 
 
 async def update_call_recording(call_id: str, recording_url: str):
