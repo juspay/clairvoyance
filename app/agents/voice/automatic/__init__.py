@@ -493,10 +493,14 @@ async def run_normal_mode(args):
     # Only stop audio when function calls complete if audio is actually playing
     @llm.event_handler("on_function_calls_finished")
     async def on_function_calls_finished(service):
-        # Only stop if audio is enabled/playing - don't stop for every function completion
-        if audio_manager.audio_enabled or audio_manager.is_playing:
+        # IMMEDIATELY stop audio when function calls finish (response coming)
+        if audio_manager.user_has_input or audio_manager.is_playing:
+            logger.info("🔧 Function calls finished - IMMEDIATELY stopping audio")
+            
+            # Use simplified stop method
             await audio_manager.stop_and_disable_audio()
-            logger.info("Stopped waiting audio - function calls finished")
+            
+            logger.info("🛑 Audio IMMEDIATELY stopped - function calls finished")
         else:
             logger.info("Function calls finished - audio not playing, no action needed")
 
