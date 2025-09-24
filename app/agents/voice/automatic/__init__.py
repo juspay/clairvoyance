@@ -31,7 +31,7 @@ from pipecat.transports.daily.transport import DailyParams, DailyTransport
 
 from app.agents.voice.automatic.features.llm_wrapper import LLMServiceWrapper
 from app.agents.voice.automatic.processors.llm_spy import handle_confirmation_response
-from app.agents.voice.automatic.services.filters.krisp.noise import NoiseFilterFromKrisp
+from app.agents.voice.automatic.services.fal import FalSmartTurnService
 from app.agents.voice.automatic.services.mcp import init_breeze_mcp_tools
 from app.agents.voice.automatic.services.mem0.memory import ImprovedMem0MemoryService
 from app.agents.voice.automatic.tools.charts import (
@@ -157,25 +157,31 @@ async def main():
         params=vad_params,
     )
 
+    # Initialize Fal.ai Smart Turn service
+    smart_turn_analyzer = None
+    fal_session = None
+    fal_smart_turn_service = None
+
+    if config.ENABLE_FAL_SMART_TURN:
+        if config.FAL_SMART_TURN_API_KEY:
+            fal_smart_turn_service = FalSmartTurnService()
+            smart_turn_analyzer, fal_session = (
+                await fal_smart_turn_service.create_analyzer()
+            )
+        else:
+            logger.warning(
+                "SMART_TURN: Fal.ai Smart Turn is enabled but FAL_SMART_TURN_API_KEY is missing; skipping."
+            )
+
     daily_params = DailyParams(
         audio_in_enabled=True,
         audio_out_enabled=True,
         vad_analyzer=None if config.DISABLE_SILERO_VAD else vad_analyzer,
+        turn_analyzer=smart_turn_analyzer,
     )
 
     # Audio filter configuration
-    if (
-        config.ENABLE_KRISP_FILTER
-        and config.KRISP_MODEL_PATH
-        and os.path.isfile(config.KRISP_MODEL_PATH)
-    ):
-        try:
-            daily_params.audio_in_filter = NoiseFilterFromKrisp(
-                model_path=config.KRISP_MODEL_PATH
-            )
-        except Exception as e:
-            logger.error(f"Krisp Filter failed: {e}")
-    elif config.ENABLE_AIC_FILTER and config.AICOUSTICS_LICENSE_KEY:
+    if config.ENABLE_AIC_FILTER and config.AICOUSTICS_LICENSE_KEY:
         try:
             aic_filter = AICFilter(
                 license_key=config.AICOUSTICS_LICENSE_KEY,
@@ -508,6 +514,9 @@ async def main():
     @task.event_handler("on_pipeline_cancelled")
     async def on_pipeline_cancelled(task, frame):
         logger.info("Pipeline task cancelled. Cancelling main task.")
+        # Clean up Fal.ai Smart Turn session
+        if fal_smart_turn_service:
+            await fal_smart_turn_service.cleanup(fal_session)
         main_task = asyncio.current_task()
         main_task.cancel()
 

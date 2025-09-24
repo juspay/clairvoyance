@@ -53,11 +53,6 @@ AIC_NOISE_GATE_ENABLE = (
     os.environ.get("AIC_NOISE_GATE_ENABLE", "true").lower() == "true"
 )
 
-# Krisp Audio Filter Configuration
-ENABLE_KRISP_FILTER = os.environ.get("ENABLE_KRISP_FILTER", "false").lower() == "true"
-KRISP_MODEL_PATH = os.environ.get(
-    "KRISP_MODEL_PATH", "/app/models/voice/krisp/krisp-viva-tel-v2.kef"
-)
 
 # TTS Configuration
 ELEVENLABS_API_KEY = os.environ.get("ELEVENLABS_API_KEY")
@@ -220,11 +215,19 @@ SONIOX_VAD_FORCE_TURN_ENDPOINT = (
 )  # CRITICAL: false = Use Soniox intelligent endpoint detection
 # true = Use external VAD (Silero)
 
+# Smart Turn Configuration
+ENABLE_FAL_SMART_TURN = (
+    os.environ.get("ENABLE_FAL_SMART_TURN", "false").lower() == "true"
+)
+# Required API key for FAL_SMART_TURN
+FAL_SMART_TURN_API_KEY = os.getenv("FAL_SMART_TURN_API_KEY")
+
 logger.info(f"Using Gemini model: {GEMINI_MODEL}")
 logger.info(f"Using response modality: {RESPONSE_MODALITY}")
 logger.info(f"Tracing enabled: {ENABLE_TRACING}")
 logger.info(f"Search grounding enabled: {ENABLE_SEARCH_GROUNDING}")
 logger.info(f"Using Gemini search result model: {GEMINI_SEARCH_RESULT_API_MODEL}")
+logger.info(f"SMART_TURN: Fal.ai Smart Turn enabled: {ENABLE_FAL_SMART_TURN}")
 
 # Automatic MCP Tool Server
 ENABLE_BREEZE_MCP = os.environ.get("ENABLE_BREEZE_MCP", "false").lower() == "true"
