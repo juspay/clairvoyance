@@ -135,7 +135,7 @@ async def _retry_call(
             attempt_count=lead.attempt_count + 1,
         )
     else:
-        if outcome == LeadCallOutcome.NO_ANSWER:
+        if outcome == LeadCallOutcome.NO_ANSWER or outcome == LeadCallOutcome.BUSY:
             reporting_webhook_url = lead.payload.get("reporting_webhook_url")
             if reporting_webhook_url:
                 summary_data = {

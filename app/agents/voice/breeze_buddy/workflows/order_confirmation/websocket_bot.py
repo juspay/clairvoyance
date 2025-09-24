@@ -374,7 +374,10 @@ class OrderConfirmationBot:
                             ),
                             "orderId": self.order_id,
                         }
-                        if self.reporting_webhook_url:
+                        if (
+                            self.reporting_webhook_url
+                            and summary_data.outcome != LeadCallOutcome.BUSY
+                        ):
                             try:
                                 payload = json.dumps(summary_data).replace(" ", "")
                                 signature = calculate_hmac_sha256(
@@ -503,7 +506,10 @@ class OrderConfirmationBot:
                     "orderId": self.order_id,
                 }
                 logger.info(f"Call summary data: {summary_data}")
-                if self.reporting_webhook_url:
+                if (
+                    self.reporting_webhook_url
+                    and summary_data.outcome != LeadCallOutcome.BUSY
+                ):
                     try:
                         payload = json.dumps(summary_data).replace(" ", "")
                         signature = calculate_hmac_sha256(
@@ -659,7 +665,7 @@ class OrderConfirmationBot:
                     "task_messages": [
                         {
                             "role": "system",
-                            "content": f"The order is confirmed. Say: 'Thank you for confirming your order. Your order for {self.order_summary} will be delivered soon. Have a good day'",
+                            "content": "The order is confirmed. Say: 'Thank you for confirming your order. Your order will be delivered soon. Have a good day'",
                         }
                     ],
                     "post_actions": [
