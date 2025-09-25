@@ -1943,7 +1943,7 @@ update_euler_offer_function = FunctionSchema(
 
 get_refund_analytics_function = FunctionSchema(
     name="get_refund_analytics_by_time",
-    description="Get comprehensive refund analytics from the dedicated refund domain including total refund volume, successful refunds, manual review counts, and breakdown by payment gateway and method within a specified time range. Provides insights into refund processing efficiency and patterns. Default to today if no timeframe specified.",
+    description="Get comprehensive refund analytics from the dedicated refund domain including total refund volume, successful refunds, manual review counts, and breakdown by payment gateway and method within a specified time range. Provides insights into refund processing efficiency and patterns.",
     properties={
         **time_input_schema["properties"],
         "dimension": {
@@ -1957,7 +1957,7 @@ get_refund_analytics_function = FunctionSchema(
             ],
         },
     },
-    required=["startTime", "endTime"],
+    required=time_input_schema["properties"],
 )
 
 tools = ToolsSchema(
