@@ -63,22 +63,19 @@ class AudioManager:
     def set_user_input(self):
         """Mark that user has provided input - required for audio to start."""
         self.user_has_input = True
-        logger.info("🎤 User input detected - audio enabled")
+        logger.info("User input detected - audio enabled")
     
     async def start_audio(self):
         """Start seamless chunked audio playback (only if user has provided input)."""
         
         # Check prerequisites
         if not self.user_has_input:
-            logger.info("🚫 No user input detected - audio blocked")
             return
             
         if not self.audio_chunks:
-            logger.warning("🚫 No audio chunks available")
             return
             
         if self.is_playing:
-            logger.info("🔄 Audio already playing - skipping")
             return
         
         # Start audio
@@ -91,12 +88,10 @@ class AudioManager:
         
         # Start seamless audio streaming
         self.loop_task = asyncio.create_task(self._stream_seamless_audio())
-        logger.info(f"🎵 Started seamless audio - max 3 loops (18s total)")
+        # logger.info("Started audio playback")
     
     async def stop_and_disable_audio(self):
         """Stop audio immediately and disable until next user input."""
-        logger.info("🛑 Stopping audio immediately")
-        
         # Set stop flags
         self.is_playing = False
         self.user_has_input = False  # Require new user input for next audio
@@ -112,8 +107,6 @@ class AudioManager:
         
         # Clear audio queue aggressively
         await self._clear_audio_queue()
-        
-        logger.info("✅ Audio stopped and disabled")
     
     def reset(self):
         """Reset for new conversation cycle."""
@@ -123,13 +116,11 @@ class AudioManager:
         
         if self.loop_task and not self.loop_task.done():
             self.loop_task.cancel()
-        
-        logger.info("🔄 Audio manager reset for new conversation")
     
     def set_bot_speaking(self, speaking: bool):
         """Track when bot starts/stops speaking to prevent audio during speech."""
         if speaking and self.is_playing:
-            logger.info("🛑 Bot started speaking - stopping audio")
+            logger.info("Bot started speaking - stopping audio")
             asyncio.create_task(self.stop_and_disable_audio())
     
     async def _stream_seamless_audio(self):
@@ -142,8 +133,6 @@ class AudioManager:
             max_loops = 3  # Maximum 3 loops = 18 seconds total
             chunk_index = 0
             
-            logger.info(f"🚀 Starting seamless streaming: {total_chunks} chunks, max {max_loops} loops")
-            
             # Pre-queue 1 chunk for seamless start (minimal buffer)
             if self.is_playing:
                 audio_frame = OutputAudioRawFrame(
@@ -152,7 +141,6 @@ class AudioManager:
                     num_channels=1
                 )
                 await self.tts_service.queue_frame(audio_frame)
-                logger.info(f"🔊 Pre-queued chunk 1/{total_chunks}")
                 chunk_index = 1
             
             # Continue streaming with optimal timing for seamless playback
@@ -179,21 +167,13 @@ class AudioManager:
                 # Update loop count when we complete a full cycle
                 if chunk_index % total_chunks == 0:
                     self.loop_count += 1
-                    logger.info(f"🔄 Completed loop {self.loop_count}/{max_loops}")
-                
-                logger.debug(f"🔊 Queued chunk {(chunk_index % total_chunks) + 1}/{total_chunks}")
-            
-            # Natural completion
-            if self.loop_count >= max_loops:
-                logger.info(f"🏁 Completed maximum {max_loops} loops - stopping naturally")
             
         except asyncio.CancelledError:
-            logger.info("🛑 Audio streaming cancelled")
+            pass
         except Exception as e:
-            logger.error(f"❌ Error in audio streaming: {e}")
+            logger.error(f"Error in audio streaming: {e}")
         finally:
             self.is_playing = False
-            logger.info("🔄 Audio streaming finished")
     
     async def _clear_audio_queue(self):
         """Clear audio queue to prevent delayed audio after stop."""
@@ -204,7 +184,6 @@ class AudioManager:
                     await self.tts_service.interrupt()
                 else:
                     self.tts_service.interrupt()
-                logger.info("🚨 Interrupted TTS service")
             
             # Send brief silence to flush pipeline
             silence_duration = 0.01  # 10ms silence
@@ -218,7 +197,6 @@ class AudioManager:
                 num_channels=1
             )
             await self.tts_service.queue_frame(silence_frame)
-            logger.info("🔇 Queued silence to flush audio pipeline")
             
         except Exception as e:
             logger.debug(f"Audio queue clearing failed: {e}")
@@ -247,39 +225,6 @@ def initialize_audio_manager(tts_service, transport=None) -> AudioManager:
 
 
 # Simple helper functions for external use
-async def stop_audio_immediately():
-    """Stop audio immediately from anywhere in the code."""
-    audio_manager = get_audio_manager()
-    if audio_manager:
-        await audio_manager.stop_and_disable_audio()
-
-
-def set_bot_speaking_state(speaking: bool):
-    """Set bot speaking state from anywhere."""
-    audio_manager = get_audio_manager()
-    if audio_manager:
-        audio_manager.set_bot_speaking(speaking)
-
-
-def mark_user_input():
-    """Mark that user has provided input - enables audio."""
-    audio_manager = get_audio_manager()
-    if audio_manager:
-        audio_manager.set_user_input()
-
-
-# Legacy compatibility methods (simplified)
-async def start_for_user_input():
-    """Legacy method - start audio for user input."""
-    audio_manager = get_audio_manager()
-    if audio_manager:
-        audio_manager.set_user_input()
-        await audio_manager.start_audio()
-
-
-async def stop_for_response():
-    """Legacy method - stop audio for response."""
-    await stop_audio_immediately()
 
 
 def reset_for_new_input():

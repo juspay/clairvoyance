@@ -40,7 +40,7 @@ from app.core import config
 from app.core.logger import logger
 
 from ..features.text_sanitizer.tts_sanitizer import sanitize_markdown
-from app.agents.voice.automatic.audio.audio_manager import get_audio_manager, stop_audio_immediately
+from app.agents.voice.automatic.audio.audio_manager import get_audio_manager
 
 def _stop_audio_immediately(context: str = "unknown") -> bool:
     """INSTANT audio stopping using simplified AudioManager API."""
@@ -49,7 +49,7 @@ def _stop_audio_immediately(context: str = "unknown") -> bool:
         # Use the simplified stop method
         asyncio.create_task(audio_manager.stop_and_disable_audio())
         
-        logger.info(f"🚨 INSTANT AUDIO STOP: {context} - simplified stop triggered")
+        logger.info(f"INSTANT AUDIO STOP: {context}")
         return True
     return False
 
@@ -187,7 +187,7 @@ class LLMSpyProcessor(FrameProcessor):
                     audio_manager = get_audio_manager()
                     if audio_manager:
                         audio_manager.set_bot_speaking(True)
-                        logger.info(f"🚨 INSTANT STOP: TextFrame detected - audio interrupted immediately")
+                        logger.info("INSTANT STOP: TextFrame detected - audio interrupted immediately")
             
             if config.SANITIZE_TEXT_FOR_TTS:
                 await self.push_frame(
@@ -200,43 +200,39 @@ class LLMSpyProcessor(FrameProcessor):
             reset_chart_turn_state(self._session_id)
             await self.push_frame(frame, direction)
 
-        # LLM Response Start - PREPARE FOR INSTANT STOP (but don't stop yet)
+        # LLM Response Start - begin collecting text and start conversation turn and PREPARE FOR INSTANT STOP (but don't stop yet)
         elif isinstance(frame, LLMFullResponseStartFrame):
-            logger.debug(f"🤖 LLM processing started - audio continues, preparing for instant stop on text output")
-            
-            if self._enable_charts:
-                self._is_collecting_response = True
-                self._accumulated_text = ""
-    
-                # Start conversation turn via ConversationManager
-                event = await self._conversation_manager.start_turn_with_events(
-                self._session_id
-            )
-                if event:
-                    await emit_rtvi_event(self._rtvi, event, self._session_id)
+            # logger.debug(f"🤖 LLM processing started - audio continues, preparing for instant stop on text output")
+            self._is_collecting_response = True
+            self._accumulated_text = ""
 
+            # Start conversation turn via ConversationManager
+            event = await self._conversation_manager.start_turn_with_events(
+                self._session_id
+         )
+            if event:
+                await emit_rtvi_event(self._rtvi, event, self._session_id)
             await self.push_frame(frame, direction)
 
-        # LLM Output - INSTANT AUDIO INTERRUPTION (zero-delay)
+        # LLM Output - accumulate streaming text & INSTANT AUDIO INTERRUPTION (zero-delay)
         elif isinstance(frame, LLMTextFrame):
             # INSTANT STOP: Any LLM text output triggers immediate audio stop
             if frame.text.strip():  # Only stop for non-empty text
                 _stop_audio_immediately("LLMTextFrame - LLM Output")
-                logger.info(f"🚨 INSTANT STOP: LLMTextFrame detected - audio interrupted with zero delay")
             
             if self._is_collecting_response and self._enable_charts:
                 self._accumulated_text += frame.text
             
             await self.push_frame(frame, direction)
 
-        # LLM Response Complete - FINAL AUDIO STOP CONFIRMATION
+        # LLM Response Complete - send to ConversationManager and FINAL AUDIO STOP CONFIRMATION
         elif isinstance(frame, LLMFullResponseEndFrame) and self._enable_charts:
             # Check if there was actual text output BEFORE clearing it
             has_text_output = self._accumulated_text.strip()
             
             if has_text_output:
                 _stop_audio_immediately("Response Complete - Final Stop")
-                logger.info(f"🚨 FINAL STOP: LLM response complete with text output - audio fully stopped")
+                # logger.info("FINAL STOP: LLM response complete with text output - audio fully stopped")
                 
                 # Send the response to conversation manager
                 event = await self._conversation_manager.add_llm_response_with_events(
@@ -251,18 +247,13 @@ class LLMSpyProcessor(FrameProcessor):
             # Handle case where no text was produced
             audio_manager = get_audio_manager()
             if audio_manager:
-                if not has_text_output:
-                    logger.info(f"🔍 LLM response ended with no text output - audio may resume if stopped")
-                
                 audio_manager.set_bot_speaking(False)
-                logger.debug(f"🤖 LLM response ended - bot marked as not speaking")
             
             await self.push_frame(frame, direction)
+            # logger.debug(f"🤖 LLM response ended - bot marked as not speaking")
 
-        # Function Call Start - NO ACTION (let audio continue)
+        # Function Call Start - emit RTVI event and track in conversation, NO ACTION (let audio continue)
         elif isinstance(frame, FunctionCallInProgressFrame):
-            logger.debug(f"🔧 Function call started: {frame.function_name} - audio continues (no interruption)")
-            
             if self._tracer:
                 # Use turn context directly for tool calls to be nested in turn span
                 turn_context = get_current_turn_context()
@@ -312,10 +303,8 @@ class LLMSpyProcessor(FrameProcessor):
                 if event:
                     await emit_rtvi_event(self._rtvi, event, self._session_id)
 
-        # Function Call Result - NO ACTION (let audio continue)
+        # Function Call Result - emit RTVI event and track in conversation and NO ACTION (let audio continue)
         elif isinstance(frame, FunctionCallResultFrame):
-            logger.debug(f"🔧 Function result: {frame.function_name} - audio continues (no interruption)")
-            
             # Emit tool-call-result event
             if self._tracer and frame.tool_call_id in self._active_spans:
                 span = self._active_spans.pop(frame.tool_call_id)

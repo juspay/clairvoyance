@@ -454,53 +454,25 @@ async def run_normal_mode(args):
     async def on_llm_response_started(service,function_calls):
         logger.info(f"Function calls started event triggered with {len(function_calls)} calls")
 
-        # commented out older waiting audio start code - audio is now managed by user speech events
-        # # Just log that LLM started - audio is managed by user speech events
-        # if tts_provider == TTSProvider.GOOGLE:
-        #     for function_call in function_calls:
-        #         # Skip "checking" message for instant functions and chart tools
-        #         if function_call.function_name not in [
-        #             "get_current_time",
-        #             "generate_bar_chart",
-        #             "generate_line_chart",
-        #             "generate_donut_chart",
-        #             "generate_single_stat_card",
-        #         ]:
-        #             phrases = [
-        #                 "Let me check on that.",
-        #                 "Give me a moment to do that.",
-        #                 "I'll get right on that.",
-        #                 "Working on that for you.",
-        #                 "One moment — I'm on it",
-        #                 "One second, boss.",
-        #                 "On it, boss!",
-        #                 "Just a second, captain.",
-        #             ]
-        #             await tts.queue_frame(TTSSpeakFrame(random.choice(phrases)))
-        #             break
-        
-    # Keep function call handler for debugging
-    @llm.event_handler("on_function_calls_started")
-    async def on_function_calls_started(service, function_calls):
-        logger.info(f"Function calls started event triggered with {len(function_calls)} calls")
-        # Audio already started by LLM response started, just log
-        for function_call in function_calls:
-            logger.debug(f"Function call: {function_call.function_name}")  
+    # # Keep function call handler for debugging
+    # @llm.event_handler("on_function_calls_started")
+    # async def on_function_calls_started(service, function_calls):
+    #     logger.info(f"Function calls started event triggered with {len(function_calls)} calls")
+    #     # Audio already started by LLM response started, just log
+    #     for function_call in function_calls:
+    #         logger.debug(f"Function call: {function_call.function_name}")  
                        
 
-    # Remove duplicate LLM response started handler - moved above
 
     # Only stop audio when function calls complete if audio is actually playing
     @llm.event_handler("on_function_calls_finished")
     async def on_function_calls_finished(service):
         # IMMEDIATELY stop audio when function calls finish (response coming)
         if audio_manager.user_has_input or audio_manager.is_playing:
-            logger.info("🔧 Function calls finished - IMMEDIATELY stopping audio")
             
             # Use simplified stop method
             await audio_manager.stop_and_disable_audio()
             
-            logger.info("🛑 Audio IMMEDIATELY stopped - function calls finished")
         else:
             logger.info("Function calls finished - audio not playing, no action needed")
 
@@ -532,10 +504,8 @@ async def run_normal_mode(args):
         pipeline_components.append(ptt_vad_filter)  # Filter VAD frames after STT
 
     # Add user speaking audio processor - manages audio based on user speech
-    logger.info("🔧 Creating UserSpeakingAudioProcessor...")
     user_speaking_processor = UserSpeakingAudioProcessor("UserSpeakingAudioProcessor")
     pipeline_components.append(user_speaking_processor)  # Add after STT/PTT, before RTVI
-    logger.info(f"✅ UserSpeakingAudioProcessor added to pipeline at position {len(pipeline_components)-1}")
 
     pipeline_components.extend([rtvi, context_aggregator.user()])
     if (
