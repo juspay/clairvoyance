@@ -304,16 +304,6 @@ async def main():
     async def on_llm_response_started(service,function_calls):
         logger.info(f"Function calls started event triggered with {len(function_calls)} calls")
 
-    # # Keep function call handler for debugging
-    # @llm.event_handler("on_function_calls_started")
-    # async def on_function_calls_started(service, function_calls):
-    #     logger.info(f"Function calls started event triggered with {len(function_calls)} calls")
-    #     # Audio already started by LLM response started, just log
-    #     for function_call in function_calls:
-    #         logger.debug(f"Function call: {function_call.function_name}")  
-                       
-
-
     # Only stop audio when function calls complete if audio is actually playing
     @llm.event_handler("on_function_calls_finished")
     async def on_function_calls_finished(service):
