@@ -500,6 +500,55 @@ def get_average_ticket_payment_wise_by_time(
     return _make_genius_api_request(params, payload_details)
 
 
+async def get_refund_analytics_by_time(params: FunctionCallParams):
+    """
+    Get comprehensive refund analytics from the dedicated refund domain including
+    total refund volume, successful refunds, manual review counts, and breakdown
+    by payment gateway and method.
+    """
+    try:
+        input_dimension = params.arguments.get("dimension")
+
+        actual_dimensions = []
+        if input_dimension:
+            actual_dimensions = [input_dimension]
+
+        logger.info(
+            f"Fetching refund analytics with params: {params.arguments} and dimension: {actual_dimensions}"
+        )
+
+        # Main refund analytics by gateway
+        analytics_payload = {
+            "domain": "kvrefundtxns",
+            "metric": [
+                "total_volume",
+                "success_rate",
+                "manual_review_rate",
+                "manual_review_count",
+                "pending_rate",
+                "refund_pending_5days",
+                "total_amount",
+                "mean_turn_around_time",
+            ],
+            "dimensions": actual_dimensions,
+            "sortedOn": {"sortDimension": "total_volume", "ordering": "Desc"},
+        }
+
+        # Execute both queries
+        analytics_result = await _make_genius_api_request(params, analytics_payload)
+        if isinstance(analytics_result, ApiFailure):
+            await params.result_callback(analytics_result.error)
+            return
+
+        await params.result_callback({"data": json.dumps(analytics_result.data)})
+
+    except Exception as e:
+        logger.error(
+            f"Unexpected error in get_refund_analytics_by_time: {e}", exc_info=True
+        )
+        await params.result_callback({"error": f"An unexpected error occurred: {e}"})
+
+
 async def create_euler_offer(params: FunctionCallParams):
     """
     Creates discount offers, cashbacks, and other promotional offers in the platform. IMPORTANT: Before calling this function, you MUST first present all the offer details to the user in a clear, formatted way and explicitly ask for their confirmation. Only proceed with calling this function after the user has explicitly confirmed they want to create the offer. Do not call this function without explicit user confirmation. To set the offer's active period, always use the get_current_time() tool for accurate start and end times in IST.
@@ -1892,6 +1941,25 @@ update_euler_offer_function = FunctionSchema(
     required=["offerCode"],
 )
 
+get_refund_analytics_function = FunctionSchema(
+    name="get_refund_analytics_by_time",
+    description="Get comprehensive refund analytics from the dedicated refund domain including total refund volume, successful refunds, manual review counts, and breakdown by payment gateway and method within a specified time range. Provides insights into refund processing efficiency and patterns. Default to today if no timeframe specified.",
+    properties={
+        **time_input_schema["properties"],
+        "dimension": {
+            "type": "string",
+            "description": "The dimension to group the analytics by. If provided, the results will be grouped by this dimension. Can be empty.",
+            "enum": [
+                "currency",
+                "payment_gateway",
+                "payment_method_type",
+                "bank",
+            ],
+        },
+    },
+    required=["startTime", "endTime"],
+)
+
 tools = ToolsSchema(
     standard_tools=[
         get_sr_success_rate_function,
@@ -1905,6 +1973,7 @@ tools = ToolsSchema(
         list_offers_by_filter_function,
         delete_euler_offer_function,
         update_euler_offer_function,
+        get_refund_analytics_function,
     ]
 )
 
@@ -1921,4 +1990,5 @@ tool_functions = {
     "list_offers_by_filter": list_offers_by_filter,
     "delete_euler_offer": delete_euler_offer,
     "update_euler_offer": update_euler_offer,
+    "get_refund_analytics_by_time": get_refund_analytics_by_time,
 }
