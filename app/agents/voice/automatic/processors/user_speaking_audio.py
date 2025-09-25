@@ -50,8 +50,6 @@ class UserSpeakingAudioProcessor(FrameProcessor):
         """Process frames and manage audio based on user speaking events."""
         await super().process_frame(frame, direction)
         
-        # Debug: Log all frames to see what's coming through
-        # logger.debug(f"UserSpeakingAudioProcessor received frame: {type(frame).__name__}")
 
         # Handle transcription frames - detect actual speech content
         if isinstance(frame, (TranscriptionFrame, InterimTranscriptionFrame)):
@@ -59,11 +57,10 @@ class UserSpeakingAudioProcessor(FrameProcessor):
             if frame.text.strip():
                 if not self._actual_speech_detected:
                     self._actual_speech_detected = True
-                    logger.info(f"✅ Actual speech detected: '{frame.text[:30]}...' - audio will be enabled")
                     
                     # If we have a pending audio task waiting for transcription, start audio now
                     if self._pending_audio_task and not self._pending_audio_task.done():
-                        logger.info("🎵 Starting audio due to delayed transcription")
+                        # logger.info("Starting audio due to delayed transcription")
                         audio_manager = get_audio_manager()
                         if audio_manager:
                             await audio_manager.start_audio()
@@ -74,7 +71,6 @@ class UserSpeakingAudioProcessor(FrameProcessor):
             VADUserStartedSpeakingFrame,
             EmulateUserStartedSpeakingFrame
         )):
-            logger.info(f"🎙️ USER STARTED SPEAKING DETECTED: {type(frame).__name__}")
             if not self._user_currently_speaking:
                 self._user_currently_speaking = True
                 self._actual_speech_detected = False  # Reset speech detection for new session
@@ -84,15 +80,13 @@ class UserSpeakingAudioProcessor(FrameProcessor):
                     # First stop any currently playing audio immediately
                     if audio_manager.is_playing:
                         await audio_manager.stop_and_disable_audio()
-                        logger.info(f"🛑 Stopped playing audio - user started speaking")
+                        # logger.info("Stopped playing audio - user started speaking")
                     
                     # Then enable for new input
                     audio_manager.set_user_input()
-                    logger.info(f"✅ Audio enabled - user started speaking ({type(frame).__name__})")
+                    # logger.info(f"Audio enabled - user started speaking ({type(frame).__name__})")
                 else:
-                    logger.error("❌ No audio manager found!")
-            else:
-                logger.info("User already marked as speaking")
+                    logger.error("No audio manager found!")
 
         # Handle user stopped speaking events
         elif isinstance(frame, (
@@ -100,26 +94,19 @@ class UserSpeakingAudioProcessor(FrameProcessor):
             VADUserStoppedSpeakingFrame,
             EmulateUserStoppedSpeakingFrame
         )):
-            logger.info(f"🔇 USER STOPPED SPEAKING DETECTED: {type(frame).__name__}")
             if self._user_currently_speaking:
                 self._user_currently_speaking = False
                 audio_manager = get_audio_manager()
                 if audio_manager:
-                    # Calculate speech duration for logging
-                    speech_duration = time.time() - self._speech_start_time if self._speech_start_time else 0
                     
                     # Check if transcription was already detected during speaking
                     if self._actual_speech_detected:
                         await audio_manager.start_audio()
-                        logger.info(f"🎵 Audio started immediately - transcription already detected (duration: {speech_duration:.1f}s) ({type(frame).__name__})")
                     else:
                         # Wait for delayed transcription (common case)
-                        logger.info(f"⏳ Waiting for transcription after PTT release (duration: {speech_duration:.1f}s)")
                         self._pending_audio_task = asyncio.create_task(self._wait_for_transcription())
                 else:
-                    logger.error("❌ No audio manager found!")
-            else:
-                logger.info("User already marked as not speaking")
+                    logger.error("No audio manager found!")
 
         # Pass frame through to next processor
         await self.push_frame(frame, direction)
@@ -132,14 +119,14 @@ class UserSpeakingAudioProcessor(FrameProcessor):
             
             # Check if transcription arrived during wait
             if self._actual_speech_detected:
-                logger.info("🎵 Audio started after transcription timeout - speech was detected")
+                logger.info("Audio started after transcription timeout - speech was detected")
                 audio_manager = get_audio_manager()
                 if audio_manager:
                     await audio_manager.start_audio()
             else:
-                logger.info("🚫 No audio started - transcription timeout reached without speech detection")
+                logger.info("No audio started - transcription timeout reached without speech detection")
                 
         except asyncio.CancelledError:
-            logger.debug("⏳ Transcription wait cancelled")
+            logger.debug("Transcription wait cancelled")
         except Exception as e:
-            logger.error(f"❌ Error in transcription wait: {e}")
+            logger.error(f"Error in transcription wait: {e}")
