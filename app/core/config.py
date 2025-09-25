@@ -82,6 +82,10 @@ ENABLE_TOOL_CALL_SOUND = (
 )
 TOOL_CALL_SOUND_FILE = os.environ.get("TOOL_CALL_SOUND_FILE", "assets/sounds/think.wav")
 
+# Tool Retry Configuration
+TOOL_RETRY_ENABLE = os.environ.get("TOOL_RETRY_ENABLE", "true").lower() == "true"
+TOOL_MAX_RETRIES = int(os.environ.get("TOOL_MAX_RETRIES", "3"))
+
 # WebSocket keepalive settings
 PING_INTERVAL = int(os.environ.get("WS_PING_INTERVAL", 5))  # seconds
 PING_TIMEOUT = int(os.environ.get("WS_PING_TIMEOUT", 10))  # seconds

@@ -45,38 +45,21 @@ def get_tool_scope_instrucations() -> str:
             - Merchants use the term 'burn rate' to mean total discounts in a given time frame — always handle this with the correct tool.
     """
 
+    search_grounding = ""
     if ENABLE_SEARCH_GROUNDING:
         search_grounding = """
         INTERNET TOOL USAGE:
             - Internet access : You have tool to access internet for questions you are not aware of. But before using internet search tool you should ALWAYS ask user confirmation whether to search internet or not. If user says yes, then you can use internet search tool.
         """
-    else:
-        search_grounding = """"""
 
+    hitl_scope = ""
     if HITL_ENABLE:
         hitl_scope = """
-        TOOL CALL RETRY & RESULT HANDLING
-
-        Tool Retry Policy
-            Failure Handling Rules:
-            - If a tool call fails because the user rejected the action,do not retry. Wait until the user explicitly asks you to perform it again.
-            - If a tool call fails because the operation timed out while waiting for confirmation, stop and ask the user how they'd like to proceed.Do not retry automatically.
-            - If a tool call fails because of a confirmation system error, stop and explain the issue. Ask the user whether they'd like to try again.
-            - For other recoverable errors (e.g., formatting issues, transient API/network failures, time related issues), retry internally up to 3 TIMES before surfacing the failure to the user.
-
         Deletion / Deletion Tool Rules
             - Perform deletions strictly one-by-one, Never perform bulk deletions.
             - When the user requests multiple deletions, confirm the list, then proceed sequentially, asking for explicit confirmation before each deletion.
             - Do not combine or batch deletion operations under any circumstance.
             - The user may retry any deletion any number of times without restrictions.
-        """
-
-    else:
-        hitl_scope = """
-        TOOL CALL RETRY & RESULT HANDLING
-
-        Tool Retry Policy:
-        - Automated Retry: If a tool call fails for a recoverable reason (e.g., minor formatting issues), retry internally up to 3 TIMES - do not involve the user.
         """
 
     tool_followups = """
