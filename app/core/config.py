@@ -30,8 +30,6 @@ UVICORN_LOG_LEVEL = os.environ.get("UVICORN_LOG_LEVEL", "info")
 
 # Gemini Proxy Configuration
 GEMINI_API_KEY = get_required_env("GEMINI_API_KEY")
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash-live-001")
-RESPONSE_MODALITY = os.environ.get("RESPONSE_MODALITY", "AUDIO")
 
 # Pipecat Agent Configuration
 DAILY_API_KEY = get_required_env("DAILY_API_KEY")
@@ -222,13 +220,6 @@ ENABLE_FAL_SMART_TURN = (
 # Required API key for FAL_SMART_TURN
 FAL_SMART_TURN_API_KEY = os.getenv("FAL_SMART_TURN_API_KEY")
 
-logger.info(f"Using Gemini model: {GEMINI_MODEL}")
-logger.info(f"Using response modality: {RESPONSE_MODALITY}")
-logger.info(f"Tracing enabled: {ENABLE_TRACING}")
-logger.info(f"Search grounding enabled: {ENABLE_SEARCH_GROUNDING}")
-logger.info(f"Using Gemini search result model: {GEMINI_SEARCH_RESULT_API_MODEL}")
-logger.info(f"SMART_TURN: Fal.ai Smart Turn enabled: {ENABLE_FAL_SMART_TURN}")
-
 # Automatic MCP Tool Server
 ENABLE_BREEZE_MCP = os.environ.get("ENABLE_BREEZE_MCP", "false").lower() == "true"
 MCP_CLIENT_TIMEOUT = int(os.environ.get("MCP_CLIENT_TIMEOUT", 30))  # seconds
@@ -237,8 +228,6 @@ shops_for_mcp = os.environ.get("SHOPS_FOR_BREEZE_MCP", "")
 SHOPS_FOR_BREEZE_MCP = [
     shop.strip() for shop in shops_for_mcp.split(",") if shop.strip()
 ]
-
-logger.info(f"Shops enabled for Breeze MCP Server: {SHOPS_FOR_BREEZE_MCP}")
 
 LIGHTHOUSE_APP_URL = os.environ.get("LIGHTHOUSE_APP_URL", "http://localhost:5173")
 ENABLE_ALL_METRICS_FROM_CKH = (
@@ -390,11 +379,6 @@ AUTOMATIC_LANGFUSE_SYSTEM_PROMPT_LABEL = os.environ.get(
     "AUTOMATIC_LANGFUSE_SYSTEM_PROMPT_LABEL", "automatic_system_langfuse_prompt"
 )
 
-logger.info(f"LangFuse prompts enabled: {ENABLE_LANGFUSE_PROMPTS}")
-if ENABLE_LANGFUSE_PROMPTS:
-    logger.info(
-        f"LangFuse system prompt: {AUTOMATIC_LANGFUSE_PROMPT_NAME} (label: {AUTOMATIC_LANGFUSE_SYSTEM_PROMPT_LABEL})"
-    )
 
 BREEZE_BUDDY_SONIOX_MODEL = os.environ.get(
     "BREEZE_BUDDY_SONIOX_MODEL", "stt-rt-preview"

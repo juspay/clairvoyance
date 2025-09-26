@@ -24,13 +24,21 @@ Key Features:
 
 import asyncio
 import os
+import sys
 import uuid
 from asyncio import Queue
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Optional
 
+from loguru import logger as subprocess_logger
+
 from app.core.logger import logger
+
+# Configure a dedicated logger for raw subprocess output.
+# This uses loguru's optimized async sink but prevents it from adding any formatting.
+subprocess_logger.remove()
+subprocess_logger.add(sys.stdout, format="{message}", enqueue=True)
 
 
 class VoiceAgentProcess:
@@ -109,6 +117,11 @@ class VoiceAgentPool:
         self._create_lock = asyncio.Lock()
         self.is_creating_process = False
 
+        # Queue for handling subprocess logs without blocking the main event loop.
+        self._log_queue: Queue[Optional[tuple[str, str]]] = Queue(maxsize=10_000)
+        self._log_writer_task: Optional[asyncio.Task] = None
+        self._dropped_logs: int = 0
+
         # Callbacks set by `app/main.py` to break circular dependencies.
         self.room_cleanup_callback = None
         self.session_cleanup_callback = None
@@ -132,6 +145,9 @@ class VoiceAgentPool:
         """
         logger.info(f"Initializing voice agent pool with {self.pool_size} processes")
 
+        # Start the dedicated log writer task
+        self._log_writer_task = asyncio.create_task(self._log_writer())
+
         for i in range(self.pool_size):
             try:
                 await self._create_and_add_process()
@@ -146,6 +162,30 @@ class VoiceAgentPool:
     def _managed_process_count(self) -> int:
         """Helper to get the current count of permanent (managed) pool processes."""
         return len(self.managed_processes)
+
+    async def _log_writer(self):
+        """
+        A dedicated background task that consumes logs from the queue and prints them.
+        This prevents blocking I/O on the main event loop.
+        """
+        logger.info("Starting subprocess log writer")
+        while True:
+            try:
+                item = await self._log_queue.get()
+                if item is None:  # Sentinel value to stop the writer
+                    logger.info("Stopping subprocess log writer")
+                    break
+                proc_id, line = item
+                # Use the dedicated, non-blocking logger to print the raw, prefixed line.
+                subprocess_logger.info(f"{line}")
+            except Exception as e:
+                logger.error(f"Error in log writer: {e}")
+
+    def _ensure_log_writer_running(self):
+        """Starts the log writer task if it's not already running."""
+        if not self._log_writer_task or self._log_writer_task.done():
+            logger.info("Log writer is not running. Starting it now.")
+            self._log_writer_task = asyncio.create_task(self._log_writer())
 
     async def _create_and_add_process(self):
         """
@@ -163,6 +203,7 @@ class VoiceAgentPool:
            from the subprocess.
         7. Adds the now-ready process to the `available_processes` queue.
         """
+        self._ensure_log_writer_running()
         process_id = str(uuid.uuid4())
 
         try:
@@ -253,9 +294,6 @@ class VoiceAgentPool:
         - In development environments, it also forwards all subprocess logs to the
           main application's logger for easier debugging.
         """
-        from app.core import config
-
-        is_dev = config.ENVIRONMENT.lower() in ["dev", "development"]
 
         try:
             while voice_process.is_healthy():
@@ -264,17 +302,24 @@ class VoiceAgentPool:
                         voice_process.process.stdout.readline(), timeout=2.0
                     )
                     if line:
-                        line = line.decode("utf-8").strip()
+                        line = line.decode("utf-8", errors="replace").strip()
 
                         if "SESSION_ENDED" in line:
                             logger.info(
                                 f"Process {voice_process.process_id[:8]} session ended, returning to pool"
                             )
                             await self._return_process_to_pool(voice_process)
-                        elif is_dev and line:
-                            logger.info(
-                                f"[Process {voice_process.process_id[:8]}] {line}"
-                            )
+                        elif line:
+                            payload = (voice_process.process_id, line)
+                            try:
+                                self._log_queue.put_nowait(payload)
+                            except asyncio.QueueFull:
+                                self._dropped_logs += 1
+                                if self._dropped_logs % 1000 == 1:
+                                    logger.warning(
+                                        "Subprocess log queue full; dropping lines (total dropped=%d)",
+                                        self._dropped_logs,
+                                    )
 
                 except asyncio.TimeoutError:
                     continue
@@ -454,6 +499,7 @@ class VoiceAgentPool:
         3. This distinction ensures that when the session is over, this temporary
            process is terminated rather than being returned to the pool.
         """
+        self._ensure_log_writer_running()
         logger.info(f"Creating direct process for session {session_id}")
 
         process_id = str(uuid.uuid4())
@@ -564,6 +610,16 @@ class VoiceAgentPool:
 
         try:
             if process.is_healthy():
+                # Close stdin to release the FD and help the child exit sooner.
+                if process.process.stdin:
+                    try:
+                        process.process.stdin.close()
+                        await process.process.stdin.wait_closed()
+                    except (BrokenPipeError, ConnectionResetError):
+                        pass  # Process likely exited before we could close.
+                    except Exception as e:
+                        logger.debug(f"Error closing stdin for {process_id}: {e}")
+
                 process.process.terminate()
                 try:
                     await asyncio.wait_for(process.process.wait(), timeout=5.0)
@@ -612,6 +668,17 @@ class VoiceAgentPool:
         if all_pids:
             logger.info(f"Cleaning up {len(all_pids)} subprocesses...")
             await asyncio.gather(*(self._cleanup_process(pid) for pid in all_pids))
+
+        # Stop the log writer gracefully, allowing tail logs to be processed.
+        if self._log_writer_task and not self._log_writer_task.done():
+            # Give a brief moment for any final logs to be enqueued.
+            await asyncio.sleep(0.1)
+            await self._log_queue.put(None)  # Send sentinel
+            try:
+                await asyncio.wait_for(self._log_writer_task, timeout=2.0)
+            except asyncio.TimeoutError:
+                logger.warning("Log writer task did not stop gracefully, cancelling.")
+                self._log_writer_task.cancel()
 
         self.active_processes.clear()
         logger.info("Voice agent pool cleanup complete")

@@ -208,6 +208,11 @@ async def bot_connect(
         f"Using client session ID for new voice agent: {client_sid}"
     )
 
+    # Log the mapping between session_id and client_sid for easy reference
+    logger.bind(session_id=session_id, client_sid=client_sid).info(
+        "Voice agent session mapping created"
+    )
+
     # 4. Try to get process from pool
     pool = get_voice_agent_pool()
     try:
