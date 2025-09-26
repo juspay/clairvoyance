@@ -239,13 +239,16 @@ class LLMSpyProcessor(FrameProcessor):
             self._accumulated_text = ""
             self._is_collecting_response = False
             
-            # Handle case where no text was produced
+            # Handle case where no text was produced (e.g., function calls only)
             audio_manager = get_audio_manager()
             if audio_manager:
                 audio_manager.set_bot_speaking(False)
+                # If no text output and user has input, resume audio
+                if not has_text_output and audio_manager.user_has_input:
+                    await audio_manager.start_audio()
+                    logger.info("LLM response ended with no text - resuming audio")
             
             await self.push_frame(frame, direction)
-            # logger.debug(f"🤖 LLM response ended - bot marked as not speaking")
 
         # Function Call Start - emit RTVI event and track in conversation, NO ACTION (let audio continue)
         elif isinstance(frame, FunctionCallInProgressFrame):
