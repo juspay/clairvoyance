@@ -432,7 +432,8 @@ async def get_gmv_order_value_payment_method_wise_by_time(params: FunctionCallPa
     payload_details = {
         "dimensions": ["payment_method_type"],
         "domain": "kvorders",
-        "metric": "total_amount",
+        "filters": {"condition": "In", "field": "payment_status", "val": [params.arguments["transactionStatus"]]},
+        "metric": "order_with_transactions_gmv"
     }
     try:
         result = await _make_genius_api_request(params, payload_details)
@@ -443,11 +444,11 @@ async def get_gmv_order_value_payment_method_wise_by_time(params: FunctionCallPa
                     continue
                 try:
                     item = json.loads(line)
-                    if "total_amount" in item and isinstance(
-                        item["total_amount"], (int, float)
+                    if "order_with_transactions_gmv" in item and isinstance(
+                        item["order_with_transactions_gmv"], (int, float)
                     ):
-                        item["total_amount"] = format_indian_currency(
-                            round(item["total_amount"])
+                        item["order_with_transactions_gmv"] = format_indian_currency(
+                            round(item["order_with_transactions_gmv"])
                         )
                     processed_data.append(item)
                 except json.JSONDecodeError as e:
@@ -457,9 +458,9 @@ async def get_gmv_order_value_payment_method_wise_by_time(params: FunctionCallPa
                     continue
 
             total_gmv = sum(
-                float(item["total_amount"].replace(",", ""))
+                float(item["order_with_transactions_gmv"].replace(",", ""))
                 for item in processed_data
-                if "total_amount" in item and isinstance(item["total_amount"], str)
+                if "order_with_transactions_gmv" in item and isinstance(item["order_with_transactions_gmv"], str)
             )
             processed_data.append(
                 {"total_gmv": format_indian_currency(round(total_gmv))}
@@ -1669,8 +1670,15 @@ success_transactional_data_function = FunctionSchema(
 gmv_order_value_payment_method_wise_function = FunctionSchema(
     name="get_gmv_order_value_payment_method_wise_by_time",
     description="Get the total Gross Merchandise Value (GMV) for each payment method within a specified time range. The results can be summed to calculate the total payment method GMV/sales. Use this to understand the revenue contribution of each payment method and the overall sales performance. Default to today if no timeframe specified.",
-    properties=time_input_schema["properties"],
-    required=time_input_schema["required"],
+    properties={
+        **time_input_schema["properties"],
+        "transactionStatus": {
+            "type": "string",
+            "description": "Specifies the type of GMV/Sales data to retrieve. Use 'SUCCESS' to fetch the Gross Merchandise Value (GMV) of successful transactions, or 'FAILURE' to fetch the GMV associated with failed transactions. This parameter ensures the query focuses on the correct dimension of sales performance.",
+            "enum": ["SUCCESS", "FAILURE"] 
+        }
+    },
+    required=[*time_input_schema["required"], "transactionStatus"],
 )
 
 average_ticket_payment_wise_function = FunctionSchema(
