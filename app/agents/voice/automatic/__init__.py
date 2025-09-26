@@ -64,9 +64,7 @@ from .prompts import get_system_prompt
 from .stt import get_stt_service
 from .tools import initialize_tools
 from .tts import get_tts_service
-from .stt import get_stt_service
 from .audio.audio_manager import initialize_audio_manager
-from app.agents.voice.automatic.processors.llm_spy import handle_confirmation_response
 
 from .types import (
     Mode,
@@ -452,14 +450,15 @@ async def run_normal_mode(args):
     # Only stop audio when function calls complete if audio is actually playing
     @llm.event_handler("on_function_calls_finished")
     async def on_function_calls_finished(service):
-        # IMMEDIATELY stop audio when function calls finish (response coming)
-        if audio_manager.user_has_input or audio_manager.is_playing:
-            
-            # Use simplified stop method
-            await audio_manager.stop_and_disable_audio()
-            
+        # Stop audio when function calls finish but keep it enabled for potential resumption
+        if audio_manager.is_playing:
+            # Stop current audio but don't disable - allow resumption if no LLM text follows
+            audio_manager.is_playing = False
+            if audio_manager.loop_task and not audio_manager.loop_task.done():
+                audio_manager.loop_task.cancel()
+            logger.info("Function calls finished - stopped audio but kept enabled for resumption")
         else:
-            logger.info("Function calls finished - audio not playing, no action needed")
+            logger.debug("Function calls finished - audio not playing, no action needed")
 
     messages = [
         {"role": "system", "content": system_prompt},
