@@ -466,20 +466,19 @@ class OrderConfirmationBot:
 
             You can only use the following functions when responding to the customer:
 
-            confirm_order() - Call this if the customer confirms all the order details.
+            confirm_order() - Call this if the customer confirms all the order details and asks no other questions.
+            confirm_order_with_question() - Call this if the customer confirms the order but also asks an unrelated question which is not related to order confirmation/cancellation.
             cancel_order() - Call this if the customer chooses to cancel the order.
             user_busy() - Call this if the customer says they are busy or it's not a good time.
-            handle_unrelated_question() - Call this if the customer asks about anything not related to confirming or cancelling the order.
+            handle_unrelated_question() - Call this if the customer asks about anything not related to confirming or cancelling the order, without confirming the order.
             address_correct() - Call this if the customer confirms that the address is correct.
             address_incorrect() - Call this if the customer says the address is incorrect or wants to update it. (Note: only landmark, pincode, or city can be updated.)
             update_landmark() - Call this if the customer wants to update the landmark in their address.
             update_pincode() - Call this if the customer wants to update the pincode in their address.
             update_city() - Call this if the customer wants to update the city in their address.
             update_locality() - Call this if the customer wants to update the locality in their address.
-
-            ⚠️ You must not use any features other than the ones listed above. If the customer says anything unrelated to these functions, always call the function handle_unrelated_question().
             
-            Your only role is to confirm or cancel this specific order. If the user asks about anything else (e.g. product details, delivery times, other products), you MUST call the function `handle_unrelated_question()` immediately. Do not try to answer these questions yourself.
+            Your only role is to confirm or cancel this specific order. If the user asks about anything else (e.g. product details, delivery times, other products), you must use the appropriate function (`handle_unrelated_question` or `confirm_order_with_question`). Do not try to answer these questions yourself.
         """
 
     async def _end_conversation_handler(self, flow_manager, args):
@@ -580,8 +579,15 @@ class OrderConfirmationBot:
         flow_functions = [
             FlowsFunctionSchema(
                 name="confirm_order",
-                description="Call this function to confirm the user's order.",
+                description="Call this function if the customer confirms the order and asks no other questions.",
                 handler=self._confirm_order_handler,
+                properties={},
+                required=[],
+            ),
+            FlowsFunctionSchema(
+                name="confirm_order_with_question",
+                description="Call this function if the customer confirms the order but also asks an unrelated question.",
+                handler=self._confirm_order_with_question_handler,
                 properties={},
                 required=[],
             ),
@@ -601,7 +607,7 @@ class OrderConfirmationBot:
             ),
             FlowsFunctionSchema(
                 name="handle_unrelated_question",
-                description="Call this function if the user asks a question about anything other than confirming or cancelling the order.",
+                description="Call this function if the user asks a question about anything other than confirming or cancelling the order, without confirming the order.",
                 handler=self._handle_unrelated_question_handler,
                 properties={},
                 required=[],
@@ -666,6 +672,18 @@ class OrderConfirmationBot:
                         {
                             "role": "system",
                             "content": "The order is confirmed. Say: 'Thank you for confirming your order. Your order will be delivered soon. Have a good day'",
+                        }
+                    ],
+                    "post_actions": [
+                        {"type": "function", "handler": self._end_conversation_handler}
+                    ],
+                },
+                "order_confirmation_with_question_and_end": {
+                    "name": "order_confirmation_with_question_and_end",
+                    "task_messages": [
+                        {
+                            "role": "system",
+                            "content": "Thanking you for confirming the order. I am here just to confirm your order, for any questions related to order please refer the website for more details.",
                         }
                     ],
                     "post_actions": [
@@ -747,6 +765,15 @@ class OrderConfirmationBot:
         if self.outcome != "address_updated":
             self.outcome = "confirmed"
         return {}, self._create_node_from_config("order_confirmation_and_end")
+
+    async def _confirm_order_with_question_handler(self):
+        logger.info(
+            "Order confirmed with an unrelated question. Transitioning to custom end node."
+        )
+        self.outcome = "confirmed"
+        return {}, self._create_node_from_config(
+            "order_confirmation_with_question_and_end"
+        )
 
     async def _deny_order_handler(self):
         logger.info("Order denied. Transitioning to cancellation node.")
