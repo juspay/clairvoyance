@@ -306,8 +306,37 @@ AUTOMATIC_LANGFUSE_SYSTEM_PROMPT_LABEL = os.environ.get(
     "AUTOMATIC_LANGFUSE_SYSTEM_PROMPT_LABEL", "automatic_system_langfuse_prompt"
 )
 
+# Speaker Verification Configuration
+ENABLE_SPEAKER_VERIFICATION = (
+    os.environ.get("ENABLE_SPEAKER_VERIFICATION", "false").lower() == "true"
+)
+SPEAKER_VERIFICATION_TARGET_ID = os.environ.get(
+    "SPEAKER_VERIFICATION_TARGET_ID", "user"
+)
+SPEAKER_VERIFICATION_ENROLLMENT_QUERIES = int(
+    os.environ.get("SPEAKER_VERIFICATION_ENROLLMENT_QUERIES", "2")
+)
+SPEAKER_VERIFICATION_ENROLLMENT_DIR = os.environ.get(
+    "SPEAKER_VERIFICATION_ENROLLMENT_DIR", "enrollments"
+)
+SPEAKER_VERIFICATION_SIMILARITY_THRESHOLD = float(
+    os.environ.get("SPEAKER_VERIFICATION_SIMILARITY_THRESHOLD", "0.60")
+)
+SPEAKER_VERIFICATION_ENABLE_ENROLLMENT = (
+    os.environ.get("SPEAKER_VERIFICATION_ENABLE_ENROLLMENT", "true").lower() == "true"
+)
+
+# Legacy config name for backward compatibility
+SPEAKER_VERIFICATION_ENROLLMENT_STEPS = SPEAKER_VERIFICATION_ENROLLMENT_QUERIES
+
 logger.info(f"LangFuse prompts enabled: {ENABLE_LANGFUSE_PROMPTS}")
 if ENABLE_LANGFUSE_PROMPTS:
     logger.info(
         f"LangFuse system prompt: {AUTOMATIC_LANGFUSE_PROMPT_NAME} (label: {AUTOMATIC_LANGFUSE_SYSTEM_PROMPT_LABEL})"
     )
+
+logger.info(f"Speaker verification enabled: {ENABLE_SPEAKER_VERIFICATION}")
+if ENABLE_SPEAKER_VERIFICATION:
+    logger.info(f"Speaker verification target: {SPEAKER_VERIFICATION_TARGET_ID}")
+    logger.info(f"Enrollment queries: {SPEAKER_VERIFICATION_ENROLLMENT_QUERIES}")
+    logger.info(f"Enrollment directory: {SPEAKER_VERIFICATION_ENROLLMENT_DIR}")

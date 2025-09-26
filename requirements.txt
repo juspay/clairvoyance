@@ -41,3 +41,9 @@ PyJWT
 
 # Audio processing
 pydub
+speechbrain
+pyannote.audio
+librosa
+soundfile
+scikit-learn
+huggingface-hub

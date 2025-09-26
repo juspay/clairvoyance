@@ -36,6 +36,7 @@ from app.agents.voice.automatic.services.mcp.automatic_client import MCPClient
 from app.utils.common import get_breeze_portal_url
 from .processors import LLMSpyProcessor
 from .processors.ptt_vad_filter import PTTVADFilter
+from .processors.speaker_verification import SpeakerVerificationProcessor
 from .prompts import get_system_prompt
 from .tools import initialize_tools
 from .tts import get_tts_service
@@ -294,8 +295,39 @@ async def main():
     # Build pipeline components list
     pipeline_components = [
         transport.input(),
-        stt,
     ]
+
+    # Add speaker verification processor if enabled
+    speaker_verifier = None
+    if config.ENABLE_SPEAKER_VERIFICATION:
+        speaker_verifier = SpeakerVerificationProcessor(
+            target_speaker_id=config.SPEAKER_VERIFICATION_TARGET_ID,
+            embeddings_dir=config.SPEAKER_VERIFICATION_ENROLLMENT_DIR,
+            enable_enrollment=config.SPEAKER_VERIFICATION_ENABLE_ENROLLMENT,
+            enrollment_queries=config.SPEAKER_VERIFICATION_ENROLLMENT_STEPS,  # Using same config value
+            similarity_threshold=config.SPEAKER_VERIFICATION_SIMILARITY_THRESHOLD,
+        )
+
+        # Set RTVI callback for sending events to frontend
+        async def send_rtvi_event(event_data):
+            if rtvi:
+                from pipecat.processors.frameworks.rtvi import RTVIServerMessageFrame
+
+                await rtvi.push_frame(RTVIServerMessageFrame(data=event_data))
+
+        speaker_verifier.set_rtvi_callback(send_rtvi_event)
+
+        # Initialize the speaker verification service
+        speaker_init_success = await speaker_verifier.initialize()
+        if speaker_init_success:
+            pipeline_components.append(speaker_verifier)
+            logger.info("✅ Speaker verification processor added to pipeline")
+        else:
+            logger.error(
+                "❌ Speaker verification initialization failed - continuing without verification"
+            )
+
+    pipeline_components.append(stt)
 
     # Add PTT VAD filter only if it's enabled
     if config.DISABLE_VAD_FOR_PTT:
@@ -437,6 +469,40 @@ async def main():
                             f"PTT state sync: states match (current_state: {current_state})"
                         )
 
+                elif message_type == "speaker-verification-status":
+                    # Handle speaker verification status request
+                    if speaker_verifier:
+                        status = speaker_verifier.get_status()
+                        # Send status back to client via RTVI
+                        from pipecat.processors.frameworks.rtvi import (
+                            RTVIServerMessageFrame,
+                        )
+
+                        await rtvi.push_frame(
+                            RTVIServerMessageFrame(
+                                data={
+                                    "type": "speaker-verification-status-response",
+                                    "data": status,
+                                }
+                            )
+                        )
+                        logger.info("Sent speaker verification status to client")
+                    else:
+                        from pipecat.processors.frameworks.rtvi import (
+                            RTVIServerMessageFrame,
+                        )
+
+                        await rtvi.push_frame(
+                            RTVIServerMessageFrame(
+                                data={
+                                    "type": "speaker-verification-status-response",
+                                    "data": {
+                                        "error": "Speaker verification not enabled"
+                                    },
+                                }
+                            )
+                        )
+
         except Exception as e:
             logger.error(f"Error handling RTVI client message: {e}")
 
@@ -463,9 +529,13 @@ async def main():
         # Check if this is a function confirmation message or PTT message and route to RTVI
         if isinstance(message, dict):
             message_type = message.get("type")
-            if message_type == "function-confirmation-response" or (
-                config.DISABLE_VAD_FOR_PTT
-                and message_type in ["ptt-start", "ptt-end", "ptt-sync"]
+            if (
+                message_type == "function-confirmation-response"
+                or (
+                    config.DISABLE_VAD_FOR_PTT
+                    and message_type in ["ptt-start", "ptt-end", "ptt-sync"]
+                )
+                or message_type == "speaker-verification-status"
             ):
                 # Manually trigger the RTVI handler since it might not be getting the message
                 try:
