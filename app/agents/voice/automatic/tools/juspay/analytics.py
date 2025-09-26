@@ -1,6 +1,6 @@
 import functools
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 
 import httpx
 import pytz
@@ -13,7 +13,11 @@ from app.agents.voice.automatic.types.models import (
     ApiSuccess,
     GeniusApiResponse,
 )
-from app.core.config import EULER_DASHBOARD_API_URL, GENIUS_API_URL
+from app.core.config import (
+    EULER_DASHBOARD_API_URL,
+    GENIUS_API_URL,
+    GENIUS_LIST_ORDERS_API,
+)
 from app.core.logger import logger
 from app.core.transport.http_client import create_http_client
 
@@ -151,6 +155,142 @@ async def _make_genius_api_request(
         return ApiFailure(
             error={
                 "Tool Error": f" [genius_api_request] An unexpected error occurred: {e}"
+            }
+        )
+
+
+async def _make_list_orders_api_request(
+    params: FunctionCallParams, payload_details: dict
+) -> GeniusApiResponse:
+    """
+    Generic helper to make requests to the Juspay List Orders API.
+    Returns a GeniusApiResponse object.
+    """
+    if not euler_token:
+        logger.error(
+            "Tool Error: [list_orders_request] Juspay tool called without required euler_token."
+        )
+        return ApiFailure(
+            error={"Tool Error": "[list_orders_request] Juspay tool is not configured."}
+        )
+
+    start_time_str = params.arguments.get("startTime")
+    end_time_str = params.arguments.get("endTime")
+
+    try:
+        ist = pytz.timezone("Asia/Kolkata")
+        utc = pytz.utc
+        if not start_time_str:
+            now_ist = datetime.now(ist)
+            start_time_ist = now_ist.replace(hour=0, minute=0, second=0, microsecond=0)
+        else:
+            start_time_ist = ist.localize(
+                datetime.strptime(start_time_str, "%Y-%m-%d %H:%M:%S")
+            )
+        start_time_utc = start_time_ist.astimezone(utc)
+
+        if end_time_str:
+            end_time_ist = ist.localize(
+                datetime.strptime(end_time_str, "%Y-%m-%d %H:%M:%S")
+            )
+        else:
+            end_time_ist = datetime.now(ist)
+        end_time_utc = end_time_ist.astimezone(utc)
+
+    except Exception as e:
+        logger.error(
+            f"Tool Error: [list_orders_request] Error converting time for Juspay API: {e}"
+        )
+        return ApiFailure(
+            error={
+                "Tool Error": f" [list_orders_request] Invalid time format provided. Please use 'YYYY-MM-DD HH:MM:SS' in IST. Error: {e}"
+            }
+        )
+
+    time_field = (
+        "order_created_at"
+        if payload_details.get("domain") == "ordersELS"
+        else "date_created"
+    )
+
+    end_time_str = end_time_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
+    start_time_str = start_time_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    end_time_dt = end_time_utc.fromisoformat(end_time_str.replace("Z", "+00:00"))
+    start_time_dt = start_time_utc.fromisoformat(start_time_str.replace("Z", "+00:00"))
+
+    if end_time_dt.tzinfo is None:
+        end_time_dt = end_time_dt.replace(tzinfo=timezone.utc)
+    if start_time_dt.tzinfo is None:
+        start_time_dt = start_time_dt.replace(tzinfo=timezone.utc)
+
+    date_from_ts = int(start_time_dt.timestamp())
+    date_to_ts = int(end_time_dt.timestamp())
+
+    qFilters = {
+        "and": {
+            "right": {
+                "field": time_field,
+                "condition": "LessThanEqual",
+                "val": str(date_to_ts),
+            },
+            "left": {
+                "field": time_field,
+                "condition": "GreaterThanEqual",
+                "val": str(date_from_ts),
+            },
+        }
+    }
+
+    full_payload = {
+        **payload_details,
+        "filters": {"dateCreated": {"lte": end_time_str, "gte": start_time_str}},
+        "qFilters": qFilters,
+    }
+    headers = {
+        "Content-Type": "application/json",
+        "x-web-logintoken": euler_token,
+    }
+
+    logger.info(
+        f"Requesting Juspay List Orders API with payload: {json.dumps(full_payload)}"
+    )
+
+    try:
+        async with create_http_client(timeout=10.0) as client:
+            response = await client.post(
+                GENIUS_LIST_ORDERS_API, json=full_payload, headers=headers
+            )
+            response.raise_for_status()
+            response_text = response.text
+            logger.info(f"Received Raw Juspay API text response: {response_text}")
+            return ApiSuccess(data=response_text)
+    except httpx.TimeoutException:
+        logger.error(
+            "Tool Error: [list_orders_api_request] Juspay API request timed out after 10 seconds."
+        )
+        return ApiFailure(
+            error={
+                "Tool Error": "[list_orders_api_request] It is taking too much time to process. Please try again."
+            }
+        )
+    except httpx.HTTPStatusError as e:
+        logger.error(
+            f"Tool Error: [list_orders_api_request] HTTP error calling Juspay API: {e.response.status_code} - {e.response.text}"
+        )
+        return ApiFailure(
+            error={
+                "Tool Error": f" [list_orders_api_request] Juspay API error: {e.response.status_code}",
+                "details": e.response.text,
+            }
+        )
+    except Exception as e:
+        logger.error(
+            f"Tool Error: [list_orders_api_request] Unexpected error calling Juspay API: {e}"
+        )
+        return ApiFailure(
+            error={
+                "Tool Error": f" [list_orders_api_request] An unexpected error occurred: {e}"
             }
         )
 
@@ -425,6 +565,20 @@ def get_success_transactional_data_by_time(
         "metric": "success_volume",
     }
     return _make_genius_api_request(params, payload_details)
+
+
+@handle_genius_response
+def get_last_n_orders(params: FunctionCallParams):
+    logger.info(f"Fetching last placed order with params: {params.arguments}")
+
+    analytics_payload = {
+        "domain": "txnsELS",
+        "offset": 0,
+        "sortDimension": "order_created_at",
+        "limit": params.arguments.get("limit", 1),
+    }
+
+    return _make_list_orders_api_request(params, analytics_payload)
 
 
 async def get_gmv_order_value_payment_method_wise_by_time(params: FunctionCallParams):
@@ -1666,6 +1820,19 @@ success_transactional_data_function = FunctionSchema(
     required=time_input_schema["required"],
 )
 
+get_last_n_orders_function = FunctionSchema(
+    name="get_last_n_orders",
+    description="Retrieves the most recently placed orders within a specified time range, sorted by creation time in descending order.",
+    properties={
+        **time_input_schema["properties"],
+        "limit": {
+            "type": "number",
+            "description": "Maximum number of recent orders to retrieve. Defaults to 1 to get the single most recent order. Increase this value to get multiple recent orders (e.g., 5 for last 5 orders, 10 for last 10 orders).",
+        },
+    },
+    required=time_input_schema["required"],
+)
+
 gmv_order_value_payment_method_wise_function = FunctionSchema(
     name="get_gmv_order_value_payment_method_wise_by_time",
     description="Get the total Gross Merchandise Value (GMV) for each payment method within a specified time range. The results can be summed to calculate the total payment method GMV/sales. Use this to understand the revenue contribution of each payment method and the overall sales performance. Default to today if no timeframe specified.",
@@ -1905,6 +2072,7 @@ tools = ToolsSchema(
         list_offers_by_filter_function,
         delete_euler_offer_function,
         update_euler_offer_function,
+        get_last_n_orders_function,
     ]
 )
 
@@ -1921,4 +2089,5 @@ tool_functions = {
     "list_offers_by_filter": list_offers_by_filter,
     "delete_euler_offer": delete_euler_offer,
     "update_euler_offer": update_euler_offer,
+    "get_last_n_orders": get_last_n_orders,
 }

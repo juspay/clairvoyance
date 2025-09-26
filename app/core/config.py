@@ -88,6 +88,7 @@ PING_TIMEOUT = int(os.environ.get("WS_PING_TIMEOUT", 10))  # seconds
 
 # Juspay API configuration
 GENIUS_API_URL = "https://portal.juspay.in/api/q/query?api-type=genius-query"
+GENIUS_LIST_ORDERS_API = "https://portal.juspay.in/ec/v4/orders"
 EULER_DASHBOARD_API_URL = os.environ.get(
     "EULER_DASHBOARD_API_URL", "https://portal.juspay.in"
 )
