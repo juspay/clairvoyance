@@ -223,9 +223,7 @@ def initialize_audio_manager(tts_service, transport=None) -> AudioManager:
     set_audio_manager(audio_manager)
     return audio_manager
 
-
 # Simple helper functions for external use
-
 
 def reset_for_new_input():
     """Legacy method - reset for new input."""
