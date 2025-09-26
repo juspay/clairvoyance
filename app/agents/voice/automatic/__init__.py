@@ -2,13 +2,9 @@ import argparse
 import asyncio
 import os
 import random
-import argparse
-from dotenv import load_dotenv
 import wave
 from datetime import datetime
 from zoneinfo import ZoneInfo
-from pydub import AudioSegment
-import audioop
 
 from dotenv import load_dotenv
 from langfuse import get_client
@@ -24,10 +20,6 @@ from pipecat.frames.frames import (
     LLMFullResponseEndFrame,
     OutputAudioRawFrame,
     TTSSpeakFrame,
-    OutputAudioRawFrame,
-    LLMFullResponseStartFrame,
-    FunctionCallInProgressFrame,
-    FunctionCallResultFrame
 )
 
 from pipecat.pipeline.pipeline import Pipeline
@@ -69,17 +61,9 @@ from .stt import get_stt_service
 from .tools import initialize_tools
 from .tts import get_tts_service
 from .stt import get_stt_service
-from .audio.audio_manager import initialize_audio_manager, get_audio_manager
+from .audio.audio_manager import initialize_audio_manager
 from app.agents.voice.automatic.processors.llm_spy import handle_confirmation_response
-from app.agents.voice.automatic.types import (
-    TTSProvider,
-    Mode,
-    decode_tts_provider,
-    decode_voice_name,
-    decode_mode,
-)
-from opentelemetry import trace
-from langfuse import get_client
+
 from .types import (
     Mode,
     TTSProvider,
@@ -301,7 +285,7 @@ async def main():
     # LLM response started handler - DO NOT start audio here
     # Audio should only start when user stops speaking, not when LLM processes
     @llm.event_handler("on_llm_response_started")
-    async def on_llm_response_started(service,function_calls):
+    async def on_llm_response_started(service, function_calls):
         logger.info(f"Function calls started event triggered with {len(function_calls)} calls")
 
     # Only stop audio when function calls complete if audio is actually playing

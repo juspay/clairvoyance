@@ -42,7 +42,6 @@ class UserSpeakingAudioProcessor(FrameProcessor):
         self._user_currently_speaking = False
         self._actual_speech_detected = False  # Track if transcription was received
         self._speech_start_time = None  # Track when speech started
-        self._min_speech_duration = 2.0  # Minimum duration (seconds) for fallback (only for very long holds)
         self._pending_audio_task = None  # Task waiting for transcription
         self._transcription_timeout = 3.0  # Wait up to 3 seconds for transcription after PTT release
 
