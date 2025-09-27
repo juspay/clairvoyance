@@ -18,6 +18,7 @@ Key Features:
 - Automatically replenishes the pool in the background as rooms are used.
 - Provides a graceful fallback to create rooms on-demand if the pool is exhausted.
 - Centralizes all Daily.co room and token configuration.
+- Handles token expiry validation and automatic token refresh for pooled rooms.
 """
 
 import asyncio
@@ -41,17 +42,29 @@ class DailyRoom:
     A simple data class representing a pre-created Daily room.
 
     This object holds all the necessary information for a participant and a bot to
-    join a Daily.co session.
+    join a Daily.co session, including separate tracking of room and token expiry times.
     """
 
     def __init__(
-        self, room_url: str, user_token: str, bot_token: str, exp_timestamp: float
+        self,
+        room_url: str,
+        user_token: str,
+        bot_token: str,
+        exp_timestamp: float,
+        token_exp_timestamp: float = None,
     ):
         self.room_url = room_url
         self.user_token = user_token
         self.bot_token = bot_token
         self.exp_timestamp = exp_timestamp
+        self.token_exp_timestamp = (
+            token_exp_timestamp or exp_timestamp
+        )  # Default to room expiry if not specified
         self.is_used = False
+
+    def are_tokens_valid(self) -> bool:
+        """Check if the tokens are still valid (not expired)."""
+        return time.time() < self.token_exp_timestamp
 
 
 class DailyRoomPool:
@@ -198,11 +211,11 @@ class DailyRoomPool:
             if not room.url:
                 raise RuntimeError("Failed to create room - no URL returned")
 
-            # Get tokens with a long expiry.
+            # Get tokens with a long expiry matching the room expiry.
             token_params = self._get_token_params(use_session_limit=False)
             user_token = await self.daily_rest_helper.get_token(
                 room.url,
-                expiry_time=self.max_session_limit,
+                expiry_time=room_expiry_seconds,  # Use same expiry as room
                 eject_at_token_exp=True,
                 owner=False,
                 params=token_params,
@@ -212,7 +225,7 @@ class DailyRoomPool:
 
             bot_token = await self.daily_rest_helper.get_token(
                 room.url,
-                expiry_time=self.max_session_limit,
+                expiry_time=room_expiry_seconds,  # Use same expiry as room
                 eject_at_token_exp=True,
                 owner=True,
                 params=token_params,
@@ -222,7 +235,9 @@ class DailyRoomPool:
 
             # Store the calculated expiration time with the room object.
             exp_timestamp = time.time() + room_expiry_seconds
-            daily_room = DailyRoom(room.url, user_token, bot_token, exp_timestamp)
+            daily_room = DailyRoom(
+                room.url, user_token, bot_token, exp_timestamp, exp_timestamp
+            )
             await self.available_rooms.put(daily_room)
 
             logger.info(f"Created and added room to pool: {room.url}")
@@ -259,7 +274,19 @@ class DailyRoomPool:
                     asyncio.create_task(self.delete_room(room.room_url))
                     continue  # Try to get the next room in the queue.
 
-                # Found a valid room.
+                # Check if tokens are expired and refresh if needed.
+                if not room.are_tokens_valid():
+                    logger.warning(
+                        f"Tokens expired for room {room.room_url}, refreshing tokens"
+                    )
+                    refreshed_room = await self._refresh_room_tokens(room)
+                    if refreshed_room is None:
+                        # Token refresh failed, discard room and try next
+                        asyncio.create_task(self.delete_room(room.room_url))
+                        continue
+                    room = refreshed_room
+
+                # Found a valid room with valid tokens.
                 room.is_used = True
                 self.active_rooms[session_id] = room
 
@@ -284,6 +311,51 @@ class DailyRoomPool:
             f"Room pool exhausted for session {session_id}, creating room directly"
         )
         return await self._create_room_direct(session_id)
+
+    async def _refresh_room_tokens(self, room: DailyRoom) -> Optional[DailyRoom]:
+        """
+        Refreshes expired tokens for a pooled room.
+
+        Returns:
+        - The room object with refreshed tokens if successful
+        - None if token refresh failed
+        """
+        try:
+            # Refresh tokens with session-specific expiry for immediate use
+            token_params = self._get_token_params(use_session_limit=True)
+
+            user_token = await self.daily_rest_helper.get_token(
+                room.room_url,
+                expiry_time=self.max_session_limit,
+                eject_at_token_exp=True,
+                owner=False,
+                params=token_params,
+            )
+            if not user_token:
+                logger.error(f"Failed to refresh user token for room {room.room_url}")
+                return None
+
+            bot_token = await self.daily_rest_helper.get_token(
+                room.room_url,
+                expiry_time=self.max_session_limit,
+                eject_at_token_exp=True,
+                owner=True,
+                params=token_params,
+            )
+            if not bot_token:
+                logger.error(f"Failed to refresh bot token for room {room.room_url}")
+                return None
+
+            # Update room with new tokens
+            room.user_token = user_token
+            room.bot_token = bot_token
+            room.token_exp_timestamp = time.time() + self.max_session_limit
+            logger.info(f"Successfully refreshed tokens for room {room.room_url}")
+            return room
+
+        except Exception as e:
+            logger.error(f"Failed to refresh tokens for room {room.room_url}: {e}")
+            return None
 
     async def _create_background_room(self):
         """
@@ -359,7 +431,9 @@ class DailyRoomPool:
                 raise RuntimeError("Failed to get bot token")
 
             exp_timestamp = time.time() + self.max_session_limit
-            daily_room = DailyRoom(room.url, user_token, bot_token, exp_timestamp)
+            daily_room = DailyRoom(
+                room.url, user_token, bot_token, exp_timestamp, exp_timestamp
+            )
             daily_room.is_used = True
             self.active_rooms[session_id] = daily_room
 

@@ -20,7 +20,9 @@ Reduce voice agent connection time from **~8 seconds to 3-4 seconds** by impleme
 - **DailyRoomPool**: Manages pre-created Daily.co rooms with tokens.
 - **Background Creation**: Automatically creates new rooms when the pool gets low.
 - **Room Lifecycle**: Handles room assignment, tracking, and single-use cleanup.
-- **Token Management**: Pre-generates user and bot tokens for each room.
+- **Token Management**: Pre-generates user and bot tokens for each room with proper expiry handling.
+- **Token Validation**: Automatically validates token expiry and refreshes expired tokens.
+- **Graceful Token Refresh**: Seamlessly refreshes expired tokens without disrupting the user experience.
 
 ### 3. Main API Changes (`app/main.py`)
 - **Dual Pool Integration**: Modified `/agent/voice/automatic` endpoint to use both pools.
@@ -190,11 +192,14 @@ curl -X POST http://localhost:8000/agent/voice/automatic \
 2.  **Room creation fails**:
     -   Verify `DAILY_API_KEY` and `DAILY_API_URL`.
     -   Check for rate limits on the Daily.co dashboard.
-3.  **Processes become unhealthy**:
+3.  **Token expiry errors** (`exp-token`):
+    -   The pool now automatically handles token expiry and refresh.
+    -   Check logs for token refresh failures.
+4.  **Processes become unhealthy**:
     -   The pool automatically replaces them.
     -   Check system resources (memory, CPU).
     -   Examine logs from the voice agent subprocesses for errors.
-4.  **Fallback to direct creation**:
+5.  **Fallback to direct creation**:
     -   This is expected under high load when the pool is temporarily exhausted.
     -   Monitor pool status to see if replenishment is keeping up.
 
@@ -223,6 +228,9 @@ curl -X POST http://localhost:8000/agent/voice/automatic/cleanup/{session_id}
 - [x] Monitoring endpoints for both pools.
 - [x] Automatic session cleanup for both resources.
 - [x] Production-ready error handling and fallback.
+- [x] **Token expiry handling and automatic refresh**.
+- [x] **Separate tracking of room and token expiry times**.
+- [x] **Graceful token refresh without user disruption**.
 
 ### 🎯 Performance Achievements
 - [x] **~50-62.5% reduction** in connection time (from ~8s to ~3-4s).
@@ -237,6 +245,34 @@ curl -X POST http://localhost:8000/agent/voice/automatic/cleanup/{session_id}
 - [ ] **Auto-scaling of pool sizes**: Implement logic to dynamically adjust `VOICE_AGENT_POOL_SIZE` and `DAILY_ROOM_POOL_SIZE` based on real-time load and demand.
 - [ ] **Advanced Health Checks**: Implement more sophisticated health checks that not only verify if a process is running but also check its responsiveness and resource consumption.
 - [ ] **Performance Metrics Dashboard**: Create a dedicated dashboard (e.g., using Grafana) to visualize pool statistics, connection times, and resource utilization over time.
+
+## 🔧 Token Expiry Fix (Latest Update)
+
+### Problem Solved
+The original implementation had a critical token expiry mismatch:
+- **Pooled rooms**: Created with 7-day expiry
+- **Tokens**: Only had 1-hour expiry (`max_session_limit`)
+- **Result**: `exp-token` errors when trying to join rooms with expired tokens
+
+### Solution Implemented
+1. **Synchronized Expiry**: Pooled room tokens now have the same 7-day expiry as the room itself
+2. **Token Validation**: Added `are_tokens_valid()` method to check token expiry before room assignment
+3. **Automatic Refresh**: If tokens are expired, they are automatically refreshed with session-specific expiry
+4. **Graceful Degradation**: Failed token refreshes result in room cleanup rather than errors
+5. **Enhanced Monitoring**: Added `available_rooms_with_valid_tokens` metric to track token health
+
+### Code Changes
+- **`DailyRoom` class**: Added `token_exp_timestamp` and `are_tokens_valid()` method
+- **`_create_and_add_room()`**: Fixed token expiry to match room expiry (7 days)
+- **`get_room()`**: Added token validation and refresh logic
+- **`_refresh_room_tokens()`**: New method for seamless token refresh
+- **`get_pool_stats()`**: Enhanced with token validity metrics
+
+### Benefits
+- **No more `exp-token` errors**: Tokens maintain proper expiry alignment
+- **Zero downtime**: Token refresh happens transparently during room assignment
+- **Better monitoring**: Track both room availability and token health
+- **Robust fallback**: Failed refreshes are handled gracefully
 
 ## 📝 Notes
 
