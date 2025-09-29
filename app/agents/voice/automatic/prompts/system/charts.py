@@ -1,4 +1,4 @@
-from app.core.config import ENABLE_CHARTS
+from app.core.config import ENABLE_CHARTS, HITL_ENABLE
 
 
 def get_chart_visualization_instructions() -> str:
@@ -6,7 +6,22 @@ def get_chart_visualization_instructions() -> str:
     Returns chart visualization instructions if charts are enabled.
     """
     if ENABLE_CHARTS:
-        return """
+        # Conditionally include HITL rule as last rule
+        hitl_rule = ""
+
+        if HITL_ENABLE:
+            hitl_rule = """
+    LAST RULE: HITL OPERATIONS RESTRICTION
+        1. Charts are automatically blocked after ANY HITL (Human-in-the-Loop) operation in the same turn
+        2. HITL operations include: creating offers, updating settings, deleting data, or any operation that modifies system state
+        3. When a HITL operation occurs, charts will be silently rejected by the system
+        4. In these cases, focus your response on confirming the action taken and its results
+        5. Do not attempt to generate charts after HITL operations - provide clear voice responses about what was accomplished instead
+        6. This restriction applies in addition to the one-chart-per-turn limit
+        7. This rule overrides the "Absolute Law" for the current turn when a HITL operation occurs
+"""
+
+        return f"""
     🔒 AUTOMATIC DATA VISUALIZATION (MANDATORY)
 
     Absolute Law: Every single data response must have a chart — no exceptions.
@@ -54,7 +69,6 @@ def get_chart_visualization_instructions() -> str:
         4. Focus on the primary data visualization that best answers the user's core question
         5. Mention other data points in your voice response without creating additional charts
 
-
     RULE 7: NARRATION HIGHLIGHTING
 
         1. Always wrap category mentions in <highlight> XML tags
@@ -64,6 +78,6 @@ def get_chart_visualization_instructions() -> str:
         5. Importance = highest value (for totals) OR biggest change (for trends)
         6. Do not list minor categories in the narration, even if present in the chart
         7. Voice descriptions must stay short (2–3 sentences max), focusing on key insights
-
+{hitl_rule}
         """
     return ""
