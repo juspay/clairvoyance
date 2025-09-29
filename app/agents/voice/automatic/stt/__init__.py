@@ -147,27 +147,6 @@ def get_stt_service(voice_name: Optional[str] = None):
     else:  # Default to Google STT
         logger.info("Using Google STT service with VAD-based turn detection")
 
-        # Minimal secure logging for Google credentials
-        if config.GOOGLE_CREDENTIALS_JSON:
-            try:
-                import json
-
-                if isinstance(config.GOOGLE_CREDENTIALS_JSON, str):
-                    parsed = json.loads(config.GOOGLE_CREDENTIALS_JSON)
-                    logger.info(
-                        f"Google credentials: Valid JSON, project={parsed.get('project_id')}"
-                    )
-                else:
-                    logger.info(
-                        f"Google credentials: Dict format, project={config.GOOGLE_CREDENTIALS_JSON.get('project_id')}"
-                    )
-            except json.JSONDecodeError as e:
-                logger.error(
-                    f"Google credentials: JSON parsing failed at position {e.pos}"
-                )
-        else:
-            logger.warning("Google credentials: Not provided")
-
         return GoogleSTTService(
             params=GoogleSTTService.InputParams(
                 languages=[Language.EN_US, Language.EN_IN], enable_interim_results=False
