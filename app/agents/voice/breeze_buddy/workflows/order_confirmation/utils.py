@@ -1,3 +1,5 @@
+import json
+
 from pipecat.services.google.stt import GoogleSTTService
 from pipecat.services.openai.stt import OpenAISTTService
 from pipecat.services.soniox.stt import SonioxInputParams, SonioxSTTService
@@ -116,3 +118,51 @@ def indian_number_to_speech(number: int) -> str:
         parts[-1] = h_part
 
     return " ".join(parts) + " rupees"
+
+
+def _extract_value_from_input(input_value, expected_key: str = None):
+    """Extract value from JSON-like input, dict object, or return the value directly"""
+    try:
+        # Handle dict objects directly (when LLM passes dict instead of string)
+        if isinstance(input_value, dict):
+            if expected_key and expected_key in input_value:
+                return str(input_value[expected_key]).strip()
+            # Otherwise, get the first value
+            elif input_value:
+                return str(list(input_value.values())[0]).strip()
+            else:
+                return ""
+
+        # Handle string inputs
+        if isinstance(input_value, str):
+            # Try to parse as JSON if it looks like JSON
+            if input_value.strip().startswith("{") and input_value.strip().endswith(
+                "}"
+            ):
+                try:
+                    # Parse the JSON-like string
+                    parsed = json.loads(input_value)
+                    if isinstance(parsed, dict):
+                        # If we have a specific key to look for, use it
+                        if expected_key and expected_key in parsed:
+                            return str(parsed[expected_key]).strip()
+                        # Otherwise, get the first value
+                        elif parsed:
+                            return str(list(parsed.values())[0]).strip()
+                except json.JSONDecodeError:
+                    # If JSON parsing fails, return the original stripped value
+                    return input_value.strip()
+
+            # If not JSON or parsing failed, return the original value
+            return input_value.strip()
+
+        # For any other type, convert to string and strip
+        return str(input_value).strip()
+
+    except (AttributeError, TypeError):
+        # If anything fails, convert to string and strip
+        return (
+            str(input_value).strip()
+            if hasattr(input_value, "strip")
+            else str(input_value)
+        )
