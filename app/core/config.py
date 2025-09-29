@@ -348,6 +348,10 @@ MAX_CHARTS_PER_TURN = int(os.environ.get("MAX_CHARTS_PER_TURN", "1"))
 # PTT VAD Filter Configuration
 DISABLE_VAD_FOR_PTT = os.environ.get("DISABLE_VAD_FOR_PTT", "true").lower() == "true"
 
+# STT Mute Filter and Frame Bridging Configuration
+ENABLE_STT_MUTE_FILTER = os.environ.get("ENABLE_STT_MUTE_FILTER", "false").lower() == "true"
+ENABLE_FRAME_BRIDGING = os.environ.get("ENABLE_FRAME_BRIDGING", "false").lower() == "true"
+
 BREEZE_DEFAULT_SALES_TAB = os.environ.get("BREEZE_DEFAULT_SALES_TAB", "SALES")
 
 # Breeze Portal URLs

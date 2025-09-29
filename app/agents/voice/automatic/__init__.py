@@ -17,15 +17,19 @@ from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.vad.vad_analyzer import VADParams
 from pipecat.frames.frames import (
     BotSpeakingFrame,
+    BotStartedSpeakingFrame,
+    BotStoppedSpeakingFrame,
     EmulateUserStartedSpeakingFrame,
     EmulateUserStoppedSpeakingFrame,
     LLMFullResponseEndFrame,
     OutputAudioRawFrame,
     TTSSpeakFrame,
 )
+from pipecat.processors.frame_processor import FrameDirection
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
+from pipecat.processors.filters.stt_mute_filter import STTMuteConfig, STTMuteFilter, STTMuteStrategy
 from pipecat.processors.frameworks.rtvi import RTVIConfig, RTVIProcessor
 from pipecat.services.azure.llm import AzureLLMService
 from pipecat.services.google.rtvi import GoogleRTVIObserver
@@ -464,13 +468,27 @@ async def run_normal_mode(args):
     # Build pipeline components list
     pipeline_components = [
         transport.input(),
-        stt,
+        stt
     ]
 
     # Add PTT VAD filter only if it's enabled
     if config.DISABLE_VAD_FOR_PTT:
         ptt_vad_filter = PTTVADFilter("PTTVADFilter")
-        pipeline_components.append(ptt_vad_filter)  # Filter VAD frames after STT
+        pipeline_components.append(ptt_vad_filter)
+
+    # Add STT mute filter only if enabled via configuration
+    stt_mute_filter = None
+    if config.ENABLE_STT_MUTE_FILTER:
+        logger.info("STT Mute Filter: ENABLED via ENABLE_STT_MUTE_FILTER env var")
+        stt_mute_filter = STTMuteFilter(
+            config=STTMuteConfig(
+                strategies={STTMuteStrategy.MUTE_UNTIL_FIRST_BOT_COMPLETE}
+            )
+        )
+        pipeline_components.append(stt_mute_filter)
+    else:
+        logger.info("STT Mute Filter: DISABLED (set ENABLE_STT_MUTE_FILTER=true to enable)")
+    
 
     pipeline_components.extend([rtvi, context_aggregator.user()])
     if (
@@ -617,6 +635,55 @@ async def run_normal_mode(args):
             await transport.start_recording()
 
         await task.queue_frames([context_aggregator.user().get_context_frame()])
+
+    # Setup frame bridging only if enabled via configuration
+    if config.ENABLE_FRAME_BRIDGING:
+        logger.info("Frame Bridging: ENABLED via ENABLE_FRAME_BRIDGING env var")
+
+        # Implement HeyGen-style frame bridging for Daily transport with loop prevention
+        def setup_daily_frame_bridging():
+            """Override Daily output transport's push_frame method to bridge bot speaking frames to input transport"""
+
+            output_transport = transport.output()
+            original_push_frame = output_transport.push_frame
+
+            # Track forwarded frame IDs to prevent loops with memory-bounded cache
+            from collections import deque
+            forwarded_frame_ids = set()
+            frame_id_queue = deque(maxlen=100)  # Keep only last 100 frame IDs
+
+            async def bridged_push_frame(frame, direction=FrameDirection.DOWNSTREAM):
+                # Bridge bot speaking frames to input transport so STTMuteFilter can receive them
+                if isinstance(frame, (BotStartedSpeakingFrame, BotStoppedSpeakingFrame)):
+                    # Prevent loop: only forward each frame once
+                    if frame.id not in forwarded_frame_ids:
+                        # Add to tracking with memory management
+                        forwarded_frame_ids.add(frame.id)
+
+                        # If queue is at max capacity, remove oldest frame ID
+                        if len(frame_id_queue) == 100:
+                            old_id = frame_id_queue.popleft()
+                            forwarded_frame_ids.discard(old_id)
+
+                        frame_id_queue.append(frame.id)
+
+                        # Forward to input transport where STTMuteFilter can receive it
+                        input_transport = transport.input()
+                        await input_transport.push_frame(frame, FrameDirection.DOWNSTREAM)
+                    else:
+                        # Frame already forwarded, skip to prevent loop
+                        pass
+
+                # Continue with normal frame flow (like HeyGen does with super().push_frame())
+                await original_push_frame(frame, direction)
+
+            output_transport.push_frame = bridged_push_frame
+
+        # Install the bridging solution
+        setup_daily_frame_bridging()
+    else:
+        logger.info("Frame Bridging: DISABLED (set ENABLE_FRAME_BRIDGING=true to enable)")
+
 
     @transport.event_handler("on_participant_left")
     async def on_participant_left(transport, participant, reason):
