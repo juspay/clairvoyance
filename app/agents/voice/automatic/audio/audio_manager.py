@@ -25,6 +25,10 @@ class AudioManager:
         self.audio_chunks = []  # 1-second audio chunks for seamless playback
         self.user_has_input = False  # Ensure audio only starts after user input
         
+        # FUNCTION CALL SET STATE - Track function call set audio
+        self.is_function_call_set_active = False  # Track if we're in a function call set
+        self.function_call_set_audio_playing = False  # Track if function call set audio is playing
+        
         # Internal task management
         self.loop_task: Optional[asyncio.Task] = None
         
@@ -122,6 +126,51 @@ class AudioManager:
         if speaking and self.is_playing:
             logger.info("Bot started speaking - stopping audio")
             asyncio.create_task(self.stop_and_disable_audio())
+    
+    async def start_function_call_set_audio(self):
+        """Start audio for function call set execution."""
+        # Only start if user has input and no audio is currently playing
+        if not self.user_has_input:
+            return
+            
+        if self.is_playing:
+            return  # Audio already playing, don't interrupt
+        
+        # Mark function call set as active
+        self.is_function_call_set_active = True
+        self.function_call_set_audio_playing = True
+        
+        # Start audio using existing method
+        await self.start_audio()
+        logger.info("Started function call set audio")
+    
+    async def stop_function_call_set_audio(self):
+        """Stop function call set audio and reset state."""
+        # Reset function call set state
+        self.is_function_call_set_active = False
+        self.function_call_set_audio_playing = False
+        
+        # Stop audio
+        if self.is_playing:
+            self.is_playing = False
+            self.loop_count = 0
+            
+            # Cancel audio task
+            if self.loop_task and not self.loop_task.done():
+                self.loop_task.cancel()
+                try:
+                    await self.loop_task
+                except asyncio.CancelledError:
+                    pass
+            
+            # Clear audio queue
+            await self._clear_audio_queue()
+            logger.info("Stopped function call set audio")
+    
+    def reset_function_call_set(self):
+        """Reset function call set state (called on new user input)."""
+        self.is_function_call_set_active = False
+        self.function_call_set_audio_playing = False
     
     async def _stream_seamless_audio(self):
         """Stream audio chunks seamlessly with minimal buffer for immediate stopping."""

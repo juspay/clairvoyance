@@ -46,7 +46,12 @@ def _stop_audio_immediately(context: str = "unknown") -> bool:
     """INSTANT audio stopping using simplified AudioManager API."""
     audio_manager = get_audio_manager()
     if audio_manager and (audio_manager.user_has_input or audio_manager.is_playing):
-        # Use the simplified stop method
+        # Stop function call set audio if active
+        if audio_manager.function_call_set_audio_playing:
+            asyncio.create_task(audio_manager.stop_function_call_set_audio())
+            logger.info(f"INSTANT STOP: Function call set audio stopped due to {context}")
+        
+        # Use the simplified stop method for regular audio
         asyncio.create_task(audio_manager.stop_and_disable_audio())
         
         logger.info(f"INSTANT AUDIO STOP: {context}")
@@ -255,7 +260,7 @@ class LLMSpyProcessor(FrameProcessor):
             
             await self.push_frame(frame, direction)
 
-        # Function Call Start - emit RTVI event and track in conversation, NO ACTION (let audio continue)
+        # Function Call Start - emit RTVI event, track in conversation, and START FUNCTION CALL SET AUDIO
         elif isinstance(frame, FunctionCallInProgressFrame):
             if self._tracer:
                 # Use turn context directly for tool calls to be nested in turn span
@@ -280,6 +285,14 @@ class LLMSpyProcessor(FrameProcessor):
             logger.debug(
                 f"Function call started: {frame.function_name} with args: {frame.arguments}"
             )
+            
+            # START FUNCTION CALL SET AUDIO - Start audio for function call execution
+            audio_manager = get_audio_manager()
+            if audio_manager and not audio_manager.is_function_call_set_active:
+                # This is the first function call in the set, start audio
+                await audio_manager.start_function_call_set_audio()
+                logger.info(f"FUNCTION CALL SET: Started audio for function call set (first call: {frame.function_name})")
+            
             await self._rtvi.push_frame(
                 RTVIServerMessageFrame(
                     data={
@@ -353,6 +366,15 @@ class LLMSpyProcessor(FrameProcessor):
                     frame.function_name,
                     frame.result,
                 )
+                
+                # Check if turn is complete (all function calls finished) and stop function call set audio
+                turn_completed = any(event.event_type == "turn_complete" for event in events)
+                if turn_completed:
+                    audio_manager = get_audio_manager()
+                    if audio_manager and audio_manager.function_call_set_audio_playing:
+                        await audio_manager.stop_function_call_set_audio()
+                        logger.info("FUNCTION CALL SET: All function calls completed - stopped audio")
+                
                 for event in events:
                     await emit_rtvi_event(self._rtvi, event, self._session_id)
 

@@ -136,7 +136,9 @@ class ConversationManager:
             
             if is_real_user_input:
                 audio_manager.reset_for_new_input()
-                logger.debug(f"MINIMAL QUEUE: Reset audio for real user input: {content[:50]}...")
+                # Reset function call set state for new user input
+                audio_manager.reset_function_call_set()
+                logger.debug(f"MINIMAL QUEUE: Reset audio and function call set for real user input: {content[:50]}...")
             else:
                 logger.debug(f"MINIMAL QUEUE: Skipping reset for function/inferred content: {content[:50]}...")
         
