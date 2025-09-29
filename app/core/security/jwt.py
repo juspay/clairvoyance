@@ -260,7 +260,10 @@ async def validate_automatic_request(raw_request: Request) -> Optional[Dict[str,
         body = await raw_request.body()
         data = json.loads(body)
         breeze_token = data.get("breezeToken")
-
+        mode = data.get("mode")
+        if mode == "TEST":  # Skip auth for test mode
+            logger.info("Test mode detected, skipping auth validation")
+            return None
         if not breeze_token:
             logger.error("Missing breezeToken in request body")
             raise HTTPException(
