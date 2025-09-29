@@ -16,16 +16,16 @@ from pipecat.transports.daily.utils import DailyRESTHelper
 from app import __version__
 from app.api.routers import automatic, breeze_buddy
 from app.core.config import (
+    AUTOMATIC_DAILY_ROOM_MAX_POOL_SIZE,
+    AUTOMATIC_DAILY_ROOM_POOL_SIZE,
+    AUTOMATIC_VOICE_AGENT_MAX_POOL_SIZE,
+    AUTOMATIC_VOICE_AGENT_POOL_SIZE,
     DAILY_API_KEY,
     DAILY_API_URL,
-    DAILY_ROOM_MAX_POOL_SIZE,
-    DAILY_ROOM_POOL_SIZE,
     ENABLE_AUTOMATIC_DAILY_RECORDING,
     HOST,
     MAX_DAILY_SESSION_LIMIT,
     PORT,
-    VOICE_AGENT_MAX_POOL_SIZE,
-    VOICE_AGENT_POOL_SIZE,
 )
 
 # Import necessary components from the new structure
@@ -89,8 +89,8 @@ async def lifespan(_app: FastAPI):
     try:
         await initialize_room_pool(
             daily_rest_helper=daily_helpers["rest"],
-            pool_size=DAILY_ROOM_POOL_SIZE,
-            max_pool_size=DAILY_ROOM_MAX_POOL_SIZE,
+            pool_size=AUTOMATIC_DAILY_ROOM_POOL_SIZE,
+            max_pool_size=AUTOMATIC_DAILY_ROOM_MAX_POOL_SIZE,
             max_session_limit=MAX_DAILY_SESSION_LIMIT,
             enable_recording=ENABLE_AUTOMATIC_DAILY_RECORDING,
         )
@@ -101,7 +101,8 @@ async def lifespan(_app: FastAPI):
     # Initialize voice agent process pool
     try:
         await initialize_voice_agent_pool(
-            pool_size=VOICE_AGENT_POOL_SIZE, max_pool_size=VOICE_AGENT_MAX_POOL_SIZE
+            pool_size=AUTOMATIC_VOICE_AGENT_POOL_SIZE,
+            max_pool_size=AUTOMATIC_VOICE_AGENT_MAX_POOL_SIZE,
         )
 
         # Set up callbacks to avoid circular imports
@@ -259,55 +260,37 @@ async def bot_connect(
             f"Failed to get process from pool: {e}, falling back to direct creation"
         )
 
-        # 5. Fallback: Launch subprocess directly
+        # 5. Fallback: Launch subprocess directly and pass config via stdin
         bot_file = "app.agents.voice.automatic"
-        cmd = [
-            "python3",
-            "-m",
-            bot_file,
-            "-u",
-            room_url,
-            "-t",
-            bot_token,
-            "--session-id",
-            session_id,
-            "--client-sid",
-            client_sid,
-        ]
+        cmd = ["python3", "-m", bot_file]
 
-        # Dynamically build command arguments from session_params
-        arg_map = {
-            "mode": "--mode",
-            "user_name": "--user-name",
-            "user_email": "--user-email",
-            "tts_provider": "--tts-provider",
-            "voice_name": "--voice-name",
-            "euler_token": "--euler-token",
-            "breeze_token": "--breeze-token",
-            "shop_url": "--shop-url",
-            "shop_id": "--shop-id",
-            "shop_type": "--shop-type",
-            "merchant_id": "--merchant-id",
-            "platform_integrations": "--platform-integrations",
-            "reseller_id": "--reseller-id",
+        session_config = {
+            "room_url": room_url,
+            "token": bot_token,
+            "session_id": session_id,
+            "client_sid": client_sid,
+            **session_params,
         }
-
-        for key, value in session_params.items():
-            if value is not None:
-                arg_name = arg_map.get(key)
-                if isinstance(value, list):
-                    cmd.extend([arg_name] + value)
-                else:
-                    cmd.extend([arg_name, str(value)])
+        config_json = json.dumps(session_config) + "\n"
 
         logger.bind(session_id=session_id).info(
-            f"Launching subprocess with command: {' '.join(cmd)}"
+            f"Launching subprocess with command: {' '.join(cmd)} and passing config via stdin"
         )
+
         proc = subprocess.Popen(
             cmd,
             cwd=Path(__file__).parent.parent,
+            stdin=subprocess.PIPE,
             bufsize=1,
         )
+
+        # Write config to stdin and close it
+        if proc.stdin:
+            try:
+                proc.stdin.write(config_json.encode("utf-8"))
+                proc.stdin.close()
+            except Exception as e:
+                logger.error(f"Failed to write to subprocess stdin: {e}")
         bot_procs[proc.pid] = (proc, room_url, session_id, "direct")
         logger.bind(session_id=session_id).info(
             f"Subprocess started with PID: {proc.pid}"

@@ -100,16 +100,16 @@ The pool sizes are now configurable via environment variables. You can set them 
 
 ```bash
 # The number of voice agent processes to keep ready in the pool.
-VOICE_AGENT_POOL_SIZE=3
+AUTOMATIC_VOICE_AGENT_POOL_SIZE=3
 
 # The maximum number of voice agent processes the pool can scale up to.
-VOICE_AGENT_MAX_POOL_SIZE=3
+AUTOMATIC_VOICE_AGENT_MAX_POOL_SIZE=3
 
 # The number of Daily.co rooms to keep ready in the pool.
-DAILY_ROOM_POOL_SIZE=5
+AUTOMATIC_DAILY_ROOM_POOL_SIZE=5
 
 # The maximum number of Daily.co rooms the pool can scale up to.
-DAILY_ROOM_MAX_POOL_SIZE=5
+AUTOMATIC_DAILY_ROOM_MAX_POOL_SIZE=5
 ```
 
 ### Multi-Pod Setup
@@ -242,7 +242,7 @@ curl -X POST http://localhost:8000/agent/voice/automatic/cleanup/{session_id}
 - [ ] **Model Pre-warming**: Investigate pre-loading heavy models (like STT, VAD) into memory when a process is created, rather than on the first session assignment. This could further reduce the initial session delay.
 - [ ] **Shared Model Cache**: For multi-process setups, explore using a shared memory cache (e.g., Redis, Memcached) for models to reduce the overall memory footprint.
 - [ ] **Asynchronous Model Loading**: Load non-critical models asynchronously after the primary connection is established to improve perceived performance.
-- [ ] **Auto-scaling of pool sizes**: Implement logic to dynamically adjust `VOICE_AGENT_POOL_SIZE` and `DAILY_ROOM_POOL_SIZE` based on real-time load and demand.
+- [ ] **Auto-scaling of pool sizes**: Implement logic to dynamically adjust `AUTOMATIC_VOICE_AGENT_POOL_SIZE` and `AUTOMATIC_DAILY_ROOM_POOL_SIZE` based on real-time load and demand.
 - [ ] **Advanced Health Checks**: Implement more sophisticated health checks that not only verify if a process is running but also check its responsiveness and resource consumption.
 - [ ] **Performance Metrics Dashboard**: Create a dedicated dashboard (e.g., using Grafana) to visualize pool statistics, connection times, and resource utilization over time.
 

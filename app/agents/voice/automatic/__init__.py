@@ -85,6 +85,29 @@ load_dotenv(override=True)
 
 
 async def main():
+    # If no command-line arguments are provided, read a single session config from stdin.
+    # This is the new secure mode for direct (non-pooled) process creation.
+    if len(sys.argv) == 1:
+        logger.info(
+            "No command-line args detected, starting in single-session stdin mode."
+        )
+        try:
+            line = await asyncio.to_thread(sys.stdin.readline)
+            if line.strip():
+                session_config = json.loads(line.strip())
+                await handle_session(session_config)
+            else:
+                logger.error(
+                    "Started with no arguments but received no config from stdin."
+                )
+        except Exception as e:
+            logger.error(
+                f"Failed to read/handle session config from stdin: {e}", exc_info=True
+            )
+        finally:
+            logger.info("Single-session stdin mode finished.")
+        return
+
     parser = argparse.ArgumentParser()
     parser.add_argument("-u", "--url", type=str, help="URL of the Daily room")
     parser.add_argument("-t", "--token", type=str, help="Daily token")

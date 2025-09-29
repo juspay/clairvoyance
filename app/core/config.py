@@ -324,10 +324,18 @@ AUTOMATIC_SESSION_INACTIVITY_TIMEOUT = float(
 MAX_DAILY_SESSION_LIMIT = int(os.environ.get("MAX_DAILY_SESSION_LIMIT", 1800))
 
 # Pool Configuration
-VOICE_AGENT_POOL_SIZE = int(os.environ.get("VOICE_AGENT_POOL_SIZE", 1))
-VOICE_AGENT_MAX_POOL_SIZE = int(os.environ.get("VOICE_AGENT_MAX_POOL_SIZE", 3))
-DAILY_ROOM_POOL_SIZE = int(os.environ.get("DAILY_ROOM_POOL_SIZE", 1))
-DAILY_ROOM_MAX_POOL_SIZE = int(os.environ.get("DAILY_ROOM_MAX_POOL_SIZE", 5))
+AUTOMATIC_VOICE_AGENT_POOL_SIZE = int(
+    os.environ.get("AUTOMATIC_VOICE_AGENT_POOL_SIZE", 1)
+)
+AUTOMATIC_VOICE_AGENT_MAX_POOL_SIZE = int(
+    os.environ.get("AUTOMATIC_VOICE_AGENT_MAX_POOL_SIZE", 3)
+)
+AUTOMATIC_DAILY_ROOM_POOL_SIZE = int(
+    os.environ.get("AUTOMATIC_DAILY_ROOM_POOL_SIZE", 1)
+)
+AUTOMATIC_DAILY_ROOM_MAX_POOL_SIZE = int(
+    os.environ.get("AUTOMATIC_DAILY_ROOM_MAX_POOL_SIZE", 5)
+)
 
 # Human-in-the-Loop (HITL) Configuration
 HITL_ENABLE = os.environ.get("HITL_ENABLE", "true").lower() == "true"
