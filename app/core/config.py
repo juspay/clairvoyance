@@ -32,6 +32,11 @@ UVICORN_LOG_LEVEL = os.environ.get("UVICORN_LOG_LEVEL", "info")
 GEMINI_API_KEY = get_required_env("GEMINI_API_KEY")
 
 # Pipecat Agent Configuration
+AUTOMATIC_CONNECT_BLOCKED_ORIGINS = [
+    item.strip()
+    for item in os.environ.get("AUTOMATIC_CONNECT_BLOCKED_ORIGINS", "").split(",")
+    if item.strip()
+]
 DAILY_API_KEY = get_required_env("DAILY_API_KEY")
 DAILY_API_URL = os.environ.get("DAILY_API_URL", "https://api.daily.co/v1")
 AZURE_OPENAI_API_KEY = get_required_env("AZURE_OPENAI_API_KEY")

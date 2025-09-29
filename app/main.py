@@ -30,7 +30,7 @@ from app.core.config import (
 
 # Import necessary components from the new structure
 from app.core.logger import logger
-from app.core.security.jwt import validate_breeze_user
+from app.core.security.jwt import validate_automatic_request
 from app.core.transport.http_client import create_aiohttp_session
 
 # Database imports
@@ -158,7 +158,7 @@ app.include_router(
 @app.post("/agent/voice/automatic")
 async def bot_connect(
     request: AutomaticVoiceUserConnectRequest,
-    user_context=Depends(validate_breeze_user),
+    user_context=Depends(validate_automatic_request),
 ) -> Dict[str, Any]:
     logger.info(
         f"Received new user connect request payload: {request.model_dump_json(exclude_none=True)}"

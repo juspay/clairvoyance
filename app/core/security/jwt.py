@@ -7,6 +7,7 @@ from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.core.config import (
+    AUTOMATIC_CONNECT_BLOCKED_ORIGINS,
     ENABLE_LIGHTHOUSE_AUTH,
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES,
     JWT_ALGORITHM,
@@ -221,7 +222,7 @@ async def get_current_user(
 # Breeze Authentication Functions
 
 
-async def validate_breeze_user(raw_request: Request) -> Optional[Dict[str, Any]]:
+async def validate_automatic_request(raw_request: Request) -> Optional[Dict[str, Any]]:
     """
     FastAPI dependency to get user context from breezeToken in request body
 
@@ -235,6 +236,22 @@ async def validate_breeze_user(raw_request: Request) -> Optional[Dict[str, Any]]
     Raises:
         HTTPException: If ENABLE_LIGHTHOUSE_AUTH is True and token is missing, invalid, or expired
     """
+
+    origin = raw_request.headers.get("origin")
+    referer = raw_request.headers.get("referer")
+    if origin:
+        if any(blocked in origin for blocked in AUTOMATIC_CONNECT_BLOCKED_ORIGINS):
+            raise HTTPException(
+                status_code=403,
+                detail=f"Access from origin '{origin}' is forbidden.",
+            )
+    elif referer:
+        if any(blocked in referer for blocked in AUTOMATIC_CONNECT_BLOCKED_ORIGINS):
+            raise HTTPException(
+                status_code=403,
+                detail=f"Access from referer '{referer}' is forbidden.",
+            )
+
     # If authentication is disabled, return None
     if not ENABLE_LIGHTHOUSE_AUTH:
         return None
