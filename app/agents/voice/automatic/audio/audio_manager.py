@@ -22,7 +22,7 @@ class AudioManager:
         # MINIMAL STATE - Only 4 variables needed
         self.is_playing = False
         self.loop_count = 0  # Track completed loops (max 3 = 18 seconds total)
-        self.audio_chunks = []  # 1-second audio chunks for seamless playback
+        self.audio_chunks = []  # 500ms audio chunks for seamless playback
         self.user_has_input = False  # Ensure audio only starts after user input
         
         # FUNCTION CALL SET STATE - Track function call set audio
@@ -35,7 +35,7 @@ class AudioManager:
         self._load_waiting_audio()
     
     def _load_waiting_audio(self):
-        """Load waiting audio and split into 1-second chunks for seamless playback."""
+        """Load waiting audio and split into 500ms chunks for seamless playback."""
         try:
             wav_file_path = f"app/agents/voice/automatic/audio/waiting_{int(AUDIO_LENGTH_SECONDS)}sec.wav"
             
@@ -43,14 +43,14 @@ class AudioManager:
             # Convert to pipeline format
             audio = audio.set_frame_rate(16000).set_channels(1).set_sample_width(2)
             
-            # Split into clean 1-second chunks
+            # Split into clean 500ms chunks
             self.audio_chunks = []
-            chunk_duration_ms = 1000  # 1 second in milliseconds
+            chunk_duration_ms = 500  # 500ms (0.5 second) in milliseconds
             
             for i in range(0, len(audio), chunk_duration_ms):
                 chunk = audio[i:i + chunk_duration_ms]
                 
-                # Ensure chunk is exactly 1 second (pad if necessary)
+                # Ensure chunk is exactly 500ms (pad if necessary)
                 if len(chunk) < chunk_duration_ms:
                     silence_needed = chunk_duration_ms - len(chunk)
                     silence = AudioSegment.silent(duration=silence_needed, frame_rate=16000)
@@ -58,7 +58,7 @@ class AudioManager:
                 
                 self.audio_chunks.append(chunk.raw_data)
             
-            logger.info(f"Loaded {AUDIO_LENGTH_SECONDS}-second waiting audio: {len(self.audio_chunks)} chunks")
+            logger.info(f"Loaded {AUDIO_LENGTH_SECONDS}-second waiting audio: {len(self.audio_chunks)} chunks (500ms each)")
 
         except Exception as e:
             logger.error(f"Failed to load waiting_{int(AUDIO_LENGTH_SECONDS)}sec.wav: {e}")
@@ -178,7 +178,7 @@ class AudioManager:
             if not self.audio_chunks:
                 return
             
-            total_chunks = len(self.audio_chunks)  # 6 chunks = 6 seconds
+            total_chunks = len(self.audio_chunks)  # 12 chunks = 6 seconds (500ms each)
             max_loops = 3  # Maximum 3 loops = 18 seconds total
             chunk_index = 0
             
@@ -195,8 +195,13 @@ class AudioManager:
             # Continue streaming with optimal timing for seamless playback
             while self.is_playing and self.loop_count < max_loops:
                 
-                # Wait 0.8 seconds before queuing next chunk (seamless timing)
-                await asyncio.sleep(0.8)
+                # Variable timing for consistent 100ms buffering:
+                # - First chunk (index 1): wait 0.4s (queue at t=0.4s for 100ms buffer)
+                # - Subsequent chunks: wait 0.5s (queue every 500ms for consistent 100ms buffer)
+                if chunk_index == 1:
+                    await asyncio.sleep(0.4)  # Queue chunk 2 with 100ms buffer
+                else:
+                    await asyncio.sleep(0.5)  # Queue subsequent chunks with 100ms buffer
                 
                 # Check if we should stop
                 if not self.is_playing:
