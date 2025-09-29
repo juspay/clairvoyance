@@ -456,7 +456,6 @@ get_breeze_address_data_function = FunctionSchema(
     required=["startTime"],
 )
 
-
 tools = ToolsSchema(
     standard_tools=[
         get_breeze_sales_data_function,

@@ -15,6 +15,8 @@ from app.core.config import LIGHTHOUSE_APP_URL
 from app.core.logger import logger
 from app.core.transport.http_client import create_http_client
 
+from ..utils import _rupees_to_paisa
+
 
 def safe_construct_url(url: str) -> Optional[urlparse]:
     """
@@ -225,3 +227,227 @@ def remove_html_tags(html_text: str) -> str:
         content = html_text
     clean_text = re.sub(r"<[^>]*>", "", content).strip()
     return clean_text
+
+
+# Surcharge-specific utility functions
+def detect_surcharge_rule_overlaps(new_rules, existing_rules, payment_type):
+    """
+    Check if new rules overlap with existing rules OR within themselves for the same payment type.
+    Returns (has_overlaps, overlap_details) where overlap_details lists specific conflicts.
+    """
+    # Check overlaps with existing rules
+    existing_payment_rules = [
+        r for r in existing_rules if r.get("paymentType") == payment_type
+    ]
+
+    overlaps = []
+
+    # Check new rules against existing rules
+    for new_rule in new_rules:
+        new_min = new_rule.get("minimumOrderValue", 0)
+        new_max = new_rule.get("maximumOrderValue")
+
+        for existing_rule in existing_payment_rules:
+            existing_min = existing_rule.get("minimumOrderValue", 0)
+            existing_max = existing_rule.get("maximumOrderValue")
+
+            # Simple overlap check
+            overlap_detected = False
+            if existing_max is None:  # Existing rule is unlimited
+                if new_min >= existing_min:
+                    overlap_detected = True
+            elif new_max is None:  # New rule is unlimited
+                if new_min <= existing_min:
+                    overlap_detected = True
+            else:
+                # Both have limits - check if they overlap
+                if not (new_max < existing_min or new_min > existing_max):
+                    overlap_detected = True
+
+            if overlap_detected:
+                new_range = (
+                    f"₹{new_min}-₹{new_max if new_max is not None else 'unlimited'}"
+                )
+                existing_range = f"₹{existing_min}-₹{existing_max if existing_max is not None else 'unlimited'}"
+                overlaps.append(
+                    f"New rule {new_range} overlaps with existing rule {existing_range}"
+                )
+
+    # Check internal overlaps within new rules (combine _check_internal_overlaps logic)
+    temp_rules = [{"paymentType": payment_type, **rule} for rule in new_rules]
+    filtered_rules = [r for r in temp_rules if r.get("paymentType") == payment_type]
+    sorted_rules = sorted(filtered_rules, key=lambda x: x.get("minimumOrderValue", 0))
+
+    for i in range(len(sorted_rules) - 1):
+        current = sorted_rules[i]
+        next_rule = sorted_rules[i + 1]
+        current_max = current.get("maximumOrderValue")
+        next_min = next_rule.get("minimumOrderValue", 0)
+
+        # True overlap (not just touching boundaries)
+        if current_max is not None and current_max > next_min:
+            current_range = f"₹{current.get('minimumOrderValue', 0)}-₹{current_max}"
+            next_range = (
+                f"₹{next_min}-₹{next_rule.get('maximumOrderValue', 'unlimited')}"
+            )
+            overlaps.append(f"Rule {current_range} overlaps with {next_range}")
+
+    return len(overlaps) > 0, overlaps
+
+
+def surcharge_rule_template(payment_type, min_val, max_val, rate, rate_type="AMOUNT"):
+    """Helper function to create a surcharge rule with standard fields."""
+    return {
+        "paymentType": payment_type,
+        "paymentMethod": "*",
+        "paymentMethodType": "*",
+        "applicationType": None,
+        "amountFields": None,
+        "logic": None,
+        "minimumOrderValue": min_val,
+        "maximumOrderValue": max_val,
+        "rate": rate,
+        "rateType": rate_type,
+    }
+
+
+def process_surcharge_input_rules(rules, payment_type):
+    """
+    SMART auto-completion handler for user rules:
+
+    Case 1: "0-10, 10-20, 20-30, 30-null" → [0-9.99, 10-19.99, 20-29.99, 30-null]
+    Case 2: "0-10, 10-20, 20-30" → [0-9.99, 10-19.99, 20-29.99, 30-null]
+    Case 3: "0-1000" (single rule) → [0-999.99, 1000-null] (creates no-surcharge rule for remaining range)
+    Case 4: "500-null" (starts above 0) → [0-499.99 (no surcharge), 500-null] (auto-fills gap from ₹0)
+
+    Always creates complete coverage with no gaps.
+    """
+    if not rules:
+        return rules
+
+    # Sort rules by minimum value
+    sorted_rules = sorted(rules, key=lambda x: x.get("minimumOrderValue", 0))
+    result = []
+
+    # STEP 0: Auto-fill gap from ₹0 if first rule doesn't start from ₹0
+    first_rule_min = sorted_rules[0].get("minimumOrderValue", 0)
+    if first_rule_min > 0:
+        # Create no-surcharge rule from ₹0 to just before first rule starts
+        no_surcharge_rule = surcharge_rule_template(
+            payment_type, 0, first_rule_min - 0.01, 0, "AMOUNT"
+        )
+        result.append(no_surcharge_rule)
+
+    # Process each rule and add required fields
+    for rule in sorted_rules:
+        new_rule = surcharge_rule_template(
+            payment_type,
+            rule.get("minimumOrderValue", 0),
+            rule.get("maximumOrderValue"),
+            rule.get("rate"),
+            rule.get("rateType", "AMOUNT"),
+        )
+        result.append(new_rule)
+
+    # STEP 1: Adjust all rules except the last one to end just before next rule starts
+    for i in range(len(result) - 1):
+        current_rule = result[i]
+        next_rule = result[i + 1]
+        original_max = current_rule.get("maximumOrderValue")
+        next_min = next_rule.get("minimumOrderValue")
+
+        if original_max is not None:
+            adjusted_max = next_min - 0.01
+            current_rule["maximumOrderValue"] = adjusted_max
+
+    # STEP 2: Handle the last rule - handle defined max for both single and multiple rules
+    if len(result) > 0:
+        last_rule = result[-1]
+        original_max = last_rule.get("maximumOrderValue")
+
+        if original_max is not None:
+            # Store original max for creating the unlimited rule
+            stored_max = original_max
+            # Adjust the last rule max
+            last_rule["maximumOrderValue"] = stored_max - 0.01
+
+            # Create unlimited rule for remaining range using helper function
+            unlimited_rule = surcharge_rule_template(
+                payment_type, stored_max, None, 0, "AMOUNT"
+            )
+            result.append(unlimited_rule)
+
+    return result
+
+
+def validate_and_process_surcharge_rules(rules, payment_type):
+    """
+    Validate, process and convert surcharge rules in one function:
+    1. Check for overlaps in user input
+    2. Check for gaps in user input
+    3. Process and auto-complete the rules
+    4. Convert to API format
+
+    Returns (success, processed_rules_or_error_message)
+    """
+    if not rules:
+        return False, "No rules provided"
+
+    # Check for overlaps (both internal and with existing - using empty existing rules for internal check)
+    has_overlaps, overlap_details = detect_surcharge_rule_overlaps(
+        rules, [], payment_type
+    )
+    if has_overlaps:
+        error_msg = f"Rules have overlaps: {'; '.join(overlap_details)}"
+        logger.error(error_msg)
+        return False, error_msg
+
+    # Check for gaps (inline gap checking logic)
+    temp_rules = [{"paymentType": payment_type, **rule} for rule in rules]
+    payment_rules = [r for r in temp_rules if r.get("paymentType") == payment_type]
+
+    if payment_rules:
+        sorted_rules = sorted(
+            payment_rules, key=lambda x: x.get("minimumOrderValue", 0)
+        )
+        gap_issues = []
+
+        # Check for gaps between consecutive rules only (₹0 gap allowed since auto-filled)
+        for i in range(len(sorted_rules) - 1):
+            current_max = sorted_rules[i].get("maximumOrderValue")
+            next_min = sorted_rules[i + 1].get("minimumOrderValue", 0)
+
+            if current_max is not None and current_max + 1 < next_min:
+                gap_start = current_max + 1
+                gap_end = next_min - 1
+                gap_issues.append(
+                    f"Coverage gap: No rule covers orders from ₹{gap_start:.2f} to ₹{gap_end:.2f}"
+                )
+
+        if gap_issues:
+            error_msg = f"Rules have gaps: {'; '.join(gap_issues)}"
+            logger.error(error_msg)
+            return False, error_msg
+
+    # Process rules (fix boundaries and auto-complete)
+    processed_rules = process_surcharge_input_rules(rules, payment_type)
+
+    # Convert to API format (inline conversion logic)
+    api_rules = []
+    for rule in processed_rules:
+        api_rule = rule.copy()
+        # Convert only the order values to paisa
+        if "minimumOrderValue" in api_rule:
+            api_rule["minimumOrderValue"] = _rupees_to_paisa(
+                api_rule["minimumOrderValue"]
+            )
+        if "maximumOrderValue" in api_rule:
+            max_value = api_rule["maximumOrderValue"]
+            if max_value is not None:
+                api_rule["maximumOrderValue"] = _rupees_to_paisa(max_value)
+            else:
+                api_rule["maximumOrderValue"] = None
+        api_rules.append(api_rule)
+
+    logger.info(f"Successfully validated and processed {len(api_rules)} rules")
+    return True, api_rules

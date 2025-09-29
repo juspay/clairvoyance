@@ -34,3 +34,17 @@ def filter_tools_by_authorization(
         f"User {email} is not authorized for write tools. Filtered {len(tools) - len(filtered_tools)} tools."
     )
     return filtered_tools, filtered_tool_functions
+
+
+def _rupees_to_paisa(rupees):
+    """Convert rupees to paisa (1 rupee = 100 paisa). Returns None if input is None."""
+    if rupees is None:
+        return None
+    return round(rupees * 100)
+
+
+def _paisa_to_rupees(paisa):
+    """Convert paisa to rupees (100 paisa = 1 rupee). Returns None if input is None."""
+    if paisa is None:
+        return None
+    return paisa / 100
