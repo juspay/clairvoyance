@@ -246,38 +246,6 @@ class OrderConfirmationBot:
             ),
         )
 
-        # Add event handlers to TTS for VAD control
-        async def set_vad_state(self, enabled: bool):
-            action = "enable" if enabled else "disable"
-            logger.info(f"Attempting to {action} VAD/audio_in.")
-
-            if self.vad_analyzer:
-                if hasattr(self.vad_analyzer, "set_enabled"):
-                    self.vad_analyzer.set_enabled(enabled)
-                    logger.info(f"VAD {action}d via set_enabled.")
-                else:
-                    logger.warning("VAD analyzer does not have set_enabled method.")
-            elif self.transport:
-                if hasattr(self.transport, "enable_audio_in"):
-                    await self.transport.enable_audio_in(enabled)
-                    logger.info(f"Audio_in {action}d on transport.")
-                else:
-                    logger.warning("Transport does not have enable_audio_in method.")
-            else:
-                logger.error(
-                    f"Could not {action} VAD: No VAD analyzer or transport found."
-                )
-
-        @tts.event_handler("on_tts_started")
-        async def on_tts_started(tts, text):
-            logger.info(f"TTS started event triggered, muting VAD: {text[:50]}...")
-            await self.set_vad_state(False)
-
-        @tts.event_handler("on_tts_stopped")
-        async def on_tts_stopped(tts, text):
-            logger.info("TTS stopped event triggered, unmuting VAD.")
-            await self.set_vad_state(True)
-
         self.system_prompt = self._get_system_prompt(
             self.shop_name,
             customer_name,
@@ -473,11 +441,13 @@ class OrderConfirmationBot:
             user_busy() - Call this if the customer says they are busy or it's not a good time.
             handle_unrelated_question() - Call this if the customer asks about anything not related to confirming or cancelling the order, without confirming the order.
             address_correct() - Call this if the customer confirms that the address is correct.
-            address_incorrect() - Call this if the customer says the address is incorrect or wants to update it. (Note: only landmark, pincode, or city can be updated.)
+            address_incorrect() - Call this if the customer says the address is incorrect or wants to update it. Only locality, landmark, pincode, or city can be updated. Apart from these, no other address details can be changed.
             update_landmark() - Call this if the customer wants to update the landmark in their address.
             update_pincode() - Call this if the customer wants to update the pincode in their address.
             update_city() - Call this if the customer wants to update the city in their address.
             update_locality() - Call this if the customer wants to update the locality in their address.
+            
+            You must not use any features other than the ones listed above.
             
             Your only role is to confirm or cancel this specific order. If the user asks about anything else (e.g. product details, delivery times, other products), you must use the appropriate function (`handle_unrelated_question` or `confirm_order_with_question`). Do not try to answer these questions yourself.
         """
@@ -623,7 +593,7 @@ class OrderConfirmationBot:
             ),
             FlowsFunctionSchema(
                 name="address_incorrect",
-                description="User wants to update the address.",
+                description="User wants to update the address. Only landmark, pincode, or city can be updated.",
                 handler=self._handle_address_incorrect,
                 properties={},
                 required=[],
@@ -685,7 +655,7 @@ class OrderConfirmationBot:
                     "task_messages": [
                         {
                             "role": "system",
-                            "content": "Thanking you for confirming the order. I am here just to confirm your order, for any questions related to order please refer the website for more details.",
+                            "content": "The user confirmed the order but asked a question. Say: 'Thank you for confirming the order. I am here just to confirm your order, for any questions related to the order please refer to the website for more details. Have a good day.'",
                         }
                     ],
                     "post_actions": [
@@ -716,12 +686,12 @@ class OrderConfirmationBot:
                         {"type": "function", "handler": self._end_conversation_handler}
                     ],
                 },
-                "reprompt": {
-                    "name": "reprompt",
+                "handle_unrelated_question": {
+                    "name": "handle_unrelated_question",
                     "task_messages": [
                         {
                             "role": "system",
-                            "content": f"I'm not able to help you with that right now, but you can find all the latest details on the {self.shop_name} website. Regarding your order for {self.order_summary}, would you like to confirm it?",
+                            "content": f"The user asked an unrelated question. Say: 'I'm not able to help you with that right now, but you can find all the latest details on the {self.shop_name} website. Regarding your order, would you like to confirm it?'",
                         }
                     ],
                     "functions": flow_functions,
@@ -772,7 +742,8 @@ class OrderConfirmationBot:
         logger.info(
             "Order confirmed with an unrelated question. Transitioning to custom end node."
         )
-        self.outcome = "confirmed"
+        if self.outcome != "address_updated":
+            self.outcome = "confirmed"
         return {}, self._create_node_from_config(
             "order_confirmation_with_question_and_end"
         )
@@ -789,7 +760,7 @@ class OrderConfirmationBot:
 
     async def _handle_unrelated_question_handler(self):
         logger.info("User asked an unrelated question. Steering back to confirmation.")
-        return {}, self._create_node_from_config("reprompt")
+        return {}, self._create_node_from_config("handle_unrelated_question")
 
     def _create_initial_node(self) -> NodeConfig:
         return self._create_node_from_config("initial")
