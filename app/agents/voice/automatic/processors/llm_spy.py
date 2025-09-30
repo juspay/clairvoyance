@@ -45,13 +45,13 @@ from app.agents.voice.automatic.audio.audio_manager import get_audio_manager
 def _stop_audio_immediately(context: str = "unknown") -> bool:
     """INSTANT audio stopping using simplified AudioManager API."""
     audio_manager = get_audio_manager()
-    if audio_manager and (audio_manager.user_has_input or audio_manager.is_playing):
+    if audio_manager and (audio_manager.user_has_input or audio_manager.is_playing or audio_manager.is_in_delay_period):
         # Stop function call set audio if active
         if audio_manager.function_call_set_audio_playing:
             asyncio.create_task(audio_manager.stop_function_call_set_audio())
             logger.info(f"INSTANT STOP: Function call set audio stopped due to {context}")
         
-        # Use the simplified stop method for regular audio
+        # Use the simplified stop method for regular audio and grace period
         asyncio.create_task(audio_manager.stop_and_disable_audio())
         
         logger.info(f"INSTANT AUDIO STOP: {context}")

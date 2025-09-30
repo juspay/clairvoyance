@@ -25,6 +25,11 @@ class AudioManager:
         self.audio_chunks = []  # 100ms audio chunks for fast interruption
         self.user_has_input = False  # Ensure audio only starts after user input
         
+        # SMART DELAY STATE - 500ms grace period before audio starts
+        self.delay_task: Optional[asyncio.Task] = None
+        self.is_in_delay_period = False
+        self.delay_duration_ms = 500  # Wait 500ms before starting audio
+        
         # FUNCTION CALL SET STATE - Track function call set audio
         self.is_function_call_set_active = False  # Track if we're in a function call set
         self.function_call_set_audio_playing = False  # Track if function call set audio is playing
@@ -69,8 +74,8 @@ class AudioManager:
         self.user_has_input = True
         logger.info("User input detected - audio enabled")
     
-    async def start_audio(self):
-        """Start seamless chunked audio playback (only if user has provided input)."""
+    async def start_audio_with_delay(self):
+        """Start audio with 500ms grace period for fast responses."""
         
         # Check prerequisites
         if not self.user_has_input:
@@ -79,6 +84,42 @@ class AudioManager:
         if not self.audio_chunks:
             return
             
+        if self.is_playing or self.is_in_delay_period:
+            return
+        
+        # Start delay period
+        self.is_in_delay_period = True
+        logger.info(f"Starting {self.delay_duration_ms}ms grace period before audio")
+        
+        # Cancel any existing delay task
+        if self.delay_task and not self.delay_task.done():
+            self.delay_task.cancel()
+        
+        # Start delay task
+        self.delay_task = asyncio.create_task(self._delay_then_start_audio())
+    
+    async def start_audio(self):
+        """Legacy method - now uses smart delay."""
+        await self.start_audio_with_delay()
+    
+    async def _delay_then_start_audio(self):
+        """Wait for delay period, then start audio if not cancelled."""
+        try:
+            # Wait for the grace period
+            await asyncio.sleep(self.delay_duration_ms / 1000)
+            
+            # If we reach here, no response came within grace period
+            if self.is_in_delay_period and self.user_has_input:
+                logger.info(f"Grace period ended - starting audio")
+                await self._start_audio_immediately()
+            
+        except asyncio.CancelledError:
+            logger.info("Grace period cancelled - fast response received")
+        finally:
+            self.is_in_delay_period = False
+    
+    async def _start_audio_immediately(self):
+        """Start audio immediately without delay."""
         if self.is_playing:
             return
         
@@ -92,7 +133,7 @@ class AudioManager:
         
         # Start seamless audio streaming
         self.loop_task = asyncio.create_task(self._stream_seamless_audio())
-        # logger.info("Started audio playback")
+        logger.info("Started audio playback")
     
     async def stop_and_disable_audio(self):
         """Stop audio immediately and disable until next user input."""
@@ -100,6 +141,15 @@ class AudioManager:
         self.is_playing = False
         self.user_has_input = False  # Require new user input for next audio
         self.loop_count = 0
+        self.is_in_delay_period = False
+        
+        # Cancel delay task if active
+        if self.delay_task and not self.delay_task.done():
+            self.delay_task.cancel()
+            try:
+                await self.delay_task
+            except asyncio.CancelledError:
+                pass
         
         # Cancel audio task
         if self.loop_task and not self.loop_task.done():
