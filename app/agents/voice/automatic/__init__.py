@@ -52,6 +52,7 @@ from app.agents.voice.automatic.utils.session_context import (
 )
 from app.core import config
 from app.core.logger import configure_session_logger, logger
+from app.core.transport.http_client import get_proxy_config
 
 from .processors import LLMSpyProcessor
 from .processors.ptt_vad_filter import PTTVADFilter
@@ -336,6 +337,20 @@ async def run_normal_mode(args):
         "Breeze Automatic Voice Agent",
         daily_params,
     )
+
+    # Configure proxy for WebRTC connections if available
+    proxy_url = get_proxy_config()
+    if proxy_url:
+        logger.info(f"Configuring Daily WebRTC proxy: {proxy_url}")
+        try:
+            # Set proxy URL on the Daily CallClient
+            transport._client._client.set_proxy_url(proxy_url)
+            logger.info("Daily WebRTC proxy configured successfully")
+        except Exception as e:
+            logger.error(f"Failed to configure Daily WebRTC proxy: {e}")
+            # Don't fail initialization - continue without proxy
+    else:
+        logger.debug("Proxy Configuration Skipped.")
 
     stt = get_stt_service(voice_name=voice_name.value)
 
