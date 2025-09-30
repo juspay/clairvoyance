@@ -199,57 +199,25 @@ async def _make_list_orders_api_request(
 
     except Exception as e:
         logger.error(
-            f"Tool Error: [list_orders_request] Error converting time for Juspay API: {e}"
+            f"Tool Error: [list_orders_api_request] Error converting time for Juspay API: {e}"
         )
         return ApiFailure(
             error={
-                "Tool Error": f" [list_orders_request] Invalid time format provided. Please use 'YYYY-MM-DD HH:MM:SS' in IST. Error: {e}"
+                "Tool Error": f"[list_orders_api_request] Invalid time format provided. Please use 'YYYY-MM-DD HH:MM:SS' in IST. Error: {e}"
             }
         )
-
-    time_field = (
-        "order_created_at"
-        if payload_details.get("domain") == "ordersELS"
-        else "date_created"
-    )
 
     end_time_str = end_time_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
     start_time_str = start_time_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    end_time_dt = end_time_utc.fromisoformat(end_time_str.replace("Z", "+00:00"))
-    start_time_dt = start_time_utc.fromisoformat(start_time_str.replace("Z", "+00:00"))
-
-    if end_time_dt.tzinfo is None:
-        end_time_dt = end_time_dt.replace(tzinfo=timezone.utc)
-    if start_time_dt.tzinfo is None:
-        start_time_dt = start_time_dt.replace(tzinfo=timezone.utc)
-
-    date_from_ts = int(start_time_dt.timestamp())
-    date_to_ts = int(end_time_dt.timestamp())
-
-    qFilters = {
-        "and": {
-            "right": {
-                "field": time_field,
-                "condition": "LessThanEqual",
-                "val": str(date_to_ts),
-            },
-            "left": {
-                "field": time_field,
-                "condition": "GreaterThanEqual",
-                "val": str(date_from_ts),
-            },
-        }
-    }
-
     full_payload = {
         **payload_details,
         "filters": {"dateCreated": {"lte": end_time_str, "gte": start_time_str}},
-        "qFilters": qFilters,
     }
     headers = {
         "Content-Type": "application/json",
         "x-web-logintoken": euler_token,
+        "user-agent": "ClairvoyanceApp/1.0",
     }
 
     logger.info(
@@ -280,7 +248,7 @@ async def _make_list_orders_api_request(
         )
         return ApiFailure(
             error={
-                "Tool Error": f" [list_orders_api_request] Juspay API error: {e.response.status_code}",
+                "Tool Error": f"[list_orders_api_request] Juspay API error: {e.response.status_code}",
                 "details": e.response.text,
             }
         )
@@ -290,7 +258,7 @@ async def _make_list_orders_api_request(
         )
         return ApiFailure(
             error={
-                "Tool Error": f" [list_orders_api_request] An unexpected error occurred: {e}"
+                "Tool Error": f"[list_orders_api_request] An unexpected error occurred: {e}"
             }
         )
 
@@ -571,11 +539,15 @@ def get_success_transactional_data_by_time(
 def get_last_n_orders(params: FunctionCallParams):
     logger.info(f"Fetching last placed order with params: {params.arguments}")
 
+    limit = params.arguments.get("limit", 1)
+    if limit > 100:
+        limit = 100
+
     analytics_payload = {
         "domain": "txnsELS",
         "offset": 0,
-        "sortDimension": "order_created_at",
-        "limit": params.arguments.get("limit", 1),
+        "sortDimension": "date_created",
+        "limit": limit,
     }
 
     return _make_list_orders_api_request(params, analytics_payload)
@@ -1822,7 +1794,7 @@ success_transactional_data_function = FunctionSchema(
 
 get_last_n_orders_function = FunctionSchema(
     name="get_last_n_orders",
-    description="Retrieves the most recently placed orders within a specified time range, sorted by creation time in descending order.",
+    description="Retrieves the most recently placed orders within a specified time range, sorted by creation time in descending order. Maximum limit: 100",
     properties={
         **time_input_schema["properties"],
         "limit": {
