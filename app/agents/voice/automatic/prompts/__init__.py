@@ -20,7 +20,9 @@ from app.core.logger import logger
 from app.services.langfuse.prompts import fetch_prompt
 
 
-def get_system_prompt(user_name: str | None, tts_provider: TTSProvider | None) -> str:
+def get_system_prompt(
+    user_name: str | None, tts_provider: TTSProvider | None, shop_id: str | None
+) -> str:
     """
     Generates a personalized system prompt based on the user's name and TTS service.
     First attempts to fetch from LangFuse, then falls back to hardcoded prompt.
@@ -39,7 +41,7 @@ def get_system_prompt(user_name: str | None, tts_provider: TTSProvider | None) -
         prompt = process_langfuse_template_variables(langfuse_prompt)
     else:
         logger.info("Using fallback hardcoded prompt")
-        prompt = get_base_system_prompt()
+        prompt = get_base_system_prompt(shop_id)
 
     # Append dynamic components that are always added locally
     prompt += get_chart_visualization_instructions()

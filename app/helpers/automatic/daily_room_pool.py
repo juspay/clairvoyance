@@ -24,7 +24,7 @@ Key Features:
 import asyncio
 import time
 from asyncio import Queue
-from typing import Dict, List, Optional
+from typing import Dict, Optional
 
 from pipecat.transports.daily.utils import (
     DailyMeetingTokenParams,

@@ -234,6 +234,16 @@ SHOPS_FOR_BREEZE_MCP = [
     shop.strip() for shop in shops_for_mcp.split(",") if shop.strip()
 ]
 
+# Shops for performance directives
+shops_for_performance_directives_str = os.environ.get(
+    "SHOPS_FOR_PERFORMANCE_DIRECTIVES", ""
+)
+SHOPS_FOR_PERFORMANCE_DIRECTIVES = [
+    shop.strip()
+    for shop in shops_for_performance_directives_str.split(",")
+    if shop.strip()
+]
+
 LIGHTHOUSE_APP_URL = os.environ.get("LIGHTHOUSE_APP_URL", "http://localhost:5173")
 ENABLE_ALL_METRICS_FROM_CKH = (
     os.environ.get("ENABLE_ALL_METRICS_FROM_CKH", "true").lower() == "true"
