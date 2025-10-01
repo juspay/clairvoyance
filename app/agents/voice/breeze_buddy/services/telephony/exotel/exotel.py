@@ -1,7 +1,7 @@
 import json
 
 import requests
-from fastapi import HTTPException, WebSocket
+from fastapi import WebSocket
 from pipecat.serializers.exotel import ExotelFrameSerializer
 
 from app.agents.voice.breeze_buddy.services.telephony.base_provider import (
