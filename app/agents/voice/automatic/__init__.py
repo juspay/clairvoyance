@@ -39,6 +39,7 @@ from app.agents.voice.automatic.processors.llm_spy import handle_confirmation_re
 from app.agents.voice.automatic.services.fal import FalSmartTurnService
 from app.agents.voice.automatic.services.mcp import init_breeze_mcp_tools
 from app.agents.voice.automatic.services.mem0.memory import ImprovedMem0MemoryService
+from app.agents.voice.automatic.services.smart_turn import LocalSmartTurnAnalyzer
 from app.agents.voice.automatic.types import (
     Mode,
     TTSProvider,
@@ -291,7 +292,16 @@ async def run_normal_mode(args):
     fal_session = None
     fal_smart_turn_service = None
 
-    if config.ENABLE_FAL_SMART_TURN:
+    if config.ENABLE_SMART_TURN:
+        try:
+            # this can be tuned using sample_rate,vad_window_size,silence_threshold
+            smart_turn_analyzer = LocalSmartTurnAnalyzer()
+            logger.info("SMART_TURN: Using LocalSmartTurnAnalyzer")
+        except Exception as e:
+            logger.error(
+                f"SMART_TURN: Failed to initialize LocalSmartTurnAnalyzer: {e}"
+            )
+    elif config.ENABLE_FAL_SMART_TURN:
         if config.FAL_SMART_TURN_API_KEY:
             fal_smart_turn_service = FalSmartTurnService()
             smart_turn_analyzer, fal_session = (
@@ -661,6 +671,9 @@ async def run_normal_mode(args):
         # Clean up Fal.ai Smart Turn session
         if fal_smart_turn_service:
             await fal_smart_turn_service.cleanup(fal_session)
+        # Clean up Local Smart Turn analyzer if it has a shutdown method
+        elif smart_turn_analyzer and hasattr(smart_turn_analyzer, "shutdown"):
+            await smart_turn_analyzer.shutdown()
         main_task = asyncio.current_task()
         main_task.cancel()
 
