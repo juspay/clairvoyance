@@ -78,6 +78,11 @@ def get_chart_visualization_instructions() -> str:
         5. Importance = highest value (for totals) OR biggest change (for trends)
         6. Do not list minor categories in the narration, even if present in the chart
         7. Voice descriptions must stay short (2–3 sentences max), focusing on key insights
+
+    RULE 8: WEEKLY COMPARISON X-AXIS STANDARDIZATION
+        For weekly trend comparisons or weekly data analysis:
+        1. ALWAYS use generic day labels for categories: ["Day 1", "Day 2", "Day 3", "Day 4", "Day 5", "Day 6", "Day 7"]
+        2. NEVER use actual dates (e.g., "2024-01-01", "Jan 1") for weekly comparisons
 {hitl_rule}
         """
     return ""
