@@ -225,6 +225,8 @@ ENABLE_FAL_SMART_TURN = (
 # Required API key for FAL_SMART_TURN
 FAL_SMART_TURN_API_KEY = os.getenv("FAL_SMART_TURN_API_KEY")
 
+ENABLE_SMART_TURN = os.getenv("ENABLE_SMART_TURN", "false").lower() == "true"
+
 # Automatic MCP Tool Server
 ENABLE_BREEZE_MCP = os.environ.get("ENABLE_BREEZE_MCP", "false").lower() == "true"
 MCP_CLIENT_TIMEOUT = int(os.environ.get("MCP_CLIENT_TIMEOUT", 30))  # seconds
