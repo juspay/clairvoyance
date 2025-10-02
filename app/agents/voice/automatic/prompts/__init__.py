@@ -2,6 +2,9 @@ from app.agents.voice.automatic.prompts.system.base import get_base_system_promp
 from app.agents.voice.automatic.prompts.system.charts import (
     get_chart_visualization_instructions,
 )
+from app.agents.voice.automatic.prompts.system.performance_directives import (
+    get_combined_directives,
+)
 from app.agents.voice.automatic.prompts.system.personalization import append_user_info
 from app.agents.voice.automatic.prompts.system.tool_scope import (
     get_tool_scope_instrucations,
@@ -41,7 +44,8 @@ def get_system_prompt(
         prompt = process_langfuse_template_variables(langfuse_prompt)
     else:
         logger.info("Using fallback hardcoded prompt")
-        prompt = get_base_system_prompt(shop_id)
+        prompt = get_base_system_prompt()
+        prompt += get_combined_directives(shop_id)
 
     # Append dynamic components that are always added locally
     prompt += get_chart_visualization_instructions()
