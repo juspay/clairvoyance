@@ -24,65 +24,50 @@ def get_chart_visualization_instructions() -> str:
         return f"""
     🔒 AUTOMATIC DATA VISUALIZATION (MANDATORY)
 
-    Absolute Law: Every single data response must have a chart — no exceptions.
+    1) MANDATORY SEQUENCE
+        Receive analytics data → Detect categories/values/time periods → Pick chart → Render chart as primary response → Add brief follow-up suggestions → Provide title + voice description with highlights
 
-    RULE 1: MANDATORY SEQUENCE
-        1. Receive analytics data
-        2. Detect categories, values, or time periods
-        3. Generate the correct chart (donut, bar, line, or single-stat)
-        4. Use the chart tool's result as the primary response, then add contextual follow-up suggestions as defined in the CONTEXTUAL RELEVANCE RULE
-        5. Never skip or delay this sequence, but always include follow-up suggestions after this.
-        6. Provide clear, descriptive titles and engaging voice descriptions
-        7. Make voice descriptions conversational and highlight key insights
-        8. In the Voice Description, always use the highlight tags around category names for synchronization with the chart. Always highlight the most important categoties.
+    2) CHART SELECTION LOGIC (evaluated in order)
+        • PRIORITY: If EXACTLY ONE data point (one category-value pair OR one time period with single metric) → MUST use Single-stat. NEVER use Line/Bar/Donut
+        • Multiple categories/percentages (payment method, sales by product/channel): Donut (or Bar if absolute comparisons are clearer)
+        • Time trend (single series, multiple time points): Line (use actual dates on X-axis)
+        • Multiple series over time (comparisons): Line with one line per series
+        • If function result specifies componentType:
+          - DONUT_CHART → Donut (mandatory)
+          - BAR_CHART → Bar (mandatory)
+          - LINE_CHART → Line (mandatory)
 
-    RULE 2: COVERAGE
-        1. Multiple categories/percentages/time series → Donut, bar, or line chart
-        2. Single numeric value (e.g., "₹12,000 sales today") → Single-stat chart
-        3. Absolutely no text-only responses without a chart
+    3) COMPARISON RULES (PERIOD-OVER-PERIOD)
+        • Applies when comparing multiple time periods (e.g., "Current Period" vs "Previous Period", "Last 7 Days" vs "Previous 7 Days")
+        • MUST show all periods as separate lines in ONE line chart - NEVER omit any period
+        • X-axis labels: MUST use generic day labels ["Day 1", "Day 2", ..., "Day N"] where N = longest period length. NEVER use actual dates for comparisons
+        • For unequal lengths: use null for missing days; do not truncate longer series
+        • If only one period exists, it's NOT a comparison → use actual dates instead (see §4)
 
-    RULE 3: PATTERN TRIGGERS
+    4) X-AXIS & DATA HANDLING
+        • Regular single-series time charts: actual dates (e.g., "2025-01-15", "Jan 15")
+        • Never use "Day 1…Day N" for regular single-series charts
+        • Multiple metrics at a single timestamp are NOT a time series: prefer Bar/Donut; Single-stat if intent is a single primary metric
 
-        1. Payment method breakdown → Donut chart
-        2. Sales by channel/product/category → Donut chart
-        3. Time trends (daily, weekly, monthly) → Line chart
-        4. Single metric → Single-stat chart
-        5. Multiple series of data → ALWAYS use Line chart (regardless of other patterns)
-        6. Comparisons between items → Line chart
+    5) RENDERING CONSTRAINTS
+        • Exactly ONE chart per user turn. If multiple charts requested, render only the first/most important; mention rest in narration
+        • Always attempt a chart first. If charting is impossible/not meaningful, return clear text answer (fallback only)
 
+    6) TITLES & VOICE DESCRIPTION
+        • Provide clear, descriptive title
+        • Voice description: 2–3 sentences, conversational, highlight key insights
+        • Wrap ONLY top 1–2 most important categories (highest value or biggest change) in highlight tags
+        • Example: <highlight category="Credit Card">credit cards</highlight>
+        • Do not highlight all categories
 
-    RULE 4: FUNCTION RESULT SCANNING
-        SCAN EVERY function result for: arrays, categories, values, percentages
-        If you see componentType: 'DONUT_CHART' → MANDATORY generate_donut_chart call
-        If you see componentType: 'BAR_CHART' → MANDATORY generate_bar_chart call
-        If you see componentType: 'LINE_CHART' → MANDATORY generate_line_chart call
+    7) FOLLOW-UP SUGGESTIONS
+        • After chart, add 1–3 short, relevant suggestions (e.g., "Compare last 7 vs previous 7 days?", "Drill into top product?")
 
-    RULE 5: FLEXIBLE HANDLING
-        1. Always attempt a chart first
-        2. If chart generation fails or is not meaningful, provide a clear text response instead
-        3. Never leave the user without an answer
+    8) FUNCTION RESULT SCANNING
+        • Always scan function results for arrays/categories/values/percentages and any componentType to enforce §2 mappings
 
-    RULE 6: CHART LIMIT PER USER TURN
-        1. Only ONE chart is allowed per user interaction/turn
-        2. If a user requests multiple charts (e.g., "show me revenue and GMV charts"), generate only the FIRST/most important chart
-        3. Additional chart requests in the same turn will be automatically rejected by the system
-        4. Focus on the primary data visualization that best answers the user's core question
-        5. Mention other data points in your voice response without creating additional charts
-
-    RULE 7: NARRATION HIGHLIGHTING
-
-        1. Always wrap category mentions in <highlight> XML tags
-        2. Use exact category names from chart data
-        3. Example: <highlight category="Credit Card">credit cards</highlight>
-        4. ONLY highlight the top 1–2 most important categories, never all
-        5. Importance = highest value (for totals) OR biggest change (for trends)
-        6. Do not list minor categories in the narration, even if present in the chart
-        7. Voice descriptions must stay short (2–3 sentences max), focusing on key insights
-
-    RULE 8: WEEKLY COMPARISON X-AXIS STANDARDIZATION
-        For weekly trend comparisons or weekly data analysis:
-        1. ALWAYS use generic day labels for categories: ["Day 1", "Day 2", "Day 3", "Day 4", "Day 5", "Day 6", "Day 7"]
-        2. NEVER use actual dates (e.g., "2024-01-01", "Jan 1") for weekly comparisons
+    9) ABSOLUTE LAW
+        • Every data response must include a chart (see §5 for the only allowed fallback)
 {hitl_rule}
         """
     return ""
