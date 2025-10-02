@@ -230,14 +230,20 @@ def remove_html_tags(html_text: str) -> str:
 
 
 # Surcharge-specific utility functions
-def detect_surcharge_rule_overlaps(new_rules, existing_rules, payment_type):
+def detect_surcharge_rule_overlaps(
+    new_rules, existing_rules, payment_type, payment_method_type, payment_method
+):
     """
-    Check if new rules overlap with existing rules OR within themselves for the same payment type.
+    Check if new rules overlap with existing rules OR within themselves for the same payment type and method type.
     Returns (has_overlaps, overlap_details) where overlap_details lists specific conflicts.
     """
     # Check overlaps with existing rules
     existing_payment_rules = [
-        r for r in existing_rules if r.get("paymentType") == payment_type
+        r
+        for r in existing_rules
+        if r.get("paymentType") == payment_type
+        and r.get("paymentMethodType") == payment_method_type
+        and r.get("paymentMethod") == payment_method
     ]
 
     overlaps = []
@@ -246,10 +252,19 @@ def detect_surcharge_rule_overlaps(new_rules, existing_rules, payment_type):
     for new_rule in new_rules:
         new_min = new_rule.get("minimumOrderValue", 0)
         new_max = new_rule.get("maximumOrderValue")
+        new_payment_method_type = new_rule.get("paymentMethodType", payment_method_type)
 
         for existing_rule in existing_payment_rules:
             existing_min = existing_rule.get("minimumOrderValue", 0)
             existing_max = existing_rule.get("maximumOrderValue")
+            existing_payment_method_type = existing_rule.get("paymentMethodType")
+
+            # Only check if payment method types match
+            if (
+                payment_method_type
+                and existing_payment_method_type != new_payment_method_type
+            ):
+                continue
 
             # Simple overlap check
             overlap_detected = False
@@ -266,16 +281,26 @@ def detect_surcharge_rule_overlaps(new_rules, existing_rules, payment_type):
 
             if overlap_detected:
                 new_range = (
-                    f"₹{new_min}-₹{new_max if new_max is not None else 'unlimited'}"
+                    f"₹{new_min}-₹{new_max if new_max is not None else 'unlimited'} "
+                    f"({new_payment_method_type})"
                 )
-                existing_range = f"₹{existing_min}-₹{existing_max if existing_max is not None else 'unlimited'}"
+                existing_range = (
+                    f"₹{existing_min}-₹{existing_max if existing_max is not None else 'unlimited'} "
+                    f"({existing_payment_method_type})"
+                )
                 overlaps.append(
                     f"New rule {new_range} overlaps with existing rule {existing_range}"
                 )
 
-    # Check internal overlaps within new rules (combine _check_internal_overlaps logic)
+    # Check internal overlaps within new rules
     temp_rules = [{"paymentType": payment_type, **rule} for rule in new_rules]
-    filtered_rules = [r for r in temp_rules if r.get("paymentType") == payment_type]
+    filtered_rules = [
+        r
+        for r in temp_rules
+        if r.get("paymentType") == payment_type
+        and r.get("paymentMethodType", payment_method_type) == payment_method_type
+        and r.get("paymentMethod") == payment_method
+    ]
     sorted_rules = sorted(filtered_rules, key=lambda x: x.get("minimumOrderValue", 0))
 
     for i in range(len(sorted_rules) - 1):
@@ -286,32 +311,43 @@ def detect_surcharge_rule_overlaps(new_rules, existing_rules, payment_type):
 
         # True overlap (not just touching boundaries)
         if current_max is not None and current_max > next_min:
-            current_range = f"₹{current.get('minimumOrderValue', 0)}-₹{current_max}"
-            next_range = (
-                f"₹{next_min}-₹{next_rule.get('maximumOrderValue', 'unlimited')}"
+            pmt = current.get("paymentMethodType", payment_method_type)
+            current_range = (
+                f"₹{current.get('minimumOrderValue', 0)}-₹{current_max} ({pmt})"
             )
+            next_range = f"₹{next_min}-₹{next_rule.get('maximumOrderValue', 'unlimited')} ({pmt})"
             overlaps.append(f"Rule {current_range} overlaps with {next_range}")
 
     return len(overlaps) > 0, overlaps
 
 
-def surcharge_rule_template(payment_type, min_val, max_val, rate, rate_type="AMOUNT"):
-    """Helper function to create a surcharge rule with standard fields."""
+def surcharge_rule_template(
+    payment_type,
+    min_val,
+    max_val,
+    rate,
+    rate_type="AMOUNT",
+    payment_method="CASH",
+    payment_method_type="CASH",
+    shop_id=None,
+):
+    """Helper function to create a surcharge rule with standard fields matching Lighthouse implementation."""
     return {
-        "paymentType": payment_type,
-        "paymentMethod": "*",
-        "paymentMethodType": "*",
-        "applicationType": None,
-        "amountFields": None,
-        "logic": None,
+        "rate": rate,
+        "paymentMethod": payment_method,
         "minimumOrderValue": min_val,
         "maximumOrderValue": max_val,
-        "rate": rate,
+        "paymentMethodGroup": payment_type,
         "rateType": rate_type,
+        "paymentMethodType": payment_method_type,
+        "shopId": shop_id,
+        "paymentType": payment_type,
     }
 
 
-def process_surcharge_input_rules(rules, payment_type):
+def process_surcharge_input_rules(
+    rules, payment_type, payment_method_type, payment_method, shop_id=None
+):
     """
     SMART auto-completion handler for user rules:
 
@@ -334,7 +370,14 @@ def process_surcharge_input_rules(rules, payment_type):
     if first_rule_min > 0:
         # Create no-surcharge rule from ₹0 to just before first rule starts
         no_surcharge_rule = surcharge_rule_template(
-            payment_type, 0, first_rule_min - 0.01, 0, "AMOUNT"
+            payment_type,
+            0,
+            first_rule_min - 0.01,
+            0,
+            "AMOUNT",
+            payment_method,
+            payment_method_type,
+            shop_id,
         )
         result.append(no_surcharge_rule)
 
@@ -346,6 +389,9 @@ def process_surcharge_input_rules(rules, payment_type):
             rule.get("maximumOrderValue"),
             rule.get("rate"),
             rule.get("rateType", "AMOUNT"),
+            payment_method,  # Use derived value directly
+            payment_method_type,  # Use derived value directly
+            shop_id,
         )
         result.append(new_rule)
 
@@ -371,16 +417,25 @@ def process_surcharge_input_rules(rules, payment_type):
             # Adjust the last rule max
             last_rule["maximumOrderValue"] = stored_max - 0.01
 
-            # Create unlimited rule for remaining range using helper function
+            # Create unlimited rule for remaining range using same payment method settings
             unlimited_rule = surcharge_rule_template(
-                payment_type, stored_max, None, 0, "AMOUNT"
+                payment_type,
+                stored_max,
+                None,
+                0,
+                "AMOUNT",
+                payment_method,
+                payment_method_type,
+                shop_id,
             )
             result.append(unlimited_rule)
 
     return result
 
 
-def validate_and_process_surcharge_rules(rules, payment_type):
+def validate_and_process_surcharge_rules(
+    rules, payment_type, payment_method_type, payment_method, shop_id=None
+):
     """
     Validate, process and convert surcharge rules in one function:
     1. Check for overlaps in user input
@@ -395,16 +450,21 @@ def validate_and_process_surcharge_rules(rules, payment_type):
 
     # Check for overlaps (both internal and with existing - using empty existing rules for internal check)
     has_overlaps, overlap_details = detect_surcharge_rule_overlaps(
-        rules, [], payment_type
+        rules, [], payment_type, payment_method_type, payment_method
     )
     if has_overlaps:
         error_msg = f"Rules have overlaps: {'; '.join(overlap_details)}"
         logger.error(error_msg)
         return False, error_msg
-
     # Check for gaps (inline gap checking logic)
     temp_rules = [{"paymentType": payment_type, **rule} for rule in rules]
-    payment_rules = [r for r in temp_rules if r.get("paymentType") == payment_type]
+    payment_rules = [
+        r
+        for r in temp_rules
+        if r.get("paymentType") == payment_type
+        and r.get("paymentMethodType") == payment_method_type
+        and r.get("paymentMethod") == payment_method
+    ]
 
     if payment_rules:
         sorted_rules = sorted(
@@ -430,7 +490,9 @@ def validate_and_process_surcharge_rules(rules, payment_type):
             return False, error_msg
 
     # Process rules (fix boundaries and auto-complete)
-    processed_rules = process_surcharge_input_rules(rules, payment_type)
+    processed_rules = process_surcharge_input_rules(
+        rules, payment_type, payment_method_type, payment_method, shop_id
+    )
 
     # Convert to API format (inline conversion logic)
     api_rules = []
