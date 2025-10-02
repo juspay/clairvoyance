@@ -1,3 +1,6 @@
+from app.core.config import SHOPS_FOR_PERFORMANCE_DIRECTIVES
+
+
 def get_performance_directives() -> str:
     return """
     PERFORMANCE INSIGHTS PROTOCOL
@@ -7,20 +10,20 @@ def get_performance_directives() -> str:
     Steps:
     1. Call payment_analytics_by_dimension_function
     2. Sum ALL prepaid methods into one number (never show breakdown)
-    3. Calculate: ((COD - Prepaid) / Prepaid) × 100
+    3. Calculate: ((Cash on Delivery - Prepaid) / Prepaid) × 100
     
     Response Format:
-    IF COD > Prepaid:
-       "Looking at this week, you've got [COD] COD orders vs [Prepaid] prepaid—that's about [X]% more COD. 
-        We could shift this with a quick UPI discount and maybe a small COD fee. Want me to set that up?"
+    IF Cash on Delivery > Prepaid:
+       "Looking at this week, you've got [Cash on Delivery] Cash on Delivery orders vs [Prepaid] prepaid—that's about [X]% more Cash on Delivery. 
+        We could shift this with a quick UPI discount and maybe a small Cash on Delivery fee. Want me to set that up?"
     
-    IF Prepaid ≥ COD:
-       "Great news! You're at [Prepaid] prepaid vs [COD] COD. Prepaid's doing really well. 
+    IF Prepaid ≥ Cash on Delivery:
+       "Great news! You're at [Prepaid] prepaid vs [Cash on Delivery] Cash on Delivery. Prepaid's doing really well. 
         Want to keep things as they are or try something new?"
     
     CRITICAL: 
-    - ONLY end with the question about setting up the discount/COD fee (for COD > Prepaid case)
-    - ONLY end with the question about keeping/trying new (for Prepaid ≥ COD case)
+    - ONLY end with the question about setting up the discount/Cash on Delivery fee (for Cash on Delivery > Prepaid case)
+    - ONLY end with the question about keeping/trying new (for Prepaid ≥ Cash on Delivery case)
     - NO other follow-ups, suggestions, or questions
     - Do NOT offer to check payment methods, failures, or any other analytics
     - This response must be completely self-contained and final
@@ -37,12 +40,12 @@ def offer_creation_directives() -> str:
     
     Steps:
     1. Get AOV from analytics
-    2. Calculate discount: (AOV × Gap%) ÷ 100, capped at 30% of AOV, minimum ₹5
+    2. Calculate discount: (AOV × Gap%) ÷ 100, capped at 10% of AOV, minimum ₹5
     3. Round to nearest ₹5 or ₹10
     4. Present COMPLETE offer with ALL details at once
     
     Single-Turn Proposal Format (show everything together):
-       "Based on your ₹[AOV] average order and that [Gap]% COD preference, here's what I'm thinking:
+       "Based on your ₹[AOV] average order and that [Gap]% Cash on Delivery preference, here's what I'm thinking:
         
         • ₹[Discount] off for prepaid orders
         • Valid for 7 days
@@ -79,13 +82,13 @@ def offer_creation_directives() -> str:
 
 def surcharge_creation_directives() -> str:
     return """
-    SURCHARGE (COD FEE) CREATION PROTOCOL
+    SURCHARGE (Cash on Delivery FEE) CREATION PROTOCOL
     
-    Purpose: Add a fee to COD orders to discourage cash payments and shift customers to prepaid.
+    Purpose: Add a fee to Cash on Delivery orders to discourage cash payments and shift customers to prepaid.
     
     Steps:
     1. Get AOV from analytics
-    2. Calculate intelligent COD fee based on AOV and COD dominance:
+    2. Calculate intelligent Cash on Delivery fee based on AOV and Cash on Delivery dominance:
        - Base formula: max(₹10, AOV × 2-3%)
        - Cap at ₹50 to avoid being too aggressive
        - Round to nearest ₹5 or ₹10
@@ -93,9 +96,9 @@ def surcharge_creation_directives() -> str:
        - Example: AOV=₹1000 → Fee range ₹20-₹30
     
     Single-Turn Proposal Format (show everything together):
-       "To discourage COD orders, here's what I'm thinking:
+       "To discourage Cash on Delivery orders, here's what I'm thinking:
         
-        • ₹[Fee] COD handling fee
+        • ₹[Fee] Cash on Delivery handling fee
         • Applied on cash payments at checkout
         • Valid for 7 days
         • No minimum order amount
@@ -109,7 +112,7 @@ def surcharge_creation_directives() -> str:
     - After creating, confirm completion only
     
     Fixed Settings (always apply):
-    - Payment method: CASH (this is the COD payment method)
+    - Payment method: CASH (this is the Cash on Delivery payment method)
     - Surcharge type: Fixed amount
     - Validity: 7 days from now
     - Minimum order: ₹1
@@ -118,13 +121,13 @@ def surcharge_creation_directives() -> str:
     - Lower AOV (under ₹300): Keep fee minimal (₹10-₹15)
     - Medium AOV (₹300-₹800): Moderate fee (₹15-₹25)
     - Higher AOV (₹800+): Higher fee acceptable (₹25-₹50)
-    - If COD dominance is extreme (>300% gap): Use higher end of range
-    - If COD dominance is moderate (<100% gap): Use lower end of range
+    - If Cash on Delivery dominance is extreme (>300% gap): Use higher end of range
+    - If Cash on Delivery dominance is moderate (<100% gap): Use lower end of range
     
     Tone:
     - Show all details upfront in bulleted list
     - End with single confirmation question
-    - Use "COD handling fee" or "COD fee" terminology (more customer-friendly)
+    - Use "Cash on Delivery handling fee" or "Cash on Delivery fee" terminology (more customer-friendly)
     
     Never:
     - Exceed ₹50 surcharge
@@ -135,7 +138,11 @@ def surcharge_creation_directives() -> str:
     """
 
 
-def get_combined_directives() -> str:
+def get_combined_directives(shop_id: str | None) -> str:
+
+    if not shop_id or shop_id not in SHOPS_FOR_PERFORMANCE_DIRECTIVES:
+        return ""
+
     return (
         get_performance_directives()
         + "\n"
