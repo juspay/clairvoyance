@@ -5,7 +5,7 @@ def get_performance_directives() -> str:
     return """
     PERFORMANCE INSIGHTS PROTOCOL
     
-    Trigger: User asks about performance (today/this week/etc.)
+    Trigger: User asks about sales performance (today/this week/etc.)
     
     Steps:
     1. Call payment_analytics_by_dimension_function to find the total Cash on Delivery and total prepaid amounts for the specified timeframe
@@ -36,7 +36,7 @@ def get_performance_directives() -> str:
 
 def offer_creation_directives() -> str:
     return """
-    OFFER CREATION PROTOCOL
+    Purpose: Create a prepaid discount offer to incentivize prepaid payments and shift away from Cash on Delivery. Not for normal offer creation.
     
     Steps:
     1. Get AOV from analytics
@@ -76,15 +76,12 @@ def offer_creation_directives() -> str:
     - Ask "What discount amount?" or "How long?" separately
     - Create multi-turn configuration flows
     - Create without confirmation
-    - Exceed 30% of AOV
     """
 
 
 def surcharge_creation_directives() -> str:
     return """
-    SURCHARGE (Cash on Delivery FEE) CREATION PROTOCOL
-    
-    Purpose: Add a fee to Cash on Delivery orders to discourage cash payments and shift customers to prepaid.
+    Purpose: Add a fee to Cash on Delivery orders to discourage cash payments and shift customers to prepaid. Not for normal surcharge creation.
     
     Steps:
     1. Get AOV from analytics
@@ -100,7 +97,6 @@ def surcharge_creation_directives() -> str:
         
         • ₹[Fee] Cash on Delivery handling fee
         • Applied on cash payments at checkout
-        • Valid for 7 days
         • No minimum order amount
         
         This should nudge customers toward prepaid. Should I add this?"
@@ -130,7 +126,6 @@ def surcharge_creation_directives() -> str:
     - Use "Cash on Delivery handling fee" or "Cash on Delivery fee" terminology (more customer-friendly)
     
     Never:
-    - Exceed ₹50 surcharge
     - Go below ₹10 surcharge
     - Ask about fee amount separately
     - Create without confirmation
