@@ -372,9 +372,18 @@ async def run_normal_mode(args):
     if proxy_url:
         logger.info(f"Configuring Daily WebRTC proxy: {proxy_url}")
         try:
-            # Set proxy URL on the Daily CallClient
-            transport._client._client.set_proxy_url(proxy_url)
-            logger.info("Daily WebRTC proxy configured successfully")
+            # Set proxy environment variables - most reliable method
+            os.environ.update(
+                {
+                    "HTTP_PROXY": proxy_url,
+                    "HTTPS_PROXY": proxy_url,
+                    "http_proxy": proxy_url,
+                    "https_proxy": proxy_url,
+                }
+            )
+            logger.info(
+                "Daily WebRTC proxy configured successfully via environment variables"
+            )
         except Exception as e:
             logger.error(f"Failed to configure Daily WebRTC proxy: {e}")
             # Don't fail initialization - continue without proxy
