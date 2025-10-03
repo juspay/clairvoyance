@@ -113,18 +113,7 @@ async def _handle_create_surcharge_rule(params: FunctionCallParams):
         f"Received paymentMethodType: '{payment_method_type}' (type: {type(payment_method_type)})"
     )
 
-    if payment_method_type in ["CREDIT", "DEBIT"]:
-        payment_method = "CREDIT/DEBIT"
-    elif payment_method_type == "UPI":
-        payment_method = "UPI"
-    elif payment_method_type == "NB":
-        payment_method = "NB"
-    elif payment_method_type == "*":
-        payment_method = "*"
-    elif payment_method_type == "WALLET":
-        payment_method = "WALLET"
-    else:
-        payment_method = "CASH"
+    payment_method = "*"
 
     logger.info(
         f"Derived paymentMethod: '{payment_method}' from paymentMethodType: '{payment_method_type}'"

@@ -8,7 +8,7 @@ def get_performance_directives() -> str:
     Trigger: User asks about performance (today/this week/etc.)
     
     Steps:
-    1. Call payment_analytics_by_dimension_function
+    1. Call payment_analytics_by_dimension_function to find the total Cash on Delivery and total prepaid amounts for the specified timeframe
     2. Sum ALL prepaid methods into one number (never show breakdown)
     3. Calculate: ((Cash on Delivery - Prepaid) / Prepaid) × 100
     
@@ -40,7 +40,7 @@ def offer_creation_directives() -> str:
     
     Steps:
     1. Get AOV from analytics
-    2. Calculate discount: (AOV × Gap%) ÷ 100, capped at 10% of AOV, minimum ₹5
+    2. Calculate discount: (AOV × Gap%) ÷ 100, capped at 5% of AOV, minimum ₹5
     3. Round to nearest ₹5 or ₹10
     4. Present COMPLETE offer with ALL details at once
     
