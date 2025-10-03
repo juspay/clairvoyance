@@ -56,7 +56,9 @@ from app.agents.voice.automatic.utils.session_context import (
 from app.core import config
 from app.core.logger import configure_session_logger, logger
 
-from .processors import LLMSpyProcessor
+from .mock.mock_stt import DEFAULT_TEST_QUESTIONS, TestQuestionProcessor
+from .processors import ChartNavigator, LLMSpyProcessor
+from .processors.chart_navigator import LLMNavigationHandler
 from .processors.ptt_vad_filter import PTTVADFilter
 from .prompts import get_system_prompt
 from .stt import get_stt_service
@@ -467,10 +469,44 @@ async def run_normal_mode(args):
         stt,
     ]
 
+    if config.ENVIRONMENT.lower() in ["development", "dev"]:
+        test_processor = TestQuestionProcessor(questions=DEFAULT_TEST_QUESTIONS)
+        pipeline_components.append(test_processor)
+        logger.info("🧪 Test Question Processor enabled (development mode)")
+
     # Add PTT VAD filter only if it's enabled
     if config.DISABLE_VAD_FOR_PTT:
         ptt_vad_filter = PTTVADFilter("PTTVADFilter")
         pipeline_components.append(ptt_vad_filter)  # Filter VAD frames after STT
+
+    # Add chart navigator after STT/PTT but before RTVI (only if charts are enabled)
+    chart_navigator = None
+    if config.ENABLE_CHARTS:
+        try:
+            chart_navigator = ChartNavigator("ChartNavigator")
+
+            # Initialize LLM navigation handler for complex navigation commands
+            try:
+                # Pass the main LLM service to avoid duplicate connections
+                navigation_handler = LLMNavigationHandler(llm_service=llm)
+                chart_navigator.set_navigation_handler(navigation_handler)
+                logger.info(
+                    "🔗 Navigation handler now reuses main pipeline LLM service"
+                )
+            except Exception as nav_error:
+                logger.warning(
+                    f"⚠️ Failed to initialize LLM Navigation Handler: {nav_error}"
+                )
+
+            # Set RTVI processor for chart navigation responses
+            chart_navigator.set_rtvi_processor(rtvi)
+
+            pipeline_components.append(chart_navigator)
+
+        except Exception as chart_error:
+            chart_navigator = None
+    else:
+        logger.info("📊 Charts disabled - skipping ChartNavigator initialization")
 
     pipeline_components.extend([rtvi, context_aggregator.user()])
     if (
@@ -607,6 +643,12 @@ async def run_normal_mode(args):
                             f"PTT state sync: states match (current_state: {current_state})"
                         )
 
+                elif message_type == "minimap-state-changed":
+                    data = message.get("data", {})
+                    minimap_active = data.get("minimap_active", False)
+                    if chart_navigator:
+                        chart_navigator.set_minimap_active(minimap_active)
+
         except Exception as e:
             logger.error(f"Error handling RTVI client message: {e}")
 
@@ -633,9 +675,13 @@ async def run_normal_mode(args):
         # Check if this is a function confirmation message or PTT message and route to RTVI
         if isinstance(message, dict):
             message_type = message.get("type")
-            if message_type == "function-confirmation-response" or (
-                config.DISABLE_VAD_FOR_PTT
-                and message_type in ["ptt-start", "ptt-end", "ptt-sync"]
+            if (
+                message_type == "function-confirmation-response"
+                or (
+                    config.DISABLE_VAD_FOR_PTT
+                    and message_type in ["ptt-start", "ptt-end", "ptt-sync"]
+                )
+                or (config.ENABLE_CHARTS and message_type == "minimap-state-changed")
             ):
                 # Manually trigger the RTVI handler since it might not be getting the message
                 try:

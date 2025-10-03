@@ -71,6 +71,18 @@ def initialize_tools(
         all_tool_functions.update(charts.tool_functions)
         logger.info(f"Loaded {len(charts.tool_functions)} chart tools.")
 
+        # Add navigation tools when charts are enabled (now consolidated in chart_navigator)
+        from app.agents.voice.automatic.processors.chart_navigator import (
+            standard_tools as navigation_tools,
+        )
+        from app.agents.voice.automatic.processors.chart_navigator import (
+            tool_functions as navigation_tool_functions,
+        )
+
+        all_tools.extend(navigation_tools)
+        all_tool_functions.update(navigation_tool_functions)
+        logger.info(f"Loaded {len(navigation_tool_functions)} navigation tools.")
+
     # Dummy tools are only available in test mode
     if mode == Mode.TEST.value:
         all_tools.extend(dummy_tools.standard_tools)
