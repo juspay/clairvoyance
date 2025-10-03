@@ -103,12 +103,40 @@ class HITLManager:
     ) -> dict:
         """Send confirmation request to user and wait for response"""
         action_type = get_action_description(function_name)
+
+        # Flatten manage_surcharge_tools arguments for better display
+        display_arguments = arguments.copy()
+        if function_name == "manage_surcharge_tools":
+            # Remove complex nested rules and add simple fields like offer tool
+            rules = arguments.get("rules", [])
+            if rules:
+                display_arguments.pop("rules", None)  # Remove complex rules
+                # Add flattened fields like offer tool
+                for i, rule in enumerate(rules):
+                    prefix = f"RULE_{i+1}_" if len(rules) > 1 else ""
+                    display_arguments[f"{prefix}RATE"] = rule.get("rate", 0)
+                    display_arguments[f"{prefix}RATE TYPE"] = rule.get(
+                        "rateType", "AMOUNT"
+                    )
+                    if rule.get("paymentMethodType"):
+                        display_arguments[f"{prefix}PAYMENT METHOD"] = rule.get(
+                            "paymentMethodType"
+                        )
+                    if rule.get("minimumOrderValue", 0) > 0:
+                        display_arguments[f"{prefix}MIN ORDER VALUE"] = rule.get(
+                            "minimumOrderValue"
+                        )
+                    if rule.get("maximumOrderValue"):
+                        display_arguments[f"{prefix}MAX ORDER_VALUE"] = rule.get(
+                            "maximumOrderValue"
+                        )
+
         sse_payload = {
             "type": "function_confirmation_request",
             "confirmation_id": confirmation_id,
             "action_type": action_type,
             "function_name": function_name,
-            "arguments": arguments,
+            "arguments": display_arguments,
             "timestamp": datetime.now().isoformat(),
         }
 
