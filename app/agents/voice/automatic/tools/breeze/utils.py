@@ -202,7 +202,7 @@ def format_announcement_html(description: str) -> str:
     Returns:
         HTML formatted announcement text
     """
-    return f"<div style='text-align: center; width: 100vw;background: green;color: white;padding:8px 0px;font-size:13px;'>{description}</div>"
+    return f"<div style='text-align: center; width: 100vw;background: #714acd;color: white;padding:8px 0px;font-size:13px;'>{description}</div>"
 
 
 def remove_html_tags(html_text: str) -> str:
