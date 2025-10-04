@@ -340,23 +340,12 @@ async def _handle_update_surcharge_rule(params: FunctionCallParams):
     """Internal helper: Simple update - delete all existing rules for payment type, then create new ones."""
     rules = params.arguments.get("rules", [])
     payment_type = params.arguments.get("paymentType", "COD")
-    payment_method_type = params.arguments.get("paymentMethodType")
+    payment_method_type = params.arguments.get("paymentMethodType", "CASH")
     logger.info(
         f"UPDATE: Received paymentMethodType: '{payment_method_type}' (type: {type(payment_method_type)})"
     )
 
-    if payment_method_type in ["CREDIT", "DEBIT"]:
-        payment_method = "CREDIT/DEBIT"
-    elif payment_method_type == "UPI":
-        payment_method = "UPI"
-    elif payment_method_type == "NB":
-        payment_method = "NB"
-    elif payment_method_type == "*":
-        payment_method = "*"
-    elif payment_method_type == "WALLET":
-        payment_method = "WALLET"
-    else:
-        payment_method = "CASH"
+    payment_method = "*"
 
     logger.info(
         f"UPDATE: Derived paymentMethod: '{payment_method}' from paymentMethodType: '{payment_method_type}'"
