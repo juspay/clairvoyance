@@ -1,7 +1,11 @@
-from app.core.config import ENABLE_SEARCH_GROUNDING, HITL_ENABLE
+from app.core.config import (
+    ENABLE_SEARCH_GROUNDING,
+    HITL_ENABLE,
+    SHOPS_FOR_PERFORMANCE_DIRECTIVES,
+)
 
 
-def get_tool_scope_instrucations() -> str:
+def get_tool_scope_instructions(shop_id: str | None) -> str:
     tool_scope = """
     TOOLS & SCOPE
         Use-Case-Driven:
@@ -86,31 +90,34 @@ def get_tool_scope_instrucations() -> str:
         - Automated Retry: If a tool call fails for a recoverable reason (e.g., minor formatting issues), retry internally up to 3 TIMES - do not involve the user.
         """
 
-    tool_followups = """
-    PROACTIVE ENGAGEMENT & CONTEXTUAL SUGGESTIONS
+    tool_followups = ""
 
-        CONTEXTUAL RELEVANCE RULE: Suggestions MUST directly relate to what was just discussed. Never suggest random and generic topics.
+    if shop_id and shop_id not in SHOPS_FOR_PERFORMANCE_DIRECTIVES:
+        tool_followups = """
+        PROACTIVE ENGAGEMENT & CONTEXTUAL SUGGESTIONS
 
-        MANDATORY PATTERNS:
-        - Sales Data → Check orders/compare with last month/payment method breakdown
-        - Payment Data → Failure reasons/success rates by method/gateway performance
-        - Order Metrics → Average order values/conversion rates/payment method breakdown
-        - Low Performance → Check failure causes/compare better periods/best payment methods
-        - Growth Trends → Which payment methods drove this/order increases/marketing attribution
-        - Offers/Promotions → Ask about performance analytics/suggest creating matching banners/recommend updating poor performers
-        - Banner Actions → Create matching offers/check existing banners/related announcements
-        - Analytics Comparisons → What changed between periods/different payment methods/attribution
-        - Time-based Data → Compare with yesterday/weekly view/latest numbers
-        - E-commerce Metrics → Conversion rates/address completion/marketing attribution
-        - General/Greetings → Business summary/today's performance/key metrics
+            CONTEXTUAL RELEVANCE RULE: Suggestions MUST directly relate to what was just discussed. Never suggest random and generic topics.
 
-        DELIVERY RULES:
-        1. Exactly 2-3 suggestions that logically follow from current conversation
-        2. Reference actual numbers/data just discussed
-        3. Frame as immediate next actions, not abstract concepts
-        4. OPTIONAL: You may provide one relevant follow-up suggestion when it feels natural and adds clear value. Keep it short and directly tied to the user’s request. If the answer alone is sufficient, no follow-up is needed.
+            MANDATORY PATTERNS:
+            - Sales Data → Check orders/compare with last month/payment method breakdown
+            - Payment Data → Failure reasons/success rates by method/gateway performance
+            - Order Metrics → Average order values/conversion rates/payment method breakdown
+            - Low Performance → Check failure causes/compare better periods/best payment methods
+            - Growth Trends → Which payment methods drove this/order increases/marketing attribution
+            - Offers/Promotions → Ask about performance analytics/suggest creating matching banners/recommend updating poor performers
+            - Banner Actions → Create matching offers/check existing banners/related announcements
+            - Analytics Comparisons → What changed between periods/different payment methods/attribution
+            - Time-based Data → Compare with yesterday/weekly view/latest numbers
+            - E-commerce Metrics → Conversion rates/address completion/marketing attribution
+            - General/Greetings → Business summary/today's performance/key metrics
 
-        NEVER suggest unrelated topics. ALWAYS check: "Does this directly relate to what we just discussed?"
-        """
+            DELIVERY RULES:
+            1. Exactly 2-3 suggestions that logically follow from current conversation
+            2. Reference actual numbers/data just discussed
+            3. Frame as immediate next actions, not abstract concepts
+            4. OPTIONAL: You may provide one relevant follow-up suggestion when it feels natural and adds clear value. Keep it short and directly tied to the user’s request. If the answer alone is sufficient, no follow-up is needed.
+
+            NEVER suggest unrelated topics. ALWAYS check: "Does this directly relate to what we just discussed?"
+            """
 
     return tool_scope + search_grounding + hitl_scope + tool_followups

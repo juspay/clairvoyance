@@ -7,7 +7,7 @@ from app.agents.voice.automatic.prompts.system.performance_directives import (
 )
 from app.agents.voice.automatic.prompts.system.personalization import append_user_info
 from app.agents.voice.automatic.prompts.system.tool_scope import (
-    get_tool_scope_instrucations,
+    get_tool_scope_instructions,
 )
 from app.agents.voice.automatic.prompts.system.tts import get_tts_based_instructions
 from app.agents.voice.automatic.prompts.system.utils import (
@@ -50,7 +50,7 @@ def get_system_prompt(
     # Append dynamic components that are always added locally
     prompt += get_chart_visualization_instructions()
     prompt += get_tts_based_instructions(tts_provider)
-    prompt += get_tool_scope_instrucations()
+    prompt += get_tool_scope_instructions(shop_id)
 
     if user_name:
         logger.info(f"Personalizing prompt for user: {user_name}")
