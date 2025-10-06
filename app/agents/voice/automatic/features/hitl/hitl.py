@@ -5,11 +5,6 @@ from typing import Any, Dict
 
 from pipecat.processors.frameworks.rtvi import RTVIServerMessageFrame
 
-from app.agents.voice.automatic.features.hitl.exceptions import (
-    HITLConfirmationError,
-    HITLOperationTimeoutError,
-    HITLUserRejectedOperationError,
-)
 from app.agents.voice.automatic.features.hitl.utils import (
     generate_success_message,
     get_action_description,
@@ -46,11 +41,6 @@ class HITLManager:
 
         Returns:
             Dict containing approval status and any modified arguments
-
-        Raises:
-            HITLUserRejectedOperationError: If user rejects the operation
-            HITLOperationTimeoutError: If confirmation times out
-            HITLConfirmationError: If confirmation process fails
         """
         confirmation_id = str(uuid.uuid4())
 
@@ -83,13 +73,16 @@ class HITLManager:
                 # Raise appropriate exception based on reason
                 if reason == "timeout":
                     error_msg = f"Operation '{function_name}' timed out waiting for user confirmation"
-                    raise HITLOperationTimeoutError(error_msg)
+                    logger.warning(error_msg)
+                    return {"approved": False, "reason": reason}
                 elif "reject" in reason.lower() or "denied" in reason.lower():
                     error_msg = f"User rejected operation '{function_name}'"
-                    raise HITLUserRejectedOperationError(error_msg)
+                    logger.warning(error_msg)
+                    return {"approved": False, "reason": reason}
                 else:
                     error_msg = f"Operation '{function_name}' failed during confirmation: {reason}"
-                    raise HITLConfirmationError(error_msg)
+                    logger.error(error_msg)
+                    return {"approved": False, "reason": reason}
 
         except Exception as e:
             logger.error(f"Confirmation process failed for {function_name}: {e}")
