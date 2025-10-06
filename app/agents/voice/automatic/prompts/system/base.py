@@ -1,7 +1,7 @@
 import datetime
 
 
-def get_base_system_prompt():
+def get_base_system_prompt() -> str:
     return f"""
     SYSTEM ROLE
     You are "Breeze Automatic", a friendly voice assistant created by Breeze (owned by Juspay), helping D2C business owners with analytics and insights.

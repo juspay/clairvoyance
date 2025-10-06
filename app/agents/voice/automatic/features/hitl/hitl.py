@@ -103,12 +103,52 @@ class HITLManager:
     ) -> dict:
         """Send confirmation request to user and wait for response"""
         action_type = get_action_description(function_name)
+
+        # Flatten manage_surcharge_tools arguments for better display
+        display_arguments = {}
+        if function_name == "manage_surcharge_tools":
+            # Remove complex nested rules and add simple fields like offer tool
+            rules = arguments.get("rules", [])
+            if rules:
+                # Add flattened fields like offer tool
+                for i, rule in enumerate(rules):
+                    prefix = f"RULE {i+1} " if len(rules) > 1 else ""
+                    display_arguments[f"{prefix}Rate"] = rule.get("rate", 0)
+                    display_arguments[f"{prefix}Rate Type"] = rule.get(
+                        "rateType", "AMOUNT"
+                    )
+                    if rule.get("paymentMethodType"):
+                        display_arguments[f"{prefix}Payment Method"] = rule.get(
+                            "paymentMethodType"
+                        )
+                    if rule.get("minimumOrderValue", 0) > 0:
+                        display_arguments[f"{prefix}Minimum Order Value"] = rule.get(
+                            "minimumOrderValue"
+                        )
+                    if rule.get("maximumOrderValue"):
+                        display_arguments[f"{prefix}Maximum Order Value"] = rule.get(
+                            "maximumOrderValue"
+                        )
+        elif function_name == "create_euler_offer":
+            if arguments.get("offerCode") is not None:
+                display_arguments["Offer Code"] = arguments.get("offerCode")
+            if arguments.get("discountValue") is not None:
+                discount_val = arguments.get("discountValue")
+                if arguments.get("calculationType") == "PERCENTAGE":
+                    display_arguments["Discount Value"] = str(discount_val) + "%"
+                else:
+                    display_arguments["Discount Value"] = discount_val
+            if arguments.get("offerDescription") is not None:
+                display_arguments["Offer Description"] = arguments.get(
+                    "offerDescription"
+                )
+
         sse_payload = {
             "type": "function_confirmation_request",
             "confirmation_id": confirmation_id,
             "action_type": action_type,
             "function_name": function_name,
-            "arguments": arguments,
+            "arguments": display_arguments,
             "timestamp": datetime.now().isoformat(),
         }
 

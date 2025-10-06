@@ -1,7 +1,11 @@
-from app.core.config import ENABLE_SEARCH_GROUNDING, HITL_ENABLE
+from app.core.config import (
+    ENABLE_SEARCH_GROUNDING,
+    HITL_ENABLE,
+    SHOPS_FOR_PERFORMANCE_DIRECTIVES,
+)
 
 
-def get_tool_scope_instrucations() -> str:
+def get_tool_scope_instructions(shop_id: str | None) -> str:
     tool_scope = """
     TOOLS & SCOPE
         Use-Case-Driven:
@@ -64,11 +68,18 @@ def get_tool_scope_instrucations() -> str:
             - If a tool call fails because of a confirmation system error, stop and explain the issue. Ask the user whether they'd like to try again.
             - For other recoverable errors (e.g., formatting issues, transient API/network failures, time related issues), retry internally up to 3 TIMES before surfacing the failure to the user.
 
-        Deletion / Deletion Tool Rules
-            - Perform deletions strictly one-by-one, Never perform bulk deletions.
-            - When the user requests multiple deletions, confirm the list, then proceed sequentially, asking for explicit confirmation before each deletion.
-            - Do not combine or batch deletion operations under any circumstance.
-            - The user may retry any deletion any number of times without restrictions.
+        Modification Tool Operation Rules (Create/Update/Delete)
+            Core Operating Principles:
+            - Execute operations strictly one-by-one - NEVER perform bulk or batch operations
+            - For multiple operations: confirm the complete list, then proceed sequentially with ONE operation per response
+            - Wait for each operation to complete (succeed or fail) before proceeding to the next
+            - Users may retry any operation unlimited times without restrictions
+            - On failure: inform user and wait for explicit instruction to retry (no automatic retries)
+
+            Operation-Specific Requirements:
+            - Deletions: Ask for explicit confirmation before each deletion
+            - Updates: State what will be changed (old value → new value) before updating, then ask for confirmation
+            - Creations: CRITICAL - NEVER call the same creation function multiple times in a single response
         """
 
     else:
@@ -79,31 +90,34 @@ def get_tool_scope_instrucations() -> str:
         - Automated Retry: If a tool call fails for a recoverable reason (e.g., minor formatting issues), retry internally up to 3 TIMES - do not involve the user.
         """
 
-    tool_followups = """
-    PROACTIVE ENGAGEMENT & CONTEXTUAL SUGGESTIONS
+    tool_followups = ""
 
-        CONTEXTUAL RELEVANCE RULE: Suggestions MUST directly relate to what was just discussed. Never suggest random and generic topics.
+    if shop_id and shop_id not in SHOPS_FOR_PERFORMANCE_DIRECTIVES:
+        tool_followups = """
+        PROACTIVE ENGAGEMENT & CONTEXTUAL SUGGESTIONS
 
-        MANDATORY PATTERNS:
-        - Sales Data → Check orders/compare with last month/payment method breakdown
-        - Payment Data → Failure reasons/success rates by method/gateway performance
-        - Order Metrics → Average order values/conversion rates/payment method breakdown
-        - Low Performance → Check failure causes/compare better periods/best payment methods
-        - Growth Trends → Which payment methods drove this/order increases/marketing attribution
-        - Offers/Promotions → Ask about performance analytics/suggest creating matching banners/recommend updating poor performers
-        - Banner Actions → Create matching offers/check existing banners/related announcements
-        - Analytics Comparisons → What changed between periods/different payment methods/attribution
-        - Time-based Data → Compare with yesterday/weekly view/latest numbers
-        - E-commerce Metrics → Conversion rates/address completion/marketing attribution
-        - General/Greetings → Business summary/today's performance/key metrics
+            CONTEXTUAL RELEVANCE RULE: Suggestions MUST directly relate to what was just discussed. Never suggest random and generic topics.
 
-        DELIVERY RULES:
-        1. Exactly 2-3 suggestions that logically follow from current conversation
-        2. Reference actual numbers/data just discussed
-        3. Frame as immediate next actions, not abstract concepts
-        4. OPTIONAL: You may provide one relevant follow-up suggestion when it feels natural and adds clear value. Keep it short and directly tied to the user’s request. If the answer alone is sufficient, no follow-up is needed.
+            MANDATORY PATTERNS:
+            - Sales Data → Check orders/compare with last month/payment method breakdown
+            - Payment Data → Failure reasons/success rates by method/gateway performance
+            - Order Metrics → Average order values/conversion rates/payment method breakdown
+            - Low Performance → Check failure causes/compare better periods/best payment methods
+            - Growth Trends → Which payment methods drove this/order increases/marketing attribution
+            - Offers/Promotions → Ask about performance analytics/suggest creating matching banners/recommend updating poor performers
+            - Banner Actions → Create matching offers/check existing banners/related announcements
+            - Analytics Comparisons → What changed between periods/different payment methods/attribution
+            - Time-based Data → Compare with yesterday/weekly view/latest numbers
+            - E-commerce Metrics → Conversion rates/address completion/marketing attribution
+            - General/Greetings → Business summary/today's performance/key metrics
 
-        NEVER suggest unrelated topics. ALWAYS check: "Does this directly relate to what we just discussed?"
-        """
+            DELIVERY RULES:
+            1. Exactly 2-3 suggestions that logically follow from current conversation
+            2. Reference actual numbers/data just discussed
+            3. Frame as immediate next actions, not abstract concepts
+            4. OPTIONAL: You may provide one relevant follow-up suggestion when it feels natural and adds clear value. Keep it short and directly tied to the user’s request. If the answer alone is sufficient, no follow-up is needed.
+
+            NEVER suggest unrelated topics. ALWAYS check: "Does this directly relate to what we just discussed?"
+            """
 
     return tool_scope + search_grounding + hitl_scope + tool_followups

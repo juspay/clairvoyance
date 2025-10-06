@@ -1,4 +1,4 @@
-from fastapi import HTTPException, WebSocket
+from fastapi import WebSocket
 from pipecat.serializers.twilio import TwilioFrameSerializer
 from twilio.http.http_client import TwilioHttpClient
 from twilio.rest import Client

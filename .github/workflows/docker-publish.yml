@@ -46,7 +46,6 @@ jobs:
           platforms: linux/amd64
           tags: asia-south1-docker.pkg.dev/breeze-uat-453414/clairvoyance/clairvoyance:${{ env.SHORT_SHA }}
           build-args: |
-            KRISP_BUCKET_PATH=gs://clairvoyance-models/krisp
             GCP_ACCESS_TOKEN=${{ env.GCP_ACCESS_TOKEN }}
           provenance: false
           sbom: false

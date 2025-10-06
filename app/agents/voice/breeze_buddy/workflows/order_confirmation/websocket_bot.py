@@ -26,6 +26,7 @@ from pydub import AudioSegment
 from app.agents.voice.breeze_buddy.workflows.order_confirmation.types import OrderData
 from app.agents.voice.breeze_buddy.workflows.order_confirmation.utils import (
     OUTCOME_TO_ENUM,
+    _extract_value_from_input,
     get_stt_service,
     indian_number_to_speech,
 )
@@ -245,38 +246,6 @@ class OrderConfirmationBot:
             ),
         )
 
-        # Add event handlers to TTS for VAD control
-        async def set_vad_state(self, enabled: bool):
-            action = "enable" if enabled else "disable"
-            logger.info(f"Attempting to {action} VAD/audio_in.")
-
-            if self.vad_analyzer:
-                if hasattr(self.vad_analyzer, "set_enabled"):
-                    self.vad_analyzer.set_enabled(enabled)
-                    logger.info(f"VAD {action}d via set_enabled.")
-                else:
-                    logger.warning("VAD analyzer does not have set_enabled method.")
-            elif self.transport:
-                if hasattr(self.transport, "enable_audio_in"):
-                    await self.transport.enable_audio_in(enabled)
-                    logger.info(f"Audio_in {action}d on transport.")
-                else:
-                    logger.warning("Transport does not have enable_audio_in method.")
-            else:
-                logger.error(
-                    f"Could not {action} VAD: No VAD analyzer or transport found."
-                )
-
-        @tts.event_handler("on_tts_started")
-        async def on_tts_started(tts, text):
-            logger.info(f"TTS started event triggered, muting VAD: {text[:50]}...")
-            await self.set_vad_state(False)
-
-        @tts.event_handler("on_tts_stopped")
-        async def on_tts_stopped(tts, text):
-            logger.info("TTS stopped event triggered, unmuting VAD.")
-            await self.set_vad_state(True)
-
         self.system_prompt = self._get_system_prompt(
             self.shop_name,
             customer_name,
@@ -466,20 +435,21 @@ class OrderConfirmationBot:
 
             You can only use the following functions when responding to the customer:
 
-            confirm_order() - Call this if the customer confirms all the order details.
+            confirm_order() - Call this if the customer confirms all the order details and asks no other questions.
+            confirm_order_with_question() - Call this if the customer confirms the order but also asks an unrelated question which is not related to order confirmation/cancellation.
             cancel_order() - Call this if the customer chooses to cancel the order.
             user_busy() - Call this if the customer says they are busy or it's not a good time.
-            handle_unrelated_question() - Call this if the customer asks about anything not related to confirming or cancelling the order.
+            handle_unrelated_question() - Call this if the customer asks about anything not related to confirming or cancelling the order, without confirming the order.
             address_correct() - Call this if the customer confirms that the address is correct.
-            address_incorrect() - Call this if the customer says the address is incorrect or wants to update it. (Note: only landmark, pincode, or city can be updated.)
+            address_incorrect() - Call this if the customer says the address is incorrect or wants to update it. Only locality, landmark, pincode, or city can be updated. Apart from these, no other address details can be changed.
             update_landmark() - Call this if the customer wants to update the landmark in their address.
             update_pincode() - Call this if the customer wants to update the pincode in their address.
             update_city() - Call this if the customer wants to update the city in their address.
             update_locality() - Call this if the customer wants to update the locality in their address.
-
-            ⚠️ You must not use any features other than the ones listed above. If the customer says anything unrelated to these functions, always call the function handle_unrelated_question().
             
-            Your only role is to confirm or cancel this specific order. If the user asks about anything else (e.g. product details, delivery times, other products), you MUST call the function `handle_unrelated_question()` immediately. Do not try to answer these questions yourself.
+            You must not use any features other than the ones listed above.
+            
+            Your only role is to confirm or cancel this specific order. If the user asks about anything else (e.g. product details, delivery times, other products), you must use the appropriate function (`handle_unrelated_question` or `confirm_order_with_question`). Do not try to answer these questions yourself.
         """
 
     async def _end_conversation_handler(self, flow_manager, args):
@@ -503,6 +473,7 @@ class OrderConfirmationBot:
                 summary_data = {
                     "callSid": self.call_sid,
                     "outcome": OUTCOME_TO_ENUM.get(self.outcome),
+                    "updatedAddress": self.updated_address,
                     "orderId": self.order_id,
                 }
                 logger.info(f"Call summary data: {summary_data}")
@@ -580,8 +551,15 @@ class OrderConfirmationBot:
         flow_functions = [
             FlowsFunctionSchema(
                 name="confirm_order",
-                description="Call this function to confirm the user's order.",
+                description="Call this function if the customer confirms the order and asks no other questions.",
                 handler=self._confirm_order_handler,
+                properties={},
+                required=[],
+            ),
+            FlowsFunctionSchema(
+                name="confirm_order_with_question",
+                description="Call this function if the customer confirms the order but also asks an unrelated question.",
+                handler=self._confirm_order_with_question_handler,
                 properties={},
                 required=[],
             ),
@@ -601,7 +579,7 @@ class OrderConfirmationBot:
             ),
             FlowsFunctionSchema(
                 name="handle_unrelated_question",
-                description="Call this function if the user asks a question about anything other than confirming or cancelling the order.",
+                description="Call this function if the user asks a question about anything other than confirming or cancelling the order, without confirming the order.",
                 handler=self._handle_unrelated_question_handler,
                 properties={},
                 required=[],
@@ -615,7 +593,7 @@ class OrderConfirmationBot:
             ),
             FlowsFunctionSchema(
                 name="address_incorrect",
-                description="User wants to update the address.",
+                description="User wants to update the address. Only landmark, pincode, or city can be updated.",
                 handler=self._handle_address_incorrect,
                 properties={},
                 required=[],
@@ -672,6 +650,18 @@ class OrderConfirmationBot:
                         {"type": "function", "handler": self._end_conversation_handler}
                     ],
                 },
+                "order_confirmation_with_question_and_end": {
+                    "name": "order_confirmation_with_question_and_end",
+                    "task_messages": [
+                        {
+                            "role": "system",
+                            "content": "The user confirmed the order but asked a question. Say: 'Thank you for confirming the order. I am here just to confirm your order, for any questions related to the order please refer to the website for more details. Have a good day.'",
+                        }
+                    ],
+                    "post_actions": [
+                        {"type": "function", "handler": self._end_conversation_handler}
+                    ],
+                },
                 "order_cancellation_and_end": {
                     "name": "order_cancellation_and_end",
                     "task_messages": [
@@ -696,12 +686,12 @@ class OrderConfirmationBot:
                         {"type": "function", "handler": self._end_conversation_handler}
                     ],
                 },
-                "reprompt": {
-                    "name": "reprompt",
+                "handle_unrelated_question": {
+                    "name": "handle_unrelated_question",
                     "task_messages": [
                         {
                             "role": "system",
-                            "content": f"I'm not able to help you with that right now, but you can find all the latest details on the {self.shop_name} website. Regarding your order for {self.order_summary}, would you like to confirm it?",
+                            "content": f"The user asked an unrelated question. Say: 'I'm not able to help you with that right now, but you can find all the latest details on the {self.shop_name} website. Regarding your order, would you like to confirm it?'",
                         }
                     ],
                     "functions": flow_functions,
@@ -748,6 +738,16 @@ class OrderConfirmationBot:
             self.outcome = "confirmed"
         return {}, self._create_node_from_config("order_confirmation_and_end")
 
+    async def _confirm_order_with_question_handler(self):
+        logger.info(
+            "Order confirmed with an unrelated question. Transitioning to custom end node."
+        )
+        if self.outcome != "address_updated":
+            self.outcome = "confirmed"
+        return {}, self._create_node_from_config(
+            "order_confirmation_with_question_and_end"
+        )
+
     async def _deny_order_handler(self):
         logger.info("Order denied. Transitioning to cancellation node.")
         self.outcome = "cancelled"
@@ -760,7 +760,7 @@ class OrderConfirmationBot:
 
     async def _handle_unrelated_question_handler(self):
         logger.info("User asked an unrelated question. Steering back to confirmation.")
-        return {}, self._create_node_from_config("reprompt")
+        return {}, self._create_node_from_config("handle_unrelated_question")
 
     def _create_initial_node(self) -> NodeConfig:
         return self._create_node_from_config("initial")
@@ -773,37 +773,59 @@ class OrderConfirmationBot:
         logger.info("Address incorrect. Proceeding to update address.")
         return {}, self._create_node_from_config("update_address")
 
+    def _update_address_part(self, part_type: str, new_value):
+        """
+        Update a specific part of an address while preserving all other parts.
+        Parts: street, locality, landmark, city, pincode
+        """
+        # Extract clean value from input
+        extracted_value = _extract_value_from_input(new_value, part_type)
+
+        logger.info(f"Updating {part_type} with value: {extracted_value}")
+
+        # Split current address into parts (use updated_address if available)
+        parts = [
+            p.strip() for p in (self.updated_address or self.address or "").split(",")
+        ]
+
+        # Ensure at least 5 parts
+        while len(parts) < 5:
+            parts.append("")
+
+        # Mapping of part_type → index in parts list
+        mapping = {"street": 0, "locality": 1, "landmark": 2, "city": 3, "pincode": 4}
+
+        # Update the specified part
+        if part_type in mapping:
+            parts[mapping[part_type]] = extracted_value
+
+        # Remove empty parts and join with comma (no spaces for webhook format)
+        final_parts = [p for p in parts if p.strip()]
+        self.updated_address = ",".join(final_parts)
+
+        logger.info(f"Final updated address: {self.updated_address}")
+
     async def _handle_landmark(self, landmark: str):
         logger.info(f"Updating landmark to: {landmark}")
-        self.updated_address = self.updated_address or self.address
-        self.updated_address = f"{self.updated_address.split(',')[0]}, {landmark}, {', '.join(self.updated_address.split(',')[2:])}"
+        self._update_address_part("landmark", landmark)
         self.outcome = "address_updated"
         return {}, self._create_node_from_config("confirm_address_update")
 
     async def _handle_pincode(self, pincode: str):
         logger.info(f"Updating pincode to: {pincode}")
-        self.updated_address = self.updated_address or self.address
-        self.updated_address = (
-            f"{', '.join(self.updated_address.split(',')[:-1])}, {pincode}"
-        )
+        self._update_address_part("pincode", pincode)
         self.outcome = "address_updated"
         return {}, self._create_node_from_config("confirm_address_update")
 
     async def _handle_city(self, city: str):
         logger.info(f"Updating city to: {city}")
-        self.updated_address = self.updated_address or self.address
-        parts = self.updated_address.split(",")
-        parts[-2] = f" {city}"
-        self.updated_address = ",".join(parts)
+        self._update_address_part("city", city)
         self.outcome = "address_updated"
         return {}, self._create_node_from_config("confirm_address_update")
 
     async def _handle_locality(self, locality: str):
         logger.info(f"Updating locality to: {locality}")
-        self.updated_address = self.updated_address or self.address
-        parts = self.updated_address.split(",")
-        parts[1] = f" {locality}"
-        self.updated_address = ",".join(parts)
+        self._update_address_part("locality", locality)
         self.outcome = "address_updated"
         return {}, self._create_node_from_config("confirm_address_update")
 

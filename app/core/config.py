@@ -30,10 +30,13 @@ UVICORN_LOG_LEVEL = os.environ.get("UVICORN_LOG_LEVEL", "info")
 
 # Gemini Proxy Configuration
 GEMINI_API_KEY = get_required_env("GEMINI_API_KEY")
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash-live-001")
-RESPONSE_MODALITY = os.environ.get("RESPONSE_MODALITY", "AUDIO")
 
 # Pipecat Agent Configuration
+AUTOMATIC_CONNECT_BLOCKED_ORIGINS = [
+    item.strip()
+    for item in os.environ.get("AUTOMATIC_CONNECT_BLOCKED_ORIGINS", "").split(",")
+    if item.strip()
+]
 DAILY_API_KEY = get_required_env("DAILY_API_KEY")
 DAILY_API_URL = os.environ.get("DAILY_API_URL", "https://api.daily.co/v1")
 AZURE_OPENAI_API_KEY = get_required_env("AZURE_OPENAI_API_KEY")
@@ -53,11 +56,6 @@ AIC_NOISE_GATE_ENABLE = (
     os.environ.get("AIC_NOISE_GATE_ENABLE", "true").lower() == "true"
 )
 
-# Krisp Audio Filter Configuration
-ENABLE_KRISP_FILTER = os.environ.get("ENABLE_KRISP_FILTER", "false").lower() == "true"
-KRISP_MODEL_PATH = os.environ.get(
-    "KRISP_MODEL_PATH", "/app/models/voice/krisp/krisp-viva-tel-v2.kef"
-)
 
 # TTS Configuration
 ELEVENLABS_API_KEY = os.environ.get("ELEVENLABS_API_KEY")
@@ -221,11 +219,12 @@ SONIOX_VAD_FORCE_TURN_ENDPOINT = (
 )  # CRITICAL: false = Use Soniox intelligent endpoint detection
 # true = Use external VAD (Silero)
 
-logger.info(f"Using Gemini model: {GEMINI_MODEL}")
-logger.info(f"Using response modality: {RESPONSE_MODALITY}")
-logger.info(f"Tracing enabled: {ENABLE_TRACING}")
-logger.info(f"Search grounding enabled: {ENABLE_SEARCH_GROUNDING}")
-logger.info(f"Using Gemini search result model: {GEMINI_SEARCH_RESULT_API_MODEL}")
+# Smart Turn Configuration
+ENABLE_FAL_SMART_TURN = (
+    os.environ.get("ENABLE_FAL_SMART_TURN", "false").lower() == "true"
+)
+# Required API key for FAL_SMART_TURN
+FAL_SMART_TURN_API_KEY = os.getenv("FAL_SMART_TURN_API_KEY")
 
 # Automatic MCP Tool Server
 ENABLE_BREEZE_MCP = os.environ.get("ENABLE_BREEZE_MCP", "false").lower() == "true"
@@ -236,7 +235,15 @@ SHOPS_FOR_BREEZE_MCP = [
     shop.strip() for shop in shops_for_mcp.split(",") if shop.strip()
 ]
 
-logger.info(f"Shops enabled for Breeze MCP Server: {SHOPS_FOR_BREEZE_MCP}")
+# Shops for performance directives
+shops_for_performance_directives_str = os.environ.get(
+    "SHOPS_FOR_PERFORMANCE_DIRECTIVES", ""
+)
+SHOPS_FOR_PERFORMANCE_DIRECTIVES = [
+    shop.strip()
+    for shop in shops_for_performance_directives_str.split(",")
+    if shop.strip()
+]
 
 LIGHTHOUSE_APP_URL = os.environ.get("LIGHTHOUSE_APP_URL", "http://localhost:5173")
 ENABLE_ALL_METRICS_FROM_CKH = (
@@ -327,6 +334,12 @@ AUTOMATIC_SESSION_INACTIVITY_TIMEOUT = float(
 )
 MAX_DAILY_SESSION_LIMIT = int(os.environ.get("MAX_DAILY_SESSION_LIMIT", 1800))
 
+# Pool Configuration
+VOICE_AGENT_POOL_SIZE = int(os.environ.get("VOICE_AGENT_POOL_SIZE", 1))
+VOICE_AGENT_MAX_POOL_SIZE = int(os.environ.get("VOICE_AGENT_MAX_POOL_SIZE", 3))
+DAILY_ROOM_POOL_SIZE = int(os.environ.get("DAILY_ROOM_POOL_SIZE", 1))
+DAILY_ROOM_MAX_POOL_SIZE = int(os.environ.get("DAILY_ROOM_MAX_POOL_SIZE", 5))
+
 # Human-in-the-Loop (HITL) Configuration
 HITL_ENABLE = os.environ.get("HITL_ENABLE", "true").lower() == "true"
 FUNCTION_CONFIRMATION_TIMEOUT = int(
@@ -360,6 +373,9 @@ AUTOMATIC_OPENAI_STT_PROMPT = os.environ.get("AUTOMATIC_OPENAI_STT_PROMPT", "")
 EXOTEL_ACCOUNT_SID = os.getenv("EXOTEL_ACCOUNT_SID", "")
 EXOTEL_API_KEY = os.getenv("EXOTEL_API_KEY", "")
 EXOTEL_API_TOKEN = os.getenv("EXOTEL_API_TOKEN", "")
+AWS_VAYU_URL = os.environ.get("AWS_VAYU_URL")
+AWS_VAYU_READ_API_KEY = os.environ.get("AWS_VAYU_READ_API_KEY")
+AWS_VAYU_WRITE_API_KEY = os.environ.get("AWS_VAYU_WRITE_API_KEY")
 EXOTEL_SUBDOMAIN = os.getenv("EXOTEL_SUBDOMAIN", "api.exotel.com")
 EXOTEL_APPLET_APP_ID = os.getenv("EXOTEL_APPLET_APP_ID", "1044183")
 
@@ -382,11 +398,6 @@ AUTOMATIC_LANGFUSE_SYSTEM_PROMPT_LABEL = os.environ.get(
     "AUTOMATIC_LANGFUSE_SYSTEM_PROMPT_LABEL", "automatic_system_langfuse_prompt"
 )
 
-logger.info(f"LangFuse prompts enabled: {ENABLE_LANGFUSE_PROMPTS}")
-if ENABLE_LANGFUSE_PROMPTS:
-    logger.info(
-        f"LangFuse system prompt: {AUTOMATIC_LANGFUSE_PROMPT_NAME} (label: {AUTOMATIC_LANGFUSE_SYSTEM_PROMPT_LABEL})"
-    )
 
 BREEZE_BUDDY_SONIOX_MODEL = os.environ.get(
     "BREEZE_BUDDY_SONIOX_MODEL", "stt-rt-preview"

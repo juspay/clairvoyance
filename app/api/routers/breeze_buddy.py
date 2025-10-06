@@ -46,22 +46,42 @@ router = APIRouter()
 
 
 @router.get("/{provider}/callback/details")
-async def callback_status(request: Request, provider: str):
+async def callback_details(request: Request, provider: str):
     query_params = dict(request.query_params)
     logger.info(f"Received call-details with {provider} query params: {query_params}")
 
-    if provider.lower() != "exotel" and provider.lower() != "twilio":
+    if provider.lower() != "exotel":
         raise HTTPException(
             status_code=404, detail="Feature not supported for this service provider"
         )
 
     call_sid = query_params.get("CallSid")
-    recording_url = None
+    recording_url = query_params.get("Stream[RecordingUrl]")
 
-    if provider.lower() == "twilio":
-        recording_url = query_params.get("RecordingUrl")
-    elif provider.lower() == "exotel":
-        recording_url = query_params.get("Stream[RecordingUrl]")
+    if recording_url and call_sid:
+        logger.info(
+            f"Extracted recording_url: {recording_url} and call_sid: {call_sid}"
+        )
+        await update_call_recording(call_sid, recording_url)
+
+    return Response(status_code=200)
+
+
+@router.post("/{provider}/callback/details")
+async def callback_details(request: Request, provider: str):
+    """
+    Logs the request body and returns a 200 OK response.
+    """
+    form = await request.form()
+    logger.info(f"Received callback from {provider} with form data: {form}")
+
+    if provider.lower() != "twilio":
+        raise HTTPException(
+            status_code=404, detail="Feature not supported for this service provider"
+        )
+
+    call_sid = form.get("CallSid")
+    recording_url = form.get("RecordingUrl")
 
     if recording_url and call_sid:
         logger.info(

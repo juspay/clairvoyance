@@ -21,11 +21,16 @@ from pipecat.frames.frames import (
 )
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.processors.frameworks.rtvi import RTVIProcessor, RTVIServerMessageFrame
+from pipecat.utils.tracing.turn_context_provider import (
+    get_current_turn_context,
+)
 
 from app.agents.voice.automatic.features.charts.chart_tools import (
-    reset_chart_turn_count,
+    mark_hitl_operation,
+    reset_chart_turn_state,
 )
 from app.agents.voice.automatic.features.charts.rtvi.rtvi import emit_chart_components
+from app.agents.voice.automatic.features.hitl.utils import is_dangerous_operation
 from app.agents.voice.automatic.rtvi.rtvi import emit_rtvi_event
 from app.agents.voice.automatic.utils.conversation_manager import (
     get_conversation_manager,
@@ -170,7 +175,7 @@ class LLMSpyProcessor(FrameProcessor):
                 await self.push_frame(frame, direction)
 
         elif isinstance(frame, UserStartedSpeakingFrame) and self._enable_charts:
-            reset_chart_turn_count(self._session_id)
+            reset_chart_turn_state(self._session_id)
             await self.push_frame(frame, direction)
 
         # LLM Response Start - begin collecting text and start conversation turn
@@ -212,9 +217,15 @@ class LLMSpyProcessor(FrameProcessor):
         # Function Call Start - emit RTVI event and track in conversation
         elif isinstance(frame, FunctionCallInProgressFrame):
             if self._tracer:
+                # Use turn context directly for tool calls to be nested in turn span
+                turn_context = get_current_turn_context()
+
                 span = self._tracer.start_span(
-                    f"Tool: {frame.function_name}", kind=trace.SpanKind.CLIENT
+                    f"Tool: {frame.function_name}",
+                    kind=trace.SpanKind.CLIENT,
+                    context=turn_context,
                 )
+
                 span.set_attributes(
                     {
                         "tool.name": frame.function_name,
@@ -284,6 +295,16 @@ class LLMSpyProcessor(FrameProcessor):
             await self.push_frame(frame, direction)
 
             if self._enable_charts:
+                # Check if this is a dangerous/HITL operation
+                try:
+                    if is_dangerous_operation(frame.function_name):
+                        mark_hitl_operation(self._session_id)
+                        logger.debug(
+                            f"[{self._session_id}] Marked HITL operation for tool: {frame.function_name}"
+                        )
+                except Exception as e:
+                    logger.debug(f"Error checking dangerous operation: {e}")
+
                 # Track in conversation via ConversationManager (may complete turn)
                 events = await self._conversation_manager.add_tool_result_with_events(
                     self._session_id,

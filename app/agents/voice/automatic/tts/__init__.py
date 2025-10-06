@@ -57,6 +57,27 @@ def get_tts_service(
         else:
             logger.info(f"Using Google TTS service with BRET voice.")
 
+        # Minimal secure logging for Google credentials
+        if config.GOOGLE_CREDENTIALS_JSON:
+            try:
+                import json
+
+                if isinstance(config.GOOGLE_CREDENTIALS_JSON, str):
+                    parsed = json.loads(config.GOOGLE_CREDENTIALS_JSON)
+                    logger.info(
+                        f"Google credentials: Valid JSON, project={parsed.get('project_id')}"
+                    )
+                else:
+                    logger.info(
+                        f"Google credentials: Dict format, project={config.GOOGLE_CREDENTIALS_JSON.get('project_id')}"
+                    )
+            except json.JSONDecodeError as e:
+                logger.error(
+                    f"Google credentials: JSON parsing failed at position {e.pos}"
+                )
+        else:
+            logger.warning("Google credentials: Not provided")
+
     return GoogleTTSService(
         voice_id=voice_id,
         params=GoogleTTSService.InputParams(

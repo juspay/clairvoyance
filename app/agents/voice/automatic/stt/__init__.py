@@ -146,6 +146,7 @@ def get_stt_service(voice_name: Optional[str] = None):
         )
     else:  # Default to Google STT
         logger.info("Using Google STT service with VAD-based turn detection")
+
         return GoogleSTTService(
             params=GoogleSTTService.InputParams(
                 languages=[Language.EN_US, Language.EN_IN], enable_interim_results=False

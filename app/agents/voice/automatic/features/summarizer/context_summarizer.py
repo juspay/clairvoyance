@@ -2,6 +2,7 @@
 import asyncio
 from typing import Any, Dict, List, Optional
 
+from pipecat.adapters.services.open_ai_adapter import OpenAILLMInvocationParams
 from pipecat.processors.aggregators.openai_llm_context import OpenAILLMContext
 
 from app.core.config import KEEP_RECENT_TURNS, MAX_TURNS_BEFORE_SUMMARY
@@ -124,10 +125,8 @@ class ContextSummarizer(OpenAILLMContext):
             ]
 
             # Get summary from LLM
-            summary_context = OpenAILLMContext(messages=summary_messages)
-            chunks = await self._llm_service.get_chat_completions(
-                summary_context, summary_messages
-            )
+            params_from_context = OpenAILLMInvocationParams(messages=summary_messages)
+            chunks = await self._llm_service.get_chat_completions(params_from_context)
             summary_parts = [
                 chunk.choices[0].delta.content
                 async for chunk in chunks

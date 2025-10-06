@@ -30,10 +30,16 @@ class ChartTurnManager:
     def __init__(self):
         self._pending_chart_emissions: Dict[str, List[Dict[str, Any]]] = {}
         self._chart_turn_counts: Dict[str, int] = {}
+        self._session_has_hitl: Dict[str, bool] = {}
 
-    def reset_chart_turn_count(self, session_id: str) -> None:
-        """Reset the chart count for a new LLM turn."""
+    def reset_turn_state(self, session_id: str) -> None:
+        """Reset chart count and HITL flag for a new LLM turn."""
         self._chart_turn_counts[session_id] = 0
+        self._session_has_hitl[session_id] = False
+
+    def mark_hitl_operation(self, session_id: str) -> None:
+        """Mark that a HITL operation occurred in this turn."""
+        self._session_has_hitl[session_id] = True
 
     def register_pending_chart_emission(
         self, session_id: str, component_data: Dict[str, Any]
@@ -43,6 +49,14 @@ class ChartTurnManager:
         """
         if session_id not in self._chart_turn_counts:
             self._chart_turn_counts[session_id] = 0
+
+        # Check if any tool result in this turn was a HITL operation
+        if self._session_has_hitl.get(session_id, False):
+            logger.warning(
+                f"[{session_id}] Silently rejecting chart '{component_data.get('props', {}).get('title', 'Unknown')}' - "
+                f"HITL operation detected in current turn"
+            )
+            return
 
         if self._chart_turn_counts[session_id] >= config.MAX_CHARTS_PER_TURN:
             logger.warning(
@@ -89,9 +103,14 @@ def get_pending_ui_components(session_id: str) -> List[UIComponentEvent]:
         return []
 
 
-def reset_chart_turn_count(session_id: str) -> None:
-    """Reset the chart count for a new LLM turn."""
-    _default_chart_turn_manager.reset_chart_turn_count(session_id)
+def reset_chart_turn_state(session_id: str) -> None:
+    """Reset chart count and actionable flag for a new LLM turn."""
+    _default_chart_turn_manager.reset_turn_state(session_id)
+
+
+def mark_hitl_operation(session_id: str) -> None:
+    """Mark that a HITL operation occurred in this turn."""
+    _default_chart_turn_manager.mark_hitl_operation(session_id)
 
 
 def _register_pending_chart_emission(

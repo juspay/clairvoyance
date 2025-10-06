@@ -1,7 +1,9 @@
 import argparse
 import asyncio
+import json
 import os
 import random
+import sys
 import wave
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -28,15 +30,15 @@ from pipecat.processors.frameworks.rtvi import RTVIConfig, RTVIProcessor
 from pipecat.services.azure.llm import AzureLLMService
 from pipecat.services.google.rtvi import GoogleRTVIObserver
 from pipecat.transports.daily.transport import DailyParams, DailyTransport
+from pipecat.utils.tracing.conversation_context_provider import (
+    ConversationContextProvider,
+)
 
 from app.agents.voice.automatic.features.llm_wrapper import LLMServiceWrapper
 from app.agents.voice.automatic.processors.llm_spy import handle_confirmation_response
-from app.agents.voice.automatic.services.filters.krisp.noise import NoiseFilterFromKrisp
+from app.agents.voice.automatic.services.fal import FalSmartTurnService
 from app.agents.voice.automatic.services.mcp import init_breeze_mcp_tools
 from app.agents.voice.automatic.services.mem0.memory import ImprovedMem0MemoryService
-from app.agents.voice.automatic.tools.charts import (
-    tool_functions as chart_tool_functions,
-)
 from app.agents.voice.automatic.types import (
     Mode,
     TTSProvider,
@@ -50,7 +52,7 @@ from app.agents.voice.automatic.utils.session_context import (
 )
 from app.core import config
 from app.core.logger import configure_session_logger, logger
-from app.utils.common import get_breeze_portal_url
+from app.core.transport.http_client import get_proxy_config
 
 from .processors import LLMSpyProcessor
 from .processors.ptt_vad_filter import PTTVADFilter
@@ -58,15 +60,6 @@ from .prompts import get_system_prompt
 from .stt import get_stt_service
 from .tools import initialize_tools
 from .tts import get_tts_service
-from .types import (
-    Mode,
-    TTSProvider,
-    decode_mode,
-    decode_tts_provider,
-    decode_voice_name,
-)
-
-load_dotenv(override=True)
 
 # Load tool call sound
 tool_call_sound = None
@@ -85,17 +78,16 @@ from app.agents.voice.automatic.analytics.utils import (
     generate_open_observer_url_for_session_id,
 )
 
+# Simple environment loading - subprocess inherits from parent
+load_dotenv(override=True)
+
 
 async def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "-u", "--url", type=str, required=True, help="URL of the Daily room"
-    )
-    parser.add_argument("-t", "--token", type=str, required=True, help="Daily token")
+    parser.add_argument("-u", "--url", type=str, help="URL of the Daily room")
+    parser.add_argument("-t", "--token", type=str, help="Daily token")
     parser.add_argument("--mode", type=str, help="Mode (TEST or LIVE)")
-    parser.add_argument(
-        "--session-id", type=str, required=True, help="Session ID for logging"
-    )
+    parser.add_argument("--session-id", type=str, help="Session ID for logging")
     parser.add_argument("--client-sid", type=str, help="Client session ID for logging")
     parser.add_argument("--euler-token", type=str, help="Euler token for live mode")
     parser.add_argument("--breeze-token", type=str, help="Breeze token for live mode")
@@ -114,7 +106,134 @@ async def main():
         help="Platform Integrations that are supported by the shop (string array)",
     )
     parser.add_argument("--reseller-id", type=str, help="Reseller ID")
+
+    # Pool mode arguments
+    parser.add_argument("--pool-mode", action="store_true", help="Run in pool mode")
+    parser.add_argument("--process-id", type=str, help="Process ID for pool mode")
+
     args = parser.parse_args()
+
+    # Validate arguments
+    if args.pool_mode and (not args.process_id or not args.process_id.strip()):
+        parser.error("--process-id is required when --pool-mode is used.")
+
+    if args.pool_mode:
+        await run_pool_mode(args)
+    else:
+        await run_normal_mode(args)
+
+
+async def run_pool_mode(args):
+    """Run in pool mode - wait for session assignments"""
+    logger.info(f"Voice agent process {args.process_id} starting in pool mode")
+
+    try:
+        await pre_initialize_services()
+        print("READY", flush=True)
+
+        # Wait for session assignments
+        while True:
+            try:
+                # Run the blocking readline call in a separate thread
+                line = await asyncio.to_thread(sys.stdin.readline)
+
+                # An empty string from readline indicates EOF
+                if line == "":
+                    logger.info("Pool process received EOF, shutting down")
+                    break
+
+                if line.strip():
+                    try:
+                        session_config = json.loads(line.strip())
+                        await handle_session(session_config)
+                    except json.JSONDecodeError as json_err:
+                        logger.error(f"Failed to decode session config: {json_err}")
+                        # Don't break the worker, just log and continue
+                        continue
+
+            except Exception as e:
+                logger.error(
+                    f"An unexpected error occurred in pool mode: {e}", exc_info=True
+                )
+                break
+
+    except Exception as e:
+        logger.error(f"Failed to initialize pool mode: {e}")
+        print(f"ERROR: {e}", flush=True)
+
+    logger.info("Pool process shutting down")
+
+
+async def pre_initialize_services():
+    """Pre-load heavy services for faster session startup"""
+    logger.info("Pre-initializing services for pool mode")
+
+    try:
+        # Pre-initialize Silero VAD model
+        await _pre_init_silero_vad()
+
+        logger.info("Services pre-initialized successfully")
+
+    except Exception as e:
+        logger.error(f"Error during service pre-initialization: {e}")
+        # Don't fail the process - fallback to normal initialization
+        logger.info("Continuing with normal initialization fallback")
+
+
+async def _pre_init_silero_vad():
+    """Pre-initialize Silero VAD model"""
+    try:
+        # Pre-load the Silero VAD model
+        vad_params = VADParams(
+            confidence=config.VAD_CONFIDENCE,
+            start_secs=config.VAD_START_SECS,
+            stop_secs=config.VAD_STOP_SECS,
+            min_volume=config.VAD_MIN_VOLUME,
+        )
+
+        # Store in global cache for reuse
+        global _silero_vad_cache
+        _silero_vad_cache = {"sample_rate": config.SAMPLE_RATE, "params": vad_params}
+
+        logger.info("Silero VAD model pre-loaded")
+
+    except Exception as e:
+        logger.debug(f"Silero VAD pre-init failed (will fallback): {e}")
+
+
+# Global caches for pre-initialized services
+_silero_vad_cache = None
+
+
+async def handle_session(session_config):
+    """Handle a session with the given configuration"""
+    session_id = session_config.get("session_id")
+
+    # Simple args object from session config
+    class SessionArgs:
+        def __init__(self, config):
+            for key, value in config.items():
+                setattr(self, key.replace("-", "_"), value)
+            # Map room_url to url for compatibility
+            self.url = config.get("room_url")
+
+    session_args = SessionArgs(session_config)
+
+    try:
+        await run_normal_mode(session_args)
+    except Exception as e:
+        logger.error(f"Session {session_id} ended with error: {e}")
+    finally:
+        logger.info(f"Session {session_id} completed, process ready for next session")
+        print("SESSION_ENDED", flush=True)
+
+
+async def run_normal_mode(args):
+    """Run the normal voice agent mode"""
+    # Validate required arguments for normal mode
+    if not args.url or not args.token or not args.session_id:
+        logger.error("Missing required arguments for normal mode")
+        return
 
     # Configure logger with session ID and client session ID for all logs in this subprocess
     configure_session_logger(args.session_id, args.client_sid)
@@ -142,40 +261,56 @@ async def main():
     )
 
     # Personalize the system prompt if a user name is provided
-    system_prompt = get_system_prompt(args.user_name, tts_provider)
+    system_prompt = get_system_prompt(args.user_name, tts_provider, args.shop_id)
 
-    # Configure VAD - use normal timeout for both cases
-    vad_params = VADParams(
-        confidence=config.VAD_CONFIDENCE,
-        start_secs=config.VAD_START_SECS,
-        stop_secs=config.VAD_STOP_SECS,  # Use normal timeout - Smart Turn will intercept and decide
-        min_volume=config.VAD_MIN_VOLUME,
-    )
+    # Configure VAD - use pre-initialized model if available
+    global _silero_vad_cache
+    if _silero_vad_cache:
+        logger.info("Using pre-initialized Silero VAD model")
+        vad_analyzer = SileroVADAnalyzer(
+            sample_rate=_silero_vad_cache["sample_rate"],
+            params=_silero_vad_cache["params"],
+        )
+    else:
+        # Fallback to normal initialization
+        logger.info("Using fallback Silero VAD initialization")
+        vad_params = VADParams(
+            confidence=config.VAD_CONFIDENCE,
+            start_secs=config.VAD_START_SECS,
+            stop_secs=config.VAD_STOP_SECS,  # Use normal timeout - Smart Turn will intercept and decide
+            min_volume=config.VAD_MIN_VOLUME,
+        )
 
-    vad_analyzer = SileroVADAnalyzer(
-        sample_rate=config.SAMPLE_RATE,
-        params=vad_params,
-    )
+        vad_analyzer = SileroVADAnalyzer(
+            sample_rate=config.SAMPLE_RATE,
+            params=vad_params,
+        )
+
+    # Initialize Fal.ai Smart Turn service
+    smart_turn_analyzer = None
+    fal_session = None
+    fal_smart_turn_service = None
+
+    if config.ENABLE_FAL_SMART_TURN:
+        if config.FAL_SMART_TURN_API_KEY:
+            fal_smart_turn_service = FalSmartTurnService()
+            smart_turn_analyzer, fal_session = (
+                await fal_smart_turn_service.create_analyzer()
+            )
+        else:
+            logger.warning(
+                "SMART_TURN: Fal.ai Smart Turn is enabled but FAL_SMART_TURN_API_KEY is missing; skipping."
+            )
 
     daily_params = DailyParams(
         audio_in_enabled=True,
         audio_out_enabled=True,
         vad_analyzer=None if config.DISABLE_SILERO_VAD else vad_analyzer,
+        turn_analyzer=smart_turn_analyzer,
     )
 
     # Audio filter configuration
-    if (
-        config.ENABLE_KRISP_FILTER
-        and config.KRISP_MODEL_PATH
-        and os.path.isfile(config.KRISP_MODEL_PATH)
-    ):
-        try:
-            daily_params.audio_in_filter = NoiseFilterFromKrisp(
-                model_path=config.KRISP_MODEL_PATH
-            )
-        except Exception as e:
-            logger.error(f"Krisp Filter failed: {e}")
-    elif config.ENABLE_AIC_FILTER and config.AICOUSTICS_LICENSE_KEY:
+    if config.ENABLE_AIC_FILTER and config.AICOUSTICS_LICENSE_KEY:
         try:
             aic_filter = AICFilter(
                 license_key=config.AICOUSTICS_LICENSE_KEY,
@@ -203,6 +338,20 @@ async def main():
         daily_params,
     )
 
+    # Configure proxy for WebRTC connections if available
+    proxy_url = get_proxy_config()
+    if proxy_url:
+        logger.info(f"Configuring Daily WebRTC proxy: {proxy_url}")
+        try:
+            # Set proxy URL on the Daily CallClient
+            transport._client._client.set_proxy_url(proxy_url)
+            logger.info("Daily WebRTC proxy configured successfully")
+        except Exception as e:
+            logger.error(f"Failed to configure Daily WebRTC proxy: {e}")
+            # Don't fail initialization - continue without proxy
+    else:
+        logger.debug("Proxy Configuration Skipped.")
+
     stt = get_stt_service(voice_name=voice_name.value)
 
     tts = get_tts_service(
@@ -221,6 +370,7 @@ async def main():
     )
 
     if not use_breeze_mcp_server:
+        # Initialize tools normally
         if mode == Mode.LIVE:
             tools, tool_functions = initialize_tools(
                 mode=mode.value,
@@ -508,6 +658,9 @@ async def main():
     @task.event_handler("on_pipeline_cancelled")
     async def on_pipeline_cancelled(task, frame):
         logger.info("Pipeline task cancelled. Cancelling main task.")
+        # Clean up Fal.ai Smart Turn session
+        if fal_smart_turn_service:
+            await fal_smart_turn_service.cleanup(fal_session)
         main_task = asyncio.current_task()
         main_task.cancel()
 
@@ -552,6 +705,16 @@ async def main():
                     )
                 ],
             )
+
+            # Set Pipecat conversation context for proper tool call nesting
+            provider = ConversationContextProvider.get_instance()
+            provider.set_current_conversation_context(
+                root_span.get_span_context(), conversation_id
+            )
+            logger.info(
+                f"Set Pipecat conversation context with span ID: {root_span.get_span_context().span_id}"
+            )
+
             await run_pipeline()
     else:
         await run_pipeline()
