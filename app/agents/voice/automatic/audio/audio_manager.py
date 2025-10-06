@@ -42,7 +42,8 @@ class AudioManager:
     def _load_waiting_audio(self):
         """Load waiting audio and split into 100ms chunks for fast interruption."""
         try:
-            wav_file_path = f"app/agents/voice/automatic/audio/waiting_{int(AUDIO_LENGTH_SECONDS)}sec.wav"
+            wav_file_path = f"assets/sounds/waiting_{int(AUDIO_LENGTH_SECONDS)}sec.wav"
+
             
             audio = AudioSegment.from_wav(wav_file_path)
             # Convert to pipeline format

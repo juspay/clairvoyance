@@ -3,8 +3,6 @@ import asyncio
 import json
 import os
 import random
-import argparse
-from dotenv import load_dotenv
 import sys
 import wave
 from datetime import datetime
@@ -65,16 +63,6 @@ from .stt import get_stt_service
 from .tools import initialize_tools
 from .tts import get_tts_service
 from .audio.audio_manager import initialize_audio_manager
-
-from .types import (
-    Mode,
-    TTSProvider,
-    decode_mode,
-    decode_tts_provider,
-    decode_voice_name,
-)
-
-load_dotenv(override=True)
 
 # Load tool call sound
 tool_call_sound = None
@@ -449,8 +437,12 @@ async def run_normal_mode(args):
 
     # Only stop audio when function calls complete if audio is actually playing
     @llm.event_handler("on_function_calls_finished")
-    async def on_function_calls_finished(service):
+    async def on_function_calls_finished(_service):
         # Stop audio when function calls finish but keep it enabled for potential resumption
+        if not audio_manager:
+            logger.warning("Audio manager not available, skipping audio control")
+            return
+
         if audio_manager.is_playing:
             # Stop current audio but don't disable - allow resumption if no LLM text follows
             audio_manager.is_playing = False
@@ -664,10 +656,19 @@ async def run_normal_mode(args):
 
     @task.event_handler("on_pipeline_cancelled")
     async def on_pipeline_cancelled(task, frame):
-        logger.info("Pipeline task cancelled. Cancelling main task.")
+        logger.info("Pipeline task cancelled. Cleaning up processors.")
+        
+        # Clean up user speaking processor
+        try:
+            await user_speaking_processor.cleanup()
+            logger.info("User speaking processor cleaned up successfully")
+        except Exception as e:
+            logger.error(f"Error cleaning up user speaking processor: {e}")
+        
         # Clean up Fal.ai Smart Turn session
         if fal_smart_turn_service:
             await fal_smart_turn_service.cleanup(fal_session)
+            
         main_task = asyncio.current_task()
         main_task.cancel()
 

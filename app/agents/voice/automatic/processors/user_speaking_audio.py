@@ -102,6 +102,9 @@ class UserSpeakingAudioProcessor(FrameProcessor):
                     if self._actual_speech_detected:
                         await audio_manager.start_audio()
                     else:
+                        # Cancel any existing pending task before creating new one
+                        if self._pending_audio_task and not self._pending_audio_task.done():
+                            self._pending_audio_task.cancel()
                         # Wait for delayed transcription (common case)
                         self._pending_audio_task = asyncio.create_task(self._wait_for_transcription())
                 else:
@@ -129,3 +132,14 @@ class UserSpeakingAudioProcessor(FrameProcessor):
             logger.debug("Transcription wait cancelled")
         except Exception as e:
             logger.error(f"Error in transcription wait: {e}")
+
+# `cleanup()` method to properly handle pending asyncio tasks during processor shutdown. This prevents resource leaks and ensures graceful termination.
+    async def cleanup(self):
+        """Cancel any pending tasks on shutdown."""
+        if self._pending_audio_task and not self._pending_audio_task.done():
+            self._pending_audio_task.cancel()
+            try:
+                await self._pending_audio_task
+            except asyncio.CancelledError:
+                pass
+        
