@@ -192,17 +192,20 @@ async def patch_shop_config(
         }
 
 
-def format_announcement_html(description: str) -> str:
+def format_announcement_html(
+    description: str, background_color: str = "#714acd"
+) -> str:
     """
     Formats the announcement text with HTML styling.
 
     Args:
         description: The announcement text to format
+        background_color: The background color of the announcement banner
 
     Returns:
         HTML formatted announcement text
     """
-    return f"<div style='text-align: center; width: 100vw;background: #714acd;color: white;padding:8px 0px;font-size:13px;'>{description}</div>"
+    return f"<div style='text-align: center; width: 100vw;background: {background_color};color: white;padding:8px 0px;font-size:13px;'>{description}</div>"
 
 
 def remove_html_tags(html_text: str) -> str:
