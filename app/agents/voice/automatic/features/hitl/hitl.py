@@ -148,7 +148,7 @@ class HITLManager:
             "confirmation_id": confirmation_id,
             "action_type": action_type,
             "function_name": function_name,
-            "arguments": display_arguments,
+            "arguments": display_arguments if len(display_arguments) > 0 else arguments,
             "timestamp": datetime.now().isoformat(),
         }
 

@@ -519,6 +519,7 @@ async def manage_announcement_banner(params: FunctionCallParams):
     try:
         action = params.arguments.get("action")
         description = params.arguments.get("description")
+        background_color = params.arguments.get("background_color", "#714acd")
 
         # Validate action
         if not action:
@@ -628,7 +629,9 @@ async def manage_announcement_banner(params: FunctionCallParams):
 
         if action == BannerAction.ADD or action == BannerAction.UPDATE:
             # Format the description with HTML styling
-            formatted_description = format_announcement_html(description)
+            formatted_description = format_announcement_html(
+                description, background_color
+            )
 
             # Update both announcement types with the same formatted content
             config_to_patch[login_page_key] = formatted_description
@@ -717,6 +720,11 @@ All announcements are formatted with HTML styling for consistent appearance.""",
         "description": {
             "type": "string",
             "description": "The content of the banner. Required when creating or updating a banner. Emojis are allowed.",
+        },
+        "background_color": {
+            "type": "string",
+            "description": "The background color of the announcement banner. Default is #714acd (Light Purple).",
+            "default": "#714acd",
         },
     },
     required=["action"],
