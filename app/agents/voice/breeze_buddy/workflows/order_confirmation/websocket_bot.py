@@ -26,7 +26,6 @@ from pydub import AudioSegment
 from app.agents.voice.breeze_buddy.workflows.order_confirmation.types import OrderData
 from app.agents.voice.breeze_buddy.workflows.order_confirmation.utils import (
     OUTCOME_TO_ENUM,
-    _extract_value_from_input,
     get_stt_service,
     indian_number_to_speech,
 )
@@ -75,6 +74,7 @@ class OrderConfirmationBot:
         self.shop_name = None
         self.address = None
         self.updated_address = None
+        self.updated_fields = {}  # Track only updated fields for webhook
         self.serializer = serializer
         self.hangup_function = hangup_function
         self.completion_function = completion_function
@@ -348,7 +348,9 @@ class OrderConfirmationBot:
                             and summary_data["outcome"] != LeadCallOutcome.BUSY
                         ):
                             try:
-                                payload = json.dumps(summary_data).replace(" ", "")
+                                payload = json.dumps(
+                                    summary_data, separators=(",", ":")
+                                )
                                 signature = calculate_hmac_sha256(
                                     payload, ORDER_CONFIRMATION_WEBHOOK_SECRET_KEY
                                 )
@@ -482,7 +484,7 @@ class OrderConfirmationBot:
                     and summary_data["outcome"] != LeadCallOutcome.BUSY
                 ):
                     try:
-                        payload = json.dumps(summary_data).replace(" ", "")
+                        payload = json.dumps(summary_data, separators=(",", ":"))
                         signature = calculate_hmac_sha256(
                             payload, ORDER_CONFIRMATION_WEBHOOK_SECRET_KEY
                         )
@@ -773,60 +775,47 @@ class OrderConfirmationBot:
         logger.info("Address incorrect. Proceeding to update address.")
         return {}, self._create_node_from_config("update_address")
 
-    def _update_address_part(self, part_type: str, new_value):
-        """
-        Update a specific part of an address while preserving all other parts.
-        Parts: street, locality, landmark, city, pincode
-        """
-        # Extract clean value from input
-        extracted_value = _extract_value_from_input(new_value, part_type)
+    def _update_address_field(self, field_name: str, value, expected_key: str = None):
+        """Helper function to update address fields and reduce redundancy"""
+        # Handle dict objects directly (LLM passes dict objects, not strings)
+        if isinstance(value, dict):
+            if expected_key and expected_key in value:
+                clean_value = str(value[expected_key]).strip()
+            else:
+                clean_value = str(list(value.values())[0]).strip()
+        else:
+            clean_value = str(value).strip()
 
-        logger.info(f"Updating {part_type} with value: {extracted_value}")
+        self.updated_fields[field_name] = clean_value
+        # Convert {"locality": "madhya Pradesh"} to "locality:madhya Pradesh"
+        updated_pairs = [f"{key}:{value}" for key, value in self.updated_fields.items()]
+        self.updated_address = ",".join(updated_pairs)
+        self.outcome = "address_updated"
 
-        # Split current address into parts (use updated_address if available)
-        parts = [
-            p.strip() for p in (self.updated_address or self.address or "").split(",")
-        ]
-
-        # Ensure at least 5 parts
-        while len(parts) < 5:
-            parts.append("")
-
-        # Mapping of part_type → index in parts list
-        mapping = {"street": 0, "locality": 1, "landmark": 2, "city": 3, "pincode": 4}
-
-        # Update the specified part
-        if part_type in mapping:
-            parts[mapping[part_type]] = extracted_value
-
-        # Remove empty parts and join with comma (no spaces for webhook format)
-        final_parts = [p for p in parts if p.strip()]
-        self.updated_address = ",".join(final_parts)
-
-        logger.info(f"Final updated address: {self.updated_address}")
+        return clean_value
 
     async def _handle_landmark(self, landmark: str):
         logger.info(f"Updating landmark to: {landmark}")
-        self._update_address_part("landmark", landmark)
-        self.outcome = "address_updated"
+        clean_value = self._update_address_field("landmark", landmark, "landmark")
+        logger.info(f"Updated landmark to: {clean_value}")
         return {}, self._create_node_from_config("confirm_address_update")
 
     async def _handle_pincode(self, pincode: str):
         logger.info(f"Updating pincode to: {pincode}")
-        self._update_address_part("pincode", pincode)
-        self.outcome = "address_updated"
+        clean_value = self._update_address_field("pincode", pincode, "pincode")
+        logger.info(f"Updated pincode to: {clean_value}")
         return {}, self._create_node_from_config("confirm_address_update")
 
     async def _handle_city(self, city: str):
         logger.info(f"Updating city to: {city}")
-        self._update_address_part("city", city)
-        self.outcome = "address_updated"
+        clean_value = self._update_address_field("city", city, "city")
+        logger.info(f"Updated city to: {clean_value}")
         return {}, self._create_node_from_config("confirm_address_update")
 
     async def _handle_locality(self, locality: str):
         logger.info(f"Updating locality to: {locality}")
-        self._update_address_part("locality", locality)
-        self.outcome = "address_updated"
+        clean_value = self._update_address_field("locality", locality, "locality")
+        logger.info(f"Updated locality to: {clean_value}")
         return {}, self._create_node_from_config("confirm_address_update")
 
 
