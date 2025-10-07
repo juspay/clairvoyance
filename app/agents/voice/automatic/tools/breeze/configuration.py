@@ -1,4 +1,5 @@
 import json
+import re
 from enum import Enum
 
 import httpx
@@ -519,7 +520,7 @@ async def manage_announcement_banner(params: FunctionCallParams):
     try:
         action = params.arguments.get("action")
         description = params.arguments.get("description")
-        background_color = params.arguments.get("background_color", "#714acd")
+        background_color = params.arguments.get("background_color", None)
 
         # Validate action
         if not action:
@@ -549,6 +550,19 @@ async def manage_announcement_banner(params: FunctionCallParams):
         # Fetch shop configuration data once
         try:
             config = await get_current_shop_config_data(shop_url)
+            if background_color is None:
+                banner = ""
+                if isinstance(config, dict):
+                    banner = config.get("announcementBannerText") or config.get(
+                        "loginPageAnnouncementText", ""
+                    )
+                if isinstance(banner, str) and banner:
+                    match = re.search(r"background:\s*([^;]+);?", banner)
+                    if match:
+                        background_color = match.group(1)
+            if background_color is None:
+                background_color = "#714acd"
+
         except ValueError as e:
             logger.error(
                 f"Tool Error: [manage_announcement_banner] Failed to get shop configuration: {str(e)}"
