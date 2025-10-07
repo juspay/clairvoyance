@@ -366,7 +366,11 @@ def get_failure_transactional_data_by_time(
         "domain": "kvorders",
         "filters": {
             "and": {
-                "left": {"condition": "NotIn", "field": "error_message", "val": [None]},
+                "left": {
+                    "condition": "NotIn",
+                    "field": "error_message",
+                    "val": [None, "COD initiated successfully"],
+                },
                 "right": {
                     "condition": "In",
                     "field": "error_message",
