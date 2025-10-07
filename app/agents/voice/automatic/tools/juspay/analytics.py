@@ -280,38 +280,10 @@ async def list_offers_by_filter(params: FunctionCallParams):
         # Determine the date range for the API call in UTC.
         now_utc = datetime.now(utc)
 
-        fetch_all = params.arguments.get("fetchAll", False)
-
-        if fetch_all:
-            start_time_ist = ist.localize(
-                datetime.strptime("2021-12-31 18:30:00", "%Y-%m-%d %H:%M:%S")
-            )
-            end_time_ist = now_utc.astimezone(ist)
-        else:
-            thirty_days_ago_utc = now_utc - timedelta(days=30)
-            user_created_at = params.arguments.get("created_at", {})
-            start_time_str = user_created_at.get("gte")
-            end_time_str = user_created_at.get("lte")
-
-            try:
-                start_time_ist = (
-                    ist.localize(datetime.strptime(start_time_str, "%Y-%m-%d %H:%M:%S"))
-                    if start_time_str
-                    else thirty_days_ago_utc.astimezone(ist)
-                )
-                end_time_ist = (
-                    ist.localize(datetime.strptime(end_time_str, "%Y-%m-%d %H:%M:%S"))
-                    if end_time_str
-                    else now_utc.astimezone(ist)
-                )
-            except Exception as e:
-                logger.error(f"Error converting user-provided time: {e}")
-                await params.result_callback(
-                    {
-                        "error": f"Invalid time format. Please use 'YYYY-MM-DD HH:MM:SS' in IST. Error: {e}"
-                    }
-                )
-                return
+        start_time_ist = ist.localize(
+            datetime.strptime("2021-12-31 18:30:00", "%Y-%m-%d %H:%M:%S")
+        )
+        end_time_ist = now_utc.astimezone(ist)
 
         # Prepare the payload for the API call.
         filters = {
@@ -1770,14 +1742,9 @@ list_offers_by_filter_function = FunctionSchema(
 
 **Behavior:**
 - **Default:** Fetches the first 10 active offers from the last 30 days.
-- **Fetch All:** If the user asks for "all" offers, set `fetchAll: true` to retrieve all offers since the beginning.
 - **Status Filter:** If the user specifies a status (e.g., "paused", "expired"), it will filter for that status.
 - **Date Filter:** If the user provides a start (`gte`) or end (`lte`) date, the tool will process accordingly.""",
     properties={
-        "fetchAll": {
-            "type": "boolean",
-            "description": "Set to true to fetch all offers, ignoring date filters. This is useful when the user asks for 'all offers'.",
-        },
         "status": {
             "type": "array",
             "items": {"type": "string", "enum": ["ACTIVE", "EXPIRED", "PAUSED", "NEW"]},
