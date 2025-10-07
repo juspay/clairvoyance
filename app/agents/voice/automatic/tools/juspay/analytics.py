@@ -261,7 +261,6 @@ async def get_payment_analytics_by_dimension(params: FunctionCallParams):
 async def list_offers_by_filter(params: FunctionCallParams):
     """
     Lists promotional offers. Fetches offers based on user-provided criteria.
-    By default, it fetches offers from the last 30 days.
     """
     try:
         logger.info(f"Fetching offers with filters: {params.arguments}")
@@ -300,7 +299,6 @@ async def list_offers_by_filter(params: FunctionCallParams):
 
         payload = {
             "status": params.arguments.get("status", ["ACTIVE"]),
-            "limit": params.arguments.get("limit", 10),
             "created_at": {
                 "gte": start_time_ist.isoformat(),
                 "lte": end_time_ist.isoformat(),
@@ -1738,10 +1736,10 @@ create_euler_offer_function = FunctionSchema(
 
 list_offers_by_filter_function = FunctionSchema(
     name="list_offers_by_filter",
-    description="""Fetches and filters promotional offers. It defaults to fetching active offers from the last 30 days.
+    description="""Fetches and filters promotional offers. It defaults to fetching active offers.
 
 **Behavior:**
-- **Default:** Fetches the first 10 active offers from the last 30 days.
+- **Default:** Fetches the active offers.
 - **Status Filter:** If the user specifies a status (e.g., "paused", "expired"), it will filter for that status.
 - **Date Filter:** If the user provides a start (`gte`) or end (`lte`) date, the tool will process accordingly.""",
     properties={
@@ -1788,10 +1786,6 @@ list_offers_by_filter_function = FunctionSchema(
         "currency": {
             "type": "string",
             "description": "Filter offers by currency code (e.g., 'INR').",
-        },
-        "limit": {
-            "type": "number",
-            "description": "The maximum number of offers to return. Defaults to 10.",
         },
         "created_at": {
             "type": "object",
