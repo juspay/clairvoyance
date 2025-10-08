@@ -7,7 +7,7 @@ from pipecat.adapters.schemas.function_schema import FunctionSchema
 from pipecat.adapters.schemas.tools_schema import ToolsSchema
 from pipecat.services.llm_service import FunctionCallParams
 
-from app.core.config import AWS_VAYU_READ_API_KEY, AWS_VAYU_URL, AWS_VAYU_WRITE_API_KEY
+from app.core.config import AWS_VAYU_READ_API_KEY, AWS_VAYU_URL, AWS_VAYU_WRITE_API_KEY, DEFAULT_ANNOUNCEMENT_BANNER_BACKGROUND_COLOR, DEFAULT_ANNOUNCEMENT_BANNER_TEXT_COLOR
 from app.core.logger import logger
 from app.core.transport.http_client import create_http_client
 
@@ -521,6 +521,7 @@ async def manage_announcement_banner(params: FunctionCallParams):
         action = params.arguments.get("action")
         description = params.arguments.get("description")
         background_color = params.arguments.get("background_color", None)
+        text_color = params.arguments.get("text_color", None)
 
         # Validate action
         if not action:
@@ -561,7 +562,20 @@ async def manage_announcement_banner(params: FunctionCallParams):
                     if match:
                         background_color = match.group(1)
             if background_color is None:
-                background_color = "#714acd"
+                background_color = DEFAULT_ANNOUNCEMENT_BANNER_BACKGROUND_COLOR
+
+            if text_color is None:
+                banner = ""
+                if isinstance(config, dict):
+                    banner = config.get("announcementBannerText") or config.get(
+                        "loginPageAnnouncementText", ""
+                    )
+                if isinstance(banner, str) and banner:
+                    match = re.search(r"color:\s*([^;]+);?", banner)
+                    if match:
+                        text_color = match.group(1)
+            if text_color is None:
+                text_color = DEFAULT_ANNOUNCEMENT_BANNER_TEXT_COLOR
 
         except ValueError as e:
             logger.error(
@@ -644,7 +658,7 @@ async def manage_announcement_banner(params: FunctionCallParams):
         if action == BannerAction.ADD or action == BannerAction.UPDATE:
             # Format the description with HTML styling
             formatted_description = format_announcement_html(
-                description, background_color
+                description, background_color, text_color
             )
 
             # Update both announcement types with the same formatted content
@@ -739,6 +753,11 @@ All announcements are formatted with HTML styling for consistent appearance.""",
             "type": "string",
             "description": "The background color of the announcement banner. Default is #714acd (Light Purple).",
             "default": "#714acd",
+        },
+        "text_color": {
+            "type": "string",
+            "description": "The text color or font color of the announcement banner. Default is white.",
+            "default": "white",
         },
     },
     required=["action"],

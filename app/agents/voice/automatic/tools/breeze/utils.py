@@ -11,7 +11,7 @@ from urllib.parse import urlparse
 
 import httpx
 
-from app.core.config import LIGHTHOUSE_APP_URL
+from app.core.config import LIGHTHOUSE_APP_URL, DEFAULT_ANNOUNCEMENT_BANNER_TEXT_COLOR, DEFAULT_ANNOUNCEMENT_BANNER_BACKGROUND_COLOR
 from app.core.logger import logger
 from app.core.transport.http_client import create_http_client
 
@@ -193,19 +193,28 @@ async def patch_shop_config(
 
 
 def format_announcement_html(
-    description: str, background_color: str = "#714acd"
+    description: str, 
+    background_color: Optional[str] = None,
+    text_color: Optional[str] = None
 ) -> str:
     """
     Formats the announcement text with HTML styling.
 
     Args:
         description: The announcement text to format
-        background_color: The background color of the announcement banner
+        background_color: The background color of the announcement banner (defaults to config value)
+        text_color: The text color of the announcement banner (defaults to config value)
 
     Returns:
         HTML formatted announcement text
     """
-    return f"<div style='text-align: center; width: 100vw;background: {background_color};color: white;padding:8px 0px;font-size:13px;'>{description}</div>"
+    # Use config defaults if not provided
+    if background_color is None:
+        background_color = DEFAULT_ANNOUNCEMENT_BANNER_BACKGROUND_COLOR
+    if text_color is None:
+        text_color = DEFAULT_ANNOUNCEMENT_BANNER_TEXT_COLOR
+        
+    return f"<div style='text-align: center; width: 100vw;background: {background_color};color: {text_color};padding:8px 0px;font-size:13px;'>{description}</div>"
 
 
 def remove_html_tags(html_text: str) -> str:
