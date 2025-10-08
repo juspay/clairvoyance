@@ -258,6 +258,10 @@ AUTOMATIC_WRITE_ACTIONS_AUTHORIZED_USERS = [
     if email.strip()
 ]
 
+ENABLE_WRITE_ACTIONS_FOR_MERCHANTS = (
+    os.environ.get("ENABLE_WRITE_ACTIONS_FOR_MERCHANTS", "false").lower() == "true"
+)
+
 # Get write actions from environment, split and normalize
 AUTOMATIC_ACTIONS_REQUIRE_AUTH = [
     action.strip().lower()
