@@ -3,11 +3,14 @@ from typing import Any, Dict, List, Optional
 from app.core.config import (
     AUTOMATIC_ACTIONS_REQUIRE_AUTH,
     AUTOMATIC_WRITE_ACTIONS_AUTHORIZED_USERS,
+    ENABLE_WRITE_ACTIONS_FOR_MERCHANTS,
 )
 from app.core.logger import logger
 
 
 def is_user_authorized_for_actions(email: Optional[str]) -> bool:
+    if ENABLE_WRITE_ACTIONS_FOR_MERCHANTS and email and "@juspay.in" not in email:
+        return True
     if not AUTOMATIC_WRITE_ACTIONS_AUTHORIZED_USERS:
         return True
     return bool(email and email in AUTOMATIC_WRITE_ACTIONS_AUTHORIZED_USERS)
