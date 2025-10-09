@@ -127,6 +127,23 @@ class AutomaticVoiceUserConnectRequest(BaseModel):
     resellerId: Optional[str] = None
 
 
+class AutomaticTextUserConnectRequest(BaseModel):
+    message: str
+    sessionId: Optional[str] = None
+    conversationId: Optional[str] = None
+    mode: Optional[str] = None
+    eulerToken: Optional[str] = None
+    breezeToken: Optional[str] = None
+    shopUrl: Optional[str] = None
+    shopId: Optional[str] = None
+    shopType: Optional[str] = None
+    userName: Optional[str] = None
+    email: Optional[str] = None
+    merchantId: Optional[str] = None
+    platformIntegrations: Optional[List[str]] = None
+    resellerId: Optional[str] = None
+
+
 class TokenData(BaseModel):
     """Token data model for JWT payload"""
 

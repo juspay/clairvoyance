@@ -14,7 +14,8 @@ from fastapi.staticfiles import StaticFiles
 from pipecat.transports.daily.utils import DailyRESTHelper
 
 from app import __version__
-from app.api.routers import automatic, breeze_buddy
+from app.agents.text.automatic import pipeline_manager as text_pipeline_manager
+from app.api.routers import automatic, breeze_buddy, text_automatic
 from app.core.config import (
     DAILY_API_KEY,
     DAILY_API_URL,
@@ -116,9 +117,18 @@ async def lifespan(_app: FastAPI):
     except Exception as e:
         logger.error(f"Failed to initialize voice agent pool: {e}")
 
+    # Initialize text agent pipeline manager
+    try:
+        await text_pipeline_manager.startup()
+        logger.info("Text agent pipeline manager initialized")
+    except Exception as e:
+        logger.error(f"Failed to initialize text agent pipeline manager: {e}")
+
     yield
 
     logger.info("Application shutdown event triggered...")
+    # Cleanup text agent pipeline manager
+    await text_pipeline_manager.shutdown()
     # Cleanup room pool
     await cleanup_room_pool()
     # Cleanup voice agent pool
@@ -151,6 +161,9 @@ app.include_router(
 )
 app.include_router(
     automatic.router, prefix="/agent/voice/automatic", tags=["Automatic Agent"]
+)
+app.include_router(
+    text_automatic.router, prefix="/agent/text/automatic", tags=["Text Automatic Agent"]
 )
 
 

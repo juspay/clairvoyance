@@ -42,3 +42,6 @@ PyJWT
 
 # Audio processing
 pydub
+
+# Redis for pipeline caching
+redis>=5.0.0

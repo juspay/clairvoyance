@@ -1,7 +1,6 @@
 import os
 
 from dotenv import load_dotenv
-from loguru import logger
 
 load_dotenv()
 
@@ -12,7 +11,6 @@ load_dotenv()
 def get_required_env(var_name: str) -> str:
     value = os.environ.get(var_name)
     if not value:
-        logger.error(f"{var_name} environment variable is required")
         raise ValueError(f"{var_name} environment variable is required")
     return value
 
@@ -127,6 +125,10 @@ SANITIZE_TEXT_FOR_TTS = (
 ENABLE_AUTOMATIC_DAILY_RECORDING = (
     os.environ.get("ENABLE_AUTOMATIC_DAILY_RECORDING", "false").lower() == "true"
 )
+
+# Redis Configuration
+REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
+MAX_CACHED_CONVERSATIONS = int(os.environ.get("MAX_CACHED_CONVERSATIONS", "1"))
 
 # Search
 ENABLE_SEARCH_GROUNDING = (
