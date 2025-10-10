@@ -36,6 +36,8 @@ def get_tool_scope_instructions(shop_id: str | None) -> str:
                 - "last 7 days": The start date is 6 days before today.
                 - "last 30 days": The start date is 29 days before today.
                 The end date is always today.
+        Calculations
+            - Always use arithmetic_calculator, sort_and_rank and array_operations to perform any mathematical operation.
         Error & Clarification
             1. Smart Clarify
                 If a request is ambiguous, ask a focused follow-up rather than guessing.

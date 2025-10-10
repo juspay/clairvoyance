@@ -12,6 +12,8 @@ from app.core.logger import logger
 from . import breeze, charts, internet, juspay
 from .dummy import tool_functions as dummy_tool_functions
 from .dummy import tools as dummy_tools
+from .math import tool_functions as math_tool_functions
+from .math import tools as math_tools
 from .system import tool_functions as system_tool_functions
 from .system import tools as system_tools
 
@@ -57,6 +59,11 @@ def initialize_tools(
     all_tools.extend(system_tools.standard_tools)
     all_tool_functions.update(system_tool_functions)
     logger.info(f"Loaded {len(system_tools.standard_tools)} system tools.")
+
+    # Math tools are always available
+    all_tools.extend(math_tools.standard_tools)
+    all_tool_functions.update(math_tool_functions)
+    logger.info(f"Loaded {len(math_tools.standard_tools)} math tools.")
 
     # Internet tools are always available
     if ENABLE_SEARCH_GROUNDING:

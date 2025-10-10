@@ -75,7 +75,7 @@ def get_chart_visualization_instructions() -> str:
         2. Use exact category names from chart data
         3. Example: <highlight category="Credit Card">credit cards</highlight>
         4. ONLY highlight the top 1–2 most important categories, never all
-        5. Importance = highest value (for totals) OR biggest change (for trends)
+        5. Importance = highest value (for totals) OR biggest change (for trends). Use sort_and_rank, array_operations and arithmetic_calculator tools to calculate.
         6. Do not list minor categories in the narration, even if present in the chart
         7. Voice descriptions must stay short (2–3 sentences max), focusing on key insights
 
