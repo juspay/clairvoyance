@@ -5,11 +5,13 @@ from app.agents.voice.automatic.types import Mode
 from app.core.config import (
     AUTOMATIC_WRITE_ACTIONS_AUTHORIZED_USERS,
     ENABLE_CHARTS,
+    ENABLE_COMFYUI,
+    ENABLE_EMAIL,
     ENABLE_SEARCH_GROUNDING,
 )
 from app.core.logger import logger
 
-from . import breeze, charts, internet, juspay
+from . import breeze, charts, comfyui, email, internet, juspay
 from .dummy import tool_functions as dummy_tool_functions
 from .dummy import tools as dummy_tools
 from .system import tool_functions as system_tool_functions
@@ -82,6 +84,24 @@ def initialize_tools(
         all_tools.extend(navigation_tools)
         all_tool_functions.update(navigation_tool_functions)
         logger.info(f"Loaded {len(navigation_tool_functions)} navigation tools.")
+
+    # ComfyUI image generation tools
+    if ENABLE_COMFYUI:
+        all_tools.extend(comfyui.standard_tools)
+        all_tool_functions.update(comfyui.tool_functions)
+        logger.info(
+            f"Loaded {len(comfyui.tool_functions)} ComfyUI image generation tools."
+        )
+    else:
+        logger.info("ComfyUI image generation tools are disabled.")
+
+    # Email tools are always available when email is enabled
+    if ENABLE_EMAIL:
+        all_tools.extend(email.tools.standard_tools)
+        all_tool_functions.update(email.tool_functions)
+        logger.info(f"Loaded {len(email.tool_functions)} email tools.")
+    else:
+        logger.info("Email tools are disabled.")
 
     # Dummy tools are only available in test mode
     if mode == Mode.TEST.value:

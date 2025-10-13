@@ -384,6 +384,21 @@ AUTOMATIC_LANGFUSE_SYSTEM_PROMPT_LABEL = os.environ.get(
     "AUTOMATIC_LANGFUSE_SYSTEM_PROMPT_LABEL", "automatic_system_langfuse_prompt"
 )
 
+# ComfyUI Configuration
+ENABLE_COMFYUI = os.environ.get("ENABLE_COMFYUI", "false").lower() == "true"
+COMFYUI_BASE_URL = os.environ.get("COMFYUI_BASE_URL", "http://localhost:8188")
+COMFYUI_WEBSOCKET_URL = os.environ.get(
+    "COMFYUI_WEBSOCKET_URL", "ws://localhost:8188/ws"
+)
+COMFYUI_TIMEOUT = int(os.environ.get("COMFYUI_TIMEOUT", "300"))  # 5 minutes default
+COMFYUI_DEFAULT_MODEL = os.environ.get(
+    "COMFYUI_DEFAULT_MODEL", "v1-5-pruned-emaonly.ckpt"
+)
+COMFYUI_DEFAULT_STEPS = int(os.environ.get("COMFYUI_DEFAULT_STEPS", "20"))
+COMFYUI_DEFAULT_CFG = float(os.environ.get("COMFYUI_DEFAULT_CFG", "8.0"))
+COMFYUI_DEFAULT_WIDTH = int(os.environ.get("COMFYUI_DEFAULT_WIDTH", "1024"))
+COMFYUI_DEFAULT_HEIGHT = int(os.environ.get("COMFYUI_DEFAULT_HEIGHT", "1024"))
+
 
 BREEZE_BUDDY_SONIOX_MODEL = os.environ.get(
     "BREEZE_BUDDY_SONIOX_MODEL", "stt-rt-preview"
@@ -406,3 +421,13 @@ BREEZE_BUDDY_SONIOX_VAD_FORCE_TURN_ENDPOINT = (
     os.environ.get("BREEZE_BUDDY_SONIOX_VAD_FORCE_TURN_ENDPOINT", "false").lower()
     == "true"
 )
+
+# Email Configuration
+ENABLE_EMAIL = os.environ.get("ENABLE_EMAIL", "true").lower() == "true"
+SMTP_SERVER = os.environ.get("SMTP_SERVER", "smtp.gmail.com")
+SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))
+SMTP_USERNAME = os.environ.get("SMTP_USERNAME", "anurag.dwivedi@juspay.in")
+SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "")
+SMTP_FROM_EMAIL = os.environ.get("SMTP_FROM_EMAIL", "anurag.dwivedi@juspay.in")
+SMTP_TO_EMAIL = os.environ.get("SMTP_TO_EMAIL", "anuragaithh@gmail.com")
+SMTP_USE_TLS = os.environ.get("SMTP_USE_TLS", "true").lower() == "true"

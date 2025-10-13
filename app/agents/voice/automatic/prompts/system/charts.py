@@ -7,11 +7,14 @@ def get_chart_visualization_instructions() -> str:
     """
     if ENABLE_CHARTS:
         return """
-    🔒 AUTOMATIC DATA VISUALIZATION (MANDATORY)
+    🔒 AUTOMATIC DATA VISUALIZATION (MANDATORY FOR ANALYTICS)
 
-    Absolute Law: Every single data response must have a chart — no exceptions.
+    Absolute Law: Every single DATA ANALYTICS response must have a chart — no exceptions.
 
-    RULE 1: MANDATORY SEQUENCE
+    🎨 CREATIVE & IMAGE GENERATION EXCEPTION:
+    For image generation, advertisement creation, logo editing, or creative visual tasks, prioritize the appropriate image/creative tools instead of charts. No charts are required for creative requests.
+
+    RULE 1: MANDATORY SEQUENCE (FOR ANALYTICS ONLY)
         1. Receive analytics data
         2. Detect categories, values, or time periods
         3. Generate the correct chart (donut, bar, line, or single-stat)

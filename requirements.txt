@@ -10,6 +10,9 @@ pytz==2025.2
 python-multipart>=0.0.6
 websockets>=11.0.3
 
+# ComfyUI client support
+websockets>=11.0.3
+
 # For handling CORS
 starlette>=0.27.0
 
@@ -42,3 +45,7 @@ PyJWT
 
 # Audio processing
 pydub
+
+# Email functionality
+aiosmtplib>=2.0.0
+email-validator>=2.0.0

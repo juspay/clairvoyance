@@ -1,21 +1,25 @@
 import asyncio
 import json
+import os
 import subprocess
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Dict
 
+import aiofiles
+import aiohttp
 import uvicorn
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pipecat.transports.daily.utils import DailyRESTHelper
 
 from app import __version__
 from app.api.routers import automatic, breeze_buddy
 from app.core.config import (
+    COMFYUI_BASE_URL,
     DAILY_API_KEY,
     DAILY_API_URL,
     DAILY_ROOM_MAX_POOL_SIZE,
@@ -152,6 +156,294 @@ app.include_router(
 app.include_router(
     automatic.router, prefix="/agent/voice/automatic", tags=["Automatic Agent"]
 )
+
+
+# ComfyUI image proxy endpoint to handle CORS
+@app.get("/api/v1/images/comfyui")
+async def proxy_comfyui_image(
+    filename: str = Query(..., description="Image filename"),
+    subfolder: str = Query("", description="Subfolder path"),
+):
+    """Proxy ComfyUI images to avoid CORS issues."""
+    try:
+        # Build the ComfyUI image URL
+        if subfolder:
+            comfyui_url = (
+                f"{COMFYUI_BASE_URL}/view?filename={filename}&subfolder={subfolder}"
+            )
+        else:
+            comfyui_url = f"{COMFYUI_BASE_URL}/view?filename={filename}"
+
+        logger.info(f"Proxying ComfyUI image: {comfyui_url}")
+
+        # Create aiohttp session to fetch the image
+        async with aiohttp.ClientSession() as session:
+            async with session.get(comfyui_url) as response:
+                if response.status != 200:
+                    raise HTTPException(
+                        status_code=response.status,
+                        detail=f"Failed to fetch image from ComfyUI: {response.status}",
+                    )
+
+                # Get content type from ComfyUI response
+                content_type = response.headers.get("content-type", "image/png")
+
+                # Read the full content to avoid connection issues
+                content = await response.read()
+
+                # Stream the image content
+                async def stream_content():
+                    # Yield content in chunks of 8192 bytes
+                    for i in range(0, len(content), 8192):
+                        yield content[i : i + 8192]
+
+                return StreamingResponse(
+                    stream_content(),
+                    media_type=content_type,
+                    headers={
+                        "Cache-Control": "public, max-age=3600",  # Cache for 1 hour
+                        "Access-Control-Allow-Origin": "*",
+                        "Access-Control-Allow-Methods": "GET",
+                        "Access-Control-Allow-Headers": "*",
+                    },
+                )
+
+    except aiohttp.ClientError as e:
+        logger.error(f"Error fetching ComfyUI image: {e}")
+        raise HTTPException(status_code=502, detail=f"Failed to fetch image: {str(e)}")
+    except Exception as e:
+        logger.error(f"Unexpected error in ComfyUI image proxy: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+# Logo upload endpoint for advertisement generation
+@app.post("/api/v1/upload/logo")
+async def upload_logo(
+    file: UploadFile = File(...),
+    session_id: str = Form(None, description="Session ID for logo context"),
+):
+    """Upload a brand logo for advertisement generation and auto-continue workflow."""
+    try:
+        # Validate file type
+        if not file.content_type or not file.content_type.startswith("image/"):
+            raise HTTPException(
+                status_code=400,
+                detail="Only image files are allowed (PNG, JPG, JPEG, GIF, WEBP)",
+            )
+
+        logger.debug(
+            f"Received logo upload: filename={file.filename}, content_type={file.content_type}, session_id={session_id}"
+        )
+
+        # Validate file size (max 10MB)
+        if file.size and file.size > 10 * 1024 * 1024:
+            raise HTTPException(
+                status_code=400, detail="File size too large. Maximum size is 10MB"
+            )
+
+        # Create uploads directory if it doesn't exist
+        uploads_dir = Path("static/uploads/logos")
+        uploads_dir.mkdir(parents=True, exist_ok=True)
+
+        # Generate unique filename
+        file_extension = file.filename.split(".")[-1] if "." in file.filename else "png"
+        unique_filename = f"logo_{uuid.uuid4()}.{file_extension}"
+        file_path = uploads_dir / unique_filename
+
+        # Save file
+        async with aiofiles.open(file_path, "wb") as f:
+            content = await file.read()
+            await f.write(content)
+
+        # Return the URL that can be used to access the logo
+        logo_url = f"/static/uploads/logos/{unique_filename}"
+
+        logger.info(f"Logo uploaded successfully: {logo_url}")
+
+        # Store logo URL in session context if session_id is provided
+        if session_id:
+            from app.agents.voice.automatic.utils.image_context import set_logo_url
+
+            set_logo_url(session_id, logo_url)
+            logger.info(f"Saved logo URL to session {session_id}: {logo_url}")
+
+        # Auto-continue workflow using session-specific or any available logo context
+        from pipecat.services.llm_service import FunctionCallParams
+
+        from app.agents.voice.automatic.tools.comfyui.image_generation import (
+            generate_advertisement_with_logo,
+        )
+        from app.agents.voice.automatic.utils.logo_context import (
+            get_and_clear_any_pending_logo_context,
+            get_logo_request_context,
+        )
+
+        advertisement_result = None
+
+        # Try to get logo context - prioritize session_id if provided, otherwise get any pending context
+        context_result = None
+        if session_id:
+            # Use session-specific context retrieval
+            context = get_logo_request_context(session_id)
+            if context:
+                context_result = (session_id, context)
+                logger.info(
+                    f"Using session-specific logo context for session {session_id}"
+                )
+            else:
+                logger.warning(
+                    f"No logo context found for session {session_id}, checking for any pending context"
+                )
+                # Fallback to any pending context if session-specific not found
+                context_result = get_and_clear_any_pending_logo_context()
+        else:
+            # No session_id provided, use the old behavior as fallback
+            logger.warning(
+                "No session_id provided in logo upload, using any available logo context"
+            )
+            context_result = get_and_clear_any_pending_logo_context()
+        if context_result:
+            found_session_id, context = context_result
+            logger.info(
+                f"Found logo request context for session {found_session_id}, auto-continuing workflow"
+            )
+
+            # Create mock function call params for auto-continuation
+            class MockFunctionCallParams:
+                def __init__(self, arguments):
+                    self.arguments = arguments
+                    self.result = None
+
+                async def result_callback(self, result):
+                    self.result = result
+
+            # Prepare arguments with logo URL
+            logo_args = {
+                **context,  # Original parameters
+                "logo_url": logo_url,  # Add the uploaded logo URL
+            }
+
+            # Auto-continue the advertisement generation
+            mock_params = MockFunctionCallParams(logo_args)
+            # try:
+            #     await generate_advertisement_with_logo(mock_params)
+            #     advertisement_result = mock_params.result
+            #     logger.info(f"Auto-generated advertisement with logo for session {found_session_id}")
+
+            #     # TODO: Trigger emit_pending_events function call to voice agent
+            #     # This will cause the LLM spy processor to emit pending RTVI events
+            #     # For now, events will be emitted on the next user interaction
+            #     logger.info(f"Auto-continue completed. RTVI events registered and will be emitted on next voice agent function call.")
+
+            # except Exception as e:
+            #     logger.error(f"Failed to auto-generate advertisement: {e}")
+            #     advertisement_result = {
+            #         "success": False,
+            #         "error": f"Failed to generate advertisement: {str(e)}"
+            #     }
+        else:
+            logger.info("No pending logo request context found for auto-continuation")
+
+        response_data = {
+            "success": True,
+            "logo_url": logo_url,
+            "filename": unique_filename,
+            "original_filename": file.filename,
+            "size": len(content),
+            "content_type": file.content_type,
+            "message": "Logo uploaded successfully! I'm creating your advertisement now. Ask me to show you the result!",
+        }
+
+        # Include advertisement result if auto-continuation happened
+        # if advertisement_result:
+        #     response_data["advertisement_result"] = advertisement_result
+
+        return JSONResponse(response_data)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error uploading logo: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to upload logo: {str(e)}")
+
+
+# Image upload endpoint for user product images
+@app.post("/api/v1/upload/image")
+async def upload_image(
+    file: UploadFile = File(...),
+    session_id: str = Form(None, description="Session ID for image context"),
+):
+    """Upload a product image for processing and set as current working image."""
+    try:
+        # Validate file type
+        if not file.content_type or not file.content_type.startswith("image/"):
+            raise HTTPException(
+                status_code=400,
+                detail="Only image files are allowed (PNG, JPG, JPEG, GIF, WEBP)",
+            )
+
+        logger.debug(
+            f"Received image upload: filename={file.filename}, content_type={file.content_type}, session_id={session_id}"
+        )
+
+        # Validate file size (max 10MB)
+        if file.size and file.size > 10 * 1024 * 1024:
+            raise HTTPException(
+                status_code=400, detail="File size too large. Maximum size is 10MB"
+            )
+
+        # Create uploads directory if it doesn't exist
+        uploads_dir = Path("static/uploads/images")
+        uploads_dir.mkdir(parents=True, exist_ok=True)
+
+        # Generate unique filename
+        file_extension = file.filename.split(".")[-1] if "." in file.filename else "png"
+        unique_filename = f"user_image_{uuid.uuid4()}.{file_extension}"
+        file_path = uploads_dir / unique_filename
+
+        # Save file
+        async with aiofiles.open(file_path, "wb") as f:
+            content = await file.read()
+            await f.write(content)
+
+        # Return the URL that can be used to access the image
+        image_url = f"/static/uploads/images/{unique_filename}"
+
+        logger.info(f"Image uploaded successfully: {image_url}")
+
+        # Store image URL in session context if session_id is provided
+        if session_id:
+            from app.agents.voice.automatic.utils.image_context import set_current_image
+
+            set_current_image(
+                session_id=session_id,
+                image_url=image_url,
+                operation="user_upload",
+                prompt=f"User uploaded image: {file.filename}",
+                parameters={
+                    "original_filename": file.filename,
+                    "content_type": file.content_type,
+                },
+            )
+            logger.info(f"Saved current image URL to session {session_id}: {image_url}")
+
+        response_data = {
+            "success": True,
+            "image_url": image_url,
+            "filename": unique_filename,
+            "original_filename": file.filename,
+            "size": len(content),
+            "content_type": file.content_type,
+            "message": "Image uploaded successfully! You can now ask me to edit or work with this image.",
+        }
+
+        return JSONResponse(response_data)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error uploading image: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to upload image: {str(e)}")
 
 
 # Pipecat bot endpoint

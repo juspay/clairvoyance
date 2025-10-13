@@ -29,7 +29,10 @@ from app.agents.voice.automatic.features.charts.chart_tools import (
     reset_chart_turn_count,
 )
 from app.agents.voice.automatic.features.charts.rtvi.rtvi import emit_chart_components
-from app.agents.voice.automatic.rtvi.rtvi import emit_rtvi_event
+from app.agents.voice.automatic.rtvi.rtvi import (
+    emit_pending_rtvi_events,
+    emit_rtvi_event,
+)
 from app.agents.voice.automatic.utils.conversation_manager import (
     get_conversation_manager,
 )
@@ -304,6 +307,12 @@ class LLMSpyProcessor(FrameProcessor):
                 # Handle chart component emission (works for both local and MCP tools)
                 # Always check for pending components after any function call
                 await emit_chart_components(
+                    self._rtvi, frame.function_name, self._session_id
+                )
+
+                # Handle pending RTVI events emission
+                # Always check for pending RTVI events after any function call
+                await emit_pending_rtvi_events(
                     self._rtvi, frame.function_name, self._session_id
                 )
         else:

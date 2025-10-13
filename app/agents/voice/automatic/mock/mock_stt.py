@@ -97,11 +97,10 @@ class TestQuestionProcessor(FrameProcessor):
 
 # Predefined question sets
 DEFAULT_TEST_QUESTIONS = [
-    "What is my conversion funnel for last week? Use random data",
-    "How much revenue did I process through Cards/UPI/Netbanking/COD/Others yesterday? Use random data",
-    "What is my conversion rate this month? Use random data",
-    "What is the source of my leads last week? Use random data",
-    "Can you provide marketing channel performance for this month? Use random data",
+    "Create an ad for me where you show a whiskey bottle. The bottle should be placed on a dark wooden bar with a sophisticated lounge background. The lighting should be warm and moody, highlighting the amber color of the whiskey. I have my own bottle image that I want to use instead of generating one.",
+    "I have uploaded the photo. Can you create the ad for me now.",
+    "Make the whiskey bottle smaller and show more of the party setting around it.",
+    "Mask the bottle and change the background to farm land with natural lighting.",
     "What is my ROAS for last week? Use random data",
     "What is my SR today? Use random data",
     "How many failed transactions did I have yesterday?",
