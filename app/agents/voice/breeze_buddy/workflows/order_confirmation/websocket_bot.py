@@ -13,6 +13,11 @@ from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
 from pipecat.processors.aggregators.openai_llm_context import OpenAILLMContext
+from pipecat.processors.filters.stt_mute_filter import (
+    STTMuteConfig,
+    STTMuteFilter,
+    STTMuteStrategy,
+)
 from pipecat.services.azure.llm import AzureLLMService
 from pipecat.services.elevenlabs.tts import ElevenLabsTTSService
 from pipecat.transcriptions.language import Language
@@ -257,6 +262,12 @@ class OrderConfirmationBot:
         )
         messages = [{"role": "system", "content": self.system_prompt}]
 
+        stt_mute_filter = STTMuteFilter(
+            config=STTMuteConfig(
+                strategies={STTMuteStrategy.MUTE_UNTIL_FIRST_BOT_COMPLETE}
+            )
+        )
+
         self.context = OpenAILLMContext(messages)
         context_aggregator = llm.create_context_aggregator(self.context)
 
@@ -264,6 +275,7 @@ class OrderConfirmationBot:
             [
                 self.transport.input(),
                 stt,
+                stt_mute_filter,
                 context_aggregator.user(),
                 llm,
                 tts,
