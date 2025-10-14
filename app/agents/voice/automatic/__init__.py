@@ -20,13 +20,23 @@ from pipecat.frames.frames import (
     EmulateUserStartedSpeakingFrame,
     EmulateUserStoppedSpeakingFrame,
     LLMFullResponseEndFrame,
+    LLMRunFrame,
     OutputAudioRawFrame,
     TTSSpeakFrame,
 )
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
-from pipecat.processors.frameworks.rtvi import RTVIConfig, RTVIProcessor
+from pipecat.processors.filters.stt_mute_filter import (
+    STTMuteConfig,
+    STTMuteFilter,
+    STTMuteStrategy,
+)
+from pipecat.processors.frameworks.rtvi import (
+    RTVIConfig,
+    RTVIProcessor,
+    RTVIServerMessageFrame,
+)
 from pipecat.services.azure.llm import AzureLLMService
 from pipecat.services.google.rtvi import GoogleRTVIObserver
 from pipecat.transports.daily.transport import DailyParams, DailyTransport
@@ -478,21 +488,42 @@ async def run_normal_mode(args):
 
     context_aggregator = llm.create_context_aggregator(context)
 
-    # Add custom LLMSpyProcessor for streaming function call events (RTVI and TTS created earlier)
-    tool_call_processor = LLMSpyProcessor(
-        rtvi, args.session_id, config.ENABLE_CHARTS, "LLMSpyProcessor"
-    )
+    # Initialize processors and pipeline components
+    stt_mute_filter = None
+    tool_call_processor = None
 
     # Build pipeline components list
     pipeline_components = [
         transport.input(),
-        stt,
     ]
 
     # Add PTT VAD filter only if it's enabled
     if config.DISABLE_VAD_FOR_PTT:
         ptt_vad_filter = PTTVADFilter("PTTVADFilter")
         pipeline_components.append(ptt_vad_filter)  # Filter VAD frames after STT
+
+    pipeline_components.append(stt)
+
+    if config.ENABLE_MUTE_UNTIL_FIRST_BOT_COMPLETE:
+        stt_mute_filter = STTMuteFilter(
+            config=STTMuteConfig(
+                strategies={
+                    STTMuteStrategy.MUTE_UNTIL_FIRST_BOT_COMPLETE,
+                }
+            )
+        )
+        tool_call_processor = LLMSpyProcessor(
+            rtvi,
+            args.session_id,
+            config.ENABLE_CHARTS,
+            stt_mute_filter,
+            "LLMSpyProcessor",
+        )
+        pipeline_components.extend([stt_mute_filter])
+    else:
+        tool_call_processor = LLMSpyProcessor(
+            rtvi, args.session_id, config.ENABLE_CHARTS, None, "LLMSpyProcessor"
+        )
 
     pipeline_components.extend([rtvi, context_aggregator.user()])
     if (
@@ -565,7 +596,7 @@ async def run_normal_mode(args):
 
     @rtvi.event_handler("on_client_ready")
     async def on_client_ready(rtvi):
-        await rtvi.set_bot_ready()
+        await rtvi.push_frame(RTVIServerMessageFrame(data={"type": "bot-ready"}))
 
     @rtvi.event_handler("on_client_message")
     async def on_client_message(rtvi, message):
@@ -638,7 +669,7 @@ async def run_normal_mode(args):
         if config.ENABLE_AUTOMATIC_DAILY_RECORDING:
             await transport.start_recording()
 
-        await task.queue_frames([context_aggregator.user().get_context_frame()])
+        await task.queue_frames([LLMRunFrame()])
 
     @transport.event_handler("on_participant_left")
     async def on_participant_left(transport, participant, reason):
@@ -665,8 +696,8 @@ async def run_normal_mode(args):
                 except Exception as e:
                     logger.error(f"Error manually routing message to RTVI: {e}")
 
-    @task.event_handler("on_pipeline_cancelled")
-    async def on_pipeline_cancelled(task, frame):
+    @task.event_handler("on_pipeline_finished")
+    async def on_pipeline_finished(task, frame):
         logger.info("Pipeline task cancelled. Cancelling main task.")
         # Clean up Fal.ai Smart Turn session
         if fal_smart_turn_service:
