@@ -10,6 +10,7 @@ from typing import Any, Dict, Optional
 
 from opentelemetry import trace
 from pipecat.frames.frames import (
+    BotStoppedSpeakingFrame,
     Frame,
     FunctionCallInProgressFrame,
     FunctionCallResultFrame,
@@ -138,12 +139,14 @@ class LLMSpyProcessor(FrameProcessor):
         rtvi: RTVIProcessor,
         session_id: str,
         enable_charts: bool,
+        stt_mute_filter: Optional[FrameProcessor] = None,
         name: str = "LLMSpyProcessor",
     ):
         super().__init__(name=name)
         self._rtvi = rtvi
         self._session_id = session_id
         self._enable_charts = enable_charts
+        self._stt_mute_filter = stt_mute_filter
 
         # Register this RTVI processor globally for function confirmations
         set_rtvi_processor(rtvi)
@@ -199,6 +202,13 @@ class LLMSpyProcessor(FrameProcessor):
             and self._enable_charts
         ):
             self._accumulated_text += frame.text
+            await self.push_frame(frame, direction)
+
+        elif (
+            isinstance(frame, BotStoppedSpeakingFrame)
+            and self._stt_mute_filter is not None
+        ):
+            await self._stt_mute_filter.process_frame(frame, FrameDirection.DOWNSTREAM)
             await self.push_frame(frame, direction)
 
         # LLM Response Complete - send to ConversationManager

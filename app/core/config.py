@@ -104,6 +104,10 @@ DISABLE_SILERO_VAD = (
     os.environ.get("DISABLE_SILERO_VAD", "false").lower() == "true"
 )  # Disable Silero VAD (use when STT provider has built-in VAD)
 
+ENABLE_MUTE_UNTIL_FIRST_BOT_COMPLETE = (
+    os.environ.get("ENABLE_MUTE_UNTIL_FIRST_BOT_COMPLETE", "false").lower() == "true"
+)
+
 # Mem0 Configuration
 MEM0_API_KEY = os.getenv("MEM0_API_KEY", "")
 MEM0_ENABLED = os.getenv("MEM0_ENABLED", "false").lower() == "true"
