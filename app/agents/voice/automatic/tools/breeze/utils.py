@@ -11,7 +11,11 @@ from urllib.parse import urlparse
 
 import httpx
 
-from app.core.config import LIGHTHOUSE_APP_URL, DEFAULT_ANNOUNCEMENT_BANNER_TEXT_COLOR, DEFAULT_ANNOUNCEMENT_BANNER_BACKGROUND_COLOR
+from app.core.config import (
+    DEFAULT_ANNOUNCEMENT_BANNER_BACKGROUND_COLOR,
+    DEFAULT_ANNOUNCEMENT_BANNER_TEXT_COLOR,
+    LIGHTHOUSE_APP_URL,
+)
 from app.core.logger import logger
 from app.core.transport.http_client import create_http_client
 
@@ -193,9 +197,9 @@ async def patch_shop_config(
 
 
 def format_announcement_html(
-    description: str, 
+    description: str,
     background_color: Optional[str] = None,
-    text_color: Optional[str] = None
+    text_color: Optional[str] = None,
 ) -> str:
     """
     Formats the announcement text with HTML styling.
@@ -213,7 +217,7 @@ def format_announcement_html(
         background_color = DEFAULT_ANNOUNCEMENT_BANNER_BACKGROUND_COLOR
     if text_color is None:
         text_color = DEFAULT_ANNOUNCEMENT_BANNER_TEXT_COLOR
-        
+
     return f"<div style='text-align: center; width: 100vw;background: {background_color};color: {text_color};padding:8px 0px;font-size:13px;'>{description}</div>"
 
 
