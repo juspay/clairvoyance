@@ -233,6 +233,9 @@ ENABLE_SMART_TURN = os.getenv("ENABLE_SMART_TURN", "false").lower() == "true"
 
 # Automatic MCP Tool Server
 ENABLE_BREEZE_MCP = os.environ.get("ENABLE_BREEZE_MCP", "false").lower() == "true"
+ENABLE_BREEZE_MCP_FOR_BRET = (
+    os.environ.get("ENABLE_BREEZE_MCP_FOR_BRET", "false").lower() == "true"
+)
 MCP_CLIENT_TIMEOUT = int(os.environ.get("MCP_CLIENT_TIMEOUT", 30))  # seconds
 BREEZE_MCP_ENDPOINT_PATH = os.environ.get("BREEZE_MCP_ENDPOINT_PATH", "/ai/neurolink")
 shops_for_mcp = os.environ.get("SHOPS_FOR_BREEZE_MCP", "")
