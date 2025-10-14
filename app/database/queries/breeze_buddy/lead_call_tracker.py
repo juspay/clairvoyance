@@ -148,3 +148,30 @@ def update_lead_call_completion_details_query(
     """
     values = [status.value, outcome.value, json.dumps(meta_data), call_end_time, id]
     return text, values
+
+
+def get_all_lead_call_trackers_query(
+    start_date: Optional[datetime] = None, end_date: Optional[datetime] = None
+) -> Tuple[str, List[Any]]:
+    """
+    Generate query to get all lead call trackers within a date range.
+    """
+    text = f"""
+        SELECT * FROM "{LEAD_CALL_TRACKER_TABLE}"
+    """
+    values: List[Any] = []
+    conditions = []
+
+    if start_date:
+        values.append(start_date)
+        conditions.append(f'"created_at" >= ${len(values)}')
+
+    if end_date:
+        values.append(end_date)
+        conditions.append(f'"created_at" < ${len(values)}')
+
+    if conditions:
+        text += " WHERE " + " AND ".join(conditions)
+
+    text += ";"
+    return text, values
