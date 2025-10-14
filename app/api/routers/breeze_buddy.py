@@ -466,7 +466,9 @@ async def get_analytics(
     )
 
     analytics = {
-        "calls_attempted": len(trackers),
+        "calls_attempted": len(
+            [t for t in trackers if t.status and t.status.value == "FINISHED"]
+        ),
         "no_answer": len(
             [t for t in trackers if t.outcome and t.outcome.value == "NO_ANSWER"]
         ),
@@ -481,6 +483,9 @@ async def get_analytics(
         ),
         "address_updated": len(
             [t for t in trackers if t.outcome and t.outcome.value == "ADDRESS_UPDATED"]
+        ),
+        "backlog_calls": len(
+            [t for t in trackers if t.status and t.status.value == "BACKLOG"]
         ),
     }
     return JSONResponse(content=analytics)
