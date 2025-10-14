@@ -57,6 +57,7 @@ from app.agents.voice.automatic.types import (
     decode_tts_provider,
     decode_voice_name,
 )
+from app.agents.voice.automatic.types.models import VoiceName
 from app.agents.voice.automatic.utils.session_context import (
     create_session_context,
     set_current_session_id,
@@ -271,6 +272,14 @@ async def run_normal_mode(args):
         or args.shop_id in config.SHOPS_FOR_BREEZE_MCP  # Specific shops only
     )
 
+    use_breeze_mcp_server_for_bret = config.ENABLE_BREEZE_MCP_FOR_BRET and (
+        voice_name == VoiceName.BRET
+        and (
+            not config.SHOPS_FOR_BREEZE_MCP
+            or args.shop_id in config.SHOPS_FOR_BREEZE_MCP
+        )
+    )
+
     # Personalize the system prompt if a user name is provided
     system_prompt = get_system_prompt(args.user_name, tts_provider, args.shop_id)
 
@@ -389,7 +398,7 @@ async def run_normal_mode(args):
         )
     )
 
-    if not use_breeze_mcp_server:
+    if not use_breeze_mcp_server and not use_breeze_mcp_server_for_bret:
         # Initialize tools normally
         if mode == Mode.LIVE:
             tools, tool_functions = initialize_tools(
