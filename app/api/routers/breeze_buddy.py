@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+from typing import Optional
 from uuid import uuid4
 
 from fastapi import (
@@ -9,7 +10,7 @@ from fastapi import (
     Request,
     WebSocket,
 )
-from starlette.responses import Response
+from starlette.responses import FileResponse, JSONResponse, Response
 from starlette.websockets import WebSocketDisconnect
 
 from app.agents.voice.breeze_buddy.managers.calls import (
@@ -30,6 +31,7 @@ from app.database.accessor import (
     create_lead_call_tracker,
     create_outbound_number,
     disable_outbound_number,
+    get_all_lead_call_trackers,
     get_all_outbound_numbers,
     get_call_execution_config_by_merchant_id,
     get_outbound_number_by_id,
@@ -420,3 +422,65 @@ async def get_call_execution_config(
     except Exception as e:
         logger.error("Error getting call execution config", exc_info=True)
         raise HTTPException(status_code=400, detail="Unexpected error") from e
+
+
+@router.get("/breeze/order-confirmation/dashboard")
+async def get_dashboard():
+    """
+    Serves the dashboard HTML file.
+    """
+    return FileResponse(
+        "app/agents/voice/breeze_buddy/workflows/order_confirmation/dashboard.html"
+    )
+
+
+@router.get("/breeze/order-confirmation/analytics")
+async def get_analytics(
+    start_date: Optional[str] = None, end_date: Optional[str] = None
+):
+    """
+    Provides analytics data for the dashboard.
+    """
+    try:
+        start_datetime = (
+            datetime.fromisoformat(start_date).replace(tzinfo=timezone.utc)
+            if start_date
+            else None
+        )
+        end_datetime = (
+            (
+                datetime.fromisoformat(end_date).replace(tzinfo=timezone.utc)
+                + timedelta(days=1)
+            )
+            if end_date
+            else None
+        )
+    except ValueError as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid date format. Expected ISO format (YYYY-MM-DD): {str(e)}",
+        ) from e
+
+    trackers = await get_all_lead_call_trackers(
+        start_date=start_datetime, end_date=end_datetime
+    )
+
+    analytics = {
+        "calls_attempted": len(trackers),
+        "no_answer": len(
+            [t for t in trackers if t.outcome and t.outcome.value == "NO_ANSWER"]
+        ),
+        "connected_and_busy": len(
+            [t for t in trackers if t.outcome and t.outcome.value == "BUSY"]
+        ),
+        "address_confirmed": len(
+            [t for t in trackers if t.outcome and t.outcome.value == "CONFIRM"]
+        ),
+        "order_cancelled": len(
+            [t for t in trackers if t.outcome and t.outcome.value == "CANCEL"]
+        ),
+        "address_updated": len(
+            [t for t in trackers if t.outcome and t.outcome.value == "ADDRESS_UPDATED"]
+        ),
+    }
+    return JSONResponse(content=analytics)

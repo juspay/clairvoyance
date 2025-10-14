@@ -11,6 +11,7 @@ from app.core.logger import logger
 from app.database.decoder.breeze_buddy.lead_call_tracker import decode_lead_call_tracker
 from app.database.queries import run_parameterized_query
 from app.database.queries.breeze_buddy.lead_call_tracker import (
+    get_all_lead_call_trackers_query,
     get_lead_by_call_id_query,
     get_leads_based_on_status_and_next_attempt_query,
     insert_lead_call_tracker_query,
@@ -208,3 +209,22 @@ async def update_lead_call_completion_details(
     except Exception as e:
         logger.error(f"Error updating lead call completion details: {e}")
         return None
+
+
+async def get_all_lead_call_trackers(
+    start_date: Optional[datetime] = None, end_date: Optional[datetime] = None
+) -> List[LeadCallTracker]:
+    """
+    Get all lead call trackers within a date range.
+    """
+    logger.info("Getting all lead call trackers")
+
+    try:
+        query_text, values = get_all_lead_call_trackers_query(start_date, end_date)
+        result = await run_parameterized_query(query_text, values)
+        if result:
+            return [decode_lead_call_tracker(row) for row in result]
+        return []
+    except Exception as e:
+        logger.error(f"Error getting all lead call trackers: {e}")
+        return []
