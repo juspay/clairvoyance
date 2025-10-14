@@ -7,7 +7,13 @@ from pipecat.adapters.schemas.function_schema import FunctionSchema
 from pipecat.adapters.schemas.tools_schema import ToolsSchema
 from pipecat.services.llm_service import FunctionCallParams
 
-from app.core.config import AWS_VAYU_READ_API_KEY, AWS_VAYU_URL, AWS_VAYU_WRITE_API_KEY, DEFAULT_ANNOUNCEMENT_BANNER_BACKGROUND_COLOR, DEFAULT_ANNOUNCEMENT_BANNER_TEXT_COLOR
+from app.core.config import (
+    AWS_VAYU_READ_API_KEY,
+    AWS_VAYU_URL,
+    AWS_VAYU_WRITE_API_KEY,
+    DEFAULT_ANNOUNCEMENT_BANNER_BACKGROUND_COLOR,
+    DEFAULT_ANNOUNCEMENT_BANNER_TEXT_COLOR,
+)
 from app.core.logger import logger
 from app.core.transport.http_client import create_http_client
 
@@ -592,7 +598,9 @@ async def manage_announcement_banner(params: FunctionCallParams):
         # For fetch action, we only need shop_url
         if action == BannerAction.FETCH:
             # Extract announcement text from config (both keys have the same content)
-            announcement_text = config.get("loginPageAnnouncementText", "")
+            announcement_text = config.get(
+                "loginPageAnnouncementText", ""
+            ) or config.get("announcementBannerText", "")
 
             # Check if announcement is present
             if not announcement_text:
