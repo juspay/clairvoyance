@@ -310,98 +310,12 @@ class OrderConfirmationBot:
         @self.transport.event_handler("on_client_disconnected")
         async def on_client_disconnected(transport, client):
             logger.info(f"Client disconnected: {client}")
-            if not self.conversation_ended:
-                self.conversation_ended = True
-                logger.info(
-                    "Client disconnected unexpectedly. Updating call status directly."
-                )
-                try:
-                    if self.call_sid:
-                        transcription = []
-                        if self.context:
-                            history = self.context.messages
-                            for msg in history:
-                                if (
-                                    isinstance(msg, dict)
-                                    and "role" in msg
-                                    and "content" in msg
-                                    and isinstance(msg["content"], str)
-                                ):
-                                    transcription.append(
-                                        {"role": msg["role"], "content": msg["content"]}
-                                    )
+            await self._handle_unexpected_disconnect("Client disconnected unexpectedly")
 
-                        await self.completion_function(
-                            call_id=self.call_sid,
-                            outcome=(
-                                LeadCallOutcome.BUSY
-                                if self.outcome == "unknown"
-                                else OUTCOME_TO_ENUM.get(self.outcome)
-                            ),
-                            transcription={
-                                "messages": transcription,
-                                "call_sid": self.call_sid,
-                            },
-                            call_end_time=datetime.now(),
-                        )
-                        logger.info(
-                            f"Updated database for call_id: {self.call_sid} with outcome: INTERRUPTED"
-                        )
-                        summary_data = {
-                            "callSid": self.call_sid,
-                            "outcome": (
-                                LeadCallOutcome.BUSY
-                                if self.outcome == "unknown"
-                                else OUTCOME_TO_ENUM.get(self.outcome)
-                            ),
-                            "orderId": self.order_id,
-                        }
-                        if (
-                            self.reporting_webhook_url
-                            and summary_data["outcome"] != LeadCallOutcome.BUSY
-                        ):
-                            try:
-                                payload = json.dumps(
-                                    summary_data, separators=(",", ":")
-                                )
-                                signature = calculate_hmac_sha256(
-                                    payload, ORDER_CONFIRMATION_WEBHOOK_SECRET_KEY
-                                )
-                                headers = {
-                                    "Content-Type": "application/json",
-                                }
-
-                                if signature:
-                                    headers["checksum"] = signature
-
-                                async with self.aiohttp_session.post(
-                                    self.reporting_webhook_url,
-                                    json=summary_data,
-                                    headers=headers,
-                                ) as response:
-                                    if response.status == 200:
-                                        logger.info(
-                                            "Successfully sent call summary webhook on disconnect."
-                                        )
-                                    else:
-                                        response_text = await response.text()
-                                        logger.error(
-                                            f"Failed to send call summary webhook on disconnect. Status: {response.status}, Body: {response_text}"
-                                        )
-                            except Exception as e:
-                                logger.error(
-                                    f"Error sending webhook on disconnect: {e}"
-                                )
-                    else:
-                        logger.warning(
-                            "No call_id found, skipping database update on disconnect."
-                        )
-                except Exception as e:
-                    logger.error(
-                        f"Error during direct DB update on disconnect for call_id {self.call_sid}: {e}"
-                    )
-
-            await self.task.cancel()
+        @self.task.event_handler("on_idle_timeout")
+        async def on_idle_timeout(task):
+            logger.info("Idle timeout detected.")
+            await self._handle_unexpected_disconnect("Idle timeout")
 
         runner = PipelineRunner(handle_sigint=False, force_gc=True)
 
@@ -468,10 +382,20 @@ class OrderConfirmationBot:
         """
 
     async def _end_conversation_handler(self, flow_manager, args):
-        self.conversation_ended = True
-        logger.info(f"Ending conversation with outcome: {self.outcome}")
+        if not self.conversation_ended:
+            self.conversation_ended = True
+            logger.info(f"Ending conversation with outcome: {self.outcome}")
+            await self._finalize_call()
+
+    async def _handle_unexpected_disconnect(self, reason: str):
+        if not self.conversation_ended:
+            self.conversation_ended = True
+            logger.info(f"{reason}. Updating call status directly.")
+            self.outcome = "busy"
+            await self._finalize_call()
+
+    async def _finalize_call(self):
         try:
-            # Prepare transcription and outcome data
             transcription = []
             if self.context:
                 history = self.context.messages
@@ -485,78 +409,61 @@ class OrderConfirmationBot:
                         transcription.append(
                             {"role": msg["role"], "content": msg["content"]}
                         )
-                summary_data = {
-                    "callSid": self.call_sid,
-                    "outcome": OUTCOME_TO_ENUM.get(self.outcome),
-                    "updatedAddress": self.updated_address,
-                    "orderId": self.order_id,
-                }
-                logger.info(f"Call summary data: {summary_data}")
-                if (
-                    self.reporting_webhook_url
-                    and summary_data["outcome"] != LeadCallOutcome.BUSY
-                ):
-                    try:
-                        payload = json.dumps(summary_data, separators=(",", ":"))
-                        signature = calculate_hmac_sha256(
-                            payload, ORDER_CONFIRMATION_WEBHOOK_SECRET_KEY
-                        )
-                        headers = {
-                            "Content-Type": "application/json",
-                        }
 
-                        if signature:
-                            headers["checksum"] = signature
+            call_outcome = OUTCOME_TO_ENUM.get(self.outcome, LeadCallOutcome.BUSY)
 
-                        async with self.aiohttp_session.post(
-                            self.reporting_webhook_url,
-                            json=summary_data,
-                            headers=headers,
-                        ) as response:
-                            if response.status == 200:
-                                logger.info("Successfully sent call summary webhook.")
-                            else:
-                                response_text = await response.text()
-                                logger.error(
-                                    f"Failed to send call summary webhook. Status: {response.status}, Body: {response_text}"
-                                )
-                    except Exception as e:
-                        logger.error(f"Error sending webhook: {e}")
+            summary_data = {
+                "callSid": self.call_sid,
+                "outcome": call_outcome,
+                "updatedAddress": self.updated_address,
+                "orderId": self.order_id,
+            }
+            logger.info(f"Call summary data: {summary_data}")
+
+            if self.reporting_webhook_url and call_outcome != LeadCallOutcome.BUSY:
+                try:
+                    payload = json.dumps(summary_data, separators=(",", ":"))
+                    signature = calculate_hmac_sha256(
+                        payload, ORDER_CONFIRMATION_WEBHOOK_SECRET_KEY
+                    )
+                    headers = {"Content-Type": "application/json"}
+                    if signature:
+                        headers["checksum"] = signature
+
+                    async with self.aiohttp_session.post(
+                        self.reporting_webhook_url, json=summary_data, headers=headers
+                    ) as response:
+                        if response.status == 200:
+                            logger.info("Successfully sent call summary webhook.")
+                        else:
+                            response_text = await response.text()
+                            logger.error(
+                                f"Failed to send call summary webhook. Status: {response.status}, Body: {response_text}"
+                            )
+                except Exception as e:
+                    logger.error(f"Error sending webhook: {e}")
 
             if self.hangup_function:
                 self.hangup_function(self.call_sid)
                 logger.info(f"Call {self.call_sid} hung up successfully.")
 
-            # Update database with call completion
             if self.call_sid:
-                try:
-                    call_outcome = OUTCOME_TO_ENUM.get(self.outcome)
-
-                    if call_outcome:
-                        await self.completion_function(
-                            call_id=self.call_sid,
-                            outcome=call_outcome,
-                            transcription={
-                                "messages": transcription,
-                                "call_sid": self.call_sid,
-                            },
-                            call_end_time=datetime.now(),
-                            updated_address=self.updated_address,
-                        )
-                        logger.info(
-                            f"Updated database for call_id: {self.call_sid} with outcome: {call_outcome}"
-                        )
-                    else:
-                        logger.warning(
-                            f"Unknown outcome '{self.outcome}' for call_id: {self.call_sid}"
-                        )
-
-                except Exception as e:
-                    logger.error(
-                        f"Error updating database for call_id {self.call_sid}: {e}"
-                    )
+                await self.completion_function(
+                    call_id=self.call_sid,
+                    outcome=call_outcome,
+                    transcription={
+                        "messages": transcription,
+                        "call_sid": self.call_sid,
+                    },
+                    call_end_time=datetime.now(),
+                    updated_address=self.updated_address,
+                )
+                logger.info(
+                    f"Updated database for call_id: {self.call_sid} with outcome: {call_outcome}"
+                )
             else:
                 logger.warning("No call_id found, skipping database update")
+
         except Exception as e:
             logger.error(f"Failed to hang up call {self.call_sid}: {str(e)}")
         finally:
