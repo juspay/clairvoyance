@@ -427,7 +427,7 @@ BREEZE_BUDDY_SONIOX_LANGUAGE_HINTS = os.environ.get(
 )
 BREEZE_BUDDY_SONIOX_CONTEXT = os.environ.get(
     "BREEZE_BUDDY_SONIOX_CONTEXT",
-    "State, Yes, Yeah, Good, Time, Yep, Later, Available, Busy, Confirm, Cancel, Repeat",
+    "State, Yes, Yeah, Good, Time, Yep, Later, Available, Busy, Confirm, Repeat, What, Order",
 )
 BREEZE_BUDDY_SONIOX_ENABLE_NON_FINAL_TOKENS = (
     os.environ.get("BREEZE_BUDDY_SONIOX_ENABLE_NON_FINAL_TOKENS", "false").lower()

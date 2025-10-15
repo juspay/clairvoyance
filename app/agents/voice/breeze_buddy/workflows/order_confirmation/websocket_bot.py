@@ -12,6 +12,7 @@ from pipecat.audio.vad.vad_analyzer import VADParams
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
+from pipecat.processors.aggregators.llm_response import LLMUserAggregatorParams
 from pipecat.processors.aggregators.openai_llm_context import OpenAILLMContext
 from pipecat.processors.filters.stt_mute_filter import (
     STTMuteConfig,
@@ -269,7 +270,10 @@ class OrderConfirmationBot:
         )
 
         self.context = OpenAILLMContext(messages)
-        context_aggregator = llm.create_context_aggregator(self.context)
+        user_params = LLMUserAggregatorParams(enable_emulated_vad_interruptions=True)
+        context_aggregator = llm.create_context_aggregator(
+            self.context, user_params=user_params
+        )
 
         pipeline = Pipeline(
             [
@@ -359,6 +363,8 @@ class OrderConfirmationBot:
             - Items: {order_summary}
             - Total Price: {total_price_words}
             - Delivery Address: {address}
+
+            When reading the delivery address, if it contains a pincode (a 6-digit number), you must read it out digit by digit. For example, if the pincode is 123456, say "Pincode is one two three four five six".
 
             Speak in a warm, casual, and human-like tone. Avoid robotic language.
 
