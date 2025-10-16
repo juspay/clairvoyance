@@ -367,19 +367,11 @@ async def run_normal_mode(args):
         daily_params,
     )
 
-    # Configure proxy for WebRTC connections if available
-    proxy_url = get_proxy_config()
-    if proxy_url:
-        logger.info(f"Configuring Daily WebRTC proxy: {proxy_url}")
-        try:
-            # Set proxy URL on the Daily CallClient
-            transport._client._client.set_proxy_url(proxy_url)
-            logger.info("Daily WebRTC proxy configured successfully")
-        except Exception as e:
-            logger.error(f"Failed to configure Daily WebRTC proxy: {e}")
-            # Don't fail initialization - continue without proxy
-    else:
-        logger.debug("Proxy Configuration Skipped.")
+    # Skip proxy configuration for Daily WebRTC connections
+    # WebRTC requires direct internet access and doesn't work through HTTP proxies
+    logger.info(
+        "Skipping proxy configuration for Daily WebRTC - direct connection required"
+    )
 
     stt = get_stt_service(voice_name=voice_name.value)
 

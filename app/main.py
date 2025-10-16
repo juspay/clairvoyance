@@ -76,14 +76,17 @@ async def lifespan(_app: FastAPI):
     except Exception as e:
         logger.error(f"Failed to initialize database: {e}")
 
-    # Initialize aiohttp session with proxy support for Daily API
-    aiohttp_session = create_aiohttp_session()
+    # Initialize aiohttp session WITHOUT proxy for Daily API
+    # Daily.co should not go through proxy as it needs direct WebRTC access
+    import aiohttp
+
+    daily_aiohttp_session = aiohttp.ClientSession()
     daily_helpers["rest"] = DailyRESTHelper(
         daily_api_key=DAILY_API_KEY,
         daily_api_url=DAILY_API_URL,
-        aiohttp_session=aiohttp_session,
+        aiohttp_session=daily_aiohttp_session,
     )
-    logger.info("Daily REST helper initialized with proxy support.")
+    logger.info("Daily REST helper initialized without proxy for WebRTC compatibility.")
 
     # Initialize Daily room pool
     try:
@@ -127,9 +130,9 @@ async def lifespan(_app: FastAPI):
     await cleanup_bot_processes()
     # Close database pool
     await close_db_pool()
-    # Close aiohttp session
-    await aiohttp_session.close()
-    logger.info("Aiohttp session closed.")
+    # Close aiohttp sessions
+    await daily_aiohttp_session.close()
+    logger.info("Aiohttp sessions closed.")
 
 
 app = FastAPI(title="Breeze Automatic Server", version=__version__, lifespan=lifespan)
