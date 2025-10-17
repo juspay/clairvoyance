@@ -44,7 +44,7 @@ def get_chart_visualization_instructions() -> str:
     RULE 3: PATTERN TRIGGERS
 
         1. Payment method breakdown → Donut chart
-        2. Sales by channel/product/category → Donut chart
+        2. Sales by any dimension → Donut chart
         3. Time trends (daily, weekly, monthly) → Line chart
         4. Single metric → Single-stat chart
         5. Multiple series of data → ALWAYS use Line chart (regardless of other patterns)
