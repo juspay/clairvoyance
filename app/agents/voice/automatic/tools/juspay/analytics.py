@@ -1381,9 +1381,7 @@ async def update_euler_offer(params: FunctionCallParams):
                         .get("order", {})
                         .get("min_order_amount", "1")
                     ),
-                    "currency": existing_offer.get("rule_dsl", {})
-                    .get("order", {})
-                    .get("currency", "INR"),
+                    "currency": "INR",
                     "amount_info": existing_offer.get("rule_dsl", {})
                     .get("order", {})
                     .get("amount_info", []),
