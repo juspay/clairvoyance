@@ -144,6 +144,19 @@ GEMINI_SEARCH_RESULT_API_MODEL = os.environ.get(
 STT_PROVIDER = os.environ.get(
     "STT_PROVIDER", "google"
 ).lower()  # "google", "assemblyai", "openai", "deepgram", or "soniox"
+
+# --- STT Fallback Configuration ---
+ENABLE_STT_FALLBACK = (
+    os.environ.get("ENABLE_STT_FALLBACK", "false").lower() == "true"
+)  # Enable automatic fallback to alternative STT providers on failure
+STT_FALLBACK_PROVIDERS = [
+    provider.strip().lower()
+    for provider in os.environ.get(
+        "STT_FALLBACK_PROVIDERS", "deepgram,openai,assemblyai,google"
+    ).split(",")
+    if provider.strip()
+]  # Comma-separated list of fallback providers in priority order
+
 ASSEMBLYAI_API_KEY = os.getenv("ASSEMBLYAI_API_KEY")
 OPENAI_STT_API_KEY = os.getenv("OPENAI_STT_API_KEY")
 OPENAI_STT_MODEL = os.environ.get(

@@ -68,10 +68,18 @@ from app.core.transport.http_client import get_proxy_config
 
 from .processors import LLMSpyProcessor
 from .processors.ptt_vad_filter import PTTVADFilter
+from .processors.stt_error_detector import STTErrorDetector
 from .prompts import get_system_prompt
 from .stt import get_stt_service
 from .tools import initialize_tools
 from .tts import get_tts_service
+
+
+class STTRestartException(Exception):
+    """Exception raised when STT service needs to be restarted with a different provider"""
+
+    pass
+
 
 # Load tool call sound
 tool_call_sound = None
@@ -241,7 +249,7 @@ async def handle_session(session_config):
 
 
 async def run_normal_mode(args):
-    """Run the normal voice agent mode"""
+    """Run the normal voice agent mode with optional STT fallback support"""
     # Validate required arguments for normal mode
     if not args.url or not args.token or not args.session_id:
         logger.error("Missing required arguments for normal mode")
@@ -253,41 +261,68 @@ async def run_normal_mode(args):
         f"Voice agent started with session ID: {args.session_id}, client session ID: {args.client_sid}"
     )
 
-    # Create session context for passing to components
-    session_context = create_session_context(args.session_id)
+    # Route to appropriate implementation based on fallback configuration
+    if config.ENABLE_STT_FALLBACK:
+        logger.info("STT fallback enabled - using fallback mode")
+        await run_with_stt_fallback(args)
+    else:
+        logger.info("STT fallback disabled - using legacy mode")
+        await run_with_single_stt(args)
 
-    # Set global session ID for chart tools
-    set_current_session_id(args.session_id)
 
-    # Decode TTS parameters
-    tts_provider = decode_tts_provider(args.tts_provider)
-    voice_name = decode_voice_name(args.voice_name)
-    mode = decode_mode(args.mode)
+async def run_with_stt_fallback(args):
+    """Run voice agent with STT fallback support"""
+    max_attempts = 1 + len(config.STT_FALLBACK_PROVIDERS)  # Primary + fallbacks
+    logger.info(f"STT fallback: Will try up to {max_attempts} providers if needed")
 
-    # Initialize tools based on the mode and provided tokens
-    # Only pass tokens if in live mode
+    for fallback_attempt in range(max_attempts):
+        try:
+            logger.info(f"STT fallback: Starting attempt #{fallback_attempt}")
 
-    use_breeze_mcp_server = config.ENABLE_BREEZE_MCP and (
-        not config.SHOPS_FOR_BREEZE_MCP  # Empty list = all shops
-        or args.shop_id in config.SHOPS_FOR_BREEZE_MCP  # Specific shops only
+            # Get STT service for current fallback attempt
+            stt = get_stt_service(
+                voice_name=decode_voice_name(args.voice_name).value,
+                fallback_attempt=fallback_attempt,
+            )
+
+            # Run pipeline with fallback enabled
+            result = await run_pipeline_with_stt(args, stt, enable_fallback=True)
+
+            # If we reach here, pipeline completed successfully
+            logger.info("STT fallback: Pipeline completed successfully")
+            return result
+
+        except STTRestartException:
+            logger.info(
+                f"STT fallback: Provider failed, trying next (attempt #{fallback_attempt + 1})"
+            )
+            continue  # Try next provider
+        except Exception as e:
+            logger.error(f"STT fallback: Non-STT error occurred: {e}")
+            raise
+
+    # All providers exhausted
+    logger.error(f"STT fallback: All {max_attempts} providers failed")
+    raise Exception("All STT providers failed")
+
+
+async def run_with_single_stt(args):
+    """Run voice agent with single STT provider (legacy behavior)"""
+    # Get STT service using legacy mode (no fallback)
+    stt = get_stt_service(
+        voice_name=decode_voice_name(args.voice_name).value, fallback_attempt=0
     )
 
-    use_breeze_mcp_server_for_bret = config.ENABLE_BREEZE_MCP_FOR_BRET and (
-        voice_name == VoiceName.BRET
-        and (
-            not config.SHOPS_FOR_BREEZE_MCP
-            or args.shop_id in config.SHOPS_FOR_BREEZE_MCP
-        )
-    )
+    # Run pipeline without fallback
+    return await run_pipeline_with_stt(args, stt, enable_fallback=False)
 
-    # Personalize the system prompt if a user name is provided
-    system_prompt = get_system_prompt(args.user_name, tts_provider, args.shop_id)
 
-    # Configure VAD - use pre-initialized model if available
+def setup_vad_analyzer():
+    """Configure VAD analyzer with pre-initialized model if available"""
     global _silero_vad_cache
     if _silero_vad_cache:
         logger.info("Using pre-initialized Silero VAD model")
-        vad_analyzer = SileroVADAnalyzer(
+        return SileroVADAnalyzer(
             sample_rate=_silero_vad_cache["sample_rate"],
             params=_silero_vad_cache["params"],
         )
@@ -297,23 +332,23 @@ async def run_normal_mode(args):
         vad_params = VADParams(
             confidence=config.VAD_CONFIDENCE,
             start_secs=config.VAD_START_SECS,
-            stop_secs=config.VAD_STOP_SECS,  # Use normal timeout - Smart Turn will intercept and decide
+            stop_secs=config.VAD_STOP_SECS,
             min_volume=config.VAD_MIN_VOLUME,
         )
-
-        vad_analyzer = SileroVADAnalyzer(
+        return SileroVADAnalyzer(
             sample_rate=config.SAMPLE_RATE,
             params=vad_params,
         )
 
-    # Initialize Fal.ai Smart Turn service
+
+async def setup_smart_turn_analyzer():
+    """Initialize Smart Turn analyzer (either Local or Fal.ai)"""
     smart_turn_analyzer = None
     fal_session = None
     fal_smart_turn_service = None
 
     if config.ENABLE_SMART_TURN:
         try:
-            # this can be tuned using sample_rate,vad_window_size,silence_threshold
             smart_turn_analyzer = LocalSmartTurnAnalyzer()
             logger.info("SMART_TURN: Using LocalSmartTurnAnalyzer")
         except Exception as e:
@@ -331,14 +366,11 @@ async def run_normal_mode(args):
                 "SMART_TURN: Fal.ai Smart Turn is enabled but FAL_SMART_TURN_API_KEY is missing; skipping."
             )
 
-    daily_params = DailyParams(
-        audio_in_enabled=True,
-        audio_out_enabled=True,
-        vad_analyzer=None if config.DISABLE_SILERO_VAD else vad_analyzer,
-        turn_analyzer=smart_turn_analyzer,
-    )
+    return smart_turn_analyzer, fal_session, fal_smart_turn_service
 
-    # Audio filter configuration
+
+def setup_audio_filter():
+    """Configure audio filter based on configuration"""
     if config.ENABLE_AIC_FILTER and config.AICOUSTICS_LICENSE_KEY:
         try:
             aic_filter = AICFilter(
@@ -347,27 +379,23 @@ async def run_normal_mode(args):
                 voice_gain=config.AIC_VOICE_GAIN,
                 noise_gate_enable=config.AIC_NOISE_GATE_ENABLE,
             )
-            daily_params.audio_in_filter = aic_filter
             logger.info(
-                f"AIC Filter: ENABLED (enhancement_level={config.AIC_ENHANCEMENT_LEVEL}, voice_gain={config.AIC_VOICE_GAIN}, noise_gate={config.AIC_NOISE_GATE_ENABLE})"
+                f"AIC Filter: ENABLED (enhancement_level={config.AIC_ENHANCEMENT_LEVEL}, "
+                f"voice_gain={config.AIC_VOICE_GAIN}, noise_gate={config.AIC_NOISE_GATE_ENABLE})"
             )
-
+            return aic_filter
         except Exception as e:
             logger.error(f"AIC Filter failed: {e}")
     elif config.ENABLE_NOISE_REDUCE_FILTER:
-        daily_params.audio_in_filter = NoisereduceFilter()
         logger.info("Audio Filter: NoiseReduce Enabled")
+        return NoisereduceFilter()
     else:
         logger.info("No Audio Filter enabled")
+        return None
 
-    transport = DailyTransport(
-        args.url,
-        args.token,
-        "Breeze Automatic Voice Agent",
-        daily_params,
-    )
 
-    # Configure proxy for WebRTC connections if available
+def setup_transport_proxy(transport):
+    """Configure proxy for WebRTC connections if available"""
     proxy_url = get_proxy_config()
     if proxy_url:
         logger.info(f"Configuring Daily WebRTC proxy: {proxy_url}")
@@ -381,22 +409,33 @@ async def run_normal_mode(args):
     else:
         logger.debug("Proxy Configuration Skipped.")
 
-    stt = get_stt_service(voice_name=voice_name.value)
 
-    tts = get_tts_service(
-        tts_provider=tts_provider.value,
-        voice_name=voice_name.value,
-        session_id=args.session_id,
-        enable_chart_text_filter=config.ENABLE_CHARTS,
-    )
-
-    llm = LLMServiceWrapper(
+def create_llm_service():
+    """Create and configure the LLM service"""
+    return LLMServiceWrapper(
         AzureLLMService(
             api_key=config.AZURE_OPENAI_API_KEY,
             endpoint=config.AZURE_OPENAI_ENDPOINT,
             model=config.AZURE_OPENAI_MODEL,
         )
     )
+
+
+async def setup_tools(args, mode, llm, voice_name, tts_provider):
+    """Setup tools based on mode and MCP configuration"""
+    use_breeze_mcp_server = config.ENABLE_BREEZE_MCP and (
+        not config.SHOPS_FOR_BREEZE_MCP  # Empty list = all shops
+        or args.shop_id in config.SHOPS_FOR_BREEZE_MCP  # Specific shops only
+    )
+    use_breeze_mcp_server_for_bret = config.ENABLE_BREEZE_MCP_FOR_BRET and (
+        voice_name == VoiceName.BRET
+        and (
+            not config.SHOPS_FOR_BREEZE_MCP
+            or args.shop_id in config.SHOPS_FOR_BREEZE_MCP
+        )
+    )
+
+    # Personalize the system prompt if a user name is provided
 
     if not use_breeze_mcp_server and not use_breeze_mcp_server_for_bret:
         # Initialize tools normally
@@ -425,6 +464,7 @@ async def run_normal_mode(args):
         for name, function in tool_functions.items():
             logger.info("Initializing the default function tools")
             llm.register_function(name, function)
+        return tools
     else:
         logger.info(f"Initializing tools from remote MCP server")
 
@@ -449,6 +489,103 @@ async def run_normal_mode(args):
             mode=mode,
             args=args,
         )
+        return tools
+
+
+async def run_pipeline_with_stt(args, stt, enable_fallback=False):
+    """Run the voice agent pipeline with the provided STT service"""
+    # Set current session ID for logging context
+    set_current_session_id(args.session_id)
+
+    # Create session context for tools and services
+    session_context = create_session_context(args)
+
+    # Decode TTS configuration
+    tts_provider = decode_tts_provider(args.tts_provider)
+    voice_name = decode_voice_name(args.voice_name)
+    mode = decode_mode(args.mode)
+
+    # Create restart callback for STT error handling
+    restart_callback = None
+    if enable_fallback:
+
+        async def stt_restart_callback():
+            """Callback triggered when STT error is detected - triggers fallback"""
+            logger.info("STT error detected by error detector - triggering fallback")
+            raise STTRestartException("STT service failure detected during runtime")
+
+        restart_callback = stt_restart_callback
+
+    # Build and run the pipeline
+    await build_and_run_pipeline(
+        args=args,
+        session_context=session_context,
+        tts_provider=tts_provider,
+        voice_name=voice_name,
+        mode=mode,
+        stt=stt,
+        restart_callback=restart_callback,
+        enable_stt_fallback=enable_fallback,
+    )
+
+
+async def build_and_run_pipeline(
+    args,
+    session_context,
+    tts_provider,
+    voice_name,
+    mode,
+    stt,
+    restart_callback=None,
+    enable_stt_fallback=False,
+):
+    """Shared pipeline building and execution logic"""
+    # Setup components using helper functions
+    vad_analyzer = setup_vad_analyzer()
+    smart_turn_analyzer, fal_session, fal_smart_turn_service = (
+        await setup_smart_turn_analyzer()
+    )
+    audio_filter = setup_audio_filter()
+
+    # Create Daily transport configuration
+    daily_params = DailyParams(
+        audio_in_enabled=True,
+        audio_out_enabled=True,
+        vad_analyzer=None if config.DISABLE_SILERO_VAD else vad_analyzer,
+        turn_analyzer=smart_turn_analyzer,
+    )
+
+    # Apply audio filter if configured
+    if audio_filter:
+        daily_params.audio_in_filter = audio_filter
+
+    # Create transport
+    transport = DailyTransport(
+        args.url,
+        args.token,
+        "Breeze Automatic Voice Agent",
+        daily_params,
+    )
+
+    # Configure proxy
+    setup_transport_proxy(transport)
+
+    # Create TTS service (STT service is already provided as parameter)
+    tts = get_tts_service(
+        tts_provider=tts_provider.value,
+        voice_name=voice_name.value,
+        session_id=args.session_id,
+        enable_chart_text_filter=config.ENABLE_CHARTS,
+    )
+
+    # Create LLM service
+    llm = create_llm_service()
+
+    # Setup tools
+    tools = await setup_tools(args, mode, llm, voice_name, tts_provider)
+
+    # Get system prompt
+    system_prompt = get_system_prompt(args.user_name, tts_provider, args.shop_id)
 
     rtvi = RTVIProcessor(config=RTVIConfig(config=[]))
 
@@ -505,6 +642,12 @@ async def run_normal_mode(args):
     pipeline_components = [
         transport.input(),
     ]
+
+    # Add STT Error Detector for runtime fallback support
+    if enable_stt_fallback and restart_callback:
+        stt_error_detector = STTErrorDetector(restart_callback, "STTErrorDetector")
+        pipeline_components.append(stt_error_detector)
+        logger.info("STT Error Detector enabled for runtime fallback")
 
     # Add PTT VAD filter only if it's enabled
     if config.DISABLE_VAD_FOR_PTT:
@@ -724,8 +867,15 @@ async def run_normal_mode(args):
             await runner.run(task)
         except asyncio.CancelledError:
             logger.info("Main task cancelled. Exiting gracefully.")
+        except STTRestartException:
+            # Re-raise STT restart exception to trigger fallback
+            logger.info(
+                "STT restart exception detected - propagating to fallback handler"
+            )
+            raise
         except Exception as e:
             logger.error(f"Pipeline runner error: {e}")
+            raise
 
     if config.ENABLE_TRACING:
         langfuse_client = get_client()
