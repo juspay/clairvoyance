@@ -373,7 +373,7 @@ async def _handle_update_surcharge_rule(params: FunctionCallParams):
     # Basic rule validation
     if rules:
         for rule in rules:
-            if not rule.get("rate") or not rule.get("rateType"):
+            if "rate" not in rule or "rateType" not in rule:
                 await params.result_callback(
                     {
                         "success": False,
