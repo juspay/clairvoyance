@@ -648,8 +648,12 @@ class OrderConfirmationBot:
         }
 
     def _create_node_from_config(self, node_name: str) -> NodeConfig:
-        if not hasattr(self, "flow_config"):
+        if node_name == "confirm_address_update":
             self.flow_config = self._get_flow_config()
+        else:
+            # Use cached config for performance on other nodes
+            if not hasattr(self, "flow_config"):
+                self.flow_config = self._get_flow_config()
 
         node_data = self.flow_config["nodes"][node_name]
 
