@@ -15,7 +15,7 @@ jobs:
 
     env:
       AWS_REGION: ap-south-1
-      AWS_BETA_REPO: clairvoyance
+      AWS_BETA_REPO: breeze-clairvoyance
 
     steps:
       - name: Checkout code
