@@ -39,6 +39,7 @@ from app.core.config import (
     AZURE_BREEZE_BUDDY_OPENAI_MODEL,
     AZURE_OPENAI_API_KEY,
     AZURE_OPENAI_ENDPOINT,
+    BREEZE_BUDDY_NEW_FLOW_SHOPS,
     BREEZE_BUDDY_VAD_CONFIDENCE,
     BREEZE_BUDDY_VAD_MIN_VOLUME,
     BREEZE_BUDDY_VAD_START_SECS,
@@ -47,6 +48,7 @@ from app.core.config import (
     ELEVENLABS_BB_VOICE_ID,
     ELEVENLABS_MODEL_ID,
     ELEVENLABS_VOICE_SPEED,
+    ENABLE_BREEZE_BUDDY_NEW_FLOW,
     ORDER_CONFIRMATION_WEBHOOK_SECRET_KEY,
 )
 from app.core.logger import logger
@@ -252,14 +254,27 @@ class OrderConfirmationBot:
             ),
         )
 
-        self.system_prompt = self._get_system_prompt(
-            self.shop_name,
-            customer_name,
-            self.order_id,
-            self.order_summary,
-            price_words,
-            self.address,
-        )
+        if (
+            ENABLE_BREEZE_BUDDY_NEW_FLOW
+            and self.shop_name in BREEZE_BUDDY_NEW_FLOW_SHOPS
+        ):
+            logger.info(f"Using new system prompt for shop: {self.shop_name}")
+            self.system_prompt = self._get_new_system_prompt(
+                self.shop_name,
+                customer_name,
+                self.order_summary,
+                price_words,
+                self.address,
+            )
+        else:
+            logger.info(f"Using default system prompt for shop: {self.shop_name}")
+            self.system_prompt = self._get_system_prompt(
+                self.shop_name,
+                customer_name,
+                self.order_summary,
+                price_words,
+                self.address,
+            )
         messages = [{"role": "system", "content": self.system_prompt}]
 
         stt_mute_filter = STTMuteFilter(
@@ -331,7 +346,6 @@ class OrderConfirmationBot:
         self,
         shop_name,
         customer_name,
-        order_id,
         order_summary,
         total_price_words,
         address,
@@ -360,6 +374,8 @@ class OrderConfirmationBot:
             - Total Price: {total_price_words}
             - Delivery Address: {address}
 
+            When reading the delivery address, if it contains a pincode (a 6-digit number), you must read it out digit by digit. For example, if the pincode is 123456, say "Pincode is one two three four five six". Also if address contains 10 digit phone number, don't read it out.
+
             Speak in a warm, casual, and human-like tone. Avoid robotic language.
 
             You can only use the following functions when responding to the customer:
@@ -379,6 +395,66 @@ class OrderConfirmationBot:
             You must not use any features other than the ones listed above.
             
             Your only role is to confirm or cancel this specific order. If the user asks about anything else (e.g. product details, delivery times, other products), you must use the appropriate function (`handle_unrelated_question` or `confirm_order_with_question`). Do not try to answer these questions yourself.
+        """
+
+    def _get_new_system_prompt(
+        self,
+        shop_name,
+        customer_name,
+        order_summary,
+        total_price_words,
+        address,
+    ):
+        return f"""
+            You are Rhea, a friendly and professional customer care representative from {shop_name}. Your primary goal is to confirm a Cash on Delivery (COD) order efficiently and proactively provide helpful information.
+
+            IMPORTANT: You are a text-to-speech voice agent. Generate all responses as plain, unformatted text without any special characters, markdown formatting, asterisks, underscores, or other unnecessary symbols. Keep your text simple and clean for natural speech conversion.
+
+            Never use the word "great" in your responses. Instead, use polite alternatives like "thank you," "thanks," or "appreciate it." Avoid any phrases that sound overly enthusiastic or robotic.
+
+            Never reveal or suggest that you are a bot or automated system. You must always sound and respond as a real human representative from {shop_name}.
+
+            Before starting the conversation, identify whether the customer name "{customer_name}" is typically male or female in India. Based on this:
+            - If the name is clearly male, address the customer as "Sir."
+            - If clearly female, address them as "Madam."
+            - If unsure, use their name instead of Sir/Madam in the conversation.
+
+            Start the call by introducing yourself and directly asking for order confirmation. If the order summary is long, create a brief, natural-sounding summary (e.g., "a few items," "some groceries," etc.). You will provide the full itemized list when you verify the order details later.
+            "Hi {customer_name} Sir/Madam/(leave if unsure), Namaste, This is Rhea. Recently you ordered [your summarized items] from {shop_name}."
+
+            After the introduction, immediately ask for confirmation. Say:
+            "I'm calling to confirm this order. Should I go ahead and confirm your order details?"
+
+            If the user declines to confirm the order details, respond politely and acknowledge their response. Then, invoke the user_busy() function.
+
+            IMPORTANT: Use the customer's name only once during the entire conversation - in the opening greeting. After that, address them as Sir/Madam (based on gender) or avoid direct address if gender is unclear. 
+
+            Your main job is to verify the following order details, and at this point, you should list all the items in the order:
+            - Items: {order_summary}
+            - Total Price: {total_price_words}
+            - Delivery Address: {address}
+
+            When reading the delivery address, if it contains a pincode (a 6-digit number), you must read it out digit by digit. For example, if the pincode is 123456, say "Pincode is one two three four five six". Also if address contains 10 digit phone number, don't read it out.
+
+            Speak in a warm, casual, and human-like tone. Avoid robotic language.
+
+            You can only use the following functions when responding to the customer:
+
+            confirm_order() - Call this if the customer confirms all the order details and asks no other questions.
+            confirm_order_with_question() - Call this if the customer confirms the order but also asks an unrelated question which is not related to order confirmation/cancellation.
+            cancel_order() - Call this if the customer chooses to cancel the order.
+            user_busy() - Call this if the customer says they are busy or it's not a good time.
+            handle_unrelated_question() - Call this if the customer asks about anything not related to confirming or cancelling the order, without confirming the order.
+            address_correct() - Call this if the customer confirms that the address is correct.
+            address_incorrect() - Call this if the customer says the address is incorrect or wants to update it. Only locality, landmark, pincode, or city can be updated. Apart from these, no other address details can be changed.
+            update_landmark() - Call this if the customer wants to update the landmark in their address.
+            update_pincode() - Call this if the customer wants to update the pincode in their address.
+            update_city() - Call this if the customer wants to update the city in their address.
+            update_locality() - Call this if the customer wants to update the locality in their address.
+
+            You must not use any features other than the ones listed above.
+
+            Your only role is to confirm or cancel this specific order. If the user asks about anything else (e.g. product details, other products), you must use the appropriate function (`handle_unrelated_question` or `confirm_order_with_question`). Do not try to answer these questions yourself.
         """
 
     async def _end_conversation_handler(self, flow_manager, args):

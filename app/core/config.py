@@ -427,7 +427,7 @@ BREEZE_BUDDY_SONIOX_LANGUAGE_HINTS = os.environ.get(
 )
 BREEZE_BUDDY_SONIOX_CONTEXT = os.environ.get(
     "BREEZE_BUDDY_SONIOX_CONTEXT",
-    "State, Yes, Yeah, Good, Time, Yep, Later, Available, Busy, Confirm, Cancel, Repeat",
+    "State, Yes, Yeah, Good, Time, Yep, Later, Available, Busy, Confirm, Repeat, What, Order, कौनसा, ठीक है, हाँ, धन्यवाद, ऑर्डर, पता, समय, फोन, संख्या, बदलना, सही है",
 )
 BREEZE_BUDDY_SONIOX_ENABLE_NON_FINAL_TOKENS = (
     os.environ.get("BREEZE_BUDDY_SONIOX_ENABLE_NON_FINAL_TOKENS", "false").lower()
@@ -440,3 +440,12 @@ BREEZE_BUDDY_SONIOX_VAD_FORCE_TURN_ENDPOINT = (
     os.environ.get("BREEZE_BUDDY_SONIOX_VAD_FORCE_TURN_ENDPOINT", "false").lower()
     == "true"
 )
+
+# Breeze Buddy New Flow
+ENABLE_BREEZE_BUDDY_NEW_FLOW = (
+    os.environ.get("ENABLE_BREEZE_BUDDY_NEW_FLOW", "false").lower() == "true"
+)
+_breeze_buddy_new_flow_shops_str = os.environ.get("BREEZE_BUDDY_NEW_FLOW_SHOPS", "")
+BREEZE_BUDDY_NEW_FLOW_SHOPS = [
+    shop.strip() for shop in _breeze_buddy_new_flow_shops_str.split(",") if shop.strip()
+]
