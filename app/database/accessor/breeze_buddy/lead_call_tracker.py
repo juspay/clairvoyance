@@ -3,7 +3,7 @@ Database accessor functions for the application.
 """
 
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import asyncpg
 
@@ -13,6 +13,7 @@ from app.database.queries import run_parameterized_query
 from app.database.queries.breeze_buddy.lead_call_tracker import (
     get_all_lead_call_trackers_query,
     get_lead_by_call_id_query,
+    get_lead_call_trackers_count_query,
     get_leads_based_on_status_and_next_attempt_query,
     insert_lead_call_tracker_query,
     update_lead_call_completion_details_query,
@@ -212,19 +213,64 @@ async def update_lead_call_completion_details(
 
 
 async def get_all_lead_call_trackers(
-    start_date: Optional[datetime] = None, end_date: Optional[datetime] = None
-) -> List[LeadCallTracker]:
+    start_date: Optional[datetime] = None,
+    end_date: Optional[datetime] = None,
+    outcome: Optional[str] = None,
+    order_id: Optional[str] = None,
+    page: Optional[int] = None,
+    page_size: Optional[int] = None,
+) -> List[Tuple[LeadCallTracker, Optional[str]]]:
     """
-    Get all lead call trackers within a date range.
+    Get all lead call trackers with optional filters and pagination.
     """
-    logger.info("Getting all lead call trackers")
+    logger.info("Getting all lead call trackers with filters and pagination")
+
+    limit = page_size
+    offset = (page - 1) * page_size if page and page_size else None
 
     try:
-        query_text, values = get_all_lead_call_trackers_query(start_date, end_date)
+        query_text, values = get_all_lead_call_trackers_query(
+            start_date=start_date,
+            end_date=end_date,
+            outcome=outcome,
+            order_id=order_id,
+            limit=limit,
+            offset=offset,
+        )
         result = await run_parameterized_query(query_text, values)
         if result:
-            return [decode_lead_call_tracker(row) for row in result]
+            return [
+                (decode_lead_call_tracker(row), row["calling_provider"])
+                for row in result
+            ]
         return []
     except Exception as e:
         logger.error(f"Error getting all lead call trackers: {e}")
         return []
+
+
+async def get_lead_call_trackers_count(
+    start_date: Optional[datetime] = None,
+    end_date: Optional[datetime] = None,
+    outcome: Optional[str] = None,
+    order_id: Optional[str] = None,
+) -> int:
+    """
+    Get the count of all lead call trackers with optional filters.
+    """
+    logger.info("Getting lead call trackers count with filters")
+
+    try:
+        query_text, values = get_lead_call_trackers_count_query(
+            start_date=start_date,
+            end_date=end_date,
+            outcome=outcome,
+            order_id=order_id,
+        )
+        result = await run_parameterized_query(query_text, values)
+        if result and result[0]["count"]:
+            return result[0]["count"]
+        return 0
+    except Exception as e:
+        logger.error(f"Error getting lead call trackers count: {e}")
+        return 0

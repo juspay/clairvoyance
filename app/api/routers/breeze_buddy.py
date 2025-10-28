@@ -2,15 +2,18 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 from uuid import uuid4
 
+import jwt
 from fastapi import (
     APIRouter,
     BackgroundTasks,
     Depends,
     HTTPException,
     Request,
+    Response,
     WebSocket,
 )
-from starlette.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import RedirectResponse
+from starlette.responses import FileResponse, JSONResponse
 from starlette.websockets import WebSocketDisconnect
 
 from app.agents.voice.breeze_buddy.managers.calls import (
@@ -22,18 +25,27 @@ from app.agents.voice.breeze_buddy.managers.calls import (
 from app.agents.voice.breeze_buddy.services.telephony.utils import get_voice_provider
 from app.agents.voice.breeze_buddy.workflows.order_confirmation.types import (
     BreezeOrderData,
+    LoginRequest,
+)
+from app.core.config import (
+    BREEZE_BUDDY_DASHBOARD_PASSWORD,
+    BREEZE_BUDDY_DASHBOARD_USERNAME,
+    BREEZE_BUDDY_SESSION_SECRET_KEY,
+    JWT_ALGORITHM,
 )
 from app.core.logger import logger
-from app.core.security.jwt import get_current_user
+from app.core.security.jwt import get_breeze_buddy_session, get_current_user
 from app.core.transport.http_client import create_aiohttp_session
 from app.database.accessor import (
     create_call_execution_config,
     create_lead_call_tracker,
     create_outbound_number,
     disable_outbound_number,
+    get_all_call_execution_configs,
     get_all_lead_call_trackers,
     get_all_outbound_numbers,
     get_call_execution_config_by_merchant_id,
+    get_lead_call_trackers_count,
     get_outbound_number_by_id,
 )
 from app.schemas import (
@@ -45,6 +57,41 @@ from app.schemas import (
 )
 
 router = APIRouter()
+
+
+@router.get("/login", include_in_schema=False)
+async def get_login_page():
+    return FileResponse(
+        "app/agents/voice/breeze_buddy/workflows/order_confirmation/login.html"
+    )
+
+
+@router.post("/login", include_in_schema=False)
+async def login(login_request: LoginRequest, response: Response):
+    if (
+        login_request.username == BREEZE_BUDDY_DASHBOARD_USERNAME
+        and login_request.password == BREEZE_BUDDY_DASHBOARD_PASSWORD
+    ):
+        session_data = {
+            "username": login_request.username,
+            "exp": datetime.now(timezone.utc) + timedelta(hours=1),
+        }
+        session_cookie = jwt.encode(
+            session_data, BREEZE_BUDDY_SESSION_SECRET_KEY, algorithm=JWT_ALGORITHM
+        )
+        response.set_cookie(key="session", value=session_cookie, httponly=True)
+        return {"message": "Login successful"}
+    raise HTTPException(status_code=401, detail="Invalid credentials")
+
+
+@router.get("/logout", include_in_schema=False)
+async def logout():
+    response = RedirectResponse(url="/agent/voice/breeze-buddy/login")
+    response.delete_cookie("session")
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return response
 
 
 @router.get("/{provider}/callback/details")
@@ -424,23 +471,60 @@ async def get_call_execution_config(
         raise HTTPException(status_code=400, detail="Unexpected error") from e
 
 
-@router.get("/breeze/order-confirmation/dashboard")
-async def get_dashboard():
+@router.get("/breeze/order-confirmation/dashboard", include_in_schema=False)
+async def get_dashboard(session: dict = Depends(get_breeze_buddy_session)):
     """
     Serves the dashboard HTML file.
     """
-    return FileResponse(
+    if not session:
+        return RedirectResponse(url="/agent/voice/breeze-buddy/login")
+    response = FileResponse(
         "app/agents/voice/breeze_buddy/workflows/order_confirmation/dashboard.html"
     )
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return response
 
 
-@router.get("/breeze/order-confirmation/analytics")
+@router.get("/breeze/order-confirmation/outbound-numbers", include_in_schema=False)
+async def get_outbound_numbers_for_dashboard(
+    session: dict = Depends(get_breeze_buddy_session),
+):
+    """
+    Provides all outbound numbers for the dashboard.
+    """
+    if not session:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    return await get_all_outbound_numbers()
+
+
+@router.get(
+    "/breeze/order-confirmation/call-execution-configs",
+    include_in_schema=False,
+)
+async def get_call_execution_configs_for_dashboard(
+    session: dict = Depends(get_breeze_buddy_session),
+):
+    """
+    Provides all call execution configs for the dashboard.
+    """
+    if not session:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    return await get_all_call_execution_configs()
+
+
+@router.get("/breeze/order-confirmation/analytics", include_in_schema=False)
 async def get_analytics(
-    start_date: Optional[str] = None, end_date: Optional[str] = None
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    session: dict = Depends(get_breeze_buddy_session),
 ):
     """
     Provides analytics data for the dashboard.
     """
+    if not session:
+        raise HTTPException(status_code=401, detail="Not authenticated")
     try:
         start_datetime = (
             datetime.fromisoformat(start_date).replace(tzinfo=timezone.utc)
@@ -467,25 +551,113 @@ async def get_analytics(
 
     analytics = {
         "calls_attempted": len(
-            [t for t in trackers if t.status and t.status.value == "FINISHED"]
+            [t for t, _ in trackers if t.status and t.status.value == "FINISHED"]
         ),
         "no_answer": len(
-            [t for t in trackers if t.outcome and t.outcome.value == "NO_ANSWER"]
+            [t for t, _ in trackers if t.outcome and t.outcome.value == "NO_ANSWER"]
         ),
         "connected_and_busy": len(
-            [t for t in trackers if t.outcome and t.outcome.value == "BUSY"]
+            [t for t, _ in trackers if t.outcome and t.outcome.value == "BUSY"]
         ),
         "address_confirmed": len(
-            [t for t in trackers if t.outcome and t.outcome.value == "CONFIRM"]
+            [t for t, _ in trackers if t.outcome and t.outcome.value == "CONFIRM"]
         ),
         "order_cancelled": len(
-            [t for t in trackers if t.outcome and t.outcome.value == "CANCEL"]
+            [t for t, _ in trackers if t.outcome and t.outcome.value == "CANCEL"]
         ),
         "address_updated": len(
-            [t for t in trackers if t.outcome and t.outcome.value == "ADDRESS_UPDATED"]
-        ),
-        "backlog_calls": len(
-            [t for t in trackers if t.status and t.status.value == "BACKLOG"]
+            [
+                t
+                for t, _ in trackers
+                if t.outcome and t.outcome.value == "ADDRESS_UPDATED"
+            ]
         ),
     }
     return JSONResponse(content=analytics)
+
+
+@router.get("/breeze/order-confirmation/call-details", include_in_schema=False)
+async def get_call_details(
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    page: int = 1,
+    page_size: int = 10,
+    outcome: Optional[str] = None,
+    order_id: Optional[str] = None,
+    session: dict = Depends(get_breeze_buddy_session),
+):
+    """
+    Provides paginated call details for the dashboard.
+    """
+    if not session:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    # Validate pagination parameters
+    if page_size < 1 or page_size > 100:
+        raise HTTPException(
+            status_code=400, detail="Page size must be between 1 and 100"
+        )
+
+    try:
+        start_datetime = (
+            datetime.fromisoformat(start_date).replace(tzinfo=timezone.utc)
+            if start_date
+            else None
+        )
+        end_datetime = (
+            (
+                datetime.fromisoformat(end_date).replace(tzinfo=timezone.utc)
+                + timedelta(days=1)
+            )
+            if end_date
+            else None
+        )
+    except ValueError as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid date format. Expected ISO format (YYYY-MM-DD): {str(e)}",
+        ) from e
+
+    total_items = await get_lead_call_trackers_count(
+        start_date=start_datetime,
+        end_date=end_datetime,
+        outcome=outcome,
+        order_id=order_id,
+    )
+
+    trackers = await get_all_lead_call_trackers(
+        start_date=start_datetime,
+        end_date=end_datetime,
+        outcome=outcome,
+        order_id=order_id,
+        page=page,
+        page_size=page_size,
+    )
+
+    total_pages = (total_items + page_size - 1) // page_size
+
+    items = []
+    for t, calling_provider in trackers:
+        items.append(
+            {
+                "id": t.id,
+                "order_id": t.payload.get("order_id"),
+                "customer_name": t.payload.get("customer_name"),
+                "shop_name": t.payload.get("shop_name"),
+                "customer_mobile_number": t.payload.get("customer_mobile_number"),
+                "outcome": t.outcome.value if t.outcome else "N/A",
+                "created_at": t.call_initiated_time,
+                "call_id": t.call_id,
+                "recording_url": t.recording_url,
+                "transcript": t.metaData.get("transcription") if t.metaData else None,
+                "calling_provider": calling_provider,
+            }
+        )
+
+    return {
+        "total_items": total_items,
+        "total_pages": total_pages,
+        "page": page,
+        "page_size": page_size,
+        "items": items,
+    }
