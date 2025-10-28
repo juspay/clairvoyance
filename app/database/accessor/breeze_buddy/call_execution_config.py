@@ -14,6 +14,7 @@ from app.database.decoder.breeze_buddy.call_execution_config import (
 )
 from app.database.queries import run_parameterized_query
 from app.database.queries.breeze_buddy.call_execution_config import (
+    get_all_call_execution_configs_query,
     get_call_execution_config_by_merchant_id_query,
     insert_call_execution_config_query,
 )
@@ -94,4 +95,27 @@ async def get_call_execution_config_by_merchant_id(
 
     except Exception as e:
         logger.error(f"Error getting call execution config by merchant ID: {e}")
+        return []
+
+
+async def get_all_call_execution_configs() -> List[CallExecutionConfig]:
+    """
+    Get all call execution configs.
+    """
+    logger.info("Getting all call execution configs")
+
+    try:
+        query_text, values = get_all_call_execution_configs_query()
+        result = await run_parameterized_query(query_text, values)
+
+        if result:
+            decoded_result = decode_call_execution_config_list(result)
+            logger.info(f"Found {len(decoded_result)} call execution configs")
+            return decoded_result
+
+        logger.info("No call execution configs found")
+        return []
+
+    except Exception as e:
+        logger.error(f"Error getting all call execution configs: {e}")
         return []

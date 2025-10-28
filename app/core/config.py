@@ -427,7 +427,7 @@ BREEZE_BUDDY_SONIOX_LANGUAGE_HINTS = os.environ.get(
 )
 BREEZE_BUDDY_SONIOX_CONTEXT = os.environ.get(
     "BREEZE_BUDDY_SONIOX_CONTEXT",
-    "State, Yes, Yeah, Good, Time, Yep, Later, Available, Busy, Confirm, Repeat, What, Order",
+    "State, Yes, Yeah, Good, Time, Yep, Later, Available, Busy, Confirm, Repeat, What, Order, कौनसा, ठीक है, हाँ, धन्यवाद, ऑर्डर, पता, समय, फोन, संख्या, बदलना, सही है",
 )
 BREEZE_BUDDY_SONIOX_ENABLE_NON_FINAL_TOKENS = (
     os.environ.get("BREEZE_BUDDY_SONIOX_ENABLE_NON_FINAL_TOKENS", "false").lower()
@@ -440,3 +440,8 @@ BREEZE_BUDDY_SONIOX_VAD_FORCE_TURN_ENDPOINT = (
     os.environ.get("BREEZE_BUDDY_SONIOX_VAD_FORCE_TURN_ENDPOINT", "false").lower()
     == "true"
 )
+
+# Dashboard Authentication
+BREEZE_BUDDY_DASHBOARD_USERNAME = os.getenv("BREEZE_BUDDY_DASHBOARD_USERNAME", "")
+BREEZE_BUDDY_DASHBOARD_PASSWORD = os.getenv("BREEZE_BUDDY_DASHBOARD_PASSWORD", "")
+BREEZE_BUDDY_SESSION_SECRET_KEY = os.getenv("BREEZE_BUDDY_SESSION_SECRET_KEY", "")

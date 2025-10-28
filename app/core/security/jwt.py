@@ -8,6 +8,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.core.config import (
     AUTOMATIC_CONNECT_BLOCKED_ORIGINS,
+    BREEZE_BUDDY_SESSION_SECRET_KEY,
     ENABLE_LIGHTHOUSE_AUTH,
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES,
     JWT_ALGORITHM,
@@ -289,3 +290,16 @@ async def validate_automatic_request(raw_request: Request) -> Optional[Dict[str,
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Error processing request body",
         )
+
+
+async def get_breeze_buddy_session(request: Request):
+    session_cookie = request.cookies.get("session")
+    if not session_cookie:
+        return None
+    try:
+        payload = jwt.decode(
+            session_cookie, BREEZE_BUDDY_SESSION_SECRET_KEY, algorithms=[JWT_ALGORITHM]
+        )
+        return payload
+    except jwt.PyJWTError:
+        return None

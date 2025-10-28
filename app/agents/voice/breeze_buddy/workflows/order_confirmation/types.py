@@ -22,3 +22,8 @@ class BreezeOrderData(BaseModel):
     order_id: str
     identity: str | None = None
     reporting_webhook_url: str | None = None
+
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str

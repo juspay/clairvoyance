@@ -1,5 +1,3 @@
-import json
-
 from pipecat.services.google.stt import GoogleSTTService
 from pipecat.services.openai.stt import OpenAISTTService
 from pipecat.services.soniox.stt import SonioxInputParams, SonioxSTTService

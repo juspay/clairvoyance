@@ -70,3 +70,12 @@ def get_call_execution_config_by_merchant_id_query(
     text = f'SELECT * FROM "{CALL_EXECUTION_CONFIG_TABLE}" WHERE "merchant_id" = $1;'
     values = [merchant_id]
     return text, values
+
+
+def get_all_call_execution_configs_query() -> Tuple[str, List[Any]]:
+    """
+    Generate query to get all call execution configs.
+    """
+    text = f'SELECT * FROM "{CALL_EXECUTION_CONFIG_TABLE}";'
+    values: List[Any] = []
+    return text, values
