@@ -207,6 +207,21 @@ def get_all_lead_call_trackers_query(
     return text, values
 
 
+def get_leads_by_status_and_time_before_query(
+    status: LeadCallStatus, time: datetime
+) -> Tuple[str, List[Any]]:
+    """
+    Generate query to select leads based on their status and a time before which they were initiated.
+    """
+    text = f"""
+        SELECT * FROM "{LEAD_CALL_TRACKER_TABLE}"
+        WHERE "status" = $1
+        AND "call_initiated_time" < $2;
+    """
+    values = [status.value, time]
+    return text, values
+
+
 def get_lead_call_trackers_count_query(
     start_date: Optional[datetime] = None,
     end_date: Optional[datetime] = None,

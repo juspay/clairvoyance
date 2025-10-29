@@ -14,6 +14,7 @@ from .breeze_buddy.lead_call_tracker import (
     get_lead_by_call_id,
     get_lead_call_trackers_count,
     get_leads_based_on_status_and_next_attempt,
+    get_leads_by_status_and_time_before,
     update_lead_call_completion_details,
     update_lead_call_details,
     update_lead_call_recording_url,
@@ -47,4 +48,5 @@ __all__ = [
     "update_lead_call_recording_url",
     "get_all_lead_call_trackers",
     "get_lead_call_trackers_count",
+    "get_leads_by_status_and_time_before",
 ]

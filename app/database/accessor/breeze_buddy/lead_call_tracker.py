@@ -15,6 +15,7 @@ from app.database.queries.breeze_buddy.lead_call_tracker import (
     get_lead_by_call_id_query,
     get_lead_call_trackers_count_query,
     get_leads_based_on_status_and_next_attempt_query,
+    get_leads_by_status_and_time_before_query,
     insert_lead_call_tracker_query,
     update_lead_call_completion_details_query,
     update_lead_call_details_query,
@@ -246,6 +247,25 @@ async def get_all_lead_call_trackers(
         return []
     except Exception as e:
         logger.error(f"Error getting all lead call trackers: {e}")
+        return []
+
+
+async def get_leads_by_status_and_time_before(
+    status: LeadCallStatus, time: datetime
+) -> List[LeadCallTracker]:
+    """
+    Get leads based on their status and a time before which they were initiated.
+    """
+    logger.info(f"Getting leads with status {status} initiated before {time}")
+
+    try:
+        query_text, values = get_leads_by_status_and_time_before_query(status, time)
+        result = await run_parameterized_query(query_text, values)
+        if result:
+            return [decode_lead_call_tracker(row) for row in result]
+        return []
+    except Exception as e:
+        logger.error(f"Error getting leads: {e}")
         return []
 
 
