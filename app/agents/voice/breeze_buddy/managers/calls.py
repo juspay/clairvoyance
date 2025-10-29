@@ -17,6 +17,7 @@ from app.database.accessor import (
     get_call_execution_config_by_merchant_id,
     get_lead_by_call_id,
     get_leads_based_on_status_and_next_attempt,
+    get_leads_by_status_and_time_before,
     get_outbound_number_based_on_status_and_provider,
     get_outbound_number_by_id,
     update_lead_call_completion_details,
@@ -174,10 +175,45 @@ async def _retry_call(
                     logger.error(f"Error sending webhook on no_answer: {e}")
 
 
+async def _cleanup_stuck_leads():
+    """
+    Cleans up leads that are stuck in the PROCESSING state.
+    """
+    logger.info("Cleaning up stuck leads...")
+    stale_time = datetime.now(timezone.utc) - timedelta(minutes=10)
+    stale_leads = await get_leads_by_status_and_time_before(
+        LeadCallStatus.PROCESSING, stale_time
+    )
+
+    logger.info(f"Found {len(stale_leads)} stuck leads to clean up.")
+
+    for lead in stale_leads:
+        logger.info(f"Found stuck lead: {lead.id}")
+
+        # Close the stuck record so it won't be picked again
+        await update_lead_call_completion_details(
+            id=lead.id,
+            status=LeadCallStatus.FINISHED,
+            outcome=LeadCallOutcome.UNKNOWN,
+            meta_data={"cleanup": "stuck_processing_timeout"},
+            call_end_time=datetime.now(timezone.utc),
+        )
+
+        outbound_number = await get_outbound_number_by_id(lead.outbound_number_id)
+        if outbound_number:
+            await _release_number(outbound_number.id, outbound_number.provider)
+
+        config = await _get_lead_config(lead)
+        if config:
+            await _retry_call(lead, config, LeadCallOutcome.UNKNOWN)
+
+
 async def process_backlog_leads():
     """
     Processes backlog leads and initiates calls.
     """
+    await _cleanup_stuck_leads()
+
     logger.info("Processing backlog leads...")
     leads = await get_leads_based_on_status_and_next_attempt(
         LeadCallStatus.BACKLOG, datetime.now(timezone.utc)
