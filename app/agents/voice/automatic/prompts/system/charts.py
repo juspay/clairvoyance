@@ -79,10 +79,22 @@ def get_chart_visualization_instructions() -> str:
         6. Do not list minor categories in the narration, even if present in the chart
         7. Voice descriptions must stay short (2–3 sentences max), focusing on key insights
 
-    RULE 8: WEEKLY COMPARISON X-AXIS STANDARDIZATION
-        For weekly trend comparisons or weekly data analysis:
-        1. ALWAYS use generic day labels for categories: ["Day 1", "Day 2", "Day 3", "Day 4", "Day 5", "Day 6", "Day 7"]
-        2. NEVER use actual dates (e.g., "2024-01-01", "Jan 1") for weekly comparisons
+    RULE 8: X-AXIS LABELING FOR SINGLE-SERIES LINE CHARTS
+        1. Use actual dates or time labels (e.g., "Jan 1", "2024-01-01")
+        2. NEVER use "Day 1", "Day 2" format
+
+    RULE 9: PERIOD-OVER-PERIOD COMPARISON CHARTS
+        1. Applies when comparing 2+ time periods (e.g., "Current" vs "Previous Period")
+        2. Include ALL periods as separate lines in ONE chart - never omit periods or create separate charts
+        3. X-axis: Generic labels based on granularity - ["Day 1"..."Day N"], ["Week 1"..."Week N"], or ["Month 1"..."Month N"] where N = longest period. NEVER use actual dates
+        4. Unequal lengths: Use null for missing data points; never truncate longer series
+        5. If only one period exists → use Rule 8 instead
+
+    RULE 10: SINGLE DATA POINT HANDLING
+        1. Exactly one (category, value) pair OR one time period with one metric → Single-stat chart
+        2. Never use line/bar/donut charts for single data points (unless charting fails - see RULE 5)
+        3. Multiple metrics at one time point ≠ time-series; use bar/donut for comparison or Single-stat for primary metric
+
 {hitl_rule}
         """
     return ""
