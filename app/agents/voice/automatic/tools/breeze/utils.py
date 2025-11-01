@@ -247,7 +247,7 @@ def remove_html_tags(html_text: str) -> str:
 
 # Surcharge-specific utility functions
 def detect_surcharge_rule_overlaps(
-    new_rules, existing_rules, payment_type, payment_method_type, payment_method
+    new_rules, existing_rules, payment_type, payment_method_type
 ):
     """
     Check if new rules overlap with existing rules OR within themselves for the same payment type and method type.
@@ -259,7 +259,6 @@ def detect_surcharge_rule_overlaps(
         for r in existing_rules
         if r.get("paymentType") == payment_type
         and r.get("paymentMethodType") == payment_method_type
-        and r.get("paymentMethod") == payment_method
     ]
 
     overlaps = []
@@ -315,7 +314,6 @@ def detect_surcharge_rule_overlaps(
         for r in temp_rules
         if r.get("paymentType") == payment_type
         and r.get("paymentMethodType", payment_method_type) == payment_method_type
-        and r.get("paymentMethod") == payment_method
     ]
     sorted_rules = sorted(filtered_rules, key=lambda x: x.get("minimumOrderValue", 0))
 
@@ -342,9 +340,9 @@ def surcharge_rule_template(
     min_val,
     max_val,
     rate,
-    rate_type="AMOUNT",
-    payment_method="CASH",
-    payment_method_type="CASH",
+    rate_type,
+    payment_method_type,
+    payment_method="*",
 ):
     """Helper function to create a surcharge rule with standard fields."""
     return {
@@ -361,9 +359,7 @@ def surcharge_rule_template(
     }
 
 
-def process_surcharge_input_rules(
-    rules, payment_type, payment_method_type, payment_method
-):
+def process_surcharge_input_rules(rules, payment_type, payment_method_type):
     """
     SMART auto-completion handler for user rules:
 
@@ -391,7 +387,6 @@ def process_surcharge_input_rules(
             first_rule_min - 0.01,
             0,
             "AMOUNT",
-            payment_method,
             payment_method_type,
         )
         result.append(no_surcharge_rule)
@@ -404,8 +399,7 @@ def process_surcharge_input_rules(
             rule.get("maximumOrderValue"),
             rule.get("rate"),
             rule.get("rateType", "AMOUNT"),
-            payment_method,  # Use derived value directly
-            payment_method_type,  # Use derived value directly
+            payment_method_type,
         )
         result.append(new_rule)
 
@@ -438,7 +432,6 @@ def process_surcharge_input_rules(
                 None,
                 0,
                 "AMOUNT",
-                payment_method,
                 payment_method_type,
             )
             result.append(unlimited_rule)
@@ -446,9 +439,7 @@ def process_surcharge_input_rules(
     return result
 
 
-def validate_and_process_surcharge_rules(
-    rules, payment_type, payment_method_type, payment_method
-):
+def validate_and_process_surcharge_rules(rules, payment_type, payment_method_type):
     """
     Validate, process and convert surcharge rules in one function:
     1. Check for overlaps in user input
@@ -463,7 +454,7 @@ def validate_and_process_surcharge_rules(
 
     # Check for overlaps (both internal and with existing - using empty existing rules for internal check)
     has_overlaps, overlap_details = detect_surcharge_rule_overlaps(
-        rules, [], payment_type, payment_method_type, payment_method
+        rules, [], payment_type, payment_method_type
     )
     if has_overlaps:
         error_msg = f"Rules have overlaps: {'; '.join(overlap_details)}"
@@ -476,7 +467,6 @@ def validate_and_process_surcharge_rules(
         for r in temp_rules
         if r.get("paymentType") == payment_type
         and r.get("paymentMethodType") == payment_method_type
-        and r.get("paymentMethod") == payment_method
     ]
 
     if payment_rules:
@@ -504,7 +494,7 @@ def validate_and_process_surcharge_rules(
 
     # Process rules (fix boundaries and auto-complete)
     processed_rules = process_surcharge_input_rules(
-        rules, payment_type, payment_method_type, payment_method
+        rules, payment_type, payment_method_type
     )
 
     # Convert to API format (inline conversion logic)

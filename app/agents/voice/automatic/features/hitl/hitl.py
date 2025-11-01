@@ -97,13 +97,12 @@ class HITLManager:
         """Send confirmation request to user and wait for response"""
         action_type = get_action_description(function_name)
 
-        # Flatten manage_surcharge_tools arguments for better display
+        # Flatten manage_vayu_surcharge arguments for better display
         display_arguments = {}
-        if function_name == "manage_surcharge_tools":
+        if function_name == "manage_vayu_surcharge":
             # Remove complex nested rules and add simple fields like offer tool
             rules = arguments.get("rules", [])
             if rules:
-                # Add flattened fields like offer tool
                 for i, rule in enumerate(rules):
                     prefix = f"RULE {i+1} " if len(rules) > 1 else ""
                     display_arguments[f"{prefix}Rate"] = rule.get("rate", 0)
