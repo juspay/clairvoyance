@@ -7,6 +7,7 @@ from typing import Optional
 
 from dotenv import load_dotenv
 from fastapi import WebSocket
+from opentelemetry import trace
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.vad.vad_analyzer import VADParams
 from pipecat.pipeline.pipeline import Pipeline
@@ -30,6 +31,10 @@ from pipecat_flows import FlowManager, FlowsFunctionSchema, NodeConfig
 from pydantic import ValidationError
 from pydub import AudioSegment
 
+from app.agents.voice.breeze_buddy.analytics.tracing_setup import (
+    auto_trace,
+    setup_tracing,
+)
 from app.agents.voice.breeze_buddy.workflows.order_confirmation.types import OrderData
 from app.agents.voice.breeze_buddy.workflows.order_confirmation.utils import (
     OUTCOME_TO_ENUM,
@@ -48,6 +53,7 @@ from app.core.config import (
     ELEVENLABS_BB_VOICE_ID,
     ELEVENLABS_MODEL_ID,
     ELEVENLABS_VOICE_SPEED,
+    ENABLE_BREEZE_BUDDY_TRACING,
     ORDER_CONFIRMATION_WEBHOOK_SECRET_KEY,
 )
 from app.core.logger import logger
@@ -228,6 +234,8 @@ class OrderConfirmationBot:
                 audio_out_enabled=True,
                 add_wav_header=False,
                 vad_analyzer=self.vad_analyzer,
+                audio_in_sample_rate=8000,  # Move audio config to transport level
+                audio_out_sample_rate=8000,  # Move audio config to transport level
                 serializer=(
                     self.serializer(stream_sid, self.call_sid)
                     if self.serializer
@@ -287,17 +295,25 @@ class OrderConfirmationBot:
                 context_aggregator.assistant(),
             ]
         )
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        conversation_id = f"{customer_name}-{self.shop_name}-{timestamp}"
 
-        self.task = PipelineTask(
-            pipeline,
-            params=PipelineParams(
+        # Create task parameters and initialize task (audio config moved to transport level)
+        task_params = {
+            "params": PipelineParams(
                 allow_interruptions=True,
-                audio_in_sample_rate=8000,
-                audio_out_sample_rate=8000,
                 enable_metrics=True,
                 enable_usage_metrics=True,
             ),
-        )
+        }
+
+        # Only add tracing parameters when tracing is enabled
+        if ENABLE_BREEZE_BUDDY_TRACING:
+            setup_tracing("breeze-buddy")
+            task_params["conversation_id"] = conversation_id
+            task_params["enable_tracing"] = True
+
+        self.task = PipelineTask(pipeline, **task_params)
 
         self.flow_manager = FlowManager(
             task=self.task,
@@ -329,7 +345,31 @@ class OrderConfirmationBot:
             except asyncio.CancelledError:
                 logger.info("Main task cancelled. Exiting gracefully.")
 
-        await run_pipeline()
+        if ENABLE_BREEZE_BUDDY_TRACING:
+            tracer = trace.get_tracer(__name__)
+
+            with tracer.start_as_current_span(conversation_id) as root_span:
+                logger.info(
+                    f"Starting Langfuse trace for Breeze Buddy conversation: {conversation_id}"
+                )
+
+                root_span.set_attribute("conversation.id", conversation_id)
+                root_span.set_attribute("conversation.type", "phone-call")
+                root_span.set_attribute("user.name", customer_name)
+                root_span.set_attribute("service.name", "breeze-buddy")
+                root_span.set_attribute("call_sid", self.call_sid)
+                root_span.set_attribute("order_id", self.order_id)
+                root_span.set_attribute("shop_name", self.shop_name)
+                root_span.set_attribute("provider", self.provider)
+                root_span.set_attribute("workflow.type", "order-confirmation")
+
+                await run_pipeline()
+        else:
+            # Run pipeline without tracing when tracing is disabled
+            logger.info(
+                f"Running pipeline without tracing for conversation: {conversation_id}"
+            )
+            await run_pipeline()
 
     def _get_system_prompt(
         self,
@@ -664,12 +704,14 @@ class OrderConfirmationBot:
             post_actions=node_data.get("post_actions", []),
         )
 
+    @auto_trace("confirm_order")
     async def _confirm_order_handler(self):
         logger.info("Order confirmed. Transitioning to confirmation node.")
         if self.outcome != "address_updated":
             self.outcome = "confirmed"
         return {}, self._create_node_from_config("order_confirmation_and_end")
 
+    @auto_trace("confirm_order_with_question")
     async def _confirm_order_with_question_handler(self):
         logger.info(
             "Order confirmed with an unrelated question. Transitioning to custom end node."
@@ -680,16 +722,19 @@ class OrderConfirmationBot:
             "order_confirmation_with_question_and_end"
         )
 
+    @auto_trace("cancel_order")
     async def _deny_order_handler(self):
         logger.info("Order denied. Transitioning to cancellation node.")
         self.outcome = "cancelled"
         return {}, self._create_node_from_config("order_cancellation_and_end")
 
+    @auto_trace("user_busy")
     async def _user_busy_handler(self):
         logger.info("User is busy. Transitioning to busy node.")
         self.outcome = "busy"
         return {}, self._create_node_from_config("user_busy_and_end")
 
+    @auto_trace("handle_unrelated_question")
     async def _handle_unrelated_question_handler(self):
         logger.info("User asked an unrelated question. Steering back to confirmation.")
         return {}, self._create_node_from_config("handle_unrelated_question")
@@ -697,10 +742,12 @@ class OrderConfirmationBot:
     def _create_initial_node(self) -> NodeConfig:
         return self._create_node_from_config("initial")
 
+    @auto_trace("address_correct")
     async def _handle_address_correct(self):
         logger.info("Address confirmed. Proceeding to final order confirmation.")
         return {}, self._create_node_from_config("final_order_confirmation")
 
+    @auto_trace("address_incorrect")
     async def _handle_address_incorrect(self):
         logger.info("Address incorrect. Proceeding to update address.")
         return {}, self._create_node_from_config("update_address")
@@ -733,24 +780,28 @@ class OrderConfirmationBot:
 
         return clean_value
 
+    @auto_trace("update_landmark")
     async def _handle_landmark(self, landmark: str):
         logger.info(f"Updating landmark to: {landmark}")
         clean_value = self._update_address_field("landmark", landmark, "landmark")
         logger.info(f"Updated landmark to: {clean_value}")
         return {}, self._create_node_from_config("confirm_address_update")
 
+    @auto_trace("update_pincode")
     async def _handle_pincode(self, pincode: str):
         logger.info(f"Updating pincode to: {pincode}")
         clean_value = self._update_address_field("pincode", pincode, "pincode")
         logger.info(f"Updated pincode to: {clean_value}")
         return {}, self._create_node_from_config("confirm_address_update")
 
+    @auto_trace("update_city")
     async def _handle_city(self, city: str):
         logger.info(f"Updating city to: {city}")
         clean_value = self._update_address_field("city", city, "city")
         logger.info(f"Updated city to: {clean_value}")
         return {}, self._create_node_from_config("confirm_address_update")
 
+    @auto_trace("update_locality")
     async def _handle_locality(self, locality: str):
         logger.info(f"Updating locality to: {locality}")
         clean_value = self._update_address_field("locality", locality, "locality")
