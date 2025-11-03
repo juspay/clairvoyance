@@ -280,7 +280,7 @@ async def trigger_order_confirmation(
     try:
         # Get call execution config
         call_execution_configs = await get_call_execution_config_by_merchant_id(
-            identity.value
+            identity.value, order.shop_identifier
         )
         if not call_execution_configs:
             raise HTTPException(
@@ -320,6 +320,7 @@ async def trigger_order_confirmation(
             id=uuid,
             merchant_id=identity,
             workflow=workflow,
+            shop_identifier=order.shop_identifier,
             next_attempt_at=next_attempt_at,
             payload=call_payload,
             attempt_count=0,
@@ -410,6 +411,8 @@ async def add_call_execution_config(
             calling_provider=config.calling_provider,
             merchant_id=config.merchant_id,
             workflow=config.workflow,
+            shop_identifier=config.shop_identifier,
+            enable_international_call=config.enable_international_call,
         )
 
         if call_execution_config:

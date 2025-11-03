@@ -2,7 +2,7 @@ import asyncio
 import audioop
 import base64
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from dotenv import load_dotenv
@@ -60,7 +60,7 @@ from app.core.config import (
 from app.core.logger import logger
 from app.core.security.sha import calculate_hmac_sha256
 from app.database.accessor import get_lead_by_call_id
-from app.schemas import CallProvider, LeadCallOutcome
+from app.schemas import CallProvider, LeadCallOutcome, RequestedBy
 
 load_dotenv(override=True)
 
@@ -94,6 +94,7 @@ class OrderConfirmationBot:
         self.completion_function = completion_function
         self.vad_analyzer = None
         self.transport = None
+        self.lead = None
 
     async def run(self):
         logger.info("Starting WebSocket bot")
@@ -159,6 +160,7 @@ class OrderConfirmationBot:
             logger.error(f"Could not find lead for call_sid: {self.call_sid}")
             return
 
+        self.lead = lead
         call_payload = lead.payload
         self.order_id = call_payload.get("order_id", "N/A")
         customer_name = call_payload.get("customer_name", "Valued Customer")
@@ -461,12 +463,21 @@ class OrderConfirmationBot:
 
             call_outcome = OUTCOME_TO_ENUM.get(self.outcome, LeadCallOutcome.BUSY)
 
+            call_duration = None
+            if self.lead and self.lead.call_initiated_time:
+                call_duration = (
+                    datetime.now(timezone.utc) - self.lead.call_initiated_time
+                ).total_seconds()
+
             summary_data = {
                 "callSid": self.call_sid,
                 "outcome": call_outcome,
                 "updatedAddress": self.updated_address,
                 "orderId": self.order_id,
             }
+            if self.lead.merchant_id != RequestedBy.BREEZE:
+                summary_data["attemptCount"] = self.lead.attempt_count + 1
+                summary_data["callDuration"] = call_duration
             logger.info(f"Call summary data: {summary_data}")
 
             if self.reporting_webhook_url and call_outcome != LeadCallOutcome.BUSY:

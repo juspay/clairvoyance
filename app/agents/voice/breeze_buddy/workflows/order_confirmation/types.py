@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Optional
 
 from pydantic import BaseModel
 
@@ -14,6 +14,7 @@ class OrderData(BaseModel):
 
 class BreezeOrderData(BaseModel):
     customer_mobile_number: str
+    shop_identifier: Optional[str] = None
     shop_name: str
     order_data: OrderData
     total_price: float

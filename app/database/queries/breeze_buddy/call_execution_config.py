@@ -3,7 +3,7 @@ Database query functions for the application.
 """
 
 from datetime import datetime, time
-from typing import Any, List, Tuple
+from typing import Any, List, Optional, Tuple
 
 from app.schemas import CallProvider, Workflow
 
@@ -22,6 +22,8 @@ def insert_call_execution_config_query(
     calling_provider: CallProvider,
     merchant_id: str,
     workflow: Workflow,
+    shop_identifier: Optional[str],
+    enable_international_call: bool,
 ) -> Tuple[str, List[Any]]:
     """
     Generate query to insert call execution config record.
@@ -38,10 +40,12 @@ def insert_call_execution_config_query(
             "calling_provider",
             "merchant_id",
             "workflow",
+            "shop_identifier",
+            "enable_international_call",
             "created_at",
             "updated_at"
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *;
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING *;
     """
 
     values = [
@@ -54,6 +58,8 @@ def insert_call_execution_config_query(
         calling_provider.value,
         merchant_id,
         workflow.value,
+        shop_identifier,
+        enable_international_call,
         datetime.now(),
         datetime.now(),
     ]
@@ -63,12 +69,17 @@ def insert_call_execution_config_query(
 
 def get_call_execution_config_by_merchant_id_query(
     merchant_id: str,
+    shop_identifier: Optional[str],
 ) -> Tuple[str, List[Any]]:
     """
-    Generate query to get call execution config by merchant ID.
+    Generate query to get call execution config by merchant ID and shop identifier.
     """
-    text = f'SELECT * FROM "{CALL_EXECUTION_CONFIG_TABLE}" WHERE "merchant_id" = $1;'
-    values = [merchant_id]
+    if shop_identifier:
+        text = f'SELECT * FROM "{CALL_EXECUTION_CONFIG_TABLE}" WHERE "merchant_id" = $1 AND "shop_identifier" = $2;'
+        values: List[Any] = [merchant_id, shop_identifier]
+    else:
+        text = f'SELECT * FROM "{CALL_EXECUTION_CONFIG_TABLE}" WHERE "merchant_id" = $1 AND "shop_identifier" IS NULL;'
+        values = [merchant_id]
     return text, values
 
 

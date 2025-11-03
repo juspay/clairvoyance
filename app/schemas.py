@@ -48,6 +48,7 @@ class LeadCallTracker(BaseModel):
     outbound_number_id: Optional[str] = None
     merchant_id: RequestedBy
     workflow: Workflow
+    shop_identifier: Optional[str] = None
     attempt_count: int = 0
     next_attempt_at: Optional[datetime] = None
     payload: Optional[Dict[str, Any]] = None
@@ -90,6 +91,8 @@ class CreateCallExecutionConfigRequest(BaseModel):
     calling_provider: CallProvider
     merchant_id: str
     workflow: Workflow
+    shop_identifier: Optional[str] = None
+    enable_international_call: bool = True
 
 
 class CallExecutionConfig(BaseModel):
@@ -102,6 +105,8 @@ class CallExecutionConfig(BaseModel):
     calling_provider: CallProvider
     merchant_id: str
     workflow: Workflow
+    shop_identifier: Optional[str] = None
+    enable_international_call: bool = True
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 

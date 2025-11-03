@@ -164,6 +164,39 @@ async def create_all_tables():
         return False
 
 
+async def alter_existing_tables():
+    """
+    Alter existing tables.
+    """
+    try:
+        async for conn in get_db_connection():
+            print("Altering tables...")
+            await conn.execute(alter_tables_query())
+            print("Tables altered successfully.")
+            return True
+    except Exception as e:
+        print(f"Error altering tables: {e}")
+        return False
+
+
+def alter_tables_query() -> str:
+    """
+    Generate queries to alter existing tables.
+    """
+    return f"""
+        ALTER TABLE "{LEAD_CALL_TRACKER_TABLE}" ADD COLUMN IF NOT EXISTS "shop_identifier" VARCHAR(255);
+        ALTER TABLE "{CALL_EXECUTION_CONFIG_TABLE}" ADD COLUMN IF NOT EXISTS "shop_identifier" VARCHAR(255);
+        ALTER TABLE "{CALL_EXECUTION_CONFIG_TABLE}" ADD COLUMN IF NOT EXISTS "enable_international_call" BOOLEAN DEFAULT TRUE;
+        ALTER TABLE "{CALL_EXECUTION_CONFIG_TABLE}" DROP CONSTRAINT IF EXISTS "call_execution_config_merchant_id_workflow_key";
+        CREATE UNIQUE INDEX IF NOT EXISTS "uq_call_execution_config_shop"
+            ON "{CALL_EXECUTION_CONFIG_TABLE}" ("merchant_id", "workflow", "shop_identifier")
+            WHERE "shop_identifier" IS NOT NULL;
+        CREATE UNIQUE INDEX IF NOT EXISTS "uq_call_execution_config_generic"
+            ON "{CALL_EXECUTION_CONFIG_TABLE}" ("merchant_id", "workflow")
+            WHERE "shop_identifier" IS NULL;
+    """
+
+
 async def list_all_tables():
     """
     List all tables in the database.
@@ -194,6 +227,8 @@ def main():
 
         if command == "create":
             asyncio.run(create_all_tables())
+        elif command == "alter":
+            asyncio.run(alter_existing_tables())
         elif command == "list":
 
             async def list_tables():
@@ -208,7 +243,7 @@ def main():
 
             asyncio.run(list_tables())
         else:
-            print("Usage: python -m scripts.create_tables [create|list]")
+            print("Usage: python -m scripts.create_tables [create|list|alter]")
 
 
 if __name__ == "__main__":
