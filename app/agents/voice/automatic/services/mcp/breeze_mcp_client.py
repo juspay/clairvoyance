@@ -48,8 +48,16 @@ async def init_breeze_mcp_tools(
         mcp_client = PipecatMCPClient(server_params=server_params)
 
         # Wrap all MCP functions to intercept chart results
-        original_register_function = llm.register_function
-        llm.register_function = create_chart_aware_wrapper(original_register_function)
+        if not hasattr(llm, "register_function") or not callable(llm.register_function):
+            logger.warning(
+                "LLM service does not have register_function method - MCP chart interception disabled"
+            )
+            original_register_function = None
+        else:
+            original_register_function = llm.register_function
+            llm.register_function = create_chart_aware_wrapper(
+                original_register_function
+            )
 
         try:
             tools = await asyncio.wait_for(
@@ -57,7 +65,8 @@ async def init_breeze_mcp_tools(
             )
         finally:
             # Restore original register_function
-            llm.register_function = original_register_function
+            if original_register_function is not None:
+                llm.register_function = original_register_function
 
         # register chart tools if enabled
         if config.ENABLE_CHARTS:

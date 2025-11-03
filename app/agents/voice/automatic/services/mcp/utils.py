@@ -8,6 +8,7 @@ from app.agents.voice.automatic.features.charts.chart_tools import (
     _register_pending_chart_emission,
 )
 from app.agents.voice.automatic.utils.session_context import get_current_session_id
+from app.core.logger import logger
 
 
 def create_chart_aware_wrapper(original_register_function):
@@ -49,9 +50,12 @@ def create_chart_aware_wrapper(original_register_function):
                             session_id = get_current_session_id()
                             if session_id:
                                 _register_pending_chart_emission(session_id, chart_data)
-                        except Exception:
+                        except Exception as e:
                             # Don't break MCP flow if chart registration fails
-                            pass
+                            logger.warning(
+                                f"Failed to register pending chart emission: {e}",
+                                exc_info=True,
+                            )
 
                         await original_callback(
                             result.get(
