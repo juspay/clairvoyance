@@ -38,6 +38,8 @@ async def create_call_execution_config(
     calling_provider: CallProvider,
     merchant_id: str,
     workflow: Workflow,
+    shop_identifier: str,
+    enable_international_call: bool,
 ) -> Optional[CallExecutionConfig]:
     """
     Create a new call execution config record.
@@ -55,6 +57,8 @@ async def create_call_execution_config(
             calling_provider=calling_provider,
             merchant_id=merchant_id,
             workflow=workflow,
+            shop_identifier=shop_identifier,
+            enable_international_call=enable_international_call,
         )
 
         result = await run_parameterized_query(query_text, values)
@@ -73,6 +77,7 @@ async def create_call_execution_config(
 
 async def get_call_execution_config_by_merchant_id(
     merchant_id: str,
+    shop_identifier: Optional[str] = None,
 ) -> List[CallExecutionConfig]:
     """
     Get call execution config by merchant ID.
@@ -80,7 +85,9 @@ async def get_call_execution_config_by_merchant_id(
     logger.info(f"Getting call execution config by merchant ID: {merchant_id}")
 
     try:
-        query_text, values = get_call_execution_config_by_merchant_id_query(merchant_id)
+        query_text, values = get_call_execution_config_by_merchant_id_query(
+            merchant_id, shop_identifier
+        )
         result = await run_parameterized_query(query_text, values)
 
         if result:
@@ -89,6 +96,22 @@ async def get_call_execution_config_by_merchant_id(
                 f"Found {len(decoded_result)} call execution configs for merchant ID: {merchant_id}"
             )
             return decoded_result
+
+        if shop_identifier:
+            # If no config is found for the specific shop_identifier, try with NULL
+            logger.info(
+                f"No config found for shop_identifier {shop_identifier}, trying generic config."
+            )
+            query_text, values = get_call_execution_config_by_merchant_id_query(
+                merchant_id, None
+            )
+            result = await run_parameterized_query(query_text, values)
+            if result:
+                decoded_result = decode_call_execution_config_list(result)
+                logger.info(
+                    f"Found {len(decoded_result)} generic call execution configs for merchant ID: {merchant_id}"
+                )
+                return decoded_result
 
         logger.info(f"No call execution config found with merchant ID: {merchant_id}")
         return []

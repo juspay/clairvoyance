@@ -18,6 +18,7 @@ def insert_lead_call_tracker_query(
     id: str,
     merchant_id: RequestedBy,
     workflow: Workflow,
+    shop_identifier: Optional[str],
     next_attempt_at: Optional[datetime],
     payload: Optional[Dict[str, Any]],
     meta_data: Optional[Dict[str, Any]],
@@ -35,6 +36,7 @@ def insert_lead_call_tracker_query(
             "id",
             "merchant_id",
             "workflow",
+            "shop_identifier",
             "next_attempt_at",
             "payload",
             "meta_data",
@@ -46,13 +48,14 @@ def insert_lead_call_tracker_query(
             "created_at",
             "updated_at"
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING *;
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) RETURNING *;
     """
 
     values = [
         id,
         merchant_id.value,
         workflow.value,
+        shop_identifier,
         next_attempt_at,
         json.dumps(payload) if payload else None,
         json.dumps(meta_data) if meta_data else None,

@@ -34,6 +34,7 @@ from app.schemas import (
     LeadCallTracker,
     OutboundNumber,
     OutboundNumberStatus,
+    RequestedBy,
 )
 
 
@@ -41,10 +42,12 @@ async def _get_lead_config(lead: LeadCallTracker) -> Optional[CallExecutionConfi
     """
     Retrieves the call execution configuration for a given lead.
     """
-    configs = await get_call_execution_config_by_merchant_id(lead.merchant_id)
+    configs = await get_call_execution_config_by_merchant_id(
+        lead.merchant_id, lead.shop_identifier
+    )
     if not configs:
         logger.warning(
-            f"No call execution config found for merchant: {lead.merchant_id}"
+            f"No call execution config found for merchant: {lead.merchant_id} and shop: {lead.shop_identifier}"
         )
         return None
 
@@ -131,6 +134,7 @@ async def _retry_call(
             id=str(uuid.uuid4()),
             merchant_id=lead.merchant_id,
             workflow=lead.workflow,
+            shop_identifier=lead.shop_identifier,
             next_attempt_at=next_attempt_at,
             payload=lead.payload,
             attempt_count=lead.attempt_count + 1,
@@ -144,6 +148,14 @@ async def _retry_call(
                     "outcome": outcome.value,
                     "orderId": lead.payload.get("order_id"),
                 }
+                if lead.merchant_id != RequestedBy.BREEZE:
+                    call_duration = None
+                    if lead.call_initiated_time:
+                        call_duration = (
+                            datetime.now(timezone.utc) - lead.call_initiated_time
+                        ).total_seconds()
+                    summary_data["attemptCount"] = lead.attempt_count + 1
+                    summary_data["callDuration"] = call_duration
                 try:
                     async with create_aiohttp_session() as session:
                         payload = json.dumps(summary_data).replace(" ", "")
@@ -267,6 +279,20 @@ async def process_backlog_leads():
                     if config.calling_provider == CallProvider.TWILIO:
                         retry_calling_provider = CallProvider.EXOTEL
                     elif config.calling_provider == CallProvider.EXOTEL:
+                        if not config.enable_international_call:
+                            logger.warning(
+                                f"International calls disabled for merchant {lead.merchant_id}. Skipping retry with Twilio."
+                            )
+                            await update_lead_call_completion_details(
+                                id=lead.id,
+                                status=LeadCallStatus.FINISHED,
+                                outcome=LeadCallOutcome.UNKNOWN,
+                                meta_data={
+                                    "failure_reason": "Failed to initiate call, international calling disabled."
+                                },
+                                call_end_time=datetime.now(timezone.utc),
+                            )
+                            continue
                         retry_calling_provider = CallProvider.TWILIO
 
                     retry_number_to_use = await _get_available_number(
