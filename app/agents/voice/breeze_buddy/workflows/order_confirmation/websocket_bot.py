@@ -54,6 +54,7 @@ from app.core.config import (
     ELEVENLABS_MODEL_ID,
     ELEVENLABS_VOICE_SPEED,
     ENABLE_BREEZE_BUDDY_TRACING,
+    ENABLE_BREEZE_BUDDY_USER_INTERRUPTION,
     ORDER_CONFIRMATION_WEBHOOK_SECRET_KEY,
 )
 from app.core.logger import logger
@@ -278,7 +279,9 @@ class OrderConfirmationBot:
         )
 
         self.context = OpenAILLMContext(messages)
-        user_params = LLMUserAggregatorParams(enable_emulated_vad_interruptions=True)
+        user_params = LLMUserAggregatorParams(
+            enable_emulated_vad_interruptions=ENABLE_BREEZE_BUDDY_USER_INTERRUPTION
+        )
         context_aggregator = llm.create_context_aggregator(
             self.context, user_params=user_params
         )
