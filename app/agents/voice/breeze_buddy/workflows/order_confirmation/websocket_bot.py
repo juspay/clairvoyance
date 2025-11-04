@@ -442,7 +442,8 @@ class OrderConfirmationBot:
         if not self.conversation_ended:
             self.conversation_ended = True
             logger.info(f"{reason}. Updating call status directly.")
-            self.outcome = "busy"
+            if self.outcome == "unknown":
+                self.outcome = "busy"
             await self._finalize_call()
 
     async def _finalize_call(self):
