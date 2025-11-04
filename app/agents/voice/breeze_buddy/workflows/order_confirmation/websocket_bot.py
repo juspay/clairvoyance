@@ -369,6 +369,8 @@ class OrderConfirmationBot:
                 root_span.set_attribute("workflow.type", "order-confirmation")
 
                 await run_pipeline()
+                # Add outcome after call completion
+                root_span.set_attribute("call.outcome", self.outcome)
         else:
             # Run pipeline without tracing when tracing is disabled
             logger.info(
@@ -628,6 +630,7 @@ class OrderConfirmationBot:
                             "content": "The order is confirmed. Say: 'Thank you for confirming your order. Your order will be delivered soon. Have a good day'",
                         }
                     ],
+                    "functions": flow_functions,
                     "post_actions": [
                         {"type": "function", "handler": self._end_conversation_handler}
                     ],
@@ -759,7 +762,7 @@ class OrderConfirmationBot:
     @auto_trace("address_correct")
     async def _handle_address_correct(self):
         logger.info("Address confirmed. Proceeding to final order confirmation.")
-        return {}, self._create_node_from_config("final_order_confirmation")
+        return {}, self._create_node_from_config("order_confirmation_and_end")
 
     @auto_trace("address_incorrect")
     async def _handle_address_incorrect(self):
