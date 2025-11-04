@@ -5,7 +5,7 @@ Generic aggregator function with mod 31 logic for time-based data aggregation
 
 import copy
 from datetime import datetime
-from typing import Optional, List, Any, Dict
+from typing import Any, Dict, List, Optional
 
 
 def parse_date_to_day_of_year(date_str: str) -> int:
@@ -15,8 +15,8 @@ def parse_date_to_day_of_year(date_str: str) -> int:
 
     try:
         # Handle different date formats
-        if date_str.endswith('Z'):
-            date_str = date_str[:-1] + '+00:00'
+        if date_str.endswith("Z"):
+            date_str = date_str[:-1] + "+00:00"
 
         formats = ["%Y-%m-%dT%H:%M:%S%z", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d"]
 
@@ -34,7 +34,9 @@ def parse_date_to_day_of_year(date_str: str) -> int:
         return datetime.now().timetuple().tm_yday
 
 
-def get_data_indices(start_time: Optional[str] = None, end_time: Optional[str] = None) -> List[int]:
+def get_data_indices(
+    start_time: Optional[str] = None, end_time: Optional[str] = None
+) -> List[int]:
     """
     Get data indices using mod 31 logic
 
@@ -46,8 +48,16 @@ def get_data_indices(start_time: Optional[str] = None, end_time: Optional[str] =
         List of indices to aggregate
     """
     # Default to today if no dates provided
-    start_day = parse_date_to_day_of_year(start_time) if start_time else datetime.now().timetuple().tm_yday
-    end_day = parse_date_to_day_of_year(end_time) if end_time else datetime.now().timetuple().tm_yday
+    start_day = (
+        parse_date_to_day_of_year(start_time)
+        if start_time
+        else datetime.now().timetuple().tm_yday
+    )
+    end_day = (
+        parse_date_to_day_of_year(end_time)
+        if end_time
+        else datetime.now().timetuple().tm_yday
+    )
 
     # Apply mod 31
     start_idx = start_day % 31
@@ -74,7 +84,7 @@ def aggregate_data(
     data_path: str,
     start_time: Optional[str] = None,
     end_time: Optional[str] = None,
-    aggregation_type: str = "sum"
+    aggregation_type: str = "sum",
 ) -> Any:
     """
     Generic aggregator function
@@ -142,7 +152,7 @@ def get_nested_value(data: Dict[str, Any], path: str) -> Any:
         Value at the path or None if not found
     """
     try:
-        keys = path.split('.')
+        keys = path.split(".")
         current = data
 
         for key in keys:
@@ -160,7 +170,7 @@ def aggregate_complete_structure(
     data_array: List[Dict[str, Any]],
     structure_path: str,
     start_time: Optional[str] = None,
-    end_time: Optional[str] = None
+    end_time: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """
     Aggregate complete data structure (for returning full tool responses)
@@ -201,9 +211,15 @@ def aggregate_complete_structure(
 
     # Aggregate the main value
     main_value_path = "value.value"  # Most structures have this pattern
-    aggregated_value = aggregate_data(data_array, f"{structure_path}.{main_value_path}", start_time, end_time, "sum")
+    aggregated_value = aggregate_data(
+        data_array, f"{structure_path}.{main_value_path}", start_time, end_time, "sum"
+    )
 
-    if aggregated_value is not None and "value" in result and "value" in result["value"]:
+    if (
+        aggregated_value is not None
+        and "value" in result
+        and "value" in result["value"]
+    ):
         result["value"]["value"] = aggregated_value
 
     return result

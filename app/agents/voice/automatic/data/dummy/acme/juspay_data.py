@@ -15,7 +15,7 @@ ACME_JUSPAY_DATA = [
             "processing_time_avg": 42.5,
             "retry_success_rate": 34.2,
             "peak_hour_sr": 91.3,
-            "off_peak_sr": 87.8
+            "off_peak_sr": 87.8,
         },
         "payment_method_success_rates": [
             {
@@ -29,8 +29,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "TRANSACTION_TIMEOUT",
                     "INSUFFICIENT_FUNDS",
-                    "BANK_ERROR"
-                ]
+                    "BANK_ERROR",
+                ],
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -43,8 +43,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "INSUFFICIENT_FUNDS",
                     "CARD_DECLINED",
-                    "EXPIRED_CARD"
-                ]
+                    "EXPIRED_CARD",
+                ],
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -57,8 +57,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "INSUFFICIENT_FUNDS",
                     "DAILY_LIMIT_EXCEEDED",
-                    "PIN_INCORRECT"
-                ]
+                    "PIN_INCORRECT",
+                ],
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -71,8 +71,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "BANK_TECHNICAL_ISSUE",
                     "SESSION_TIMEOUT",
-                    "INVALID_CREDENTIALS"
-                ]
+                    "INVALID_CREDENTIALS",
+                ],
             },
             {
                 "payment_method_type": "WALLET",
@@ -85,9 +85,9 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "INSUFFICIENT_WALLET_BALANCE",
                     "WALLET_BLOCKED",
-                    "OTP_FAILURE"
-                ]
-            }
+                    "OTP_FAILURE",
+                ],
+            },
         ],
         "failure_details": [
             {
@@ -98,8 +98,8 @@ ACME_JUSPAY_DATA = [
                 "avg_retry_attempts": 1.8,
                 "resolution_suggestions": [
                     "Check account balance",
-                    "Try different card"
-                ]
+                    "Try different card",
+                ],
             },
             {
                 "error_message": "BANK_TECHNICAL_ISSUE",
@@ -107,10 +107,7 @@ ACME_JUSPAY_DATA = [
                 "count": 45,
                 "percentage": 13.6,
                 "avg_retry_attempts": 2.1,
-                "resolution_suggestions": [
-                    "Try again later",
-                    "Contact bank"
-                ]
+                "resolution_suggestions": ["Try again later", "Contact bank"],
             },
             {
                 "error_message": "TRANSACTION_TIMEOUT",
@@ -120,8 +117,8 @@ ACME_JUSPAY_DATA = [
                 "avg_retry_attempts": 1.5,
                 "resolution_suggestions": [
                     "Check internet connection",
-                    "Retry payment"
-                ]
+                    "Retry payment",
+                ],
             },
             {
                 "error_message": "CARD_DECLINED",
@@ -129,10 +126,7 @@ ACME_JUSPAY_DATA = [
                 "count": 31,
                 "percentage": 9.3,
                 "avg_retry_attempts": 1.3,
-                "resolution_suggestions": [
-                    "Contact card issuer",
-                    "Try different card"
-                ]
+                "resolution_suggestions": ["Contact card issuer", "Try different card"],
             },
             {
                 "error_message": "DAILY_LIMIT_EXCEEDED",
@@ -142,8 +136,8 @@ ACME_JUSPAY_DATA = [
                 "avg_retry_attempts": 1.1,
                 "resolution_suggestions": [
                     "Try tomorrow",
-                    "Use different payment method"
-                ]
+                    "Use different payment method",
+                ],
             },
             {
                 "error_message": "SESSION_EXPIRED",
@@ -151,11 +145,8 @@ ACME_JUSPAY_DATA = [
                 "count": 22,
                 "percentage": 6.6,
                 "avg_retry_attempts": 1.9,
-                "resolution_suggestions": [
-                    "Login again",
-                    "Refresh page"
-                ]
-            }
+                "resolution_suggestions": ["Login again", "Refresh page"],
+            },
         ],
         "success_volume_by_payment_method": [
             {
@@ -164,7 +155,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 36.1,
                 "peak_hour_volume": 127,
                 "avg_transaction_value": 4142.33,
-                "repeat_customer_rate": 68.5
+                "repeat_customer_rate": 68.5,
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -172,7 +163,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 41.0,
                 "peak_hour_volume": 145,
                 "avg_transaction_value": 5890.45,
-                "repeat_customer_rate": 72.3
+                "repeat_customer_rate": 72.3,
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -180,7 +171,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 14.6,
                 "peak_hour_volume": 52,
                 "avg_transaction_value": 3456.78,
-                "repeat_customer_rate": 58.9
+                "repeat_customer_rate": 58.9,
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -188,7 +179,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 5.4,
                 "peak_hour_volume": 19,
                 "avg_transaction_value": 6234.89,
-                "repeat_customer_rate": 45.3
+                "repeat_customer_rate": 45.3,
             },
             {
                 "payment_method_type": "WALLET",
@@ -196,8 +187,8 @@ ACME_JUSPAY_DATA = [
                 "percentage": 3.9,
                 "peak_hour_volume": 14,
                 "avg_transaction_value": 2890.12,
-                "repeat_customer_rate": 61.7
-            }
+                "repeat_customer_rate": 61.7,
+            },
         ],
         "gmv_by_payment_method": [
             {
@@ -210,8 +201,8 @@ ACME_JUSPAY_DATA = [
                     "North": 38.2,
                     "South": 42.1,
                     "West": 35.7,
-                    "East": 28.9
-                }
+                    "East": 28.9,
+                },
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -223,8 +214,8 @@ ACME_JUSPAY_DATA = [
                     "North": 52.3,
                     "South": 48.9,
                     "West": 54.1,
-                    "East": 46.7
-                }
+                    "East": 46.7,
+                },
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -236,8 +227,8 @@ ACME_JUSPAY_DATA = [
                     "North": 28.5,
                     "South": 31.2,
                     "West": 26.8,
-                    "East": 33.4
-                }
+                    "East": 33.4,
+                },
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -249,8 +240,8 @@ ACME_JUSPAY_DATA = [
                     "North": 15.2,
                     "South": 12.8,
                     "West": 18.9,
-                    "East": 21.3
-                }
+                    "East": 21.3,
+                },
             },
             {
                 "payment_method_type": "WALLET",
@@ -262,9 +253,9 @@ ACME_JUSPAY_DATA = [
                     "North": 22.1,
                     "South": 25.8,
                     "West": 19.4,
-                    "East": 16.2
-                }
-            }
+                    "East": 16.2,
+                },
+            },
         ],
         "average_ticket_size_by_payment_method": [
             {
@@ -275,8 +266,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 45.2,
                     "Fashion": 32.1,
-                    "Home": 22.7
-                }
+                    "Home": 22.7,
+                },
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -286,8 +277,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 58.7,
                     "Fashion": 28.9,
-                    "Home": 12.4
-                }
+                    "Home": 12.4,
+                },
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -297,8 +288,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 31.5,
                     "Fashion": 42.3,
-                    "Home": 26.2
-                }
+                    "Home": 26.2,
+                },
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -308,8 +299,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 67.8,
                     "Fashion": 18.9,
-                    "Home": 13.3
-                }
+                    "Home": 13.3,
+                },
             },
             {
                 "payment_method_type": "WALLET",
@@ -319,67 +310,54 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 28.4,
                     "Fashion": 45.6,
-                    "Home": 26.0
-                }
-            }
+                    "Home": 26.0,
+                },
+            },
         ],
         "device_wise_analytics": {
             "desktop": {
                 "success_rate": 93.4,
                 "transaction_volume": 1541,
-                "preferred_payment_methods": [
-                    "CREDIT_CARD",
-                    "NET_BANKING"
-                ],
-                "avg_processing_time": 45.2
+                "preferred_payment_methods": ["CREDIT_CARD", "NET_BANKING"],
+                "avg_processing_time": 45.2,
             },
             "mobile": {
                 "success_rate": 87.8,
                 "transaction_volume": 1233,
-                "preferred_payment_methods": [
-                    "UPI",
-                    "WALLET"
-                ],
-                "avg_processing_time": 38.7
+                "preferred_payment_methods": ["UPI", "WALLET"],
+                "avg_processing_time": 38.7,
             },
             "tablet": {
                 "success_rate": 89.1,
                 "transaction_volume": 309,
-                "preferred_payment_methods": [
-                    "CREDIT_CARD",
-                    "UPI"
-                ],
-                "avg_processing_time": 42.1
-            }
+                "preferred_payment_methods": ["CREDIT_CARD", "UPI"],
+                "avg_processing_time": 42.1,
+            },
         },
         "time_based_analytics": {
             "hourly_patterns": {
-                "peak_hours": [
-                    "14:00-15:00",
-                    "20:00-21:00",
-                    "21:00-22:00"
-                ],
+                "peak_hours": ["14:00-15:00", "20:00-21:00", "21:00-22:00"],
                 "success_rate_by_hour": {
                     "morning": 91.2,
                     "afternoon": 89.8,
                     "evening": 88.4,
-                    "night": 85.6
+                    "night": 85.6,
                 },
                 "payment_method_preference_by_time": {
                     "morning": "UPI",
                     "afternoon": "CREDIT_CARD",
                     "evening": "CREDIT_CARD",
-                    "night": "UPI"
-                }
+                    "night": "UPI",
+                },
             },
             "weekly_patterns": {
                 "weekday_sr": 89.7,
                 "weekend_sr": 87.9,
                 "monday_peak": False,
-                "friday_peak": True
-            }
+                "friday_peak": True,
+            },
         },
-        "errors": []
+        "errors": [],
     },
     {
         "overall_success_rate_data": {
@@ -390,7 +368,7 @@ ACME_JUSPAY_DATA = [
             "processing_time_avg": 41.8,
             "retry_success_rate": 36.4,
             "peak_hour_sr": 92.1,
-            "off_peak_sr": 88.5
+            "off_peak_sr": 88.5,
         },
         "payment_method_success_rates": [
             {
@@ -404,8 +382,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "TRANSACTION_TIMEOUT",
                     "INSUFFICIENT_FUNDS",
-                    "BANK_ERROR"
-                ]
+                    "BANK_ERROR",
+                ],
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -418,8 +396,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "INSUFFICIENT_FUNDS",
                     "CARD_DECLINED",
-                    "EXPIRED_CARD"
-                ]
+                    "EXPIRED_CARD",
+                ],
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -432,8 +410,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "INSUFFICIENT_FUNDS",
                     "DAILY_LIMIT_EXCEEDED",
-                    "PIN_INCORRECT"
-                ]
+                    "PIN_INCORRECT",
+                ],
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -446,8 +424,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "BANK_TECHNICAL_ISSUE",
                     "SESSION_TIMEOUT",
-                    "INVALID_CREDENTIALS"
-                ]
+                    "INVALID_CREDENTIALS",
+                ],
             },
             {
                 "payment_method_type": "WALLET",
@@ -460,9 +438,9 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "INSUFFICIENT_WALLET_BALANCE",
                     "WALLET_BLOCKED",
-                    "OTP_FAILURE"
-                ]
-            }
+                    "OTP_FAILURE",
+                ],
+            },
         ],
         "failure_details": [
             {
@@ -473,8 +451,8 @@ ACME_JUSPAY_DATA = [
                 "avg_retry_attempts": 1.7,
                 "resolution_suggestions": [
                     "Check account balance",
-                    "Try different card"
-                ]
+                    "Try different card",
+                ],
             },
             {
                 "error_message": "BANK_TECHNICAL_ISSUE",
@@ -482,10 +460,7 @@ ACME_JUSPAY_DATA = [
                 "count": 52,
                 "percentage": 16.4,
                 "avg_retry_attempts": 2.3,
-                "resolution_suggestions": [
-                    "Try again later",
-                    "Contact bank"
-                ]
+                "resolution_suggestions": ["Try again later", "Contact bank"],
             },
             {
                 "error_message": "TRANSACTION_TIMEOUT",
@@ -495,8 +470,8 @@ ACME_JUSPAY_DATA = [
                 "avg_retry_attempts": 1.4,
                 "resolution_suggestions": [
                     "Check internet connection",
-                    "Retry payment"
-                ]
+                    "Retry payment",
+                ],
             },
             {
                 "error_message": "CARD_DECLINED",
@@ -504,10 +479,7 @@ ACME_JUSPAY_DATA = [
                 "count": 29,
                 "percentage": 9.1,
                 "avg_retry_attempts": 1.2,
-                "resolution_suggestions": [
-                    "Contact card issuer",
-                    "Try different card"
-                ]
+                "resolution_suggestions": ["Contact card issuer", "Try different card"],
             },
             {
                 "error_message": "DAILY_LIMIT_EXCEEDED",
@@ -517,8 +489,8 @@ ACME_JUSPAY_DATA = [
                 "avg_retry_attempts": 1.0,
                 "resolution_suggestions": [
                     "Try tomorrow",
-                    "Use different payment method"
-                ]
+                    "Use different payment method",
+                ],
             },
             {
                 "error_message": "SESSION_EXPIRED",
@@ -526,11 +498,8 @@ ACME_JUSPAY_DATA = [
                 "count": 19,
                 "percentage": 6.0,
                 "avg_retry_attempts": 1.8,
-                "resolution_suggestions": [
-                    "Login again",
-                    "Refresh page"
-                ]
-            }
+                "resolution_suggestions": ["Login again", "Refresh page"],
+            },
         ],
         "success_volume_by_payment_method": [
             {
@@ -539,7 +508,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 36.1,
                 "peak_hour_volume": 134,
                 "avg_transaction_value": 4198.67,
-                "repeat_customer_rate": 69.2
+                "repeat_customer_rate": 69.2,
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -547,7 +516,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 40.9,
                 "peak_hour_volume": 152,
                 "avg_transaction_value": 5956.23,
-                "repeat_customer_rate": 73.1
+                "repeat_customer_rate": 73.1,
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -555,7 +524,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 14.7,
                 "peak_hour_volume": 55,
                 "avg_transaction_value": 3512.45,
-                "repeat_customer_rate": 59.7
+                "repeat_customer_rate": 59.7,
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -563,7 +532,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 5.4,
                 "peak_hour_volume": 20,
                 "avg_transaction_value": 6312.78,
-                "repeat_customer_rate": 46.8
+                "repeat_customer_rate": 46.8,
             },
             {
                 "payment_method_type": "WALLET",
@@ -571,8 +540,8 @@ ACME_JUSPAY_DATA = [
                 "percentage": 3.9,
                 "peak_hour_volume": 15,
                 "avg_transaction_value": 2934.56,
-                "repeat_customer_rate": 62.3
-            }
+                "repeat_customer_rate": 62.3,
+            },
         ],
         "gmv_by_payment_method": [
             {
@@ -585,8 +554,8 @@ ACME_JUSPAY_DATA = [
                     "North": 39.1,
                     "South": 43.2,
                     "West": 36.8,
-                    "East": 29.7
-                }
+                    "East": 29.7,
+                },
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -598,8 +567,8 @@ ACME_JUSPAY_DATA = [
                     "North": 53.1,
                     "South": 49.8,
                     "West": 55.2,
-                    "East": 47.5
-                }
+                    "East": 47.5,
+                },
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -611,8 +580,8 @@ ACME_JUSPAY_DATA = [
                     "North": 29.3,
                     "South": 32.1,
                     "West": 27.6,
-                    "East": 34.2
-                }
+                    "East": 34.2,
+                },
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -624,8 +593,8 @@ ACME_JUSPAY_DATA = [
                     "North": 16.1,
                     "South": 13.7,
                     "West": 19.8,
-                    "East": 22.1
-                }
+                    "East": 22.1,
+                },
             },
             {
                 "payment_method_type": "WALLET",
@@ -637,9 +606,9 @@ ACME_JUSPAY_DATA = [
                     "North": 23.2,
                     "South": 26.9,
                     "West": 20.3,
-                    "East": 17.1
-                }
-            }
+                    "East": 17.1,
+                },
+            },
         ],
         "average_ticket_size_by_payment_method": [
             {
@@ -650,8 +619,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 46.1,
                     "Fashion": 32.8,
-                    "Home": 21.1
-                }
+                    "Home": 21.1,
+                },
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -661,8 +630,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 59.3,
                     "Fashion": 27.8,
-                    "Home": 12.9
-                }
+                    "Home": 12.9,
+                },
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -672,8 +641,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 32.2,
                     "Fashion": 41.9,
-                    "Home": 25.9
-                }
+                    "Home": 25.9,
+                },
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -683,8 +652,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 68.5,
                     "Fashion": 18.2,
-                    "Home": 13.3
-                }
+                    "Home": 13.3,
+                },
             },
             {
                 "payment_method_type": "WALLET",
@@ -694,67 +663,54 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 29.1,
                     "Fashion": 46.3,
-                    "Home": 24.6
-                }
-            }
+                    "Home": 24.6,
+                },
+            },
         ],
         "device_wise_analytics": {
             "desktop": {
                 "success_rate": 94.1,
                 "transaction_volume": 1608,
-                "preferred_payment_methods": [
-                    "CREDIT_CARD",
-                    "NET_BANKING"
-                ],
-                "avg_processing_time": 44.8
+                "preferred_payment_methods": ["CREDIT_CARD", "NET_BANKING"],
+                "avg_processing_time": 44.8,
             },
             "mobile": {
                 "success_rate": 88.5,
                 "transaction_volume": 1287,
-                "preferred_payment_methods": [
-                    "UPI",
-                    "WALLET"
-                ],
-                "avg_processing_time": 37.9
+                "preferred_payment_methods": ["UPI", "WALLET"],
+                "avg_processing_time": 37.9,
             },
             "tablet": {
                 "success_rate": 89.8,
                 "transaction_volume": 320,
-                "preferred_payment_methods": [
-                    "CREDIT_CARD",
-                    "UPI"
-                ],
-                "avg_processing_time": 41.7
-            }
+                "preferred_payment_methods": ["CREDIT_CARD", "UPI"],
+                "avg_processing_time": 41.7,
+            },
         },
         "time_based_analytics": {
             "hourly_patterns": {
-                "peak_hours": [
-                    "15:00-16:00",
-                    "19:00-20:00",
-                    "20:00-21:00"
-                ],
+                "peak_hours": ["15:00-16:00", "19:00-20:00", "20:00-21:00"],
                 "success_rate_by_hour": {
                     "morning": 91.8,
                     "afternoon": 90.4,
                     "evening": 89.1,
-                    "night": 86.2
+                    "night": 86.2,
                 },
                 "payment_method_preference_by_time": {
                     "morning": "UPI",
                     "afternoon": "CREDIT_CARD",
                     "evening": "CREDIT_CARD",
-                    "night": "UPI"
-                }
+                    "night": "UPI",
+                },
             },
             "weekly_patterns": {
                 "weekday_sr": 90.3,
                 "weekend_sr": 88.6,
                 "monday_peak": False,
-                "friday_peak": True
-            }
+                "friday_peak": True,
+            },
         },
-        "errors": []
+        "errors": [],
     },
     {
         "overall_success_rate_data": {
@@ -765,7 +721,7 @@ ACME_JUSPAY_DATA = [
             "processing_time_avg": 43.2,
             "retry_success_rate": 35.8,
             "peak_hour_sr": 91.4,
-            "off_peak_sr": 87.1
+            "off_peak_sr": 87.1,
         },
         "payment_method_success_rates": [
             {
@@ -779,8 +735,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "TRANSACTION_TIMEOUT",
                     "INSUFFICIENT_FUNDS",
-                    "BANK_ERROR"
-                ]
+                    "BANK_ERROR",
+                ],
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -793,8 +749,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "INSUFFICIENT_FUNDS",
                     "CARD_DECLINED",
-                    "EXPIRED_CARD"
-                ]
+                    "EXPIRED_CARD",
+                ],
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -807,8 +763,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "INSUFFICIENT_FUNDS",
                     "DAILY_LIMIT_EXCEEDED",
-                    "PIN_INCORRECT"
-                ]
+                    "PIN_INCORRECT",
+                ],
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -821,8 +777,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "BANK_TECHNICAL_ISSUE",
                     "SESSION_TIMEOUT",
-                    "INVALID_CREDENTIALS"
-                ]
+                    "INVALID_CREDENTIALS",
+                ],
             },
             {
                 "payment_method_type": "WALLET",
@@ -835,9 +791,9 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "INSUFFICIENT_WALLET_BALANCE",
                     "WALLET_BLOCKED",
-                    "OTP_FAILURE"
-                ]
-            }
+                    "OTP_FAILURE",
+                ],
+            },
         ],
         "failure_details": [
             {
@@ -848,8 +804,8 @@ ACME_JUSPAY_DATA = [
                 "avg_retry_attempts": 1.8,
                 "resolution_suggestions": [
                     "Check account balance",
-                    "Try different card"
-                ]
+                    "Try different card",
+                ],
             },
             {
                 "error_message": "BANK_TECHNICAL_ISSUE",
@@ -857,10 +813,7 @@ ACME_JUSPAY_DATA = [
                 "count": 58,
                 "percentage": 16.2,
                 "avg_retry_attempts": 2.4,
-                "resolution_suggestions": [
-                    "Try again later",
-                    "Contact bank"
-                ]
+                "resolution_suggestions": ["Try again later", "Contact bank"],
             },
             {
                 "error_message": "TRANSACTION_TIMEOUT",
@@ -870,8 +823,8 @@ ACME_JUSPAY_DATA = [
                 "avg_retry_attempts": 1.6,
                 "resolution_suggestions": [
                     "Check internet connection",
-                    "Retry payment"
-                ]
+                    "Retry payment",
+                ],
             },
             {
                 "error_message": "CARD_DECLINED",
@@ -879,10 +832,7 @@ ACME_JUSPAY_DATA = [
                 "count": 34,
                 "percentage": 9.5,
                 "avg_retry_attempts": 1.4,
-                "resolution_suggestions": [
-                    "Contact card issuer",
-                    "Try different card"
-                ]
+                "resolution_suggestions": ["Contact card issuer", "Try different card"],
             },
             {
                 "error_message": "DAILY_LIMIT_EXCEEDED",
@@ -892,8 +842,8 @@ ACME_JUSPAY_DATA = [
                 "avg_retry_attempts": 1.2,
                 "resolution_suggestions": [
                     "Try tomorrow",
-                    "Use different payment method"
-                ]
+                    "Use different payment method",
+                ],
             },
             {
                 "error_message": "SESSION_EXPIRED",
@@ -901,11 +851,8 @@ ACME_JUSPAY_DATA = [
                 "count": 24,
                 "percentage": 6.7,
                 "avg_retry_attempts": 1.9,
-                "resolution_suggestions": [
-                    "Login again",
-                    "Refresh page"
-                ]
-            }
+                "resolution_suggestions": ["Login again", "Refresh page"],
+            },
         ],
         "success_volume_by_payment_method": [
             {
@@ -914,7 +861,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 36.2,
                 "peak_hour_volume": 129,
                 "avg_transaction_value": 4234.56,
-                "repeat_customer_rate": 68.9
+                "repeat_customer_rate": 68.9,
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -922,7 +869,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 40.8,
                 "peak_hour_volume": 148,
                 "avg_transaction_value": 6023.78,
-                "repeat_customer_rate": 72.8
+                "repeat_customer_rate": 72.8,
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -930,7 +877,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 14.7,
                 "peak_hour_volume": 53,
                 "avg_transaction_value": 3567.89,
-                "repeat_customer_rate": 60.1
+                "repeat_customer_rate": 60.1,
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -938,7 +885,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 5.4,
                 "peak_hour_volume": 19,
                 "avg_transaction_value": 6456.23,
-                "repeat_customer_rate": 47.2
+                "repeat_customer_rate": 47.2,
             },
             {
                 "payment_method_type": "WALLET",
@@ -946,8 +893,8 @@ ACME_JUSPAY_DATA = [
                 "percentage": 3.9,
                 "peak_hour_volume": 14,
                 "avg_transaction_value": 2987.45,
-                "repeat_customer_rate": 63.1
-            }
+                "repeat_customer_rate": 63.1,
+            },
         ],
         "gmv_by_payment_method": [
             {
@@ -960,8 +907,8 @@ ACME_JUSPAY_DATA = [
                     "North": 39.8,
                     "South": 44.1,
                     "West": 37.5,
-                    "East": 30.2
-                }
+                    "East": 30.2,
+                },
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -973,8 +920,8 @@ ACME_JUSPAY_DATA = [
                     "North": 54.2,
                     "South": 50.3,
                     "West": 56.1,
-                    "East": 48.2
-                }
+                    "East": 48.2,
+                },
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -986,8 +933,8 @@ ACME_JUSPAY_DATA = [
                     "North": 30.1,
                     "South": 32.8,
                     "West": 28.4,
-                    "East": 35.1
-                }
+                    "East": 35.1,
+                },
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -999,8 +946,8 @@ ACME_JUSPAY_DATA = [
                     "North": 16.8,
                     "South": 14.2,
                     "West": 20.3,
-                    "East": 22.7
-                }
+                    "East": 22.7,
+                },
             },
             {
                 "payment_method_type": "WALLET",
@@ -1012,9 +959,9 @@ ACME_JUSPAY_DATA = [
                     "North": 24.1,
                     "South": 27.6,
                     "West": 21.2,
-                    "East": 17.8
-                }
-            }
+                    "East": 17.8,
+                },
+            },
         ],
         "average_ticket_size_by_payment_method": [
             {
@@ -1025,8 +972,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 46.8,
                     "Fashion": 31.5,
-                    "Home": 21.7
-                }
+                    "Home": 21.7,
+                },
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -1036,8 +983,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 60.1,
                     "Fashion": 27.4,
-                    "Home": 12.5
-                }
+                    "Home": 12.5,
+                },
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -1047,8 +994,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 33.1,
                     "Fashion": 41.2,
-                    "Home": 25.7
-                }
+                    "Home": 25.7,
+                },
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -1058,8 +1005,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 69.2,
                     "Fashion": 17.8,
-                    "Home": 13.0
-                }
+                    "Home": 13.0,
+                },
             },
             {
                 "payment_method_type": "WALLET",
@@ -1069,67 +1016,54 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 29.8,
                     "Fashion": 45.9,
-                    "Home": 24.3
-                }
-            }
+                    "Home": 24.3,
+                },
+            },
         ],
         "device_wise_analytics": {
             "desktop": {
                 "success_rate": 93.8,
                 "transaction_volume": 1578,
-                "preferred_payment_methods": [
-                    "CREDIT_CARD",
-                    "NET_BANKING"
-                ],
-                "avg_processing_time": 47.2
+                "preferred_payment_methods": ["CREDIT_CARD", "NET_BANKING"],
+                "avg_processing_time": 47.2,
             },
             "mobile": {
                 "success_rate": 86.4,
                 "transaction_volume": 1262,
-                "preferred_payment_methods": [
-                    "UPI",
-                    "WALLET"
-                ],
-                "avg_processing_time": 40.7
+                "preferred_payment_methods": ["UPI", "WALLET"],
+                "avg_processing_time": 40.7,
             },
             "tablet": {
                 "success_rate": 88.9,
                 "transaction_volume": 316,
-                "preferred_payment_methods": [
-                    "CREDIT_CARD",
-                    "UPI"
-                ],
-                "avg_processing_time": 44.2
-            }
+                "preferred_payment_methods": ["CREDIT_CARD", "UPI"],
+                "avg_processing_time": 44.2,
+            },
         },
         "time_based_analytics": {
             "hourly_patterns": {
-                "peak_hours": [
-                    "14:00-15:00",
-                    "21:00-22:00",
-                    "22:00-23:00"
-                ],
+                "peak_hours": ["14:00-15:00", "21:00-22:00", "22:00-23:00"],
                 "success_rate_by_hour": {
                     "morning": 91.5,
                     "afternoon": 89.9,
                     "evening": 87.9,
-                    "night": 85.6
+                    "night": 85.6,
                 },
                 "payment_method_preference_by_time": {
                     "morning": "UPI",
                     "afternoon": "CREDIT_CARD",
                     "evening": "CREDIT_CARD",
-                    "night": "UPI"
-                }
+                    "night": "UPI",
+                },
             },
             "weekly_patterns": {
                 "weekday_sr": 89.9,
                 "weekend_sr": 87.4,
                 "monday_peak": False,
-                "friday_peak": True
-            }
+                "friday_peak": True,
+            },
         },
-        "errors": []
+        "errors": [],
     },
     {
         "overall_success_rate_data": {
@@ -1140,7 +1074,7 @@ ACME_JUSPAY_DATA = [
             "processing_time_avg": 40.8,
             "retry_success_rate": 38.2,
             "peak_hour_sr": 93.8,
-            "off_peak_sr": 89.7
+            "off_peak_sr": 89.7,
         },
         "payment_method_success_rates": [
             {
@@ -1154,8 +1088,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "TRANSACTION_TIMEOUT",
                     "INSUFFICIENT_FUNDS",
-                    "BANK_ERROR"
-                ]
+                    "BANK_ERROR",
+                ],
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -1168,8 +1102,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "INSUFFICIENT_FUNDS",
                     "CARD_DECLINED",
-                    "EXPIRED_CARD"
-                ]
+                    "EXPIRED_CARD",
+                ],
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -1182,8 +1116,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "INSUFFICIENT_FUNDS",
                     "DAILY_LIMIT_EXCEEDED",
-                    "PIN_INCORRECT"
-                ]
+                    "PIN_INCORRECT",
+                ],
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -1196,8 +1130,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "BANK_TECHNICAL_ISSUE",
                     "SESSION_TIMEOUT",
-                    "INVALID_CREDENTIALS"
-                ]
+                    "INVALID_CREDENTIALS",
+                ],
             },
             {
                 "payment_method_type": "WALLET",
@@ -1210,9 +1144,9 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "INSUFFICIENT_WALLET_BALANCE",
                     "WALLET_BLOCKED",
-                    "OTP_FAILURE"
-                ]
-            }
+                    "OTP_FAILURE",
+                ],
+            },
         ],
         "failure_details": [
             {
@@ -1223,8 +1157,8 @@ ACME_JUSPAY_DATA = [
                 "avg_retry_attempts": 1.7,
                 "resolution_suggestions": [
                     "Check account balance",
-                    "Try different card"
-                ]
+                    "Try different card",
+                ],
             },
             {
                 "error_message": "BANK_TECHNICAL_ISSUE",
@@ -1232,10 +1166,7 @@ ACME_JUSPAY_DATA = [
                 "count": 46,
                 "percentage": 16.1,
                 "avg_retry_attempts": 2.2,
-                "resolution_suggestions": [
-                    "Try again later",
-                    "Contact bank"
-                ]
+                "resolution_suggestions": ["Try again later", "Contact bank"],
             },
             {
                 "error_message": "TRANSACTION_TIMEOUT",
@@ -1245,8 +1176,8 @@ ACME_JUSPAY_DATA = [
                 "avg_retry_attempts": 1.5,
                 "resolution_suggestions": [
                     "Check internet connection",
-                    "Retry payment"
-                ]
+                    "Retry payment",
+                ],
             },
             {
                 "error_message": "CARD_DECLINED",
@@ -1254,10 +1185,7 @@ ACME_JUSPAY_DATA = [
                 "count": 26,
                 "percentage": 9.1,
                 "avg_retry_attempts": 1.3,
-                "resolution_suggestions": [
-                    "Contact card issuer",
-                    "Try different card"
-                ]
+                "resolution_suggestions": ["Contact card issuer", "Try different card"],
             },
             {
                 "error_message": "DAILY_LIMIT_EXCEEDED",
@@ -1267,8 +1195,8 @@ ACME_JUSPAY_DATA = [
                 "avg_retry_attempts": 1.1,
                 "resolution_suggestions": [
                     "Try tomorrow",
-                    "Use different payment method"
-                ]
+                    "Use different payment method",
+                ],
             },
             {
                 "error_message": "SESSION_EXPIRED",
@@ -1276,11 +1204,8 @@ ACME_JUSPAY_DATA = [
                 "count": 18,
                 "percentage": 6.3,
                 "avg_retry_attempts": 1.8,
-                "resolution_suggestions": [
-                    "Login again",
-                    "Refresh page"
-                ]
-            }
+                "resolution_suggestions": ["Login again", "Refresh page"],
+            },
         ],
         "success_volume_by_payment_method": [
             {
@@ -1289,7 +1214,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 36.0,
                 "peak_hour_volume": 138,
                 "avg_transaction_value": 4298.34,
-                "repeat_customer_rate": 70.1
+                "repeat_customer_rate": 70.1,
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -1297,7 +1222,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 40.6,
                 "peak_hour_volume": 158,
                 "avg_transaction_value": 6189.45,
-                "repeat_customer_rate": 74.2
+                "repeat_customer_rate": 74.2,
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -1305,7 +1230,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 14.6,
                 "peak_hour_volume": 57,
                 "avg_transaction_value": 3634.78,
-                "repeat_customer_rate": 61.8
+                "repeat_customer_rate": 61.8,
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -1313,7 +1238,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 5.4,
                 "peak_hour_volume": 21,
                 "avg_transaction_value": 6578.9,
-                "repeat_customer_rate": 48.9
+                "repeat_customer_rate": 48.9,
             },
             {
                 "payment_method_type": "WALLET",
@@ -1321,8 +1246,8 @@ ACME_JUSPAY_DATA = [
                 "percentage": 4.0,
                 "peak_hour_volume": 15,
                 "avg_transaction_value": 3056.78,
-                "repeat_customer_rate": 64.5
-            }
+                "repeat_customer_rate": 64.5,
+            },
         ],
         "gmv_by_payment_method": [
             {
@@ -1335,8 +1260,8 @@ ACME_JUSPAY_DATA = [
                     "North": 40.5,
                     "South": 45.3,
                     "West": 38.2,
-                    "East": 31.1
-                }
+                    "East": 31.1,
+                },
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -1348,8 +1273,8 @@ ACME_JUSPAY_DATA = [
                     "North": 55.7,
                     "South": 51.8,
                     "West": 57.6,
-                    "East": 49.1
-                }
+                    "East": 49.1,
+                },
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -1361,8 +1286,8 @@ ACME_JUSPAY_DATA = [
                     "North": 31.2,
                     "South": 34.1,
                     "West": 29.3,
-                    "East": 36.4
-                }
+                    "East": 36.4,
+                },
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -1374,8 +1299,8 @@ ACME_JUSPAY_DATA = [
                     "North": 17.5,
                     "South": 15.1,
                     "West": 21.2,
-                    "East": 23.8
-                }
+                    "East": 23.8,
+                },
             },
             {
                 "payment_method_type": "WALLET",
@@ -1387,9 +1312,9 @@ ACME_JUSPAY_DATA = [
                     "North": 25.2,
                     "South": 28.7,
                     "West": 22.1,
-                    "East": 18.9
-                }
-            }
+                    "East": 18.9,
+                },
+            },
         ],
         "average_ticket_size_by_payment_method": [
             {
@@ -1400,8 +1325,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 47.5,
                     "Fashion": 30.8,
-                    "Home": 21.7
-                }
+                    "Home": 21.7,
+                },
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -1411,8 +1336,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 61.4,
                     "Fashion": 26.2,
-                    "Home": 12.4
-                }
+                    "Home": 12.4,
+                },
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -1422,8 +1347,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 34.8,
                     "Fashion": 40.1,
-                    "Home": 25.1
-                }
+                    "Home": 25.1,
+                },
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -1433,8 +1358,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 70.6,
                     "Fashion": 16.9,
-                    "Home": 12.5
-                }
+                    "Home": 12.5,
+                },
             },
             {
                 "payment_method_type": "WALLET",
@@ -1444,67 +1369,54 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 30.5,
                     "Fashion": 46.8,
-                    "Home": 22.7
-                }
-            }
+                    "Home": 22.7,
+                },
+            },
         ],
         "device_wise_analytics": {
             "desktop": {
                 "success_rate": 95.2,
                 "transaction_volume": 1649,
-                "preferred_payment_methods": [
-                    "CREDIT_CARD",
-                    "NET_BANKING"
-                ],
-                "avg_processing_time": 44.8
+                "preferred_payment_methods": ["CREDIT_CARD", "NET_BANKING"],
+                "avg_processing_time": 44.8,
             },
             "mobile": {
                 "success_rate": 89.1,
                 "transaction_volume": 1318,
-                "preferred_payment_methods": [
-                    "UPI",
-                    "WALLET"
-                ],
-                "avg_processing_time": 37.3
+                "preferred_payment_methods": ["UPI", "WALLET"],
+                "avg_processing_time": 37.3,
             },
             "tablet": {
                 "success_rate": 91.6,
                 "transaction_volume": 331,
-                "preferred_payment_methods": [
-                    "CREDIT_CARD",
-                    "UPI"
-                ],
-                "avg_processing_time": 40.8
-            }
+                "preferred_payment_methods": ["CREDIT_CARD", "UPI"],
+                "avg_processing_time": 40.8,
+            },
         },
         "time_based_analytics": {
             "hourly_patterns": {
-                "peak_hours": [
-                    "15:00-16:00",
-                    "20:00-21:00",
-                    "21:00-22:00"
-                ],
+                "peak_hours": ["15:00-16:00", "20:00-21:00", "21:00-22:00"],
                 "success_rate_by_hour": {
                     "morning": 93.2,
                     "afternoon": 91.8,
                     "evening": 90.4,
-                    "night": 88.1
+                    "night": 88.1,
                 },
                 "payment_method_preference_by_time": {
                     "morning": "UPI",
                     "afternoon": "CREDIT_CARD",
                     "evening": "CREDIT_CARD",
-                    "night": "UPI"
-                }
+                    "night": "UPI",
+                },
             },
             "weekly_patterns": {
                 "weekday_sr": 92.1,
                 "weekend_sr": 89.8,
                 "monday_peak": False,
-                "friday_peak": True
-            }
+                "friday_peak": True,
+            },
         },
-        "errors": []
+        "errors": [],
     },
     {
         "overall_success_rate_data": {
@@ -1515,7 +1427,7 @@ ACME_JUSPAY_DATA = [
             "processing_time_avg": 44.5,
             "retry_success_rate": 33.7,
             "peak_hour_sr": 90.2,
-            "off_peak_sr": 86.4
+            "off_peak_sr": 86.4,
         },
         "payment_method_success_rates": [
             {
@@ -1529,8 +1441,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "TRANSACTION_TIMEOUT",
                     "INSUFFICIENT_FUNDS",
-                    "BANK_ERROR"
-                ]
+                    "BANK_ERROR",
+                ],
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -1543,8 +1455,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "INSUFFICIENT_FUNDS",
                     "CARD_DECLINED",
-                    "EXPIRED_CARD"
-                ]
+                    "EXPIRED_CARD",
+                ],
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -1557,8 +1469,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "INSUFFICIENT_FUNDS",
                     "DAILY_LIMIT_EXCEEDED",
-                    "PIN_INCORRECT"
-                ]
+                    "PIN_INCORRECT",
+                ],
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -1571,8 +1483,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "BANK_TECHNICAL_ISSUE",
                     "SESSION_TIMEOUT",
-                    "INVALID_CREDENTIALS"
-                ]
+                    "INVALID_CREDENTIALS",
+                ],
             },
             {
                 "payment_method_type": "WALLET",
@@ -1585,9 +1497,9 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "INSUFFICIENT_WALLET_BALANCE",
                     "WALLET_BLOCKED",
-                    "OTP_FAILURE"
-                ]
-            }
+                    "OTP_FAILURE",
+                ],
+            },
         ],
         "failure_details": [
             {
@@ -1598,8 +1510,8 @@ ACME_JUSPAY_DATA = [
                 "avg_retry_attempts": 1.9,
                 "resolution_suggestions": [
                     "Check account balance",
-                    "Try different card"
-                ]
+                    "Try different card",
+                ],
             },
             {
                 "error_message": "BANK_TECHNICAL_ISSUE",
@@ -1607,10 +1519,7 @@ ACME_JUSPAY_DATA = [
                 "count": 63,
                 "percentage": 16.8,
                 "avg_retry_attempts": 2.5,
-                "resolution_suggestions": [
-                    "Try again later",
-                    "Contact bank"
-                ]
+                "resolution_suggestions": ["Try again later", "Contact bank"],
             },
             {
                 "error_message": "TRANSACTION_TIMEOUT",
@@ -1620,8 +1529,8 @@ ACME_JUSPAY_DATA = [
                 "avg_retry_attempts": 1.7,
                 "resolution_suggestions": [
                     "Check internet connection",
-                    "Retry payment"
-                ]
+                    "Retry payment",
+                ],
             },
             {
                 "error_message": "CARD_DECLINED",
@@ -1629,10 +1538,7 @@ ACME_JUSPAY_DATA = [
                 "count": 37,
                 "percentage": 9.9,
                 "avg_retry_attempts": 1.5,
-                "resolution_suggestions": [
-                    "Contact card issuer",
-                    "Try different card"
-                ]
+                "resolution_suggestions": ["Contact card issuer", "Try different card"],
             },
             {
                 "error_message": "DAILY_LIMIT_EXCEEDED",
@@ -1642,8 +1548,8 @@ ACME_JUSPAY_DATA = [
                 "avg_retry_attempts": 1.3,
                 "resolution_suggestions": [
                     "Try tomorrow",
-                    "Use different payment method"
-                ]
+                    "Use different payment method",
+                ],
             },
             {
                 "error_message": "SESSION_EXPIRED",
@@ -1651,11 +1557,8 @@ ACME_JUSPAY_DATA = [
                 "count": 26,
                 "percentage": 7.0,
                 "avg_retry_attempts": 2.0,
-                "resolution_suggestions": [
-                    "Login again",
-                    "Refresh page"
-                ]
-            }
+                "resolution_suggestions": ["Login again", "Refresh page"],
+            },
         ],
         "success_volume_by_payment_method": [
             {
@@ -1664,7 +1567,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 36.0,
                 "peak_hour_volume": 124,
                 "avg_transaction_value": 4167.89,
-                "repeat_customer_rate": 67.8
+                "repeat_customer_rate": 67.8,
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -1672,7 +1575,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 40.4,
                 "peak_hour_volume": 142,
                 "avg_transaction_value": 5923.45,
-                "repeat_customer_rate": 71.5
+                "repeat_customer_rate": 71.5,
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -1680,7 +1583,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 14.6,
                 "peak_hour_volume": 51,
                 "avg_transaction_value": 3489.23,
-                "repeat_customer_rate": 58.7
+                "repeat_customer_rate": 58.7,
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -1688,7 +1591,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 5.4,
                 "peak_hour_volume": 19,
                 "avg_transaction_value": 6334.67,
-                "repeat_customer_rate": 45.8
+                "repeat_customer_rate": 45.8,
             },
             {
                 "payment_method_type": "WALLET",
@@ -1696,8 +1599,8 @@ ACME_JUSPAY_DATA = [
                 "percentage": 3.9,
                 "peak_hour_volume": 13,
                 "avg_transaction_value": 2923.56,
-                "repeat_customer_rate": 61.9
-            }
+                "repeat_customer_rate": 61.9,
+            },
         ],
         "gmv_by_payment_method": [
             {
@@ -1710,8 +1613,8 @@ ACME_JUSPAY_DATA = [
                     "North": 38.9,
                     "South": 43.7,
                     "West": 36.1,
-                    "East": 29.8
-                }
+                    "East": 29.8,
+                },
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -1723,8 +1626,8 @@ ACME_JUSPAY_DATA = [
                     "North": 53.4,
                     "South": 49.2,
                     "West": 55.8,
-                    "East": 47.3
-                }
+                    "East": 47.3,
+                },
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -1736,8 +1639,8 @@ ACME_JUSPAY_DATA = [
                     "North": 29.7,
                     "South": 32.4,
                     "West": 27.8,
-                    "East": 34.9
-                }
+                    "East": 34.9,
+                },
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -1749,8 +1652,8 @@ ACME_JUSPAY_DATA = [
                     "North": 16.2,
                     "South": 13.8,
                     "West": 19.7,
-                    "East": 22.4
-                }
+                    "East": 22.4,
+                },
             },
             {
                 "payment_method_type": "WALLET",
@@ -1762,9 +1665,9 @@ ACME_JUSPAY_DATA = [
                     "North": 23.5,
                     "South": 27.1,
                     "West": 20.8,
-                    "East": 17.4
-                }
-            }
+                    "East": 17.4,
+                },
+            },
         ],
         "average_ticket_size_by_payment_method": [
             {
@@ -1775,8 +1678,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 45.9,
                     "Fashion": 32.4,
-                    "Home": 21.7
-                }
+                    "Home": 21.7,
+                },
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -1786,8 +1689,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 58.2,
                     "Fashion": 29.1,
-                    "Home": 12.7
-                }
+                    "Home": 12.7,
+                },
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -1797,8 +1700,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 32.7,
                     "Fashion": 42.8,
-                    "Home": 24.5
-                }
+                    "Home": 24.5,
+                },
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -1808,8 +1711,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 68.9,
                     "Fashion": 18.4,
-                    "Home": 12.7
-                }
+                    "Home": 12.7,
+                },
             },
             {
                 "payment_method_type": "WALLET",
@@ -1819,67 +1722,54 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 28.9,
                     "Fashion": 46.2,
-                    "Home": 24.9
-                }
-            }
+                    "Home": 24.9,
+                },
+            },
         ],
         "device_wise_analytics": {
             "desktop": {
                 "success_rate": 92.1,
                 "transaction_volume": 1544,
-                "preferred_payment_methods": [
-                    "CREDIT_CARD",
-                    "NET_BANKING"
-                ],
-                "avg_processing_time": 48.5
+                "preferred_payment_methods": ["CREDIT_CARD", "NET_BANKING"],
+                "avg_processing_time": 48.5,
             },
             "mobile": {
                 "success_rate": 85.8,
                 "transaction_volume": 1235,
-                "preferred_payment_methods": [
-                    "UPI",
-                    "WALLET"
-                ],
-                "avg_processing_time": 41.0
+                "preferred_payment_methods": ["UPI", "WALLET"],
+                "avg_processing_time": 41.0,
             },
             "tablet": {
                 "success_rate": 87.4,
                 "transaction_volume": 310,
-                "preferred_payment_methods": [
-                    "CREDIT_CARD",
-                    "UPI"
-                ],
-                "avg_processing_time": 45.5
-            }
+                "preferred_payment_methods": ["CREDIT_CARD", "UPI"],
+                "avg_processing_time": 45.5,
+            },
         },
         "time_based_analytics": {
             "hourly_patterns": {
-                "peak_hours": [
-                    "16:00-17:00",
-                    "19:00-20:00",
-                    "22:00-23:00"
-                ],
+                "peak_hours": ["16:00-17:00", "19:00-20:00", "22:00-23:00"],
                 "success_rate_by_hour": {
                     "morning": 90.5,
                     "afternoon": 88.7,
                     "evening": 86.9,
-                    "night": 84.2
+                    "night": 84.2,
                 },
                 "payment_method_preference_by_time": {
                     "morning": "UPI",
                     "afternoon": "CREDIT_CARD",
                     "evening": "CREDIT_CARD",
-                    "night": "UPI"
-                }
+                    "night": "UPI",
+                },
             },
             "weekly_patterns": {
                 "weekday_sr": 88.6,
                 "weekend_sr": 86.1,
                 "monday_peak": False,
-                "friday_peak": True
-            }
+                "friday_peak": True,
+            },
         },
-        "errors": []
+        "errors": [],
     },
     {
         "overall_success_rate_data": {
@@ -1890,7 +1780,7 @@ ACME_JUSPAY_DATA = [
             "processing_time_avg": 38.9,
             "retry_success_rate": 41.3,
             "peak_hour_sr": 95.7,
-            "off_peak_sr": 91.8
+            "off_peak_sr": 91.8,
         },
         "payment_method_success_rates": [
             {
@@ -1904,8 +1794,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "TRANSACTION_TIMEOUT",
                     "INSUFFICIENT_FUNDS",
-                    "BANK_ERROR"
-                ]
+                    "BANK_ERROR",
+                ],
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -1918,8 +1808,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "INSUFFICIENT_FUNDS",
                     "CARD_DECLINED",
-                    "EXPIRED_CARD"
-                ]
+                    "EXPIRED_CARD",
+                ],
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -1932,8 +1822,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "INSUFFICIENT_FUNDS",
                     "DAILY_LIMIT_EXCEEDED",
-                    "PIN_INCORRECT"
-                ]
+                    "PIN_INCORRECT",
+                ],
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -1946,8 +1836,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "BANK_TECHNICAL_ISSUE",
                     "SESSION_TIMEOUT",
-                    "INVALID_CREDENTIALS"
-                ]
+                    "INVALID_CREDENTIALS",
+                ],
             },
             {
                 "payment_method_type": "WALLET",
@@ -1960,9 +1850,9 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "INSUFFICIENT_WALLET_BALANCE",
                     "WALLET_BLOCKED",
-                    "OTP_FAILURE"
-                ]
-            }
+                    "OTP_FAILURE",
+                ],
+            },
         ],
         "failure_details": [
             {
@@ -1973,8 +1863,8 @@ ACME_JUSPAY_DATA = [
                 "avg_retry_attempts": 1.6,
                 "resolution_suggestions": [
                     "Check account balance",
-                    "Try different card"
-                ]
+                    "Try different card",
+                ],
             },
             {
                 "error_message": "BANK_TECHNICAL_ISSUE",
@@ -1982,10 +1872,7 @@ ACME_JUSPAY_DATA = [
                 "count": 36,
                 "percentage": 15.8,
                 "avg_retry_attempts": 2.1,
-                "resolution_suggestions": [
-                    "Try again later",
-                    "Contact bank"
-                ]
+                "resolution_suggestions": ["Try again later", "Contact bank"],
             },
             {
                 "error_message": "TRANSACTION_TIMEOUT",
@@ -1995,8 +1882,8 @@ ACME_JUSPAY_DATA = [
                 "avg_retry_attempts": 1.4,
                 "resolution_suggestions": [
                     "Check internet connection",
-                    "Retry payment"
-                ]
+                    "Retry payment",
+                ],
             },
             {
                 "error_message": "CARD_DECLINED",
@@ -2004,10 +1891,7 @@ ACME_JUSPAY_DATA = [
                 "count": 19,
                 "percentage": 8.3,
                 "avg_retry_attempts": 1.2,
-                "resolution_suggestions": [
-                    "Contact card issuer",
-                    "Try different card"
-                ]
+                "resolution_suggestions": ["Contact card issuer", "Try different card"],
             },
             {
                 "error_message": "DAILY_LIMIT_EXCEEDED",
@@ -2017,8 +1901,8 @@ ACME_JUSPAY_DATA = [
                 "avg_retry_attempts": 1.0,
                 "resolution_suggestions": [
                     "Try tomorrow",
-                    "Use different payment method"
-                ]
+                    "Use different payment method",
+                ],
             },
             {
                 "error_message": "SESSION_EXPIRED",
@@ -2026,11 +1910,8 @@ ACME_JUSPAY_DATA = [
                 "count": 12,
                 "percentage": 5.3,
                 "avg_retry_attempts": 1.7,
-                "resolution_suggestions": [
-                    "Login again",
-                    "Refresh page"
-                ]
-            }
+                "resolution_suggestions": ["Login again", "Refresh page"],
+            },
         ],
         "success_volume_by_payment_method": [
             {
@@ -2039,7 +1920,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 36.0,
                 "peak_hour_volume": 145,
                 "avg_transaction_value": 4389.67,
-                "repeat_customer_rate": 72.3
+                "repeat_customer_rate": 72.3,
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -2047,7 +1928,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 40.3,
                 "peak_hour_volume": 165,
                 "avg_transaction_value": 6267.89,
-                "repeat_customer_rate": 75.8
+                "repeat_customer_rate": 75.8,
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -2055,7 +1936,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 14.7,
                 "peak_hour_volume": 60,
                 "avg_transaction_value": 3698.45,
-                "repeat_customer_rate": 63.4
+                "repeat_customer_rate": 63.4,
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -2063,7 +1944,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 5.5,
                 "peak_hour_volume": 22,
                 "avg_transaction_value": 6723.56,
-                "repeat_customer_rate": 50.2
+                "repeat_customer_rate": 50.2,
             },
             {
                 "payment_method_type": "WALLET",
@@ -2071,8 +1952,8 @@ ACME_JUSPAY_DATA = [
                 "percentage": 4.0,
                 "peak_hour_volume": 16,
                 "avg_transaction_value": 3134.78,
-                "repeat_customer_rate": 66.1
-            }
+                "repeat_customer_rate": 66.1,
+            },
         ],
         "gmv_by_payment_method": [
             {
@@ -2085,8 +1966,8 @@ ACME_JUSPAY_DATA = [
                     "North": 41.2,
                     "South": 46.8,
                     "West": 39.1,
-                    "East": 32.4
-                }
+                    "East": 32.4,
+                },
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -2098,8 +1979,8 @@ ACME_JUSPAY_DATA = [
                     "North": 57.1,
                     "South": 53.4,
                     "West": 59.2,
-                    "East": 50.8
-                }
+                    "East": 50.8,
+                },
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -2111,8 +1992,8 @@ ACME_JUSPAY_DATA = [
                     "North": 32.5,
                     "South": 35.7,
                     "West": 30.1,
-                    "East": 37.8
-                }
+                    "East": 37.8,
+                },
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -2124,8 +2005,8 @@ ACME_JUSPAY_DATA = [
                     "North": 18.2,
                     "South": 15.8,
                     "West": 22.1,
-                    "East": 24.9
-                }
+                    "East": 24.9,
+                },
             },
             {
                 "payment_method_type": "WALLET",
@@ -2137,9 +2018,9 @@ ACME_JUSPAY_DATA = [
                     "North": 26.3,
                     "South": 30.1,
                     "West": 23.4,
-                    "East": 19.8
-                }
-            }
+                    "East": 19.8,
+                },
+            },
         ],
         "average_ticket_size_by_payment_method": [
             {
@@ -2150,8 +2031,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 48.2,
                     "Fashion": 30.1,
-                    "Home": 21.7
-                }
+                    "Home": 21.7,
+                },
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -2161,8 +2042,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 62.7,
                     "Fashion": 25.8,
-                    "Home": 11.5
-                }
+                    "Home": 11.5,
+                },
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -2172,8 +2053,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 35.4,
                     "Fashion": 39.8,
-                    "Home": 24.8
-                }
+                    "Home": 24.8,
+                },
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -2183,8 +2064,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 71.8,
                     "Fashion": 16.2,
-                    "Home": 12.0
-                }
+                    "Home": 12.0,
+                },
             },
             {
                 "payment_method_type": "WALLET",
@@ -2194,67 +2075,54 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 31.2,
                     "Fashion": 47.1,
-                    "Home": 21.7
-                }
-            }
+                    "Home": 21.7,
+                },
+            },
         ],
         "device_wise_analytics": {
             "desktop": {
                 "success_rate": 96.8,
                 "transaction_volume": 1694,
-                "preferred_payment_methods": [
-                    "CREDIT_CARD",
-                    "NET_BANKING"
-                ],
-                "avg_processing_time": 42.9
+                "preferred_payment_methods": ["CREDIT_CARD", "NET_BANKING"],
+                "avg_processing_time": 42.9,
             },
             "mobile": {
                 "success_rate": 91.6,
                 "transaction_volume": 1354,
-                "preferred_payment_methods": [
-                    "UPI",
-                    "WALLET"
-                ],
-                "avg_processing_time": 35.4
+                "preferred_payment_methods": ["UPI", "WALLET"],
+                "avg_processing_time": 35.4,
             },
             "tablet": {
                 "success_rate": 93.2,
                 "transaction_volume": 339,
-                "preferred_payment_methods": [
-                    "CREDIT_CARD",
-                    "UPI"
-                ],
-                "avg_processing_time": 38.9
-            }
+                "preferred_payment_methods": ["CREDIT_CARD", "UPI"],
+                "avg_processing_time": 38.9,
+            },
         },
         "time_based_analytics": {
             "hourly_patterns": {
-                "peak_hours": [
-                    "17:00-18:00",
-                    "20:00-21:00",
-                    "21:00-22:00"
-                ],
+                "peak_hours": ["17:00-18:00", "20:00-21:00", "21:00-22:00"],
                 "success_rate_by_hour": {
                     "morning": 95.1,
                     "afternoon": 93.7,
                     "evening": 92.3,
-                    "night": 90.8
+                    "night": 90.8,
                 },
                 "payment_method_preference_by_time": {
                     "morning": "UPI",
                     "afternoon": "CREDIT_CARD",
                     "evening": "CREDIT_CARD",
-                    "night": "UPI"
-                }
+                    "night": "UPI",
+                },
             },
             "weekly_patterns": {
                 "weekday_sr": 94.2,
                 "weekend_sr": 91.8,
                 "monday_peak": False,
-                "friday_peak": True
-            }
+                "friday_peak": True,
+            },
         },
-        "errors": []
+        "errors": [],
     },
     {
         "overall_success_rate_data": {
@@ -2265,7 +2133,7 @@ ACME_JUSPAY_DATA = [
             "processing_time_avg": 42.1,
             "retry_success_rate": 36.9,
             "peak_hour_sr": 92.4,
-            "off_peak_sr": 88.2
+            "off_peak_sr": 88.2,
         },
         "payment_method_success_rates": [
             {
@@ -2279,8 +2147,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "TRANSACTION_TIMEOUT",
                     "INSUFFICIENT_FUNDS",
-                    "BANK_ERROR"
-                ]
+                    "BANK_ERROR",
+                ],
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -2293,8 +2161,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "INSUFFICIENT_FUNDS",
                     "CARD_DECLINED",
-                    "EXPIRED_CARD"
-                ]
+                    "EXPIRED_CARD",
+                ],
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -2307,8 +2175,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "INSUFFICIENT_FUNDS",
                     "DAILY_LIMIT_EXCEEDED",
-                    "PIN_INCORRECT"
-                ]
+                    "PIN_INCORRECT",
+                ],
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -2321,8 +2189,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "BANK_TECHNICAL_ISSUE",
                     "SESSION_TIMEOUT",
-                    "INVALID_CREDENTIALS"
-                ]
+                    "INVALID_CREDENTIALS",
+                ],
             },
             {
                 "payment_method_type": "WALLET",
@@ -2335,9 +2203,9 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "INSUFFICIENT_WALLET_BALANCE",
                     "WALLET_BLOCKED",
-                    "OTP_FAILURE"
-                ]
-            }
+                    "OTP_FAILURE",
+                ],
+            },
         ],
         "failure_details": [
             {
@@ -2348,8 +2216,8 @@ ACME_JUSPAY_DATA = [
                 "avg_retry_attempts": 1.8,
                 "resolution_suggestions": [
                     "Check account balance",
-                    "Try different card"
-                ]
+                    "Try different card",
+                ],
             },
             {
                 "error_message": "BANK_TECHNICAL_ISSUE",
@@ -2357,10 +2225,7 @@ ACME_JUSPAY_DATA = [
                 "count": 53,
                 "percentage": 16.0,
                 "avg_retry_attempts": 2.3,
-                "resolution_suggestions": [
-                    "Try again later",
-                    "Contact bank"
-                ]
+                "resolution_suggestions": ["Try again later", "Contact bank"],
             },
             {
                 "error_message": "TRANSACTION_TIMEOUT",
@@ -2370,8 +2235,8 @@ ACME_JUSPAY_DATA = [
                 "avg_retry_attempts": 1.6,
                 "resolution_suggestions": [
                     "Check internet connection",
-                    "Retry payment"
-                ]
+                    "Retry payment",
+                ],
             },
             {
                 "error_message": "CARD_DECLINED",
@@ -2379,10 +2244,7 @@ ACME_JUSPAY_DATA = [
                 "count": 32,
                 "percentage": 9.7,
                 "avg_retry_attempts": 1.4,
-                "resolution_suggestions": [
-                    "Contact card issuer",
-                    "Try different card"
-                ]
+                "resolution_suggestions": ["Contact card issuer", "Try different card"],
             },
             {
                 "error_message": "DAILY_LIMIT_EXCEEDED",
@@ -2392,8 +2254,8 @@ ACME_JUSPAY_DATA = [
                 "avg_retry_attempts": 1.2,
                 "resolution_suggestions": [
                     "Try tomorrow",
-                    "Use different payment method"
-                ]
+                    "Use different payment method",
+                ],
             },
             {
                 "error_message": "SESSION_EXPIRED",
@@ -2401,11 +2263,8 @@ ACME_JUSPAY_DATA = [
                 "count": 21,
                 "percentage": 6.3,
                 "avg_retry_attempts": 1.9,
-                "resolution_suggestions": [
-                    "Login again",
-                    "Refresh page"
-                ]
-            }
+                "resolution_suggestions": ["Login again", "Refresh page"],
+            },
         ],
         "success_volume_by_payment_method": [
             {
@@ -2414,7 +2273,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 36.1,
                 "peak_hour_volume": 133,
                 "avg_transaction_value": 4289.34,
-                "repeat_customer_rate": 70.5
+                "repeat_customer_rate": 70.5,
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -2422,7 +2281,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 40.3,
                 "peak_hour_volume": 152,
                 "avg_transaction_value": 6089.78,
-                "repeat_customer_rate": 73.9
+                "repeat_customer_rate": 73.9,
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -2430,7 +2289,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 14.6,
                 "peak_hour_volume": 55,
                 "avg_transaction_value": 3598.67,
-                "repeat_customer_rate": 61.8
+                "repeat_customer_rate": 61.8,
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -2438,7 +2297,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 5.4,
                 "peak_hour_volume": 20,
                 "avg_transaction_value": 6545.23,
-                "repeat_customer_rate": 48.7
+                "repeat_customer_rate": 48.7,
             },
             {
                 "payment_method_type": "WALLET",
@@ -2446,8 +2305,8 @@ ACME_JUSPAY_DATA = [
                 "percentage": 3.9,
                 "peak_hour_volume": 14,
                 "avg_transaction_value": 3067.89,
-                "repeat_customer_rate": 64.2
-            }
+                "repeat_customer_rate": 64.2,
+            },
         ],
         "gmv_by_payment_method": [
             {
@@ -2460,8 +2319,8 @@ ACME_JUSPAY_DATA = [
                     "North": 40.1,
                     "South": 44.5,
                     "West": 37.8,
-                    "East": 31.2
-                }
+                    "East": 31.2,
+                },
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -2473,8 +2332,8 @@ ACME_JUSPAY_DATA = [
                     "North": 54.8,
                     "South": 51.2,
                     "West": 57.1,
-                    "East": 49.4
-                }
+                    "East": 49.4,
+                },
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -2486,8 +2345,8 @@ ACME_JUSPAY_DATA = [
                     "North": 31.4,
                     "South": 34.2,
                     "West": 29.8,
-                    "East": 36.1
-                }
+                    "East": 36.1,
+                },
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -2499,8 +2358,8 @@ ACME_JUSPAY_DATA = [
                     "North": 17.1,
                     "South": 14.7,
                     "West": 20.8,
-                    "East": 23.5
-                }
+                    "East": 23.5,
+                },
             },
             {
                 "payment_method_type": "WALLET",
@@ -2512,9 +2371,9 @@ ACME_JUSPAY_DATA = [
                     "North": 24.7,
                     "South": 28.4,
                     "West": 21.9,
-                    "East": 18.6
-                }
-            }
+                    "East": 18.6,
+                },
+            },
         ],
         "average_ticket_size_by_payment_method": [
             {
@@ -2525,8 +2384,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 46.8,
                     "Fashion": 31.4,
-                    "Home": 21.8
-                }
+                    "Home": 21.8,
+                },
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -2536,8 +2395,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 60.4,
                     "Fashion": 27.9,
-                    "Home": 11.7
-                }
+                    "Home": 11.7,
+                },
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -2547,8 +2406,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 34.1,
                     "Fashion": 41.5,
-                    "Home": 24.4
-                }
+                    "Home": 24.4,
+                },
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -2558,8 +2417,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 70.3,
                     "Fashion": 17.2,
-                    "Home": 12.5
-                }
+                    "Home": 12.5,
+                },
             },
             {
                 "payment_method_type": "WALLET",
@@ -2569,67 +2428,54 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 30.1,
                     "Fashion": 46.8,
-                    "Home": 23.1
-                }
-            }
+                    "Home": 23.1,
+                },
+            },
         ],
         "device_wise_analytics": {
             "desktop": {
                 "success_rate": 93.4,
                 "transaction_volume": 1617,
-                "preferred_payment_methods": [
-                    "CREDIT_CARD",
-                    "NET_BANKING"
-                ],
-                "avg_processing_time": 46.1
+                "preferred_payment_methods": ["CREDIT_CARD", "NET_BANKING"],
+                "avg_processing_time": 46.1,
             },
             "mobile": {
                 "success_rate": 87.9,
                 "transaction_volume": 1294,
-                "preferred_payment_methods": [
-                    "UPI",
-                    "WALLET"
-                ],
-                "avg_processing_time": 38.6
+                "preferred_payment_methods": ["UPI", "WALLET"],
+                "avg_processing_time": 38.6,
             },
             "tablet": {
                 "success_rate": 89.5,
                 "transaction_volume": 323,
-                "preferred_payment_methods": [
-                    "CREDIT_CARD",
-                    "UPI"
-                ],
-                "avg_processing_time": 42.1
-            }
+                "preferred_payment_methods": ["CREDIT_CARD", "UPI"],
+                "avg_processing_time": 42.1,
+            },
         },
         "time_based_analytics": {
             "hourly_patterns": {
-                "peak_hours": [
-                    "14:00-15:00",
-                    "19:00-20:00",
-                    "20:00-21:00"
-                ],
+                "peak_hours": ["14:00-15:00", "19:00-20:00", "20:00-21:00"],
                 "success_rate_by_hour": {
                     "morning": 92.1,
                     "afternoon": 90.3,
                     "evening": 88.7,
-                    "night": 86.5
+                    "night": 86.5,
                 },
                 "payment_method_preference_by_time": {
                     "morning": "UPI",
                     "afternoon": "CREDIT_CARD",
                     "evening": "CREDIT_CARD",
-                    "night": "UPI"
-                }
+                    "night": "UPI",
+                },
             },
             "weekly_patterns": {
                 "weekday_sr": 90.5,
                 "weekend_sr": 88.1,
                 "monday_peak": False,
-                "friday_peak": True
-            }
+                "friday_peak": True,
+            },
         },
-        "errors": []
+        "errors": [],
     },
     {
         "overall_success_rate_data": {
@@ -2640,7 +2486,7 @@ ACME_JUSPAY_DATA = [
             "processing_time_avg": 39.4,
             "retry_success_rate": 40.1,
             "peak_hour_sr": 95.2,
-            "off_peak_sr": 91.3
+            "off_peak_sr": 91.3,
         },
         "payment_method_success_rates": [
             {
@@ -2654,8 +2500,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "TRANSACTION_TIMEOUT",
                     "INSUFFICIENT_FUNDS",
-                    "BANK_ERROR"
-                ]
+                    "BANK_ERROR",
+                ],
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -2668,8 +2514,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "INSUFFICIENT_FUNDS",
                     "CARD_DECLINED",
-                    "EXPIRED_CARD"
-                ]
+                    "EXPIRED_CARD",
+                ],
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -2682,8 +2528,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "INSUFFICIENT_FUNDS",
                     "DAILY_LIMIT_EXCEEDED",
-                    "PIN_INCORRECT"
-                ]
+                    "PIN_INCORRECT",
+                ],
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -2696,8 +2542,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "BANK_TECHNICAL_ISSUE",
                     "SESSION_TIMEOUT",
-                    "INVALID_CREDENTIALS"
-                ]
+                    "INVALID_CREDENTIALS",
+                ],
             },
             {
                 "payment_method_type": "WALLET",
@@ -2710,9 +2556,9 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "INSUFFICIENT_WALLET_BALANCE",
                     "WALLET_BLOCKED",
-                    "OTP_FAILURE"
-                ]
-            }
+                    "OTP_FAILURE",
+                ],
+            },
         ],
         "failure_details": [
             {
@@ -2723,8 +2569,8 @@ ACME_JUSPAY_DATA = [
                 "avg_retry_attempts": 1.7,
                 "resolution_suggestions": [
                     "Check account balance",
-                    "Try different card"
-                ]
+                    "Try different card",
+                ],
             },
             {
                 "error_message": "BANK_TECHNICAL_ISSUE",
@@ -2732,10 +2578,7 @@ ACME_JUSPAY_DATA = [
                 "count": 40,
                 "percentage": 16.1,
                 "avg_retry_attempts": 2.2,
-                "resolution_suggestions": [
-                    "Try again later",
-                    "Contact bank"
-                ]
+                "resolution_suggestions": ["Try again later", "Contact bank"],
             },
             {
                 "error_message": "TRANSACTION_TIMEOUT",
@@ -2745,8 +2588,8 @@ ACME_JUSPAY_DATA = [
                 "avg_retry_attempts": 1.5,
                 "resolution_suggestions": [
                     "Check internet connection",
-                    "Retry payment"
-                ]
+                    "Retry payment",
+                ],
             },
             {
                 "error_message": "CARD_DECLINED",
@@ -2754,10 +2597,7 @@ ACME_JUSPAY_DATA = [
                 "count": 22,
                 "percentage": 8.8,
                 "avg_retry_attempts": 1.3,
-                "resolution_suggestions": [
-                    "Contact card issuer",
-                    "Try different card"
-                ]
+                "resolution_suggestions": ["Contact card issuer", "Try different card"],
             },
             {
                 "error_message": "DAILY_LIMIT_EXCEEDED",
@@ -2767,8 +2607,8 @@ ACME_JUSPAY_DATA = [
                 "avg_retry_attempts": 1.1,
                 "resolution_suggestions": [
                     "Try tomorrow",
-                    "Use different payment method"
-                ]
+                    "Use different payment method",
+                ],
             },
             {
                 "error_message": "SESSION_EXPIRED",
@@ -2776,11 +2616,8 @@ ACME_JUSPAY_DATA = [
                 "count": 15,
                 "percentage": 6.0,
                 "avg_retry_attempts": 1.8,
-                "resolution_suggestions": [
-                    "Login again",
-                    "Refresh page"
-                ]
-            }
+                "resolution_suggestions": ["Login again", "Refresh page"],
+            },
         ],
         "success_volume_by_payment_method": [
             {
@@ -2789,7 +2626,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 35.8,
                 "peak_hour_volume": 143,
                 "avg_transaction_value": 4445.78,
-                "repeat_customer_rate": 71.8
+                "repeat_customer_rate": 71.8,
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -2797,7 +2634,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 40.3,
                 "peak_hour_volume": 164,
                 "avg_transaction_value": 6334.56,
-                "repeat_customer_rate": 75.2
+                "repeat_customer_rate": 75.2,
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -2805,7 +2642,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 14.6,
                 "peak_hour_volume": 59,
                 "avg_transaction_value": 3756.89,
-                "repeat_customer_rate": 62.9
+                "repeat_customer_rate": 62.9,
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -2813,7 +2650,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 5.5,
                 "peak_hour_volume": 22,
                 "avg_transaction_value": 6789.34,
-                "repeat_customer_rate": 49.8
+                "repeat_customer_rate": 49.8,
             },
             {
                 "payment_method_type": "WALLET",
@@ -2821,8 +2658,8 @@ ACME_JUSPAY_DATA = [
                 "percentage": 4.0,
                 "peak_hour_volume": 16,
                 "avg_transaction_value": 3189.45,
-                "repeat_customer_rate": 65.7
-            }
+                "repeat_customer_rate": 65.7,
+            },
         ],
         "gmv_by_payment_method": [
             {
@@ -2835,8 +2672,8 @@ ACME_JUSPAY_DATA = [
                     "North": 41.8,
                     "South": 47.2,
                     "West": 39.6,
-                    "East": 32.9
-                }
+                    "East": 32.9,
+                },
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -2848,8 +2685,8 @@ ACME_JUSPAY_DATA = [
                     "North": 56.8,
                     "South": 53.1,
                     "West": 58.9,
-                    "East": 50.5
-                }
+                    "East": 50.5,
+                },
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -2861,8 +2698,8 @@ ACME_JUSPAY_DATA = [
                     "North": 32.1,
                     "South": 35.4,
                     "West": 29.8,
-                    "East": 37.2
-                }
+                    "East": 37.2,
+                },
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -2874,8 +2711,8 @@ ACME_JUSPAY_DATA = [
                     "North": 17.9,
                     "South": 15.4,
                     "West": 21.7,
-                    "East": 24.3
-                }
+                    "East": 24.3,
+                },
             },
             {
                 "payment_method_type": "WALLET",
@@ -2887,9 +2724,9 @@ ACME_JUSPAY_DATA = [
                     "North": 25.8,
                     "South": 29.7,
                     "West": 22.9,
-                    "East": 19.4
-                }
-            }
+                    "East": 19.4,
+                },
+            },
         ],
         "average_ticket_size_by_payment_method": [
             {
@@ -2900,8 +2737,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 48.9,
                     "Fashion": 29.4,
-                    "Home": 21.7
-                }
+                    "Home": 21.7,
+                },
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -2911,8 +2748,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 63.1,
                     "Fashion": 25.2,
-                    "Home": 11.7
-                }
+                    "Home": 11.7,
+                },
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -2922,8 +2759,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 36.1,
                     "Fashion": 39.2,
-                    "Home": 24.7
-                }
+                    "Home": 24.7,
+                },
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -2933,8 +2770,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 72.4,
                     "Fashion": 15.8,
-                    "Home": 11.8
-                }
+                    "Home": 11.8,
+                },
             },
             {
                 "payment_method_type": "WALLET",
@@ -2944,67 +2781,54 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 31.8,
                     "Fashion": 47.6,
-                    "Home": 20.6
-                }
-            }
+                    "Home": 20.6,
+                },
+            },
         ],
         "device_wise_analytics": {
             "desktop": {
                 "success_rate": 96.1,
                 "transaction_volume": 1700,
-                "preferred_payment_methods": [
-                    "CREDIT_CARD",
-                    "NET_BANKING"
-                ],
-                "avg_processing_time": 43.4
+                "preferred_payment_methods": ["CREDIT_CARD", "NET_BANKING"],
+                "avg_processing_time": 43.4,
             },
             "mobile": {
                 "success_rate": 90.8,
                 "transaction_volume": 1361,
-                "preferred_payment_methods": [
-                    "UPI",
-                    "WALLET"
-                ],
-                "avg_processing_time": 36.1
+                "preferred_payment_methods": ["UPI", "WALLET"],
+                "avg_processing_time": 36.1,
             },
             "tablet": {
                 "success_rate": 92.5,
                 "transaction_volume": 340,
-                "preferred_payment_methods": [
-                    "CREDIT_CARD",
-                    "UPI"
-                ],
-                "avg_processing_time": 39.4
-            }
+                "preferred_payment_methods": ["CREDIT_CARD", "UPI"],
+                "avg_processing_time": 39.4,
+            },
         },
         "time_based_analytics": {
             "hourly_patterns": {
-                "peak_hours": [
-                    "15:00-16:00",
-                    "21:00-22:00",
-                    "22:00-23:00"
-                ],
+                "peak_hours": ["15:00-16:00", "21:00-22:00", "22:00-23:00"],
                 "success_rate_by_hour": {
                     "morning": 94.8,
                     "afternoon": 93.1,
                     "evening": 91.7,
-                    "night": 89.9
+                    "night": 89.9,
                 },
                 "payment_method_preference_by_time": {
                     "morning": "UPI",
                     "afternoon": "CREDIT_CARD",
                     "evening": "CREDIT_CARD",
-                    "night": "UPI"
-                }
+                    "night": "UPI",
+                },
             },
             "weekly_patterns": {
                 "weekday_sr": 93.4,
                 "weekend_sr": 91.2,
                 "monday_peak": False,
-                "friday_peak": True
-            }
+                "friday_peak": True,
+            },
         },
-        "errors": []
+        "errors": [],
     },
     {
         "overall_success_rate_data": {
@@ -3015,7 +2839,7 @@ ACME_JUSPAY_DATA = [
             "processing_time_avg": 43.8,
             "retry_success_rate": 35.4,
             "peak_hour_sr": 91.1,
-            "off_peak_sr": 86.7
+            "off_peak_sr": 86.7,
         },
         "payment_method_success_rates": [
             {
@@ -3029,8 +2853,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "TRANSACTION_TIMEOUT",
                     "INSUFFICIENT_FUNDS",
-                    "BANK_ERROR"
-                ]
+                    "BANK_ERROR",
+                ],
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -3043,8 +2867,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "INSUFFICIENT_FUNDS",
                     "CARD_DECLINED",
-                    "EXPIRED_CARD"
-                ]
+                    "EXPIRED_CARD",
+                ],
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -3057,8 +2881,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "INSUFFICIENT_FUNDS",
                     "DAILY_LIMIT_EXCEEDED",
-                    "PIN_INCORRECT"
-                ]
+                    "PIN_INCORRECT",
+                ],
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -3071,8 +2895,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "BANK_TECHNICAL_ISSUE",
                     "SESSION_TIMEOUT",
-                    "INVALID_CREDENTIALS"
-                ]
+                    "INVALID_CREDENTIALS",
+                ],
             },
             {
                 "payment_method_type": "WALLET",
@@ -3085,9 +2909,9 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "INSUFFICIENT_WALLET_BALANCE",
                     "WALLET_BLOCKED",
-                    "OTP_FAILURE"
-                ]
-            }
+                    "OTP_FAILURE",
+                ],
+            },
         ],
         "failure_details": [
             {
@@ -3098,8 +2922,8 @@ ACME_JUSPAY_DATA = [
                 "avg_retry_attempts": 1.9,
                 "resolution_suggestions": [
                     "Check account balance",
-                    "Try different card"
-                ]
+                    "Try different card",
+                ],
             },
             {
                 "error_message": "BANK_TECHNICAL_ISSUE",
@@ -3107,10 +2931,7 @@ ACME_JUSPAY_DATA = [
                 "count": 59,
                 "percentage": 16.1,
                 "avg_retry_attempts": 2.4,
-                "resolution_suggestions": [
-                    "Try again later",
-                    "Contact bank"
-                ]
+                "resolution_suggestions": ["Try again later", "Contact bank"],
             },
             {
                 "error_message": "TRANSACTION_TIMEOUT",
@@ -3120,8 +2941,8 @@ ACME_JUSPAY_DATA = [
                 "avg_retry_attempts": 1.7,
                 "resolution_suggestions": [
                     "Check internet connection",
-                    "Retry payment"
-                ]
+                    "Retry payment",
+                ],
             },
             {
                 "error_message": "CARD_DECLINED",
@@ -3129,10 +2950,7 @@ ACME_JUSPAY_DATA = [
                 "count": 35,
                 "percentage": 9.6,
                 "avg_retry_attempts": 1.5,
-                "resolution_suggestions": [
-                    "Contact card issuer",
-                    "Try different card"
-                ]
+                "resolution_suggestions": ["Contact card issuer", "Try different card"],
             },
             {
                 "error_message": "DAILY_LIMIT_EXCEEDED",
@@ -3142,8 +2960,8 @@ ACME_JUSPAY_DATA = [
                 "avg_retry_attempts": 1.3,
                 "resolution_suggestions": [
                     "Try tomorrow",
-                    "Use different payment method"
-                ]
+                    "Use different payment method",
+                ],
             },
             {
                 "error_message": "SESSION_EXPIRED",
@@ -3151,11 +2969,8 @@ ACME_JUSPAY_DATA = [
                 "count": 23,
                 "percentage": 6.3,
                 "avg_retry_attempts": 2.0,
-                "resolution_suggestions": [
-                    "Login again",
-                    "Refresh page"
-                ]
-            }
+                "resolution_suggestions": ["Login again", "Refresh page"],
+            },
         ],
         "success_volume_by_payment_method": [
             {
@@ -3164,7 +2979,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 36.2,
                 "peak_hour_volume": 127,
                 "avg_transaction_value": 4278.9,
-                "repeat_customer_rate": 69.4
+                "repeat_customer_rate": 69.4,
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -3172,7 +2987,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 40.6,
                 "peak_hour_volume": 146,
                 "avg_transaction_value": 6012.34,
-                "repeat_customer_rate": 72.7
+                "repeat_customer_rate": 72.7,
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -3180,7 +2995,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 14.7,
                 "peak_hour_volume": 53,
                 "avg_transaction_value": 3623.78,
-                "repeat_customer_rate": 60.5
+                "repeat_customer_rate": 60.5,
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -3188,7 +3003,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 5.5,
                 "peak_hour_volume": 20,
                 "avg_transaction_value": 6456.78,
-                "repeat_customer_rate": 47.9
+                "repeat_customer_rate": 47.9,
             },
             {
                 "payment_method_type": "WALLET",
@@ -3196,8 +3011,8 @@ ACME_JUSPAY_DATA = [
                 "percentage": 3.9,
                 "peak_hour_volume": 14,
                 "avg_transaction_value": 3034.56,
-                "repeat_customer_rate": 63.8
-            }
+                "repeat_customer_rate": 63.8,
+            },
         ],
         "gmv_by_payment_method": [
             {
@@ -3210,8 +3025,8 @@ ACME_JUSPAY_DATA = [
                     "North": 39.7,
                     "South": 44.1,
                     "West": 37.4,
-                    "East": 30.8
-                }
+                    "East": 30.8,
+                },
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -3223,8 +3038,8 @@ ACME_JUSPAY_DATA = [
                     "North": 54.2,
                     "South": 50.6,
                     "West": 56.4,
-                    "East": 48.9
-                }
+                    "East": 48.9,
+                },
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -3236,8 +3051,8 @@ ACME_JUSPAY_DATA = [
                     "North": 30.8,
                     "South": 33.7,
                     "West": 29.1,
-                    "East": 35.6
-                }
+                    "East": 35.6,
+                },
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -3249,8 +3064,8 @@ ACME_JUSPAY_DATA = [
                     "North": 16.7,
                     "South": 14.3,
                     "West": 20.2,
-                    "East": 23.1
-                }
+                    "East": 23.1,
+                },
             },
             {
                 "payment_method_type": "WALLET",
@@ -3262,9 +3077,9 @@ ACME_JUSPAY_DATA = [
                     "North": 24.3,
                     "South": 28.0,
                     "West": 21.6,
-                    "East": 18.2
-                }
-            }
+                    "East": 18.2,
+                },
+            },
         ],
         "average_ticket_size_by_payment_method": [
             {
@@ -3275,8 +3090,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 46.5,
                     "Fashion": 31.8,
-                    "Home": 21.7
-                }
+                    "Home": 21.7,
+                },
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -3286,8 +3101,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 59.8,
                     "Fashion": 28.4,
-                    "Home": 11.8
-                }
+                    "Home": 11.8,
+                },
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -3297,8 +3112,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 33.9,
                     "Fashion": 41.8,
-                    "Home": 24.3
-                }
+                    "Home": 24.3,
+                },
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -3308,8 +3123,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 69.7,
                     "Fashion": 17.5,
-                    "Home": 12.8
-                }
+                    "Home": 12.8,
+                },
             },
             {
                 "payment_method_type": "WALLET",
@@ -3319,67 +3134,54 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 29.7,
                     "Fashion": 47.1,
-                    "Home": 23.2
-                }
-            }
+                    "Home": 23.2,
+                },
+            },
         ],
         "device_wise_analytics": {
             "desktop": {
                 "success_rate": 92.7,
                 "transaction_volume": 1573,
-                "preferred_payment_methods": [
-                    "CREDIT_CARD",
-                    "NET_BANKING"
-                ],
-                "avg_processing_time": 47.8
+                "preferred_payment_methods": ["CREDIT_CARD", "NET_BANKING"],
+                "avg_processing_time": 47.8,
             },
             "mobile": {
                 "success_rate": 86.1,
                 "transaction_volume": 1259,
-                "preferred_payment_methods": [
-                    "UPI",
-                    "WALLET"
-                ],
-                "avg_processing_time": 40.3
+                "preferred_payment_methods": ["UPI", "WALLET"],
+                "avg_processing_time": 40.3,
             },
             "tablet": {
                 "success_rate": 88.2,
                 "transaction_volume": 313,
-                "preferred_payment_methods": [
-                    "CREDIT_CARD",
-                    "UPI"
-                ],
-                "avg_processing_time": 43.8
-            }
+                "preferred_payment_methods": ["CREDIT_CARD", "UPI"],
+                "avg_processing_time": 43.8,
+            },
         },
         "time_based_analytics": {
             "hourly_patterns": {
-                "peak_hours": [
-                    "16:00-17:00",
-                    "20:00-21:00",
-                    "21:00-22:00"
-                ],
+                "peak_hours": ["16:00-17:00", "20:00-21:00", "21:00-22:00"],
                 "success_rate_by_hour": {
                     "morning": 90.8,
                     "afternoon": 89.1,
                     "evening": 87.4,
-                    "night": 85.2
+                    "night": 85.2,
                 },
                 "payment_method_preference_by_time": {
                     "morning": "UPI",
                     "afternoon": "CREDIT_CARD",
                     "evening": "CREDIT_CARD",
-                    "night": "UPI"
-                }
+                    "night": "UPI",
+                },
             },
             "weekly_patterns": {
                 "weekday_sr": 89.1,
                 "weekend_sr": 86.8,
                 "monday_peak": False,
-                "friday_peak": True
-            }
+                "friday_peak": True,
+            },
         },
-        "errors": []
+        "errors": [],
     },
     {
         "overall_success_rate_data": {
@@ -3390,7 +3192,7 @@ ACME_JUSPAY_DATA = [
             "processing_time_avg": 37.8,
             "retry_success_rate": 42.7,
             "peak_hour_sr": 96.5,
-            "off_peak_sr": 92.8
+            "off_peak_sr": 92.8,
         },
         "payment_method_success_rates": [
             {
@@ -3404,8 +3206,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "TRANSACTION_TIMEOUT",
                     "INSUFFICIENT_FUNDS",
-                    "BANK_ERROR"
-                ]
+                    "BANK_ERROR",
+                ],
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -3418,8 +3220,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "INSUFFICIENT_FUNDS",
                     "CARD_DECLINED",
-                    "EXPIRED_CARD"
-                ]
+                    "EXPIRED_CARD",
+                ],
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -3432,8 +3234,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "INSUFFICIENT_FUNDS",
                     "DAILY_LIMIT_EXCEEDED",
-                    "PIN_INCORRECT"
-                ]
+                    "PIN_INCORRECT",
+                ],
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -3446,8 +3248,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "BANK_TECHNICAL_ISSUE",
                     "SESSION_TIMEOUT",
-                    "INVALID_CREDENTIALS"
-                ]
+                    "INVALID_CREDENTIALS",
+                ],
             },
             {
                 "payment_method_type": "WALLET",
@@ -3460,9 +3262,9 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "INSUFFICIENT_WALLET_BALANCE",
                     "WALLET_BLOCKED",
-                    "OTP_FAILURE"
-                ]
-            }
+                    "OTP_FAILURE",
+                ],
+            },
         ],
         "failure_details": [
             {
@@ -3473,8 +3275,8 @@ ACME_JUSPAY_DATA = [
                 "avg_retry_attempts": 1.6,
                 "resolution_suggestions": [
                     "Check account balance",
-                    "Try different card"
-                ]
+                    "Try different card",
+                ],
             },
             {
                 "error_message": "BANK_TECHNICAL_ISSUE",
@@ -3482,10 +3284,7 @@ ACME_JUSPAY_DATA = [
                 "count": 33,
                 "percentage": 16.3,
                 "avg_retry_attempts": 2.1,
-                "resolution_suggestions": [
-                    "Try again later",
-                    "Contact bank"
-                ]
+                "resolution_suggestions": ["Try again later", "Contact bank"],
             },
             {
                 "error_message": "TRANSACTION_TIMEOUT",
@@ -3495,8 +3294,8 @@ ACME_JUSPAY_DATA = [
                 "avg_retry_attempts": 1.4,
                 "resolution_suggestions": [
                     "Check internet connection",
-                    "Retry payment"
-                ]
+                    "Retry payment",
+                ],
             },
             {
                 "error_message": "CARD_DECLINED",
@@ -3504,10 +3303,7 @@ ACME_JUSPAY_DATA = [
                 "count": 17,
                 "percentage": 8.4,
                 "avg_retry_attempts": 1.2,
-                "resolution_suggestions": [
-                    "Contact card issuer",
-                    "Try different card"
-                ]
+                "resolution_suggestions": ["Contact card issuer", "Try different card"],
             },
             {
                 "error_message": "DAILY_LIMIT_EXCEEDED",
@@ -3517,8 +3313,8 @@ ACME_JUSPAY_DATA = [
                 "avg_retry_attempts": 1.0,
                 "resolution_suggestions": [
                     "Try tomorrow",
-                    "Use different payment method"
-                ]
+                    "Use different payment method",
+                ],
             },
             {
                 "error_message": "SESSION_EXPIRED",
@@ -3526,11 +3322,8 @@ ACME_JUSPAY_DATA = [
                 "count": 12,
                 "percentage": 5.9,
                 "avg_retry_attempts": 1.7,
-                "resolution_suggestions": [
-                    "Login again",
-                    "Refresh page"
-                ]
-            }
+                "resolution_suggestions": ["Login again", "Refresh page"],
+            },
         ],
         "success_volume_by_payment_method": [
             {
@@ -3539,7 +3332,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 35.8,
                 "peak_hour_volume": 148,
                 "avg_transaction_value": 4534.67,
-                "repeat_customer_rate": 73.2
+                "repeat_customer_rate": 73.2,
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -3547,7 +3340,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 40.7,
                 "peak_hour_volume": 171,
                 "avg_transaction_value": 6445.89,
-                "repeat_customer_rate": 76.8
+                "repeat_customer_rate": 76.8,
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -3555,7 +3348,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 14.7,
                 "peak_hour_volume": 62,
                 "avg_transaction_value": 3823.45,
-                "repeat_customer_rate": 64.1
+                "repeat_customer_rate": 64.1,
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -3563,7 +3356,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 5.5,
                 "peak_hour_volume": 23,
                 "avg_transaction_value": 6912.34,
-                "repeat_customer_rate": 51.2
+                "repeat_customer_rate": 51.2,
             },
             {
                 "payment_method_type": "WALLET",
@@ -3571,8 +3364,8 @@ ACME_JUSPAY_DATA = [
                 "percentage": 4.0,
                 "peak_hour_volume": 16,
                 "avg_transaction_value": 3267.89,
-                "repeat_customer_rate": 67.4
-            }
+                "repeat_customer_rate": 67.4,
+            },
         ],
         "gmv_by_payment_method": [
             {
@@ -3585,8 +3378,8 @@ ACME_JUSPAY_DATA = [
                     "North": 42.4,
                     "South": 47.8,
                     "West": 40.2,
-                    "East": 33.6
-                }
+                    "East": 33.6,
+                },
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -3598,8 +3391,8 @@ ACME_JUSPAY_DATA = [
                     "North": 58.1,
                     "South": 54.7,
                     "West": 60.3,
-                    "East": 52.1
-                }
+                    "East": 52.1,
+                },
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -3611,8 +3404,8 @@ ACME_JUSPAY_DATA = [
                     "North": 33.4,
                     "South": 36.8,
                     "West": 31.2,
-                    "East": 38.7
-                }
+                    "East": 38.7,
+                },
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -3624,8 +3417,8 @@ ACME_JUSPAY_DATA = [
                     "North": 18.6,
                     "South": 16.1,
                     "West": 22.5,
-                    "East": 25.7
-                }
+                    "East": 25.7,
+                },
             },
             {
                 "payment_method_type": "WALLET",
@@ -3637,9 +3430,9 @@ ACME_JUSPAY_DATA = [
                     "North": 26.9,
                     "South": 31.3,
                     "West": 24.1,
-                    "East": 20.3
-                }
-            }
+                    "East": 20.3,
+                },
+            },
         ],
         "average_ticket_size_by_payment_method": [
             {
@@ -3650,8 +3443,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 49.6,
                     "Fashion": 28.7,
-                    "Home": 21.7
-                }
+                    "Home": 21.7,
+                },
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -3661,8 +3454,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 64.3,
                     "Fashion": 24.6,
-                    "Home": 11.1
-                }
+                    "Home": 11.1,
+                },
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -3672,8 +3465,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 37.2,
                     "Fashion": 38.1,
-                    "Home": 24.7
-                }
+                    "Home": 24.7,
+                },
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -3683,8 +3476,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 73.1,
                     "Fashion": 15.2,
-                    "Home": 11.7
-                }
+                    "Home": 11.7,
+                },
             },
             {
                 "payment_method_type": "WALLET",
@@ -3694,67 +3487,54 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 32.4,
                     "Fashion": 48.1,
-                    "Home": 19.5
-                }
-            }
+                    "Home": 19.5,
+                },
+            },
         ],
         "device_wise_analytics": {
             "desktop": {
                 "success_rate": 97.4,
                 "transaction_volume": 1728,
-                "preferred_payment_methods": [
-                    "CREDIT_CARD",
-                    "NET_BANKING"
-                ],
-                "avg_processing_time": 41.8
+                "preferred_payment_methods": ["CREDIT_CARD", "NET_BANKING"],
+                "avg_processing_time": 41.8,
             },
             "mobile": {
                 "success_rate": 92.3,
                 "transaction_volume": 1382,
-                "preferred_payment_methods": [
-                    "UPI",
-                    "WALLET"
-                ],
-                "avg_processing_time": 34.2
+                "preferred_payment_methods": ["UPI", "WALLET"],
+                "avg_processing_time": 34.2,
             },
             "tablet": {
                 "success_rate": 94.1,
                 "transaction_volume": 346,
-                "preferred_payment_methods": [
-                    "CREDIT_CARD",
-                    "UPI"
-                ],
-                "avg_processing_time": 37.8
-            }
+                "preferred_payment_methods": ["CREDIT_CARD", "UPI"],
+                "avg_processing_time": 37.8,
+            },
         },
         "time_based_analytics": {
             "hourly_patterns": {
-                "peak_hours": [
-                    "17:00-18:00",
-                    "22:00-23:00",
-                    "23:00-24:00"
-                ],
+                "peak_hours": ["17:00-18:00", "22:00-23:00", "23:00-24:00"],
                 "success_rate_by_hour": {
                     "morning": 96.2,
                     "afternoon": 94.8,
                     "evening": 93.4,
-                    "night": 91.7
+                    "night": 91.7,
                 },
                 "payment_method_preference_by_time": {
                     "morning": "UPI",
                     "afternoon": "CREDIT_CARD",
                     "evening": "CREDIT_CARD",
-                    "night": "UPI"
-                }
+                    "night": "UPI",
+                },
             },
             "weekly_patterns": {
                 "weekday_sr": 95.1,
                 "weekend_sr": 92.8,
                 "monday_peak": False,
-                "friday_peak": True
-            }
+                "friday_peak": True,
+            },
         },
-        "errors": []
+        "errors": [],
     },
     {
         "overall_success_rate_data": {
@@ -3765,7 +3545,7 @@ ACME_JUSPAY_DATA = [
             "processing_time_avg": 41.2,
             "retry_success_rate": 37.8,
             "peak_hour_sr": 93.1,
-            "off_peak_sr": 88.9
+            "off_peak_sr": 88.9,
         },
         "payment_method_success_rates": [
             {
@@ -3779,8 +3559,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "TRANSACTION_TIMEOUT",
                     "INSUFFICIENT_FUNDS",
-                    "BANK_ERROR"
-                ]
+                    "BANK_ERROR",
+                ],
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -3793,8 +3573,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "INSUFFICIENT_FUNDS",
                     "CARD_DECLINED",
-                    "EXPIRED_CARD"
-                ]
+                    "EXPIRED_CARD",
+                ],
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -3807,8 +3587,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "INSUFFICIENT_FUNDS",
                     "DAILY_LIMIT_EXCEEDED",
-                    "PIN_INCORRECT"
-                ]
+                    "PIN_INCORRECT",
+                ],
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -3821,8 +3601,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "BANK_TECHNICAL_ISSUE",
                     "SESSION_TIMEOUT",
-                    "INVALID_CREDENTIALS"
-                ]
+                    "INVALID_CREDENTIALS",
+                ],
             },
             {
                 "payment_method_type": "WALLET",
@@ -3835,9 +3615,9 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "INSUFFICIENT_WALLET_BALANCE",
                     "WALLET_BLOCKED",
-                    "OTP_FAILURE"
-                ]
-            }
+                    "OTP_FAILURE",
+                ],
+            },
         ],
         "failure_details": [
             {
@@ -3848,8 +3628,8 @@ ACME_JUSPAY_DATA = [
                 "avg_retry_attempts": 1.8,
                 "resolution_suggestions": [
                     "Check account balance",
-                    "Try different card"
-                ]
+                    "Try different card",
+                ],
             },
             {
                 "error_message": "BANK_TECHNICAL_ISSUE",
@@ -3857,10 +3637,7 @@ ACME_JUSPAY_DATA = [
                 "count": 51,
                 "percentage": 16.2,
                 "avg_retry_attempts": 2.3,
-                "resolution_suggestions": [
-                    "Try again later",
-                    "Contact bank"
-                ]
+                "resolution_suggestions": ["Try again later", "Contact bank"],
             },
             {
                 "error_message": "TRANSACTION_TIMEOUT",
@@ -3870,8 +3647,8 @@ ACME_JUSPAY_DATA = [
                 "avg_retry_attempts": 1.6,
                 "resolution_suggestions": [
                     "Check internet connection",
-                    "Retry payment"
-                ]
+                    "Retry payment",
+                ],
             },
             {
                 "error_message": "CARD_DECLINED",
@@ -3879,10 +3656,7 @@ ACME_JUSPAY_DATA = [
                 "count": 29,
                 "percentage": 9.2,
                 "avg_retry_attempts": 1.4,
-                "resolution_suggestions": [
-                    "Contact card issuer",
-                    "Try different card"
-                ]
+                "resolution_suggestions": ["Contact card issuer", "Try different card"],
             },
             {
                 "error_message": "DAILY_LIMIT_EXCEEDED",
@@ -3892,8 +3666,8 @@ ACME_JUSPAY_DATA = [
                 "avg_retry_attempts": 1.2,
                 "resolution_suggestions": [
                     "Try tomorrow",
-                    "Use different payment method"
-                ]
+                    "Use different payment method",
+                ],
             },
             {
                 "error_message": "SESSION_EXPIRED",
@@ -3901,11 +3675,8 @@ ACME_JUSPAY_DATA = [
                 "count": 20,
                 "percentage": 6.3,
                 "avg_retry_attempts": 1.9,
-                "resolution_suggestions": [
-                    "Login again",
-                    "Refresh page"
-                ]
-            }
+                "resolution_suggestions": ["Login again", "Refresh page"],
+            },
         ],
         "success_volume_by_payment_method": [
             {
@@ -3914,7 +3685,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 36.1,
                 "peak_hour_volume": 137,
                 "avg_transaction_value": 4356.78,
-                "repeat_customer_rate": 71.2
+                "repeat_customer_rate": 71.2,
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -3922,7 +3693,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 40.6,
                 "peak_hour_volume": 157,
                 "avg_transaction_value": 6223.45,
-                "repeat_customer_rate": 74.5
+                "repeat_customer_rate": 74.5,
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -3930,7 +3701,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 14.7,
                 "peak_hour_volume": 57,
                 "avg_transaction_value": 3689.23,
-                "repeat_customer_rate": 62.1
+                "repeat_customer_rate": 62.1,
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -3938,7 +3709,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 5.4,
                 "peak_hour_volume": 21,
                 "avg_transaction_value": 6678.9,
-                "repeat_customer_rate": 49.1
+                "repeat_customer_rate": 49.1,
             },
             {
                 "payment_method_type": "WALLET",
@@ -3946,8 +3717,8 @@ ACME_JUSPAY_DATA = [
                 "percentage": 4.0,
                 "peak_hour_volume": 15,
                 "avg_transaction_value": 3134.56,
-                "repeat_customer_rate": 65.8
-            }
+                "repeat_customer_rate": 65.8,
+            },
         ],
         "gmv_by_payment_method": [
             {
@@ -3960,8 +3731,8 @@ ACME_JUSPAY_DATA = [
                     "North": 40.8,
                     "South": 45.2,
                     "West": 38.6,
-                    "East": 31.7
-                }
+                    "East": 31.7,
+                },
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -3973,8 +3744,8 @@ ACME_JUSPAY_DATA = [
                     "North": 55.4,
                     "South": 51.9,
                     "West": 57.8,
-                    "East": 49.7
-                }
+                    "East": 49.7,
+                },
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -3986,8 +3757,8 @@ ACME_JUSPAY_DATA = [
                     "North": 31.8,
                     "South": 34.9,
                     "West": 30.1,
-                    "East": 37.2
-                }
+                    "East": 37.2,
+                },
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -3999,8 +3770,8 @@ ACME_JUSPAY_DATA = [
                     "North": 17.4,
                     "South": 15.0,
                     "West": 21.1,
-                    "East": 24.1
-                }
+                    "East": 24.1,
+                },
             },
             {
                 "payment_method_type": "WALLET",
@@ -4012,9 +3783,9 @@ ACME_JUSPAY_DATA = [
                     "North": 25.1,
                     "South": 29.2,
                     "West": 22.4,
-                    "East": 19.0
-                }
-            }
+                    "East": 19.0,
+                },
+            },
         ],
         "average_ticket_size_by_payment_method": [
             {
@@ -4025,8 +3796,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 47.8,
                     "Fashion": 30.5,
-                    "Home": 21.7
-                }
+                    "Home": 21.7,
+                },
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -4036,8 +3807,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 61.7,
                     "Fashion": 26.8,
-                    "Home": 11.5
-                }
+                    "Home": 11.5,
+                },
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -4047,8 +3818,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 35.6,
                     "Fashion": 40.7,
-                    "Home": 23.7
-                }
+                    "Home": 23.7,
+                },
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -4058,8 +3829,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 70.9,
                     "Fashion": 16.7,
-                    "Home": 12.4
-                }
+                    "Home": 12.4,
+                },
             },
             {
                 "payment_method_type": "WALLET",
@@ -4069,67 +3840,54 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 30.8,
                     "Fashion": 47.4,
-                    "Home": 21.8
-                }
-            }
+                    "Home": 21.8,
+                },
+            },
         ],
         "device_wise_analytics": {
             "desktop": {
                 "success_rate": 94.7,
                 "transaction_volume": 1649,
-                "preferred_payment_methods": [
-                    "CREDIT_CARD",
-                    "NET_BANKING"
-                ],
-                "avg_processing_time": 45.2
+                "preferred_payment_methods": ["CREDIT_CARD", "NET_BANKING"],
+                "avg_processing_time": 45.2,
             },
             "mobile": {
                 "success_rate": 88.4,
                 "transaction_volume": 1319,
-                "preferred_payment_methods": [
-                    "UPI",
-                    "WALLET"
-                ],
-                "avg_processing_time": 37.8
+                "preferred_payment_methods": ["UPI", "WALLET"],
+                "avg_processing_time": 37.8,
             },
             "tablet": {
                 "success_rate": 90.1,
                 "transaction_volume": 330,
-                "preferred_payment_methods": [
-                    "CREDIT_CARD",
-                    "UPI"
-                ],
-                "avg_processing_time": 41.2
-            }
+                "preferred_payment_methods": ["CREDIT_CARD", "UPI"],
+                "avg_processing_time": 41.2,
+            },
         },
         "time_based_analytics": {
             "hourly_patterns": {
-                "peak_hours": [
-                    "14:00-15:00",
-                    "21:00-22:00",
-                    "22:00-23:00"
-                ],
+                "peak_hours": ["14:00-15:00", "21:00-22:00", "22:00-23:00"],
                 "success_rate_by_hour": {
                     "morning": 92.8,
                     "afternoon": 91.2,
                     "evening": 89.7,
-                    "night": 87.4
+                    "night": 87.4,
                 },
                 "payment_method_preference_by_time": {
                     "morning": "UPI",
                     "afternoon": "CREDIT_CARD",
                     "evening": "CREDIT_CARD",
-                    "night": "UPI"
-                }
+                    "night": "UPI",
+                },
             },
             "weekly_patterns": {
                 "weekday_sr": 91.2,
                 "weekend_sr": 89.1,
                 "monday_peak": False,
-                "friday_peak": True
-            }
+                "friday_peak": True,
+            },
         },
-        "errors": []
+        "errors": [],
     },
     {
         "overall_success_rate_data": {
@@ -4140,7 +3898,7 @@ ACME_JUSPAY_DATA = [
             "processing_time_avg": 40.2,
             "retry_success_rate": 36.8,
             "peak_hour_sr": 92.1,
-            "off_peak_sr": 88.9
+            "off_peak_sr": 88.9,
         },
         "payment_method_success_rates": [
             {
@@ -4154,8 +3912,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "TRANSACTION_TIMEOUT",
                     "INSUFFICIENT_FUNDS",
-                    "BANK_ERROR"
-                ]
+                    "BANK_ERROR",
+                ],
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -4168,8 +3926,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "INSUFFICIENT_FUNDS",
                     "CARD_DECLINED",
-                    "EXPIRED_CARD"
-                ]
+                    "EXPIRED_CARD",
+                ],
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -4182,8 +3940,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "INSUFFICIENT_FUNDS",
                     "DAILY_LIMIT_EXCEEDED",
-                    "PIN_INCORRECT"
-                ]
+                    "PIN_INCORRECT",
+                ],
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -4196,8 +3954,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "BANK_TECHNICAL_ISSUE",
                     "SESSION_TIMEOUT",
-                    "INVALID_CREDENTIALS"
-                ]
+                    "INVALID_CREDENTIALS",
+                ],
             },
             {
                 "payment_method_type": "WALLET",
@@ -4210,49 +3968,29 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "INSUFFICIENT_WALLET_BALANCE",
                     "WALLET_BLOCKED",
-                    "OTP_FAILURE"
-                ]
-            }
+                    "OTP_FAILURE",
+                ],
+            },
         ],
         "failure_analysis": {
             "top_failure_reasons": [
-                {
-                    "reason": "TRANSACTION_TIMEOUT",
-                    "count": 89,
-                    "percentage": 28.6
-                },
-                {
-                    "reason": "INSUFFICIENT_FUNDS",
-                    "count": 76,
-                    "percentage": 24.4
-                },
-                {
-                    "reason": "CARD_DECLINED",
-                    "count": 58,
-                    "percentage": 18.6
-                },
-                {
-                    "reason": "BANK_ERROR",
-                    "count": 42,
-                    "percentage": 13.5
-                },
-                {
-                    "reason": "EXPIRED_CARD",
-                    "count": 26,
-                    "percentage": 8.4
-                }
+                {"reason": "TRANSACTION_TIMEOUT", "count": 89, "percentage": 28.6},
+                {"reason": "INSUFFICIENT_FUNDS", "count": 76, "percentage": 24.4},
+                {"reason": "CARD_DECLINED", "count": 58, "percentage": 18.6},
+                {"reason": "BANK_ERROR", "count": 42, "percentage": 13.5},
+                {"reason": "EXPIRED_CARD", "count": 26, "percentage": 8.4},
             ],
             "failure_rate_by_hour": {
                 "00-06": 12.8,
                 "06-12": 9.2,
                 "12-18": 8.9,
-                "18-24": 10.7
+                "18-24": 10.7,
             },
             "retry_attempts": {
                 "single_retry": 198,
                 "multiple_retries": 113,
-                "success_after_retry": 114
-            }
+                "success_after_retry": 114,
+            },
         },
         "gmv_breakdown": {
             "total_gmv": 523840.75,
@@ -4262,11 +4000,11 @@ ACME_JUSPAY_DATA = [
                 "UPI": 186423.45,
                 "CREDIT_CARD": 203187.3,
                 "DEBIT_CARD": 58972.15,
-                "NET_BANKING": 23873.3
+                "NET_BANKING": 23873.3,
             },
             "average_transaction_value": 165.82,
             "high_value_transactions": 42,
-            "micro_transactions": 1205
+            "micro_transactions": 1205,
         },
         "device_analytics": {
             "mobile_sr": 91.2,
@@ -4277,73 +4015,48 @@ ACME_JUSPAY_DATA = [
             "tablet_percentage": 2.7,
             "ios_sr": 92.1,
             "android_sr": 90.8,
-            "windows_sr": 89.2
+            "windows_sr": 89.2,
         },
         "geographical_data": {
             "top_cities": [
-                {
-                    "city": "Mumbai",
-                    "success_rate": 91.8,
-                    "volume": 892
-                },
-                {
-                    "city": "Delhi",
-                    "success_rate": 90.2,
-                    "volume": 743
-                },
-                {
-                    "city": "Bangalore",
-                    "success_rate": 92.4,
-                    "volume": 612
-                },
-                {
-                    "city": "Chennai",
-                    "success_rate": 89.7,
-                    "volume": 456
-                },
-                {
-                    "city": "Hyderabad",
-                    "success_rate": 91.1,
-                    "volume": 453
-                }
+                {"city": "Mumbai", "success_rate": 91.8, "volume": 892},
+                {"city": "Delhi", "success_rate": 90.2, "volume": 743},
+                {"city": "Bangalore", "success_rate": 92.4, "volume": 612},
+                {"city": "Chennai", "success_rate": 89.7, "volume": 456},
+                {"city": "Hyderabad", "success_rate": 91.1, "volume": 453},
             ],
             "state_performance": {
                 "Maharashtra": 91.8,
                 "Karnataka": 92.4,
                 "Delhi": 90.2,
                 "Tamil Nadu": 89.7,
-                "Telangana": 91.1
-            }
+                "Telangana": 91.1,
+            },
         },
         "temporal_patterns": {
             "hourly_success_rates": {
-                "peak_hours": [
-                    "14:00-16:00",
-                    "19:00-21:00"
-                ],
-                "low_performance_hours": [
-                    "02:00-06:00"
-                ],
-                "weekend_pattern": "higher_evening_activity"
+                "peak_hours": ["14:00-16:00", "19:00-21:00"],
+                "low_performance_hours": ["02:00-06:00"],
+                "weekend_pattern": "higher_evening_activity",
             },
             "success_rate_by_time_of_day": {
                 "morning": 90.8,
                 "afternoon": 91.2,
                 "evening": 90.9,
-                "night": 88.1
+                "night": 88.1,
             },
             "payment_method_preference_by_time": {
                 "morning": "UPI",
                 "afternoon": "CREDIT_CARD",
                 "evening": "CREDIT_CARD",
-                "night": "UPI"
-            }
+                "night": "UPI",
+            },
         },
         "weekly_patterns": {
             "weekday_sr": 90.6,
             "weekend_sr": 89.2,
             "monday_peak": False,
-            "friday_peak": True
+            "friday_peak": True,
         },
         "errors": [],
         "failure_details": [
@@ -4355,8 +4068,8 @@ ACME_JUSPAY_DATA = [
                 "avg_retry_attempts": 2.3,
                 "resolution_suggestions": [
                     "Check account balance",
-                    "Try different card"
-                ]
+                    "Try different card",
+                ],
             },
             {
                 "error_message": "BANK_TECHNICAL_ISSUE",
@@ -4364,10 +4077,7 @@ ACME_JUSPAY_DATA = [
                 "count": 34,
                 "percentage": 11.0,
                 "avg_retry_attempts": 1.2,
-                "resolution_suggestions": [
-                    "Try again later",
-                    "Contact bank"
-                ]
+                "resolution_suggestions": ["Try again later", "Contact bank"],
             },
             {
                 "error_message": "TRANSACTION_TIMEOUT",
@@ -4377,8 +4087,8 @@ ACME_JUSPAY_DATA = [
                 "avg_retry_attempts": 1.1,
                 "resolution_suggestions": [
                     "Check internet connection",
-                    "Retry payment"
-                ]
+                    "Retry payment",
+                ],
             },
             {
                 "error_message": "CARD_DECLINED",
@@ -4386,10 +4096,7 @@ ACME_JUSPAY_DATA = [
                 "count": 26,
                 "percentage": 8.4,
                 "avg_retry_attempts": 1.9,
-                "resolution_suggestions": [
-                    "Contact card issuer",
-                    "Try different card"
-                ]
+                "resolution_suggestions": ["Contact card issuer", "Try different card"],
             },
             {
                 "error_message": "DAILY_LIMIT_EXCEEDED",
@@ -4399,8 +4106,8 @@ ACME_JUSPAY_DATA = [
                 "avg_retry_attempts": 1.0,
                 "resolution_suggestions": [
                     "Try tomorrow",
-                    "Use different payment method"
-                ]
+                    "Use different payment method",
+                ],
             },
             {
                 "error_message": "SESSION_EXPIRED",
@@ -4408,11 +4115,8 @@ ACME_JUSPAY_DATA = [
                 "count": 49,
                 "percentage": 15.9,
                 "avg_retry_attempts": 2.1,
-                "resolution_suggestions": [
-                    "Login again",
-                    "Refresh page"
-                ]
-            }
+                "resolution_suggestions": ["Login again", "Refresh page"],
+            },
         ],
         "success_volume_by_payment_method": [
             {
@@ -4421,7 +4125,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 36.4,
                 "peak_hour_volume": 103,
                 "avg_transaction_value": 3467.48,
-                "repeat_customer_rate": 50.7
+                "repeat_customer_rate": 50.7,
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -4429,7 +4133,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 40.3,
                 "peak_hour_volume": 107,
                 "avg_transaction_value": 3483.74,
-                "repeat_customer_rate": 52.3
+                "repeat_customer_rate": 52.3,
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -4437,7 +4141,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 14.4,
                 "peak_hour_volume": 64,
                 "avg_transaction_value": 3969.81,
-                "repeat_customer_rate": 63.0
+                "repeat_customer_rate": 63.0,
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -4445,7 +4149,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 5.2,
                 "peak_hour_volume": 38,
                 "avg_transaction_value": 4876.61,
-                "repeat_customer_rate": 66.1
+                "repeat_customer_rate": 66.1,
             },
             {
                 "payment_method_type": "WALLET",
@@ -4453,8 +4157,8 @@ ACME_JUSPAY_DATA = [
                 "percentage": 3.7,
                 "peak_hour_volume": 130,
                 "avg_transaction_value": 3638.38,
-                "repeat_customer_rate": 52.1
-            }
+                "repeat_customer_rate": 52.1,
+            },
         ],
         "gmv_by_payment_method": [
             {
@@ -4467,8 +4171,8 @@ ACME_JUSPAY_DATA = [
                     "North": 38.2,
                     "South": 42.1,
                     "West": 35.7,
-                    "East": 28.9
-                }
+                    "East": 28.9,
+                },
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -4480,8 +4184,8 @@ ACME_JUSPAY_DATA = [
                     "North": 52.3,
                     "South": 48.9,
                     "West": 54.1,
-                    "East": 46.7
-                }
+                    "East": 46.7,
+                },
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -4493,8 +4197,8 @@ ACME_JUSPAY_DATA = [
                     "North": 28.5,
                     "South": 31.2,
                     "West": 26.8,
-                    "East": 33.4
-                }
+                    "East": 33.4,
+                },
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -4506,8 +4210,8 @@ ACME_JUSPAY_DATA = [
                     "North": 15.2,
                     "South": 12.8,
                     "West": 18.9,
-                    "East": 21.3
-                }
+                    "East": 21.3,
+                },
             },
             {
                 "payment_method_type": "WALLET",
@@ -4519,9 +4223,9 @@ ACME_JUSPAY_DATA = [
                     "North": 22.1,
                     "South": 25.8,
                     "West": 19.4,
-                    "East": 16.2
-                }
-            }
+                    "East": 16.2,
+                },
+            },
         ],
         "average_ticket_size_by_payment_method": [
             {
@@ -4532,8 +4236,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 45.2,
                     "Fashion": 32.1,
-                    "Home": 22.7
-                }
+                    "Home": 22.7,
+                },
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -4543,8 +4247,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 58.7,
                     "Fashion": 28.9,
-                    "Home": 12.4
-                }
+                    "Home": 12.4,
+                },
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -4554,8 +4258,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 31.5,
                     "Fashion": 42.3,
-                    "Home": 26.2
-                }
+                    "Home": 26.2,
+                },
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -4565,8 +4269,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 67.8,
                     "Fashion": 18.9,
-                    "Home": 13.3
-                }
+                    "Home": 13.3,
+                },
             },
             {
                 "payment_method_type": "WALLET",
@@ -4576,10 +4280,10 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 28.4,
                     "Fashion": 45.6,
-                    "Home": 26.0
-                }
-            }
-        ]
+                    "Home": 26.0,
+                },
+            },
+        ],
     },
     {
         "overall_success_rate_data": {
@@ -4590,7 +4294,7 @@ ACME_JUSPAY_DATA = [
             "processing_time_avg": 43.8,
             "retry_success_rate": 33.2,
             "peak_hour_sr": 90.8,
-            "off_peak_sr": 87.1
+            "off_peak_sr": 87.1,
         },
         "payment_method_success_rates": [
             {
@@ -4604,8 +4308,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "TRANSACTION_TIMEOUT",
                     "INSUFFICIENT_FUNDS",
-                    "BANK_ERROR"
-                ]
+                    "BANK_ERROR",
+                ],
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -4618,8 +4322,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "INSUFFICIENT_FUNDS",
                     "CARD_DECLINED",
-                    "EXPIRED_CARD"
-                ]
+                    "EXPIRED_CARD",
+                ],
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -4632,8 +4336,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "INSUFFICIENT_FUNDS",
                     "DAILY_LIMIT_EXCEEDED",
-                    "PIN_INCORRECT"
-                ]
+                    "PIN_INCORRECT",
+                ],
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -4646,8 +4350,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "BANK_TECHNICAL_ISSUE",
                     "SESSION_TIMEOUT",
-                    "INVALID_CREDENTIALS"
-                ]
+                    "INVALID_CREDENTIALS",
+                ],
             },
             {
                 "payment_method_type": "WALLET",
@@ -4660,49 +4364,29 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "INSUFFICIENT_WALLET_BALANCE",
                     "WALLET_BLOCKED",
-                    "OTP_FAILURE"
-                ]
-            }
+                    "OTP_FAILURE",
+                ],
+            },
         ],
         "failure_analysis": {
             "top_failure_reasons": [
-                {
-                    "reason": "INSUFFICIENT_FUNDS",
-                    "count": 94,
-                    "percentage": 28.0
-                },
-                {
-                    "reason": "CARD_DECLINED",
-                    "count": 83,
-                    "percentage": 24.7
-                },
-                {
-                    "reason": "TRANSACTION_TIMEOUT",
-                    "count": 72,
-                    "percentage": 21.4
-                },
-                {
-                    "reason": "BANK_ERROR",
-                    "count": 45,
-                    "percentage": 13.4
-                },
-                {
-                    "reason": "SESSION_TIMEOUT",
-                    "count": 42,
-                    "percentage": 12.5
-                }
+                {"reason": "INSUFFICIENT_FUNDS", "count": 94, "percentage": 28.0},
+                {"reason": "CARD_DECLINED", "count": 83, "percentage": 24.7},
+                {"reason": "TRANSACTION_TIMEOUT", "count": 72, "percentage": 21.4},
+                {"reason": "BANK_ERROR", "count": 45, "percentage": 13.4},
+                {"reason": "SESSION_TIMEOUT", "count": 42, "percentage": 12.5},
             ],
             "failure_rate_by_hour": {
                 "00-06": 14.2,
                 "06-12": 10.8,
                 "12-18": 9.5,
-                "18-24": 11.8
+                "18-24": 11.8,
             },
             "retry_attempts": {
                 "single_retry": 215,
                 "multiple_retries": 121,
-                "success_after_retry": 112
-            }
+                "success_after_retry": 112,
+            },
         },
         "gmv_breakdown": {
             "total_gmv": 498375.4,
@@ -4712,11 +4396,11 @@ ACME_JUSPAY_DATA = [
                 "UPI": 175623.2,
                 "CREDIT_CARD": 189734.65,
                 "DEBIT_CARD": 55482.3,
-                "NET_BANKING": 21544.7
+                "NET_BANKING": 21544.7,
             },
             "average_transaction_value": 166.83,
             "high_value_transactions": 38,
-            "micro_transactions": 1156
+            "micro_transactions": 1156,
         },
         "device_analytics": {
             "mobile_sr": 89.8,
@@ -4727,73 +4411,48 @@ ACME_JUSPAY_DATA = [
             "tablet_percentage": 2.7,
             "ios_sr": 91.3,
             "android_sr": 89.2,
-            "windows_sr": 87.8
+            "windows_sr": 87.8,
         },
         "geographical_data": {
             "top_cities": [
-                {
-                    "city": "Mumbai",
-                    "success_rate": 90.1,
-                    "volume": 823
-                },
-                {
-                    "city": "Delhi",
-                    "success_rate": 88.7,
-                    "volume": 698
-                },
-                {
-                    "city": "Bangalore",
-                    "success_rate": 91.2,
-                    "volume": 567
-                },
-                {
-                    "city": "Chennai",
-                    "success_rate": 87.9,
-                    "volume": 423
-                },
-                {
-                    "city": "Hyderabad",
-                    "success_rate": 89.8,
-                    "volume": 476
-                }
+                {"city": "Mumbai", "success_rate": 90.1, "volume": 823},
+                {"city": "Delhi", "success_rate": 88.7, "volume": 698},
+                {"city": "Bangalore", "success_rate": 91.2, "volume": 567},
+                {"city": "Chennai", "success_rate": 87.9, "volume": 423},
+                {"city": "Hyderabad", "success_rate": 89.8, "volume": 476},
             ],
             "state_performance": {
                 "Maharashtra": 90.1,
                 "Karnataka": 91.2,
                 "Delhi": 88.7,
                 "Tamil Nadu": 87.9,
-                "Telangana": 89.8
-            }
+                "Telangana": 89.8,
+            },
         },
         "temporal_patterns": {
             "hourly_success_rates": {
-                "peak_hours": [
-                    "13:00-15:00",
-                    "20:00-22:00"
-                ],
-                "low_performance_hours": [
-                    "03:00-07:00"
-                ],
-                "weekend_pattern": "consistent_performance"
+                "peak_hours": ["13:00-15:00", "20:00-22:00"],
+                "low_performance_hours": ["03:00-07:00"],
+                "weekend_pattern": "consistent_performance",
             },
             "success_rate_by_time_of_day": {
                 "morning": 89.2,
                 "afternoon": 89.8,
                 "evening": 89.1,
-                "night": 86.8
+                "night": 86.8,
             },
             "payment_method_preference_by_time": {
                 "morning": "UPI",
                 "afternoon": "CREDIT_CARD",
                 "evening": "CREDIT_CARD",
-                "night": "UPI"
-            }
+                "night": "UPI",
+            },
         },
         "weekly_patterns": {
             "weekday_sr": 89.1,
             "weekend_sr": 87.8,
             "monday_peak": True,
-            "friday_peak": False
+            "friday_peak": False,
         },
         "errors": [],
         "failure_details": [
@@ -4805,8 +4464,8 @@ ACME_JUSPAY_DATA = [
                 "avg_retry_attempts": 1.8,
                 "resolution_suggestions": [
                     "Check account balance",
-                    "Try different card"
-                ]
+                    "Try different card",
+                ],
             },
             {
                 "error_message": "BANK_TECHNICAL_ISSUE",
@@ -4814,10 +4473,7 @@ ACME_JUSPAY_DATA = [
                 "count": 30,
                 "percentage": 10.2,
                 "avg_retry_attempts": 2.2,
-                "resolution_suggestions": [
-                    "Try again later",
-                    "Contact bank"
-                ]
+                "resolution_suggestions": ["Try again later", "Contact bank"],
             },
             {
                 "error_message": "TRANSACTION_TIMEOUT",
@@ -4827,8 +4483,8 @@ ACME_JUSPAY_DATA = [
                 "avg_retry_attempts": 1.3,
                 "resolution_suggestions": [
                     "Check internet connection",
-                    "Retry payment"
-                ]
+                    "Retry payment",
+                ],
             },
             {
                 "error_message": "CARD_DECLINED",
@@ -4836,10 +4492,7 @@ ACME_JUSPAY_DATA = [
                 "count": 16,
                 "percentage": 5.4,
                 "avg_retry_attempts": 1.3,
-                "resolution_suggestions": [
-                    "Contact card issuer",
-                    "Try different card"
-                ]
+                "resolution_suggestions": ["Contact card issuer", "Try different card"],
             },
             {
                 "error_message": "DAILY_LIMIT_EXCEEDED",
@@ -4849,8 +4502,8 @@ ACME_JUSPAY_DATA = [
                 "avg_retry_attempts": 1.4,
                 "resolution_suggestions": [
                     "Try tomorrow",
-                    "Use different payment method"
-                ]
+                    "Use different payment method",
+                ],
             },
             {
                 "error_message": "SESSION_EXPIRED",
@@ -4858,11 +4511,8 @@ ACME_JUSPAY_DATA = [
                 "count": 28,
                 "percentage": 9.5,
                 "avg_retry_attempts": 1.4,
-                "resolution_suggestions": [
-                    "Login again",
-                    "Refresh page"
-                ]
-            }
+                "resolution_suggestions": ["Login again", "Refresh page"],
+            },
         ],
         "success_volume_by_payment_method": [
             {
@@ -4871,7 +4521,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 35.2,
                 "peak_hour_volume": 49,
                 "avg_transaction_value": 6333.06,
-                "repeat_customer_rate": 54.5
+                "repeat_customer_rate": 54.5,
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -4879,7 +4529,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 40.7,
                 "peak_hour_volume": 126,
                 "avg_transaction_value": 2565.54,
-                "repeat_customer_rate": 61.8
+                "repeat_customer_rate": 61.8,
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -4887,7 +4537,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 14.8,
                 "peak_hour_volume": 65,
                 "avg_transaction_value": 3549.1,
-                "repeat_customer_rate": 60.7
+                "repeat_customer_rate": 60.7,
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -4895,7 +4545,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 5.5,
                 "peak_hour_volume": 62,
                 "avg_transaction_value": 5286.55,
-                "repeat_customer_rate": 64.8
+                "repeat_customer_rate": 64.8,
             },
             {
                 "payment_method_type": "WALLET",
@@ -4903,8 +4553,8 @@ ACME_JUSPAY_DATA = [
                 "percentage": 3.8,
                 "peak_hour_volume": 39,
                 "avg_transaction_value": 4946.12,
-                "repeat_customer_rate": 59.9
-            }
+                "repeat_customer_rate": 59.9,
+            },
         ],
         "gmv_by_payment_method": [
             {
@@ -4917,8 +4567,8 @@ ACME_JUSPAY_DATA = [
                     "North": 38.2,
                     "South": 42.1,
                     "West": 35.7,
-                    "East": 28.9
-                }
+                    "East": 28.9,
+                },
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -4930,8 +4580,8 @@ ACME_JUSPAY_DATA = [
                     "North": 52.3,
                     "South": 48.9,
                     "West": 54.1,
-                    "East": 46.7
-                }
+                    "East": 46.7,
+                },
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -4943,8 +4593,8 @@ ACME_JUSPAY_DATA = [
                     "North": 28.5,
                     "South": 31.2,
                     "West": 26.8,
-                    "East": 33.4
-                }
+                    "East": 33.4,
+                },
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -4956,8 +4606,8 @@ ACME_JUSPAY_DATA = [
                     "North": 15.2,
                     "South": 12.8,
                     "West": 18.9,
-                    "East": 21.3
-                }
+                    "East": 21.3,
+                },
             },
             {
                 "payment_method_type": "WALLET",
@@ -4969,9 +4619,9 @@ ACME_JUSPAY_DATA = [
                     "North": 22.1,
                     "South": 25.8,
                     "West": 19.4,
-                    "East": 16.2
-                }
-            }
+                    "East": 16.2,
+                },
+            },
         ],
         "average_ticket_size_by_payment_method": [
             {
@@ -4982,8 +4632,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 45.2,
                     "Fashion": 32.1,
-                    "Home": 22.7
-                }
+                    "Home": 22.7,
+                },
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -4993,8 +4643,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 58.7,
                     "Fashion": 28.9,
-                    "Home": 12.4
-                }
+                    "Home": 12.4,
+                },
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -5004,8 +4654,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 31.5,
                     "Fashion": 42.3,
-                    "Home": 26.2
-                }
+                    "Home": 26.2,
+                },
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -5015,8 +4665,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 67.8,
                     "Fashion": 18.9,
-                    "Home": 13.3
-                }
+                    "Home": 13.3,
+                },
             },
             {
                 "payment_method_type": "WALLET",
@@ -5026,10 +4676,10 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 28.4,
                     "Fashion": 45.6,
-                    "Home": 26.0
-                }
-            }
-        ]
+                    "Home": 26.0,
+                },
+            },
+        ],
     },
     {
         "overall_success_rate_data": {
@@ -5040,7 +4690,7 @@ ACME_JUSPAY_DATA = [
             "processing_time_avg": 39.7,
             "retry_success_rate": 38.5,
             "peak_hour_sr": 93.2,
-            "off_peak_sr": 89.8
+            "off_peak_sr": 89.8,
         },
         "payment_method_success_rates": [
             {
@@ -5054,8 +4704,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "TRANSACTION_TIMEOUT",
                     "INSUFFICIENT_FUNDS",
-                    "BANK_ERROR"
-                ]
+                    "BANK_ERROR",
+                ],
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -5068,8 +4718,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "INSUFFICIENT_FUNDS",
                     "CARD_DECLINED",
-                    "EXPIRED_CARD"
-                ]
+                    "EXPIRED_CARD",
+                ],
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -5082,8 +4732,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "INSUFFICIENT_FUNDS",
                     "DAILY_LIMIT_EXCEEDED",
-                    "PIN_INCORRECT"
-                ]
+                    "PIN_INCORRECT",
+                ],
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -5096,8 +4746,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "BANK_TECHNICAL_ISSUE",
                     "SESSION_TIMEOUT",
-                    "INVALID_CREDENTIALS"
-                ]
+                    "INVALID_CREDENTIALS",
+                ],
             },
             {
                 "payment_method_type": "WALLET",
@@ -5110,49 +4760,29 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "INSUFFICIENT_WALLET_BALANCE",
                     "WALLET_BLOCKED",
-                    "OTP_FAILURE"
-                ]
-            }
+                    "OTP_FAILURE",
+                ],
+            },
         ],
         "failure_analysis": {
             "top_failure_reasons": [
-                {
-                    "reason": "INSUFFICIENT_FUNDS",
-                    "count": 87,
-                    "percentage": 31.1
-                },
-                {
-                    "reason": "TRANSACTION_TIMEOUT",
-                    "count": 64,
-                    "percentage": 22.9
-                },
-                {
-                    "reason": "CARD_DECLINED",
-                    "count": 52,
-                    "percentage": 18.6
-                },
-                {
-                    "reason": "BANK_ERROR",
-                    "count": 38,
-                    "percentage": 13.6
-                },
-                {
-                    "reason": "EXPIRED_CARD",
-                    "count": 39,
-                    "percentage": 13.9
-                }
+                {"reason": "INSUFFICIENT_FUNDS", "count": 87, "percentage": 31.1},
+                {"reason": "TRANSACTION_TIMEOUT", "count": 64, "percentage": 22.9},
+                {"reason": "CARD_DECLINED", "count": 52, "percentage": 18.6},
+                {"reason": "BANK_ERROR", "count": 38, "percentage": 13.6},
+                {"reason": "EXPIRED_CARD", "count": 39, "percentage": 13.9},
             ],
             "failure_rate_by_hour": {
                 "00-06": 11.2,
                 "06-12": 8.7,
                 "12-18": 7.9,
-                "18-24": 9.8
+                "18-24": 9.8,
             },
             "retry_attempts": {
                 "single_retry": 178,
                 "multiple_retries": 102,
-                "success_after_retry": 108
-            }
+                "success_after_retry": 108,
+            },
         },
         "gmv_breakdown": {
             "total_gmv": 547829.6,
@@ -5162,11 +4792,11 @@ ACME_JUSPAY_DATA = [
                 "UPI": 194867.45,
                 "CREDIT_CARD": 218934.7,
                 "DEBIT_CARD": 62384.2,
-                "NET_BANKING": 24235.0
+                "NET_BANKING": 24235.0,
             },
             "average_transaction_value": 169.35,
             "high_value_transactions": 46,
-            "micro_transactions": 1287
+            "micro_transactions": 1287,
         },
         "device_analytics": {
             "mobile_sr": 92.4,
@@ -5177,73 +4807,48 @@ ACME_JUSPAY_DATA = [
             "tablet_percentage": 2.8,
             "ios_sr": 93.5,
             "android_sr": 91.9,
-            "windows_sr": 90.2
+            "windows_sr": 90.2,
         },
         "geographical_data": {
             "top_cities": [
-                {
-                    "city": "Mumbai",
-                    "success_rate": 92.7,
-                    "volume": 934
-                },
-                {
-                    "city": "Delhi",
-                    "success_rate": 91.3,
-                    "volume": 789
-                },
-                {
-                    "city": "Bangalore",
-                    "success_rate": 93.1,
-                    "volume": 645
-                },
-                {
-                    "city": "Chennai",
-                    "success_rate": 90.8,
-                    "volume": 487
-                },
-                {
-                    "city": "Hyderabad",
-                    "success_rate": 92.2,
-                    "volume": 379
-                }
+                {"city": "Mumbai", "success_rate": 92.7, "volume": 934},
+                {"city": "Delhi", "success_rate": 91.3, "volume": 789},
+                {"city": "Bangalore", "success_rate": 93.1, "volume": 645},
+                {"city": "Chennai", "success_rate": 90.8, "volume": 487},
+                {"city": "Hyderabad", "success_rate": 92.2, "volume": 379},
             ],
             "state_performance": {
                 "Maharashtra": 92.7,
                 "Karnataka": 93.1,
                 "Delhi": 91.3,
                 "Tamil Nadu": 90.8,
-                "Telangana": 92.2
-            }
+                "Telangana": 92.2,
+            },
         },
         "temporal_patterns": {
             "hourly_success_rates": {
-                "peak_hours": [
-                    "14:00-16:00",
-                    "19:00-21:00"
-                ],
-                "low_performance_hours": [
-                    "01:00-05:00"
-                ],
-                "weekend_pattern": "steady_performance"
+                "peak_hours": ["14:00-16:00", "19:00-21:00"],
+                "low_performance_hours": ["01:00-05:00"],
+                "weekend_pattern": "steady_performance",
             },
             "success_rate_by_time_of_day": {
                 "morning": 91.8,
                 "afternoon": 92.1,
                 "evening": 91.7,
-                "night": 89.5
+                "night": 89.5,
             },
             "payment_method_preference_by_time": {
                 "morning": "UPI",
                 "afternoon": "CREDIT_CARD",
                 "evening": "CREDIT_CARD",
-                "night": "UPI"
-            }
+                "night": "UPI",
+            },
         },
         "weekly_patterns": {
             "weekday_sr": 91.7,
             "weekend_sr": 90.8,
             "monday_peak": False,
-            "friday_peak": True
+            "friday_peak": True,
         },
         "errors": [],
         "failure_details": [
@@ -5255,8 +4860,8 @@ ACME_JUSPAY_DATA = [
                 "avg_retry_attempts": 1.6,
                 "resolution_suggestions": [
                     "Check account balance",
-                    "Try different card"
-                ]
+                    "Try different card",
+                ],
             },
             {
                 "error_message": "BANK_TECHNICAL_ISSUE",
@@ -5264,10 +4869,7 @@ ACME_JUSPAY_DATA = [
                 "count": 24,
                 "percentage": 8.8,
                 "avg_retry_attempts": 1.9,
-                "resolution_suggestions": [
-                    "Try again later",
-                    "Contact bank"
-                ]
+                "resolution_suggestions": ["Try again later", "Contact bank"],
             },
             {
                 "error_message": "TRANSACTION_TIMEOUT",
@@ -5277,8 +4879,8 @@ ACME_JUSPAY_DATA = [
                 "avg_retry_attempts": 1.7,
                 "resolution_suggestions": [
                     "Check internet connection",
-                    "Retry payment"
-                ]
+                    "Retry payment",
+                ],
             },
             {
                 "error_message": "CARD_DECLINED",
@@ -5286,10 +4888,7 @@ ACME_JUSPAY_DATA = [
                 "count": 20,
                 "percentage": 7.4,
                 "avg_retry_attempts": 2.3,
-                "resolution_suggestions": [
-                    "Contact card issuer",
-                    "Try different card"
-                ]
+                "resolution_suggestions": ["Contact card issuer", "Try different card"],
             },
             {
                 "error_message": "DAILY_LIMIT_EXCEEDED",
@@ -5299,8 +4898,8 @@ ACME_JUSPAY_DATA = [
                 "avg_retry_attempts": 2.4,
                 "resolution_suggestions": [
                     "Try tomorrow",
-                    "Use different payment method"
-                ]
+                    "Use different payment method",
+                ],
             },
             {
                 "error_message": "SESSION_EXPIRED",
@@ -5308,11 +4907,8 @@ ACME_JUSPAY_DATA = [
                 "count": 33,
                 "percentage": 12.1,
                 "avg_retry_attempts": 2.4,
-                "resolution_suggestions": [
-                    "Login again",
-                    "Refresh page"
-                ]
-            }
+                "resolution_suggestions": ["Login again", "Refresh page"],
+            },
         ],
         "success_volume_by_payment_method": [
             {
@@ -5321,7 +4917,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 35.3,
                 "peak_hour_volume": 77,
                 "avg_transaction_value": 4428.17,
-                "repeat_customer_rate": 65.8
+                "repeat_customer_rate": 65.8,
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -5329,7 +4925,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 40.9,
                 "peak_hour_volume": 48,
                 "avg_transaction_value": 2507.81,
-                "repeat_customer_rate": 45.3
+                "repeat_customer_rate": 45.3,
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -5337,7 +4933,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 14.6,
                 "peak_hour_volume": 134,
                 "avg_transaction_value": 4960.75,
-                "repeat_customer_rate": 56.5
+                "repeat_customer_rate": 56.5,
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -5345,7 +4941,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 5.5,
                 "peak_hour_volume": 103,
                 "avg_transaction_value": 4880.98,
-                "repeat_customer_rate": 62.3
+                "repeat_customer_rate": 62.3,
             },
             {
                 "payment_method_type": "WALLET",
@@ -5353,8 +4949,8 @@ ACME_JUSPAY_DATA = [
                 "percentage": 3.7,
                 "peak_hour_volume": 59,
                 "avg_transaction_value": 4178.36,
-                "repeat_customer_rate": 58.4
-            }
+                "repeat_customer_rate": 58.4,
+            },
         ],
         "gmv_by_payment_method": [
             {
@@ -5367,8 +4963,8 @@ ACME_JUSPAY_DATA = [
                     "North": 38.2,
                     "South": 42.1,
                     "West": 35.7,
-                    "East": 28.9
-                }
+                    "East": 28.9,
+                },
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -5380,8 +4976,8 @@ ACME_JUSPAY_DATA = [
                     "North": 52.3,
                     "South": 48.9,
                     "West": 54.1,
-                    "East": 46.7
-                }
+                    "East": 46.7,
+                },
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -5393,8 +4989,8 @@ ACME_JUSPAY_DATA = [
                     "North": 28.5,
                     "South": 31.2,
                     "West": 26.8,
-                    "East": 33.4
-                }
+                    "East": 33.4,
+                },
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -5406,8 +5002,8 @@ ACME_JUSPAY_DATA = [
                     "North": 15.2,
                     "South": 12.8,
                     "West": 18.9,
-                    "East": 21.3
-                }
+                    "East": 21.3,
+                },
             },
             {
                 "payment_method_type": "WALLET",
@@ -5419,9 +5015,9 @@ ACME_JUSPAY_DATA = [
                     "North": 22.1,
                     "South": 25.8,
                     "West": 19.4,
-                    "East": 16.2
-                }
-            }
+                    "East": 16.2,
+                },
+            },
         ],
         "average_ticket_size_by_payment_method": [
             {
@@ -5432,8 +5028,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 45.2,
                     "Fashion": 32.1,
-                    "Home": 22.7
-                }
+                    "Home": 22.7,
+                },
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -5443,8 +5039,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 58.7,
                     "Fashion": 28.9,
-                    "Home": 12.4
-                }
+                    "Home": 12.4,
+                },
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -5454,8 +5050,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 31.5,
                     "Fashion": 42.3,
-                    "Home": 26.2
-                }
+                    "Home": 26.2,
+                },
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -5465,8 +5061,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 67.8,
                     "Fashion": 18.9,
-                    "Home": 13.3
-                }
+                    "Home": 13.3,
+                },
             },
             {
                 "payment_method_type": "WALLET",
@@ -5476,10 +5072,10 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 28.4,
                     "Fashion": 45.6,
-                    "Home": 26.0
-                }
-            }
-        ]
+                    "Home": 26.0,
+                },
+            },
+        ],
     },
     {
         "overall_success_rate_data": {
@@ -5490,7 +5086,7 @@ ACME_JUSPAY_DATA = [
             "processing_time_avg": 45.1,
             "retry_success_rate": 31.8,
             "peak_hour_sr": 89.7,
-            "off_peak_sr": 86.4
+            "off_peak_sr": 86.4,
         },
         "payment_method_success_rates": [
             {
@@ -5504,8 +5100,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "TRANSACTION_TIMEOUT",
                     "INSUFFICIENT_FUNDS",
-                    "BANK_ERROR"
-                ]
+                    "BANK_ERROR",
+                ],
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -5518,8 +5114,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "INSUFFICIENT_FUNDS",
                     "CARD_DECLINED",
-                    "EXPIRED_CARD"
-                ]
+                    "EXPIRED_CARD",
+                ],
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -5532,8 +5128,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "INSUFFICIENT_FUNDS",
                     "DAILY_LIMIT_EXCEEDED",
-                    "PIN_INCORRECT"
-                ]
+                    "PIN_INCORRECT",
+                ],
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -5546,8 +5142,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "BANK_TECHNICAL_ISSUE",
                     "SESSION_TIMEOUT",
-                    "INVALID_CREDENTIALS"
-                ]
+                    "INVALID_CREDENTIALS",
+                ],
             },
             {
                 "payment_method_type": "WALLET",
@@ -5560,49 +5156,29 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "INSUFFICIENT_WALLET_BALANCE",
                     "WALLET_BLOCKED",
-                    "OTP_FAILURE"
-                ]
-            }
+                    "OTP_FAILURE",
+                ],
+            },
         ],
         "failure_analysis": {
             "top_failure_reasons": [
-                {
-                    "reason": "CARD_DECLINED",
-                    "count": 98,
-                    "percentage": 28.1
-                },
-                {
-                    "reason": "INSUFFICIENT_FUNDS",
-                    "count": 92,
-                    "percentage": 26.4
-                },
-                {
-                    "reason": "TRANSACTION_TIMEOUT",
-                    "count": 73,
-                    "percentage": 20.9
-                },
-                {
-                    "reason": "SESSION_TIMEOUT",
-                    "count": 48,
-                    "percentage": 13.8
-                },
-                {
-                    "reason": "BANK_ERROR",
-                    "count": 38,
-                    "percentage": 10.9
-                }
+                {"reason": "CARD_DECLINED", "count": 98, "percentage": 28.1},
+                {"reason": "INSUFFICIENT_FUNDS", "count": 92, "percentage": 26.4},
+                {"reason": "TRANSACTION_TIMEOUT", "count": 73, "percentage": 20.9},
+                {"reason": "SESSION_TIMEOUT", "count": 48, "percentage": 13.8},
+                {"reason": "BANK_ERROR", "count": 38, "percentage": 10.9},
             ],
             "failure_rate_by_hour": {
                 "00-06": 15.7,
                 "06-12": 11.9,
                 "12-18": 10.2,
-                "18-24": 12.6
+                "18-24": 12.6,
             },
             "retry_attempts": {
                 "single_retry": 223,
                 "multiple_retries": 126,
-                "success_after_retry": 111
-            }
+                "success_after_retry": 111,
+            },
         },
         "gmv_breakdown": {
             "total_gmv": 482934.8,
@@ -5612,11 +5188,11 @@ ACME_JUSPAY_DATA = [
                 "UPI": 168734.2,
                 "CREDIT_CARD": 175623.85,
                 "DEBIT_CARD": 52847.3,
-                "NET_BANKING": 27475.9
+                "NET_BANKING": 27475.9,
             },
             "average_transaction_value": 167.04,
             "high_value_transactions": 34,
-            "micro_transactions": 1089
+            "micro_transactions": 1089,
         },
         "device_analytics": {
             "mobile_sr": 88.9,
@@ -5627,73 +5203,48 @@ ACME_JUSPAY_DATA = [
             "tablet_percentage": 2.8,
             "ios_sr": 90.1,
             "android_sr": 88.2,
-            "windows_sr": 86.8
+            "windows_sr": 86.8,
         },
         "geographical_data": {
             "top_cities": [
-                {
-                    "city": "Mumbai",
-                    "success_rate": 89.2,
-                    "volume": 798
-                },
-                {
-                    "city": "Delhi",
-                    "success_rate": 87.8,
-                    "volume": 673
-                },
-                {
-                    "city": "Bangalore",
-                    "success_rate": 90.1,
-                    "volume": 567
-                },
-                {
-                    "city": "Chennai",
-                    "success_rate": 86.9,
-                    "volume": 434
-                },
-                {
-                    "city": "Hyderabad",
-                    "success_rate": 88.7,
-                    "volume": 420
-                }
+                {"city": "Mumbai", "success_rate": 89.2, "volume": 798},
+                {"city": "Delhi", "success_rate": 87.8, "volume": 673},
+                {"city": "Bangalore", "success_rate": 90.1, "volume": 567},
+                {"city": "Chennai", "success_rate": 86.9, "volume": 434},
+                {"city": "Hyderabad", "success_rate": 88.7, "volume": 420},
             ],
             "state_performance": {
                 "Maharashtra": 89.2,
                 "Karnataka": 90.1,
                 "Delhi": 87.8,
                 "Tamil Nadu": 86.9,
-                "Telangana": 88.7
-            }
+                "Telangana": 88.7,
+            },
         },
         "temporal_patterns": {
             "hourly_success_rates": {
-                "peak_hours": [
-                    "15:00-17:00",
-                    "18:00-20:00"
-                ],
-                "low_performance_hours": [
-                    "02:00-06:00"
-                ],
-                "weekend_pattern": "lower_performance"
+                "peak_hours": ["15:00-17:00", "18:00-20:00"],
+                "low_performance_hours": ["02:00-06:00"],
+                "weekend_pattern": "lower_performance",
             },
             "success_rate_by_time_of_day": {
                 "morning": 88.4,
                 "afternoon": 88.9,
                 "evening": 88.1,
-                "night": 86.2
+                "night": 86.2,
             },
             "payment_method_preference_by_time": {
                 "morning": "UPI",
                 "afternoon": "CREDIT_CARD",
                 "evening": "CREDIT_CARD",
-                "night": "UPI"
-            }
+                "night": "UPI",
+            },
         },
         "weekly_patterns": {
             "weekday_sr": 88.3,
             "weekend_sr": 87.1,
             "monday_peak": True,
-            "friday_peak": False
+            "friday_peak": False,
         },
         "errors": [],
         "failure_details": [
@@ -5705,8 +5256,8 @@ ACME_JUSPAY_DATA = [
                 "avg_retry_attempts": 1.9,
                 "resolution_suggestions": [
                     "Check account balance",
-                    "Try different card"
-                ]
+                    "Try different card",
+                ],
             },
             {
                 "error_message": "BANK_TECHNICAL_ISSUE",
@@ -5714,10 +5265,7 @@ ACME_JUSPAY_DATA = [
                 "count": 38,
                 "percentage": 12.8,
                 "avg_retry_attempts": 2.5,
-                "resolution_suggestions": [
-                    "Try again later",
-                    "Contact bank"
-                ]
+                "resolution_suggestions": ["Try again later", "Contact bank"],
             },
             {
                 "error_message": "TRANSACTION_TIMEOUT",
@@ -5727,8 +5275,8 @@ ACME_JUSPAY_DATA = [
                 "avg_retry_attempts": 1.1,
                 "resolution_suggestions": [
                     "Check internet connection",
-                    "Retry payment"
-                ]
+                    "Retry payment",
+                ],
             },
             {
                 "error_message": "CARD_DECLINED",
@@ -5736,10 +5284,7 @@ ACME_JUSPAY_DATA = [
                 "count": 30,
                 "percentage": 10.1,
                 "avg_retry_attempts": 2.0,
-                "resolution_suggestions": [
-                    "Contact card issuer",
-                    "Try different card"
-                ]
+                "resolution_suggestions": ["Contact card issuer", "Try different card"],
             },
             {
                 "error_message": "DAILY_LIMIT_EXCEEDED",
@@ -5749,8 +5294,8 @@ ACME_JUSPAY_DATA = [
                 "avg_retry_attempts": 1.2,
                 "resolution_suggestions": [
                     "Try tomorrow",
-                    "Use different payment method"
-                ]
+                    "Use different payment method",
+                ],
             },
             {
                 "error_message": "SESSION_EXPIRED",
@@ -5758,11 +5303,8 @@ ACME_JUSPAY_DATA = [
                 "count": 34,
                 "percentage": 11.4,
                 "avg_retry_attempts": 1.9,
-                "resolution_suggestions": [
-                    "Login again",
-                    "Refresh page"
-                ]
-            }
+                "resolution_suggestions": ["Login again", "Refresh page"],
+            },
         ],
         "success_volume_by_payment_method": [
             {
@@ -5771,7 +5313,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 36.1,
                 "peak_hour_volume": 112,
                 "avg_transaction_value": 2567.39,
-                "repeat_customer_rate": 74.5
+                "repeat_customer_rate": 74.5,
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -5779,7 +5321,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 40.2,
                 "peak_hour_volume": 53,
                 "avg_transaction_value": 6300.23,
-                "repeat_customer_rate": 74.7
+                "repeat_customer_rate": 74.7,
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -5787,7 +5329,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 14.5,
                 "peak_hour_volume": 101,
                 "avg_transaction_value": 6160.33,
-                "repeat_customer_rate": 63.7
+                "repeat_customer_rate": 63.7,
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -5795,7 +5337,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 5.3,
                 "peak_hour_volume": 37,
                 "avg_transaction_value": 5216.14,
-                "repeat_customer_rate": 60.0
+                "repeat_customer_rate": 60.0,
             },
             {
                 "payment_method_type": "WALLET",
@@ -5803,8 +5345,8 @@ ACME_JUSPAY_DATA = [
                 "percentage": 3.8,
                 "peak_hour_volume": 89,
                 "avg_transaction_value": 4193.75,
-                "repeat_customer_rate": 49.3
-            }
+                "repeat_customer_rate": 49.3,
+            },
         ],
         "gmv_by_payment_method": [
             {
@@ -5817,8 +5359,8 @@ ACME_JUSPAY_DATA = [
                     "North": 38.2,
                     "South": 42.1,
                     "West": 35.7,
-                    "East": 28.9
-                }
+                    "East": 28.9,
+                },
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -5830,8 +5372,8 @@ ACME_JUSPAY_DATA = [
                     "North": 52.3,
                     "South": 48.9,
                     "West": 54.1,
-                    "East": 46.7
-                }
+                    "East": 46.7,
+                },
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -5843,8 +5385,8 @@ ACME_JUSPAY_DATA = [
                     "North": 28.5,
                     "South": 31.2,
                     "West": 26.8,
-                    "East": 33.4
-                }
+                    "East": 33.4,
+                },
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -5856,8 +5398,8 @@ ACME_JUSPAY_DATA = [
                     "North": 15.2,
                     "South": 12.8,
                     "West": 18.9,
-                    "East": 21.3
-                }
+                    "East": 21.3,
+                },
             },
             {
                 "payment_method_type": "WALLET",
@@ -5869,9 +5411,9 @@ ACME_JUSPAY_DATA = [
                     "North": 22.1,
                     "South": 25.8,
                     "West": 19.4,
-                    "East": 16.2
-                }
-            }
+                    "East": 16.2,
+                },
+            },
         ],
         "average_ticket_size_by_payment_method": [
             {
@@ -5882,8 +5424,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 45.2,
                     "Fashion": 32.1,
-                    "Home": 22.7
-                }
+                    "Home": 22.7,
+                },
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -5893,8 +5435,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 58.7,
                     "Fashion": 28.9,
-                    "Home": 12.4
-                }
+                    "Home": 12.4,
+                },
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -5904,8 +5446,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 31.5,
                     "Fashion": 42.3,
-                    "Home": 26.2
-                }
+                    "Home": 26.2,
+                },
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -5915,8 +5457,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 67.8,
                     "Fashion": 18.9,
-                    "Home": 13.3
-                }
+                    "Home": 13.3,
+                },
             },
             {
                 "payment_method_type": "WALLET",
@@ -5926,10 +5468,10 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 28.4,
                     "Fashion": 45.6,
-                    "Home": 26.0
-                }
-            }
-        ]
+                    "Home": 26.0,
+                },
+            },
+        ],
     },
     {
         "overall_success_rate_data": {
@@ -5940,7 +5482,7 @@ ACME_JUSPAY_DATA = [
             "processing_time_avg": 37.2,
             "retry_success_rate": 42.1,
             "peak_hour_sr": 95.3,
-            "off_peak_sr": 92.1
+            "off_peak_sr": 92.1,
         },
         "payment_method_success_rates": [
             {
@@ -5954,8 +5496,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "TRANSACTION_TIMEOUT",
                     "INSUFFICIENT_FUNDS",
-                    "BANK_ERROR"
-                ]
+                    "BANK_ERROR",
+                ],
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -5968,8 +5510,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "INSUFFICIENT_FUNDS",
                     "CARD_DECLINED",
-                    "EXPIRED_CARD"
-                ]
+                    "EXPIRED_CARD",
+                ],
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -5982,8 +5524,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "INSUFFICIENT_FUNDS",
                     "DAILY_LIMIT_EXCEEDED",
-                    "PIN_INCORRECT"
-                ]
+                    "PIN_INCORRECT",
+                ],
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -5996,8 +5538,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "BANK_TECHNICAL_ISSUE",
                     "SESSION_TIMEOUT",
-                    "INVALID_CREDENTIALS"
-                ]
+                    "INVALID_CREDENTIALS",
+                ],
             },
             {
                 "payment_method_type": "WALLET",
@@ -6010,49 +5552,29 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "INSUFFICIENT_WALLET_BALANCE",
                     "WALLET_BLOCKED",
-                    "OTP_FAILURE"
-                ]
-            }
+                    "OTP_FAILURE",
+                ],
+            },
         ],
         "failure_analysis": {
             "top_failure_reasons": [
-                {
-                    "reason": "INSUFFICIENT_FUNDS",
-                    "count": 73,
-                    "percentage": 32.0
-                },
-                {
-                    "reason": "CARD_DECLINED",
-                    "count": 58,
-                    "percentage": 25.4
-                },
-                {
-                    "reason": "TRANSACTION_TIMEOUT",
-                    "count": 42,
-                    "percentage": 18.4
-                },
-                {
-                    "reason": "BANK_ERROR",
-                    "count": 31,
-                    "percentage": 13.6
-                },
-                {
-                    "reason": "SESSION_TIMEOUT",
-                    "count": 24,
-                    "percentage": 10.5
-                }
+                {"reason": "INSUFFICIENT_FUNDS", "count": 73, "percentage": 32.0},
+                {"reason": "CARD_DECLINED", "count": 58, "percentage": 25.4},
+                {"reason": "TRANSACTION_TIMEOUT", "count": 42, "percentage": 18.4},
+                {"reason": "BANK_ERROR", "count": 31, "percentage": 13.6},
+                {"reason": "SESSION_TIMEOUT", "count": 24, "percentage": 10.5},
             ],
             "failure_rate_by_hour": {
                 "00-06": 8.9,
                 "06-12": 6.2,
                 "12-18": 5.8,
-                "18-24": 7.1
+                "18-24": 7.1,
             },
             "retry_attempts": {
                 "single_retry": 145,
                 "multiple_retries": 83,
-                "success_after_retry": 96
-            }
+                "success_after_retry": 96,
+            },
         },
         "gmv_breakdown": {
             "total_gmv": 628759.2,
@@ -6062,11 +5584,11 @@ ACME_JUSPAY_DATA = [
                 "UPI": 221456.8,
                 "CREDIT_CARD": 253892.65,
                 "DEBIT_CARD": 75234.4,
-                "NET_BANKING": 37250.6
+                "NET_BANKING": 37250.6,
             },
             "average_transaction_value": 180.28,
             "high_value_transactions": 58,
-            "micro_transactions": 1398
+            "micro_transactions": 1398,
         },
         "device_analytics": {
             "mobile_sr": 94.1,
@@ -6077,73 +5599,48 @@ ACME_JUSPAY_DATA = [
             "tablet_percentage": 2.8,
             "ios_sr": 95.2,
             "android_sr": 93.7,
-            "windows_sr": 92.8
+            "windows_sr": 92.8,
         },
         "geographical_data": {
             "top_cities": [
-                {
-                    "city": "Mumbai",
-                    "success_rate": 94.5,
-                    "volume": 1056
-                },
-                {
-                    "city": "Delhi",
-                    "success_rate": 93.2,
-                    "volume": 867
-                },
-                {
-                    "city": "Bangalore",
-                    "success_rate": 95.1,
-                    "volume": 723
-                },
-                {
-                    "city": "Chennai",
-                    "success_rate": 92.8,
-                    "volume": 534
-                },
-                {
-                    "city": "Hyderabad",
-                    "success_rate": 94.2,
-                    "volume": 307
-                }
+                {"city": "Mumbai", "success_rate": 94.5, "volume": 1056},
+                {"city": "Delhi", "success_rate": 93.2, "volume": 867},
+                {"city": "Bangalore", "success_rate": 95.1, "volume": 723},
+                {"city": "Chennai", "success_rate": 92.8, "volume": 534},
+                {"city": "Hyderabad", "success_rate": 94.2, "volume": 307},
             ],
             "state_performance": {
                 "Maharashtra": 94.5,
                 "Karnataka": 95.1,
                 "Delhi": 93.2,
                 "Tamil Nadu": 92.8,
-                "Telangana": 94.2
-            }
+                "Telangana": 94.2,
+            },
         },
         "temporal_patterns": {
             "hourly_success_rates": {
-                "peak_hours": [
-                    "13:00-15:00",
-                    "20:00-22:00"
-                ],
-                "low_performance_hours": [
-                    "03:00-06:00"
-                ],
-                "weekend_pattern": "high_performance"
+                "peak_hours": ["13:00-15:00", "20:00-22:00"],
+                "low_performance_hours": ["03:00-06:00"],
+                "weekend_pattern": "high_performance",
             },
             "success_rate_by_time_of_day": {
                 "morning": 93.8,
                 "afternoon": 94.2,
                 "evening": 93.9,
-                "night": 92.1
+                "night": 92.1,
             },
             "payment_method_preference_by_time": {
                 "morning": "UPI",
                 "afternoon": "CREDIT_CARD",
                 "evening": "CREDIT_CARD",
-                "night": "UPI"
-            }
+                "night": "UPI",
+            },
         },
         "weekly_patterns": {
             "weekday_sr": 93.8,
             "weekend_sr": 92.9,
             "monday_peak": False,
-            "friday_peak": True
+            "friday_peak": True,
         },
         "errors": [],
         "failure_details": [
@@ -6155,8 +5652,8 @@ ACME_JUSPAY_DATA = [
                 "avg_retry_attempts": 2.1,
                 "resolution_suggestions": [
                     "Check account balance",
-                    "Try different card"
-                ]
+                    "Try different card",
+                ],
             },
             {
                 "error_message": "BANK_TECHNICAL_ISSUE",
@@ -6164,10 +5661,7 @@ ACME_JUSPAY_DATA = [
                 "count": 28,
                 "percentage": 10.5,
                 "avg_retry_attempts": 1.5,
-                "resolution_suggestions": [
-                    "Try again later",
-                    "Contact bank"
-                ]
+                "resolution_suggestions": ["Try again later", "Contact bank"],
             },
             {
                 "error_message": "TRANSACTION_TIMEOUT",
@@ -6177,8 +5671,8 @@ ACME_JUSPAY_DATA = [
                 "avg_retry_attempts": 2.0,
                 "resolution_suggestions": [
                     "Check internet connection",
-                    "Retry payment"
-                ]
+                    "Retry payment",
+                ],
             },
             {
                 "error_message": "CARD_DECLINED",
@@ -6186,10 +5680,7 @@ ACME_JUSPAY_DATA = [
                 "count": 31,
                 "percentage": 11.6,
                 "avg_retry_attempts": 1.5,
-                "resolution_suggestions": [
-                    "Contact card issuer",
-                    "Try different card"
-                ]
+                "resolution_suggestions": ["Contact card issuer", "Try different card"],
             },
             {
                 "error_message": "DAILY_LIMIT_EXCEEDED",
@@ -6199,8 +5690,8 @@ ACME_JUSPAY_DATA = [
                 "avg_retry_attempts": 1.4,
                 "resolution_suggestions": [
                     "Try tomorrow",
-                    "Use different payment method"
-                ]
+                    "Use different payment method",
+                ],
             },
             {
                 "error_message": "SESSION_EXPIRED",
@@ -6208,11 +5699,8 @@ ACME_JUSPAY_DATA = [
                 "count": 43,
                 "percentage": 16.1,
                 "avg_retry_attempts": 1.4,
-                "resolution_suggestions": [
-                    "Login again",
-                    "Refresh page"
-                ]
-            }
+                "resolution_suggestions": ["Login again", "Refresh page"],
+            },
         ],
         "success_volume_by_payment_method": [
             {
@@ -6221,7 +5709,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 36.2,
                 "peak_hour_volume": 41,
                 "avg_transaction_value": 5669.93,
-                "repeat_customer_rate": 71.8
+                "repeat_customer_rate": 71.8,
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -6229,7 +5717,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 40.5,
                 "peak_hour_volume": 146,
                 "avg_transaction_value": 5698.01,
-                "repeat_customer_rate": 55.9
+                "repeat_customer_rate": 55.9,
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -6237,7 +5725,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 14.0,
                 "peak_hour_volume": 147,
                 "avg_transaction_value": 4406.18,
-                "repeat_customer_rate": 68.2
+                "repeat_customer_rate": 68.2,
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -6245,7 +5733,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 5.5,
                 "peak_hour_volume": 130,
                 "avg_transaction_value": 6031.83,
-                "repeat_customer_rate": 72.3
+                "repeat_customer_rate": 72.3,
             },
             {
                 "payment_method_type": "WALLET",
@@ -6253,8 +5741,8 @@ ACME_JUSPAY_DATA = [
                 "percentage": 3.7,
                 "peak_hour_volume": 95,
                 "avg_transaction_value": 5278.11,
-                "repeat_customer_rate": 57.6
-            }
+                "repeat_customer_rate": 57.6,
+            },
         ],
         "gmv_by_payment_method": [
             {
@@ -6267,8 +5755,8 @@ ACME_JUSPAY_DATA = [
                     "North": 38.2,
                     "South": 42.1,
                     "West": 35.7,
-                    "East": 28.9
-                }
+                    "East": 28.9,
+                },
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -6280,8 +5768,8 @@ ACME_JUSPAY_DATA = [
                     "North": 52.3,
                     "South": 48.9,
                     "West": 54.1,
-                    "East": 46.7
-                }
+                    "East": 46.7,
+                },
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -6293,8 +5781,8 @@ ACME_JUSPAY_DATA = [
                     "North": 28.5,
                     "South": 31.2,
                     "West": 26.8,
-                    "East": 33.4
-                }
+                    "East": 33.4,
+                },
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -6306,8 +5794,8 @@ ACME_JUSPAY_DATA = [
                     "North": 15.2,
                     "South": 12.8,
                     "West": 18.9,
-                    "East": 21.3
-                }
+                    "East": 21.3,
+                },
             },
             {
                 "payment_method_type": "WALLET",
@@ -6319,9 +5807,9 @@ ACME_JUSPAY_DATA = [
                     "North": 22.1,
                     "South": 25.8,
                     "West": 19.4,
-                    "East": 16.2
-                }
-            }
+                    "East": 16.2,
+                },
+            },
         ],
         "average_ticket_size_by_payment_method": [
             {
@@ -6332,8 +5820,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 45.2,
                     "Fashion": 32.1,
-                    "Home": 22.7
-                }
+                    "Home": 22.7,
+                },
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -6343,8 +5831,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 58.7,
                     "Fashion": 28.9,
-                    "Home": 12.4
-                }
+                    "Home": 12.4,
+                },
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -6354,8 +5842,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 31.5,
                     "Fashion": 42.3,
-                    "Home": 26.2
-                }
+                    "Home": 26.2,
+                },
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -6365,8 +5853,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 67.8,
                     "Fashion": 18.9,
-                    "Home": 13.3
-                }
+                    "Home": 13.3,
+                },
             },
             {
                 "payment_method_type": "WALLET",
@@ -6376,10 +5864,10 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 28.4,
                     "Fashion": 45.6,
-                    "Home": 26.0
-                }
-            }
-        ]
+                    "Home": 26.0,
+                },
+            },
+        ],
     },
     {
         "overall_success_rate_data": {
@@ -6390,7 +5878,7 @@ ACME_JUSPAY_DATA = [
             "processing_time_avg": 41.8,
             "retry_success_rate": 35.7,
             "peak_hour_sr": 91.9,
-            "off_peak_sr": 88.2
+            "off_peak_sr": 88.2,
         },
         "payment_method_success_rates": [
             {
@@ -6404,8 +5892,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "TRANSACTION_TIMEOUT",
                     "INSUFFICIENT_FUNDS",
-                    "BANK_ERROR"
-                ]
+                    "BANK_ERROR",
+                ],
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -6418,8 +5906,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "INSUFFICIENT_FUNDS",
                     "CARD_DECLINED",
-                    "EXPIRED_CARD"
-                ]
+                    "EXPIRED_CARD",
+                ],
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -6432,8 +5920,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "INSUFFICIENT_FUNDS",
                     "DAILY_LIMIT_EXCEEDED",
-                    "PIN_INCORRECT"
-                ]
+                    "PIN_INCORRECT",
+                ],
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -6446,8 +5934,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "BANK_TECHNICAL_ISSUE",
                     "SESSION_TIMEOUT",
-                    "INVALID_CREDENTIALS"
-                ]
+                    "INVALID_CREDENTIALS",
+                ],
             },
             {
                 "payment_method_type": "WALLET",
@@ -6460,49 +5948,29 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "INSUFFICIENT_WALLET_BALANCE",
                     "WALLET_BLOCKED",
-                    "OTP_FAILURE"
-                ]
-            }
+                    "OTP_FAILURE",
+                ],
+            },
         ],
         "failure_analysis": {
             "top_failure_reasons": [
-                {
-                    "reason": "CARD_DECLINED",
-                    "count": 89,
-                    "percentage": 27.3
-                },
-                {
-                    "reason": "INSUFFICIENT_FUNDS",
-                    "count": 84,
-                    "percentage": 25.8
-                },
-                {
-                    "reason": "TRANSACTION_TIMEOUT",
-                    "count": 67,
-                    "percentage": 20.6
-                },
-                {
-                    "reason": "SESSION_TIMEOUT",
-                    "count": 43,
-                    "percentage": 13.2
-                },
-                {
-                    "reason": "BANK_ERROR",
-                    "count": 43,
-                    "percentage": 13.2
-                }
+                {"reason": "CARD_DECLINED", "count": 89, "percentage": 27.3},
+                {"reason": "INSUFFICIENT_FUNDS", "count": 84, "percentage": 25.8},
+                {"reason": "TRANSACTION_TIMEOUT", "count": 67, "percentage": 20.6},
+                {"reason": "SESSION_TIMEOUT", "count": 43, "percentage": 13.2},
+                {"reason": "BANK_ERROR", "count": 43, "percentage": 13.2},
             ],
             "failure_rate_by_hour": {
                 "00-06": 13.1,
                 "06-12": 9.8,
                 "12-18": 8.9,
-                "18-24": 10.7
+                "18-24": 10.7,
             },
             "retry_attempts": {
                 "single_retry": 208,
                 "multiple_retries": 118,
-                "success_after_retry": 116
-            }
+                "success_after_retry": 116,
+            },
         },
         "gmv_breakdown": {
             "total_gmv": 521673.45,
@@ -6512,11 +5980,11 @@ ACME_JUSPAY_DATA = [
                 "UPI": 184623.7,
                 "CREDIT_CARD": 203834.85,
                 "DEBIT_CARD": 58967.4,
-                "NET_BANKING": 20116.35
+                "NET_BANKING": 20116.35,
             },
             "average_transaction_value": 165.89,
             "high_value_transactions": 41,
-            "micro_transactions": 1234
+            "micro_transactions": 1234,
         },
         "device_analytics": {
             "mobile_sr": 90.7,
@@ -6527,73 +5995,48 @@ ACME_JUSPAY_DATA = [
             "tablet_percentage": 2.7,
             "ios_sr": 91.8,
             "android_sr": 90.2,
-            "windows_sr": 88.7
+            "windows_sr": 88.7,
         },
         "geographical_data": {
             "top_cities": [
-                {
-                    "city": "Mumbai",
-                    "success_rate": 91.1,
-                    "volume": 887
-                },
-                {
-                    "city": "Delhi",
-                    "success_rate": 89.5,
-                    "volume": 734
-                },
-                {
-                    "city": "Bangalore",
-                    "success_rate": 92.3,
-                    "volume": 612
-                },
-                {
-                    "city": "Chennai",
-                    "success_rate": 88.7,
-                    "volume": 467
-                },
-                {
-                    "city": "Hyderabad",
-                    "success_rate": 90.8,
-                    "volume": 445
-                }
+                {"city": "Mumbai", "success_rate": 91.1, "volume": 887},
+                {"city": "Delhi", "success_rate": 89.5, "volume": 734},
+                {"city": "Bangalore", "success_rate": 92.3, "volume": 612},
+                {"city": "Chennai", "success_rate": 88.7, "volume": 467},
+                {"city": "Hyderabad", "success_rate": 90.8, "volume": 445},
             ],
             "state_performance": {
                 "Maharashtra": 91.1,
                 "Karnataka": 92.3,
                 "Delhi": 89.5,
                 "Tamil Nadu": 88.7,
-                "Telangana": 90.8
-            }
+                "Telangana": 90.8,
+            },
         },
         "temporal_patterns": {
             "hourly_success_rates": {
-                "peak_hours": [
-                    "14:00-16:00",
-                    "19:00-21:00"
-                ],
-                "low_performance_hours": [
-                    "02:00-06:00"
-                ],
-                "weekend_pattern": "moderate_performance"
+                "peak_hours": ["14:00-16:00", "19:00-21:00"],
+                "low_performance_hours": ["02:00-06:00"],
+                "weekend_pattern": "moderate_performance",
             },
             "success_rate_by_time_of_day": {
                 "morning": 90.1,
                 "afternoon": 90.6,
                 "evening": 90.2,
-                "night": 87.9
+                "night": 87.9,
             },
             "payment_method_preference_by_time": {
                 "morning": "UPI",
                 "afternoon": "CREDIT_CARD",
                 "evening": "CREDIT_CARD",
-                "night": "UPI"
-            }
+                "night": "UPI",
+            },
         },
         "weekly_patterns": {
             "weekday_sr": 90.1,
             "weekend_sr": 88.9,
             "monday_peak": True,
-            "friday_peak": False
+            "friday_peak": False,
         },
         "errors": [],
         "failure_details": [
@@ -6605,8 +6048,8 @@ ACME_JUSPAY_DATA = [
                 "avg_retry_attempts": 2.2,
                 "resolution_suggestions": [
                     "Check account balance",
-                    "Try different card"
-                ]
+                    "Try different card",
+                ],
             },
             {
                 "error_message": "BANK_TECHNICAL_ISSUE",
@@ -6614,10 +6057,7 @@ ACME_JUSPAY_DATA = [
                 "count": 23,
                 "percentage": 6.8,
                 "avg_retry_attempts": 2.4,
-                "resolution_suggestions": [
-                    "Try again later",
-                    "Contact bank"
-                ]
+                "resolution_suggestions": ["Try again later", "Contact bank"],
             },
             {
                 "error_message": "TRANSACTION_TIMEOUT",
@@ -6627,8 +6067,8 @@ ACME_JUSPAY_DATA = [
                 "avg_retry_attempts": 1.0,
                 "resolution_suggestions": [
                     "Check internet connection",
-                    "Retry payment"
-                ]
+                    "Retry payment",
+                ],
             },
             {
                 "error_message": "CARD_DECLINED",
@@ -6636,10 +6076,7 @@ ACME_JUSPAY_DATA = [
                 "count": 20,
                 "percentage": 5.9,
                 "avg_retry_attempts": 1.5,
-                "resolution_suggestions": [
-                    "Contact card issuer",
-                    "Try different card"
-                ]
+                "resolution_suggestions": ["Contact card issuer", "Try different card"],
             },
             {
                 "error_message": "DAILY_LIMIT_EXCEEDED",
@@ -6649,8 +6086,8 @@ ACME_JUSPAY_DATA = [
                 "avg_retry_attempts": 1.3,
                 "resolution_suggestions": [
                     "Try tomorrow",
-                    "Use different payment method"
-                ]
+                    "Use different payment method",
+                ],
             },
             {
                 "error_message": "SESSION_EXPIRED",
@@ -6658,11 +6095,8 @@ ACME_JUSPAY_DATA = [
                 "count": 18,
                 "percentage": 5.3,
                 "avg_retry_attempts": 2.3,
-                "resolution_suggestions": [
-                    "Login again",
-                    "Refresh page"
-                ]
-            }
+                "resolution_suggestions": ["Login again", "Refresh page"],
+            },
         ],
         "success_volume_by_payment_method": [
             {
@@ -6671,7 +6105,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 35.0,
                 "peak_hour_volume": 123,
                 "avg_transaction_value": 4251.77,
-                "repeat_customer_rate": 65.5
+                "repeat_customer_rate": 65.5,
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -6679,7 +6113,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 41.3,
                 "peak_hour_volume": 100,
                 "avg_transaction_value": 2902.69,
-                "repeat_customer_rate": 59.3
+                "repeat_customer_rate": 59.3,
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -6687,7 +6121,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 14.5,
                 "peak_hour_volume": 134,
                 "avg_transaction_value": 4841.01,
-                "repeat_customer_rate": 57.3
+                "repeat_customer_rate": 57.3,
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -6695,7 +6129,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 5.5,
                 "peak_hour_volume": 63,
                 "avg_transaction_value": 6359.5,
-                "repeat_customer_rate": 54.8
+                "repeat_customer_rate": 54.8,
             },
             {
                 "payment_method_type": "WALLET",
@@ -6703,8 +6137,8 @@ ACME_JUSPAY_DATA = [
                 "percentage": 3.6,
                 "peak_hour_volume": 100,
                 "avg_transaction_value": 5598.93,
-                "repeat_customer_rate": 66.7
-            }
+                "repeat_customer_rate": 66.7,
+            },
         ],
         "gmv_by_payment_method": [
             {
@@ -6717,8 +6151,8 @@ ACME_JUSPAY_DATA = [
                     "North": 38.2,
                     "South": 42.1,
                     "West": 35.7,
-                    "East": 28.9
-                }
+                    "East": 28.9,
+                },
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -6730,8 +6164,8 @@ ACME_JUSPAY_DATA = [
                     "North": 52.3,
                     "South": 48.9,
                     "West": 54.1,
-                    "East": 46.7
-                }
+                    "East": 46.7,
+                },
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -6743,8 +6177,8 @@ ACME_JUSPAY_DATA = [
                     "North": 28.5,
                     "South": 31.2,
                     "West": 26.8,
-                    "East": 33.4
-                }
+                    "East": 33.4,
+                },
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -6756,8 +6190,8 @@ ACME_JUSPAY_DATA = [
                     "North": 15.2,
                     "South": 12.8,
                     "West": 18.9,
-                    "East": 21.3
-                }
+                    "East": 21.3,
+                },
             },
             {
                 "payment_method_type": "WALLET",
@@ -6769,9 +6203,9 @@ ACME_JUSPAY_DATA = [
                     "North": 22.1,
                     "South": 25.8,
                     "West": 19.4,
-                    "East": 16.2
-                }
-            }
+                    "East": 16.2,
+                },
+            },
         ],
         "average_ticket_size_by_payment_method": [
             {
@@ -6782,8 +6216,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 45.2,
                     "Fashion": 32.1,
-                    "Home": 22.7
-                }
+                    "Home": 22.7,
+                },
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -6793,8 +6227,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 58.7,
                     "Fashion": 28.9,
-                    "Home": 12.4
-                }
+                    "Home": 12.4,
+                },
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -6804,8 +6238,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 31.5,
                     "Fashion": 42.3,
-                    "Home": 26.2
-                }
+                    "Home": 26.2,
+                },
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -6815,8 +6249,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 67.8,
                     "Fashion": 18.9,
-                    "Home": 13.3
-                }
+                    "Home": 13.3,
+                },
             },
             {
                 "payment_method_type": "WALLET",
@@ -6826,10 +6260,10 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 28.4,
                     "Fashion": 45.6,
-                    "Home": 26.0
-                }
-            }
-        ]
+                    "Home": 26.0,
+                },
+            },
+        ],
     },
     {
         "overall_success_rate_data": {
@@ -6840,7 +6274,7 @@ ACME_JUSPAY_DATA = [
             "processing_time_avg": 38.5,
             "retry_success_rate": 39.8,
             "peak_hour_sr": 94.2,
-            "off_peak_sr": 90.7
+            "off_peak_sr": 90.7,
         },
         "payment_method_success_rates": [
             {
@@ -6854,8 +6288,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "TRANSACTION_TIMEOUT",
                     "INSUFFICIENT_FUNDS",
-                    "BANK_ERROR"
-                ]
+                    "BANK_ERROR",
+                ],
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -6868,8 +6302,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "INSUFFICIENT_FUNDS",
                     "CARD_DECLINED",
-                    "EXPIRED_CARD"
-                ]
+                    "EXPIRED_CARD",
+                ],
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -6882,8 +6316,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "INSUFFICIENT_FUNDS",
                     "DAILY_LIMIT_EXCEEDED",
-                    "PIN_INCORRECT"
-                ]
+                    "PIN_INCORRECT",
+                ],
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -6896,8 +6330,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "BANK_TECHNICAL_ISSUE",
                     "SESSION_TIMEOUT",
-                    "INVALID_CREDENTIALS"
-                ]
+                    "INVALID_CREDENTIALS",
+                ],
             },
             {
                 "payment_method_type": "WALLET",
@@ -6910,49 +6344,29 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "INSUFFICIENT_WALLET_BALANCE",
                     "WALLET_BLOCKED",
-                    "OTP_FAILURE"
-                ]
-            }
+                    "OTP_FAILURE",
+                ],
+            },
         ],
         "failure_analysis": {
             "top_failure_reasons": [
-                {
-                    "reason": "INSUFFICIENT_FUNDS",
-                    "count": 78,
-                    "percentage": 29.3
-                },
-                {
-                    "reason": "CARD_DECLINED",
-                    "count": 69,
-                    "percentage": 25.9
-                },
-                {
-                    "reason": "TRANSACTION_TIMEOUT",
-                    "count": 54,
-                    "percentage": 20.3
-                },
-                {
-                    "reason": "BANK_ERROR",
-                    "count": 35,
-                    "percentage": 13.2
-                },
-                {
-                    "reason": "SESSION_TIMEOUT",
-                    "count": 30,
-                    "percentage": 11.3
-                }
+                {"reason": "INSUFFICIENT_FUNDS", "count": 78, "percentage": 29.3},
+                {"reason": "CARD_DECLINED", "count": 69, "percentage": 25.9},
+                {"reason": "TRANSACTION_TIMEOUT", "count": 54, "percentage": 20.3},
+                {"reason": "BANK_ERROR", "count": 35, "percentage": 13.2},
+                {"reason": "SESSION_TIMEOUT", "count": 30, "percentage": 11.3},
             ],
             "failure_rate_by_hour": {
                 "00-06": 10.2,
                 "06-12": 7.4,
                 "12-18": 6.8,
-                "18-24": 8.3
+                "18-24": 8.3,
             },
             "retry_attempts": {
                 "single_retry": 169,
                 "multiple_retries": 97,
-                "success_after_retry": 106
-            }
+                "success_after_retry": 106,
+            },
         },
         "gmv_breakdown": {
             "total_gmv": 578934.65,
@@ -6962,11 +6376,11 @@ ACME_JUSPAY_DATA = [
                 "UPI": 204834.7,
                 "CREDIT_CARD": 234556.85,
                 "DEBIT_CARD": 67834.2,
-                "NET_BANKING": 26395.65
+                "NET_BANKING": 26395.65,
             },
             "average_transaction_value": 170.19,
             "high_value_transactions": 52,
-            "micro_transactions": 1378
+            "micro_transactions": 1378,
         },
         "device_analytics": {
             "mobile_sr": 93.1,
@@ -6977,73 +6391,48 @@ ACME_JUSPAY_DATA = [
             "tablet_percentage": 2.6,
             "ios_sr": 94.3,
             "android_sr": 92.6,
-            "windows_sr": 91.2
+            "windows_sr": 91.2,
         },
         "geographical_data": {
             "top_cities": [
-                {
-                    "city": "Mumbai",
-                    "success_rate": 93.4,
-                    "volume": 978
-                },
-                {
-                    "city": "Delhi",
-                    "success_rate": 91.8,
-                    "volume": 821
-                },
-                {
-                    "city": "Bangalore",
-                    "success_rate": 94.2,
-                    "volume": 689
-                },
-                {
-                    "city": "Chennai",
-                    "success_rate": 91.2,
-                    "volume": 512
-                },
-                {
-                    "city": "Hyderabad",
-                    "success_rate": 92.9,
-                    "volume": 401
-                }
+                {"city": "Mumbai", "success_rate": 93.4, "volume": 978},
+                {"city": "Delhi", "success_rate": 91.8, "volume": 821},
+                {"city": "Bangalore", "success_rate": 94.2, "volume": 689},
+                {"city": "Chennai", "success_rate": 91.2, "volume": 512},
+                {"city": "Hyderabad", "success_rate": 92.9, "volume": 401},
             ],
             "state_performance": {
                 "Maharashtra": 93.4,
                 "Karnataka": 94.2,
                 "Delhi": 91.8,
                 "Tamil Nadu": 91.2,
-                "Telangana": 92.9
-            }
+                "Telangana": 92.9,
+            },
         },
         "temporal_patterns": {
             "hourly_success_rates": {
-                "peak_hours": [
-                    "15:00-17:00",
-                    "20:00-22:00"
-                ],
-                "low_performance_hours": [
-                    "01:00-05:00"
-                ],
-                "weekend_pattern": "strong_performance"
+                "peak_hours": ["15:00-17:00", "20:00-22:00"],
+                "low_performance_hours": ["01:00-05:00"],
+                "weekend_pattern": "strong_performance",
             },
             "success_rate_by_time_of_day": {
                 "morning": 92.6,
                 "afternoon": 93.1,
                 "evening": 92.8,
-                "night": 90.9
+                "night": 90.9,
             },
             "payment_method_preference_by_time": {
                 "morning": "UPI",
                 "afternoon": "CREDIT_CARD",
                 "evening": "CREDIT_CARD",
-                "night": "UPI"
-            }
+                "night": "UPI",
+            },
         },
         "weekly_patterns": {
             "weekday_sr": 92.5,
             "weekend_sr": 91.6,
             "monday_peak": False,
-            "friday_peak": True
+            "friday_peak": True,
         },
         "errors": [],
         "failure_details": [
@@ -7055,8 +6444,8 @@ ACME_JUSPAY_DATA = [
                 "avg_retry_attempts": 1.6,
                 "resolution_suggestions": [
                     "Check account balance",
-                    "Try different card"
-                ]
+                    "Try different card",
+                ],
             },
             {
                 "error_message": "BANK_TECHNICAL_ISSUE",
@@ -7064,10 +6453,7 @@ ACME_JUSPAY_DATA = [
                 "count": 33,
                 "percentage": 8.6,
                 "avg_retry_attempts": 2.2,
-                "resolution_suggestions": [
-                    "Try again later",
-                    "Contact bank"
-                ]
+                "resolution_suggestions": ["Try again later", "Contact bank"],
             },
             {
                 "error_message": "TRANSACTION_TIMEOUT",
@@ -7077,8 +6463,8 @@ ACME_JUSPAY_DATA = [
                 "avg_retry_attempts": 1.2,
                 "resolution_suggestions": [
                     "Check internet connection",
-                    "Retry payment"
-                ]
+                    "Retry payment",
+                ],
             },
             {
                 "error_message": "CARD_DECLINED",
@@ -7086,10 +6472,7 @@ ACME_JUSPAY_DATA = [
                 "count": 49,
                 "percentage": 12.7,
                 "avg_retry_attempts": 1.3,
-                "resolution_suggestions": [
-                    "Contact card issuer",
-                    "Try different card"
-                ]
+                "resolution_suggestions": ["Contact card issuer", "Try different card"],
             },
             {
                 "error_message": "DAILY_LIMIT_EXCEEDED",
@@ -7099,8 +6482,8 @@ ACME_JUSPAY_DATA = [
                 "avg_retry_attempts": 1.9,
                 "resolution_suggestions": [
                     "Try tomorrow",
-                    "Use different payment method"
-                ]
+                    "Use different payment method",
+                ],
             },
             {
                 "error_message": "SESSION_EXPIRED",
@@ -7108,11 +6491,8 @@ ACME_JUSPAY_DATA = [
                 "count": 44,
                 "percentage": 11.4,
                 "avg_retry_attempts": 1.8,
-                "resolution_suggestions": [
-                    "Login again",
-                    "Refresh page"
-                ]
-            }
+                "resolution_suggestions": ["Login again", "Refresh page"],
+            },
         ],
         "success_volume_by_payment_method": [
             {
@@ -7121,7 +6501,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 36.4,
                 "peak_hour_volume": 72,
                 "avg_transaction_value": 6233.54,
-                "repeat_customer_rate": 62.1
+                "repeat_customer_rate": 62.1,
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -7129,7 +6509,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 40.3,
                 "peak_hour_volume": 142,
                 "avg_transaction_value": 6097.44,
-                "repeat_customer_rate": 56.0
+                "repeat_customer_rate": 56.0,
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -7137,7 +6517,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 14.7,
                 "peak_hour_volume": 107,
                 "avg_transaction_value": 5844.15,
-                "repeat_customer_rate": 68.1
+                "repeat_customer_rate": 68.1,
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -7145,7 +6525,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 5.0,
                 "peak_hour_volume": 23,
                 "avg_transaction_value": 6089.47,
-                "repeat_customer_rate": 69.0
+                "repeat_customer_rate": 69.0,
             },
             {
                 "payment_method_type": "WALLET",
@@ -7153,8 +6533,8 @@ ACME_JUSPAY_DATA = [
                 "percentage": 3.7,
                 "peak_hour_volume": 96,
                 "avg_transaction_value": 3142.21,
-                "repeat_customer_rate": 68.6
-            }
+                "repeat_customer_rate": 68.6,
+            },
         ],
         "gmv_by_payment_method": [
             {
@@ -7167,8 +6547,8 @@ ACME_JUSPAY_DATA = [
                     "North": 38.2,
                     "South": 42.1,
                     "West": 35.7,
-                    "East": 28.9
-                }
+                    "East": 28.9,
+                },
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -7180,8 +6560,8 @@ ACME_JUSPAY_DATA = [
                     "North": 52.3,
                     "South": 48.9,
                     "West": 54.1,
-                    "East": 46.7
-                }
+                    "East": 46.7,
+                },
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -7193,8 +6573,8 @@ ACME_JUSPAY_DATA = [
                     "North": 28.5,
                     "South": 31.2,
                     "West": 26.8,
-                    "East": 33.4
-                }
+                    "East": 33.4,
+                },
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -7206,8 +6586,8 @@ ACME_JUSPAY_DATA = [
                     "North": 15.2,
                     "South": 12.8,
                     "West": 18.9,
-                    "East": 21.3
-                }
+                    "East": 21.3,
+                },
             },
             {
                 "payment_method_type": "WALLET",
@@ -7219,9 +6599,9 @@ ACME_JUSPAY_DATA = [
                     "North": 22.1,
                     "South": 25.8,
                     "West": 19.4,
-                    "East": 16.2
-                }
-            }
+                    "East": 16.2,
+                },
+            },
         ],
         "average_ticket_size_by_payment_method": [
             {
@@ -7232,8 +6612,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 45.2,
                     "Fashion": 32.1,
-                    "Home": 22.7
-                }
+                    "Home": 22.7,
+                },
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -7243,8 +6623,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 58.7,
                     "Fashion": 28.9,
-                    "Home": 12.4
-                }
+                    "Home": 12.4,
+                },
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -7254,8 +6634,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 31.5,
                     "Fashion": 42.3,
-                    "Home": 26.2
-                }
+                    "Home": 26.2,
+                },
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -7265,8 +6645,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 67.8,
                     "Fashion": 18.9,
-                    "Home": 13.3
-                }
+                    "Home": 13.3,
+                },
             },
             {
                 "payment_method_type": "WALLET",
@@ -7276,10 +6656,10 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 28.4,
                     "Fashion": 45.6,
-                    "Home": 26.0
-                }
-            }
-        ]
+                    "Home": 26.0,
+                },
+            },
+        ],
     },
     {
         "overall_success_rate_data": {
@@ -7290,7 +6670,7 @@ ACME_JUSPAY_DATA = [
             "processing_time_avg": 44.3,
             "retry_success_rate": 32.6,
             "peak_hour_sr": 90.1,
-            "off_peak_sr": 86.8
+            "off_peak_sr": 86.8,
         },
         "payment_method_success_rates": [
             {
@@ -7304,8 +6684,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "TRANSACTION_TIMEOUT",
                     "INSUFFICIENT_FUNDS",
-                    "BANK_ERROR"
-                ]
+                    "BANK_ERROR",
+                ],
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -7318,8 +6698,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "INSUFFICIENT_FUNDS",
                     "CARD_DECLINED",
-                    "EXPIRED_CARD"
-                ]
+                    "EXPIRED_CARD",
+                ],
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -7332,8 +6712,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "INSUFFICIENT_FUNDS",
                     "DAILY_LIMIT_EXCEEDED",
-                    "PIN_INCORRECT"
-                ]
+                    "PIN_INCORRECT",
+                ],
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -7346,8 +6726,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "BANK_TECHNICAL_ISSUE",
                     "SESSION_TIMEOUT",
-                    "INVALID_CREDENTIALS"
-                ]
+                    "INVALID_CREDENTIALS",
+                ],
             },
             {
                 "payment_method_type": "WALLET",
@@ -7360,49 +6740,29 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "INSUFFICIENT_WALLET_BALANCE",
                     "WALLET_BLOCKED",
-                    "OTP_FAILURE"
-                ]
-            }
+                    "OTP_FAILURE",
+                ],
+            },
         ],
         "failure_analysis": {
             "top_failure_reasons": [
-                {
-                    "reason": "CARD_DECLINED",
-                    "count": 102,
-                    "percentage": 29.4
-                },
-                {
-                    "reason": "INSUFFICIENT_FUNDS",
-                    "count": 95,
-                    "percentage": 27.4
-                },
-                {
-                    "reason": "TRANSACTION_TIMEOUT",
-                    "count": 71,
-                    "percentage": 20.5
-                },
-                {
-                    "reason": "SESSION_TIMEOUT",
-                    "count": 47,
-                    "percentage": 13.5
-                },
-                {
-                    "reason": "BANK_ERROR",
-                    "count": 32,
-                    "percentage": 9.2
-                }
+                {"reason": "CARD_DECLINED", "count": 102, "percentage": 29.4},
+                {"reason": "INSUFFICIENT_FUNDS", "count": 95, "percentage": 27.4},
+                {"reason": "TRANSACTION_TIMEOUT", "count": 71, "percentage": 20.5},
+                {"reason": "SESSION_TIMEOUT", "count": 47, "percentage": 13.5},
+                {"reason": "BANK_ERROR", "count": 32, "percentage": 9.2},
             ],
             "failure_rate_by_hour": {
                 "00-06": 15.8,
                 "06-12": 11.2,
                 "12-18": 9.7,
-                "18-24": 13.1
+                "18-24": 13.1,
             },
             "retry_attempts": {
                 "single_retry": 221,
                 "multiple_retries": 126,
-                "success_after_retry": 113
-            }
+                "success_after_retry": 113,
+            },
         },
         "gmv_breakdown": {
             "total_gmv": 492834.9,
@@ -7412,11 +6772,11 @@ ACME_JUSPAY_DATA = [
                 "UPI": 172345.6,
                 "CREDIT_CARD": 178923.85,
                 "DEBIT_CARD": 56234.7,
-                "NET_BANKING": 27622.6
+                "NET_BANKING": 27622.6,
             },
             "average_transaction_value": 166.09,
             "high_value_transactions": 36,
-            "micro_transactions": 1145
+            "micro_transactions": 1145,
         },
         "device_analytics": {
             "mobile_sr": 89.3,
@@ -7427,73 +6787,48 @@ ACME_JUSPAY_DATA = [
             "tablet_percentage": 1.9,
             "ios_sr": 90.7,
             "android_sr": 88.6,
-            "windows_sr": 87.2
+            "windows_sr": 87.2,
         },
         "geographical_data": {
             "top_cities": [
-                {
-                    "city": "Mumbai",
-                    "success_rate": 89.8,
-                    "volume": 812
-                },
-                {
-                    "city": "Delhi",
-                    "success_rate": 87.9,
-                    "volume": 689
-                },
-                {
-                    "city": "Bangalore",
-                    "success_rate": 90.7,
-                    "volume": 578
-                },
-                {
-                    "city": "Chennai",
-                    "success_rate": 86.8,
-                    "volume": 443
-                },
-                {
-                    "city": "Hyderabad",
-                    "success_rate": 89.1,
-                    "volume": 445
-                }
+                {"city": "Mumbai", "success_rate": 89.8, "volume": 812},
+                {"city": "Delhi", "success_rate": 87.9, "volume": 689},
+                {"city": "Bangalore", "success_rate": 90.7, "volume": 578},
+                {"city": "Chennai", "success_rate": 86.8, "volume": 443},
+                {"city": "Hyderabad", "success_rate": 89.1, "volume": 445},
             ],
             "state_performance": {
                 "Maharashtra": 89.8,
                 "Karnataka": 90.7,
                 "Delhi": 87.9,
                 "Tamil Nadu": 86.8,
-                "Telangana": 89.1
-            }
+                "Telangana": 89.1,
+            },
         },
         "temporal_patterns": {
             "hourly_success_rates": {
-                "peak_hours": [
-                    "14:00-16:00",
-                    "18:00-20:00"
-                ],
-                "low_performance_hours": [
-                    "03:00-07:00"
-                ],
-                "weekend_pattern": "challenging_performance"
+                "peak_hours": ["14:00-16:00", "18:00-20:00"],
+                "low_performance_hours": ["03:00-07:00"],
+                "weekend_pattern": "challenging_performance",
             },
             "success_rate_by_time_of_day": {
                 "morning": 88.7,
                 "afternoon": 89.2,
                 "evening": 88.8,
-                "night": 86.4
+                "night": 86.4,
             },
             "payment_method_preference_by_time": {
                 "morning": "UPI",
                 "afternoon": "CREDIT_CARD",
                 "evening": "CREDIT_CARD",
-                "night": "UPI"
-            }
+                "night": "UPI",
+            },
         },
         "weekly_patterns": {
             "weekday_sr": 88.6,
             "weekend_sr": 87.4,
             "monday_peak": True,
-            "friday_peak": False
+            "friday_peak": False,
         },
         "errors": [],
         "failure_details": [
@@ -7505,8 +6840,8 @@ ACME_JUSPAY_DATA = [
                 "avg_retry_attempts": 1.9,
                 "resolution_suggestions": [
                     "Check account balance",
-                    "Try different card"
-                ]
+                    "Try different card",
+                ],
             },
             {
                 "error_message": "BANK_TECHNICAL_ISSUE",
@@ -7514,10 +6849,7 @@ ACME_JUSPAY_DATA = [
                 "count": 28,
                 "percentage": 9.2,
                 "avg_retry_attempts": 1.4,
-                "resolution_suggestions": [
-                    "Try again later",
-                    "Contact bank"
-                ]
+                "resolution_suggestions": ["Try again later", "Contact bank"],
             },
             {
                 "error_message": "TRANSACTION_TIMEOUT",
@@ -7527,8 +6859,8 @@ ACME_JUSPAY_DATA = [
                 "avg_retry_attempts": 2.4,
                 "resolution_suggestions": [
                     "Check internet connection",
-                    "Retry payment"
-                ]
+                    "Retry payment",
+                ],
             },
             {
                 "error_message": "CARD_DECLINED",
@@ -7536,10 +6868,7 @@ ACME_JUSPAY_DATA = [
                 "count": 22,
                 "percentage": 7.3,
                 "avg_retry_attempts": 1.1,
-                "resolution_suggestions": [
-                    "Contact card issuer",
-                    "Try different card"
-                ]
+                "resolution_suggestions": ["Contact card issuer", "Try different card"],
             },
             {
                 "error_message": "DAILY_LIMIT_EXCEEDED",
@@ -7549,8 +6878,8 @@ ACME_JUSPAY_DATA = [
                 "avg_retry_attempts": 1.4,
                 "resolution_suggestions": [
                     "Try tomorrow",
-                    "Use different payment method"
-                ]
+                    "Use different payment method",
+                ],
             },
             {
                 "error_message": "SESSION_EXPIRED",
@@ -7558,11 +6887,8 @@ ACME_JUSPAY_DATA = [
                 "count": 50,
                 "percentage": 16.5,
                 "avg_retry_attempts": 1.4,
-                "resolution_suggestions": [
-                    "Login again",
-                    "Refresh page"
-                ]
-            }
+                "resolution_suggestions": ["Login again", "Refresh page"],
+            },
         ],
         "success_volume_by_payment_method": [
             {
@@ -7571,7 +6897,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 35.2,
                 "peak_hour_volume": 149,
                 "avg_transaction_value": 5044.11,
-                "repeat_customer_rate": 55.7
+                "repeat_customer_rate": 55.7,
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -7579,7 +6905,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 40.6,
                 "peak_hour_volume": 22,
                 "avg_transaction_value": 3248.4,
-                "repeat_customer_rate": 59.8
+                "repeat_customer_rate": 59.8,
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -7587,7 +6913,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 15.0,
                 "peak_hour_volume": 37,
                 "avg_transaction_value": 2899.75,
-                "repeat_customer_rate": 60.7
+                "repeat_customer_rate": 60.7,
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -7595,7 +6921,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 5.6,
                 "peak_hour_volume": 116,
                 "avg_transaction_value": 5914.68,
-                "repeat_customer_rate": 60.6
+                "repeat_customer_rate": 60.6,
             },
             {
                 "payment_method_type": "WALLET",
@@ -7603,8 +6929,8 @@ ACME_JUSPAY_DATA = [
                 "percentage": 3.6,
                 "peak_hour_volume": 132,
                 "avg_transaction_value": 5306.42,
-                "repeat_customer_rate": 56.6
-            }
+                "repeat_customer_rate": 56.6,
+            },
         ],
         "gmv_by_payment_method": [
             {
@@ -7617,8 +6943,8 @@ ACME_JUSPAY_DATA = [
                     "North": 38.2,
                     "South": 42.1,
                     "West": 35.7,
-                    "East": 28.9
-                }
+                    "East": 28.9,
+                },
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -7630,8 +6956,8 @@ ACME_JUSPAY_DATA = [
                     "North": 52.3,
                     "South": 48.9,
                     "West": 54.1,
-                    "East": 46.7
-                }
+                    "East": 46.7,
+                },
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -7643,8 +6969,8 @@ ACME_JUSPAY_DATA = [
                     "North": 28.5,
                     "South": 31.2,
                     "West": 26.8,
-                    "East": 33.4
-                }
+                    "East": 33.4,
+                },
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -7656,8 +6982,8 @@ ACME_JUSPAY_DATA = [
                     "North": 15.2,
                     "South": 12.8,
                     "West": 18.9,
-                    "East": 21.3
-                }
+                    "East": 21.3,
+                },
             },
             {
                 "payment_method_type": "WALLET",
@@ -7669,9 +6995,9 @@ ACME_JUSPAY_DATA = [
                     "North": 22.1,
                     "South": 25.8,
                     "West": 19.4,
-                    "East": 16.2
-                }
-            }
+                    "East": 16.2,
+                },
+            },
         ],
         "average_ticket_size_by_payment_method": [
             {
@@ -7682,8 +7008,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 45.2,
                     "Fashion": 32.1,
-                    "Home": 22.7
-                }
+                    "Home": 22.7,
+                },
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -7693,8 +7019,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 58.7,
                     "Fashion": 28.9,
-                    "Home": 12.4
-                }
+                    "Home": 12.4,
+                },
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -7704,8 +7030,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 31.5,
                     "Fashion": 42.3,
-                    "Home": 26.2
-                }
+                    "Home": 26.2,
+                },
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -7715,8 +7041,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 67.8,
                     "Fashion": 18.9,
-                    "Home": 13.3
-                }
+                    "Home": 13.3,
+                },
             },
             {
                 "payment_method_type": "WALLET",
@@ -7726,10 +7052,10 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 28.4,
                     "Fashion": 45.6,
-                    "Home": 26.0
-                }
-            }
-        ]
+                    "Home": 26.0,
+                },
+            },
+        ],
     },
     {
         "overall_success_rate_data": {
@@ -7740,7 +7066,7 @@ ACME_JUSPAY_DATA = [
             "processing_time_avg": 35.8,
             "retry_success_rate": 44.5,
             "peak_hour_sr": 96.1,
-            "off_peak_sr": 93.2
+            "off_peak_sr": 93.2,
         },
         "payment_method_success_rates": [
             {
@@ -7754,8 +7080,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "TRANSACTION_TIMEOUT",
                     "INSUFFICIENT_FUNDS",
-                    "BANK_ERROR"
-                ]
+                    "BANK_ERROR",
+                ],
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -7768,8 +7094,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "INSUFFICIENT_FUNDS",
                     "CARD_DECLINED",
-                    "EXPIRED_CARD"
-                ]
+                    "EXPIRED_CARD",
+                ],
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -7782,8 +7108,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "INSUFFICIENT_FUNDS",
                     "DAILY_LIMIT_EXCEEDED",
-                    "PIN_INCORRECT"
-                ]
+                    "PIN_INCORRECT",
+                ],
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -7796,8 +7122,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "BANK_TECHNICAL_ISSUE",
                     "SESSION_TIMEOUT",
-                    "INVALID_CREDENTIALS"
-                ]
+                    "INVALID_CREDENTIALS",
+                ],
             },
             {
                 "payment_method_type": "WALLET",
@@ -7810,49 +7136,29 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "INSUFFICIENT_WALLET_BALANCE",
                     "WALLET_BLOCKED",
-                    "OTP_FAILURE"
-                ]
-            }
+                    "OTP_FAILURE",
+                ],
+            },
         ],
         "failure_analysis": {
             "top_failure_reasons": [
-                {
-                    "reason": "INSUFFICIENT_FUNDS",
-                    "count": 65,
-                    "percentage": 32.5
-                },
-                {
-                    "reason": "CARD_DECLINED",
-                    "count": 48,
-                    "percentage": 24.0
-                },
-                {
-                    "reason": "TRANSACTION_TIMEOUT",
-                    "count": 38,
-                    "percentage": 19.0
-                },
-                {
-                    "reason": "BANK_ERROR",
-                    "count": 27,
-                    "percentage": 13.5
-                },
-                {
-                    "reason": "SESSION_TIMEOUT",
-                    "count": 22,
-                    "percentage": 11.0
-                }
+                {"reason": "INSUFFICIENT_FUNDS", "count": 65, "percentage": 32.5},
+                {"reason": "CARD_DECLINED", "count": 48, "percentage": 24.0},
+                {"reason": "TRANSACTION_TIMEOUT", "count": 38, "percentage": 19.0},
+                {"reason": "BANK_ERROR", "count": 27, "percentage": 13.5},
+                {"reason": "SESSION_TIMEOUT", "count": 22, "percentage": 11.0},
             ],
             "failure_rate_by_hour": {
                 "00-06": 7.2,
                 "06-12": 5.1,
                 "12-18": 4.8,
-                "18-24": 6.3
+                "18-24": 6.3,
             },
             "retry_attempts": {
                 "single_retry": 127,
                 "multiple_retries": 73,
-                "success_after_retry": 89
-            }
+                "success_after_retry": 89,
+            },
         },
         "gmv_breakdown": {
             "total_gmv": 672834.55,
@@ -7862,11 +7168,11 @@ ACME_JUSPAY_DATA = [
                 "UPI": 235467.8,
                 "CREDIT_CARD": 278934.65,
                 "DEBIT_CARD": 83456.7,
-                "NET_BANKING": 37865.75
+                "NET_BANKING": 37865.75,
             },
             "average_transaction_value": 184.15,
             "high_value_transactions": 67,
-            "micro_transactions": 1523
+            "micro_transactions": 1523,
         },
         "device_analytics": {
             "mobile_sr": 95.2,
@@ -7877,73 +7183,48 @@ ACME_JUSPAY_DATA = [
             "tablet_percentage": 2.8,
             "ios_sr": 96.4,
             "android_sr": 94.7,
-            "windows_sr": 93.6
+            "windows_sr": 93.6,
         },
         "geographical_data": {
             "top_cities": [
-                {
-                    "city": "Mumbai",
-                    "success_rate": 95.8,
-                    "volume": 1134
-                },
-                {
-                    "city": "Delhi",
-                    "success_rate": 94.2,
-                    "volume": 923
-                },
-                {
-                    "city": "Bangalore",
-                    "success_rate": 96.1,
-                    "volume": 787
-                },
-                {
-                    "city": "Chennai",
-                    "success_rate": 93.9,
-                    "volume": 598
-                },
-                {
-                    "city": "Hyderabad",
-                    "success_rate": 95.3,
-                    "volume": 212
-                }
+                {"city": "Mumbai", "success_rate": 95.8, "volume": 1134},
+                {"city": "Delhi", "success_rate": 94.2, "volume": 923},
+                {"city": "Bangalore", "success_rate": 96.1, "volume": 787},
+                {"city": "Chennai", "success_rate": 93.9, "volume": 598},
+                {"city": "Hyderabad", "success_rate": 95.3, "volume": 212},
             ],
             "state_performance": {
                 "Maharashtra": 95.8,
                 "Karnataka": 96.1,
                 "Delhi": 94.2,
                 "Tamil Nadu": 93.9,
-                "Telangana": 95.3
-            }
+                "Telangana": 95.3,
+            },
         },
         "temporal_patterns": {
             "hourly_success_rates": {
-                "peak_hours": [
-                    "13:00-15:00",
-                    "21:00-23:00"
-                ],
-                "low_performance_hours": [
-                    "02:00-05:00"
-                ],
-                "weekend_pattern": "excellent_performance"
+                "peak_hours": ["13:00-15:00", "21:00-23:00"],
+                "low_performance_hours": ["02:00-05:00"],
+                "weekend_pattern": "excellent_performance",
             },
             "success_rate_by_time_of_day": {
                 "morning": 94.9,
                 "afternoon": 95.2,
                 "evening": 95.1,
-                "night": 93.4
+                "night": 93.4,
             },
             "payment_method_preference_by_time": {
                 "morning": "UPI",
                 "afternoon": "CREDIT_CARD",
                 "evening": "CREDIT_CARD",
-                "night": "UPI"
-            }
+                "night": "UPI",
+            },
         },
         "weekly_patterns": {
             "weekday_sr": 94.8,
             "weekend_sr": 94.1,
             "monday_peak": False,
-            "friday_peak": True
+            "friday_peak": True,
         },
         "errors": [],
         "failure_details": [
@@ -7955,8 +7236,8 @@ ACME_JUSPAY_DATA = [
                 "avg_retry_attempts": 1.6,
                 "resolution_suggestions": [
                     "Check account balance",
-                    "Try different card"
-                ]
+                    "Try different card",
+                ],
             },
             {
                 "error_message": "BANK_TECHNICAL_ISSUE",
@@ -7964,10 +7245,7 @@ ACME_JUSPAY_DATA = [
                 "count": 46,
                 "percentage": 14.2,
                 "avg_retry_attempts": 1.7,
-                "resolution_suggestions": [
-                    "Try again later",
-                    "Contact bank"
-                ]
+                "resolution_suggestions": ["Try again later", "Contact bank"],
             },
             {
                 "error_message": "TRANSACTION_TIMEOUT",
@@ -7977,8 +7255,8 @@ ACME_JUSPAY_DATA = [
                 "avg_retry_attempts": 1.1,
                 "resolution_suggestions": [
                     "Check internet connection",
-                    "Retry payment"
-                ]
+                    "Retry payment",
+                ],
             },
             {
                 "error_message": "CARD_DECLINED",
@@ -7986,10 +7264,7 @@ ACME_JUSPAY_DATA = [
                 "count": 16,
                 "percentage": 4.9,
                 "avg_retry_attempts": 1.7,
-                "resolution_suggestions": [
-                    "Contact card issuer",
-                    "Try different card"
-                ]
+                "resolution_suggestions": ["Contact card issuer", "Try different card"],
             },
             {
                 "error_message": "DAILY_LIMIT_EXCEEDED",
@@ -7999,8 +7274,8 @@ ACME_JUSPAY_DATA = [
                 "avg_retry_attempts": 1.7,
                 "resolution_suggestions": [
                     "Try tomorrow",
-                    "Use different payment method"
-                ]
+                    "Use different payment method",
+                ],
             },
             {
                 "error_message": "SESSION_EXPIRED",
@@ -8008,11 +7283,8 @@ ACME_JUSPAY_DATA = [
                 "count": 26,
                 "percentage": 8.0,
                 "avg_retry_attempts": 2.1,
-                "resolution_suggestions": [
-                    "Login again",
-                    "Refresh page"
-                ]
-            }
+                "resolution_suggestions": ["Login again", "Refresh page"],
+            },
         ],
         "success_volume_by_payment_method": [
             {
@@ -8021,7 +7293,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 36.2,
                 "peak_hour_volume": 61,
                 "avg_transaction_value": 3491.43,
-                "repeat_customer_rate": 59.2
+                "repeat_customer_rate": 59.2,
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -8029,7 +7301,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 40.6,
                 "peak_hour_volume": 106,
                 "avg_transaction_value": 5345.09,
-                "repeat_customer_rate": 51.9
+                "repeat_customer_rate": 51.9,
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -8037,7 +7309,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 13.9,
                 "peak_hour_volume": 145,
                 "avg_transaction_value": 3086.94,
-                "repeat_customer_rate": 70.7
+                "repeat_customer_rate": 70.7,
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -8045,7 +7317,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 5.6,
                 "peak_hour_volume": 104,
                 "avg_transaction_value": 5136.44,
-                "repeat_customer_rate": 68.2
+                "repeat_customer_rate": 68.2,
             },
             {
                 "payment_method_type": "WALLET",
@@ -8053,8 +7325,8 @@ ACME_JUSPAY_DATA = [
                 "percentage": 3.7,
                 "peak_hour_volume": 115,
                 "avg_transaction_value": 4355.3,
-                "repeat_customer_rate": 51.3
-            }
+                "repeat_customer_rate": 51.3,
+            },
         ],
         "gmv_by_payment_method": [
             {
@@ -8067,8 +7339,8 @@ ACME_JUSPAY_DATA = [
                     "North": 38.2,
                     "South": 42.1,
                     "West": 35.7,
-                    "East": 28.9
-                }
+                    "East": 28.9,
+                },
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -8080,8 +7352,8 @@ ACME_JUSPAY_DATA = [
                     "North": 52.3,
                     "South": 48.9,
                     "West": 54.1,
-                    "East": 46.7
-                }
+                    "East": 46.7,
+                },
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -8093,8 +7365,8 @@ ACME_JUSPAY_DATA = [
                     "North": 28.5,
                     "South": 31.2,
                     "West": 26.8,
-                    "East": 33.4
-                }
+                    "East": 33.4,
+                },
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -8106,8 +7378,8 @@ ACME_JUSPAY_DATA = [
                     "North": 15.2,
                     "South": 12.8,
                     "West": 18.9,
-                    "East": 21.3
-                }
+                    "East": 21.3,
+                },
             },
             {
                 "payment_method_type": "WALLET",
@@ -8119,9 +7391,9 @@ ACME_JUSPAY_DATA = [
                     "North": 22.1,
                     "South": 25.8,
                     "West": 19.4,
-                    "East": 16.2
-                }
-            }
+                    "East": 16.2,
+                },
+            },
         ],
         "average_ticket_size_by_payment_method": [
             {
@@ -8132,8 +7404,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 45.2,
                     "Fashion": 32.1,
-                    "Home": 22.7
-                }
+                    "Home": 22.7,
+                },
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -8143,8 +7415,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 58.7,
                     "Fashion": 28.9,
-                    "Home": 12.4
-                }
+                    "Home": 12.4,
+                },
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -8154,8 +7426,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 31.5,
                     "Fashion": 42.3,
-                    "Home": 26.2
-                }
+                    "Home": 26.2,
+                },
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -8165,8 +7437,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 67.8,
                     "Fashion": 18.9,
-                    "Home": 13.3
-                }
+                    "Home": 13.3,
+                },
             },
             {
                 "payment_method_type": "WALLET",
@@ -8176,10 +7448,10 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 28.4,
                     "Fashion": 45.6,
-                    "Home": 26.0
-                }
-            }
-        ]
+                    "Home": 26.0,
+                },
+            },
+        ],
     },
     {
         "overall_success_rate_data": {
@@ -8190,7 +7462,7 @@ ACME_JUSPAY_DATA = [
             "processing_time_avg": 47.2,
             "retry_success_rate": 29.8,
             "peak_hour_sr": 88.9,
-            "off_peak_sr": 85.1
+            "off_peak_sr": 85.1,
         },
         "payment_method_success_rates": [
             {
@@ -8204,8 +7476,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "TRANSACTION_TIMEOUT",
                     "INSUFFICIENT_FUNDS",
-                    "BANK_ERROR"
-                ]
+                    "BANK_ERROR",
+                ],
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -8218,8 +7490,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "INSUFFICIENT_FUNDS",
                     "CARD_DECLINED",
-                    "EXPIRED_CARD"
-                ]
+                    "EXPIRED_CARD",
+                ],
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -8232,8 +7504,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "INSUFFICIENT_FUNDS",
                     "DAILY_LIMIT_EXCEEDED",
-                    "PIN_INCORRECT"
-                ]
+                    "PIN_INCORRECT",
+                ],
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -8246,8 +7518,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "BANK_TECHNICAL_ISSUE",
                     "SESSION_TIMEOUT",
-                    "INVALID_CREDENTIALS"
-                ]
+                    "INVALID_CREDENTIALS",
+                ],
             },
             {
                 "payment_method_type": "WALLET",
@@ -8260,49 +7532,29 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "INSUFFICIENT_WALLET_BALANCE",
                     "WALLET_BLOCKED",
-                    "OTP_FAILURE"
-                ]
-            }
+                    "OTP_FAILURE",
+                ],
+            },
         ],
         "failure_analysis": {
             "top_failure_reasons": [
-                {
-                    "reason": "CARD_DECLINED",
-                    "count": 112,
-                    "percentage": 29.8
-                },
-                {
-                    "reason": "INSUFFICIENT_FUNDS",
-                    "count": 108,
-                    "percentage": 28.7
-                },
-                {
-                    "reason": "TRANSACTION_TIMEOUT",
-                    "count": 84,
-                    "percentage": 22.3
-                },
-                {
-                    "reason": "SESSION_TIMEOUT",
-                    "count": 52,
-                    "percentage": 13.8
-                },
-                {
-                    "reason": "BANK_ERROR",
-                    "count": 20,
-                    "percentage": 5.3
-                }
+                {"reason": "CARD_DECLINED", "count": 112, "percentage": 29.8},
+                {"reason": "INSUFFICIENT_FUNDS", "count": 108, "percentage": 28.7},
+                {"reason": "TRANSACTION_TIMEOUT", "count": 84, "percentage": 22.3},
+                {"reason": "SESSION_TIMEOUT", "count": 52, "percentage": 13.8},
+                {"reason": "BANK_ERROR", "count": 20, "percentage": 5.3},
             ],
             "failure_rate_by_hour": {
                 "00-06": 17.4,
                 "06-12": 13.1,
                 "12-18": 11.8,
-                "18-24": 14.2
+                "18-24": 14.2,
             },
             "retry_attempts": {
                 "single_retry": 239,
                 "multiple_retries": 137,
-                "success_after_retry": 112
-            }
+                "success_after_retry": 112,
+            },
         },
         "gmv_breakdown": {
             "total_gmv": 468923.4,
@@ -8312,11 +7564,11 @@ ACME_JUSPAY_DATA = [
                 "UPI": 164523.7,
                 "CREDIT_CARD": 167834.95,
                 "DEBIT_CARD": 51456.3,
-                "NET_BANKING": 22919.9
+                "NET_BANKING": 22919.9,
             },
             "average_transaction_value": 165.44,
             "high_value_transactions": 29,
-            "micro_transactions": 1089
+            "micro_transactions": 1089,
         },
         "device_analytics": {
             "mobile_sr": 87.8,
@@ -8327,73 +7579,48 @@ ACME_JUSPAY_DATA = [
             "tablet_percentage": 2.1,
             "ios_sr": 89.1,
             "android_sr": 87.2,
-            "windows_sr": 85.3
+            "windows_sr": 85.3,
         },
         "geographical_data": {
             "top_cities": [
-                {
-                    "city": "Mumbai",
-                    "success_rate": 88.4,
-                    "volume": 789
-                },
-                {
-                    "city": "Delhi",
-                    "success_rate": 86.1,
-                    "volume": 654
-                },
-                {
-                    "city": "Bangalore",
-                    "success_rate": 89.7,
-                    "volume": 542
-                },
-                {
-                    "city": "Chennai",
-                    "success_rate": 84.8,
-                    "volume": 412
-                },
-                {
-                    "city": "Hyderabad",
-                    "success_rate": 87.6,
-                    "volume": 437
-                }
+                {"city": "Mumbai", "success_rate": 88.4, "volume": 789},
+                {"city": "Delhi", "success_rate": 86.1, "volume": 654},
+                {"city": "Bangalore", "success_rate": 89.7, "volume": 542},
+                {"city": "Chennai", "success_rate": 84.8, "volume": 412},
+                {"city": "Hyderabad", "success_rate": 87.6, "volume": 437},
             ],
             "state_performance": {
                 "Maharashtra": 88.4,
                 "Karnataka": 89.7,
                 "Delhi": 86.1,
                 "Tamil Nadu": 84.8,
-                "Telangana": 87.6
-            }
+                "Telangana": 87.6,
+            },
         },
         "temporal_patterns": {
             "hourly_success_rates": {
-                "peak_hours": [
-                    "14:00-16:00",
-                    "17:00-19:00"
-                ],
-                "low_performance_hours": [
-                    "04:00-08:00"
-                ],
-                "weekend_pattern": "difficult_performance"
+                "peak_hours": ["14:00-16:00", "17:00-19:00"],
+                "low_performance_hours": ["04:00-08:00"],
+                "weekend_pattern": "difficult_performance",
             },
             "success_rate_by_time_of_day": {
                 "morning": 87.2,
                 "afternoon": 87.8,
                 "evening": 87.1,
-                "night": 84.9
+                "night": 84.9,
             },
             "payment_method_preference_by_time": {
                 "morning": "UPI",
                 "afternoon": "CREDIT_CARD",
                 "evening": "CREDIT_CARD",
-                "night": "UPI"
-            }
+                "night": "UPI",
+            },
         },
         "weekly_patterns": {
             "weekday_sr": 87.1,
             "weekend_sr": 85.8,
             "monday_peak": True,
-            "friday_peak": False
+            "friday_peak": False,
         },
         "errors": [],
         "failure_details": [
@@ -8405,8 +7632,8 @@ ACME_JUSPAY_DATA = [
                 "avg_retry_attempts": 1.2,
                 "resolution_suggestions": [
                     "Check account balance",
-                    "Try different card"
-                ]
+                    "Try different card",
+                ],
             },
             {
                 "error_message": "BANK_TECHNICAL_ISSUE",
@@ -8414,10 +7641,7 @@ ACME_JUSPAY_DATA = [
                 "count": 40,
                 "percentage": 17.7,
                 "avg_retry_attempts": 1.3,
-                "resolution_suggestions": [
-                    "Try again later",
-                    "Contact bank"
-                ]
+                "resolution_suggestions": ["Try again later", "Contact bank"],
             },
             {
                 "error_message": "TRANSACTION_TIMEOUT",
@@ -8427,8 +7651,8 @@ ACME_JUSPAY_DATA = [
                 "avg_retry_attempts": 1.3,
                 "resolution_suggestions": [
                     "Check internet connection",
-                    "Retry payment"
-                ]
+                    "Retry payment",
+                ],
             },
             {
                 "error_message": "CARD_DECLINED",
@@ -8436,10 +7660,7 @@ ACME_JUSPAY_DATA = [
                 "count": 43,
                 "percentage": 19.0,
                 "avg_retry_attempts": 2.2,
-                "resolution_suggestions": [
-                    "Contact card issuer",
-                    "Try different card"
-                ]
+                "resolution_suggestions": ["Contact card issuer", "Try different card"],
             },
             {
                 "error_message": "DAILY_LIMIT_EXCEEDED",
@@ -8449,8 +7670,8 @@ ACME_JUSPAY_DATA = [
                 "avg_retry_attempts": 1.2,
                 "resolution_suggestions": [
                     "Try tomorrow",
-                    "Use different payment method"
-                ]
+                    "Use different payment method",
+                ],
             },
             {
                 "error_message": "SESSION_EXPIRED",
@@ -8458,11 +7679,8 @@ ACME_JUSPAY_DATA = [
                 "count": 17,
                 "percentage": 7.5,
                 "avg_retry_attempts": 1.6,
-                "resolution_suggestions": [
-                    "Login again",
-                    "Refresh page"
-                ]
-            }
+                "resolution_suggestions": ["Login again", "Refresh page"],
+            },
         ],
         "success_volume_by_payment_method": [
             {
@@ -8471,7 +7689,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 35.6,
                 "peak_hour_volume": 143,
                 "avg_transaction_value": 2660.63,
-                "repeat_customer_rate": 68.8
+                "repeat_customer_rate": 68.8,
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -8479,7 +7697,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 40.5,
                 "peak_hour_volume": 59,
                 "avg_transaction_value": 4812.68,
-                "repeat_customer_rate": 63.9
+                "repeat_customer_rate": 63.9,
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -8487,7 +7705,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 14.6,
                 "peak_hour_volume": 143,
                 "avg_transaction_value": 3467.14,
-                "repeat_customer_rate": 45.4
+                "repeat_customer_rate": 45.4,
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -8495,7 +7713,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 5.5,
                 "peak_hour_volume": 88,
                 "avg_transaction_value": 2841.7,
-                "repeat_customer_rate": 59.9
+                "repeat_customer_rate": 59.9,
             },
             {
                 "payment_method_type": "WALLET",
@@ -8503,8 +7721,8 @@ ACME_JUSPAY_DATA = [
                 "percentage": 3.8,
                 "peak_hour_volume": 30,
                 "avg_transaction_value": 4886.09,
-                "repeat_customer_rate": 54.0
-            }
+                "repeat_customer_rate": 54.0,
+            },
         ],
         "gmv_by_payment_method": [
             {
@@ -8517,8 +7735,8 @@ ACME_JUSPAY_DATA = [
                     "North": 38.2,
                     "South": 42.1,
                     "West": 35.7,
-                    "East": 28.9
-                }
+                    "East": 28.9,
+                },
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -8530,8 +7748,8 @@ ACME_JUSPAY_DATA = [
                     "North": 52.3,
                     "South": 48.9,
                     "West": 54.1,
-                    "East": 46.7
-                }
+                    "East": 46.7,
+                },
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -8543,8 +7761,8 @@ ACME_JUSPAY_DATA = [
                     "North": 28.5,
                     "South": 31.2,
                     "West": 26.8,
-                    "East": 33.4
-                }
+                    "East": 33.4,
+                },
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -8556,8 +7774,8 @@ ACME_JUSPAY_DATA = [
                     "North": 15.2,
                     "South": 12.8,
                     "West": 18.9,
-                    "East": 21.3
-                }
+                    "East": 21.3,
+                },
             },
             {
                 "payment_method_type": "WALLET",
@@ -8569,9 +7787,9 @@ ACME_JUSPAY_DATA = [
                     "North": 22.1,
                     "South": 25.8,
                     "West": 19.4,
-                    "East": 16.2
-                }
-            }
+                    "East": 16.2,
+                },
+            },
         ],
         "average_ticket_size_by_payment_method": [
             {
@@ -8582,8 +7800,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 45.2,
                     "Fashion": 32.1,
-                    "Home": 22.7
-                }
+                    "Home": 22.7,
+                },
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -8593,8 +7811,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 58.7,
                     "Fashion": 28.9,
-                    "Home": 12.4
-                }
+                    "Home": 12.4,
+                },
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -8604,8 +7822,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 31.5,
                     "Fashion": 42.3,
-                    "Home": 26.2
-                }
+                    "Home": 26.2,
+                },
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -8615,8 +7833,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 67.8,
                     "Fashion": 18.9,
-                    "Home": 13.3
-                }
+                    "Home": 13.3,
+                },
             },
             {
                 "payment_method_type": "WALLET",
@@ -8626,10 +7844,10 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 28.4,
                     "Fashion": 45.6,
-                    "Home": 26.0
-                }
-            }
-        ]
+                    "Home": 26.0,
+                },
+            },
+        ],
     },
     {
         "overall_success_rate_data": {
@@ -8640,7 +7858,7 @@ ACME_JUSPAY_DATA = [
             "processing_time_avg": 40.6,
             "retry_success_rate": 37.2,
             "peak_hour_sr": 92.8,
-            "off_peak_sr": 89.3
+            "off_peak_sr": 89.3,
         },
         "payment_method_success_rates": [
             {
@@ -8654,8 +7872,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "TRANSACTION_TIMEOUT",
                     "INSUFFICIENT_FUNDS",
-                    "BANK_ERROR"
-                ]
+                    "BANK_ERROR",
+                ],
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -8668,8 +7886,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "INSUFFICIENT_FUNDS",
                     "CARD_DECLINED",
-                    "EXPIRED_CARD"
-                ]
+                    "EXPIRED_CARD",
+                ],
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -8682,8 +7900,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "INSUFFICIENT_FUNDS",
                     "DAILY_LIMIT_EXCEEDED",
-                    "PIN_INCORRECT"
-                ]
+                    "PIN_INCORRECT",
+                ],
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -8696,8 +7914,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "BANK_TECHNICAL_ISSUE",
                     "SESSION_TIMEOUT",
-                    "INVALID_CREDENTIALS"
-                ]
+                    "INVALID_CREDENTIALS",
+                ],
             },
             {
                 "payment_method_type": "WALLET",
@@ -8710,49 +7928,29 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "INSUFFICIENT_WALLET_BALANCE",
                     "WALLET_BLOCKED",
-                    "OTP_FAILURE"
-                ]
-            }
+                    "OTP_FAILURE",
+                ],
+            },
         ],
         "failure_analysis": {
             "top_failure_reasons": [
-                {
-                    "reason": "INSUFFICIENT_FUNDS",
-                    "count": 89,
-                    "percentage": 29.6
-                },
-                {
-                    "reason": "CARD_DECLINED",
-                    "count": 78,
-                    "percentage": 25.9
-                },
-                {
-                    "reason": "TRANSACTION_TIMEOUT",
-                    "count": 62,
-                    "percentage": 20.6
-                },
-                {
-                    "reason": "BANK_ERROR",
-                    "count": 41,
-                    "percentage": 13.6
-                },
-                {
-                    "reason": "SESSION_TIMEOUT",
-                    "count": 31,
-                    "percentage": 10.3
-                }
+                {"reason": "INSUFFICIENT_FUNDS", "count": 89, "percentage": 29.6},
+                {"reason": "CARD_DECLINED", "count": 78, "percentage": 25.9},
+                {"reason": "TRANSACTION_TIMEOUT", "count": 62, "percentage": 20.6},
+                {"reason": "BANK_ERROR", "count": 41, "percentage": 13.6},
+                {"reason": "SESSION_TIMEOUT", "count": 31, "percentage": 10.3},
             ],
             "failure_rate_by_hour": {
                 "00-06": 11.8,
                 "06-12": 8.9,
                 "12-18": 8.1,
-                "18-24": 9.7
+                "18-24": 9.7,
             },
             "retry_attempts": {
                 "single_retry": 191,
                 "multiple_retries": 110,
-                "success_after_retry": 112
-            }
+                "success_after_retry": 112,
+            },
         },
         "gmv_breakdown": {
             "total_gmv": 563784.2,
@@ -8762,11 +7960,11 @@ ACME_JUSPAY_DATA = [
                 "UPI": 197834.6,
                 "CREDIT_CARD": 221456.85,
                 "DEBIT_CARD": 65723.4,
-                "NET_BANKING": 27319.9
+                "NET_BANKING": 27319.9,
             },
             "average_transaction_value": 171.44,
             "high_value_transactions": 48,
-            "micro_transactions": 1312
+            "micro_transactions": 1312,
         },
         "device_analytics": {
             "mobile_sr": 91.8,
@@ -8777,73 +7975,48 @@ ACME_JUSPAY_DATA = [
             "tablet_percentage": 2.5,
             "ios_sr": 92.9,
             "android_sr": 91.2,
-            "windows_sr": 89.7
+            "windows_sr": 89.7,
         },
         "geographical_data": {
             "top_cities": [
-                {
-                    "city": "Mumbai",
-                    "success_rate": 92.1,
-                    "volume": 923
-                },
-                {
-                    "city": "Delhi",
-                    "success_rate": 90.6,
-                    "volume": 784
-                },
-                {
-                    "city": "Bangalore",
-                    "success_rate": 93.2,
-                    "volume": 656
-                },
-                {
-                    "city": "Chennai",
-                    "success_rate": 89.8,
-                    "volume": 498
-                },
-                {
-                    "city": "Hyderabad",
-                    "success_rate": 91.7,
-                    "volume": 428
-                }
+                {"city": "Mumbai", "success_rate": 92.1, "volume": 923},
+                {"city": "Delhi", "success_rate": 90.6, "volume": 784},
+                {"city": "Bangalore", "success_rate": 93.2, "volume": 656},
+                {"city": "Chennai", "success_rate": 89.8, "volume": 498},
+                {"city": "Hyderabad", "success_rate": 91.7, "volume": 428},
             ],
             "state_performance": {
                 "Maharashtra": 92.1,
                 "Karnataka": 93.2,
                 "Delhi": 90.6,
                 "Tamil Nadu": 89.8,
-                "Telangana": 91.7
-            }
+                "Telangana": 91.7,
+            },
         },
         "temporal_patterns": {
             "hourly_success_rates": {
-                "peak_hours": [
-                    "15:00-17:00",
-                    "19:00-21:00"
-                ],
-                "low_performance_hours": [
-                    "02:00-06:00"
-                ],
-                "weekend_pattern": "solid_performance"
+                "peak_hours": ["15:00-17:00", "19:00-21:00"],
+                "low_performance_hours": ["02:00-06:00"],
+                "weekend_pattern": "solid_performance",
             },
             "success_rate_by_time_of_day": {
                 "morning": 91.2,
                 "afternoon": 91.6,
                 "evening": 91.3,
-                "night": 89.7
+                "night": 89.7,
             },
             "payment_method_preference_by_time": {
                 "morning": "UPI",
                 "afternoon": "CREDIT_CARD",
                 "evening": "CREDIT_CARD",
-                "night": "UPI"
-            }
+                "night": "UPI",
+            },
         },
         "weekly_patterns": {
             "weekday_sr": 91.1,
             "weekend_sr": 90.2,
             "monday_peak": False,
-            "friday_peak": True
+            "friday_peak": True,
         },
         "errors": [],
         "failure_details": [
@@ -8855,8 +8028,8 @@ ACME_JUSPAY_DATA = [
                 "avg_retry_attempts": 2.3,
                 "resolution_suggestions": [
                     "Check account balance",
-                    "Try different card"
-                ]
+                    "Try different card",
+                ],
             },
             {
                 "error_message": "BANK_TECHNICAL_ISSUE",
@@ -8864,10 +8037,7 @@ ACME_JUSPAY_DATA = [
                 "count": 23,
                 "percentage": 9.3,
                 "avg_retry_attempts": 1.1,
-                "resolution_suggestions": [
-                    "Try again later",
-                    "Contact bank"
-                ]
+                "resolution_suggestions": ["Try again later", "Contact bank"],
             },
             {
                 "error_message": "TRANSACTION_TIMEOUT",
@@ -8877,8 +8047,8 @@ ACME_JUSPAY_DATA = [
                 "avg_retry_attempts": 1.4,
                 "resolution_suggestions": [
                     "Check internet connection",
-                    "Retry payment"
-                ]
+                    "Retry payment",
+                ],
             },
             {
                 "error_message": "CARD_DECLINED",
@@ -8886,10 +8056,7 @@ ACME_JUSPAY_DATA = [
                 "count": 24,
                 "percentage": 9.8,
                 "avg_retry_attempts": 2.0,
-                "resolution_suggestions": [
-                    "Contact card issuer",
-                    "Try different card"
-                ]
+                "resolution_suggestions": ["Contact card issuer", "Try different card"],
             },
             {
                 "error_message": "DAILY_LIMIT_EXCEEDED",
@@ -8899,8 +8066,8 @@ ACME_JUSPAY_DATA = [
                 "avg_retry_attempts": 2.2,
                 "resolution_suggestions": [
                     "Try tomorrow",
-                    "Use different payment method"
-                ]
+                    "Use different payment method",
+                ],
             },
             {
                 "error_message": "SESSION_EXPIRED",
@@ -8908,11 +8075,8 @@ ACME_JUSPAY_DATA = [
                 "count": 27,
                 "percentage": 11.0,
                 "avg_retry_attempts": 1.6,
-                "resolution_suggestions": [
-                    "Login again",
-                    "Refresh page"
-                ]
-            }
+                "resolution_suggestions": ["Login again", "Refresh page"],
+            },
         ],
         "success_volume_by_payment_method": [
             {
@@ -8921,7 +8085,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 35.8,
                 "peak_hour_volume": 73,
                 "avg_transaction_value": 6423.85,
-                "repeat_customer_rate": 48.0
+                "repeat_customer_rate": 48.0,
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -8929,7 +8093,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 40.8,
                 "peak_hour_volume": 46,
                 "avg_transaction_value": 3392.58,
-                "repeat_customer_rate": 67.5
+                "repeat_customer_rate": 67.5,
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -8937,7 +8101,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 14.3,
                 "peak_hour_volume": 94,
                 "avg_transaction_value": 4637.73,
-                "repeat_customer_rate": 62.1
+                "repeat_customer_rate": 62.1,
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -8945,7 +8109,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 5.3,
                 "peak_hour_volume": 105,
                 "avg_transaction_value": 4243.27,
-                "repeat_customer_rate": 69.6
+                "repeat_customer_rate": 69.6,
             },
             {
                 "payment_method_type": "WALLET",
@@ -8953,8 +8117,8 @@ ACME_JUSPAY_DATA = [
                 "percentage": 3.8,
                 "peak_hour_volume": 121,
                 "avg_transaction_value": 2766.5,
-                "repeat_customer_rate": 51.1
-            }
+                "repeat_customer_rate": 51.1,
+            },
         ],
         "gmv_by_payment_method": [
             {
@@ -8967,8 +8131,8 @@ ACME_JUSPAY_DATA = [
                     "North": 38.2,
                     "South": 42.1,
                     "West": 35.7,
-                    "East": 28.9
-                }
+                    "East": 28.9,
+                },
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -8980,8 +8144,8 @@ ACME_JUSPAY_DATA = [
                     "North": 52.3,
                     "South": 48.9,
                     "West": 54.1,
-                    "East": 46.7
-                }
+                    "East": 46.7,
+                },
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -8993,8 +8157,8 @@ ACME_JUSPAY_DATA = [
                     "North": 28.5,
                     "South": 31.2,
                     "West": 26.8,
-                    "East": 33.4
-                }
+                    "East": 33.4,
+                },
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -9006,8 +8170,8 @@ ACME_JUSPAY_DATA = [
                     "North": 15.2,
                     "South": 12.8,
                     "West": 18.9,
-                    "East": 21.3
-                }
+                    "East": 21.3,
+                },
             },
             {
                 "payment_method_type": "WALLET",
@@ -9019,9 +8183,9 @@ ACME_JUSPAY_DATA = [
                     "North": 22.1,
                     "South": 25.8,
                     "West": 19.4,
-                    "East": 16.2
-                }
-            }
+                    "East": 16.2,
+                },
+            },
         ],
         "average_ticket_size_by_payment_method": [
             {
@@ -9032,8 +8196,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 45.2,
                     "Fashion": 32.1,
-                    "Home": 22.7
-                }
+                    "Home": 22.7,
+                },
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -9043,8 +8207,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 58.7,
                     "Fashion": 28.9,
-                    "Home": 12.4
-                }
+                    "Home": 12.4,
+                },
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -9054,8 +8218,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 31.5,
                     "Fashion": 42.3,
-                    "Home": 26.2
-                }
+                    "Home": 26.2,
+                },
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -9065,8 +8229,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 67.8,
                     "Fashion": 18.9,
-                    "Home": 13.3
-                }
+                    "Home": 13.3,
+                },
             },
             {
                 "payment_method_type": "WALLET",
@@ -9076,10 +8240,10 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 28.4,
                     "Fashion": 45.6,
-                    "Home": 26.0
-                }
-            }
-        ]
+                    "Home": 26.0,
+                },
+            },
+        ],
     },
     {
         "overall_success_rate_data": {
@@ -9090,7 +8254,7 @@ ACME_JUSPAY_DATA = [
             "processing_time_avg": 36.4,
             "retry_success_rate": 41.4,
             "peak_hour_sr": 95.7,
-            "off_peak_sr": 92.8
+            "off_peak_sr": 92.8,
         },
         "payment_method_success_rates": [
             {
@@ -9104,8 +8268,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "TRANSACTION_TIMEOUT",
                     "INSUFFICIENT_FUNDS",
-                    "BANK_ERROR"
-                ]
+                    "BANK_ERROR",
+                ],
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -9118,8 +8282,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "INSUFFICIENT_FUNDS",
                     "CARD_DECLINED",
-                    "EXPIRED_CARD"
-                ]
+                    "EXPIRED_CARD",
+                ],
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -9132,8 +8296,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "INSUFFICIENT_FUNDS",
                     "DAILY_LIMIT_EXCEEDED",
-                    "PIN_INCORRECT"
-                ]
+                    "PIN_INCORRECT",
+                ],
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -9146,8 +8310,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "BANK_TECHNICAL_ISSUE",
                     "SESSION_TIMEOUT",
-                    "INVALID_CREDENTIALS"
-                ]
+                    "INVALID_CREDENTIALS",
+                ],
             },
             {
                 "payment_method_type": "WALLET",
@@ -9160,49 +8324,29 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "INSUFFICIENT_WALLET_BALANCE",
                     "WALLET_BLOCKED",
-                    "OTP_FAILURE"
-                ]
-            }
+                    "OTP_FAILURE",
+                ],
+            },
         ],
         "failure_analysis": {
             "top_failure_reasons": [
-                {
-                    "reason": "INSUFFICIENT_FUNDS",
-                    "count": 71,
-                    "percentage": 32.0
-                },
-                {
-                    "reason": "CARD_DECLINED",
-                    "count": 56,
-                    "percentage": 25.2
-                },
-                {
-                    "reason": "TRANSACTION_TIMEOUT",
-                    "count": 44,
-                    "percentage": 19.8
-                },
-                {
-                    "reason": "BANK_ERROR",
-                    "count": 29,
-                    "percentage": 13.1
-                },
-                {
-                    "reason": "SESSION_TIMEOUT",
-                    "count": 22,
-                    "percentage": 9.9
-                }
+                {"reason": "INSUFFICIENT_FUNDS", "count": 71, "percentage": 32.0},
+                {"reason": "CARD_DECLINED", "count": 56, "percentage": 25.2},
+                {"reason": "TRANSACTION_TIMEOUT", "count": 44, "percentage": 19.8},
+                {"reason": "BANK_ERROR", "count": 29, "percentage": 13.1},
+                {"reason": "SESSION_TIMEOUT", "count": 22, "percentage": 9.9},
             ],
             "failure_rate_by_hour": {
                 "00-06": 8.1,
                 "06-12": 5.8,
                 "12-18": 5.2,
-                "18-24": 6.7
+                "18-24": 6.7,
             },
             "retry_attempts": {
                 "single_retry": 141,
                 "multiple_retries": 81,
-                "success_after_retry": 92
-            }
+                "success_after_retry": 92,
+            },
         },
         "gmv_breakdown": {
             "total_gmv": 649834.75,
@@ -9212,11 +8356,11 @@ ACME_JUSPAY_DATA = [
                 "UPI": 227456.8,
                 "CREDIT_CARD": 259834.65,
                 "DEBIT_CARD": 78923.4,
-                "NET_BANKING": 42972.55
+                "NET_BANKING": 42972.55,
             },
             "average_transaction_value": 182.15,
             "high_value_transactions": 64,
-            "micro_transactions": 1456
+            "micro_transactions": 1456,
         },
         "device_analytics": {
             "mobile_sr": 94.6,
@@ -9227,73 +8371,48 @@ ACME_JUSPAY_DATA = [
             "tablet_percentage": 2.7,
             "ios_sr": 95.8,
             "android_sr": 94.1,
-            "windows_sr": 93.0
+            "windows_sr": 93.0,
         },
         "geographical_data": {
             "top_cities": [
-                {
-                    "city": "Mumbai",
-                    "success_rate": 95.1,
-                    "volume": 1087
-                },
-                {
-                    "city": "Delhi",
-                    "success_rate": 93.8,
-                    "volume": 891
-                },
-                {
-                    "city": "Bangalore",
-                    "success_rate": 95.9,
-                    "volume": 734
-                },
-                {
-                    "city": "Chennai",
-                    "success_rate": 92.7,
-                    "volume": 567
-                },
-                {
-                    "city": "Hyderabad",
-                    "success_rate": 94.6,
-                    "volume": 288
-                }
+                {"city": "Mumbai", "success_rate": 95.1, "volume": 1087},
+                {"city": "Delhi", "success_rate": 93.8, "volume": 891},
+                {"city": "Bangalore", "success_rate": 95.9, "volume": 734},
+                {"city": "Chennai", "success_rate": 92.7, "volume": 567},
+                {"city": "Hyderabad", "success_rate": 94.6, "volume": 288},
             ],
             "state_performance": {
                 "Maharashtra": 95.1,
                 "Karnataka": 95.9,
                 "Delhi": 93.8,
                 "Tamil Nadu": 92.7,
-                "Telangana": 94.6
-            }
+                "Telangana": 94.6,
+            },
         },
         "temporal_patterns": {
             "hourly_success_rates": {
-                "peak_hours": [
-                    "14:00-16:00",
-                    "20:00-22:00"
-                ],
-                "low_performance_hours": [
-                    "01:00-05:00"
-                ],
-                "weekend_pattern": "outstanding_performance"
+                "peak_hours": ["14:00-16:00", "20:00-22:00"],
+                "low_performance_hours": ["01:00-05:00"],
+                "weekend_pattern": "outstanding_performance",
             },
             "success_rate_by_time_of_day": {
                 "morning": 94.1,
                 "afternoon": 94.6,
                 "evening": 94.3,
-                "night": 92.8
+                "night": 92.8,
             },
             "payment_method_preference_by_time": {
                 "morning": "UPI",
                 "afternoon": "CREDIT_CARD",
                 "evening": "CREDIT_CARD",
-                "night": "UPI"
-            }
+                "night": "UPI",
+            },
         },
         "weekly_patterns": {
             "weekday_sr": 94.1,
             "weekend_sr": 93.2,
             "monday_peak": False,
-            "friday_peak": True
+            "friday_peak": True,
         },
         "errors": [],
         "failure_details": [
@@ -9305,8 +8424,8 @@ ACME_JUSPAY_DATA = [
                 "avg_retry_attempts": 2.5,
                 "resolution_suggestions": [
                     "Check account balance",
-                    "Try different card"
-                ]
+                    "Try different card",
+                ],
             },
             {
                 "error_message": "BANK_TECHNICAL_ISSUE",
@@ -9314,10 +8433,7 @@ ACME_JUSPAY_DATA = [
                 "count": 16,
                 "percentage": 3.8,
                 "avg_retry_attempts": 1.1,
-                "resolution_suggestions": [
-                    "Try again later",
-                    "Contact bank"
-                ]
+                "resolution_suggestions": ["Try again later", "Contact bank"],
             },
             {
                 "error_message": "TRANSACTION_TIMEOUT",
@@ -9327,8 +8443,8 @@ ACME_JUSPAY_DATA = [
                 "avg_retry_attempts": 1.1,
                 "resolution_suggestions": [
                     "Check internet connection",
-                    "Retry payment"
-                ]
+                    "Retry payment",
+                ],
             },
             {
                 "error_message": "CARD_DECLINED",
@@ -9336,10 +8452,7 @@ ACME_JUSPAY_DATA = [
                 "count": 35,
                 "percentage": 8.4,
                 "avg_retry_attempts": 1.7,
-                "resolution_suggestions": [
-                    "Contact card issuer",
-                    "Try different card"
-                ]
+                "resolution_suggestions": ["Contact card issuer", "Try different card"],
             },
             {
                 "error_message": "DAILY_LIMIT_EXCEEDED",
@@ -9349,8 +8462,8 @@ ACME_JUSPAY_DATA = [
                 "avg_retry_attempts": 1.7,
                 "resolution_suggestions": [
                     "Try tomorrow",
-                    "Use different payment method"
-                ]
+                    "Use different payment method",
+                ],
             },
             {
                 "error_message": "SESSION_EXPIRED",
@@ -9358,11 +8471,8 @@ ACME_JUSPAY_DATA = [
                 "count": 15,
                 "percentage": 3.6,
                 "avg_retry_attempts": 2.2,
-                "resolution_suggestions": [
-                    "Login again",
-                    "Refresh page"
-                ]
-            }
+                "resolution_suggestions": ["Login again", "Refresh page"],
+            },
         ],
         "success_volume_by_payment_method": [
             {
@@ -9371,7 +8481,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 35.5,
                 "peak_hour_volume": 24,
                 "avg_transaction_value": 4148.14,
-                "repeat_customer_rate": 58.8
+                "repeat_customer_rate": 58.8,
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -9379,7 +8489,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 40.7,
                 "peak_hour_volume": 127,
                 "avg_transaction_value": 3777.26,
-                "repeat_customer_rate": 51.8
+                "repeat_customer_rate": 51.8,
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -9387,7 +8497,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 14.5,
                 "peak_hour_volume": 87,
                 "avg_transaction_value": 5378.21,
-                "repeat_customer_rate": 61.8
+                "repeat_customer_rate": 61.8,
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -9395,7 +8505,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 5.3,
                 "peak_hour_volume": 146,
                 "avg_transaction_value": 4644.57,
-                "repeat_customer_rate": 53.4
+                "repeat_customer_rate": 53.4,
             },
             {
                 "payment_method_type": "WALLET",
@@ -9403,8 +8513,8 @@ ACME_JUSPAY_DATA = [
                 "percentage": 4.0,
                 "peak_hour_volume": 129,
                 "avg_transaction_value": 5231.21,
-                "repeat_customer_rate": 64.2
-            }
+                "repeat_customer_rate": 64.2,
+            },
         ],
         "gmv_by_payment_method": [
             {
@@ -9417,8 +8527,8 @@ ACME_JUSPAY_DATA = [
                     "North": 38.2,
                     "South": 42.1,
                     "West": 35.7,
-                    "East": 28.9
-                }
+                    "East": 28.9,
+                },
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -9430,8 +8540,8 @@ ACME_JUSPAY_DATA = [
                     "North": 52.3,
                     "South": 48.9,
                     "West": 54.1,
-                    "East": 46.7
-                }
+                    "East": 46.7,
+                },
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -9443,8 +8553,8 @@ ACME_JUSPAY_DATA = [
                     "North": 28.5,
                     "South": 31.2,
                     "West": 26.8,
-                    "East": 33.4
-                }
+                    "East": 33.4,
+                },
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -9456,8 +8566,8 @@ ACME_JUSPAY_DATA = [
                     "North": 15.2,
                     "South": 12.8,
                     "West": 18.9,
-                    "East": 21.3
-                }
+                    "East": 21.3,
+                },
             },
             {
                 "payment_method_type": "WALLET",
@@ -9469,9 +8579,9 @@ ACME_JUSPAY_DATA = [
                     "North": 22.1,
                     "South": 25.8,
                     "West": 19.4,
-                    "East": 16.2
-                }
-            }
+                    "East": 16.2,
+                },
+            },
         ],
         "average_ticket_size_by_payment_method": [
             {
@@ -9482,8 +8592,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 45.2,
                     "Fashion": 32.1,
-                    "Home": 22.7
-                }
+                    "Home": 22.7,
+                },
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -9493,8 +8603,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 58.7,
                     "Fashion": 28.9,
-                    "Home": 12.4
-                }
+                    "Home": 12.4,
+                },
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -9504,8 +8614,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 31.5,
                     "Fashion": 42.3,
-                    "Home": 26.2
-                }
+                    "Home": 26.2,
+                },
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -9515,8 +8625,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 67.8,
                     "Fashion": 18.9,
-                    "Home": 13.3
-                }
+                    "Home": 13.3,
+                },
             },
             {
                 "payment_method_type": "WALLET",
@@ -9526,10 +8636,10 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 28.4,
                     "Fashion": 45.6,
-                    "Home": 26.0
-                }
-            }
-        ]
+                    "Home": 26.0,
+                },
+            },
+        ],
     },
     {
         "overall_success_rate_data": {
@@ -9540,7 +8650,7 @@ ACME_JUSPAY_DATA = [
             "processing_time_avg": 43.7,
             "retry_success_rate": 33.0,
             "peak_hour_sr": 90.2,
-            "off_peak_sr": 86.4
+            "off_peak_sr": 86.4,
         },
         "payment_method_success_rates": [
             {
@@ -9554,8 +8664,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "TRANSACTION_TIMEOUT",
                     "INSUFFICIENT_FUNDS",
-                    "BANK_ERROR"
-                ]
+                    "BANK_ERROR",
+                ],
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -9568,8 +8678,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "INSUFFICIENT_FUNDS",
                     "CARD_DECLINED",
-                    "EXPIRED_CARD"
-                ]
+                    "EXPIRED_CARD",
+                ],
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -9582,8 +8692,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "INSUFFICIENT_FUNDS",
                     "DAILY_LIMIT_EXCEEDED",
-                    "PIN_INCORRECT"
-                ]
+                    "PIN_INCORRECT",
+                ],
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -9596,8 +8706,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "BANK_TECHNICAL_ISSUE",
                     "SESSION_TIMEOUT",
-                    "INVALID_CREDENTIALS"
-                ]
+                    "INVALID_CREDENTIALS",
+                ],
             },
             {
                 "payment_method_type": "WALLET",
@@ -9610,49 +8720,29 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "INSUFFICIENT_WALLET_BALANCE",
                     "WALLET_BLOCKED",
-                    "OTP_FAILURE"
-                ]
-            }
+                    "OTP_FAILURE",
+                ],
+            },
         ],
         "failure_analysis": {
             "top_failure_reasons": [
-                {
-                    "reason": "CARD_DECLINED",
-                    "count": 108,
-                    "percentage": 29.7
-                },
-                {
-                    "reason": "INSUFFICIENT_FUNDS",
-                    "count": 101,
-                    "percentage": 27.7
-                },
-                {
-                    "reason": "TRANSACTION_TIMEOUT",
-                    "count": 78,
-                    "percentage": 21.4
-                },
-                {
-                    "reason": "SESSION_TIMEOUT",
-                    "count": 47,
-                    "percentage": 12.9
-                },
-                {
-                    "reason": "BANK_ERROR",
-                    "count": 30,
-                    "percentage": 8.2
-                }
+                {"reason": "CARD_DECLINED", "count": 108, "percentage": 29.7},
+                {"reason": "INSUFFICIENT_FUNDS", "count": 101, "percentage": 27.7},
+                {"reason": "TRANSACTION_TIMEOUT", "count": 78, "percentage": 21.4},
+                {"reason": "SESSION_TIMEOUT", "count": 47, "percentage": 12.9},
+                {"reason": "BANK_ERROR", "count": 30, "percentage": 8.2},
             ],
             "failure_rate_by_hour": {
                 "00-06": 15.2,
                 "06-12": 11.8,
                 "12-18": 10.1,
-                "18-24": 12.9
+                "18-24": 12.9,
             },
             "retry_attempts": {
                 "single_retry": 232,
                 "multiple_retries": 132,
-                "success_after_retry": 120
-            }
+                "success_after_retry": 120,
+            },
         },
         "gmv_breakdown": {
             "total_gmv": 503789.6,
@@ -9662,11 +8752,11 @@ ACME_JUSPAY_DATA = [
                 "UPI": 176234.7,
                 "CREDIT_CARD": 182934.85,
                 "DEBIT_CARD": 58456.3,
-                "NET_BANKING": 25530.4
+                "NET_BANKING": 25530.4,
             },
             "average_transaction_value": 166.61,
             "high_value_transactions": 37,
-            "micro_transactions": 1178
+            "micro_transactions": 1178,
         },
         "device_analytics": {
             "mobile_sr": 89.1,
@@ -9677,73 +8767,48 @@ ACME_JUSPAY_DATA = [
             "tablet_percentage": 1.8,
             "ios_sr": 90.4,
             "android_sr": 88.6,
-            "windows_sr": 86.9
+            "windows_sr": 86.9,
         },
         "geographical_data": {
             "top_cities": [
-                {
-                    "city": "Mumbai",
-                    "success_rate": 89.6,
-                    "volume": 834
-                },
-                {
-                    "city": "Delhi",
-                    "success_rate": 87.3,
-                    "volume": 701
-                },
-                {
-                    "city": "Bangalore",
-                    "success_rate": 90.8,
-                    "volume": 589
-                },
-                {
-                    "city": "Chennai",
-                    "success_rate": 86.2,
-                    "volume": 456
-                },
-                {
-                    "city": "Hyderabad",
-                    "success_rate": 89.1,
-                    "volume": 444
-                }
+                {"city": "Mumbai", "success_rate": 89.6, "volume": 834},
+                {"city": "Delhi", "success_rate": 87.3, "volume": 701},
+                {"city": "Bangalore", "success_rate": 90.8, "volume": 589},
+                {"city": "Chennai", "success_rate": 86.2, "volume": 456},
+                {"city": "Hyderabad", "success_rate": 89.1, "volume": 444},
             ],
             "state_performance": {
                 "Maharashtra": 89.6,
                 "Karnataka": 90.8,
                 "Delhi": 87.3,
                 "Tamil Nadu": 86.2,
-                "Telangana": 89.1
-            }
+                "Telangana": 89.1,
+            },
         },
         "temporal_patterns": {
             "hourly_success_rates": {
-                "peak_hours": [
-                    "15:00-17:00",
-                    "18:00-20:00"
-                ],
-                "low_performance_hours": [
-                    "03:00-07:00"
-                ],
-                "weekend_pattern": "moderate_challenges"
+                "peak_hours": ["15:00-17:00", "18:00-20:00"],
+                "low_performance_hours": ["03:00-07:00"],
+                "weekend_pattern": "moderate_challenges",
             },
             "success_rate_by_time_of_day": {
                 "morning": 88.4,
                 "afternoon": 89.1,
                 "evening": 88.7,
-                "night": 86.1
+                "night": 86.1,
             },
             "payment_method_preference_by_time": {
                 "morning": "UPI",
                 "afternoon": "CREDIT_CARD",
                 "evening": "CREDIT_CARD",
-                "night": "UPI"
-            }
+                "night": "UPI",
+            },
         },
         "weekly_patterns": {
             "weekday_sr": 88.3,
             "weekend_sr": 87.1,
             "monday_peak": True,
-            "friday_peak": False
+            "friday_peak": False,
         },
         "errors": [],
         "failure_details": [
@@ -9755,8 +8820,8 @@ ACME_JUSPAY_DATA = [
                 "avg_retry_attempts": 1.4,
                 "resolution_suggestions": [
                     "Check account balance",
-                    "Try different card"
-                ]
+                    "Try different card",
+                ],
             },
             {
                 "error_message": "BANK_TECHNICAL_ISSUE",
@@ -9764,10 +8829,7 @@ ACME_JUSPAY_DATA = [
                 "count": 44,
                 "percentage": 12.9,
                 "avg_retry_attempts": 1.3,
-                "resolution_suggestions": [
-                    "Try again later",
-                    "Contact bank"
-                ]
+                "resolution_suggestions": ["Try again later", "Contact bank"],
             },
             {
                 "error_message": "TRANSACTION_TIMEOUT",
@@ -9777,8 +8839,8 @@ ACME_JUSPAY_DATA = [
                 "avg_retry_attempts": 1.8,
                 "resolution_suggestions": [
                     "Check internet connection",
-                    "Retry payment"
-                ]
+                    "Retry payment",
+                ],
             },
             {
                 "error_message": "CARD_DECLINED",
@@ -9786,10 +8848,7 @@ ACME_JUSPAY_DATA = [
                 "count": 32,
                 "percentage": 9.4,
                 "avg_retry_attempts": 1.5,
-                "resolution_suggestions": [
-                    "Contact card issuer",
-                    "Try different card"
-                ]
+                "resolution_suggestions": ["Contact card issuer", "Try different card"],
             },
             {
                 "error_message": "DAILY_LIMIT_EXCEEDED",
@@ -9799,8 +8858,8 @@ ACME_JUSPAY_DATA = [
                 "avg_retry_attempts": 2.4,
                 "resolution_suggestions": [
                     "Try tomorrow",
-                    "Use different payment method"
-                ]
+                    "Use different payment method",
+                ],
             },
             {
                 "error_message": "SESSION_EXPIRED",
@@ -9808,11 +8867,8 @@ ACME_JUSPAY_DATA = [
                 "count": 35,
                 "percentage": 10.3,
                 "avg_retry_attempts": 1.0,
-                "resolution_suggestions": [
-                    "Login again",
-                    "Refresh page"
-                ]
-            }
+                "resolution_suggestions": ["Login again", "Refresh page"],
+            },
         ],
         "success_volume_by_payment_method": [
             {
@@ -9821,7 +8877,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 35.8,
                 "peak_hour_volume": 70,
                 "avg_transaction_value": 3792.95,
-                "repeat_customer_rate": 51.5
+                "repeat_customer_rate": 51.5,
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -9829,7 +8885,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 40.2,
                 "peak_hour_volume": 87,
                 "avg_transaction_value": 3604.46,
-                "repeat_customer_rate": 64.2
+                "repeat_customer_rate": 64.2,
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -9837,7 +8893,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 14.6,
                 "peak_hour_volume": 60,
                 "avg_transaction_value": 3509.54,
-                "repeat_customer_rate": 59.9
+                "repeat_customer_rate": 59.9,
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -9845,7 +8901,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 5.5,
                 "peak_hour_volume": 104,
                 "avg_transaction_value": 4005.21,
-                "repeat_customer_rate": 55.0
+                "repeat_customer_rate": 55.0,
             },
             {
                 "payment_method_type": "WALLET",
@@ -9853,8 +8909,8 @@ ACME_JUSPAY_DATA = [
                 "percentage": 3.9,
                 "peak_hour_volume": 69,
                 "avg_transaction_value": 4361.06,
-                "repeat_customer_rate": 48.2
-            }
+                "repeat_customer_rate": 48.2,
+            },
         ],
         "gmv_by_payment_method": [
             {
@@ -9867,8 +8923,8 @@ ACME_JUSPAY_DATA = [
                     "North": 38.2,
                     "South": 42.1,
                     "West": 35.7,
-                    "East": 28.9
-                }
+                    "East": 28.9,
+                },
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -9880,8 +8936,8 @@ ACME_JUSPAY_DATA = [
                     "North": 52.3,
                     "South": 48.9,
                     "West": 54.1,
-                    "East": 46.7
-                }
+                    "East": 46.7,
+                },
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -9893,8 +8949,8 @@ ACME_JUSPAY_DATA = [
                     "North": 28.5,
                     "South": 31.2,
                     "West": 26.8,
-                    "East": 33.4
-                }
+                    "East": 33.4,
+                },
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -9906,8 +8962,8 @@ ACME_JUSPAY_DATA = [
                     "North": 15.2,
                     "South": 12.8,
                     "West": 18.9,
-                    "East": 21.3
-                }
+                    "East": 21.3,
+                },
             },
             {
                 "payment_method_type": "WALLET",
@@ -9919,9 +8975,9 @@ ACME_JUSPAY_DATA = [
                     "North": 22.1,
                     "South": 25.8,
                     "West": 19.4,
-                    "East": 16.2
-                }
-            }
+                    "East": 16.2,
+                },
+            },
         ],
         "average_ticket_size_by_payment_method": [
             {
@@ -9932,8 +8988,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 45.2,
                     "Fashion": 32.1,
-                    "Home": 22.7
-                }
+                    "Home": 22.7,
+                },
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -9943,8 +8999,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 58.7,
                     "Fashion": 28.9,
-                    "Home": 12.4
-                }
+                    "Home": 12.4,
+                },
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -9954,8 +9010,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 31.5,
                     "Fashion": 42.3,
-                    "Home": 26.2
-                }
+                    "Home": 26.2,
+                },
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -9965,8 +9021,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 67.8,
                     "Fashion": 18.9,
-                    "Home": 13.3
-                }
+                    "Home": 13.3,
+                },
             },
             {
                 "payment_method_type": "WALLET",
@@ -9976,10 +9032,10 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 28.4,
                     "Fashion": 45.6,
-                    "Home": 26.0
-                }
-            }
-        ]
+                    "Home": 26.0,
+                },
+            },
+        ],
     },
     {
         "overall_success_rate_data": {
@@ -9990,7 +9046,7 @@ ACME_JUSPAY_DATA = [
             "processing_time_avg": 39.1,
             "retry_success_rate": 38.9,
             "peak_hour_sr": 93.4,
-            "off_peak_sr": 90.2
+            "off_peak_sr": 90.2,
         },
         "payment_method_success_rates": [
             {
@@ -10004,8 +9060,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "TRANSACTION_TIMEOUT",
                     "INSUFFICIENT_FUNDS",
-                    "BANK_ERROR"
-                ]
+                    "BANK_ERROR",
+                ],
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -10018,8 +9074,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "INSUFFICIENT_FUNDS",
                     "CARD_DECLINED",
-                    "EXPIRED_CARD"
-                ]
+                    "EXPIRED_CARD",
+                ],
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -10032,8 +9088,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "INSUFFICIENT_FUNDS",
                     "DAILY_LIMIT_EXCEEDED",
-                    "PIN_INCORRECT"
-                ]
+                    "PIN_INCORRECT",
+                ],
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -10046,8 +9102,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "BANK_TECHNICAL_ISSUE",
                     "SESSION_TIMEOUT",
-                    "INVALID_CREDENTIALS"
-                ]
+                    "INVALID_CREDENTIALS",
+                ],
             },
             {
                 "payment_method_type": "WALLET",
@@ -10060,49 +9116,29 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "INSUFFICIENT_WALLET_BALANCE",
                     "WALLET_BLOCKED",
-                    "OTP_FAILURE"
-                ]
-            }
+                    "OTP_FAILURE",
+                ],
+            },
         ],
         "failure_analysis": {
             "top_failure_reasons": [
-                {
-                    "reason": "INSUFFICIENT_FUNDS",
-                    "count": 84,
-                    "percentage": 29.7
-                },
-                {
-                    "reason": "CARD_DECLINED",
-                    "count": 72,
-                    "percentage": 25.4
-                },
-                {
-                    "reason": "TRANSACTION_TIMEOUT",
-                    "count": 58,
-                    "percentage": 20.5
-                },
-                {
-                    "reason": "BANK_ERROR",
-                    "count": 37,
-                    "percentage": 13.1
-                },
-                {
-                    "reason": "SESSION_TIMEOUT",
-                    "count": 32,
-                    "percentage": 11.3
-                }
+                {"reason": "INSUFFICIENT_FUNDS", "count": 84, "percentage": 29.7},
+                {"reason": "CARD_DECLINED", "count": 72, "percentage": 25.4},
+                {"reason": "TRANSACTION_TIMEOUT", "count": 58, "percentage": 20.5},
+                {"reason": "BANK_ERROR", "count": 37, "percentage": 13.1},
+                {"reason": "SESSION_TIMEOUT", "count": 32, "percentage": 11.3},
             ],
             "failure_rate_by_hour": {
                 "00-06": 10.8,
                 "06-12": 7.9,
                 "12-18": 7.2,
-                "18-24": 8.9
+                "18-24": 8.9,
             },
             "retry_attempts": {
                 "single_retry": 180,
                 "multiple_retries": 103,
-                "success_after_retry": 110
-            }
+                "success_after_retry": 110,
+            },
         },
         "gmv_breakdown": {
             "total_gmv": 587234.8,
@@ -10112,11 +9148,11 @@ ACME_JUSPAY_DATA = [
                 "UPI": 205634.5,
                 "CREDIT_CARD": 232187.65,
                 "DEBIT_CARD": 68923.4,
-                "NET_BANKING": 32720.15
+                "NET_BANKING": 32720.15,
             },
             "average_transaction_value": 172.85,
             "high_value_transactions": 49,
-            "micro_transactions": 1367
+            "micro_transactions": 1367,
         },
         "device_analytics": {
             "mobile_sr": 92.7,
@@ -10127,73 +9163,48 @@ ACME_JUSPAY_DATA = [
             "tablet_percentage": 2.7,
             "ios_sr": 93.9,
             "android_sr": 92.1,
-            "windows_sr": 90.8
+            "windows_sr": 90.8,
         },
         "geographical_data": {
             "top_cities": [
-                {
-                    "city": "Mumbai",
-                    "success_rate": 92.8,
-                    "volume": 967
-                },
-                {
-                    "city": "Delhi",
-                    "success_rate": 91.4,
-                    "volume": 823
-                },
-                {
-                    "city": "Bangalore",
-                    "success_rate": 93.6,
-                    "volume": 678
-                },
-                {
-                    "city": "Chennai",
-                    "success_rate": 90.7,
-                    "volume": 523
-                },
-                {
-                    "city": "Hyderabad",
-                    "success_rate": 92.3,
-                    "volume": 407
-                }
+                {"city": "Mumbai", "success_rate": 92.8, "volume": 967},
+                {"city": "Delhi", "success_rate": 91.4, "volume": 823},
+                {"city": "Bangalore", "success_rate": 93.6, "volume": 678},
+                {"city": "Chennai", "success_rate": 90.7, "volume": 523},
+                {"city": "Hyderabad", "success_rate": 92.3, "volume": 407},
             ],
             "state_performance": {
                 "Maharashtra": 92.8,
                 "Karnataka": 93.6,
                 "Delhi": 91.4,
                 "Tamil Nadu": 90.7,
-                "Telangana": 92.3
-            }
+                "Telangana": 92.3,
+            },
         },
         "temporal_patterns": {
             "hourly_success_rates": {
-                "peak_hours": [
-                    "14:00-16:00",
-                    "19:00-21:00"
-                ],
-                "low_performance_hours": [
-                    "02:00-06:00"
-                ],
-                "weekend_pattern": "strong_recovery"
+                "peak_hours": ["14:00-16:00", "19:00-21:00"],
+                "low_performance_hours": ["02:00-06:00"],
+                "weekend_pattern": "strong_recovery",
             },
             "success_rate_by_time_of_day": {
                 "morning": 92.1,
                 "afternoon": 92.5,
                 "evening": 92.2,
-                "night": 90.4
+                "night": 90.4,
             },
             "payment_method_preference_by_time": {
                 "morning": "UPI",
                 "afternoon": "CREDIT_CARD",
                 "evening": "CREDIT_CARD",
-                "night": "UPI"
-            }
+                "night": "UPI",
+            },
         },
         "weekly_patterns": {
             "weekday_sr": 92.0,
             "weekend_sr": 91.1,
             "monday_peak": False,
-            "friday_peak": True
+            "friday_peak": True,
         },
         "errors": [],
         "failure_details": [
@@ -10205,8 +9216,8 @@ ACME_JUSPAY_DATA = [
                 "avg_retry_attempts": 2.3,
                 "resolution_suggestions": [
                     "Check account balance",
-                    "Try different card"
-                ]
+                    "Try different card",
+                ],
             },
             {
                 "error_message": "BANK_TECHNICAL_ISSUE",
@@ -10214,10 +9225,7 @@ ACME_JUSPAY_DATA = [
                 "count": 19,
                 "percentage": 5.7,
                 "avg_retry_attempts": 2.0,
-                "resolution_suggestions": [
-                    "Try again later",
-                    "Contact bank"
-                ]
+                "resolution_suggestions": ["Try again later", "Contact bank"],
             },
             {
                 "error_message": "TRANSACTION_TIMEOUT",
@@ -10227,8 +9235,8 @@ ACME_JUSPAY_DATA = [
                 "avg_retry_attempts": 2.3,
                 "resolution_suggestions": [
                     "Check internet connection",
-                    "Retry payment"
-                ]
+                    "Retry payment",
+                ],
             },
             {
                 "error_message": "CARD_DECLINED",
@@ -10236,10 +9244,7 @@ ACME_JUSPAY_DATA = [
                 "count": 45,
                 "percentage": 13.5,
                 "avg_retry_attempts": 1.2,
-                "resolution_suggestions": [
-                    "Contact card issuer",
-                    "Try different card"
-                ]
+                "resolution_suggestions": ["Contact card issuer", "Try different card"],
             },
             {
                 "error_message": "DAILY_LIMIT_EXCEEDED",
@@ -10249,8 +9254,8 @@ ACME_JUSPAY_DATA = [
                 "avg_retry_attempts": 2.3,
                 "resolution_suggestions": [
                     "Try tomorrow",
-                    "Use different payment method"
-                ]
+                    "Use different payment method",
+                ],
             },
             {
                 "error_message": "SESSION_EXPIRED",
@@ -10258,11 +9263,8 @@ ACME_JUSPAY_DATA = [
                 "count": 31,
                 "percentage": 9.3,
                 "avg_retry_attempts": 2.1,
-                "resolution_suggestions": [
-                    "Login again",
-                    "Refresh page"
-                ]
-            }
+                "resolution_suggestions": ["Login again", "Refresh page"],
+            },
         ],
         "success_volume_by_payment_method": [
             {
@@ -10271,7 +9273,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 35.4,
                 "peak_hour_volume": 121,
                 "avg_transaction_value": 4917.0,
-                "repeat_customer_rate": 71.5
+                "repeat_customer_rate": 71.5,
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -10279,7 +9281,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 41.0,
                 "peak_hour_volume": 17,
                 "avg_transaction_value": 4704.54,
-                "repeat_customer_rate": 68.9
+                "repeat_customer_rate": 68.9,
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -10287,7 +9289,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 14.7,
                 "peak_hour_volume": 150,
                 "avg_transaction_value": 4021.22,
-                "repeat_customer_rate": 67.1
+                "repeat_customer_rate": 67.1,
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -10295,7 +9297,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 5.2,
                 "peak_hour_volume": 126,
                 "avg_transaction_value": 4799.01,
-                "repeat_customer_rate": 54.9
+                "repeat_customer_rate": 54.9,
             },
             {
                 "payment_method_type": "WALLET",
@@ -10303,8 +9305,8 @@ ACME_JUSPAY_DATA = [
                 "percentage": 3.8,
                 "peak_hour_volume": 117,
                 "avg_transaction_value": 5424.61,
-                "repeat_customer_rate": 54.9
-            }
+                "repeat_customer_rate": 54.9,
+            },
         ],
         "gmv_by_payment_method": [
             {
@@ -10317,8 +9319,8 @@ ACME_JUSPAY_DATA = [
                     "North": 38.2,
                     "South": 42.1,
                     "West": 35.7,
-                    "East": 28.9
-                }
+                    "East": 28.9,
+                },
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -10330,8 +9332,8 @@ ACME_JUSPAY_DATA = [
                     "North": 52.3,
                     "South": 48.9,
                     "West": 54.1,
-                    "East": 46.7
-                }
+                    "East": 46.7,
+                },
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -10343,8 +9345,8 @@ ACME_JUSPAY_DATA = [
                     "North": 28.5,
                     "South": 31.2,
                     "West": 26.8,
-                    "East": 33.4
-                }
+                    "East": 33.4,
+                },
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -10356,8 +9358,8 @@ ACME_JUSPAY_DATA = [
                     "North": 15.2,
                     "South": 12.8,
                     "West": 18.9,
-                    "East": 21.3
-                }
+                    "East": 21.3,
+                },
             },
             {
                 "payment_method_type": "WALLET",
@@ -10369,9 +9371,9 @@ ACME_JUSPAY_DATA = [
                     "North": 22.1,
                     "South": 25.8,
                     "West": 19.4,
-                    "East": 16.2
-                }
-            }
+                    "East": 16.2,
+                },
+            },
         ],
         "average_ticket_size_by_payment_method": [
             {
@@ -10382,8 +9384,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 45.2,
                     "Fashion": 32.1,
-                    "Home": 22.7
-                }
+                    "Home": 22.7,
+                },
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -10393,8 +9395,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 58.7,
                     "Fashion": 28.9,
-                    "Home": 12.4
-                }
+                    "Home": 12.4,
+                },
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -10404,8 +9406,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 31.5,
                     "Fashion": 42.3,
-                    "Home": 26.2
-                }
+                    "Home": 26.2,
+                },
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -10415,8 +9417,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 67.8,
                     "Fashion": 18.9,
-                    "Home": 13.3
-                }
+                    "Home": 13.3,
+                },
             },
             {
                 "payment_method_type": "WALLET",
@@ -10426,10 +9428,10 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 28.4,
                     "Fashion": 45.6,
-                    "Home": 26.0
-                }
-            }
-        ]
+                    "Home": 26.0,
+                },
+            },
+        ],
     },
     {
         "overall_success_rate_data": {
@@ -10440,7 +9442,7 @@ ACME_JUSPAY_DATA = [
             "processing_time_avg": 34.2,
             "retry_success_rate": 46.4,
             "peak_hour_sr": 97.1,
-            "off_peak_sr": 94.1
+            "off_peak_sr": 94.1,
         },
         "payment_method_success_rates": [
             {
@@ -10454,8 +9456,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "TRANSACTION_TIMEOUT",
                     "INSUFFICIENT_FUNDS",
-                    "BANK_ERROR"
-                ]
+                    "BANK_ERROR",
+                ],
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -10468,8 +9470,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "INSUFFICIENT_FUNDS",
                     "CARD_DECLINED",
-                    "EXPIRED_CARD"
-                ]
+                    "EXPIRED_CARD",
+                ],
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -10482,8 +9484,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "INSUFFICIENT_FUNDS",
                     "DAILY_LIMIT_EXCEEDED",
-                    "PIN_INCORRECT"
-                ]
+                    "PIN_INCORRECT",
+                ],
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -10496,8 +9498,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "BANK_TECHNICAL_ISSUE",
                     "SESSION_TIMEOUT",
-                    "INVALID_CREDENTIALS"
-                ]
+                    "INVALID_CREDENTIALS",
+                ],
             },
             {
                 "payment_method_type": "WALLET",
@@ -10510,49 +9512,29 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "INSUFFICIENT_WALLET_BALANCE",
                     "WALLET_BLOCKED",
-                    "OTP_FAILURE"
-                ]
-            }
+                    "OTP_FAILURE",
+                ],
+            },
         ],
         "failure_analysis": {
             "top_failure_reasons": [
-                {
-                    "reason": "INSUFFICIENT_FUNDS",
-                    "count": 58,
-                    "percentage": 32.0
-                },
-                {
-                    "reason": "CARD_DECLINED",
-                    "count": 43,
-                    "percentage": 23.8
-                },
-                {
-                    "reason": "TRANSACTION_TIMEOUT",
-                    "count": 32,
-                    "percentage": 17.7
-                },
-                {
-                    "reason": "BANK_ERROR",
-                    "count": 26,
-                    "percentage": 14.4
-                },
-                {
-                    "reason": "SESSION_TIMEOUT",
-                    "count": 22,
-                    "percentage": 12.2
-                }
+                {"reason": "INSUFFICIENT_FUNDS", "count": 58, "percentage": 32.0},
+                {"reason": "CARD_DECLINED", "count": 43, "percentage": 23.8},
+                {"reason": "TRANSACTION_TIMEOUT", "count": 32, "percentage": 17.7},
+                {"reason": "BANK_ERROR", "count": 26, "percentage": 14.4},
+                {"reason": "SESSION_TIMEOUT", "count": 22, "percentage": 12.2},
             ],
             "failure_rate_by_hour": {
                 "00-06": 6.1,
                 "06-12": 4.2,
                 "12-18": 3.8,
-                "18-24": 5.1
+                "18-24": 5.1,
             },
             "retry_attempts": {
                 "single_retry": 115,
                 "multiple_retries": 66,
-                "success_after_retry": 84
-            }
+                "success_after_retry": 84,
+            },
         },
         "gmv_breakdown": {
             "total_gmv": 712456.85,
@@ -10562,11 +9544,11 @@ ACME_JUSPAY_DATA = [
                 "UPI": 248956.75,
                 "CREDIT_CARD": 294734.5,
                 "DEBIT_CARD": 87234.6,
-                "NET_BANKING": 47308.35
+                "NET_BANKING": 47308.35,
             },
             "average_transaction_value": 188.05,
             "high_value_transactions": 72,
-            "micro_transactions": 1598
+            "micro_transactions": 1598,
         },
         "device_analytics": {
             "mobile_sr": 96.1,
@@ -10577,73 +9559,48 @@ ACME_JUSPAY_DATA = [
             "tablet_percentage": 2.8,
             "ios_sr": 97.2,
             "android_sr": 95.6,
-            "windows_sr": 94.2
+            "windows_sr": 94.2,
         },
         "geographical_data": {
             "top_cities": [
-                {
-                    "city": "Mumbai",
-                    "success_rate": 96.4,
-                    "volume": 1234
-                },
-                {
-                    "city": "Delhi",
-                    "success_rate": 95.1,
-                    "volume": 967
-                },
-                {
-                    "city": "Bangalore",
-                    "success_rate": 97.2,
-                    "volume": 823
-                },
-                {
-                    "city": "Chennai",
-                    "success_rate": 94.8,
-                    "volume": 623
-                },
-                {
-                    "city": "Hyderabad",
-                    "success_rate": 96.1,
-                    "volume": 142
-                }
+                {"city": "Mumbai", "success_rate": 96.4, "volume": 1234},
+                {"city": "Delhi", "success_rate": 95.1, "volume": 967},
+                {"city": "Bangalore", "success_rate": 97.2, "volume": 823},
+                {"city": "Chennai", "success_rate": 94.8, "volume": 623},
+                {"city": "Hyderabad", "success_rate": 96.1, "volume": 142},
             ],
             "state_performance": {
                 "Maharashtra": 96.4,
                 "Karnataka": 97.2,
                 "Delhi": 95.1,
                 "Tamil Nadu": 94.8,
-                "Telangana": 96.1
-            }
+                "Telangana": 96.1,
+            },
         },
         "temporal_patterns": {
             "hourly_success_rates": {
-                "peak_hours": [
-                    "13:00-15:00",
-                    "21:00-23:00"
-                ],
-                "low_performance_hours": [
-                    "01:00-04:00"
-                ],
-                "weekend_pattern": "exceptional_performance"
+                "peak_hours": ["13:00-15:00", "21:00-23:00"],
+                "low_performance_hours": ["01:00-04:00"],
+                "weekend_pattern": "exceptional_performance",
             },
             "success_rate_by_time_of_day": {
                 "morning": 95.7,
                 "afternoon": 96.1,
                 "evening": 95.9,
-                "night": 94.2
+                "night": 94.2,
             },
             "payment_method_preference_by_time": {
                 "morning": "UPI",
                 "afternoon": "CREDIT_CARD",
                 "evening": "CREDIT_CARD",
-                "night": "UPI"
-            }
+                "night": "UPI",
+            },
         },
         "weekly_patterns": {
             "weekday_sr": 95.6,
             "weekend_sr": 94.7,
             "monday_peak": False,
-            "friday_peak": True
+            "friday_peak": True,
         },
         "errors": [],
         "failure_details": [
@@ -10655,8 +9612,8 @@ ACME_JUSPAY_DATA = [
                 "avg_retry_attempts": 2.1,
                 "resolution_suggestions": [
                     "Check account balance",
-                    "Try different card"
-                ]
+                    "Try different card",
+                ],
             },
             {
                 "error_message": "BANK_TECHNICAL_ISSUE",
@@ -10664,10 +9621,7 @@ ACME_JUSPAY_DATA = [
                 "count": 40,
                 "percentage": 13.5,
                 "avg_retry_attempts": 1.2,
-                "resolution_suggestions": [
-                    "Try again later",
-                    "Contact bank"
-                ]
+                "resolution_suggestions": ["Try again later", "Contact bank"],
             },
             {
                 "error_message": "TRANSACTION_TIMEOUT",
@@ -10677,8 +9631,8 @@ ACME_JUSPAY_DATA = [
                 "avg_retry_attempts": 1.6,
                 "resolution_suggestions": [
                     "Check internet connection",
-                    "Retry payment"
-                ]
+                    "Retry payment",
+                ],
             },
             {
                 "error_message": "CARD_DECLINED",
@@ -10686,10 +9640,7 @@ ACME_JUSPAY_DATA = [
                 "count": 18,
                 "percentage": 6.1,
                 "avg_retry_attempts": 2.2,
-                "resolution_suggestions": [
-                    "Contact card issuer",
-                    "Try different card"
-                ]
+                "resolution_suggestions": ["Contact card issuer", "Try different card"],
             },
             {
                 "error_message": "DAILY_LIMIT_EXCEEDED",
@@ -10699,8 +9650,8 @@ ACME_JUSPAY_DATA = [
                 "avg_retry_attempts": 1.7,
                 "resolution_suggestions": [
                     "Try tomorrow",
-                    "Use different payment method"
-                ]
+                    "Use different payment method",
+                ],
             },
             {
                 "error_message": "SESSION_EXPIRED",
@@ -10708,11 +9659,8 @@ ACME_JUSPAY_DATA = [
                 "count": 48,
                 "percentage": 16.2,
                 "avg_retry_attempts": 2.3,
-                "resolution_suggestions": [
-                    "Login again",
-                    "Refresh page"
-                ]
-            }
+                "resolution_suggestions": ["Login again", "Refresh page"],
+            },
         ],
         "success_volume_by_payment_method": [
             {
@@ -10721,7 +9669,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 35.1,
                 "peak_hour_volume": 77,
                 "avg_transaction_value": 3459.06,
-                "repeat_customer_rate": 54.1
+                "repeat_customer_rate": 54.1,
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -10729,7 +9677,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 40.7,
                 "peak_hour_volume": 17,
                 "avg_transaction_value": 3541.68,
-                "repeat_customer_rate": 57.5
+                "repeat_customer_rate": 57.5,
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -10737,7 +9685,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 15.2,
                 "peak_hour_volume": 69,
                 "avg_transaction_value": 2725.6,
-                "repeat_customer_rate": 70.7
+                "repeat_customer_rate": 70.7,
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -10745,7 +9693,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 5.3,
                 "peak_hour_volume": 62,
                 "avg_transaction_value": 2638.14,
-                "repeat_customer_rate": 74.6
+                "repeat_customer_rate": 74.6,
             },
             {
                 "payment_method_type": "WALLET",
@@ -10753,8 +9701,8 @@ ACME_JUSPAY_DATA = [
                 "percentage": 3.7,
                 "peak_hour_volume": 124,
                 "avg_transaction_value": 4410.24,
-                "repeat_customer_rate": 73.9
-            }
+                "repeat_customer_rate": 73.9,
+            },
         ],
         "gmv_by_payment_method": [
             {
@@ -10767,8 +9715,8 @@ ACME_JUSPAY_DATA = [
                     "North": 38.2,
                     "South": 42.1,
                     "West": 35.7,
-                    "East": 28.9
-                }
+                    "East": 28.9,
+                },
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -10780,8 +9728,8 @@ ACME_JUSPAY_DATA = [
                     "North": 52.3,
                     "South": 48.9,
                     "West": 54.1,
-                    "East": 46.7
-                }
+                    "East": 46.7,
+                },
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -10793,8 +9741,8 @@ ACME_JUSPAY_DATA = [
                     "North": 28.5,
                     "South": 31.2,
                     "West": 26.8,
-                    "East": 33.4
-                }
+                    "East": 33.4,
+                },
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -10806,8 +9754,8 @@ ACME_JUSPAY_DATA = [
                     "North": 15.2,
                     "South": 12.8,
                     "West": 18.9,
-                    "East": 21.3
-                }
+                    "East": 21.3,
+                },
             },
             {
                 "payment_method_type": "WALLET",
@@ -10819,9 +9767,9 @@ ACME_JUSPAY_DATA = [
                     "North": 22.1,
                     "South": 25.8,
                     "West": 19.4,
-                    "East": 16.2
-                }
-            }
+                    "East": 16.2,
+                },
+            },
         ],
         "average_ticket_size_by_payment_method": [
             {
@@ -10832,8 +9780,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 45.2,
                     "Fashion": 32.1,
-                    "Home": 22.7
-                }
+                    "Home": 22.7,
+                },
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -10843,8 +9791,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 58.7,
                     "Fashion": 28.9,
-                    "Home": 12.4
-                }
+                    "Home": 12.4,
+                },
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -10854,8 +9802,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 31.5,
                     "Fashion": 42.3,
-                    "Home": 26.2
-                }
+                    "Home": 26.2,
+                },
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -10865,8 +9813,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 67.8,
                     "Fashion": 18.9,
-                    "Home": 13.3
-                }
+                    "Home": 13.3,
+                },
             },
             {
                 "payment_method_type": "WALLET",
@@ -10876,10 +9824,10 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 28.4,
                     "Fashion": 45.6,
-                    "Home": 26.0
-                }
-            }
-        ]
+                    "Home": 26.0,
+                },
+            },
+        ],
     },
     {
         "overall_success_rate_data": {
@@ -10890,7 +9838,7 @@ ACME_JUSPAY_DATA = [
             "processing_time_avg": 42.1,
             "retry_success_rate": 35.3,
             "peak_hour_sr": 91.8,
-            "off_peak_sr": 87.9
+            "off_peak_sr": 87.9,
         },
         "payment_method_success_rates": [
             {
@@ -10904,8 +9852,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "TRANSACTION_TIMEOUT",
                     "INSUFFICIENT_FUNDS",
-                    "BANK_ERROR"
-                ]
+                    "BANK_ERROR",
+                ],
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -10918,8 +9866,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "INSUFFICIENT_FUNDS",
                     "CARD_DECLINED",
-                    "EXPIRED_CARD"
-                ]
+                    "EXPIRED_CARD",
+                ],
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -10932,8 +9880,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "INSUFFICIENT_FUNDS",
                     "DAILY_LIMIT_EXCEEDED",
-                    "PIN_INCORRECT"
-                ]
+                    "PIN_INCORRECT",
+                ],
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -10946,8 +9894,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "BANK_TECHNICAL_ISSUE",
                     "SESSION_TIMEOUT",
-                    "INVALID_CREDENTIALS"
-                ]
+                    "INVALID_CREDENTIALS",
+                ],
             },
             {
                 "payment_method_type": "WALLET",
@@ -10960,49 +9908,29 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "INSUFFICIENT_WALLET_BALANCE",
                     "WALLET_BLOCKED",
-                    "OTP_FAILURE"
-                ]
-            }
+                    "OTP_FAILURE",
+                ],
+            },
         ],
         "failure_analysis": {
             "top_failure_reasons": [
-                {
-                    "reason": "CARD_DECLINED",
-                    "count": 97,
-                    "percentage": 29.3
-                },
-                {
-                    "reason": "INSUFFICIENT_FUNDS",
-                    "count": 89,
-                    "percentage": 26.9
-                },
-                {
-                    "reason": "TRANSACTION_TIMEOUT",
-                    "count": 68,
-                    "percentage": 20.5
-                },
-                {
-                    "reason": "SESSION_TIMEOUT",
-                    "count": 44,
-                    "percentage": 13.3
-                },
-                {
-                    "reason": "BANK_ERROR",
-                    "count": 33,
-                    "percentage": 10.0
-                }
+                {"reason": "CARD_DECLINED", "count": 97, "percentage": 29.3},
+                {"reason": "INSUFFICIENT_FUNDS", "count": 89, "percentage": 26.9},
+                {"reason": "TRANSACTION_TIMEOUT", "count": 68, "percentage": 20.5},
+                {"reason": "SESSION_TIMEOUT", "count": 44, "percentage": 13.3},
+                {"reason": "BANK_ERROR", "count": 33, "percentage": 10.0},
             ],
             "failure_rate_by_hour": {
                 "00-06": 13.7,
                 "06-12": 10.2,
                 "12-18": 9.1,
-                "18-24": 11.5
+                "18-24": 11.5,
             },
             "retry_attempts": {
                 "single_retry": 211,
                 "multiple_retries": 120,
-                "success_after_retry": 117
-            }
+                "success_after_retry": 117,
+            },
         },
         "gmv_breakdown": {
             "total_gmv": 524739.8,
@@ -11012,11 +9940,11 @@ ACME_JUSPAY_DATA = [
                 "UPI": 186234.7,
                 "CREDIT_CARD": 196834.85,
                 "DEBIT_CARD": 59467.4,
-                "NET_BANKING": 26919.3
+                "NET_BANKING": 26919.3,
             },
             "average_transaction_value": 167.02,
             "high_value_transactions": 43,
-            "micro_transactions": 1234
+            "micro_transactions": 1234,
         },
         "device_analytics": {
             "mobile_sr": 90.6,
@@ -11027,73 +9955,48 @@ ACME_JUSPAY_DATA = [
             "tablet_percentage": 2.2,
             "ios_sr": 91.9,
             "android_sr": 90.1,
-            "windows_sr": 88.3
+            "windows_sr": 88.3,
         },
         "geographical_data": {
             "top_cities": [
-                {
-                    "city": "Mumbai",
-                    "success_rate": 91.3,
-                    "volume": 889
-                },
-                {
-                    "city": "Delhi",
-                    "success_rate": 88.9,
-                    "volume": 734
-                },
-                {
-                    "city": "Bangalore",
-                    "success_rate": 92.1,
-                    "volume": 612
-                },
-                {
-                    "city": "Chennai",
-                    "success_rate": 87.8,
-                    "volume": 467
-                },
-                {
-                    "city": "Hyderabad",
-                    "success_rate": 90.2,
-                    "volume": 440
-                }
+                {"city": "Mumbai", "success_rate": 91.3, "volume": 889},
+                {"city": "Delhi", "success_rate": 88.9, "volume": 734},
+                {"city": "Bangalore", "success_rate": 92.1, "volume": 612},
+                {"city": "Chennai", "success_rate": 87.8, "volume": 467},
+                {"city": "Hyderabad", "success_rate": 90.2, "volume": 440},
             ],
             "state_performance": {
                 "Maharashtra": 91.3,
                 "Karnataka": 92.1,
                 "Delhi": 88.9,
                 "Tamil Nadu": 87.8,
-                "Telangana": 90.2
-            }
+                "Telangana": 90.2,
+            },
         },
         "temporal_patterns": {
             "hourly_success_rates": {
-                "peak_hours": [
-                    "14:00-16:00",
-                    "19:00-21:00"
-                ],
-                "low_performance_hours": [
-                    "03:00-07:00"
-                ],
-                "weekend_pattern": "variable_performance"
+                "peak_hours": ["14:00-16:00", "19:00-21:00"],
+                "low_performance_hours": ["03:00-07:00"],
+                "weekend_pattern": "variable_performance",
             },
             "success_rate_by_time_of_day": {
                 "morning": 89.9,
                 "afternoon": 90.4,
                 "evening": 90.1,
-                "night": 87.6
+                "night": 87.6,
             },
             "payment_method_preference_by_time": {
                 "morning": "UPI",
                 "afternoon": "CREDIT_CARD",
                 "evening": "CREDIT_CARD",
-                "night": "UPI"
-            }
+                "night": "UPI",
+            },
         },
         "weekly_patterns": {
             "weekday_sr": 89.8,
             "weekend_sr": 88.7,
             "monday_peak": True,
-            "friday_peak": False
+            "friday_peak": False,
         },
         "errors": [],
         "failure_details": [
@@ -11105,8 +10008,8 @@ ACME_JUSPAY_DATA = [
                 "avg_retry_attempts": 1.5,
                 "resolution_suggestions": [
                     "Check account balance",
-                    "Try different card"
-                ]
+                    "Try different card",
+                ],
             },
             {
                 "error_message": "BANK_TECHNICAL_ISSUE",
@@ -11114,10 +10017,7 @@ ACME_JUSPAY_DATA = [
                 "count": 48,
                 "percentage": 16.2,
                 "avg_retry_attempts": 2.2,
-                "resolution_suggestions": [
-                    "Try again later",
-                    "Contact bank"
-                ]
+                "resolution_suggestions": ["Try again later", "Contact bank"],
             },
             {
                 "error_message": "TRANSACTION_TIMEOUT",
@@ -11127,8 +10027,8 @@ ACME_JUSPAY_DATA = [
                 "avg_retry_attempts": 1.9,
                 "resolution_suggestions": [
                     "Check internet connection",
-                    "Retry payment"
-                ]
+                    "Retry payment",
+                ],
             },
             {
                 "error_message": "CARD_DECLINED",
@@ -11136,10 +10036,7 @@ ACME_JUSPAY_DATA = [
                 "count": 39,
                 "percentage": 13.2,
                 "avg_retry_attempts": 2.5,
-                "resolution_suggestions": [
-                    "Contact card issuer",
-                    "Try different card"
-                ]
+                "resolution_suggestions": ["Contact card issuer", "Try different card"],
             },
             {
                 "error_message": "DAILY_LIMIT_EXCEEDED",
@@ -11149,8 +10046,8 @@ ACME_JUSPAY_DATA = [
                 "avg_retry_attempts": 2.1,
                 "resolution_suggestions": [
                     "Try tomorrow",
-                    "Use different payment method"
-                ]
+                    "Use different payment method",
+                ],
             },
             {
                 "error_message": "SESSION_EXPIRED",
@@ -11158,11 +10055,8 @@ ACME_JUSPAY_DATA = [
                 "count": 33,
                 "percentage": 11.1,
                 "avg_retry_attempts": 2.4,
-                "resolution_suggestions": [
-                    "Login again",
-                    "Refresh page"
-                ]
-            }
+                "resolution_suggestions": ["Login again", "Refresh page"],
+            },
         ],
         "success_volume_by_payment_method": [
             {
@@ -11171,7 +10065,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 36.1,
                 "peak_hour_volume": 80,
                 "avg_transaction_value": 3019.89,
-                "repeat_customer_rate": 65.3
+                "repeat_customer_rate": 65.3,
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -11179,7 +10073,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 40.2,
                 "peak_hour_volume": 97,
                 "avg_transaction_value": 3835.11,
-                "repeat_customer_rate": 68.0
+                "repeat_customer_rate": 68.0,
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -11187,7 +10081,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 14.7,
                 "peak_hour_volume": 60,
                 "avg_transaction_value": 6211.59,
-                "repeat_customer_rate": 73.3
+                "repeat_customer_rate": 73.3,
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -11195,7 +10089,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 5.4,
                 "peak_hour_volume": 59,
                 "avg_transaction_value": 5153.11,
-                "repeat_customer_rate": 70.8
+                "repeat_customer_rate": 70.8,
             },
             {
                 "payment_method_type": "WALLET",
@@ -11203,8 +10097,8 @@ ACME_JUSPAY_DATA = [
                 "percentage": 3.6,
                 "peak_hour_volume": 113,
                 "avg_transaction_value": 5159.16,
-                "repeat_customer_rate": 58.0
-            }
+                "repeat_customer_rate": 58.0,
+            },
         ],
         "gmv_by_payment_method": [
             {
@@ -11217,8 +10111,8 @@ ACME_JUSPAY_DATA = [
                     "North": 38.2,
                     "South": 42.1,
                     "West": 35.7,
-                    "East": 28.9
-                }
+                    "East": 28.9,
+                },
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -11230,8 +10124,8 @@ ACME_JUSPAY_DATA = [
                     "North": 52.3,
                     "South": 48.9,
                     "West": 54.1,
-                    "East": 46.7
-                }
+                    "East": 46.7,
+                },
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -11243,8 +10137,8 @@ ACME_JUSPAY_DATA = [
                     "North": 28.5,
                     "South": 31.2,
                     "West": 26.8,
-                    "East": 33.4
-                }
+                    "East": 33.4,
+                },
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -11256,8 +10150,8 @@ ACME_JUSPAY_DATA = [
                     "North": 15.2,
                     "South": 12.8,
                     "West": 18.9,
-                    "East": 21.3
-                }
+                    "East": 21.3,
+                },
             },
             {
                 "payment_method_type": "WALLET",
@@ -11269,9 +10163,9 @@ ACME_JUSPAY_DATA = [
                     "North": 22.1,
                     "South": 25.8,
                     "West": 19.4,
-                    "East": 16.2
-                }
-            }
+                    "East": 16.2,
+                },
+            },
         ],
         "average_ticket_size_by_payment_method": [
             {
@@ -11282,8 +10176,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 45.2,
                     "Fashion": 32.1,
-                    "Home": 22.7
-                }
+                    "Home": 22.7,
+                },
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -11293,8 +10187,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 58.7,
                     "Fashion": 28.9,
-                    "Home": 12.4
-                }
+                    "Home": 12.4,
+                },
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -11304,8 +10198,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 31.5,
                     "Fashion": 42.3,
-                    "Home": 26.2
-                }
+                    "Home": 26.2,
+                },
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -11315,8 +10209,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 67.8,
                     "Fashion": 18.9,
-                    "Home": 13.3
-                }
+                    "Home": 13.3,
+                },
             },
             {
                 "payment_method_type": "WALLET",
@@ -11326,10 +10220,10 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 28.4,
                     "Fashion": 45.6,
-                    "Home": 26.0
-                }
-            }
-        ]
+                    "Home": 26.0,
+                },
+            },
+        ],
     },
     {
         "overall_success_rate_data": {
@@ -11340,7 +10234,7 @@ ACME_JUSPAY_DATA = [
             "processing_time_avg": 37.9,
             "retry_success_rate": 40.7,
             "peak_hour_sr": 94.6,
-            "off_peak_sr": 91.8
+            "off_peak_sr": 91.8,
         },
         "payment_method_success_rates": [
             {
@@ -11354,8 +10248,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "TRANSACTION_TIMEOUT",
                     "INSUFFICIENT_FUNDS",
-                    "BANK_ERROR"
-                ]
+                    "BANK_ERROR",
+                ],
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -11368,8 +10262,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "INSUFFICIENT_FUNDS",
                     "CARD_DECLINED",
-                    "EXPIRED_CARD"
-                ]
+                    "EXPIRED_CARD",
+                ],
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -11382,8 +10276,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "INSUFFICIENT_FUNDS",
                     "DAILY_LIMIT_EXCEEDED",
-                    "PIN_INCORRECT"
-                ]
+                    "PIN_INCORRECT",
+                ],
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -11396,8 +10290,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "BANK_TECHNICAL_ISSUE",
                     "SESSION_TIMEOUT",
-                    "INVALID_CREDENTIALS"
-                ]
+                    "INVALID_CREDENTIALS",
+                ],
             },
             {
                 "payment_method_type": "WALLET",
@@ -11410,49 +10304,29 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "INSUFFICIENT_WALLET_BALANCE",
                     "WALLET_BLOCKED",
-                    "OTP_FAILURE"
-                ]
-            }
+                    "OTP_FAILURE",
+                ],
+            },
         ],
         "failure_analysis": {
             "top_failure_reasons": [
-                {
-                    "reason": "INSUFFICIENT_FUNDS",
-                    "count": 78,
-                    "percentage": 31.5
-                },
-                {
-                    "reason": "CARD_DECLINED",
-                    "count": 64,
-                    "percentage": 25.8
-                },
-                {
-                    "reason": "TRANSACTION_TIMEOUT",
-                    "count": 51,
-                    "percentage": 20.6
-                },
-                {
-                    "reason": "BANK_ERROR",
-                    "count": 32,
-                    "percentage": 12.9
-                },
-                {
-                    "reason": "SESSION_TIMEOUT",
-                    "count": 23,
-                    "percentage": 9.3
-                }
+                {"reason": "INSUFFICIENT_FUNDS", "count": 78, "percentage": 31.5},
+                {"reason": "CARD_DECLINED", "count": 64, "percentage": 25.8},
+                {"reason": "TRANSACTION_TIMEOUT", "count": 51, "percentage": 20.6},
+                {"reason": "BANK_ERROR", "count": 32, "percentage": 12.9},
+                {"reason": "SESSION_TIMEOUT", "count": 23, "percentage": 9.3},
             ],
             "failure_rate_by_hour": {
                 "00-06": 9.2,
                 "06-12": 6.8,
                 "12-18": 6.1,
-                "18-24": 7.9
+                "18-24": 7.9,
             },
             "retry_attempts": {
                 "single_retry": 158,
                 "multiple_retries": 90,
-                "success_after_retry": 101
-            }
+                "success_after_retry": 101,
+            },
         },
         "gmv_breakdown": {
             "total_gmv": 598734.6,
@@ -11462,11 +10336,11 @@ ACME_JUSPAY_DATA = [
                 "UPI": 208456.8,
                 "CREDIT_CARD": 241187.65,
                 "DEBIT_CARD": 71923.4,
-                "NET_BANKING": 34054.9
+                "NET_BANKING": 34054.9,
             },
             "average_transaction_value": 173.28,
             "high_value_transactions": 54,
-            "micro_transactions": 1398
+            "micro_transactions": 1398,
         },
         "device_analytics": {
             "mobile_sr": 93.7,
@@ -11477,73 +10351,48 @@ ACME_JUSPAY_DATA = [
             "tablet_percentage": 2.7,
             "ios_sr": 94.8,
             "android_sr": 93.2,
-            "windows_sr": 91.9
+            "windows_sr": 91.9,
         },
         "geographical_data": {
             "top_cities": [
-                {
-                    "city": "Mumbai",
-                    "success_rate": 94.1,
-                    "volume": 987
-                },
-                {
-                    "city": "Delhi",
-                    "success_rate": 92.6,
-                    "volume": 834
-                },
-                {
-                    "city": "Bangalore",
-                    "success_rate": 94.9,
-                    "volume": 689
-                },
-                {
-                    "city": "Chennai",
-                    "success_rate": 91.8,
-                    "volume": 534
-                },
-                {
-                    "city": "Hyderabad",
-                    "success_rate": 93.4,
-                    "volume": 412
-                }
+                {"city": "Mumbai", "success_rate": 94.1, "volume": 987},
+                {"city": "Delhi", "success_rate": 92.6, "volume": 834},
+                {"city": "Bangalore", "success_rate": 94.9, "volume": 689},
+                {"city": "Chennai", "success_rate": 91.8, "volume": 534},
+                {"city": "Hyderabad", "success_rate": 93.4, "volume": 412},
             ],
             "state_performance": {
                 "Maharashtra": 94.1,
                 "Karnataka": 94.9,
                 "Delhi": 92.6,
                 "Tamil Nadu": 91.8,
-                "Telangana": 93.4
-            }
+                "Telangana": 93.4,
+            },
         },
         "temporal_patterns": {
             "hourly_success_rates": {
-                "peak_hours": [
-                    "15:00-17:00",
-                    "20:00-22:00"
-                ],
-                "low_performance_hours": [
-                    "01:00-05:00"
-                ],
-                "weekend_pattern": "consistently_strong"
+                "peak_hours": ["15:00-17:00", "20:00-22:00"],
+                "low_performance_hours": ["01:00-05:00"],
+                "weekend_pattern": "consistently_strong",
             },
             "success_rate_by_time_of_day": {
                 "morning": 93.2,
                 "afternoon": 93.7,
                 "evening": 93.4,
-                "night": 91.6
+                "night": 91.6,
             },
             "payment_method_preference_by_time": {
                 "morning": "UPI",
                 "afternoon": "CREDIT_CARD",
                 "evening": "CREDIT_CARD",
-                "night": "UPI"
-            }
+                "night": "UPI",
+            },
         },
         "weekly_patterns": {
             "weekday_sr": 93.1,
             "weekend_sr": 92.3,
             "monday_peak": False,
-            "friday_peak": True
+            "friday_peak": True,
         },
         "errors": [],
         "failure_details": [
@@ -11555,8 +10404,8 @@ ACME_JUSPAY_DATA = [
                 "avg_retry_attempts": 1.6,
                 "resolution_suggestions": [
                     "Check account balance",
-                    "Try different card"
-                ]
+                    "Try different card",
+                ],
             },
             {
                 "error_message": "BANK_TECHNICAL_ISSUE",
@@ -11564,10 +10413,7 @@ ACME_JUSPAY_DATA = [
                 "count": 30,
                 "percentage": 10.1,
                 "avg_retry_attempts": 1.1,
-                "resolution_suggestions": [
-                    "Try again later",
-                    "Contact bank"
-                ]
+                "resolution_suggestions": ["Try again later", "Contact bank"],
             },
             {
                 "error_message": "TRANSACTION_TIMEOUT",
@@ -11577,8 +10423,8 @@ ACME_JUSPAY_DATA = [
                 "avg_retry_attempts": 1.6,
                 "resolution_suggestions": [
                     "Check internet connection",
-                    "Retry payment"
-                ]
+                    "Retry payment",
+                ],
             },
             {
                 "error_message": "CARD_DECLINED",
@@ -11586,10 +10432,7 @@ ACME_JUSPAY_DATA = [
                 "count": 19,
                 "percentage": 6.4,
                 "avg_retry_attempts": 2.5,
-                "resolution_suggestions": [
-                    "Contact card issuer",
-                    "Try different card"
-                ]
+                "resolution_suggestions": ["Contact card issuer", "Try different card"],
             },
             {
                 "error_message": "DAILY_LIMIT_EXCEEDED",
@@ -11599,8 +10442,8 @@ ACME_JUSPAY_DATA = [
                 "avg_retry_attempts": 2.1,
                 "resolution_suggestions": [
                     "Try tomorrow",
-                    "Use different payment method"
-                ]
+                    "Use different payment method",
+                ],
             },
             {
                 "error_message": "SESSION_EXPIRED",
@@ -11608,11 +10451,8 @@ ACME_JUSPAY_DATA = [
                 "count": 31,
                 "percentage": 10.5,
                 "avg_retry_attempts": 1.1,
-                "resolution_suggestions": [
-                    "Login again",
-                    "Refresh page"
-                ]
-            }
+                "resolution_suggestions": ["Login again", "Refresh page"],
+            },
         ],
         "success_volume_by_payment_method": [
             {
@@ -11621,7 +10461,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 36.1,
                 "peak_hour_volume": 84,
                 "avg_transaction_value": 5848.18,
-                "repeat_customer_rate": 50.9
+                "repeat_customer_rate": 50.9,
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -11629,7 +10469,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 40.1,
                 "peak_hour_volume": 85,
                 "avg_transaction_value": 4188.82,
-                "repeat_customer_rate": 60.4
+                "repeat_customer_rate": 60.4,
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -11637,7 +10477,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 14.9,
                 "peak_hour_volume": 87,
                 "avg_transaction_value": 4495.42,
-                "repeat_customer_rate": 69.3
+                "repeat_customer_rate": 69.3,
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -11645,7 +10485,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 5.0,
                 "peak_hour_volume": 47,
                 "avg_transaction_value": 5442.7,
-                "repeat_customer_rate": 73.3
+                "repeat_customer_rate": 73.3,
             },
             {
                 "payment_method_type": "WALLET",
@@ -11653,8 +10493,8 @@ ACME_JUSPAY_DATA = [
                 "percentage": 3.8,
                 "peak_hour_volume": 106,
                 "avg_transaction_value": 6486.62,
-                "repeat_customer_rate": 57.1
-            }
+                "repeat_customer_rate": 57.1,
+            },
         ],
         "gmv_by_payment_method": [
             {
@@ -11667,8 +10507,8 @@ ACME_JUSPAY_DATA = [
                     "North": 38.2,
                     "South": 42.1,
                     "West": 35.7,
-                    "East": 28.9
-                }
+                    "East": 28.9,
+                },
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -11680,8 +10520,8 @@ ACME_JUSPAY_DATA = [
                     "North": 52.3,
                     "South": 48.9,
                     "West": 54.1,
-                    "East": 46.7
-                }
+                    "East": 46.7,
+                },
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -11693,8 +10533,8 @@ ACME_JUSPAY_DATA = [
                     "North": 28.5,
                     "South": 31.2,
                     "West": 26.8,
-                    "East": 33.4
-                }
+                    "East": 33.4,
+                },
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -11706,8 +10546,8 @@ ACME_JUSPAY_DATA = [
                     "North": 15.2,
                     "South": 12.8,
                     "West": 18.9,
-                    "East": 21.3
-                }
+                    "East": 21.3,
+                },
             },
             {
                 "payment_method_type": "WALLET",
@@ -11719,9 +10559,9 @@ ACME_JUSPAY_DATA = [
                     "North": 22.1,
                     "South": 25.8,
                     "West": 19.4,
-                    "East": 16.2
-                }
-            }
+                    "East": 16.2,
+                },
+            },
         ],
         "average_ticket_size_by_payment_method": [
             {
@@ -11732,8 +10572,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 45.2,
                     "Fashion": 32.1,
-                    "Home": 22.7
-                }
+                    "Home": 22.7,
+                },
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -11743,8 +10583,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 58.7,
                     "Fashion": 28.9,
-                    "Home": 12.4
-                }
+                    "Home": 12.4,
+                },
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -11754,8 +10594,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 31.5,
                     "Fashion": 42.3,
-                    "Home": 26.2
-                }
+                    "Home": 26.2,
+                },
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -11765,8 +10605,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 67.8,
                     "Fashion": 18.9,
-                    "Home": 13.3
-                }
+                    "Home": 13.3,
+                },
             },
             {
                 "payment_method_type": "WALLET",
@@ -11776,10 +10616,10 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 28.4,
                     "Fashion": 45.6,
-                    "Home": 26.0
-                }
-            }
-        ]
+                    "Home": 26.0,
+                },
+            },
+        ],
     },
     {
         "overall_success_rate_data": {
@@ -11790,7 +10630,7 @@ ACME_JUSPAY_DATA = [
             "processing_time_avg": 44.6,
             "retry_success_rate": 32.0,
             "peak_hour_sr": 90.4,
-            "off_peak_sr": 86.7
+            "off_peak_sr": 86.7,
         },
         "payment_method_success_rates": [
             {
@@ -11804,8 +10644,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "TRANSACTION_TIMEOUT",
                     "INSUFFICIENT_FUNDS",
-                    "BANK_ERROR"
-                ]
+                    "BANK_ERROR",
+                ],
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -11818,8 +10658,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "INSUFFICIENT_FUNDS",
                     "CARD_DECLINED",
-                    "EXPIRED_CARD"
-                ]
+                    "EXPIRED_CARD",
+                ],
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -11832,8 +10672,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "INSUFFICIENT_FUNDS",
                     "DAILY_LIMIT_EXCEEDED",
-                    "PIN_INCORRECT"
-                ]
+                    "PIN_INCORRECT",
+                ],
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -11846,8 +10686,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "BANK_TECHNICAL_ISSUE",
                     "SESSION_TIMEOUT",
-                    "INVALID_CREDENTIALS"
-                ]
+                    "INVALID_CREDENTIALS",
+                ],
             },
             {
                 "payment_method_type": "WALLET",
@@ -11860,49 +10700,29 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "INSUFFICIENT_WALLET_BALANCE",
                     "WALLET_BLOCKED",
-                    "OTP_FAILURE"
-                ]
-            }
+                    "OTP_FAILURE",
+                ],
+            },
         ],
         "failure_analysis": {
             "top_failure_reasons": [
-                {
-                    "reason": "CARD_DECLINED",
-                    "count": 105,
-                    "percentage": 29.7
-                },
-                {
-                    "reason": "INSUFFICIENT_FUNDS",
-                    "count": 98,
-                    "percentage": 27.8
-                },
-                {
-                    "reason": "TRANSACTION_TIMEOUT",
-                    "count": 76,
-                    "percentage": 21.5
-                },
-                {
-                    "reason": "SESSION_TIMEOUT",
-                    "count": 45,
-                    "percentage": 12.7
-                },
-                {
-                    "reason": "BANK_ERROR",
-                    "count": 29,
-                    "percentage": 8.2
-                }
+                {"reason": "CARD_DECLINED", "count": 105, "percentage": 29.7},
+                {"reason": "INSUFFICIENT_FUNDS", "count": 98, "percentage": 27.8},
+                {"reason": "TRANSACTION_TIMEOUT", "count": 76, "percentage": 21.5},
+                {"reason": "SESSION_TIMEOUT", "count": 45, "percentage": 12.7},
+                {"reason": "BANK_ERROR", "count": 29, "percentage": 8.2},
             ],
             "failure_rate_by_hour": {
                 "00-06": 15.9,
                 "06-12": 11.4,
                 "12-18": 10.1,
-                "18-24": 13.2
+                "18-24": 13.2,
             },
             "retry_attempts": {
                 "single_retry": 225,
                 "multiple_retries": 128,
-                "success_after_retry": 113
-            }
+                "success_after_retry": 113,
+            },
         },
         "gmv_breakdown": {
             "total_gmv": 496734.85,
@@ -11912,11 +10732,11 @@ ACME_JUSPAY_DATA = [
                 "UPI": 173456.7,
                 "CREDIT_CARD": 179834.95,
                 "DEBIT_CARD": 57234.6,
-                "NET_BANKING": 27397.15
+                "NET_BANKING": 27397.15,
             },
             "average_transaction_value": 166.31,
             "high_value_transactions": 35,
-            "micro_transactions": 1156
+            "micro_transactions": 1156,
         },
         "device_analytics": {
             "mobile_sr": 89.2,
@@ -11927,73 +10747,48 @@ ACME_JUSPAY_DATA = [
             "tablet_percentage": 1.7,
             "ios_sr": 90.5,
             "android_sr": 88.7,
-            "windows_sr": 87.1
+            "windows_sr": 87.1,
         },
         "geographical_data": {
             "top_cities": [
-                {
-                    "city": "Mumbai",
-                    "success_rate": 89.8,
-                    "volume": 823
-                },
-                {
-                    "city": "Delhi",
-                    "success_rate": 87.4,
-                    "volume": 697
-                },
-                {
-                    "city": "Bangalore",
-                    "success_rate": 90.6,
-                    "volume": 578
-                },
-                {
-                    "city": "Chennai",
-                    "success_rate": 86.3,
-                    "volume": 445
-                },
-                {
-                    "city": "Hyderabad",
-                    "success_rate": 88.9,
-                    "volume": 444
-                }
+                {"city": "Mumbai", "success_rate": 89.8, "volume": 823},
+                {"city": "Delhi", "success_rate": 87.4, "volume": 697},
+                {"city": "Bangalore", "success_rate": 90.6, "volume": 578},
+                {"city": "Chennai", "success_rate": 86.3, "volume": 445},
+                {"city": "Hyderabad", "success_rate": 88.9, "volume": 444},
             ],
             "state_performance": {
                 "Maharashtra": 89.8,
                 "Karnataka": 90.6,
                 "Delhi": 87.4,
                 "Tamil Nadu": 86.3,
-                "Telangana": 88.9
-            }
+                "Telangana": 88.9,
+            },
         },
         "temporal_patterns": {
             "hourly_success_rates": {
-                "peak_hours": [
-                    "14:00-16:00",
-                    "18:00-20:00"
-                ],
-                "low_performance_hours": [
-                    "03:00-07:00"
-                ],
-                "weekend_pattern": "modest_challenges"
+                "peak_hours": ["14:00-16:00", "18:00-20:00"],
+                "low_performance_hours": ["03:00-07:00"],
+                "weekend_pattern": "modest_challenges",
             },
             "success_rate_by_time_of_day": {
                 "morning": 88.6,
                 "afternoon": 89.1,
                 "evening": 88.8,
-                "night": 86.2
+                "night": 86.2,
             },
             "payment_method_preference_by_time": {
                 "morning": "UPI",
                 "afternoon": "CREDIT_CARD",
                 "evening": "CREDIT_CARD",
-                "night": "UPI"
-            }
+                "night": "UPI",
+            },
         },
         "weekly_patterns": {
             "weekday_sr": 88.5,
             "weekend_sr": 87.3,
             "monday_peak": True,
-            "friday_peak": False
+            "friday_peak": False,
         },
         "errors": [],
         "failure_details": [
@@ -12005,8 +10800,8 @@ ACME_JUSPAY_DATA = [
                 "avg_retry_attempts": 1.6,
                 "resolution_suggestions": [
                     "Check account balance",
-                    "Try different card"
-                ]
+                    "Try different card",
+                ],
             },
             {
                 "error_message": "BANK_TECHNICAL_ISSUE",
@@ -12014,10 +10809,7 @@ ACME_JUSPAY_DATA = [
                 "count": 19,
                 "percentage": 4.9,
                 "avg_retry_attempts": 1.2,
-                "resolution_suggestions": [
-                    "Try again later",
-                    "Contact bank"
-                ]
+                "resolution_suggestions": ["Try again later", "Contact bank"],
             },
             {
                 "error_message": "TRANSACTION_TIMEOUT",
@@ -12027,8 +10819,8 @@ ACME_JUSPAY_DATA = [
                 "avg_retry_attempts": 1.2,
                 "resolution_suggestions": [
                     "Check internet connection",
-                    "Retry payment"
-                ]
+                    "Retry payment",
+                ],
             },
             {
                 "error_message": "CARD_DECLINED",
@@ -12036,10 +10828,7 @@ ACME_JUSPAY_DATA = [
                 "count": 17,
                 "percentage": 4.4,
                 "avg_retry_attempts": 2.4,
-                "resolution_suggestions": [
-                    "Contact card issuer",
-                    "Try different card"
-                ]
+                "resolution_suggestions": ["Contact card issuer", "Try different card"],
             },
             {
                 "error_message": "DAILY_LIMIT_EXCEEDED",
@@ -12049,8 +10838,8 @@ ACME_JUSPAY_DATA = [
                 "avg_retry_attempts": 2.3,
                 "resolution_suggestions": [
                     "Try tomorrow",
-                    "Use different payment method"
-                ]
+                    "Use different payment method",
+                ],
             },
             {
                 "error_message": "SESSION_EXPIRED",
@@ -12058,11 +10847,8 @@ ACME_JUSPAY_DATA = [
                 "count": 26,
                 "percentage": 6.7,
                 "avg_retry_attempts": 2.3,
-                "resolution_suggestions": [
-                    "Login again",
-                    "Refresh page"
-                ]
-            }
+                "resolution_suggestions": ["Login again", "Refresh page"],
+            },
         ],
         "success_volume_by_payment_method": [
             {
@@ -12071,7 +10857,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 35.2,
                 "peak_hour_volume": 67,
                 "avg_transaction_value": 4475.22,
-                "repeat_customer_rate": 46.1
+                "repeat_customer_rate": 46.1,
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -12079,7 +10865,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 41.4,
                 "peak_hour_volume": 28,
                 "avg_transaction_value": 2846.52,
-                "repeat_customer_rate": 60.5
+                "repeat_customer_rate": 60.5,
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -12087,7 +10873,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 14.4,
                 "peak_hour_volume": 107,
                 "avg_transaction_value": 5111.21,
-                "repeat_customer_rate": 48.6
+                "repeat_customer_rate": 48.6,
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -12095,7 +10881,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 5.0,
                 "peak_hour_volume": 86,
                 "avg_transaction_value": 3366.09,
-                "repeat_customer_rate": 72.1
+                "repeat_customer_rate": 72.1,
             },
             {
                 "payment_method_type": "WALLET",
@@ -12103,8 +10889,8 @@ ACME_JUSPAY_DATA = [
                 "percentage": 4.0,
                 "peak_hour_volume": 119,
                 "avg_transaction_value": 5949.32,
-                "repeat_customer_rate": 59.5
-            }
+                "repeat_customer_rate": 59.5,
+            },
         ],
         "gmv_by_payment_method": [
             {
@@ -12117,8 +10903,8 @@ ACME_JUSPAY_DATA = [
                     "North": 38.2,
                     "South": 42.1,
                     "West": 35.7,
-                    "East": 28.9
-                }
+                    "East": 28.9,
+                },
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -12130,8 +10916,8 @@ ACME_JUSPAY_DATA = [
                     "North": 52.3,
                     "South": 48.9,
                     "West": 54.1,
-                    "East": 46.7
-                }
+                    "East": 46.7,
+                },
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -12143,8 +10929,8 @@ ACME_JUSPAY_DATA = [
                     "North": 28.5,
                     "South": 31.2,
                     "West": 26.8,
-                    "East": 33.4
-                }
+                    "East": 33.4,
+                },
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -12156,8 +10942,8 @@ ACME_JUSPAY_DATA = [
                     "North": 15.2,
                     "South": 12.8,
                     "West": 18.9,
-                    "East": 21.3
-                }
+                    "East": 21.3,
+                },
             },
             {
                 "payment_method_type": "WALLET",
@@ -12169,9 +10955,9 @@ ACME_JUSPAY_DATA = [
                     "North": 22.1,
                     "South": 25.8,
                     "West": 19.4,
-                    "East": 16.2
-                }
-            }
+                    "East": 16.2,
+                },
+            },
         ],
         "average_ticket_size_by_payment_method": [
             {
@@ -12182,8 +10968,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 45.2,
                     "Fashion": 32.1,
-                    "Home": 22.7
-                }
+                    "Home": 22.7,
+                },
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -12193,8 +10979,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 58.7,
                     "Fashion": 28.9,
-                    "Home": 12.4
-                }
+                    "Home": 12.4,
+                },
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -12204,8 +10990,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 31.5,
                     "Fashion": 42.3,
-                    "Home": 26.2
-                }
+                    "Home": 26.2,
+                },
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -12215,8 +11001,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 67.8,
                     "Fashion": 18.9,
-                    "Home": 13.3
-                }
+                    "Home": 13.3,
+                },
             },
             {
                 "payment_method_type": "WALLET",
@@ -12226,10 +11012,10 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 28.4,
                     "Fashion": 45.6,
-                    "Home": 26.0
-                }
-            }
-        ]
+                    "Home": 26.0,
+                },
+            },
+        ],
     },
     {
         "overall_success_rate_data": {
@@ -12240,7 +11026,7 @@ ACME_JUSPAY_DATA = [
             "processing_time_avg": 40.3,
             "retry_success_rate": 36.7,
             "peak_hour_sr": 92.9,
-            "off_peak_sr": 89.4
+            "off_peak_sr": 89.4,
         },
         "payment_method_success_rates": [
             {
@@ -12254,8 +11040,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "TRANSACTION_TIMEOUT",
                     "INSUFFICIENT_FUNDS",
-                    "BANK_ERROR"
-                ]
+                    "BANK_ERROR",
+                ],
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -12268,8 +11054,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "INSUFFICIENT_FUNDS",
                     "CARD_DECLINED",
-                    "EXPIRED_CARD"
-                ]
+                    "EXPIRED_CARD",
+                ],
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -12282,8 +11068,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "INSUFFICIENT_FUNDS",
                     "DAILY_LIMIT_EXCEEDED",
-                    "PIN_INCORRECT"
-                ]
+                    "PIN_INCORRECT",
+                ],
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -12296,8 +11082,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "BANK_TECHNICAL_ISSUE",
                     "SESSION_TIMEOUT",
-                    "INVALID_CREDENTIALS"
-                ]
+                    "INVALID_CREDENTIALS",
+                ],
             },
             {
                 "payment_method_type": "WALLET",
@@ -12310,49 +11096,29 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "INSUFFICIENT_WALLET_BALANCE",
                     "WALLET_BLOCKED",
-                    "OTP_FAILURE"
-                ]
-            }
+                    "OTP_FAILURE",
+                ],
+            },
         ],
         "failure_analysis": {
             "top_failure_reasons": [
-                {
-                    "reason": "INSUFFICIENT_FUNDS",
-                    "count": 93,
-                    "percentage": 29.7
-                },
-                {
-                    "reason": "CARD_DECLINED",
-                    "count": 81,
-                    "percentage": 25.9
-                },
-                {
-                    "reason": "TRANSACTION_TIMEOUT",
-                    "count": 64,
-                    "percentage": 20.4
-                },
-                {
-                    "reason": "BANK_ERROR",
-                    "count": 42,
-                    "percentage": 13.4
-                },
-                {
-                    "reason": "SESSION_TIMEOUT",
-                    "count": 33,
-                    "percentage": 10.5
-                }
+                {"reason": "INSUFFICIENT_FUNDS", "count": 93, "percentage": 29.7},
+                {"reason": "CARD_DECLINED", "count": 81, "percentage": 25.9},
+                {"reason": "TRANSACTION_TIMEOUT", "count": 64, "percentage": 20.4},
+                {"reason": "BANK_ERROR", "count": 42, "percentage": 13.4},
+                {"reason": "SESSION_TIMEOUT", "count": 33, "percentage": 10.5},
             ],
             "failure_rate_by_hour": {
                 "00-06": 12.1,
                 "06-12": 8.7,
                 "12-18": 7.9,
-                "18-24": 9.8
+                "18-24": 9.8,
             },
             "retry_attempts": {
                 "single_retry": 199,
                 "multiple_retries": 114,
-                "success_after_retry": 115
-            }
+                "success_after_retry": 115,
+            },
         },
         "gmv_breakdown": {
             "total_gmv": 578923.7,
@@ -12362,11 +11128,11 @@ ACME_JUSPAY_DATA = [
                 "UPI": 203734.85,
                 "CREDIT_CARD": 228456.7,
                 "DEBIT_CARD": 68923.4,
-                "NET_BANKING": 33720.95
+                "NET_BANKING": 33720.95,
             },
             "average_transaction_value": 171.36,
             "high_value_transactions": 51,
-            "micro_transactions": 1356
+            "micro_transactions": 1356,
         },
         "device_analytics": {
             "mobile_sr": 91.7,
@@ -12377,73 +11143,48 @@ ACME_JUSPAY_DATA = [
             "tablet_percentage": 2.5,
             "ios_sr": 92.8,
             "android_sr": 91.1,
-            "windows_sr": 89.7
+            "windows_sr": 89.7,
         },
         "geographical_data": {
             "top_cities": [
-                {
-                    "city": "Mumbai",
-                    "success_rate": 92.3,
-                    "volume": 956
-                },
-                {
-                    "city": "Delhi",
-                    "success_rate": 90.1,
-                    "volume": 812
-                },
-                {
-                    "city": "Bangalore",
-                    "success_rate": 93.1,
-                    "volume": 667
-                },
-                {
-                    "city": "Chennai",
-                    "success_rate": 89.7,
-                    "volume": 512
-                },
-                {
-                    "city": "Hyderabad",
-                    "success_rate": 91.8,
-                    "volume": 431
-                }
+                {"city": "Mumbai", "success_rate": 92.3, "volume": 956},
+                {"city": "Delhi", "success_rate": 90.1, "volume": 812},
+                {"city": "Bangalore", "success_rate": 93.1, "volume": 667},
+                {"city": "Chennai", "success_rate": 89.7, "volume": 512},
+                {"city": "Hyderabad", "success_rate": 91.8, "volume": 431},
             ],
             "state_performance": {
                 "Maharashtra": 92.3,
                 "Karnataka": 93.1,
                 "Delhi": 90.1,
                 "Tamil Nadu": 89.7,
-                "Telangana": 91.8
-            }
+                "Telangana": 91.8,
+            },
         },
         "temporal_patterns": {
             "hourly_success_rates": {
-                "peak_hours": [
-                    "15:00-17:00",
-                    "19:00-21:00"
-                ],
-                "low_performance_hours": [
-                    "02:00-06:00"
-                ],
-                "weekend_pattern": "reliable_performance"
+                "peak_hours": ["15:00-17:00", "19:00-21:00"],
+                "low_performance_hours": ["02:00-06:00"],
+                "weekend_pattern": "reliable_performance",
             },
             "success_rate_by_time_of_day": {
                 "morning": 91.1,
                 "afternoon": 91.6,
                 "evening": 91.3,
-                "night": 89.2
+                "night": 89.2,
             },
             "payment_method_preference_by_time": {
                 "morning": "UPI",
                 "afternoon": "CREDIT_CARD",
                 "evening": "CREDIT_CARD",
-                "night": "UPI"
-            }
+                "night": "UPI",
+            },
         },
         "weekly_patterns": {
             "weekday_sr": 91.0,
             "weekend_sr": 90.1,
             "monday_peak": False,
-            "friday_peak": True
+            "friday_peak": True,
         },
         "errors": [],
         "failure_details": [
@@ -12455,8 +11196,8 @@ ACME_JUSPAY_DATA = [
                 "avg_retry_attempts": 1.6,
                 "resolution_suggestions": [
                     "Check account balance",
-                    "Try different card"
-                ]
+                    "Try different card",
+                ],
             },
             {
                 "error_message": "BANK_TECHNICAL_ISSUE",
@@ -12464,10 +11205,7 @@ ACME_JUSPAY_DATA = [
                 "count": 25,
                 "percentage": 7.8,
                 "avg_retry_attempts": 2.0,
-                "resolution_suggestions": [
-                    "Try again later",
-                    "Contact bank"
-                ]
+                "resolution_suggestions": ["Try again later", "Contact bank"],
             },
             {
                 "error_message": "TRANSACTION_TIMEOUT",
@@ -12477,8 +11215,8 @@ ACME_JUSPAY_DATA = [
                 "avg_retry_attempts": 2.0,
                 "resolution_suggestions": [
                     "Check internet connection",
-                    "Retry payment"
-                ]
+                    "Retry payment",
+                ],
             },
             {
                 "error_message": "CARD_DECLINED",
@@ -12486,10 +11224,7 @@ ACME_JUSPAY_DATA = [
                 "count": 37,
                 "percentage": 11.5,
                 "avg_retry_attempts": 1.7,
-                "resolution_suggestions": [
-                    "Contact card issuer",
-                    "Try different card"
-                ]
+                "resolution_suggestions": ["Contact card issuer", "Try different card"],
             },
             {
                 "error_message": "DAILY_LIMIT_EXCEEDED",
@@ -12499,8 +11234,8 @@ ACME_JUSPAY_DATA = [
                 "avg_retry_attempts": 2.5,
                 "resolution_suggestions": [
                     "Try tomorrow",
-                    "Use different payment method"
-                ]
+                    "Use different payment method",
+                ],
             },
             {
                 "error_message": "SESSION_EXPIRED",
@@ -12508,11 +11243,8 @@ ACME_JUSPAY_DATA = [
                 "count": 49,
                 "percentage": 15.2,
                 "avg_retry_attempts": 2.2,
-                "resolution_suggestions": [
-                    "Login again",
-                    "Refresh page"
-                ]
-            }
+                "resolution_suggestions": ["Login again", "Refresh page"],
+            },
         ],
         "success_volume_by_payment_method": [
             {
@@ -12521,7 +11253,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 35.8,
                 "peak_hour_volume": 140,
                 "avg_transaction_value": 4802.38,
-                "repeat_customer_rate": 73.3
+                "repeat_customer_rate": 73.3,
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -12529,7 +11261,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 41.2,
                 "peak_hour_volume": 90,
                 "avg_transaction_value": 4595.56,
-                "repeat_customer_rate": 60.4
+                "repeat_customer_rate": 60.4,
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -12537,7 +11269,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 14.1,
                 "peak_hour_volume": 114,
                 "avg_transaction_value": 4952.36,
-                "repeat_customer_rate": 45.1
+                "repeat_customer_rate": 45.1,
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -12545,7 +11277,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 5.1,
                 "peak_hour_volume": 125,
                 "avg_transaction_value": 3898.16,
-                "repeat_customer_rate": 72.7
+                "repeat_customer_rate": 72.7,
             },
             {
                 "payment_method_type": "WALLET",
@@ -12553,8 +11285,8 @@ ACME_JUSPAY_DATA = [
                 "percentage": 3.9,
                 "peak_hour_volume": 60,
                 "avg_transaction_value": 5588.12,
-                "repeat_customer_rate": 66.2
-            }
+                "repeat_customer_rate": 66.2,
+            },
         ],
         "gmv_by_payment_method": [
             {
@@ -12567,8 +11299,8 @@ ACME_JUSPAY_DATA = [
                     "North": 38.2,
                     "South": 42.1,
                     "West": 35.7,
-                    "East": 28.9
-                }
+                    "East": 28.9,
+                },
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -12580,8 +11312,8 @@ ACME_JUSPAY_DATA = [
                     "North": 52.3,
                     "South": 48.9,
                     "West": 54.1,
-                    "East": 46.7
-                }
+                    "East": 46.7,
+                },
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -12593,8 +11325,8 @@ ACME_JUSPAY_DATA = [
                     "North": 28.5,
                     "South": 31.2,
                     "West": 26.8,
-                    "East": 33.4
-                }
+                    "East": 33.4,
+                },
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -12606,8 +11338,8 @@ ACME_JUSPAY_DATA = [
                     "North": 15.2,
                     "South": 12.8,
                     "West": 18.9,
-                    "East": 21.3
-                }
+                    "East": 21.3,
+                },
             },
             {
                 "payment_method_type": "WALLET",
@@ -12619,9 +11351,9 @@ ACME_JUSPAY_DATA = [
                     "North": 22.1,
                     "South": 25.8,
                     "West": 19.4,
-                    "East": 16.2
-                }
-            }
+                    "East": 16.2,
+                },
+            },
         ],
         "average_ticket_size_by_payment_method": [
             {
@@ -12632,8 +11364,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 45.2,
                     "Fashion": 32.1,
-                    "Home": 22.7
-                }
+                    "Home": 22.7,
+                },
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -12643,8 +11375,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 58.7,
                     "Fashion": 28.9,
-                    "Home": 12.4
-                }
+                    "Home": 12.4,
+                },
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -12654,8 +11386,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 31.5,
                     "Fashion": 42.3,
-                    "Home": 26.2
-                }
+                    "Home": 26.2,
+                },
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -12665,8 +11397,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 67.8,
                     "Fashion": 18.9,
-                    "Home": 13.3
-                }
+                    "Home": 13.3,
+                },
             },
             {
                 "payment_method_type": "WALLET",
@@ -12676,10 +11408,10 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 28.4,
                     "Fashion": 45.6,
-                    "Home": 26.0
-                }
-            }
-        ]
+                    "Home": 26.0,
+                },
+            },
+        ],
     },
     {
         "overall_success_rate_data": {
@@ -12690,7 +11422,7 @@ ACME_JUSPAY_DATA = [
             "processing_time_avg": 35.7,
             "retry_success_rate": 43.1,
             "peak_hour_sr": 96.2,
-            "off_peak_sr": 93.1
+            "off_peak_sr": 93.1,
         },
         "payment_method_success_rates": [
             {
@@ -12704,8 +11436,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "TRANSACTION_TIMEOUT",
                     "INSUFFICIENT_FUNDS",
-                    "BANK_ERROR"
-                ]
+                    "BANK_ERROR",
+                ],
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -12718,8 +11450,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "INSUFFICIENT_FUNDS",
                     "CARD_DECLINED",
-                    "EXPIRED_CARD"
-                ]
+                    "EXPIRED_CARD",
+                ],
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -12732,8 +11464,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "INSUFFICIENT_FUNDS",
                     "DAILY_LIMIT_EXCEEDED",
-                    "PIN_INCORRECT"
-                ]
+                    "PIN_INCORRECT",
+                ],
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -12746,8 +11478,8 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "BANK_TECHNICAL_ISSUE",
                     "SESSION_TIMEOUT",
-                    "INVALID_CREDENTIALS"
-                ]
+                    "INVALID_CREDENTIALS",
+                ],
             },
             {
                 "payment_method_type": "WALLET",
@@ -12760,49 +11492,29 @@ ACME_JUSPAY_DATA = [
                 "failure_reasons": [
                     "INSUFFICIENT_WALLET_BALANCE",
                     "WALLET_BLOCKED",
-                    "OTP_FAILURE"
-                ]
-            }
+                    "OTP_FAILURE",
+                ],
+            },
         ],
         "failure_analysis": {
             "top_failure_reasons": [
-                {
-                    "reason": "INSUFFICIENT_FUNDS",
-                    "count": 68,
-                    "percentage": 32.2
-                },
-                {
-                    "reason": "CARD_DECLINED",
-                    "count": 52,
-                    "percentage": 24.6
-                },
-                {
-                    "reason": "TRANSACTION_TIMEOUT",
-                    "count": 39,
-                    "percentage": 18.5
-                },
-                {
-                    "reason": "BANK_ERROR",
-                    "count": 30,
-                    "percentage": 14.2
-                },
-                {
-                    "reason": "SESSION_TIMEOUT",
-                    "count": 22,
-                    "percentage": 10.4
-                }
+                {"reason": "INSUFFICIENT_FUNDS", "count": 68, "percentage": 32.2},
+                {"reason": "CARD_DECLINED", "count": 52, "percentage": 24.6},
+                {"reason": "TRANSACTION_TIMEOUT", "count": 39, "percentage": 18.5},
+                {"reason": "BANK_ERROR", "count": 30, "percentage": 14.2},
+                {"reason": "SESSION_TIMEOUT", "count": 22, "percentage": 10.4},
             ],
             "failure_rate_by_hour": {
                 "00-06": 7.8,
                 "06-12": 5.3,
                 "12-18": 4.9,
-                "18-24": 6.4
+                "18-24": 6.4,
             },
             "retry_attempts": {
                 "single_retry": 134,
                 "multiple_retries": 77,
-                "success_after_retry": 91
-            }
+                "success_after_retry": 91,
+            },
         },
         "gmv_breakdown": {
             "total_gmv": 673925.45,
@@ -12812,11 +11524,11 @@ ACME_JUSPAY_DATA = [
                 "UPI": 234567.8,
                 "CREDIT_CARD": 268934.65,
                 "DEBIT_CARD": 82456.3,
-                "NET_BANKING": 48897.95
+                "NET_BANKING": 48897.95,
             },
             "average_transaction_value": 186.01,
             "high_value_transactions": 69,
-            "micro_transactions": 1534
+            "micro_transactions": 1534,
         },
         "device_analytics": {
             "mobile_sr": 95.1,
@@ -12827,73 +11539,48 @@ ACME_JUSPAY_DATA = [
             "tablet_percentage": 2.6,
             "ios_sr": 96.3,
             "android_sr": 94.6,
-            "windows_sr": 93.2
+            "windows_sr": 93.2,
         },
         "geographical_data": {
             "top_cities": [
-                {
-                    "city": "Mumbai",
-                    "success_rate": 95.6,
-                    "volume": 1123
-                },
-                {
-                    "city": "Delhi",
-                    "success_rate": 93.9,
-                    "volume": 934
-                },
-                {
-                    "city": "Bangalore",
-                    "success_rate": 96.2,
-                    "volume": 789
-                },
-                {
-                    "city": "Chennai",
-                    "success_rate": 93.1,
-                    "volume": 612
-                },
-                {
-                    "city": "Hyderabad",
-                    "success_rate": 95.1,
-                    "volume": 165
-                }
+                {"city": "Mumbai", "success_rate": 95.6, "volume": 1123},
+                {"city": "Delhi", "success_rate": 93.9, "volume": 934},
+                {"city": "Bangalore", "success_rate": 96.2, "volume": 789},
+                {"city": "Chennai", "success_rate": 93.1, "volume": 612},
+                {"city": "Hyderabad", "success_rate": 95.1, "volume": 165},
             ],
             "state_performance": {
                 "Maharashtra": 95.6,
                 "Karnataka": 96.2,
                 "Delhi": 93.9,
                 "Tamil Nadu": 93.1,
-                "Telangana": 95.1
-            }
+                "Telangana": 95.1,
+            },
         },
         "temporal_patterns": {
             "hourly_success_rates": {
-                "peak_hours": [
-                    "14:00-16:00",
-                    "21:00-23:00"
-                ],
-                "low_performance_hours": [
-                    "01:00-04:00"
-                ],
-                "weekend_pattern": "month_end_excellence"
+                "peak_hours": ["14:00-16:00", "21:00-23:00"],
+                "low_performance_hours": ["01:00-04:00"],
+                "weekend_pattern": "month_end_excellence",
             },
             "success_rate_by_time_of_day": {
                 "morning": 94.6,
                 "afternoon": 95.1,
                 "evening": 94.8,
-                "night": 92.9
+                "night": 92.9,
             },
             "payment_method_preference_by_time": {
                 "morning": "UPI",
                 "afternoon": "CREDIT_CARD",
                 "evening": "CREDIT_CARD",
-                "night": "UPI"
-            }
+                "night": "UPI",
+            },
         },
         "weekly_patterns": {
             "weekday_sr": 94.5,
             "weekend_sr": 93.6,
             "monday_peak": False,
-            "friday_peak": True
+            "friday_peak": True,
         },
         "errors": [],
         "failure_details": [
@@ -12905,8 +11592,8 @@ ACME_JUSPAY_DATA = [
                 "avg_retry_attempts": 1.4,
                 "resolution_suggestions": [
                     "Check account balance",
-                    "Try different card"
-                ]
+                    "Try different card",
+                ],
             },
             {
                 "error_message": "BANK_TECHNICAL_ISSUE",
@@ -12914,10 +11601,7 @@ ACME_JUSPAY_DATA = [
                 "count": 43,
                 "percentage": 14.4,
                 "avg_retry_attempts": 1.1,
-                "resolution_suggestions": [
-                    "Try again later",
-                    "Contact bank"
-                ]
+                "resolution_suggestions": ["Try again later", "Contact bank"],
             },
             {
                 "error_message": "TRANSACTION_TIMEOUT",
@@ -12927,8 +11611,8 @@ ACME_JUSPAY_DATA = [
                 "avg_retry_attempts": 1.8,
                 "resolution_suggestions": [
                     "Check internet connection",
-                    "Retry payment"
-                ]
+                    "Retry payment",
+                ],
             },
             {
                 "error_message": "CARD_DECLINED",
@@ -12936,10 +11620,7 @@ ACME_JUSPAY_DATA = [
                 "count": 42,
                 "percentage": 14.1,
                 "avg_retry_attempts": 2.1,
-                "resolution_suggestions": [
-                    "Contact card issuer",
-                    "Try different card"
-                ]
+                "resolution_suggestions": ["Contact card issuer", "Try different card"],
             },
             {
                 "error_message": "DAILY_LIMIT_EXCEEDED",
@@ -12949,8 +11630,8 @@ ACME_JUSPAY_DATA = [
                 "avg_retry_attempts": 2.2,
                 "resolution_suggestions": [
                     "Try tomorrow",
-                    "Use different payment method"
-                ]
+                    "Use different payment method",
+                ],
             },
             {
                 "error_message": "SESSION_EXPIRED",
@@ -12958,11 +11639,8 @@ ACME_JUSPAY_DATA = [
                 "count": 15,
                 "percentage": 5.0,
                 "avg_retry_attempts": 2.2,
-                "resolution_suggestions": [
-                    "Login again",
-                    "Refresh page"
-                ]
-            }
+                "resolution_suggestions": ["Login again", "Refresh page"],
+            },
         ],
         "success_volume_by_payment_method": [
             {
@@ -12971,7 +11649,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 35.8,
                 "peak_hour_volume": 149,
                 "avg_transaction_value": 6172.76,
-                "repeat_customer_rate": 64.1
+                "repeat_customer_rate": 64.1,
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -12979,7 +11657,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 40.4,
                 "peak_hour_volume": 35,
                 "avg_transaction_value": 5168.63,
-                "repeat_customer_rate": 54.6
+                "repeat_customer_rate": 54.6,
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -12987,7 +11665,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 14.3,
                 "peak_hour_volume": 85,
                 "avg_transaction_value": 5743.75,
-                "repeat_customer_rate": 75.0
+                "repeat_customer_rate": 75.0,
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -12995,7 +11673,7 @@ ACME_JUSPAY_DATA = [
                 "percentage": 5.6,
                 "peak_hour_volume": 128,
                 "avg_transaction_value": 2577.2,
-                "repeat_customer_rate": 61.6
+                "repeat_customer_rate": 61.6,
             },
             {
                 "payment_method_type": "WALLET",
@@ -13003,8 +11681,8 @@ ACME_JUSPAY_DATA = [
                 "percentage": 3.8,
                 "peak_hour_volume": 144,
                 "avg_transaction_value": 3571.03,
-                "repeat_customer_rate": 67.6
-            }
+                "repeat_customer_rate": 67.6,
+            },
         ],
         "gmv_by_payment_method": [
             {
@@ -13017,8 +11695,8 @@ ACME_JUSPAY_DATA = [
                     "North": 38.2,
                     "South": 42.1,
                     "West": 35.7,
-                    "East": 28.9
-                }
+                    "East": 28.9,
+                },
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -13030,8 +11708,8 @@ ACME_JUSPAY_DATA = [
                     "North": 52.3,
                     "South": 48.9,
                     "West": 54.1,
-                    "East": 46.7
-                }
+                    "East": 46.7,
+                },
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -13043,8 +11721,8 @@ ACME_JUSPAY_DATA = [
                     "North": 28.5,
                     "South": 31.2,
                     "West": 26.8,
-                    "East": 33.4
-                }
+                    "East": 33.4,
+                },
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -13056,8 +11734,8 @@ ACME_JUSPAY_DATA = [
                     "North": 15.2,
                     "South": 12.8,
                     "West": 18.9,
-                    "East": 21.3
-                }
+                    "East": 21.3,
+                },
             },
             {
                 "payment_method_type": "WALLET",
@@ -13069,9 +11747,9 @@ ACME_JUSPAY_DATA = [
                     "North": 22.1,
                     "South": 25.8,
                     "West": 19.4,
-                    "East": 16.2
-                }
-            }
+                    "East": 16.2,
+                },
+            },
         ],
         "average_ticket_size_by_payment_method": [
             {
@@ -13082,8 +11760,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 45.2,
                     "Fashion": 32.1,
-                    "Home": 22.7
-                }
+                    "Home": 22.7,
+                },
             },
             {
                 "payment_method_type": "CREDIT_CARD",
@@ -13093,8 +11771,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 58.7,
                     "Fashion": 28.9,
-                    "Home": 12.4
-                }
+                    "Home": 12.4,
+                },
             },
             {
                 "payment_method_type": "DEBIT_CARD",
@@ -13104,8 +11782,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 31.5,
                     "Fashion": 42.3,
-                    "Home": 26.2
-                }
+                    "Home": 26.2,
+                },
             },
             {
                 "payment_method_type": "NET_BANKING",
@@ -13115,8 +11793,8 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 67.8,
                     "Fashion": 18.9,
-                    "Home": 13.3
-                }
+                    "Home": 13.3,
+                },
             },
             {
                 "payment_method_type": "WALLET",
@@ -13126,9 +11804,9 @@ ACME_JUSPAY_DATA = [
                 "category_preference": {
                     "Electronics": 28.4,
                     "Fashion": 45.6,
-                    "Home": 26.0
-                }
-            }
-        ]
-    }
+                    "Home": 26.0,
+                },
+            },
+        ],
+    },
 ]

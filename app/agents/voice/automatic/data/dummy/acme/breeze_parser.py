@@ -4,18 +4,28 @@ Handles all Breeze analytics data using the generic aggregator
 """
 
 import copy
-from typing import Optional, Dict, Any
+from typing import Any, Dict, Optional
 
 try:
-    from .aggregator import aggregate_complete_structure, get_data_indices, get_nested_value
+    from .aggregator import (
+        aggregate_complete_structure,
+        get_data_indices,
+        get_nested_value,
+    )
     from .breeze_data import ACME_BREEZE_DATA
 except ImportError:
     # Fallback for direct execution
-    from aggregator import aggregate_complete_structure, get_data_indices, get_nested_value
+    from aggregator import (
+        aggregate_complete_structure,
+        get_data_indices,
+        get_nested_value,
+    )
     from breeze_data import ACME_BREEZE_DATA
 
 
-def get_sales_breakdown(start_time: Optional[str] = None, end_time: Optional[str] = None) -> Optional[Dict[str, Any]]:
+def get_sales_breakdown(
+    start_time: Optional[str] = None, end_time: Optional[str] = None
+) -> Optional[Dict[str, Any]]:
     """
     Get sales breakdown data with aggregation
 
@@ -30,11 +40,13 @@ def get_sales_breakdown(start_time: Optional[str] = None, end_time: Optional[str
         data_array=ACME_BREEZE_DATA,
         structure_path="businessTotalSalesBreakdown",
         start_time=start_time,
-        end_time=end_time
+        end_time=end_time,
     )
 
 
-def get_orders_breakdown(start_time: Optional[str] = None, end_time: Optional[str] = None) -> Optional[Dict[str, Any]]:
+def get_orders_breakdown(
+    start_time: Optional[str] = None, end_time: Optional[str] = None
+) -> Optional[Dict[str, Any]]:
     """
     Get orders breakdown data with aggregation
 
@@ -49,11 +61,13 @@ def get_orders_breakdown(start_time: Optional[str] = None, end_time: Optional[st
         data_array=ACME_BREEZE_DATA,
         structure_path="businessTotalOrdersBreakdown",
         start_time=start_time,
-        end_time=end_time
+        end_time=end_time,
     )
 
 
-def get_conversion_breakdown(start_time: Optional[str] = None, end_time: Optional[str] = None) -> Optional[Dict[str, Any]]:
+def get_conversion_breakdown(
+    start_time: Optional[str] = None, end_time: Optional[str] = None
+) -> Optional[Dict[str, Any]]:
     """
     Get conversion breakdown data with aggregation
 
@@ -68,11 +82,13 @@ def get_conversion_breakdown(start_time: Optional[str] = None, end_time: Optiona
         data_array=ACME_BREEZE_DATA,
         structure_path="businessConversionBreakdown",
         start_time=start_time,
-        end_time=end_time
+        end_time=end_time,
     )
 
 
-def get_payment_success_rate(start_time: Optional[str] = None, end_time: Optional[str] = None) -> Optional[Dict[str, Any]]:
+def get_payment_success_rate(
+    start_time: Optional[str] = None, end_time: Optional[str] = None
+) -> Optional[Dict[str, Any]]:
     """
     Get payment success rate data with aggregation
 
@@ -87,11 +103,13 @@ def get_payment_success_rate(start_time: Optional[str] = None, end_time: Optiona
         data_array=ACME_BREEZE_DATA,
         structure_path="paymentSuccessRate",
         start_time=start_time,
-        end_time=end_time
+        end_time=end_time,
     )
 
 
-def get_average_order_value(start_time: Optional[str] = None, end_time: Optional[str] = None) -> Optional[Dict[str, Any]]:
+def get_average_order_value(
+    start_time: Optional[str] = None, end_time: Optional[str] = None
+) -> Optional[Dict[str, Any]]:
     """
     Get average order value data with aggregation
 
@@ -122,8 +140,12 @@ def get_average_order_value(start_time: Optional[str] = None, end_time: Optional
 
     for idx in indices:
         if idx < len(ACME_BREEZE_DATA):
-            revenue = get_nested_value(ACME_BREEZE_DATA[idx], "businessTotalSalesBreakdown.value.value")
-            orders = get_nested_value(ACME_BREEZE_DATA[idx], "businessTotalOrdersBreakdown.value.value")
+            revenue = get_nested_value(
+                ACME_BREEZE_DATA[idx], "businessTotalSalesBreakdown.value.value"
+            )
+            orders = get_nested_value(
+                ACME_BREEZE_DATA[idx], "businessTotalOrdersBreakdown.value.value"
+            )
             if revenue is not None and orders is not None:
                 total_revenue += revenue
                 total_orders += orders
@@ -133,7 +155,9 @@ def get_average_order_value(start_time: Optional[str] = None, end_time: Optional
     if first_index >= len(ACME_BREEZE_DATA):
         return None
 
-    base_structure = get_nested_value(ACME_BREEZE_DATA[first_index], "averageOrderValue")
+    base_structure = get_nested_value(
+        ACME_BREEZE_DATA[first_index], "averageOrderValue"
+    )
     if not base_structure:
         return None
 

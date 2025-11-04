@@ -1,3 +1,4 @@
+import json
 from typing import Optional
 
 from deepgram import LiveOptions
@@ -5,12 +6,88 @@ from pipecat.services.assemblyai.stt import AssemblyAISTTService
 from pipecat.services.deepgram.stt import DeepgramSTTService
 from pipecat.services.google.stt import GoogleSTTService
 from pipecat.services.openai.stt import OpenAISTTService
-from pipecat.services.soniox.stt import SonioxInputParams, SonioxSTTService
+from pipecat.services.soniox.stt import (
+    SonioxContextGeneralItem,
+    SonioxContextObject,
+    SonioxContextTranslationTerm,
+    SonioxInputParams,
+    SonioxSTTService,
+)
 from pipecat.transcriptions.language import Language
 
 from app.agents.voice.automatic.types import VoiceName
 from app.core import config
 from app.core.logger import logger
+
+
+def parse_soniox_context() -> Optional[SonioxContextObject]:
+    """
+    Parse Soniox context from JSON environment variable into SonioxContextObject.
+
+    Expected JSON structure:
+    {
+        "general": [{"key": "organisation", "value": "Juspay"}, ...],
+        "text": "User Persona: D2C ecommerce merchants...",
+        "terms": ["Juspay", "Breeze Automatic", "PSR", ...],
+        "translation_terms": [{"source": "...", "target": "..."}, ...]
+    }
+
+    Returns:
+        SonioxContextObject if parsing succeeds, None otherwise
+    """
+    if not config.SONIOX_CONTEXT:
+        return None
+
+    try:
+        # Parse JSON from environment variable
+        context_data = json.loads(config.SONIOX_CONTEXT)
+
+        # Extract fields from JSON
+        general_items = context_data.get("general", [])
+        text = context_data.get("text")
+        terms = context_data.get("terms", [])
+        translation_terms_items = context_data.get("translation_terms", [])
+
+        # Convert general items to SonioxContextGeneralItem objects
+        general_objects = None
+        if general_items:
+            general_objects = [
+                SonioxContextGeneralItem(key=item["key"], value=item["value"])
+                for item in general_items
+            ]
+
+        # Convert translation_terms items to SonioxContextTranslationTerm objects
+        translation_terms_objects = None
+        if translation_terms_items:
+            translation_terms_objects = [
+                SonioxContextTranslationTerm(
+                    source=item["source"], target=item["target"]
+                )
+                for item in translation_terms_items
+            ]
+
+        # Create and return SonioxContextObject
+        context_object = SonioxContextObject(
+            general=general_objects if general_objects else None,
+            text=text,
+            terms=terms if terms else None,
+            translation_terms=(
+                translation_terms_objects if translation_terms_objects else None
+            ),
+        )
+
+        logger.info(
+            f"Successfully parsed Soniox context with {len(general_objects or [])} general items, "
+            f"{len(terms) if terms else 0} terms, "
+            f"{len(translation_terms_objects or [])} translation terms"
+        )
+        return context_object
+
+    except Exception as e:
+        logger.warning(
+            f"Failed to parse SONIOX_CONTEXT: {e}. Falling back to None context."
+        )
+        return None
 
 
 def get_stt_service(voice_name: Optional[str] = None):
@@ -119,11 +196,14 @@ def get_stt_service(voice_name: Optional[str] = None):
             ]
             language_hints = [Language(lang) for lang in lang_list if lang]
 
+        # Parse context from JSON environment variable
+        context = parse_soniox_context()
+
         # Configure Soniox with supported parameters only
         soniox_params = SonioxInputParams(
             model=config.SONIOX_MODEL,
             language_hints=language_hints,
-            context=config.SONIOX_CONTEXT if config.SONIOX_CONTEXT else None,
+            context=context,
             enable_non_final_tokens=config.SONIOX_ENABLE_NON_FINAL_TOKENS,
             max_non_final_tokens_duration_ms=(
                 config.SONIOX_MAX_NON_FINAL_TOKENS_DURATION_MS
