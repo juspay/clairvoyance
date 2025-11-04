@@ -511,12 +511,18 @@ async def run_normal_mode(args):
             args.session_id,
             config.ENABLE_CHARTS,
             stt_mute_filter,
+            context_aggregator,
             "LLMSpyProcessor",
         )
         pipeline_components.extend([stt_mute_filter])
     else:
         tool_call_processor = LLMSpyProcessor(
-            rtvi, args.session_id, config.ENABLE_CHARTS, None, "LLMSpyProcessor"
+            rtvi,
+            args.session_id,
+            config.ENABLE_CHARTS,
+            None,
+            context_aggregator,
+            "LLMSpyProcessor",
         )
 
     pipeline_components.extend([rtvi, context_aggregator.user()])

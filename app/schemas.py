@@ -139,3 +139,49 @@ class TokenData(BaseModel):
     username: Optional[str] = None
     email: Optional[str] = None
     scopes: list[str] = Field(default_factory=list)
+
+
+class ConversationStatus(str, Enum):
+    ACTIVE = "active"
+    COMPLETED = "completed"
+
+
+class MessageRole(str, Enum):
+    USER = "user"
+    ASSISTANT = "assistant"
+
+
+class Conversation(BaseModel):
+    """Conversation model"""
+
+    id: str
+    session_id: str
+    client_sid: Optional[str] = None
+    merchant_id: Optional[str] = None
+    user_email: Optional[str] = None
+    user_name: Optional[str] = None
+    shop_id: Optional[str] = None
+    shop_url: Optional[str] = None
+    reseller_id: Optional[str] = None
+    mode: Optional[str] = None
+    status: ConversationStatus = ConversationStatus.ACTIVE
+    summary: Optional[str] = None
+    message_count: int = 0
+    started_at: datetime
+    last_activity_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    metadata: Optional[Dict[str, Any]] = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class ConversationMessage(BaseModel):
+    """Conversation message model"""
+
+    id: str
+    conversation_id: str
+    role: MessageRole
+    content: str
+    sequence_number: int
+    timestamp: datetime
+    created_at: datetime

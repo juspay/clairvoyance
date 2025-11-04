@@ -14,6 +14,9 @@ from fastapi.staticfiles import StaticFiles
 from pipecat.transports.daily.utils import DailyRESTHelper
 
 from app import __version__
+from app.agents.voice.automatic.services.conversation.conversation_storage import (
+    get_conversation_storage_service,
+)
 from app.api.routers import automatic, breeze_buddy
 from app.core.config import (
     DAILY_API_KEY,
@@ -21,6 +24,7 @@ from app.core.config import (
     DAILY_ROOM_MAX_POOL_SIZE,
     DAILY_ROOM_POOL_SIZE,
     ENABLE_AUTOMATIC_DAILY_RECORDING,
+    ENABLE_CONVERSATION_STORAGE,
     HOST,
     MAX_DAILY_SESSION_LIMIT,
     PORT,
@@ -212,6 +216,40 @@ async def bot_connect(
     logger.bind(session_id=session_id, client_sid=client_sid).info(
         "Voice agent session mapping created"
     )
+
+    # 3.5. Create conversation record if storage is enabled
+    if ENABLE_CONVERSATION_STORAGE:
+        try:
+            conversation_service = get_conversation_storage_service()
+            conversation = await conversation_service.create_conversation(
+                session_id=session_id,
+                merchant_id=request.merchantId,
+                client_sid=client_sid,
+                user_email=request.email,
+                user_name=request.userName,
+                shop_id=request.shopId,
+                shop_url=request.shopUrl,
+                reseller_id=request.resellerId,
+                mode=request.mode.upper() if request.mode else None,
+                metadata={
+                    "tts_provider": session_params.get("tts_provider"),
+                    "voice_name": session_params.get("voice_name"),
+                    "shop_type": session_params.get("shop_type"),
+                    "platform_integrations": session_params.get(
+                        "platform_integrations"
+                    ),
+                },
+            )
+            if conversation:
+                logger.bind(session_id=session_id).info(
+                    f"Conversation record created for session {session_id}"
+                )
+            else:
+                logger.error(
+                    f"Failed to create conversation record for session {session_id}"
+                )
+        except Exception as e:
+            logger.error(f"Error creating conversation record: {e}")
 
     # 4. Try to get process from pool
     pool = get_voice_agent_pool()

@@ -15,6 +15,8 @@ load_dotenv(override=True)
 OUTBOUND_NUMBERS_TABLE = "outbound_number"
 CALL_EXECUTION_CONFIG_TABLE = "call_execution_config"
 LEAD_CALL_TRACKER_TABLE = "lead_call_tracker"
+CONVERSATIONS_TABLE = "conversations"
+CONVERSATION_MESSAGES_TABLE = "conversation_messages"
 
 
 def create_lead_call_tracker_table_query() -> str:
@@ -68,6 +70,68 @@ def create_call_execution_config_table_query() -> str:
             UNIQUE("merchant_id", "workflow")
         );
         CREATE INDEX IF NOT EXISTS "idx_call_execution_config_created_at" ON "{CALL_EXECUTION_CONFIG_TABLE}" ("created_at");
+    """
+
+
+def create_conversations_table_query() -> str:
+    """
+    Generate query to create conversations table.
+    """
+    return f"""
+        CREATE TABLE IF NOT EXISTS "{CONVERSATIONS_TABLE}" (
+            "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            "session_id" VARCHAR(255) UNIQUE NOT NULL,
+            "client_sid" VARCHAR(255),
+            "merchant_id" VARCHAR(255),
+            "user_email" VARCHAR(255),
+            "user_name" VARCHAR(255),
+            "shop_id" VARCHAR(255),
+            "shop_url" VARCHAR(255),
+            "reseller_id" VARCHAR(255),
+            "mode" VARCHAR(50),
+            "status" VARCHAR(50) DEFAULT 'active' NOT NULL,
+            "summary" TEXT,
+            "message_count" INTEGER DEFAULT 0,
+            "started_at" TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
+            "last_activity_at" TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+            "completed_at" TIMESTAMP WITH TIME ZONE,
+            "metadata" JSONB,
+            "created_at" TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
+            "updated_at" TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS "idx_conversations_session_id" ON "{CONVERSATIONS_TABLE}" ("session_id");
+        CREATE INDEX IF NOT EXISTS "idx_conversations_merchant_id" ON "{CONVERSATIONS_TABLE}" ("merchant_id");
+        CREATE INDEX IF NOT EXISTS "idx_conversations_user_email" ON "{CONVERSATIONS_TABLE}" ("user_email");
+        CREATE INDEX IF NOT EXISTS "idx_conversations_shop_id" ON "{CONVERSATIONS_TABLE}" ("shop_id");
+        CREATE INDEX IF NOT EXISTS "idx_conversations_status" ON "{CONVERSATIONS_TABLE}" ("status");
+        CREATE INDEX IF NOT EXISTS "idx_conversations_started_at" ON "{CONVERSATIONS_TABLE}" ("started_at" DESC);
+        CREATE INDEX IF NOT EXISTS "idx_conversations_user_lookup" ON "{CONVERSATIONS_TABLE}" ("merchant_id", "user_email", "started_at" DESC);
+        CREATE INDEX IF NOT EXISTS "idx_conversations_shop_lookup" ON "{CONVERSATIONS_TABLE}" ("merchant_id", "shop_id", "started_at" DESC);
+    """
+
+
+def create_conversation_messages_table_query() -> str:
+    """
+    Generate query to create conversation_messages table.
+    """
+    return f"""
+        CREATE TABLE IF NOT EXISTS "{CONVERSATION_MESSAGES_TABLE}" (
+            "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            "conversation_id" UUID NOT NULL,
+            "role" VARCHAR(20) NOT NULL,
+            "content" TEXT NOT NULL,
+            "sequence_number" INTEGER NOT NULL,
+            "timestamp" TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
+            "created_at" TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
+            CONSTRAINT "fk_conversation_id" FOREIGN KEY ("conversation_id")
+                REFERENCES "{CONVERSATIONS_TABLE}" ("id") ON DELETE CASCADE,
+            CONSTRAINT "unique_conversation_sequence" UNIQUE ("conversation_id", "sequence_number")
+        );
+
+        CREATE INDEX IF NOT EXISTS "idx_conversation_messages_conversation_id" ON "{CONVERSATION_MESSAGES_TABLE}" ("conversation_id");
+        CREATE INDEX IF NOT EXISTS "idx_conversation_messages_sequence" ON "{CONVERSATION_MESSAGES_TABLE}" ("conversation_id", "sequence_number");
+        CREATE INDEX IF NOT EXISTS "idx_conversation_messages_timestamp" ON "{CONVERSATION_MESSAGES_TABLE}" ("timestamp" DESC);
     """
 
 
@@ -137,6 +201,36 @@ async def create_lead_call_tracker_table():
         return False
 
 
+async def create_conversations_table():
+    """
+    Create the conversations table with all constraints and indexes.
+    """
+    try:
+        async for conn in get_db_connection():
+            print("Creating conversations table...")
+            await conn.execute(create_conversations_table_query())
+            print("Conversations table created successfully")
+            return True
+    except Exception as e:
+        print(f"Error creating conversations table: {e}")
+        return False
+
+
+async def create_conversation_messages_table():
+    """
+    Create the conversation_messages table with all constraints and indexes.
+    """
+    try:
+        async for conn in get_db_connection():
+            print("Creating conversation_messages table...")
+            await conn.execute(create_conversation_messages_table_query())
+            print("Conversation messages table created successfully")
+            return True
+    except Exception as e:
+        print(f"Error creating conversation_messages table: {e}")
+        return False
+
+
 async def create_all_tables():
     """
     Create all database tables.
@@ -147,11 +241,15 @@ async def create_all_tables():
         outbound_numbers_success = await create_outbound_numbers_table()
         call_execution_config_success = await create_call_execution_config_table()
         lead_call_tracker_success = await create_lead_call_tracker_table()
+        conversations_success = await create_conversations_table()
+        conversation_messages_success = await create_conversation_messages_table()
 
         if (
             outbound_numbers_success
             and call_execution_config_success
             and lead_call_tracker_success
+            and conversations_success
+            and conversation_messages_success
         ):
             print("All database tables created successfully")
             return True

@@ -28,6 +28,10 @@ import asyncio
 import subprocess  # for TimeoutExpired
 from typing import Any, Dict
 
+from app.agents.voice.automatic.services.conversation.conversation_storage import (
+    get_conversation_storage_service,
+)
+from app.core import config
 from app.core.logger import logger
 
 # The global registry for all running voice agent subprocesses.
@@ -69,6 +73,7 @@ async def session_cleanup_callback(session_id: str):
     1. Iterates through the `bot_procs` dictionary.
     2. Finds the entry where the session ID matches.
     3. Calls `cleanup_session_tracking` with the corresponding PID.
+    4. Marks the conversation as completed in the database.
     """
     pid_to_remove = None
     for pid, proc_info in list(bot_procs.items()):
@@ -77,6 +82,15 @@ async def session_cleanup_callback(session_id: str):
             break
     if pid_to_remove:
         await cleanup_session_tracking(pid_to_remove)
+
+    # Mark conversation as completed in database
+    try:
+        if config.ENABLE_CONVERSATION_STORAGE:
+            conversation_service = get_conversation_storage_service()
+            await conversation_service.complete_conversation(session_id)
+            logger.info(f"Conversation marked as completed for session: {session_id}")
+    except Exception as e:
+        logger.error(f"Failed to complete conversation for session {session_id}: {e}")
 
 
 async def monitor_session_cleanup():

@@ -33,6 +33,9 @@ from app.agents.voice.automatic.features.charts.chart_tools import (
 from app.agents.voice.automatic.features.charts.rtvi.rtvi import emit_chart_components
 from app.agents.voice.automatic.features.hitl.utils import is_dangerous_operation
 from app.agents.voice.automatic.rtvi.rtvi import emit_rtvi_event
+from app.agents.voice.automatic.services.conversation.conversation_storage import (
+    get_conversation_storage_service,
+)
 from app.agents.voice.automatic.utils.conversation_manager import (
     get_conversation_manager,
 )
@@ -140,6 +143,7 @@ class LLMSpyProcessor(FrameProcessor):
         session_id: str,
         enable_charts: bool,
         stt_mute_filter: Optional[FrameProcessor] = None,
+        context_aggregator=None,  # OpenAI LLM context aggregator pair
         name: str = "LLMSpyProcessor",
     ):
         super().__init__(name=name)
@@ -147,6 +151,7 @@ class LLMSpyProcessor(FrameProcessor):
         self._session_id = session_id
         self._enable_charts = enable_charts
         self._stt_mute_filter = stt_mute_filter
+        self._context_aggregator = context_aggregator
 
         # Register this RTVI processor globally for function confirmations
         set_rtvi_processor(rtvi)
@@ -165,11 +170,23 @@ class LLMSpyProcessor(FrameProcessor):
             # Conversation management (delegates to service)
             self._conversation_manager = get_conversation_manager()
 
+        # Conversation storage setup (completely independent from charts)
+        if config.ENABLE_CONVERSATION_STORAGE:
+            self._conversation_accumulated_text = ""
+            self._conversation_is_collecting = False
+            self._last_saved_user_message = None
+
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         """Process frames and delegate conversation logic to ConversationManager."""
         await super().process_frame(frame, direction)
 
         if isinstance(frame, TextFrame):
+            # Collect text for conversation storage if we're in collecting mode
+            if config.ENABLE_CONVERSATION_STORAGE and getattr(
+                self, "_conversation_is_collecting", False
+            ):
+                self._conversation_accumulated_text += frame.text
+
             if config.SANITIZE_TEXT_FOR_TTS:
                 await self.push_frame(
                     TextFrame(text=sanitize_markdown(frame.text)), direction
@@ -182,16 +199,25 @@ class LLMSpyProcessor(FrameProcessor):
             await self.push_frame(frame, direction)
 
         # LLM Response Start - begin collecting text and start conversation turn
-        elif isinstance(frame, LLMFullResponseStartFrame) and self._enable_charts:
-            self._is_collecting_response = True
-            self._accumulated_text = ""
+        elif isinstance(frame, LLMFullResponseStartFrame) and (
+            self._enable_charts or config.ENABLE_CONVERSATION_STORAGE
+        ):
+            # Charts logic
+            if self._enable_charts:
+                self._is_collecting_response = True
+                self._accumulated_text = ""
 
-            # Start conversation turn via ConversationManager
-            event = await self._conversation_manager.start_turn_with_events(
-                self._session_id
-            )
-            if event:
-                await emit_rtvi_event(self._rtvi, event, self._session_id)
+                # Start conversation turn via ConversationManager
+                event = await self._conversation_manager.start_turn_with_events(
+                    self._session_id
+                )
+                if event:
+                    await emit_rtvi_event(self._rtvi, event, self._session_id)
+
+            # Conversation storage logic (independent)
+            if config.ENABLE_CONVERSATION_STORAGE:
+                self._conversation_is_collecting = True
+                self._conversation_accumulated_text = ""
 
             await self.push_frame(frame, direction)
 
@@ -212,16 +238,32 @@ class LLMSpyProcessor(FrameProcessor):
             await self.push_frame(frame, direction)
 
         # LLM Response Complete - send to ConversationManager
-        elif isinstance(frame, LLMFullResponseEndFrame) and self._enable_charts:
-            if self._accumulated_text.strip():
-                event = await self._conversation_manager.add_llm_response_with_events(
-                    self._session_id, self._accumulated_text.strip()
-                )
-                if event:
-                    await emit_rtvi_event(self._rtvi, event, self._session_id)
+        elif isinstance(frame, LLMFullResponseEndFrame) and (
+            self._enable_charts or config.ENABLE_CONVERSATION_STORAGE
+        ):
+            # Charts logic
+            if self._enable_charts:
+                if self._accumulated_text.strip():
+                    event = (
+                        await self._conversation_manager.add_llm_response_with_events(
+                            self._session_id, self._accumulated_text.strip()
+                        )
+                    )
+                    if event:
+                        await emit_rtvi_event(self._rtvi, event, self._session_id)
 
-            self._accumulated_text = ""
-            self._is_collecting_response = False
+                self._accumulated_text = ""
+                self._is_collecting_response = False
+
+            # Conversation storage logic (independent)
+            if config.ENABLE_CONVERSATION_STORAGE:
+                if self._conversation_accumulated_text.strip():
+                    await self._save_conversation_pair(
+                        self._conversation_accumulated_text.strip()
+                    )
+                self._conversation_accumulated_text = ""
+                self._conversation_is_collecting = False
+
             await self.push_frame(frame, direction)
 
         # Function Call Start - emit RTVI event and track in conversation
@@ -332,3 +374,49 @@ class LLMSpyProcessor(FrameProcessor):
                 )
         else:
             await self.push_frame(frame, direction)
+
+    async def _save_conversation_pair(self, assistant_message: str):
+        """Save user and assistant messages as a pair to database."""
+        try:
+            # Save both messages to database
+            conversation_service = get_conversation_storage_service()
+
+            # Extract user message from context if context_aggregator is available
+            user_message = None
+            if hasattr(self, "_context_aggregator") and self._context_aggregator:
+                try:
+                    context = self._context_aggregator._user._context
+                    context_messages = context.get_messages()
+
+                    for msg in reversed(context_messages):
+                        if msg.get("role") == "user":
+                            content = msg.get("content", "")
+                            if isinstance(content, str) and content.strip():
+                                user_message = content.strip()
+                                break
+                except Exception as e:
+                    logger.debug(f"Could not extract user message from context: {e}")
+
+            # If we have a user message, check if it's a duplicate
+            if user_message:
+                if user_message != self._last_saved_user_message:
+                    # Save user message first (only if not duplicate)
+                    await conversation_service.save_message(
+                        session_id=self._session_id,
+                        role="user",
+                        content=user_message,
+                    )
+
+                    # Track the saved user message to prevent duplicates
+                    self._last_saved_user_message = user_message
+
+            # Always save assistant message (even if user message was duplicate)
+            # This allows multiple assistant responses per user question
+            await conversation_service.save_message(
+                session_id=self._session_id,
+                role="assistant",
+                content=assistant_message,
+            )
+
+        except Exception as e:
+            logger.error(f"[{self._session_id}] Failed to save conversation pair: {e}")
