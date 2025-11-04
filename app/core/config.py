@@ -471,3 +471,12 @@ BUDDY_OTEL_EXPORTER_OTLP_TRACES_ENDPOINT = os.getenv(
 BUDDY_OTEL_EXPORTER_OTLP_TRACES_HEADERS = os.getenv(
     "BUDDY_OTEL_EXPORTER_OTLP_TRACES_HEADERS", ""
 )
+
+# Graceful Shutdown Configuration
+# NOTE: BOT_MAX_DRAIN_SECONDS should be less than Kubernetes terminationGracePeriodSeconds
+# to allow time for cleanup. Recommended: terminationGracePeriodSeconds - 20 seconds
+# For a 45s termination grace period, use 25s drain + ~5s cleanup = 30s total
+ENABLE_SIGTERM_HANDLER = (
+    os.environ.get("ENABLE_SIGTERM_HANDLER", "false").lower() == "true"
+)
+BOT_MAX_DRAIN_SECONDS = int(os.environ.get("BOT_MAX_DRAIN_SECONDS", "25"))
