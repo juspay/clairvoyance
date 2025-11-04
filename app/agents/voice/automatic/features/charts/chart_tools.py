@@ -335,7 +335,9 @@ async def generate_donut_chart(params) -> None:
             colors = DONUT_COLORS[: len(categories)]
 
         # Calculate and format total based on data type (matching MCP logic)
-        total_value = sum(data)
+        float_data = [float(n) for n in data]
+
+        total_value = sum(float_data)
         formatted_total = None
 
         if data_type == "currency":
