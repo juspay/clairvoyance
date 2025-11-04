@@ -3,7 +3,7 @@ ACME Juspay Data Parser
 Handles all Juspay analytics data using the generic aggregator
 """
 
-from typing import Optional, Dict, Any, List
+from typing import Any, Dict, List, Optional
 
 try:
     from .aggregator import aggregate_data, get_data_indices
@@ -14,7 +14,9 @@ except ImportError:
     from juspay_data import ACME_JUSPAY_DATA
 
 
-def get_success_rate(start_time: Optional[str] = None, end_time: Optional[str] = None) -> Optional[Dict[str, Any]]:
+def get_success_rate(
+    start_time: Optional[str] = None, end_time: Optional[str] = None
+) -> Optional[Dict[str, Any]]:
     """
     Get Juspay success rate data with aggregation
 
@@ -66,7 +68,9 @@ def get_success_rate(start_time: Optional[str] = None, end_time: Optional[str] =
     }
 
 
-def get_payment_method_sr(start_time: Optional[str] = None, end_time: Optional[str] = None) -> Optional[List[Dict[str, Any]]]:
+def get_payment_method_sr(
+    start_time: Optional[str] = None, end_time: Optional[str] = None
+) -> Optional[List[Dict[str, Any]]]:
     """
     Get payment method success rates with aggregation
 
@@ -113,20 +117,28 @@ def get_payment_method_sr(start_time: Optional[str] = None, end_time: Optional[s
     # Build result
     result = []
     for pm_type, data in method_totals.items():
-        result.append({
-            "payment_method_type": pm_type,
-            "success_rate": round(sum(data["success_rates"]) / len(data["success_rates"]), 1) if data["success_rates"] else 0,
-            "total_attempts": data["total_attempts"],
-            "successful": data["successful"],
-            "failed": data["failed"],
-            "avg_processing_time": 0,  # Would need additional aggregation
-            "failure_reasons": []
-        })
+        result.append(
+            {
+                "payment_method_type": pm_type,
+                "success_rate": (
+                    round(sum(data["success_rates"]) / len(data["success_rates"]), 1)
+                    if data["success_rates"]
+                    else 0
+                ),
+                "total_attempts": data["total_attempts"],
+                "successful": data["successful"],
+                "failed": data["failed"],
+                "avg_processing_time": 0,  # Would need additional aggregation
+                "failure_reasons": [],
+            }
+        )
 
     return result
 
 
-def get_success_transactional_data(start_time: Optional[str] = None, end_time: Optional[str] = None) -> Optional[List[Dict[str, Any]]]:
+def get_success_transactional_data(
+    start_time: Optional[str] = None, end_time: Optional[str] = None
+) -> Optional[List[Dict[str, Any]]]:
     """
     Get success transactional data with aggregation
 
@@ -163,26 +175,40 @@ def get_success_transactional_data(start_time: Optional[str] = None, end_time: O
                         "peak_hour_volume": 0,
                     }
 
-                method_totals[pm_type]["transaction_count"] += method.get("transaction_count", 0)
-                method_totals[pm_type]["peak_hour_volume"] += method.get("peak_hour_volume", 0)
+                method_totals[pm_type]["transaction_count"] += method.get(
+                    "transaction_count", 0
+                )
+                method_totals[pm_type]["peak_hour_volume"] += method.get(
+                    "peak_hour_volume", 0
+                )
 
     # Calculate percentages
-    total_transactions = sum(data["transaction_count"] for data in method_totals.values())
+    total_transactions = sum(
+        data["transaction_count"] for data in method_totals.values()
+    )
 
     result = []
     for pm_type, data in method_totals.items():
-        percentage = (data["transaction_count"] / total_transactions * 100) if total_transactions > 0 else 0
-        result.append({
-            "payment_method_type": pm_type,
-            "transaction_count": data["transaction_count"],
-            "percentage": round(percentage, 1),
-            "peak_hour_volume": data["peak_hour_volume"],
-        })
+        percentage = (
+            (data["transaction_count"] / total_transactions * 100)
+            if total_transactions > 0
+            else 0
+        )
+        result.append(
+            {
+                "payment_method_type": pm_type,
+                "transaction_count": data["transaction_count"],
+                "percentage": round(percentage, 1),
+                "peak_hour_volume": data["peak_hour_volume"],
+            }
+        )
 
     return result
 
 
-def get_failure_transactional_data(start_time: Optional[str] = None, end_time: Optional[str] = None) -> Optional[List[Dict[str, Any]]]:
+def get_failure_transactional_data(
+    start_time: Optional[str] = None, end_time: Optional[str] = None
+) -> Optional[List[Dict[str, Any]]]:
     """
     Get failure transactional data with aggregation
 
@@ -213,7 +239,9 @@ def get_failure_transactional_data(start_time: Optional[str] = None, end_time: O
     return None
 
 
-def get_gmv_by_payment_method(start_time: Optional[str] = None, end_time: Optional[str] = None) -> Optional[List[Dict[str, Any]]]:
+def get_gmv_by_payment_method(
+    start_time: Optional[str] = None, end_time: Optional[str] = None
+) -> Optional[List[Dict[str, Any]]]:
     """
     Get GMV by payment method with aggregation
 
@@ -257,16 +285,20 @@ def get_gmv_by_payment_method(start_time: Optional[str] = None, end_time: Option
     result = []
     for pm_type, data in method_totals.items():
         percentage = (data["gmv"] / total_gmv * 100) if total_gmv > 0 else 0
-        result.append({
-            "payment_method_type": pm_type,
-            "gmv": data["gmv"],
-            "percentage": round(percentage, 1),
-        })
+        result.append(
+            {
+                "payment_method_type": pm_type,
+                "gmv": data["gmv"],
+                "percentage": round(percentage, 1),
+            }
+        )
 
     return result
 
 
-def get_average_ticket_size(start_time: Optional[str] = None, end_time: Optional[str] = None) -> Optional[List[Dict[str, Any]]]:
+def get_average_ticket_size(
+    start_time: Optional[str] = None, end_time: Optional[str] = None
+) -> Optional[List[Dict[str, Any]]]:
     """
     Get average ticket size with aggregation
 

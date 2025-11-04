@@ -12,9 +12,10 @@ from app.core.logger import logger
 from . import breeze, charts, internet, juspay
 from .dummy import tool_functions as dummy_tool_functions
 from .dummy import tools as dummy_tools
-from .dummy.acme_analytics import acme_tools, acme_tool_functions
+from .dummy.acme_analytics import acme_tool_functions, acme_tools
 from .system import tool_functions as system_tool_functions
 from .system import tools as system_tools
+
 
 def initialize_tools(
     mode: str,
@@ -77,7 +78,9 @@ def initialize_tools(
         if shop_id == "acme-store-demo":
             all_tools.extend(acme_tools.standard_tools)
             all_tool_functions.update(acme_tool_functions)
-            logger.info(f"Loaded {len(acme_tools.standard_tools)} ACME analytics tools with time range support.")
+            logger.info(
+                f"Loaded {len(acme_tools.standard_tools)} ACME analytics tools with time range support."
+            )
         else:
             all_tools.extend(dummy_tools.standard_tools)
             all_tool_functions.update(dummy_tool_functions)
