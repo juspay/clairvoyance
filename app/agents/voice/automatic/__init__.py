@@ -402,6 +402,7 @@ async def run_normal_mode(args):
         else:
             tools, tool_functions = initialize_tools(
                 mode=mode.value,
+                shop_id=args.shop_id,
                 merchant_id=args.merchant_id,
                 session_id=args.client_sid,  # Pass client_sid instead of session_id
                 reseller_id=args.reseller_id,
