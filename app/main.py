@@ -1,5 +1,7 @@
 import asyncio
 import json
+import os
+import signal
 import subprocess
 import uuid
 from contextlib import asynccontextmanager
@@ -16,11 +18,13 @@ from pipecat.transports.daily.utils import DailyRESTHelper
 from app import __version__
 from app.api.routers import automatic, breeze_buddy
 from app.core.config import (
+    BOT_MAX_DRAIN_SECONDS,
     DAILY_API_KEY,
     DAILY_API_URL,
     DAILY_ROOM_MAX_POOL_SIZE,
     DAILY_ROOM_POOL_SIZE,
     ENABLE_AUTOMATIC_DAILY_RECORDING,
+    ENABLE_SIGTERM_HANDLER,
     HOST,
     MAX_DAILY_SESSION_LIMIT,
     PORT,
@@ -57,6 +61,9 @@ from app.schemas import (
 
 # Store Daily API helpers and room pool
 daily_helpers = {}
+
+# Flag to indicate if pod is draining (no new connections accepted)
+_is_draining = False
 
 
 async def room_cleanup_callback(session_id: str):
@@ -119,6 +126,17 @@ async def lifespan(_app: FastAPI):
     yield
 
     logger.info("Application shutdown event triggered...")
+
+    # Graceful drain period - wait for active sessions to complete if enabled
+    if ENABLE_SIGTERM_HANDLER and _is_draining:
+        logger.info(
+            f"Drain mode active. Waiting {BOT_MAX_DRAIN_SECONDS}s for active sessions to complete..."
+        )
+        await asyncio.sleep(BOT_MAX_DRAIN_SECONDS)
+        logger.info(
+            f"Drain period ({BOT_MAX_DRAIN_SECONDS}s) complete. Proceeding with cleanup."
+        )
+
     # Cleanup room pool
     await cleanup_room_pool()
     # Cleanup voice agent pool
@@ -371,6 +389,16 @@ async def database_health_check():
 async def get_version():
     """Get application version."""
     return JSONResponse({"version": __version__})
+
+
+# Drain endpoint for Kubernetes preStop hook
+@app.get("/drain")
+async def drain():
+    """Called by Kubernetes preStop hook before sending SIGTERM"""
+    global _is_draining
+    logger.info("Drain endpoint called by Kubernetes - marking pod as draining")
+    _is_draining = True
+    return JSONResponse({"status": "draining"})
 
 
 # The main block is now only for direct execution, which is not the recommended way.
