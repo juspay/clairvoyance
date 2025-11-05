@@ -530,87 +530,90 @@ class OrderConfirmationBot:
         finally:
             await self.task.cancel()
 
-    def _get_flow_config(self):
-        flow_functions = [
-            FlowsFunctionSchema(
-                name="confirm_order",
-                description="Call this function if the customer confirms the order and asks no other questions.",
-                handler=self._confirm_order_handler,
-                properties={},
-                required=[],
-            ),
-            FlowsFunctionSchema(
-                name="confirm_order_with_question",
-                description="Call this function if the customer confirms the order but also asks an unrelated question.",
-                handler=self._confirm_order_with_question_handler,
-                properties={},
-                required=[],
-            ),
-            FlowsFunctionSchema(
-                name="cancel_order",
-                description="Call this function to cancel the user's order.",
-                handler=self._deny_order_handler,
-                properties={},
-                required=[],
-            ),
-            FlowsFunctionSchema(
-                name="user_busy",
-                description="Call this function if the user says they are busy or it's not a good time to talk.",
-                handler=self._user_busy_handler,
-                properties={},
-                required=[],
-            ),
-            FlowsFunctionSchema(
-                name="handle_unrelated_question",
-                description="Call this function if the user asks a question about anything other than confirming or cancelling the order, without confirming the order.",
-                handler=self._handle_unrelated_question_handler,
-                properties={},
-                required=[],
-            ),
-            FlowsFunctionSchema(
-                name="address_correct",
-                description="User confirms the address is correct.",
-                handler=self._handle_address_correct,
-                properties={},
-                required=[],
-            ),
-            FlowsFunctionSchema(
-                name="address_incorrect",
-                description="User wants to update the address. Only landmark, pincode, or city can be updated.",
-                handler=self._handle_address_incorrect,
-                properties={},
-                required=[],
-            ),
-            FlowsFunctionSchema(
-                name="update_landmark",
-                description="User wants to update the landmark of the address.",
-                handler=self._handle_landmark,
-                properties={"landmark": {"type": "string"}},
-                required=["landmark"],
-            ),
-            FlowsFunctionSchema(
-                name="update_pincode",
-                description="User provides the pincode.",
-                handler=self._handle_pincode,
-                properties={"pincode": {"type": "string"}},
-                required=["pincode"],
-            ),
-            FlowsFunctionSchema(
-                name="update_city",
-                description="User provides the city.",
-                handler=self._handle_city,
-                properties={"city": {"type": "string"}},
-                required=["city"],
-            ),
-            FlowsFunctionSchema(
-                name="update_locality",
-                description="User provides the locality.",
-                handler=self._handle_locality,
-                properties={"locality": {"type": "string"}},
-                required=["locality"],
-            ),
-        ]
+    def _get_flow_functions(self):
+        if not hasattr(self, "flow_functions"):
+            self.flow_functions = [
+                FlowsFunctionSchema(
+                    name="confirm_order",
+                    description="Call this function if the customer confirms the order and asks no other questions.",
+                    handler=self._confirm_order_handler,
+                    properties={},
+                    required=[],
+                ),
+                FlowsFunctionSchema(
+                    name="confirm_order_with_question",
+                    description="Call this function if the customer confirms the order but also asks an unrelated question.",
+                    handler=self._confirm_order_with_question_handler,
+                    properties={},
+                    required=[],
+                ),
+                FlowsFunctionSchema(
+                    name="cancel_order",
+                    description="Call this function to cancel the user's order.",
+                    handler=self._deny_order_handler,
+                    properties={},
+                    required=[],
+                ),
+                FlowsFunctionSchema(
+                    name="user_busy",
+                    description="Call this function if the user says they are busy or it's not a good time to talk.",
+                    handler=self._user_busy_handler,
+                    properties={},
+                    required=[],
+                ),
+                FlowsFunctionSchema(
+                    name="handle_unrelated_question",
+                    description="Call this function if the user asks a question about anything other than confirming or cancelling the order, without confirming the order.",
+                    handler=self._handle_unrelated_question_handler,
+                    properties={},
+                    required=[],
+                ),
+                FlowsFunctionSchema(
+                    name="address_correct",
+                    description="User confirms the address is correct.",
+                    handler=self._handle_address_correct,
+                    properties={},
+                    required=[],
+                ),
+                FlowsFunctionSchema(
+                    name="address_incorrect",
+                    description="User wants to update the address. Only landmark, pincode, or city can be updated.",
+                    handler=self._handle_address_incorrect,
+                    properties={},
+                    required=[],
+                ),
+                FlowsFunctionSchema(
+                    name="update_landmark",
+                    description="User wants to update the landmark of the address.",
+                    handler=self._handle_landmark,
+                    properties={"landmark": {"type": "string"}},
+                    required=["landmark"],
+                ),
+                FlowsFunctionSchema(
+                    name="update_pincode",
+                    description="User provides the pincode.",
+                    handler=self._handle_pincode,
+                    properties={"pincode": {"type": "string"}},
+                    required=["pincode"],
+                ),
+                FlowsFunctionSchema(
+                    name="update_city",
+                    description="User provides the city.",
+                    handler=self._handle_city,
+                    properties={"city": {"type": "string"}},
+                    required=["city"],
+                ),
+                FlowsFunctionSchema(
+                    name="update_locality",
+                    description="User provides the locality.",
+                    handler=self._handle_locality,
+                    properties={"locality": {"type": "string"}},
+                    required=["locality"],
+                ),
+            ]
+        return self.flow_functions
 
+    def _get_flow_config(self, flow_functions):
         return {
             "initial_node": "initial",
             "nodes": {
@@ -702,13 +705,27 @@ class OrderConfirmationBot:
             },
         }
 
+    def _create_confirm_address_update_node(self) -> NodeConfig:
+        """Dynamically creates the node for confirming an address update."""
+        flow_functions = self._get_flow_functions()
+        return NodeConfig(
+            name="confirm_address_update",
+            task_messages=[
+                {
+                    "role": "system",
+                    "content": f"Got it. Your updated address is now: {self.updated_address}. Is there anything else you would like to update, or should I go ahead and confirm the order with this address?",
+                }
+            ],
+            functions=flow_functions,
+        )
+
     def _create_node_from_config(self, node_name: str) -> NodeConfig:
         if node_name == "confirm_address_update":
-            self.flow_config = self._get_flow_config()
-        else:
-            # Use cached config for performance on other nodes
-            if not hasattr(self, "flow_config"):
-                self.flow_config = self._get_flow_config()
+            return self._create_confirm_address_update_node()
+
+        if not hasattr(self, "flow_config"):
+            flow_functions = self._get_flow_functions()
+            self.flow_config = self._get_flow_config(flow_functions)
 
         node_data = self.flow_config["nodes"][node_name]
 
@@ -760,7 +777,7 @@ class OrderConfirmationBot:
     @auto_trace("address_correct")
     async def _handle_address_correct(self):
         logger.info("Address confirmed. Proceeding to final order confirmation.")
-        return {}, self._create_node_from_config("final_order_confirmation")
+        return {}, self._create_node_from_config("order_confirmation_and_end")
 
     @auto_trace("address_incorrect")
     async def _handle_address_incorrect(self):
