@@ -595,6 +595,7 @@ async def create_euler_offer(params: FunctionCallParams):
         }
 
         # Convert IST dates to ISO format for API payload
+        logger.info(f"[DEBUG] Starting date conversion for start_date: {start_date}, end_date: {end_date}")
         try:
             ist = pytz.timezone("Asia/Kolkata")
 
@@ -603,12 +604,14 @@ async def create_euler_offer(params: FunctionCallParams):
                 datetime.strptime(start_date, "%Y-%m-%d %H:%M:%S")
             )
             start_date_iso = start_date_ist.isoformat()
+            logger.info(f"[DEBUG] start_date converted to ISO: {start_date_iso}")
 
             # Parse end_date from IST format and convert to ISO
             end_date_ist = ist.localize(
                 datetime.strptime(end_date, "%Y-%m-%d %H:%M:%S")
             )
             end_date_iso = end_date_ist.isoformat()
+            logger.info(f"[DEBUG] end_date converted to ISO: {end_date_iso}")
 
         except Exception as e:
             logger.error(
@@ -622,6 +625,7 @@ async def create_euler_offer(params: FunctionCallParams):
             return
 
         # Build payment instruments payload
+        logger.info(f"[DEBUG] Building payment instruments payload for: {payment_instruments}")
         if payment_instruments:
             payment_instruments_payload = [
                 instrument_map[instrument]
@@ -632,91 +636,112 @@ async def create_euler_offer(params: FunctionCallParams):
             payment_instruments_payload = list(instrument_map.values())
 
         # Construct the API payload
-        api_payload = {
-            "application_mode": "ORDER",
-            "merchant_id": merchant_id,
-            "offer_code": offer_code,
-            "batch_id": "",
-            "offer_description": {
-                "title": offer_title,
-                "description": offer_description,
-                "tnc": "",
-                "sponsored_by": sponsored_by,
-                "display_title": offer_title,
-            },
-            "ui_configs": {
-                "is_hidden": "false",
-                "should_validate": "true",
-                "auto_apply": "false" if is_coupon_based else "true",
-                "offer_display_priority": 0,
-                "payment_method_label": "",
-            },
-            "rule_dsl": {
-                "order": {
-                    "max_quantity": None,
-                    "min_quantity": None,
-                    "max_order_amount": None,
-                    "min_order_amount": str(min_order_amount),
-                    "currency": "INR",
-                    "amount_info": [],
+        try:
+            api_payload = {
+                "application_mode": "ORDER",
+                "merchant_id": merchant_id,
+                "offer_code": offer_code,
+                "batch_id": "",
+                "offer_description": {
+                    "title": offer_title,
+                    "description": offer_description,
+                    "tnc": "",
+                    "sponsored_by": sponsored_by,
+                    "display_title": offer_title,
                 },
-                "additional_payment_filters": None,
-                "payment_instrument": payment_instruments_payload,
-                "counters": [],
-                "payment_channel": [],
-                "benefits": [
-                    {
-                        "type": offer_type,
-                        "calculation_rule": calculation_type,
-                        "value": discount_value,
+                "ui_configs": {
+                    "is_hidden": "false",
+                    "should_validate": "true",
+                    "auto_apply": "false" if is_coupon_based else "true",
+                    "offer_display_priority": 0,
+                    "payment_method_label": "",
+                },
+                "rule_dsl": {
+                    "order": {
+                        "max_quantity": None,
+                        "min_quantity": None,
+                        "max_order_amount": None,
+                        "min_order_amount": str(min_order_amount),
+                        "currency": "INR",
                         "amount_info": [],
-                        "max_amount": max_discount_amount,
-                        "global_max_amount": None,
-                    }
-                ],
-                "filters": {"blacklist": [], "whitelist": []},
-            },
-            "status": "ACTIVE",
-            "start_time": start_date_iso,
-            "end_time": end_date_iso,
-            "metadata": {
-                "analytics_offer_code": offer_code,
-                "customerResetPeriodType": "offerPeriod",
-                "cardResetPeriodType": "offerPeriod",
-                "productCustomerResetPeriodType": "offerPeriod",
-                "productCardResetPeriodType": "offerPeriod",
-                "upiResetPeriodType": "offerPeriod",
-                "productUpiResetPeriodType": "offerPeriod",
-                "start_date": start_date_iso,
-                "end_date": end_date_iso,
-            },
-            "udf1": None,
-            "udf2": None,
-            "udf3": None,
-            "udf4": None,
-            "udf5": None,
-            "udf6": None,
-            "udf7": None,
-            "udf8": None,
-            "udf9": None,
-            "udf10": None,
-            "minOfferBreakupCheckbox": False,
-            "offerBreakupBool": False,
-            "benefitsAmountInfo": [],
-            "has_multi_codes": False,
-        }
+                    },
+                    "additional_payment_filters": None,
+                    "payment_instrument": payment_instruments_payload,
+                    "counters": [],
+                    "payment_channel": [],
+                    "benefits": [
+                        {
+                            "type": offer_type,
+                            "calculation_rule": calculation_type,
+                            "value": discount_value,
+                            "amount_info": [],
+                            "max_amount": max_discount_amount,
+                            "global_max_amount": None,
+                        }
+                    ],
+                    "filters": {"blacklist": [], "whitelist": []},
+                },
+                "status": "ACTIVE",
+                "start_time": start_date_iso,
+                "end_time": end_date_iso,
+                "metadata": {
+                    "analytics_offer_code": offer_code,
+                    "customerResetPeriodType": "offerPeriod",
+                    "cardResetPeriodType": "offerPeriod",
+                    "productCustomerResetPeriodType": "offerPeriod",
+                    "productCardResetPeriodType": "offerPeriod",
+                    "upiResetPeriodType": "offerPeriod",
+                    "productUpiResetPeriodType": "offerPeriod",
+                    "start_date": start_date_iso,
+                    "end_date": end_date_iso,
+                },
+                "udf1": None,
+                "udf2": None,
+                "udf3": None,
+                "udf4": None,
+                "udf5": None,
+                "udf6": None,
+                "udf7": None,
+                "udf8": None,
+                "udf9": None,
+                "udf10": None,
+                "minOfferBreakupCheckbox": False,
+                "offerBreakupBool": False,
+                "benefitsAmountInfo": [],
+                "has_multi_codes": False,
+            }
 
-        # Make API request
-        endpoint = f"{EULER_DASHBOARD_API_URL}/api/offers/dashboard/create?merchant_id={merchant_id}"
-        headers = {"Content-Type": "application/json", "x-web-logintoken": euler_token}
+            # Make API request
+            endpoint = f"{EULER_DASHBOARD_API_URL}/api/offers/dashboard/create?merchant_id={merchant_id}"
+            headers = {"Content-Type": "application/json", "x-web-logintoken": euler_token}
+            logger.info(f"[DEBUG] Endpoint and headers prepared: {endpoint}")
 
-        logger.info(
-            f"Making offer creation request to: {endpoint} | Payload: {json.dumps(api_payload, indent=2)}"
-        )
+        except Exception as e:
+            logger.error(f"[DEBUG] Error during API payload construction: {e}", exc_info=True)
+            await params.result_callback(
+                {
+                    "error": f"Tool Error: [create_euler_offer] Error constructing API payload: {str(e)}"
+                }
+            )
+            return
+
+        logger.info(f"Making offer creation request to: {endpoint}")
+        logger.info(f"Payload size: {len(str(api_payload))} characters")
+        try:
+            logger.info(f"Payload preview: {json.dumps(api_payload, indent=2)[:500]}...")
+        except Exception as e:
+            logger.error(f"Failed to serialize payload for logging: {e}")
 
         async with create_http_client(timeout=10.0) as client:
             response = await client.post(endpoint, json=api_payload, headers=headers)
-
+            logger.info(f"Received response from Euler API: Status {response.status_code}")
+            logger.info(f"Response headers: {dict(response.headers)}")
+            try:
+                response_text = response.text
+                logger.info(f"Response body: {response_text}")
+            except Exception as e:
+                logger.error(f"Failed to read response body: {e}")
+            
             if response.status_code == 200:
                 response_data = response.json()
                 offer_id = response_data.get("offer_id")
