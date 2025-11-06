@@ -26,6 +26,7 @@
 - **Vercel AI SDK:** The remote MCP server is built using the Vercel AI SDK, which provides tools for creating AI-powered applications and endpoints.
 - **Command-Line Interface (CLI):** The agent is launched via a Python script that accepts command-line arguments (`argparse`) for configuration, including session details, tokens, and feature flags.
 - **OpenTelemetry & Langfuse:** Used for tracing and observability, providing insights into the agent's performance and behavior during a session.
+- **OpenFeature SDK:** Integrated for feature flag management with DevCycle and Env fallback, supporting auto-selection and environment variable fallbacks.
 
 ## 5. Internal Agent Tools
 

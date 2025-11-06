@@ -54,3 +54,12 @@ It is optional, but recommended to be updated as the project evolves.
 ## Testing Patterns
 
 *
+
+## Feature Flag Patterns
+
+*   **[2025-11-06] - OpenFeature Integration Pattern:**
+    *   **Description:** Implemented OpenFeature SDK integration with auto-selection between DevCycle and Env fallback providers, following a three-tier fallback hierarchy.
+        *   **Provider Auto-Selection:** `FeatureFlagService` automatically selects DevCycle when SDK key is available, falls back to environment variables.
+        *   **Graceful Fallbacks:** Comprehensive error handling ensures the system always degrades gracefully to environment variables.
+    *   **Rationale:** Provides flexible feature flag management without external dependencies during development, while supporting production-grade DevCycle integration.
+    *   **Files:** `apps/services/open_feature/providers/dev_cycle/` - Complete OpenFeature implementation with provider factory and service layer.

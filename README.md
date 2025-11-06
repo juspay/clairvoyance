@@ -20,6 +20,7 @@ The platform is built around a few key components:
 *   **Dynamic Tool Loading:** The `Automatic` agent dynamically loads tools based on the operating mode and credentials, allowing it to interact with services like Juspay and Breeze for analytics.
 *   **Workflow-Driven Conversations:** Agents can follow predefined workflows, such as the order confirmation process in `Breeze Buddy`.
 *   **Environment-Driven Configuration:** All sensitive keys, API endpoints, and settings are managed via a `.env` file.
+*   **Feature Flag Management:** Integrated with OpenFeature for flexible feature control with DevCycle enabling real-time feature toggling without code deployments.
 *   **Modular & Scalable:** The project is structured for maintainability and easy extension with new agents, tools, or services.
 
 ## 3. Project Structure
@@ -101,3 +102,7 @@ The server will start on `http://0.0.0.0:8000` by default.
     *   Making calls to external services (e.g., starting a call via Twilio).
     *   Launching an agent as a subprocess to handle the real-time conversation.
 5.  The voice agent connects to the communication service (like Daily.co or a direct telephony stream) and manages the STT -> LLM -> TTS pipeline, using its specialized tools to complete its task.
+
+## 7. Feature Flags
+
+Clairvoyance uses OpenFeature for flexible feature flag management with auto-selection between DevCycle and Env fallback. See [OpenFeature Integration Guide](docs/OPEN_FEATURE_INTEGRATION.md) for usage details.
