@@ -36,9 +36,9 @@ from app.agents.voice.breeze_buddy.analytics.tracing_setup import (
     setup_tracing,
 )
 from app.agents.voice.breeze_buddy.workflows.order_confirmation.types import OrderData
+from app.agents.voice.breeze_buddy.stt import get_stt_service
 from app.agents.voice.breeze_buddy.workflows.order_confirmation.utils import (
     OUTCOME_TO_ENUM,
-    get_stt_service,
     indian_number_to_speech,
 )
 from app.core.config import (
@@ -372,7 +372,7 @@ class OrderConfirmationBot:
         else:
             # Run pipeline without tracing when tracing is disabled
             logger.info(
-                f"Running pipeline without tracing for conversation: {conversation_id}"
+                f"Running pipeline without tracing for the conversation: {conversation_id}"
             )
             await run_pipeline()
 
