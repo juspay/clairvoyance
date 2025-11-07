@@ -8,9 +8,6 @@ from pipecat.services.mcp_service import MCPClient as PipecatMCPClient
 
 from app.agents.voice.automatic.services.mcp.utils import create_chart_aware_wrapper
 from app.agents.voice.automatic.tools import initialize_tools
-from app.agents.voice.automatic.tools.charts import (
-    tool_functions as chart_tool_functions,
-)
 from app.agents.voice.automatic.types import Mode
 from app.core import config
 from app.core.logger import logger
@@ -68,21 +65,13 @@ async def init_breeze_mcp_tools(
             if original_register_function is not None:
                 llm.register_function = original_register_function
 
-        # register chart tools if enabled
-        if config.ENABLE_CHARTS:
-            for name, function in chart_tool_functions.items():
-                logger.info(f"Registering essential chart tool: {name}")
-                llm.register_function(name, function)
-
         # Log registration success
         if tools:
             logger.info(
                 f"Successfully registered MCP tools via pure Pipecat MCP client"
             )
         else:
-            logger.warning(
-                f"MCP client returned None or empty tools object - but essential tools are still registered"
-            )
+            logger.warning(f"MCP client returned None or empty tools object")
 
         return tools
 
