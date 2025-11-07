@@ -90,12 +90,15 @@ def parse_soniox_context() -> Optional[SonioxContextObject]:
         return None
 
 
-def get_stt_service(voice_name: Optional[str] = None):
+def get_stt_service(
+    voice_name: Optional[str] = None, fallback_stt_provider: Optional[str] = None
+):
     """
     Returns an STT service instance based on the environment configuration.
 
     Args:
         voice_name: Voice name to determine STT provider override for specific voices
+        fallback_stt_provider: STT provider to use when in fallback mode (overrides config)
     """
     # Check for MIA voice with OpenAI override
     if voice_name == VoiceName.MIA.value and config.ENABLE_OPENAI_FOR_MIA:
@@ -116,8 +119,13 @@ def get_stt_service(voice_name: Optional[str] = None):
             temperature=0.0,  # Deterministic output for consistency
         )
 
-    # Default behavior - use configured STT provider
-    if config.STT_PROVIDER == "assemblyai":
+    # Determine which STT provider to use (fallback override or config)
+    effective_stt_provider = (
+        fallback_stt_provider if fallback_stt_provider else config.STT_PROVIDER
+    )
+
+    # Default behavior - use configured or fallback STT provider
+    if effective_stt_provider == "assemblyai":
         if not config.ASSEMBLYAI_API_KEY:
             raise ValueError(
                 "ASSEMBLYAI_API_KEY is required when STT_PROVIDER=assemblyai"
@@ -130,7 +138,7 @@ def get_stt_service(voice_name: Optional[str] = None):
             vad_force_turn_endpoint=True,
             # No connection_params needed since we're using VAD for turn detection
         )
-    elif config.STT_PROVIDER == "openai":
+    elif effective_stt_provider == "openai":
         if not config.OPENAI_STT_API_KEY:
             raise ValueError(
                 "OPENAI_STT_API_KEY or OPENAI_API_KEY is required when STT_PROVIDER=openai"
@@ -147,7 +155,7 @@ def get_stt_service(voice_name: Optional[str] = None):
             prompt=config.AUTOMATIC_OPENAI_STT_PROMPT,
             temperature=0.0,  # Deterministic output for consistency
         )
-    elif config.STT_PROVIDER == "deepgram":
+    elif effective_stt_provider == "deepgram":
         if not config.DEEPGRAM_API_KEY:
             raise ValueError("DEEPGRAM_API_KEY is required when STT_PROVIDER=deepgram")
 
@@ -184,7 +192,7 @@ def get_stt_service(voice_name: Optional[str] = None):
         return DeepgramSTTService(
             api_key=config.DEEPGRAM_API_KEY, live_options=live_options
         )
-    elif config.STT_PROVIDER == "soniox":
+    elif effective_stt_provider == "soniox":
         if not config.SONIOX_API_KEY:
             raise ValueError("SONIOX_API_KEY is required when STT_PROVIDER=soniox")
 

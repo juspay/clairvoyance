@@ -47,6 +47,13 @@ from pipecat.utils.tracing.conversation_context_provider import (
 from app.agents.voice.automatic.features.llm_wrapper import LLMServiceWrapper
 from app.agents.voice.automatic.processors.llm_spy import handle_confirmation_response
 from app.agents.voice.automatic.services.fal import FalSmartTurnService
+from app.agents.voice.automatic.services.fallback.pipeline_restart_manager import (
+    PipelineRestartManager,
+)
+from app.agents.voice.automatic.services.fallback.session_manager import (
+    FallbackSessionContext,
+    get_fallback_session_manager,
+)
 from app.agents.voice.automatic.services.mcp import init_breeze_mcp_tools
 from app.agents.voice.automatic.services.mem0.memory import ImprovedMem0MemoryService
 from app.agents.voice.automatic.services.smart_turn import LocalSmartTurnAnalyzer
@@ -121,6 +128,20 @@ async def main():
     # Pool mode arguments
     parser.add_argument("--pool-mode", action="store_true", help="Run in pool mode")
     parser.add_argument("--process-id", type=str, help="Process ID for pool mode")
+
+    # Fallback restart arguments
+    parser.add_argument(
+        "--is-fallback-restart",
+        action="store_true",
+        help="Mark this as a fallback restart session",
+    )
+    parser.add_argument(
+        "--original-stt-provider", type=str, help="Original STT provider that failed"
+    )
+    parser.add_argument(
+        "--fallback-stt-provider", type=str, help="Fallback STT provider being used"
+    )
+    parser.add_argument("--fallback-reason", type=str, help="Reason for the fallback")
 
     args = parser.parse_args()
 
@@ -239,6 +260,156 @@ async def handle_session(session_config):
         print("SESSION_ENDED", flush=True)
 
 
+async def create_pipeline_internal(
+    args, transport, stt, tts, llm, tools, rtvi, voice_name, mode
+):
+    """
+    Create and configure the voice agent pipeline with all components.
+
+    Args:
+        args: Parsed command line arguments
+        transport: Daily transport instance
+        stt: Speech-to-text service
+        tts: Text-to-speech service
+        llm: Large language model service
+        tools: Initialized tools for the LLM
+        rtvi: RTVI processor instance
+        voice_name: Voice name enum value
+        mode: Operating mode (TEST/LIVE)
+
+    Returns:
+        tuple: (pipeline, task, ptt_vad_filter, context_aggregator)
+    """
+    # Personalize the system prompt if a user name is provided
+    system_prompt = get_system_prompt(
+        args.user_name, decode_tts_provider(args.tts_provider), args.shop_id
+    )
+
+    messages = [
+        {"role": "system", "content": system_prompt},
+    ]
+
+    context = llm.create_summarizing_context(
+        messages,
+        tools,
+    )
+
+    context_aggregator = llm.create_context_aggregator(context)
+
+    # Initialize processors and pipeline components
+    stt_mute_filter = None
+    tool_call_processor = None
+    ptt_vad_filter = None
+
+    # Build pipeline components list
+    pipeline_components = [
+        transport.input(),
+    ]
+
+    # Add PTT VAD filter only if it's enabled
+    if config.DISABLE_VAD_FOR_PTT:
+        ptt_vad_filter = PTTVADFilter("PTTVADFilter")
+        pipeline_components.append(ptt_vad_filter)  # Filter VAD frames after STT
+
+    pipeline_components.append(stt)
+
+    if config.ENABLE_MUTE_UNTIL_FIRST_BOT_COMPLETE:
+        stt_mute_filter = STTMuteFilter(
+            config=STTMuteConfig(
+                strategies={
+                    STTMuteStrategy.MUTE_UNTIL_FIRST_BOT_COMPLETE,
+                }
+            )
+        )
+        tool_call_processor = LLMSpyProcessor(
+            rtvi,
+            args.session_id,
+            config.ENABLE_CHARTS,
+            stt_mute_filter,
+            "LLMSpyProcessor",
+        )
+        pipeline_components.extend([stt_mute_filter])
+    else:
+        tool_call_processor = LLMSpyProcessor(
+            rtvi, args.session_id, config.ENABLE_CHARTS, None, "LLMSpyProcessor"
+        )
+
+    pipeline_components.extend([rtvi, context_aggregator.user()])
+
+    # Add Mem0 memory service if enabled
+    if (
+        config.MEM0_ENABLED
+        and args.user_email
+        and args.user_email.strip()
+        and config.MEM0_API_KEY
+        and config.MEM0_API_KEY.strip()
+    ):
+        try:
+            logger.info("Initializing Mem0 memory service")
+            memory_params = ImprovedMem0MemoryService.InputParams()
+            memory = ImprovedMem0MemoryService(
+                api_key=config.MEM0_API_KEY,
+                user_id=args.user_email,
+                params=memory_params,
+            )
+            pipeline_components.append(memory)
+            logger.info("Mem0 memory service initialized successfully")
+        except (ValueError, Exception) as e:
+            logger.error(f"Failed to initialize Mem0 memory service: {e}")
+            logger.warning(
+                "Continuing without memory service - conversation will work normally"
+            )
+    elif config.MEM0_ENABLED:
+        if not args.user_email:
+            logger.info(
+                "Skipping Mem0 memory service - no user email provided (guest flow)"
+            )
+        elif not config.MEM0_API_KEY or not config.MEM0_API_KEY.strip():
+            logger.warning("MEM0_API_KEY is not provided - skipping memory service")
+    else:
+        logger.debug("Mem0 memory service disabled via config")
+
+    # Add remaining components
+    pipeline_components.extend(
+        [
+            llm,
+            tool_call_processor,
+            tts,
+            transport.output(),
+            context_aggregator.assistant(),
+        ]
+    )
+
+    pipeline = Pipeline(pipeline_components)
+
+    # Create conversation ID for tracing
+    user_name = args.user_name or "guest"
+    shopId = (
+        "euler" if args.euler_token and not args.shop_id else args.shop_id or "dummy"
+    )
+    ist_time = datetime.now(ZoneInfo("Asia/Kolkata"))
+    timestamp = ist_time.strftime("%Y-%m-%d_%H-%M-%S")
+    conversation_id = f"{user_name}-{shopId}-{timestamp}"
+
+    # Configure task parameters
+    task_params = {
+        "idle_timeout_secs": config.AUTOMATIC_SESSION_INACTIVITY_TIMEOUT,
+        "idle_timeout_frames": (BotSpeakingFrame, LLMFullResponseEndFrame),
+        "params": PipelineParams(allow_interruptions=True),
+        "cancel_on_idle_timeout": True,
+        "observers": [GoogleRTVIObserver(rtvi)],
+    }
+
+    if config.ENABLE_TRACING:
+        setup_tracing("breeze-voice-agent")
+        task_params["conversation_id"] = conversation_id
+        task_params["enable_tracing"] = True
+
+    task = PipelineTask(pipeline, **task_params)
+
+    return pipeline, task, ptt_vad_filter, context_aggregator
+
+
 async def run_normal_mode(args):
     """Run the normal voice agent mode"""
     # Validate required arguments for normal mode
@@ -248,9 +419,20 @@ async def run_normal_mode(args):
 
     # Configure logger with session ID and client session ID for all logs in this subprocess
     configure_session_logger(args.session_id, args.client_sid)
-    logger.info(
-        f"Voice agent started with session ID: {args.session_id}, client session ID: {args.client_sid}"
-    )
+
+    # Check if this is a fallback restart session
+    if getattr(args, "is_fallback_restart", False):
+        logger.info(
+            f"Voice agent restarted (STT fallback) with session ID: {args.session_id}, "
+            f"client session ID: {args.client_sid}, "
+            f"original STT: {getattr(args, 'original_stt_provider', 'unknown')}, "
+            f"fallback STT: {getattr(args, 'fallback_stt_provider', 'unknown')}, "
+            f"reason: {getattr(args, 'fallback_reason', 'unknown')}"
+        )
+    else:
+        logger.info(
+            f"Voice agent started with session ID: {args.session_id}, client session ID: {args.client_sid}"
+        )
 
     # Create session context for passing to components
     session_context = create_session_context(args.session_id)
@@ -278,9 +460,6 @@ async def run_normal_mode(args):
             or args.shop_id in config.SHOPS_FOR_BREEZE_MCP
         )
     )
-
-    # Personalize the system prompt if a user name is provided
-    system_prompt = get_system_prompt(args.user_name, tts_provider, args.shop_id)
 
     # Configure VAD - use pre-initialized model if available
     global _silero_vad_cache
@@ -366,7 +545,15 @@ async def run_normal_mode(args):
         daily_params,
     )
 
-    stt = get_stt_service(voice_name=voice_name.value)
+    # Determine if we should use fallback STT provider
+    fallback_provider = (
+        getattr(args, "fallback_stt_provider", None)
+        if getattr(args, "is_fallback_restart", False)
+        else None
+    )
+    stt = get_stt_service(
+        voice_name=voice_name.value, fallback_stt_provider=fallback_provider
+    )
 
     tts = get_tts_service(
         tts_provider=tts_provider.value,
@@ -472,100 +659,12 @@ async def run_normal_mode(args):
                         await tts.queue_frame(TTSSpeakFrame(random.choice(phrases)))
                     break
 
-    messages = [
-        {"role": "system", "content": system_prompt},
-    ]
-
-    context = llm.create_summarizing_context(
-        messages,
-        tools,
+    # Create pipeline using the extracted function
+    pipeline, task, ptt_vad_filter, context_aggregator = await create_pipeline_internal(
+        args, transport, stt, tts, llm, tools, rtvi, voice_name, mode
     )
 
-    context_aggregator = llm.create_context_aggregator(context)
-
-    # Initialize processors and pipeline components
-    stt_mute_filter = None
-    tool_call_processor = None
-
-    # Build pipeline components list
-    pipeline_components = [
-        transport.input(),
-    ]
-
-    # Add PTT VAD filter only if it's enabled
-    if config.DISABLE_VAD_FOR_PTT:
-        ptt_vad_filter = PTTVADFilter("PTTVADFilter")
-        pipeline_components.append(ptt_vad_filter)  # Filter VAD frames after STT
-
-    pipeline_components.append(stt)
-
-    if config.ENABLE_MUTE_UNTIL_FIRST_BOT_COMPLETE:
-        stt_mute_filter = STTMuteFilter(
-            config=STTMuteConfig(
-                strategies={
-                    STTMuteStrategy.MUTE_UNTIL_FIRST_BOT_COMPLETE,
-                }
-            )
-        )
-        tool_call_processor = LLMSpyProcessor(
-            rtvi,
-            args.session_id,
-            config.ENABLE_CHARTS,
-            stt_mute_filter,
-            "LLMSpyProcessor",
-        )
-        pipeline_components.extend([stt_mute_filter])
-    else:
-        tool_call_processor = LLMSpyProcessor(
-            rtvi, args.session_id, config.ENABLE_CHARTS, None, "LLMSpyProcessor"
-        )
-
-    pipeline_components.extend([rtvi, context_aggregator.user()])
-    if (
-        config.MEM0_ENABLED
-        and args.user_email
-        and args.user_email.strip()
-        and config.MEM0_API_KEY
-        and config.MEM0_API_KEY.strip()
-    ):
-        try:
-            logger.info("Initializing Mem0 memory service")
-            memory_params = ImprovedMem0MemoryService.InputParams()
-            memory = ImprovedMem0MemoryService(
-                api_key=config.MEM0_API_KEY,
-                user_id=args.user_email,
-                params=memory_params,
-            )
-            pipeline_components.append(memory)
-            logger.info("Mem0 memory service initialized successfully")
-        except (ValueError, Exception) as e:
-            logger.error(f"Failed to initialize Mem0 memory service: {e}")
-            logger.warning(
-                "Continuing without memory service - conversation will work normally"
-            )
-    elif config.MEM0_ENABLED:
-        if not args.user_email:
-            logger.info(
-                "Skipping Mem0 memory service - no user email provided (guest flow)"
-            )
-        elif not config.MEM0_API_KEY or not config.MEM0_API_KEY.strip():
-            logger.warning("MEM0_API_KEY is not provided - skipping memory service")
-    else:
-        logger.debug("Mem0 memory service disabled via config")
-
-    # Add remaining components
-    pipeline_components.extend(
-        [
-            llm,
-            tool_call_processor,
-            tts,
-            transport.output(),
-            context_aggregator.assistant(),
-        ]
-    )
-
-    pipeline = Pipeline(pipeline_components)
-
+    # Create conversation ID and user name for tracing and event handlers
     user_name = args.user_name or "guest"
     shopId = (
         "euler" if args.euler_token and not args.shop_id else args.shop_id or "dummy"
@@ -574,20 +673,45 @@ async def run_normal_mode(args):
     timestamp = ist_time.strftime("%Y-%m-%d_%H-%M-%S")
     conversation_id = f"{user_name}-{shopId}-{timestamp}"
 
-    task_params = {
-        "idle_timeout_secs": config.AUTOMATIC_SESSION_INACTIVITY_TIMEOUT,
-        "idle_timeout_frames": (BotSpeakingFrame, LLMFullResponseEndFrame),
-        "params": PipelineParams(allow_interruptions=True),
-        "cancel_on_idle_timeout": True,
-        "observers": [GoogleRTVIObserver(rtvi)],
-    }
+    # Setup event handlers
+    await setup_pipeline_event_handlers(
+        args,
+        rtvi,
+        transport,
+        task,
+        ptt_vad_filter,
+        fal_smart_turn_service,
+        fal_session,
+        smart_turn_analyzer,
+    )
 
-    if config.ENABLE_TRACING:
-        setup_tracing("breeze-voice-agent")
-        task_params["conversation_id"] = conversation_id
-        task_params["enable_tracing"] = True
+    # Continue with pipeline execution and tracing
+    await run_normal_mode_continued(args, conversation_id, user_name, voice_name, task)
 
-    task = PipelineTask(pipeline, **task_params)
+
+async def setup_pipeline_event_handlers(
+    args,
+    rtvi,
+    transport,
+    task,
+    ptt_vad_filter,
+    fal_smart_turn_service,
+    fal_session,
+    smart_turn_analyzer,
+):
+    """
+    Setup all event handlers for the pipeline components.
+
+    Args:
+        args: Parsed command line arguments
+        rtvi: RTVI processor instance
+        transport: Daily transport instance
+        task: Pipeline task instance
+        ptt_vad_filter: PTT VAD filter instance (can be None)
+        fal_smart_turn_service: Fal Smart Turn service instance (can be None)
+        fal_session: Fal session instance (can be None)
+        smart_turn_analyzer: Smart turn analyzer instance (can be None)
+    """
 
     @rtvi.event_handler("on_client_ready")
     async def on_client_ready(rtvi):
@@ -703,6 +827,139 @@ async def run_normal_mode(args):
         main_task = asyncio.current_task()
         main_task.cancel()
 
+    @task.event_handler("on_pipeline_error")
+    async def on_pipeline_error(task, error_frame):
+        """Handle pipeline errors and trigger fallback if needed"""
+
+        logger.warning(f"Pipeline error detected: {error_frame.error}")
+
+        # Check if this is a Soniox error that should trigger fallback
+        current_stt_provider = config.STT_PROVIDER
+        fallback_success = await restart_pipeline_with_fallback(
+            args, error_frame, current_stt_provider, rtvi, task
+        )
+
+        if fallback_success:
+            logger.info(
+                "Fallback triggered successfully - pipeline will restart automatically"
+            )
+        else:
+            logger.info("Continuing with current pipeline despite error")
+
+
+async def restart_pipeline_with_fallback(
+    args, error_frame, current_stt_provider, rtvi, task
+):
+    """
+    Restart the pipeline with fallback STT provider when errors are detected.
+
+    Args:
+        args: Parsed command line arguments
+        error_frame: The ErrorFrame that triggered the fallback
+        current_stt_provider: The currently active STT provider name
+        rtvi: RTVI processor instance for sending messages to frontend
+        task: Pipeline task instance for cancellation
+
+    Returns:
+        bool: True if restart was successful, False otherwise
+    """
+
+    restart_manager = PipelineRestartManager()
+
+    # Check if fallback should be enabled
+    if not restart_manager.should_enable_fallback(
+        error_frame, current_stt_provider, config.ENABLE_FALLBACK
+    ):
+        logger.info("Fallback not enabled for this error, continuing with current STT")
+        return False
+
+    logger.info(
+        f"Initiating pipeline restart with fallback STT provider: {config.FALLBACK_STT_PROVIDER}"
+    )
+
+    try:
+        # Store original STT provider for logging and context
+        original_stt_provider = config.STT_PROVIDER
+
+        logger.info(
+            f"Session {args.session_id} using fallback STT: {original_stt_provider} → {config.FALLBACK_STT_PROVIDER}"
+        )
+        logger.info(
+            f"Fallback session will restart with {config.FALLBACK_STT_PROVIDER} STT provider"
+        )
+
+        # Create fallback session context for auto-restart
+        session_args_dict = {
+            "url": args.url,
+            "token": args.token,
+            "mode": args.mode,
+            "session_id": args.session_id,
+            "client_sid": args.client_sid,
+            "euler_token": getattr(args, "euler_token", None),
+            "breeze_token": getattr(args, "breeze_token", None),
+            "shop_url": getattr(args, "shop_url", None),
+            "shop_id": getattr(args, "shop_id", None),
+            "shop_type": getattr(args, "shop_type", None),
+            "user_name": getattr(args, "user_name", None),
+            "user_email": getattr(args, "user_email", None),
+            "tts_provider": getattr(args, "tts_provider", None),
+            "voice_name": getattr(args, "voice_name", None),
+            "merchant_id": getattr(args, "merchant_id", None),
+            "platform_integrations": getattr(args, "platform_integrations", None),
+            "reseller_id": getattr(args, "reseller_id", None),
+            "fallback_stt_provider": config.FALLBACK_STT_PROVIDER,
+        }
+
+        fallback_context = FallbackSessionContext(
+            original_session_id=args.session_id,
+            room_url=args.url,
+            token=args.token,
+            bot_name="Breeze Automatic Voice Agent",
+            original_stt_provider=original_stt_provider,
+            fallback_stt_provider=config.FALLBACK_STT_PROVIDER,
+            error_reason=str(error_frame.error),
+            session_args=session_args_dict,
+        )
+
+        # Register session for auto-restart
+        fallback_manager = get_fallback_session_manager()
+        fallback_manager.register_fallback_session(fallback_context)
+
+        # Send message to frontend about fallback
+        await rtvi.push_frame(
+            RTVIServerMessageFrame(
+                data={
+                    "type": "stt-fallback-triggered",
+                    "originalProvider": original_stt_provider,
+                    "fallbackProvider": config.FALLBACK_STT_PROVIDER,
+                    "reason": str(error_frame.error),
+                    "autoRestart": True,
+                }
+            )
+        )
+
+        # Signal fallback session end to the process pool via stdout
+        # This allows the main process to detect fallback sessions across process boundaries
+        print(
+            f"FALLBACK_SESSION_END:{args.session_id}:{original_stt_provider}:{config.FALLBACK_STT_PROVIDER}:{str(error_frame.error)}",
+            flush=True,
+        )
+
+        # Wait a moment for the message to be sent
+        await asyncio.sleep(0.5)
+
+        # Cancel the current pipeline task to trigger cleanup and restart
+        await task.cancel()
+
+        return True
+
+    except Exception as e:
+        logger.error(f"Failed to restart pipeline with fallback: {e}")
+        return False
+
+
+async def run_normal_mode_continued(args, conversation_id, user_name, voice_name, task):
+    """Continue the run_normal_mode function with pipeline execution and tracing."""
     runner = PipelineRunner()
 
     async def run_pipeline():

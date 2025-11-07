@@ -3,6 +3,10 @@ API Router for the Automatic Voice Agent
 """
 
 import asyncio
+import json
+import subprocess
+import uuid
+from typing import Any, Dict
 
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
@@ -128,3 +132,142 @@ async def cleanup_session(session_id: str):
         return JSONResponse(
             status_code=500, content={"status": "error", "message": str(e)}
         )
+
+
+async def start_voice_session_internal(
+    room_url: str, token: str, session_id: str, **session_params
+) -> Dict[str, Any]:
+    """
+    Internal function to start a voice session with the given parameters.
+    Used for automatic session restart during STT fallback scenarios.
+
+    Args:
+        room_url: The Daily room URL
+        token: The bot token for the room
+        session_id: The session ID to use
+        **session_params: Additional session parameters
+
+    Returns:
+        Dictionary with success status and any error information
+    """
+    try:
+        logger.info(f"Starting internal voice session {session_id}")
+
+        # Store session parameters for potential future fallbacks
+        pool = get_voice_agent_pool()
+        pool.store_session_parameters(
+            session_id, {"room_url": room_url, "token": token, **session_params}
+        )
+
+        # Try to get process from pool first
+        try:
+            voice_process = await pool.get_process(session_id)
+
+            try:
+                # Configure the pre-warmed process
+                session_config = {
+                    "room_url": room_url,
+                    "token": token,
+                    "session_id": session_id,
+                    **session_params,
+                }
+
+                config_json = json.dumps(session_config) + "\n"
+                voice_process.process.stdin.write(config_json.encode("utf-8"))
+                await voice_process.process.stdin.drain()
+
+                logger.info(
+                    f"Assigned pre-warmed process {voice_process.process_id} to session {session_id}"
+                )
+
+                # Track the process in bot_procs
+                bot_procs[voice_process.process.pid] = (
+                    voice_process.process,
+                    room_url,
+                    session_id,
+                    "pool",
+                )
+
+                return {"success": True, "session_id": session_id}
+
+            except Exception as write_error:
+                logger.error(
+                    f"Failed to configure pooled process {voice_process.process_id}, returning to pool: {write_error}"
+                )
+                # Return the process to the pool to prevent a leak
+                await pool.return_process(session_id)
+                # Re-raise to trigger the fallback mechanism
+                raise
+
+        except Exception as e:
+            logger.warning(
+                f"Failed to get process from pool: {e}, falling back to direct creation"
+            )
+
+            # Fallback: Launch subprocess directly
+            bot_file = "app.agents.voice.automatic"
+            cmd = [
+                "python3",
+                "-m",
+                bot_file,
+                "-u",
+                room_url,
+                "-t",
+                token,
+                "--session-id",
+                session_id,
+            ]
+
+            # Add session parameters to command
+            arg_map = {
+                "client_sid": "--client-sid",
+                "mode": "--mode",
+                "user_name": "--user-name",
+                "user_email": "--user-email",
+                "tts_provider": "--tts-provider",
+                "voice_name": "--voice-name",
+                "euler_token": "--euler-token",
+                "breeze_token": "--breeze-token",
+                "shop_url": "--shop-url",
+                "shop_id": "--shop-id",
+                "shop_type": "--shop-type",
+                "merchant_id": "--merchant-id",
+                "platform_integrations": "--platform-integrations",
+                "reseller_id": "--reseller-id",
+                "is_fallback_restart": "--is-fallback-restart",
+                "original_stt_provider": "--original-stt-provider",
+                "fallback_stt_provider": "--fallback-stt-provider",
+                "fallback_reason": "--fallback-reason",
+            }
+
+            for key, value in session_params.items():
+                if value is not None:
+                    arg_name = arg_map.get(key)
+                    if arg_name:
+                        if isinstance(value, list):
+                            cmd.extend([arg_name] + value)
+                        elif isinstance(value, bool):
+                            if value:  # Only add boolean flags if True
+                                cmd.append(arg_name)
+                        else:
+                            cmd.extend([arg_name, str(value)])
+
+            # Start the subprocess
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+            )
+
+            # Track the process
+            bot_procs[proc.pid] = (proc, room_url, session_id, "direct")
+
+            logger.info(
+                f"Started direct process for session {session_id} (PID: {proc.pid})"
+            )
+
+            return {"success": True, "session_id": session_id, "process_type": "direct"}
+
+    except Exception as e:
+        logger.error(f"Failed to start voice session {session_id}: {e}")
+        return {"success": False, "error": str(e)}

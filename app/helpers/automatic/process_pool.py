@@ -29,10 +29,16 @@ import uuid
 from asyncio import Queue
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Optional
+from typing import TYPE_CHECKING, Dict, Optional
+
+if TYPE_CHECKING:
+    from app.api.routers.automatic import start_voice_session_internal
 
 from loguru import logger as subprocess_logger
 
+from app.agents.voice.automatic.services.fallback.session_manager import (
+    get_fallback_session_manager,
+)
 from app.core.logger import logger
 
 # Configure a dedicated logger for raw subprocess output.
@@ -112,6 +118,9 @@ class VoiceAgentPool:
         # processes from temporary fallback ones.
         self.managed_processes: Dict[str, VoiceAgentProcess] = {}
         self.ephemeral_processes: Dict[str, VoiceAgentProcess] = {}
+
+        # Storage for session parameters to enable auto-restart on fallback
+        self.session_parameters: Dict[str, Dict] = {}
 
         # A lock to prevent race conditions during background process creation.
         self._create_lock = asyncio.Lock()
@@ -309,6 +318,55 @@ class VoiceAgentPool:
                                 f"Process {voice_process.process_id[:8]} session ended, returning to pool"
                             )
                             await self._return_process_to_pool(voice_process)
+                        elif "FALLBACK_SESSION_END:" in line:
+                            logger.info(
+                                f"Process {voice_process.process_id[:8]} fallback session ended"
+                            )
+                            # Parse fallback session information
+                            try:
+                                parts = line.split(":", 4)  # Split into max 5 parts
+                                if len(parts) >= 5:
+                                    session_id = parts[1]
+                                    original_stt = parts[2]
+                                    fallback_stt = parts[3]
+                                    error_reason = parts[4]
+
+                                    logger.info(
+                                        f"Detected fallback session end: {session_id}, "
+                                        f"STT {original_stt} -> {fallback_stt}, reason: {error_reason}"
+                                    )
+
+                                    # Get stored session parameters for auto-restart
+                                    session_params = self.get_session_parameters(
+                                        session_id
+                                    )
+                                    if session_params:
+                                        logger.info(
+                                            f"Auto-restarting fallback session {session_id}"
+                                        )
+                                        await self._restart_fallback_session_with_params(
+                                            session_id,
+                                            session_params,
+                                            original_stt,
+                                            fallback_stt,
+                                            error_reason,
+                                        )
+                                    else:
+                                        logger.warning(
+                                            f"No session parameters found for auto-restart: {session_id}"
+                                        )
+
+                                else:
+                                    logger.warning(
+                                        f"Invalid fallback session end format: {line}"
+                                    )
+                            except Exception as e:
+                                logger.error(f"Error parsing fallback session end: {e}")
+
+                            # Return process to pool, preserving session params for potential future fallbacks
+                            await self._return_process_to_pool(
+                                voice_process, preserve_session_params=True
+                            )
                         elif line:
                             payload = (voice_process.process_id, line)
                             try:
@@ -353,14 +411,22 @@ class VoiceAgentPool:
                         f"Error during best-effort cleanup for process {voice_process.process_id}: {cleanup_error}"
                     )
 
-    async def _return_process_to_pool(self, voice_process: VoiceAgentProcess):
+    async def _return_process_to_pool(
+        self, voice_process: VoiceAgentProcess, preserve_session_params: bool = False
+    ):
         """
         Handles the logic for returning a process to the pool after its session ends.
+
+        Args:
+            voice_process: The VoiceAgentProcess to return to the pool
+            preserve_session_params: If True, keeps session parameters for potential future fallbacks.
+                                   If False, removes session parameters (normal cleanup).
 
         Flow:
         1. Finds the `session_id` associated with the given `voice_process`.
         2. Calls `return_process(session_id)` to perform the actual state change.
-        3. Triggers the `room_cleanup_callback` to ensure the associated Daily room
+        3. Conditionally removes session parameters based on `preserve_session_params` flag.
+        4. Triggers the `room_cleanup_callback` to ensure the associated Daily room
            is also cleaned up immediately.
         """
         try:
@@ -374,10 +440,22 @@ class VoiceAgentPool:
             )
 
             if session_id:
+                # Normal session end - return to pool
                 await self.return_process(session_id)
                 logger.info(
                     f"Process {voice_process.process_id[:8]} returned to pool automatically"
                 )
+
+                # Conditionally clean up session parameters
+                if not preserve_session_params:
+                    self.remove_session_parameters(session_id)
+                    logger.debug(
+                        f"Removed session parameters for normal session {session_id}"
+                    )
+                else:
+                    logger.debug(
+                        f"Preserving session parameters for potential future fallbacks: {session_id}"
+                    )
 
                 await self._trigger_room_cleanup(session_id)
 
@@ -408,6 +486,120 @@ class VoiceAgentPool:
 
         except Exception as e:
             logger.error(f"Error triggering room cleanup for session {session_id}: {e}")
+
+    async def _restart_fallback_session_with_params(
+        self,
+        session_id: str,
+        session_params: Dict,
+        original_stt: str,
+        fallback_stt: str,
+        error_reason: str,
+    ):
+        """
+        Restart a session with fallback STT provider using stored parameters.
+
+        Args:
+            session_id: The session ID to restart
+            session_params: Stored session parameters for recreation
+            original_stt: The original STT provider that failed
+            fallback_stt: The fallback STT provider to use
+            error_reason: The reason for the fallback
+        """
+        try:
+            logger.info(
+                f"Auto-restarting fallback session {session_id} with {fallback_stt} STT"
+            )
+
+            # Create restart arguments with fallback context
+            restart_args = session_params.copy()
+            restart_args["is_fallback_restart"] = True
+            restart_args["original_stt_provider"] = original_stt
+            restart_args["fallback_stt_provider"] = fallback_stt
+            restart_args["fallback_reason"] = error_reason
+
+            # Extract required parameters to avoid conflicts
+            room_url = restart_args.pop("room_url")
+            token = restart_args.pop("token")
+            # session_id is already provided as parameter, remove from restart_args if present
+            restart_args.pop("session_id", None)
+
+            # Dynamic import to avoid circular dependencies
+            try:
+                from app.api.routers.automatic import start_voice_session_internal
+            except ImportError as e:
+                logger.error(f"Failed to import start_voice_session_internal: {e}")
+                return
+
+            # Start new session with updated STT provider
+            result = await start_voice_session_internal(
+                room_url=room_url,
+                token=token,
+                session_id=session_id,  # Reuse same session ID
+                **restart_args,
+            )
+
+            if result.get("success"):
+                logger.info(
+                    f"Fallback session {session_id} restarted successfully with {fallback_stt}"
+                )
+                # Keep session parameters for potential future fallbacks
+            else:
+                logger.error(
+                    f"Failed to restart fallback session: {result.get('error', 'Unknown error')}"
+                )
+                # Remove session parameters on failure
+                self.remove_session_parameters(session_id)
+
+        except Exception as e:
+            logger.error(f"Error restarting fallback session {session_id}: {e}")
+            # Remove session parameters on error
+            self.remove_session_parameters(session_id)
+
+    async def _restart_fallback_session(self, fallback_context):
+        """
+        Restart a session with fallback STT provider.
+
+        Args:
+            fallback_context: FallbackSessionContext with session parameters
+        """
+        try:
+            logger.info(
+                f"Auto-restarting fallback session {fallback_context.original_session_id}"
+            )
+
+            # Get restart arguments from fallback context
+            restart_args = get_fallback_session_manager().create_restart_args(
+                fallback_context
+            )
+
+            # Dynamic import to avoid circular dependencies
+            try:
+                from app.api.routers.automatic import start_voice_session_internal
+            except ImportError as e:
+                logger.error(f"Failed to import start_voice_session_internal: {e}")
+                return
+
+            # Start new session with updated STT provider
+            result = await start_voice_session_internal(
+                room_url=fallback_context.room_url,
+                token=fallback_context.token,
+                session_id=fallback_context.original_session_id,  # Reuse same session ID
+                **restart_args,
+            )
+
+            if result.get("success"):
+                logger.info(
+                    f"Fallback session {fallback_context.original_session_id} restarted successfully"
+                )
+            else:
+                logger.error(
+                    f"Failed to restart fallback session: {result.get('error', 'Unknown error')}"
+                )
+
+        except Exception as e:
+            logger.error(
+                f"Error restarting fallback session {fallback_context.original_session_id}: {e}"
+            )
 
     async def get_process(self, session_id: str) -> VoiceAgentProcess:
         """
@@ -681,7 +873,39 @@ class VoiceAgentPool:
                 self._log_writer_task.cancel()
 
         self.active_processes.clear()
+        self.session_parameters.clear()
         logger.info("Voice agent pool cleanup complete")
+
+    def store_session_parameters(self, session_id: str, session_params: Dict):
+        """Store session parameters for potential auto-restart on fallback.
+
+        Args:
+            session_id: The session ID to store parameters for
+            session_params: Dictionary containing all session parameters needed for restart
+        """
+        self.session_parameters[session_id] = session_params.copy()
+        logger.debug(f"Stored session parameters for {session_id}")
+
+    def get_session_parameters(self, session_id: str) -> Optional[Dict]:
+        """Retrieve stored session parameters.
+
+        Args:
+            session_id: The session ID to retrieve parameters for
+
+        Returns:
+            Dictionary of session parameters, or None if not found
+        """
+        return self.session_parameters.get(session_id)
+
+    def remove_session_parameters(self, session_id: str):
+        """Remove stored session parameters.
+
+        Args:
+            session_id: The session ID to remove parameters for
+        """
+        if session_id in self.session_parameters:
+            del self.session_parameters[session_id]
+            logger.debug(f"Removed session parameters for {session_id}")
 
 
 # Global pool instance, managed by the functions below.

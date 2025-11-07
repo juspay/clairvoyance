@@ -224,6 +224,14 @@ SONIOX_VAD_FORCE_TURN_ENDPOINT = (
 )  # CRITICAL: false = Use Soniox intelligent endpoint detection
 # true = Use external VAD (Silero)
 
+# --- STT Fallback Configuration ---
+ENABLE_FALLBACK = (
+    os.environ.get("ENABLE_FALLBACK", "false").lower() == "true"
+)  # Enable fallback to another STT provider when primary STT fails
+FALLBACK_STT_PROVIDER = os.environ.get(
+    "FALLBACK_STT_PROVIDER", "deepgram"
+).lower()  # Fallback STT provider when primary STT encounters errors
+
 # Smart Turn Configuration
 ENABLE_FAL_SMART_TURN = (
     os.environ.get("ENABLE_FAL_SMART_TURN", "false").lower() == "true"

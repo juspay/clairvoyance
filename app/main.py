@@ -228,6 +228,9 @@ async def bot_connect(
                 **session_params,
             }
 
+            # Store session parameters for potential fallback auto-restart
+            pool.store_session_parameters(session_id, session_config)
+
             config_json = json.dumps(session_config) + "\n"
             voice_process.process.stdin.write(config_json.encode("utf-8"))
             await voice_process.process.stdin.drain()
@@ -299,6 +302,16 @@ async def bot_connect(
                     cmd.extend([arg_name] + value)
                 else:
                     cmd.extend([arg_name, str(value)])
+
+        # Store session parameters for potential fallback auto-restart
+        direct_session_config = {
+            "room_url": room_url,
+            "token": bot_token,
+            "session_id": session_id,
+            "client_sid": client_sid,
+            **session_params,
+        }
+        pool.store_session_parameters(session_id, direct_session_config)
 
         logger.bind(session_id=session_id).info(
             f"Launching subprocess with command: {' '.join(cmd)}"
