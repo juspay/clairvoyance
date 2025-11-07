@@ -2,6 +2,7 @@ import os
 
 from dotenv import load_dotenv
 from loguru import logger
+from app.services.open_feature import feature_flags
 
 load_dotenv()
 
@@ -15,6 +16,48 @@ def get_required_env(var_name: str) -> str:
         logger.error(f"{var_name} environment variable is required")
         raise ValueError(f"{var_name} environment variable is required")
     return value
+
+
+def get_env(key: str, default=None, type=str):
+    """
+    Get environment variable with DevCycle integration.
+    
+    Logic:
+    1. Check if key is CORE or SERVICE env
+    2. If CORE → return os.getenv(key, default) 
+    3. If SERVICE → check DevCycle first, then fallback to os.getenv(key, default)
+    
+    Supported types: str, int, float, bool
+    """
+    # TODO: You'll define the core vs service classification logic later
+    # For now, assume all are service (you'll define this later)
+    is_core = False  # We'll define this logic later
+    
+    if is_core:
+        # CORE: Direct environment variable access (like ENABLE_AIC_FILTER)
+        if type == bool:
+            return os.environ.get(key, str(default)).lower() == "true"
+        elif type == int:
+            return int(os.environ.get(key, str(default or 0)))
+        elif type == float:
+            return float(os.environ.get(key, str(default or 0.0)))
+        else:  # str
+            return os.environ.get(key, default)
+    
+    else:
+        # SERVICE: Try DevCycle first, then fallback to environment
+        # Pass original environment key - let feature flag functions handle conversion
+        
+        if type == bool:
+            return feature_flags.is_enabled(key, default)
+        elif type == str:
+            return feature_flags.get_string(key, default or "")
+        elif type == int:
+            return int(feature_flags.get_number(key, float(default or 0)))
+        elif type == float:
+            return feature_flags.get_number(key, default or 0.0)
+        else:  # str
+            return feature_flags.get_string(key, default or "")
 
 
 # Environment

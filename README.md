@@ -20,6 +20,7 @@ The platform is built around a few key components:
 *   **Dynamic Tool Loading:** The `Automatic` agent dynamically loads tools based on the operating mode and credentials, allowing it to interact with services like Juspay and Breeze for analytics.
 *   **Workflow-Driven Conversations:** Agents can follow predefined workflows, such as the order confirmation process in `Breeze Buddy`.
 *   **Environment-Driven Configuration:** All sensitive keys, API endpoints, and settings are managed via a `.env` file.
+*   **Feature Flag Management:** Integrated with DevCycle for dynamic feature control, enabling real-time feature toggling without code deployments.
 *   **Modular & Scalable:** The project is structured for maintainability and easy extension with new agents, tools, or services.
 
 ## 3. Project Structure

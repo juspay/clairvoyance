@@ -42,3 +42,7 @@ PyJWT
 
 # Audio processing
 pydub
+
+# DevCycle OpenFeature Integration
+devcycle-python-server-sdk>=3.13.1
+openfeature-sdk>=0.8.0
