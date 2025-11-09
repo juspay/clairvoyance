@@ -19,7 +19,7 @@ from app.core.config import (
 from app.core.logger import logger
 from app.core.transport.http_client import create_http_client
 
-from ..utils import _rupees_to_paisa
+from ..utils import _paisa_to_rupees, _rupees_to_paisa
 
 
 def safe_construct_url(url: str) -> Optional[urlparse]:
@@ -526,3 +526,263 @@ def validate_and_process_surcharge_rules(
 
     logger.info(f"Successfully validated and processed {len(api_rules)} rules")
     return True, api_rules
+
+
+# Optimization functions for surcharge rule deletion
+def find_adjacent_zero_rules(rules, payment_type, payment_method_type, payment_method):
+    """
+    Identify groups of adjacent zero-rate rules that can be merged.
+
+    Args:
+        rules: List of rules (in rupees format)
+        payment_type: Payment type (COD/PARTIAL)
+        payment_method_type: Payment method type
+        payment_method: Payment method
+
+    Returns:
+        List of rule groups where each group contains adjacent zero-rate rules
+    """
+    # Filter rules for the specific payment type and method
+    filtered_rules = [
+        r
+        for r in rules
+        if r.get("paymentType") == payment_type
+        and r.get("paymentMethodType") == payment_method_type
+        and r.get("paymentMethod") == payment_method
+        and r.get("rate") == 0
+    ]
+
+    if not filtered_rules:
+        return []
+
+    # Sort by minimum order value
+    sorted_rules = sorted(filtered_rules, key=lambda x: x.get("minimumOrderValue", 0))
+
+    adjacent_groups = []
+    current_group = [sorted_rules[0]]
+
+    for i in range(1, len(sorted_rules)):
+        current_rule = sorted_rules[i]
+        previous_rule = current_group[-1]
+
+        # Check if rules are adjacent (previous max + 0.01 = current min)
+        prev_max = previous_rule.get("maximumOrderValue")
+        curr_min = current_rule.get("minimumOrderValue", 0)
+
+        if prev_max is not None and abs(prev_max + 0.01 - curr_min) == 0:
+            # Rules are adjacent, add to current group
+            current_group.append(current_rule)
+        else:
+            # Rules are not adjacent, start new group
+            if len(current_group) > 1:
+                adjacent_groups.append(current_group)
+            current_group = [current_rule]
+
+    # Add the last group if it has multiple rules
+    if len(current_group) > 1:
+        adjacent_groups.append(current_group)
+
+    logger.info(f"Found {len(adjacent_groups)} groups of adjacent zero rules")
+    return adjacent_groups
+
+
+def merge_adjacent_zero_rules(
+    zero_rule_groups, payment_type, payment_method_type, payment_method
+):
+    """
+    Merge adjacent zero-rate rules into optimized single rules.
+
+    Args:
+        zero_rule_groups: List of groups containing adjacent zero rules
+        payment_type: Payment type
+        payment_method_type: Payment method type
+        payment_method: Payment method
+
+    Returns:
+        List of merged rules
+    """
+    merged_rules = []
+
+    for group in zero_rule_groups:
+        if len(group) <= 1:
+            continue
+
+        # Get the range from first rule's min to last rule's max
+        first_rule = group[0]
+        last_rule = group[-1]
+
+        merged_rule = surcharge_rule_template(
+            payment_type,
+            first_rule.get("minimumOrderValue", 0),
+            last_rule.get("maximumOrderValue"),
+            0,
+            first_rule.get("rateType", "AMOUNT"),
+            payment_method,
+            payment_method_type,
+        )
+
+        merged_rules.append(merged_rule)
+
+        logger.info(
+            f"Merged {len(group)} rules into: "
+            f"₹{merged_rule['minimumOrderValue']}-"
+            f"₹{merged_rule['maximumOrderValue'] if merged_rule['maximumOrderValue'] is not None else 'unlimited'}"
+        )
+
+    return merged_rules
+
+
+def optimize_rules_for_deletion(
+    all_rules, target_rule_id, payment_type, payment_method_type, payment_method
+):
+    """
+    Main optimization function that:
+    1. Sets target rule rate to 0
+    2. Finds adjacent zero rules
+    3. Merges them into optimized rules
+    4. Returns the final optimized rule set
+
+    Args:
+        all_rules: All existing rules
+        target_rule_id: ID of rule to be "deleted" (set to 0)
+        payment_type: Payment type
+        payment_method_type: Payment method type
+        payment_method: Payment method
+
+    Returns:
+        Tuple of (success, optimized_rules_or_error_message, backup_data)
+    """
+    try:
+        # Create backup first (inlined logic)
+        filtered_rules = [
+            r
+            for r in all_rules
+            if r.get("paymentType") == payment_type
+            and r.get("paymentMethodType") == payment_method_type
+            and r.get("paymentMethod") == payment_method
+        ]
+
+        backup = {
+            "timestamp": int(time.time() * 1000),
+            "payment_type": payment_type,
+            "payment_method_type": payment_method_type,
+            "payment_method": payment_method,
+            "rules": filtered_rules,
+            "total_rules": len(filtered_rules),
+        }
+
+        logger.info(
+            f"Created backup for {payment_type}-{payment_method_type}: {len(filtered_rules)} rules"
+        )
+
+        # Find the target rule and set its rate to 0
+        target_rule_found = False
+        modified_rules = []
+
+        for rule in all_rules:
+            rule_copy = rule.copy()
+
+            # Convert to rupees if needed for comparison
+            if "minimumOrderValue" in rule_copy:
+                rule_copy["minimumOrderValue"] = _paisa_to_rupees(
+                    rule_copy["minimumOrderValue"]
+                )
+            if (
+                "maximumOrderValue" in rule_copy
+                and rule_copy["maximumOrderValue"] is not None
+            ):
+                rule_copy["maximumOrderValue"] = _paisa_to_rupees(
+                    rule_copy["maximumOrderValue"]
+                )
+
+            # Check if this is the target rule
+            if (
+                rule.get("id") == target_rule_id
+                and rule.get("paymentType") == payment_type
+                and rule.get("paymentMethodType") == payment_method_type
+                and rule.get("paymentMethod") == payment_method
+            ):
+                rule_copy["rate"] = 0
+                target_rule_found = True
+                logger.info(f"Set target rule {target_rule_id} rate to 0")
+
+            modified_rules.append(rule_copy)
+
+        if not target_rule_found:
+            return False, f"Target rule {target_rule_id} not found", backup
+
+        # Find adjacent zero rules
+        adjacent_groups = find_adjacent_zero_rules(
+            modified_rules, payment_type, payment_method_type, payment_method
+        )
+
+        if not adjacent_groups:
+            logger.info("No adjacent zero rules found for merging")
+            # Still return the modified rules (with target set to 0) even if no merging is possible
+            filtered_rules = [
+                r
+                for r in modified_rules
+                if r.get("paymentType") == payment_type
+                and r.get("paymentMethodType") == payment_method_type
+                and r.get("paymentMethod") == payment_method
+            ]
+
+            # Ultimate optimization: If only one rule remains with 0 rate, delete all rules
+            if len(filtered_rules) == 1 and filtered_rules[0].get("rate") == 0:
+                logger.info(
+                    "ULTIMATE OPTIMIZATION: Single zero-rate rule detected - removing all rules"
+                )
+                logger.info(
+                    f"Optimization complete: {len(backup['rules'])} → 0 rules (all rules eliminated)"
+                )
+                return True, [], backup
+
+            return True, filtered_rules, backup
+
+        # Merge adjacent zero rules
+        merged_rules = merge_adjacent_zero_rules(
+            adjacent_groups, payment_type, payment_method_type, payment_method
+        )
+
+        # Create final rule set: non-zero rules + merged zero rules
+        final_rules = []
+        # Get all rules that are not part of any adjacent group
+        rules_in_groups = set()
+        for group in adjacent_groups:
+            for rule in group:
+                rules_in_groups.add(id(rule))
+
+        for rule in modified_rules:
+            if (
+                rule.get("paymentType") == payment_type
+                and rule.get("paymentMethodType") == payment_method_type
+                and rule.get("paymentMethod") == payment_method
+            ):
+                # Only include if not part of an adjacent group
+                if id(rule) not in rules_in_groups:
+                    final_rules.append(rule)
+
+        # Add merged rules
+        final_rules.extend(merged_rules)
+
+        # Sort by minimum order value
+        final_rules = sorted(final_rules, key=lambda x: x.get("minimumOrderValue", 0))
+
+        # Ultimate optimization: If only one rule remains with 0 rate, delete all rules
+        if len(final_rules) == 1 and final_rules[0].get("rate") == 0:
+            logger.info(
+                "ULTIMATE OPTIMIZATION: Single zero-rate rule detected - removing all rules"
+            )
+            logger.info(
+                f"Optimization complete: {len(backup['rules'])} → 0 rules (all rules eliminated)"
+            )
+            return True, [], backup
+
+        logger.info(
+            f"Optimization complete: {len(backup['rules'])} → {len(final_rules)} rules"
+        )
+        return True, final_rules, backup
+
+    except Exception as e:
+        logger.error(f"Error in rule optimization: {e}")
+        return False, f"Optimization failed: {str(e)}", None

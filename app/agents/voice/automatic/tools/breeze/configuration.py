@@ -22,8 +22,10 @@ from .utils import (
     detect_surcharge_rule_overlaps,
     format_announcement_html,
     get_current_shop_config_data,
+    optimize_rules_for_deletion,
     patch_shop_config,
     remove_html_tags,
+    surcharge_rule_template,
     validate_and_process_surcharge_rules,
 )
 
@@ -34,10 +36,20 @@ shop_url: str | None = None
 merchant_id: str | None = None
 user_id: str | None = None
 
+COD_PAYMENT_METHOD_TYPES = {"CASH", "UPI", "NB", "WALLET", "CARD", "*"}
+
 
 async def get_surcharge_rules(params: FunctionCallParams):
-    """Retrieves surcharge rules with an option to filter by payment type. Values are in rupees."""
-    payment_type = params.arguments.get("paymentType", "ALL")
+    """Retrieves surcharge rules with an option to filter by payment method type. Values are in rupees."""
+    payment_method_type = params.arguments.get("paymentMethodType", "*")
+
+    # When paymentMethodType is "*", show ALL rules regardless of payment type
+    if payment_method_type == "*":
+        payment_type = "ALL"
+    elif payment_method_type in COD_PAYMENT_METHOD_TYPES:
+        payment_type = "COD"
+    else:
+        payment_type = "PARTIAL"
 
     # Check authentication first
     if not shop_id:
@@ -110,21 +122,19 @@ async def get_surcharge_rules(params: FunctionCallParams):
         )
 
 
-# Helper functions for the unified manage_surcharge_tools function
+# Helper functions for the unified manage_vayu_surcharge function
 async def _handle_create_surcharge_rule(params: FunctionCallParams):
     """Internal helper: Creates one or more new surcharge rules for a specific payment type. Ensures rules are unique and not already present."""
     rules = params.arguments.get("rules", [])
-    payment_type = params.arguments.get("paymentType", "COD")
-    payment_method_type = params.arguments.get("paymentMethodType", "CASH")
-    logger.info(
-        f"Received paymentMethodType: '{payment_method_type}' (type: {type(payment_method_type)})"
-    )
+    payment_method_type = params.arguments.get("paymentMethodType", "*")
+
+    if payment_method_type in COD_PAYMENT_METHOD_TYPES:
+        payment_type = "COD"
+    else:
+        payment_type = "PARTIAL"
 
     payment_method = "*"
 
-    logger.info(
-        f"Derived paymentMethod: '{payment_method}' from paymentMethodType: '{payment_method_type}'"
-    )
     if not rules:
         await params.result_callback(
             {
@@ -134,23 +144,17 @@ async def _handle_create_surcharge_rule(params: FunctionCallParams):
         )
         return
 
-    # Enhanced config validation
     if not all([shop_id, AWS_VAYU_WRITE_API_KEY, AWS_VAYU_URL]):
         await params.result_callback(
             {
                 "success": False,
-                "error": "Server misconfiguration. Missing required configuration (shop_id, VAYU_WRITE_API_KEY, or VAYU_URL).",
+                "error": "Server misconfiguration. Missing required configuration.",
             }
         )
         return
 
-    logger.info(
-        f"Creating {len(rules)} surcharge rules for shop {shop_id}, payment type: {payment_type}"
-    )
-
     try:
-        logger.info("Checking for existing rules to avoid duplicates")
-
+        # Get existing rules to check for overlaps
         headers = {
             "Content-Type": "application/json",
             "Authorization": AWS_VAYU_READ_API_KEY,
@@ -162,8 +166,8 @@ async def _handle_create_surcharge_rule(params: FunctionCallParams):
                 response = await client.get(endpoint, headers=headers)
                 response.raise_for_status()
                 result = response.json()
-
                 existing_rules_raw = result.get("rules", [])
+
                 # Convert paisa to rupees for comparison
                 existing_rules = []
                 for rule in existing_rules_raw:
@@ -177,42 +181,30 @@ async def _handle_create_surcharge_rule(params: FunctionCallParams):
                             converted_rule["maximumOrderValue"]
                         )
                     existing_rules.append(converted_rule)
-
         except Exception as e:
-            logger.warning(
-                f"Could not retrieve existing rules for duplicate check: {e}, proceeding with creation"
-            )
+            logger.warning(f"Could not retrieve existing rules: {e}")
             existing_rules = []
 
-        # Check for overlaps with existing rules BEFORE processing
+        # Check for overlaps with existing rules
         has_overlaps, overlap_details = detect_surcharge_rule_overlaps(
             rules, existing_rules, payment_type, payment_method_type, payment_method
         )
 
         if has_overlaps:
             error_message = (
-                f"Cannot create rules due to overlaps with existing {payment_type} rules:\n"
-                + "\n".join(overlap_details)
+                f"Cannot create rules due to overlaps: {'; '.join(overlap_details)}"
             )
-            logger.warning(error_message)
             await params.result_callback({"success": False, "error": error_message})
             return
 
-        # Add payment method details to each rule before validation
-        for i, rule in enumerate(rules):
+        # Add payment method details to each rule
+        for rule in rules:
             if "paymentMethodType" not in rule:
                 rule["paymentMethodType"] = payment_method_type
-                logger.info(
-                    f"Rule {i}: Added paymentMethodType='{payment_method_type}'"
-                )
             if "paymentMethod" not in rule:
                 rule["paymentMethod"] = payment_method
-                logger.info(f"Rule {i}: Added paymentMethod='{payment_method}'")
-            logger.info(
-                f"Rule {i} final state: paymentMethodType='{rule.get('paymentMethodType')}', paymentMethod='{rule.get('paymentMethod')}'"
-            )
 
-        # SIMPLIFIED VALIDATION: Use the new streamlined function
+        # Validate and process rules
         success, result = validate_and_process_surcharge_rules(
             rules, payment_type, payment_method_type, payment_method
         )
@@ -221,39 +213,25 @@ async def _handle_create_surcharge_rule(params: FunctionCallParams):
             await params.result_callback({"success": False, "error": result})
             return
 
-        # result contains the API-ready rules
         api_rules = result
-
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": AWS_VAYU_WRITE_API_KEY,
-        }
-
+        headers["Authorization"] = AWS_VAYU_WRITE_API_KEY
         payload = {"rules": api_rules, "shopId": shop_id}
-
-        # Log the payload being sent to API for debugging
-        logger.info(f"Sending payload to API: {json.dumps(payload, indent=2)}")
-        for i, rule in enumerate(api_rules):
-            logger.info(
-                f"API Rule {i}: paymentMethod='{rule.get('paymentMethod')}', paymentMethodType='{rule.get('paymentMethodType')}'"
-            )
-
         endpoint = f"{AWS_VAYU_URL}/surcharge/rule/create"
 
         async with create_http_client(timeout=30.0) as client:
             response = await client.post(endpoint, json=payload, headers=headers)
             response.raise_for_status()
             result = response.json()
-            logger.info(f"Successfully created {len(api_rules)} surcharge rules")
 
-            # Enhanced response
             enhanced_result = result.copy() if result else {}
             enhanced_result["rulesCreated"] = len(api_rules)
 
-            message = f"Successfully created {len(api_rules)} surcharge rules for {payment_type}"
-
             await params.result_callback(
-                {"success": True, "data": enhanced_result, "message": message}
+                {
+                    "success": True,
+                    "data": enhanced_result,
+                    "message": f"Successfully created {len(api_rules)} surcharge rules for {payment_type}",
+                }
             )
 
     except httpx.RequestError as e:
@@ -284,81 +262,301 @@ async def _handle_create_surcharge_rule(params: FunctionCallParams):
 
 
 async def _handle_delete_surcharge_rule(params: FunctionCallParams):
-    """Internal helper: Deletes a specific surcharge rule."""
+    """
+    Internal helper: Optimized deletion that:
+    1. Backs up original rules
+    2. Sets target rule rate to 0
+    3. Finds and merges adjacent zero rules
+    4. Uses existing create function for validation and recreation
+    5. Handles rollback on failure
+    """
+    logger.info(
+        "OPTIMIZE DELETE FUNCTION CALLED - Advanced optimization will be performed"
+    )
     rule_id = params.arguments.get("ruleId")
-
+    rules = params.arguments.get("rules", [])
+    logger.info("llm rules")
+    logger.info(rules)
     if not rule_id:
         await params.result_callback(
-            {"success": False, "error": "Rule ID is required to delete surcharge rule."}
+            {"success": False, "error": "Rule ID is required for optimized deletion."}
         )
         return
 
     # Authentication check
-    if not shop_id or not AWS_VAYU_WRITE_API_KEY:
-        logger.error("Delete surcharge rule called without required authentication.")
+    if not all([shop_id, AWS_VAYU_WRITE_API_KEY, AWS_VAYU_READ_API_KEY]):
         await params.result_callback(
-            {"error": "Authentication is missing. Cannot delete surcharge rule."}
+            {
+                "success": False,
+                "error": "Authentication is missing for optimized deletion.",
+            }
         )
         return
 
-    logger.info(f"Deleting surcharge rule {rule_id}")
-
     try:
+        # Step 1: First GET all existing rules (NOT DELETE!)
         headers = {
             "Content-Type": "application/json",
-            "Authorization": AWS_VAYU_WRITE_API_KEY,
+            "Authorization": AWS_VAYU_READ_API_KEY,
         }
-
-        endpoint = f"{AWS_VAYU_URL}/surcharge/rule?ruleId={rule_id}"
+        endpoint = f"{AWS_VAYU_URL}/surcharge/rule?shopId={shop_id}"
 
         async with create_http_client() as client:
-            response = await client.delete(endpoint, headers=headers)
+            response = await client.get(endpoint, headers=headers)
             response.raise_for_status()
             result = response.json()
-            logger.info(f"Successfully deleted surcharge rule {rule_id}")
+            all_existing_rules = result.get("rules", [])
+
+        if not all_existing_rules:
+            await params.result_callback(
+                {"success": False, "error": "No existing rules found for optimization."}
+            )
+            return
+
+        # Step 2: Find target rule and extract payment details
+        target_rule = None
+        for rule in all_existing_rules:
+            if rule.get("id") == rule_id:
+                target_rule = rule
+                break
+
+        if not target_rule:
+            await params.result_callback(
+                {"success": False, "error": f"Target rule {rule_id} not found"}
+            )
+            return
+
+        # Extract payment details from target rule
+        payment_type = target_rule.get("paymentType")
+        payment_method_type = target_rule.get("paymentMethodType")
+        payment_method = target_rule.get("paymentMethod")
+
+        logger.info(
+            f"Starting optimized deletion for rule {rule_id} ({payment_type}-{payment_method_type}-{payment_method})"
+        )
+
+        # Step 3: Optimize rules (with all 5 required parameters)
+        success, optimized_result, backup_data = optimize_rules_for_deletion(
+            all_existing_rules,
+            rule_id,
+            payment_type,
+            payment_method_type,
+            payment_method,
+        )
+
+        if not success:
+            await params.result_callback(
+                {"success": False, "error": f"Optimization failed: {optimized_result}"}
+            )
+            return
+
+        optimized_rules = optimized_result
+        logger.info(
+            f"Optimization successful: {len(optimized_rules)} rules after optimization"
+        )
+
+        rules_to_delete = [
+            r
+            for r in all_existing_rules
+            if r.get("paymentType") == payment_type
+            and r.get("paymentMethodType") == payment_method_type
+        ]
+
+        deleted_count = 0
+        headers["Authorization"] = AWS_VAYU_WRITE_API_KEY
+
+        for rule in rules_to_delete:
+            if rule_id_to_delete := rule.get("id"):
+                try:
+                    delete_endpoint = (
+                        f"{AWS_VAYU_URL}/surcharge/rule?ruleId={rule_id_to_delete}"
+                    )
+                    async with create_http_client() as client:
+                        await client.delete(delete_endpoint, headers=headers)
+                    deleted_count += 1
+                except Exception as e:
+                    logger.warning(f"Failed to delete rule {rule_id_to_delete}: {e}")
+
+        logger.info(f"Deleted {deleted_count} existing rules")
+
+        # Step 4: Use existing create function to recreate optimized rules
+        try:
+            # Prepare rules for creation using the surcharge template
+            rules_for_creation = []
+            for rule in optimized_rules:
+                create_rule = surcharge_rule_template(
+                    payment_type=payment_type,
+                    min_val=rule.get("minimumOrderValue", 0),
+                    max_val=rule.get("maximumOrderValue"),
+                    rate=rule.get("rate"),
+                    rate_type=rule.get("rateType", "AMOUNT"),
+                    payment_method_type=rule.get(
+                        "paymentMethodType", payment_method_type
+                    ),
+                    payment_method=rule.get("paymentMethod", payment_method),
+                )
+                rules_for_creation.append(create_rule)
+
+            if rules_for_creation:
+                # Add payment method details to each rule
+                for rule in rules_for_creation:
+                    if "paymentMethodType" not in rule:
+                        rule["paymentMethodType"] = payment_method_type
+                    if "paymentMethod" not in rule:
+                        rule["paymentMethod"] = payment_method
+
+                # Validate and process
+                success, result = validate_and_process_surcharge_rules(
+                    rules_for_creation, payment_type, payment_method_type
+                )
+
+                if not success:
+                    raise Exception(f"Validation failed: {result}")
+
+                api_rules = result
+                payload = {"rules": api_rules, "shopId": shop_id}
+                create_endpoint = f"{AWS_VAYU_URL}/surcharge/rule/create"
+
+                async with create_http_client(timeout=30.0) as client:
+                    response = await client.post(
+                        create_endpoint, json=payload, headers=headers
+                    )
+                    response.raise_for_status()
+                    create_result = response.json()
+
+                created_count = len(api_rules)
+                logger.info(f"Successfully created {created_count} optimized rules")
+            else:
+                created_count = 0
+                logger.info("No rules to create after optimization")
+
+            # Step 5: Success response
+            optimization_summary = (
+                f"Optimized deletion completed: "
+                f"deleted {deleted_count} rules, created {created_count} optimized rules"
+            )
 
             await params.result_callback(
                 {
                     "success": True,
-                    "data": result,
-                    "message": f"Successfully deleted surcharge rule {rule_id}.",
+                    "data": {
+                        "rulesDeleted": deleted_count,
+                        "rulesCreated": created_count,
+                        "originalRuleCount": (
+                            len(backup_data["rules"]) if backup_data else 0
+                        ),
+                        "optimizedRuleCount": created_count,
+                        "rulesSaved": (len(backup_data["rules"]) if backup_data else 0)
+                        - created_count,
+                    },
+                    "message": optimization_summary,
+                    "backup": {
+                        "timestamp": backup_data["timestamp"] if backup_data else None,
+                        "originalRules": (
+                            len(backup_data["rules"]) if backup_data else 0
+                        ),
+                    },
                 }
             )
 
+        except Exception as create_error:
+            # Step 6: Rollback on creation failure
+            logger.error(f"Creation failed, attempting rollback: {create_error}")
+
+            try:
+                # Restore from backup
+                if backup_data and backup_data.get("rules"):
+                    restore_rules = []
+                    for rule in backup_data["rules"]:
+                        restore_rule = {
+                            "rate": rule.get("rate"),
+                            "rateType": rule.get("rateType", "AMOUNT"),
+                            "minimumOrderValue": _paisa_to_rupees(
+                                rule.get("minimumOrderValue", 0)
+                            ),
+                            "maximumOrderValue": (
+                                _paisa_to_rupees(rule.get("maximumOrderValue"))
+                                if rule.get("maximumOrderValue") is not None
+                                else None
+                            ),
+                            "paymentMethodType": rule.get(
+                                "paymentMethodType", payment_method_type
+                            ),
+                            "paymentMethod": rule.get("paymentMethod", payment_method),
+                        }
+                        restore_rules.append(restore_rule)
+
+                    # Use existing create function for rollback
+                    from .utils import validate_and_process_surcharge_rules
+
+                    success, result = validate_and_process_surcharge_rules(
+                        restore_rules, payment_type, payment_method_type
+                    )
+
+                    if success:
+                        api_rules = result
+                        payload = {"rules": api_rules, "shopId": shop_id}
+
+                        async with create_http_client(timeout=30.0) as client:
+                            response = await client.post(
+                                create_endpoint, json=payload, headers=headers
+                            )
+                            response.raise_for_status()
+
+                        logger.info("Successfully restored from backup")
+                        await params.result_callback(
+                            {
+                                "success": False,
+                                "error": f"Optimization failed during creation, rules restored from backup: {str(create_error)}",
+                                "rollback": "completed",
+                            }
+                        )
+                    else:
+                        raise Exception("Rollback validation failed")
+                else:
+                    raise Exception("No backup data available for rollback")
+
+            except Exception as rollback_error:
+                logger.error(f"Rollback failed: {rollback_error}")
+                await params.result_callback(
+                    {
+                        "success": False,
+                        "error": f"Optimization failed and rollback failed: {str(create_error)}. Manual intervention required.",
+                        "rollback": "failed",
+                        "rollbackError": str(rollback_error),
+                    }
+                )
+
     except httpx.HTTPStatusError as e:
         logger.error(
-            f"HTTP error deleting surcharge rule: {e.response.status_code} - {e.response.text}"
+            f"HTTP error in optimized deletion: {e.response.status_code} - {e.response.text}"
         )
         await params.result_callback(
             {
                 "success": False,
-                "error": f"API error: {e.response.status_code}",
+                "error": f"API error during optimized deletion: {e.response.status_code}",
                 "details": e.response.text,
             }
         )
     except Exception as e:
-        logger.error(f"Unexpected error deleting surcharge rule: {e}")
+        logger.error(f"Unexpected error in optimized deletion: {e}")
         await params.result_callback(
-            {"success": False, "error": f"An unexpected error occurred: {e}"}
+            {"success": False, "error": f"Optimized deletion failed: {str(e)}"}
         )
 
 
 async def _handle_update_surcharge_rule(params: FunctionCallParams):
     """Internal helper: Simple update - delete all existing rules for payment type, then create new ones."""
     rules = params.arguments.get("rules", [])
-    payment_type = params.arguments.get("paymentType", "COD")
-    payment_method_type = params.arguments.get("paymentMethodType", "CASH")
-    logger.info(
-        f"UPDATE: Received paymentMethodType: '{payment_method_type}' (type: {type(payment_method_type)})"
-    )
+    payment_method_type = params.arguments.get("paymentMethodType", "*")
+
+    if payment_method_type in COD_PAYMENT_METHOD_TYPES:
+        payment_type = "COD"
+    else:
+        payment_type = "PARTIAL"
 
     payment_method = "*"
 
-    logger.info(
-        f"UPDATE: Derived paymentMethod: '{payment_method}' from paymentMethodType: '{payment_method_type}'"
-    )
-
-    # Basic validation
     if not all([shop_id, AWS_VAYU_WRITE_API_KEY, AWS_VAYU_URL]):
         await params.result_callback(
             {
@@ -367,8 +565,6 @@ async def _handle_update_surcharge_rule(params: FunctionCallParams):
             }
         )
         return
-
-    logger.info(f"Updating {payment_type} rules for shop {shop_id}")
 
     # Basic rule validation
     if rules:
@@ -383,10 +579,9 @@ async def _handle_update_surcharge_rule(params: FunctionCallParams):
                 return
 
     try:
-        # Step 1: Validate new rules FIRST (before making any changes)
+        # Validate new rules first
         api_rules = None
         if rules:
-            # Add payment method details to each rule before validation
             for rule in rules:
                 if "paymentMethodType" not in rule:
                     rule["paymentMethodType"] = payment_method_type
@@ -403,7 +598,7 @@ async def _handle_update_surcharge_rule(params: FunctionCallParams):
                 return
             api_rules = result
 
-        # Step 2: Get existing rules to delete
+        # Get existing rules to delete
         headers = {
             "Content-Type": "application/json",
             "Authorization": AWS_VAYU_READ_API_KEY,
@@ -415,7 +610,7 @@ async def _handle_update_surcharge_rule(params: FunctionCallParams):
             response.raise_for_status()
             existing_rules = response.json().get("rules", [])
 
-        # Step 3: Delete existing rules for this payment type
+        # Delete existing rules for this payment type
         rules_to_delete = [
             r
             for r in existing_rules
@@ -436,7 +631,7 @@ async def _handle_update_surcharge_rule(params: FunctionCallParams):
                 except Exception as e:
                     logger.warning(f"Failed to delete rule {rule_id}: {e}")
 
-        # Step 4: Create new rules (if any)
+        # Create new rules if any
         created_count = 0
         if api_rules:
             payload = {"rules": api_rules, "shopId": shop_id}
@@ -449,11 +644,12 @@ async def _handle_update_surcharge_rule(params: FunctionCallParams):
                 response.raise_for_status()
                 created_count = len(api_rules)
 
-        # Step 5: Success response
-        if rules:
-            message = f"Updated {payment_type} rules: deleted {deleted_count}, created {created_count}"
-        else:
-            message = f"Cleared all {payment_type} rules: deleted {deleted_count}"
+        # Success response
+        message = (
+            f"Updated {payment_type} rules: deleted {deleted_count}, created {created_count}"
+            if rules
+            else f"Cleared all {payment_type} rules: deleted {deleted_count}"
+        )
 
         await params.result_callback(
             {
@@ -471,7 +667,7 @@ async def _handle_update_surcharge_rule(params: FunctionCallParams):
 
 
 # Unified surcharge management function
-async def manage_surcharge_tools(params: FunctionCallParams):
+async def manage_vayu_surcharge(params: FunctionCallParams):
     """
     Unified function to manage surcharge rule operations (create, delete, update).
     The 'action' parameter determines which operation to perform.
@@ -785,19 +981,29 @@ get_surcharge_rules_function = FunctionSchema(
     },
     required=[],
 )
+#     - When in doubt, use CONVERT_TO_ZERO strategies instead of merging
 
-manage_surcharge_tools_function = FunctionSchema(
-    name="manage_surcharge_tools",
-    description="Unified tool for managing surcharge rule operations (create, delete, update). Use the 'action' parameter to specify which operation to perform.",
+manage_vayu_surcharge_function = FunctionSchema(
+    name="manage_vayu_surcharge",
+    description="""Manages surcharge rule operations for payment systems.
+
+🚨 IMPORTANT: After ANY surcharge operation, ALWAYS call get_surcharge_rules() to display current rules with proper rupee values! 
+
+Actions available:
+- **create**: Add new surcharge rules with validation for overlaps and gaps
+- **delete**: Intelligent deletion with adjacent zero-rule merging and optimization (automatically optimizes rules)
+- **update**: Replace all rules for a payment type (delete existing + create new)
+
+The delete action automatically performs optimization to minimize rules by merging adjacent zero-rate rules.""",
     properties={
         "action": {
             "type": "string",
             "enum": ["create", "delete", "update"],
-            "description": "The operation to perform: 'create' adds new rules, 'delete' removes a specific rule, 'update' replaces all rules for a payment type.",
+            "description": "The operation to perform: 'create' adds new rules, 'delete' removes a specific rule with automatic optimization and rule merging, 'update' replaces all rules for a payment type.",
         },
         "rules": {
             "type": "array",
-            "description": "Array of surcharge rule objects. Required for 'create' and 'update' actions. For 'update', providing an empty array clears all rules for the payment type.",
+            "description": "🚨 MANDATORY FOR DELETE: Array of surcharge rule objects with the complete optimized rule set after deletion. Required for 'create', 'update', and 'delete' actions. For 'update', providing an empty array clears all rules for the payment type. For 'delete', NEVER omit this - provide the complete set of rules that should exist after the deletion.",
             "items": {
                 "type": "object",
                 "properties": {
@@ -812,11 +1018,11 @@ manage_surcharge_tools_function = FunctionSchema(
                     },
                     "minimumOrderValue": {
                         "type": "number",
-                        "description": "Minimum order value for this rule to apply in rupees. Optional, defaults to 0.",
+                        "description": "Minimum order value for this rule to apply in RUPEES. Optional, defaults to 0. The system will convert this to paisa internally.",
                     },
                     "maximumOrderValue": {
                         "type": "number",
-                        "description": "Maximum order value for this rule to apply in rupees. Optional, no limit if not specified.",
+                        "description": "Maximum order value for this rule to apply in RUPEES. Optional, no limit if not specified. The system will convert this to paisa internally.",
                     },
                     "paymentMethodType": {
                         "type": "string",
@@ -849,11 +1055,11 @@ manage_surcharge_tools_function = FunctionSchema(
 standard_tools = [
     manage_announcement_banner_function,
     get_surcharge_rules_function,
-    manage_surcharge_tools_function,
+    manage_vayu_surcharge_function,
 ]
 tool_functions = {
     "manage_announcement_banner": manage_announcement_banner,
     "get_surcharge_rules": get_surcharge_rules,
-    "manage_surcharge_tools": manage_surcharge_tools,
+    "manage_vayu_surcharge": manage_vayu_surcharge,
 }
 tools = ToolsSchema(standard_tools=standard_tools)
