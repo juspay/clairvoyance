@@ -595,7 +595,9 @@ async def create_euler_offer(params: FunctionCallParams):
         }
 
         # Convert IST dates to ISO format for API payload
-        logger.info(f"[DEBUG] Starting date conversion for start_date: {start_date}, end_date: {end_date}")
+        logger.info(
+            f"[DEBUG] Starting date conversion for start_date: {start_date}, end_date: {end_date}"
+        )
         try:
             ist = pytz.timezone("Asia/Kolkata")
 
@@ -625,7 +627,9 @@ async def create_euler_offer(params: FunctionCallParams):
             return
 
         # Build payment instruments payload
-        logger.info(f"[DEBUG] Building payment instruments payload for: {payment_instruments}")
+        logger.info(
+            f"[DEBUG] Building payment instruments payload for: {payment_instruments}"
+        )
         if payment_instruments:
             payment_instruments_payload = [
                 instrument_map[instrument]
@@ -713,11 +717,16 @@ async def create_euler_offer(params: FunctionCallParams):
 
             # Make API request
             endpoint = f"{EULER_DASHBOARD_API_URL}/api/offers/dashboard/create?merchant_id={merchant_id}"
-            headers = {"Content-Type": "application/json", "x-web-logintoken": euler_token}
+            headers = {
+                "Content-Type": "application/json",
+                "x-web-logintoken": euler_token,
+            }
             logger.info(f"[DEBUG] Endpoint and headers prepared: {endpoint}")
 
         except Exception as e:
-            logger.error(f"[DEBUG] Error during API payload construction: {e}", exc_info=True)
+            logger.error(
+                f"[DEBUG] Error during API payload construction: {e}", exc_info=True
+            )
             await params.result_callback(
                 {
                     "error": f"Tool Error: [create_euler_offer] Error constructing API payload: {str(e)}"
@@ -728,20 +737,24 @@ async def create_euler_offer(params: FunctionCallParams):
         logger.info(f"Making offer creation request to: {endpoint}")
         logger.info(f"Payload size: {len(str(api_payload))} characters")
         try:
-            logger.info(f"Payload preview: {json.dumps(api_payload, indent=2)[:500]}...")
+            logger.info(
+                f"Payload preview: {json.dumps(api_payload, indent=2)[:500]}..."
+            )
         except Exception as e:
             logger.error(f"Failed to serialize payload for logging: {e}")
 
         async with create_http_client(timeout=10.0) as client:
             response = await client.post(endpoint, json=api_payload, headers=headers)
-            logger.info(f"Received response from Euler API: Status {response.status_code}")
+            logger.info(
+                f"Received response from Euler API: Status {response.status_code}"
+            )
             logger.info(f"Response headers: {dict(response.headers)}")
             try:
                 response_text = response.text
                 logger.info(f"Response body: {response_text}")
             except Exception as e:
                 logger.error(f"Failed to read response body: {e}")
-            
+
             if response.status_code == 200:
                 response_data = response.json()
                 offer_id = response_data.get("offer_id")
