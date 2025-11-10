@@ -35,8 +35,8 @@ from app.agents.voice.breeze_buddy.analytics.tracing_setup import (
     auto_trace,
     setup_tracing,
 )
-from app.agents.voice.breeze_buddy.workflows.order_confirmation.types import OrderData
 from app.agents.voice.breeze_buddy.stt import get_stt_service
+from app.agents.voice.breeze_buddy.workflows.order_confirmation.types import OrderData
 from app.agents.voice.breeze_buddy.workflows.order_confirmation.utils import (
     OUTCOME_TO_ENUM,
     indian_number_to_speech,
@@ -59,7 +59,7 @@ from app.core.config import (
 )
 from app.core.logger import logger
 from app.core.security.sha import calculate_hmac_sha256
-from app.database.accessor import get_lead_by_call_id
+from app.database.accessor import get_lead_by_call_id, update_lead_call_initiated_time
 from app.schemas import CallProvider, LeadCallOutcome, RequestedBy
 
 load_dotenv(override=True)
@@ -88,6 +88,7 @@ class OrderConfirmationBot:
         self.shop_name = None
         self.address = None
         self.updated_address = None
+        self.cancellation_reason = None
         self.updated_fields = {}  # Track only updated fields for webhook
         self.serializer = serializer
         self.hangup_function = hangup_function
@@ -99,6 +100,7 @@ class OrderConfirmationBot:
     async def run(self):
         logger.info("Starting WebSocket bot")
         await self.ws.accept()
+        call_initiated_time = datetime.now(timezone.utc)
 
         try:
             start_data = self.ws.iter_text()
@@ -155,6 +157,7 @@ class OrderConfirmationBot:
             stream_sid = call_data.get("stream_sid")
             self.call_sid = call_data.get("start").get("call_sid")
 
+        await update_lead_call_initiated_time(self.call_sid, call_initiated_time)
         lead = await get_lead_by_call_id(self.call_sid)
         if not lead:
             logger.error(f"Could not find lead for call_sid: {self.call_sid}")
@@ -267,7 +270,6 @@ class OrderConfirmationBot:
         self.system_prompt = self._get_system_prompt(
             self.shop_name,
             customer_name,
-            self.order_id,
             self.order_summary,
             price_words,
             self.address,
@@ -380,7 +382,6 @@ class OrderConfirmationBot:
         self,
         shop_name,
         customer_name,
-        order_id,
         order_summary,
         total_price_words,
         address,
@@ -450,19 +451,22 @@ class OrderConfirmationBot:
 
             call_duration = None
             if self.lead and self.lead.call_initiated_time:
+                call_initiated_time_utc = self.lead.call_initiated_time.astimezone(
+                    timezone.utc
+                )
                 call_duration = (
-                    datetime.now(timezone.utc) - self.lead.call_initiated_time
+                    datetime.now(timezone.utc) - call_initiated_time_utc
                 ).total_seconds()
 
             summary_data = {
                 "callSid": self.call_sid,
+                "cancellationReason": self.cancellation_reason,
                 "outcome": call_outcome,
                 "updatedAddress": self.updated_address,
+                "attemptCount": self.lead.attempt_count + 1,
+                "callDuration": call_duration,
                 "orderId": self.order_id,
             }
-            if self.lead.merchant_id != RequestedBy.BREEZE:
-                summary_data["attemptCount"] = self.lead.attempt_count + 1
-                summary_data["callDuration"] = call_duration
             logger.info(f"Call summary data: {summary_data}")
 
             if self.reporting_webhook_url and call_outcome != LeadCallOutcome.BUSY:
@@ -502,6 +506,7 @@ class OrderConfirmationBot:
                     },
                     call_end_time=datetime.now(),
                     updated_address=self.updated_address,
+                    cancellation_reason=self.cancellation_reason,
                 )
                 logger.info(
                     f"Updated database for call_id: {self.call_sid} with outcome: {call_outcome}"
@@ -533,9 +538,14 @@ class OrderConfirmationBot:
             ),
             FlowsFunctionSchema(
                 name="cancel_order",
-                description="Call this function to cancel the user's order.",
+                description="Call this function to cancel the user's order. If the user gives a reason for cancellation, pass it.",
                 handler=self._deny_order_handler,
-                properties={},
+                properties={
+                    "reason": {
+                        "type": "string",
+                        "description": "The reason for cancelling the order.",
+                    }
+                },
                 required=[],
             ),
         ]
@@ -558,9 +568,14 @@ class OrderConfirmationBot:
             ),
             FlowsFunctionSchema(
                 name="cancel_order",
-                description="Call this function to cancel the user's order.",
+                description="Call this function to cancel the user's order. If the user gives a reason for cancellation, pass it.",
                 handler=self._deny_order_handler,
-                properties={},
+                properties={
+                    "reason": {
+                        "type": "string",
+                        "description": "The reason for cancelling the order.",
+                    }
+                },
                 required=[],
             ),
             FlowsFunctionSchema(
@@ -766,10 +781,19 @@ class OrderConfirmationBot:
             "order_confirmation_with_question_and_end"
         )
 
+    def _get_cancellation_reason(self, reason: str | dict) -> str:
+        """Extracts the cancellation reason from the LLM, which can be a string or a dict."""
+        if isinstance(reason, dict):
+            return reason.get("reason", "User requested for cancellation")
+        return reason
+
     @auto_trace("cancel_order")
-    async def _deny_order_handler(self):
-        logger.info("Order denied. Transitioning to cancellation node.")
+    async def _deny_order_handler(self, reason: str = "user asked to cancel"):
+        logger.info(
+            f"Order denied with reason: {reason}. Transitioning to cancellation node."
+        )
         self.outcome = "cancelled"
+        self.cancellation_reason = self._get_cancellation_reason(reason)
         return {}, self._create_node_from_config("order_cancellation_and_end")
 
     @auto_trace("user_busy")

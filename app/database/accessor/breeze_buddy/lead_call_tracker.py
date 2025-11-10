@@ -19,6 +19,7 @@ from app.database.queries.breeze_buddy.lead_call_tracker import (
     insert_lead_call_tracker_query,
     update_lead_call_completion_details_query,
     update_lead_call_details_query,
+    update_lead_call_initiated_time_query,
     update_lead_call_recording_url_query,
 )
 from app.schemas import (
@@ -154,6 +155,32 @@ async def get_lead_by_call_id(call_id: str) -> Optional[LeadCallTracker]:
 
     except Exception as e:
         logger.error(f"Error getting lead: {e}")
+        return None
+
+
+async def update_lead_call_initiated_time(
+    call_id: str, call_initiated_time: datetime
+) -> Optional[LeadCallTracker]:
+    """
+    Update lead call initiated time.
+    """
+    logger.info(f"Updating lead with call ID {call_id} with call initiated time")
+
+    try:
+        query_text, values = update_lead_call_initiated_time_query(
+            call_id, call_initiated_time
+        )
+        result = await run_parameterized_query(query_text, values)
+        if result and get_row_count(result) > 0:
+            decoded_result = decode_lead_call_tracker(result[0])
+            logger.info(f"Lead updated successfully: {decoded_result}")
+            return decoded_result
+
+        logger.error("Failed to update lead")
+        return None
+
+    except Exception as e:
+        logger.error(f"Error updating lead: {e}")
         return None
 
 

@@ -134,6 +134,22 @@ def update_lead_call_recording_url_query(
     return text, values
 
 
+def update_lead_call_initiated_time_query(
+    call_id: str, call_initiated_time: datetime
+) -> Tuple[str, List[Any]]:
+    """
+    Generate query to update lead call initiated time.
+    """
+    text = f"""
+        UPDATE "{LEAD_CALL_TRACKER_TABLE}"
+        SET "call_initiated_time" = $1, "updated_at" = NOW()
+        WHERE "call_id" = $2
+        RETURNING *;
+    """
+    values = [call_initiated_time, call_id]
+    return text, values
+
+
 def update_lead_call_completion_details_query(
     id: str,
     status: LeadCallStatus,

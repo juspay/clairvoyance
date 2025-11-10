@@ -1,6 +1,5 @@
 from app.schemas import LeadCallOutcome
 
-
 # Mapping dictionary for outcome strings to LeadCallOutcome enum values
 OUTCOME_TO_ENUM = {
     "confirmed": LeadCallOutcome.CONFIRM,

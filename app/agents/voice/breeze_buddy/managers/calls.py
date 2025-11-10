@@ -143,19 +143,23 @@ async def _retry_call(
         if outcome == LeadCallOutcome.NO_ANSWER or outcome == LeadCallOutcome.BUSY:
             reporting_webhook_url = lead.payload.get("reporting_webhook_url")
             if reporting_webhook_url:
+                call_duration = None
+                if lead.call_initiated_time:
+                    call_initiated_time_utc = lead.call_initiated_time.astimezone(
+                        timezone.utc
+                    )
+                    call_duration = (
+                        datetime.now(timezone.utc) - call_initiated_time_utc
+                    ).total_seconds()
+
                 summary_data = {
                     "callSid": lead.call_id,
                     "outcome": outcome.value,
+                    "attemptCount": lead.attempt_count + 1,
+                    "callDuration": call_duration,
                     "orderId": lead.payload.get("order_id"),
                 }
-                if lead.merchant_id != RequestedBy.BREEZE:
-                    call_duration = None
-                    if lead.call_initiated_time:
-                        call_duration = (
-                            datetime.now(timezone.utc) - lead.call_initiated_time
-                        ).total_seconds()
-                    summary_data["attemptCount"] = lead.attempt_count + 1
-                    summary_data["callDuration"] = call_duration
+
                 try:
                     async with create_aiohttp_session() as session:
                         payload = json.dumps(summary_data).replace(" ", "")
@@ -337,6 +341,7 @@ async def handle_call_completion(
     transcription: dict,
     call_end_time: datetime,
     updated_address: str | None = None,
+    cancellation_reason: str | None = None,
 ):
     """
     Handles call completion events.
@@ -362,6 +367,8 @@ async def handle_call_completion(
     meta_data = {"transcription": transcription}
     if updated_address:
         meta_data["updated_address"] = updated_address
+    if cancellation_reason:
+        meta_data["cancellation_reason"] = cancellation_reason
 
     await update_lead_call_completion_details(
         id=lead.id,
