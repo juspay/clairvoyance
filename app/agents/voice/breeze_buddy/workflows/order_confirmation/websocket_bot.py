@@ -409,25 +409,9 @@ class OrderConfirmationBot:
             - Total Price: {total_price_words}
             - Delivery Address: {address}
 
-            When reading the delivery address, if it contains a pincode (a 6-digit number), you must read it out digit by digit. For example, if the pincode is 123456, say "Pincode is one two three four five six".
+            When reading the delivery address, if it contains a pincode (a 6-digit number), you must read it out digit by digit. For example, if the pincode is 123456, say "Pincode is one two three four five six". If it contains a 10-digit phone number, read it out digit by digit as well.
 
             Speak in a warm, casual, and human-like tone. Avoid robotic language.
-
-            You can only use the following functions when responding to the customer:
-
-            confirm_order() - Call this if the customer confirms all the order details and asks no other questions.
-            confirm_order_with_question() - Call this if the customer confirms the order but also asks an unrelated question which is not related to order confirmation/cancellation.
-            cancel_order() - Call this if the customer chooses to cancel the order.
-            user_busy() - Call this if the customer says they are busy or it's not a good time.
-            handle_unrelated_question() - Call this if the customer asks about anything not related to confirming or cancelling the order, without confirming the order.
-            address_correct() - Call this if the customer confirms that the address is correct.
-            address_incorrect() - Call this if the customer says the address is incorrect or wants to update it. Only locality, landmark, pincode, or city can be updated. Apart from these, no other address details can be changed.
-            update_landmark() - Call this if the customer wants to update the landmark in their address.
-            update_pincode() - Call this if the customer wants to update the pincode in their address.
-            update_city() - Call this if the customer wants to update the city in their address.
-            update_locality() - Call this if the customer wants to update the locality in their address.
-            
-            You must not use any features other than the ones listed above.
             
             Your only role is to confirm or cancel this specific order. If the user asks about anything else (e.g. product details, delivery times, other products), you must use the appropriate function (`handle_unrelated_question` or `confirm_order_with_question`). Do not try to answer these questions yourself.
         """
@@ -531,7 +515,33 @@ class OrderConfirmationBot:
             await self.task.cancel()
 
     def _get_flow_config(self):
-        flow_functions = [
+        # Initial stage functions - only greeting and availability
+        initial_functions = [
+            FlowsFunctionSchema(
+                name="user_available",
+                description="Call this function when the user confirms it's a good time to talk.",
+                handler=self._user_available_handler,
+                properties={},
+                required=[],
+            ),
+            FlowsFunctionSchema(
+                name="user_busy",
+                description="Call this function if the user says they are busy or it's not a good time to talk.",
+                handler=self._user_busy_handler,
+                properties={},
+                required=[],
+            ),
+            FlowsFunctionSchema(
+                name="cancel_order",
+                description="Call this function to cancel the user's order.",
+                handler=self._deny_order_handler,
+                properties={},
+                required=[],
+            ),
+        ]
+
+        # Order verification functions - for main conversation flow
+        order_functions = [
             FlowsFunctionSchema(
                 name="confirm_order",
                 description="Call this function if the customer confirms the order and asks no other questions.",
@@ -550,13 +560,6 @@ class OrderConfirmationBot:
                 name="cancel_order",
                 description="Call this function to cancel the user's order.",
                 handler=self._deny_order_handler,
-                properties={},
-                required=[],
-            ),
-            FlowsFunctionSchema(
-                name="user_busy",
-                description="Call this function if the user says they are busy or it's not a good time to talk.",
-                handler=self._user_busy_handler,
                 properties={},
                 required=[],
             ),
@@ -581,6 +584,10 @@ class OrderConfirmationBot:
                 properties={},
                 required=[],
             ),
+        ]
+
+        # Address update functions
+        address_functions = [
             FlowsFunctionSchema(
                 name="update_landmark",
                 description="User wants to update the landmark of the address.",
@@ -619,7 +626,18 @@ class OrderConfirmationBot:
                     "task_messages": [
                         {"role": "system", "content": self.system_prompt}
                     ],
-                    "functions": flow_functions,
+                    "functions": initial_functions,
+                },
+                "verify_order_details": {
+                    "name": "verify_order_details",
+                    "pre_actions": [{"type": "tts_say", "text": "Okay."}],
+                    "task_messages": [
+                        {
+                            "role": "system",
+                            "content": f"Now verify the order details with the customer. The order contains {self.order_summary}. The delivery address is {self.address}. Ask for confirmation of the order.",
+                        }
+                    ],
+                    "functions": order_functions,
                 },
                 "order_confirmation_and_end": {
                     "name": "order_confirmation_and_end",
@@ -677,17 +695,17 @@ class OrderConfirmationBot:
                             "content": f"The user asked an unrelated question. Say: 'I'm not able to help you with that right now, but you can find all the latest details on the {self.shop_name} website. Regarding your order, would you like to confirm it?'",
                         }
                     ],
-                    "functions": flow_functions,
+                    "functions": order_functions,
                 },
                 "update_address": {
                     "name": "update_address",
                     "task_messages": [
                         {
                             "role": "system",
-                            "content": "Sure, I can help with that. What part of the address would you like to update? You can update the locality, landmark, pincode, city.",
+                            "content": "Sure, I can help with that. What part of the address would you like to update? You can update the locality, landmark, pincode, or city.",
                         }
                     ],
-                    "functions": flow_functions,
+                    "functions": address_functions,
                 },
                 "confirm_address_update": {
                     "name": "confirm_address_update",
@@ -697,7 +715,17 @@ class OrderConfirmationBot:
                             "content": f"Got it. Your updated address is now: {self.updated_address}. Is there anything else you would like to update, or should I go ahead and confirm the order with this address?",
                         }
                     ],
-                    "functions": flow_functions,
+                    "functions": order_functions,
+                },
+                "final_order_confirmation": {
+                    "name": "final_order_confirmation",
+                    "task_messages": [
+                        {
+                            "role": "system",
+                            "content": "Perfect! Can I confirm your order now?",
+                        }
+                    ],
+                    "functions": order_functions,
                 },
             },
         }
@@ -716,6 +744,7 @@ class OrderConfirmationBot:
             name=node_data["name"],
             task_messages=node_data.get("task_messages", []),
             functions=node_data.get("functions", []),
+            pre_actions=node_data.get("pre_actions", []),
             post_actions=node_data.get("post_actions", []),
         )
 
@@ -822,6 +851,13 @@ class OrderConfirmationBot:
         clean_value = self._update_address_field("locality", locality, "locality")
         logger.info(f"Updated locality to: {clean_value}")
         return {}, self._create_node_from_config("confirm_address_update")
+
+    @auto_trace("user_available")
+    async def _user_available_handler(self):
+        logger.info(
+            "User confirmed it's a good time. Proceeding to verify order details."
+        )
+        return {}, self._create_node_from_config("verify_order_details")
 
 
 async def main(
