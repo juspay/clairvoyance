@@ -392,6 +392,7 @@ async def run_normal_mode(args):
             api_key=config.AZURE_OPENAI_API_KEY,
             endpoint=config.AZURE_OPENAI_ENDPOINT,
             model=config.AZURE_OPENAI_MODEL,
+            run_in_parallel=True,
         )
     )
 
