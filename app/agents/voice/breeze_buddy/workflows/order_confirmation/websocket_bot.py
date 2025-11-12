@@ -410,9 +410,27 @@ class OrderConfirmationBot:
             - Total Price: {total_price_words}
             - Delivery Address: {address}
 
-            When reading the delivery address, if it contains a pincode (a 6-digit number), you must read it out digit by digit. For example, if the pincode is 123456, say "Pincode is one two three four five six". If it contains a 10-digit phone number, read it out digit by digit as well.
+            Delivery Address Reading Rules
 
-            Speak in a warm, casual, and human-like tone. Avoid robotic language.
+                Pincode Handling
+                    - If the address includes a 6-digit pincode, read it digit by digit only in English.
+                    - Example: 123456 → "Pincode is one two three four five six."
+                    - Never read the pincode as a full number or in any other language.
+
+                Mobile / Phone Number Handling
+                    - If the address includes a 10-digit mobile or phone number, read it digit by digit only in English.
+                    - Example: 9876543210 → "nine eight seven six five four three two one zero."
+
+                Example of correct usage when speaking adress in other language e.g. Hindi:
+                    "आपका पता है [address in Hindi], aur pincode hai one two three four five six."
+
+            Tone and Language
+                - Speak in a warm, casual, and natural tone — avoid robotic phrasing.
+                - If the user speaks in another language (like Hindi), reply in that same language but keep the same friendly, human tone.
+
+            Action Handling
+                - Always use the provided functions to perform any actions related to the order.
+                - Do not attempt to perform these actions through plain text replies.
             
             Your only role is to confirm or cancel this specific order. If the user asks about anything else (e.g. product details, delivery times, other products), you must use the appropriate function (`handle_unrelated_question` or `confirm_order_with_question`). Do not try to answer these questions yourself.
         """
@@ -524,21 +542,21 @@ class OrderConfirmationBot:
         initial_functions = [
             FlowsFunctionSchema(
                 name="user_available",
-                description="Call this function when the user confirms it's a good time to talk.",
+                description="Call this function when the user confirms that they are available to talk with clear affirmative responses.",
                 handler=self._user_available_handler,
                 properties={},
                 required=[],
             ),
             FlowsFunctionSchema(
                 name="user_busy",
-                description="Call this function if the user says they are busy or it's not a good time to talk.",
+                description="Call this function when the user says they are busy or it's not a good time to talk.",
                 handler=self._user_busy_handler,
                 properties={},
                 required=[],
             ),
             FlowsFunctionSchema(
                 name="cancel_order",
-                description="Call this function to cancel the user's order. If the user gives a reason for cancellation, pass it.",
+                description="Call this function if the customer explicitly asks to cancel the order. If the user gives a reason for cancellation, pass it.",
                 handler=self._deny_order_handler,
                 properties={
                     "reason": {
@@ -548,27 +566,34 @@ class OrderConfirmationBot:
                 },
                 required=[],
             ),
+            FlowsFunctionSchema(
+                name="handle_unrelated_question",
+                description="Call this function if the user asks a question about anything other than confirming or cancelling the order, without confirming the order.",
+                handler=self._handle_unrelated_question_handler,
+                properties={},
+                required=[],
+            ),
         ]
 
         # Order verification functions - for main conversation flow
         order_functions = [
             FlowsFunctionSchema(
                 name="confirm_order",
-                description="Call this function if the customer confirms the order and asks no other questions.",
+                description="Call this function if the customer agrees/confirms the order details (items, price, and address) and asks no other questions.",
                 handler=self._confirm_order_handler,
                 properties={},
                 required=[],
             ),
             FlowsFunctionSchema(
                 name="confirm_order_with_question",
-                description="Call this function if the customer confirms the order but also asks an unrelated question.",
+                description="Call this function if the customer agrees/confirms the order but also asks an unrelated question about delivery time, product details, or other topics.",
                 handler=self._confirm_order_with_question_handler,
                 properties={},
                 required=[],
             ),
             FlowsFunctionSchema(
                 name="cancel_order",
-                description="Call this function to cancel the user's order. If the user gives a reason for cancellation, pass it.",
+                description="Call this function if the customer explicitly asks to cancel the order. If the user gives a reason for cancellation, pass it.",
                 handler=self._deny_order_handler,
                 properties={
                     "reason": {
@@ -586,15 +611,8 @@ class OrderConfirmationBot:
                 required=[],
             ),
             FlowsFunctionSchema(
-                name="address_correct",
-                description="User confirms the address is correct.",
-                handler=self._handle_address_correct,
-                properties={},
-                required=[],
-            ),
-            FlowsFunctionSchema(
                 name="address_incorrect",
-                description="User wants to update the address. Only landmark, pincode, or city can be updated.",
+                description="User says the address is wrong or wants to update it. Only landmark, pincode, locality, or city can be updated.",
                 handler=self._handle_address_incorrect,
                 properties={},
                 required=[],
@@ -631,6 +649,13 @@ class OrderConfirmationBot:
                 properties={"locality": {"type": "string"}},
                 required=["locality"],
             ),
+            FlowsFunctionSchema(
+                name="handle_unrelated_question",
+                description="Call this function if the user asks a question about anything other than confirming or cancelling the order, without confirming the order.",
+                handler=self._handle_unrelated_question_handler,
+                properties={},
+                required=[],
+            ),
         ]
 
         return {
@@ -659,7 +684,7 @@ class OrderConfirmationBot:
                     "task_messages": [
                         {
                             "role": "system",
-                            "content": "The order is confirmed. Say: 'Thank you for confirming your order. Your order will be delivered soon. Have a good day'",
+                            "content": "Thank you for confirming your order. Your order will be delivered soon. Have a good day.",
                         }
                     ],
                     "post_actions": [
@@ -671,7 +696,7 @@ class OrderConfirmationBot:
                     "task_messages": [
                         {
                             "role": "system",
-                            "content": "The user confirmed the order but asked a question. Say: 'Thank you for confirming the order. I am here just to confirm your order, for any questions related to the order please refer to the website for more details. Have a good day.'",
+                            "content": "Thank you for confirming the order. I am here just to confirm your order, for any questions related to the order please refer to the website for more details. Have a good day.",
                         }
                     ],
                     "post_actions": [
@@ -683,7 +708,7 @@ class OrderConfirmationBot:
                     "task_messages": [
                         {
                             "role": "system",
-                            "content": "The order is cancelled. Say: 'I understand you don't want to proceed with this order. I am cancelling your order. Thank you for your time.'",
+                            "content": "I understand you don't want to proceed with this order. I am cancelling your order. Thank you for your time.",
                         }
                     ],
                     "post_actions": [
@@ -695,7 +720,7 @@ class OrderConfirmationBot:
                     "task_messages": [
                         {
                             "role": "system",
-                            "content": "The user is busy. Say: 'I understand. I will call you back later. Thank you for your time.'",
+                            "content": "I understand. I will call you back later. Thank you for your time.",
                         }
                     ],
                     "post_actions": [
@@ -707,7 +732,7 @@ class OrderConfirmationBot:
                     "task_messages": [
                         {
                             "role": "system",
-                            "content": f"The user asked an unrelated question. Say: 'I'm not able to help you with that right now, but you can find all the latest details on the {self.shop_name} website. Regarding your order, would you like to confirm it?'",
+                            "content": f"I'm not able to help you with that right now, but you can find all the latest details on the {self.shop_name} website. Regarding your order, would you like to confirm it?",
                         }
                     ],
                     "functions": order_functions,
@@ -728,16 +753,6 @@ class OrderConfirmationBot:
                         {
                             "role": "system",
                             "content": f"Got it. Your updated address is now: {self.updated_address}. Is there anything else you would like to update, or should I go ahead and confirm the order with this address?",
-                        }
-                    ],
-                    "functions": order_functions,
-                },
-                "final_order_confirmation": {
-                    "name": "final_order_confirmation",
-                    "task_messages": [
-                        {
-                            "role": "system",
-                            "content": "Perfect! Can I confirm your order now?",
                         }
                     ],
                     "functions": order_functions,
@@ -809,11 +824,6 @@ class OrderConfirmationBot:
 
     def _create_initial_node(self) -> NodeConfig:
         return self._create_node_from_config("initial")
-
-    @auto_trace("address_correct")
-    async def _handle_address_correct(self):
-        logger.info("Address confirmed. Proceeding to final order confirmation.")
-        return {}, self._create_node_from_config("final_order_confirmation")
 
     @auto_trace("address_incorrect")
     async def _handle_address_incorrect(self):
