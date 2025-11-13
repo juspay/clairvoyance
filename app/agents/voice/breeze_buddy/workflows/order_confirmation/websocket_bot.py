@@ -435,6 +435,12 @@ class OrderConfirmationBot:
             Your only role is to confirm or cancel this specific order. If the user asks about anything else (e.g. product details, delivery times, other products), you must use the appropriate function (`handle_unrelated_question` or `confirm_order_with_question`). Do not try to answer these questions yourself.
         """
 
+    async def _mute_stt_handler(self, flow_manager, args):
+        """Mute STT by setting VAD confidence to 1.0 before terminal nodes"""
+        if self.vad_analyzer:
+            self.vad_analyzer.params.confidence = 1.0
+            logger.info("STT muted via pre-action for terminal node")
+
     async def _end_conversation_handler(self, flow_manager, args):
         if not self.conversation_ended:
             self.conversation_ended = True
@@ -681,6 +687,9 @@ class OrderConfirmationBot:
                 },
                 "order_confirmation_and_end": {
                     "name": "order_confirmation_and_end",
+                    "pre_actions": [
+                        {"type": "function", "handler": self._mute_stt_handler}
+                    ],
                     "task_messages": [
                         {
                             "role": "system",
@@ -693,6 +702,9 @@ class OrderConfirmationBot:
                 },
                 "order_confirmation_with_question_and_end": {
                     "name": "order_confirmation_with_question_and_end",
+                    "pre_actions": [
+                        {"type": "function", "handler": self._mute_stt_handler}
+                    ],
                     "task_messages": [
                         {
                             "role": "system",
@@ -705,6 +717,9 @@ class OrderConfirmationBot:
                 },
                 "order_cancellation_and_end": {
                     "name": "order_cancellation_and_end",
+                    "pre_actions": [
+                        {"type": "function", "handler": self._mute_stt_handler}
+                    ],
                     "task_messages": [
                         {
                             "role": "system",
@@ -717,6 +732,9 @@ class OrderConfirmationBot:
                 },
                 "user_busy_and_end": {
                     "name": "user_busy_and_end",
+                    "pre_actions": [
+                        {"type": "function", "handler": self._mute_stt_handler}
+                    ],
                     "task_messages": [
                         {
                             "role": "system",
