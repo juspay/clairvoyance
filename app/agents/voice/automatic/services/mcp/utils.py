@@ -38,9 +38,9 @@ def create_chart_aware_wrapper(original_register_function):
                     except json.JSONDecodeError:
                         pass
 
-                # Check for chart data and register for pending emission
-                if isinstance(result, dict) and result.get("success"):
-                    chart_data = result.get("data")
+                if isinstance(result, dict):
+                    comments = result.get("comments", {})
+                    chart_data = comments.get("data")
                     if (
                         chart_data
                         and isinstance(chart_data, dict)
@@ -57,11 +57,12 @@ def create_chart_aware_wrapper(original_register_function):
                                 exc_info=True,
                             )
 
+                        clean_text = chart_data.get("metadata", {}).get(
+                            "cleanVoiceDescription"
+                        )
                         await original_callback(
-                            result.get(
-                                "cleanVoiceDescription",
-                                "Chart generated successfully",
-                            )
+                            clean_text
+                            or result.get("message", "Chart generated successfully")
                         )
                         return
 
