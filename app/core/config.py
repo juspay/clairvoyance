@@ -43,6 +43,11 @@ AZURE_OPENAI_API_KEY = get_required_env("AZURE_OPENAI_API_KEY")
 AZURE_OPENAI_ENDPOINT = get_required_env("AZURE_OPENAI_ENDPOINT")
 AZURE_OPENAI_MODEL = os.environ.get("AZURE_OPENAI_MODEL", "gpt-4o-automatic")
 GOOGLE_CREDENTIALS_JSON = get_required_env("GOOGLE_CREDENTIALS_JSON")
+
+# GCS Configuration
+GCS_CREDENTIALS_JSON = os.environ.get("GCS_CREDENTIALS_JSON", "")
+GCS_DEFAULT_BUCKET = os.environ.get("GCS_DEFAULT_BUCKET", "")
+
 ENABLE_NOISE_REDUCE_FILTER = (
     os.environ.get("ENABLE_NOISE_REDUCE_FILTER", "true").lower() == "true"
 )
