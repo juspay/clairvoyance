@@ -4,6 +4,7 @@ from datetime import datetime
 
 import httpx
 import pytz
+from dateutil.relativedelta import relativedelta
 from pipecat.adapters.schemas.function_schema import FunctionSchema
 from pipecat.adapters.schemas.tools_schema import ToolsSchema
 from pipecat.services.llm_service import FunctionCallParams
@@ -28,7 +29,6 @@ OFFER_REQUIRED_KEYS = [
     "offerTitle",
     "discountValue",
     "startDate",
-    "endDate",
     "offerDescription",
 ]
 
@@ -517,7 +517,6 @@ async def create_euler_offer(params: FunctionCallParams):
         offer_title = required_fields["offerTitle"]
         discount_value = required_fields["discountValue"]
         start_date = required_fields["startDate"]
-        end_date = required_fields["endDate"]
         offer_description = required_fields["offerDescription"]
 
         logger.info(
@@ -533,7 +532,7 @@ async def create_euler_offer(params: FunctionCallParams):
         is_coupon_based = params.arguments.get("isCouponBased", True)
         sponsored_by = params.arguments.get("sponsoredBy", "BREEZE")
         payment_instruments = params.arguments.get("paymentInstruments", [])
-
+        
         # Payment instrument mapping
         instrument_map = {
             "CARD": {
@@ -595,9 +594,6 @@ async def create_euler_offer(params: FunctionCallParams):
         }
 
         # Convert IST dates to ISO format for API payload
-        logger.info(
-            f"[DEBUG] Starting date conversion for start_date: {start_date}, end_date: {end_date}"
-        )
         try:
             ist = pytz.timezone("Asia/Kolkata")
 
@@ -606,14 +602,21 @@ async def create_euler_offer(params: FunctionCallParams):
                 datetime.strptime(start_date, "%Y-%m-%d %H:%M:%S")
             )
             start_date_iso = start_date_ist.isoformat()
-            logger.info(f"[DEBUG] start_date converted to ISO: {start_date_iso}")
 
-            # Parse end_date from IST format and convert to ISO
-            end_date_ist = ist.localize(
-                datetime.strptime(end_date, "%Y-%m-%d %H:%M:%S")
-            )
+            # Handle optional endDate - if not provided, set to 2 years after start_date
+            end_date = params.arguments.get("endDate")
+            if not end_date:
+                # Calculate end_date as 2 years after start_date
+                end_date_ist = start_date_ist + relativedelta(years=2)
+                end_date = end_date_ist.strftime("%Y-%m-%d %H:%M:%S")
+                logger.info(f"No end date provided, calculated end date as 2 years after start date: {end_date}")
+            else:
+                # Parse provided end_date from IST format
+                end_date_ist = ist.localize(
+                    datetime.strptime(end_date, "%Y-%m-%d %H:%M:%S")
+                )
+
             end_date_iso = end_date_ist.isoformat()
-            logger.info(f"[DEBUG] end_date converted to ISO: {end_date_iso}")
 
         except Exception as e:
             logger.error(
@@ -627,9 +630,6 @@ async def create_euler_offer(params: FunctionCallParams):
             return
 
         # Build payment instruments payload
-        logger.info(
-            f"[DEBUG] Building payment instruments payload for: {payment_instruments}"
-        )
         if payment_instruments:
             payment_instruments_payload = [
                 instrument_map[instrument]
@@ -721,7 +721,6 @@ async def create_euler_offer(params: FunctionCallParams):
                 "Content-Type": "application/json",
                 "x-web-logintoken": euler_token,
             }
-            logger.info(f"[DEBUG] Endpoint and headers prepared: {endpoint}")
 
         except Exception as e:
             logger.error(
@@ -1726,7 +1725,7 @@ create_euler_offer_function = FunctionSchema(
         },
         "endDate": {
             "type": "string",
-            "description": "REQUIRED: Ask the user for the offer end date and time. Must be provided in IST format YYYY-MM-DD HH:MM:SS. Do not use example dates - always get the actual desired end date from the user.",
+            "description": "The offer end date and time in IST format YYYY-MM-DD HH:MM:SS. If not provided, defaults to 2 years from the start date.",
         },
         "offerDescription": {
             "type": "string",
