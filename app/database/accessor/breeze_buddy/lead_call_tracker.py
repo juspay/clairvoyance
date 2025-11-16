@@ -11,12 +11,14 @@ from app.core.logger import logger
 from app.database.decoder.breeze_buddy.lead_call_tracker import decode_lead_call_tracker
 from app.database.queries import run_parameterized_query
 from app.database.queries.breeze_buddy.lead_call_tracker import (
+    acquire_lock_on_lead_by_id_query,
     get_all_lead_call_trackers_query,
     get_lead_by_call_id_query,
     get_lead_call_trackers_count_query,
     get_leads_based_on_status_and_next_attempt_query,
     get_leads_by_status_and_time_before_query,
     insert_lead_call_tracker_query,
+    release_lock_on_lead_by_id_query,
     update_lead_call_completion_details_query,
     update_lead_call_details_query,
     update_lead_call_initiated_time_query,
@@ -104,6 +106,50 @@ async def get_leads_based_on_status_and_next_attempt(
     except Exception as e:
         logger.error(f"Error getting leads: {e}")
         return []
+
+
+async def acquire_lock_on_lead_by_id(lead_id: str) -> Optional[LeadCallTracker]:
+    """
+    Atomically acquire lock on a lead by ID. Returns the locked lead if successful, None if already locked.
+    """
+    logger.info(f"Attempting to acquire lock on lead with ID: {lead_id}")
+
+    try:
+        query_text, values = acquire_lock_on_lead_by_id_query(lead_id)
+        result = await run_parameterized_query(query_text, values)
+        if result and get_row_count(result) > 0:
+            decoded_result = decode_lead_call_tracker(result[0])
+            logger.info(f"Lock acquired successfully for lead: {decoded_result.id}")
+            return decoded_result
+
+        logger.info(f"Lead {lead_id} is already locked or does not exist")
+        return None
+
+    except Exception as e:
+        logger.error(f"Error acquiring lock on lead: {e}")
+        return None
+
+
+async def release_lock_on_lead_by_id(lead_id: str) -> Optional[LeadCallTracker]:
+    """
+    Release lock on a lead by ID. Returns the unlocked lead if successful.
+    """
+    logger.info(f"Attempting to release lock on lead with ID: {lead_id}")
+
+    try:
+        query_text, values = release_lock_on_lead_by_id_query(lead_id)
+        result = await run_parameterized_query(query_text, values)
+        if result and get_row_count(result) > 0:
+            decoded_result = decode_lead_call_tracker(result[0])
+            logger.info(f"Lock released successfully for lead: {decoded_result.id}")
+            return decoded_result
+
+        logger.warning(f"Lead {lead_id} not found for lock release")
+        return None
+
+    except Exception as e:
+        logger.error(f"Error releasing lock on lead: {e}")
+        return None
 
 
 async def update_lead_call_details(

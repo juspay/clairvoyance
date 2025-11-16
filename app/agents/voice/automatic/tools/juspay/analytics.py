@@ -532,7 +532,7 @@ async def create_euler_offer(params: FunctionCallParams):
         is_coupon_based = params.arguments.get("isCouponBased", True)
         sponsored_by = params.arguments.get("sponsoredBy", "BREEZE")
         payment_instruments = params.arguments.get("paymentInstruments", [])
-        
+
         # Payment instrument mapping
         instrument_map = {
             "CARD": {
@@ -609,7 +609,9 @@ async def create_euler_offer(params: FunctionCallParams):
                 # Calculate end_date as 2 years after start_date
                 end_date_ist = start_date_ist + relativedelta(years=2)
                 end_date = end_date_ist.strftime("%Y-%m-%d %H:%M:%S")
-                logger.info(f"No end date provided, calculated end date as 2 years after start date: {end_date}")
+                logger.info(
+                    f"No end date provided, calculated end date as 2 years after start date: {end_date}"
+                )
             else:
                 # Parse provided end_date from IST format
                 end_date_ist = ist.localize(

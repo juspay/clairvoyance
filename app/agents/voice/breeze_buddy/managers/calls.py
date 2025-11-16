@@ -13,6 +13,7 @@ from app.core.logger import logger
 from app.core.security.sha import calculate_hmac_sha256
 from app.core.transport.http_client import create_aiohttp_session
 from app.database.accessor import (
+    acquire_lock_on_lead_by_id,
     create_lead_call_tracker,
     get_call_execution_config_by_merchant_id,
     get_lead_by_call_id,
@@ -20,6 +21,7 @@ from app.database.accessor import (
     get_leads_by_status_and_time_before,
     get_outbound_number_based_on_status_and_provider,
     get_outbound_number_by_id,
+    release_lock_on_lead_by_id,
     update_lead_call_completion_details,
     update_lead_call_details,
     update_lead_call_recording_url,
@@ -204,24 +206,43 @@ async def _cleanup_stuck_leads():
     logger.info(f"Found {len(stale_leads)} stuck leads to clean up.")
 
     for lead in stale_leads:
-        logger.info(f"Found stuck lead: {lead.id}")
+        locked_lead = None
+        try:
+            # Try to acquire lock on this stuck lead to prevent race conditions
+            locked_lead = await acquire_lock_on_lead_by_id(lead.id)
+            if not locked_lead:
+                logger.info(
+                    f"Stuck lead {lead.id} is already locked by another process, skipping cleanup."
+                )
+                continue
 
-        # Close the stuck record so it won't be picked again
-        await update_lead_call_completion_details(
-            id=lead.id,
-            status=LeadCallStatus.FINISHED,
-            outcome=LeadCallOutcome.UNKNOWN,
-            meta_data={"cleanup": "stuck_processing_timeout"},
-            call_end_time=datetime.now(timezone.utc),
-        )
+            logger.info(f"Successfully locked stuck lead {lead.id} for cleanup.")
 
-        outbound_number = await get_outbound_number_by_id(lead.outbound_number_id)
-        if outbound_number:
-            await _release_number(outbound_number.id, outbound_number.provider)
+            # Close the stuck record so it won't be picked again
+            await update_lead_call_completion_details(
+                id=locked_lead.id,
+                status=LeadCallStatus.FINISHED,
+                outcome=LeadCallOutcome.UNKNOWN,
+                meta_data={"cleanup": "stuck_processing_timeout"},
+                call_end_time=datetime.now(timezone.utc),
+            )
 
-        config = await _get_lead_config(lead)
-        if config:
-            await _retry_call(lead, config, LeadCallOutcome.UNKNOWN)
+            outbound_number = await get_outbound_number_by_id(
+                locked_lead.outbound_number_id
+            )
+            if outbound_number:
+                await _release_number(outbound_number.id, outbound_number.provider)
+
+            config = await _get_lead_config(locked_lead)
+            if config:
+                await _retry_call(locked_lead, config, LeadCallOutcome.UNKNOWN)
+
+        except Exception as e:
+            logger.error(f"Error cleaning up stuck lead {lead.id}: {e}")
+
+        finally:
+            if locked_lead:
+                await release_lock_on_lead_by_id(locked_lead.id)
 
 
 async def process_backlog_leads():
@@ -239,20 +260,34 @@ async def process_backlog_leads():
     async with create_aiohttp_session() as session:
         for lead in leads:
             try:
-                config = await _get_lead_config(lead)
+                # Try to acquire lock for this lead atomically
+                locked_lead = await acquire_lock_on_lead_by_id(lead.id)
+                if not locked_lead:
+                    logger.info(
+                        f"Lead {lead.id} is already locked by another process, skipping."
+                    )
+                    continue
+
+                # Now we have exclusive access to this lead
+                logger.info(f"Successfully locked lead {lead.id} for processing.")
+
+                config = await _get_lead_config(locked_lead)
                 if not config:
+                    await release_lock_on_lead_by_id(locked_lead.id)
                     continue
 
                 if not _is_within_calling_hours(config):
                     logger.info(
-                        f"Skipping lead {lead.id} - outside calling hours. "
+                        f"Skipping lead {locked_lead.id} - outside calling hours. "
                         f"Current time: {datetime.now(timezone(timedelta(hours=5, minutes=30))).time()}, "
                         f"Allowed window: {config.call_start_time} - {config.call_end_time}"
                     )
+                    await release_lock_on_lead_by_id(locked_lead.id)
                     continue
 
                 number_to_use = await _get_available_number(config.calling_provider)
                 if not number_to_use:
+                    await release_lock_on_lead_by_id(locked_lead.id)
                     continue
 
                 await _acquire_number(number_to_use)
@@ -261,12 +296,13 @@ async def process_backlog_leads():
                     config.calling_provider.value, session
                 )
                 call = call_provider.make_call(
-                    lead.payload.get("customer_mobile_number"), number_to_use.number
+                    locked_lead.payload.get("customer_mobile_number"),
+                    number_to_use.number,
                 )
 
                 if call and call.get("sid"):
                     await update_lead_call_details(
-                        lead.id,
+                        locked_lead.id,
                         LeadCallStatus.PROCESSING,
                         call.get("sid"),
                         datetime.now(timezone.utc),
@@ -274,7 +310,7 @@ async def process_backlog_leads():
                     )
                 else:
                     logger.error(
-                        f"Failed to initiate call for lead {lead.id}. Call response: {call}"
+                        f"Failed to initiate call for lead {locked_lead.id}. Call response: {call}"
                     )
                     await _release_number(number_to_use.id, config.calling_provider)
 
@@ -285,10 +321,10 @@ async def process_backlog_leads():
                     elif config.calling_provider == CallProvider.EXOTEL:
                         if not config.enable_international_call:
                             logger.warning(
-                                f"International calls disabled for merchant {lead.merchant_id}. Skipping retry with Twilio."
+                                f"International calls disabled for merchant {locked_lead.merchant_id}. Skipping retry with Twilio."
                             )
                             await update_lead_call_completion_details(
-                                id=lead.id,
+                                id=locked_lead.id,
                                 status=LeadCallStatus.FINISHED,
                                 outcome=LeadCallOutcome.UNKNOWN,
                                 meta_data={
@@ -296,6 +332,7 @@ async def process_backlog_leads():
                                 },
                                 call_end_time=datetime.now(timezone.utc),
                             )
+                            await release_lock_on_lead_by_id(locked_lead.id)
                             continue
                         retry_calling_provider = CallProvider.TWILIO
 
@@ -303,6 +340,7 @@ async def process_backlog_leads():
                         retry_calling_provider
                     )
                     if not retry_number_to_use:
+                        await release_lock_on_lead_by_id(locked_lead.id)
                         continue
 
                     await _acquire_number(retry_number_to_use)
@@ -311,13 +349,13 @@ async def process_backlog_leads():
                         retry_calling_provider.value, session
                     )
                     retry_call = retry_call_provider.make_call(
-                        lead.payload.get("customer_mobile_number"),
+                        locked_lead.payload.get("customer_mobile_number"),
                         retry_number_to_use.number,
                     )
 
                     if retry_call and retry_call.get("sid"):
                         await update_lead_call_details(
-                            lead.id,
+                            locked_lead.id,
                             LeadCallStatus.PROCESSING,
                             retry_call.get("sid"),
                             datetime.now(timezone.utc),
@@ -325,11 +363,13 @@ async def process_backlog_leads():
                         )
                     else:
                         logger.error(
-                            f"Failed to initiate retry call for lead {lead.id}. Call response: {retry_call}"
+                            f"Failed to initiate retry call for lead {locked_lead.id}. Call response: {retry_call}"
                         )
                         await _release_number(
                             retry_number_to_use.id, retry_calling_provider
                         )
+
+                await release_lock_on_lead_by_id(locked_lead.id)
 
             except Exception as e:
                 logger.error(f"Error processing lead {lead.id}: {e}")

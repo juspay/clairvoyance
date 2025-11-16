@@ -60,6 +60,7 @@ class LeadCallTracker(BaseModel):
     call_initiated_time: Optional[datetime] = None
     call_end_time: Optional[datetime] = None
     cost: Optional[float] = None
+    is_locked: bool = False
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
