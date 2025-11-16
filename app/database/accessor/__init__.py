@@ -9,12 +9,14 @@ from .breeze_buddy.call_execution_config import (
     get_call_execution_config_by_merchant_id,
 )
 from .breeze_buddy.lead_call_tracker import (
+    acquire_lock_on_lead_by_id,
     create_lead_call_tracker,
     get_all_lead_call_trackers,
     get_lead_by_call_id,
     get_lead_call_trackers_count,
     get_leads_based_on_status_and_next_attempt,
     get_leads_by_status_and_time_before,
+    release_lock_on_lead_by_id,
     update_lead_call_completion_details,
     update_lead_call_details,
     update_lead_call_initiated_time,
@@ -43,6 +45,8 @@ __all__ = [
     "get_all_call_execution_configs",
     "create_lead_call_tracker",
     "get_leads_based_on_status_and_next_attempt",
+    "acquire_lock_on_lead_by_id",
+    "release_lock_on_lead_by_id",
     "update_lead_call_details",
     "get_lead_by_call_id",
     "update_lead_call_completion_details",

@@ -80,9 +80,40 @@ def get_leads_based_on_status_and_next_attempt_query(
     text = f"""
         SELECT * FROM "{LEAD_CALL_TRACKER_TABLE}"
         WHERE "status" = $1
-        AND "next_attempt_at" <= $2;
+        AND "next_attempt_at" <= $2
+        AND "is_locked" = FALSE;
     """
     values = [status.value, time]
+    return text, values
+
+
+def acquire_lock_on_lead_by_id_query(lead_id: str) -> Tuple[str, List[Any]]:
+    """
+    Generate query to atomically acquire lock on a lead by ID.
+    Returns the lead if successfully locked, None if already locked.
+    """
+    text = f"""
+        UPDATE "{LEAD_CALL_TRACKER_TABLE}"
+        SET "is_locked" = TRUE, "updated_at" = NOW()
+        WHERE "id" = $1
+        AND "is_locked" = FALSE
+        RETURNING *;
+    """
+    values = [lead_id]
+    return text, values
+
+
+def release_lock_on_lead_by_id_query(lead_id: str) -> Tuple[str, List[Any]]:
+    """
+    Generate query to release lock on a lead by ID.
+    """
+    text = f"""
+        UPDATE "{LEAD_CALL_TRACKER_TABLE}"
+        SET "is_locked" = FALSE, "updated_at" = NOW()
+        WHERE "id" = $1
+        RETURNING *;
+    """
+    values = [lead_id]
     return text, values
 
 
@@ -231,11 +262,13 @@ def get_leads_by_status_and_time_before_query(
 ) -> Tuple[str, List[Any]]:
     """
     Generate query to select leads based on their status and a time before which they were initiated.
+    Only returns unlocked leads to prevent race conditions.
     """
     text = f"""
         SELECT * FROM "{LEAD_CALL_TRACKER_TABLE}"
         WHERE "status" = $1
-        AND "call_initiated_time" < $2;
+        AND "call_initiated_time" < $2
+        AND "is_locked" = FALSE;
     """
     values = [status.value, time]
     return text, values

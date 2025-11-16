@@ -185,6 +185,7 @@ def alter_tables_query() -> str:
     """
     return f"""
         ALTER TABLE "{LEAD_CALL_TRACKER_TABLE}" ADD COLUMN IF NOT EXISTS "shop_identifier" VARCHAR(255);
+        ALTER TABLE "{LEAD_CALL_TRACKER_TABLE}" ADD COLUMN IF NOT EXISTS "is_locked" BOOLEAN DEFAULT FALSE NOT NULL;
         ALTER TABLE "{CALL_EXECUTION_CONFIG_TABLE}" ADD COLUMN IF NOT EXISTS "shop_identifier" VARCHAR(255);
         ALTER TABLE "{CALL_EXECUTION_CONFIG_TABLE}" ADD COLUMN IF NOT EXISTS "enable_international_call" BOOLEAN DEFAULT TRUE;
         ALTER TABLE "{CALL_EXECUTION_CONFIG_TABLE}" DROP CONSTRAINT IF EXISTS "call_execution_config_merchant_id_workflow_key";
@@ -194,6 +195,9 @@ def alter_tables_query() -> str:
         CREATE UNIQUE INDEX IF NOT EXISTS "uq_call_execution_config_generic"
             ON "{CALL_EXECUTION_CONFIG_TABLE}" ("merchant_id", "workflow")
             WHERE "shop_identifier" IS NULL;
+        CREATE INDEX IF NOT EXISTS "idx_lead_call_tracker_is_locked" ON "{LEAD_CALL_TRACKER_TABLE}" ("is_locked");
+        CREATE INDEX IF NOT EXISTS "idx_lead_call_tracker_status_next_attempt_locked" 
+            ON "{LEAD_CALL_TRACKER_TABLE}" ("status", "is_locked", "next_attempt_at");
     """
 
 

@@ -40,6 +40,7 @@ def decode_lead_call_tracker(row: asyncpg.Record) -> Optional[LeadCallTracker]:
         call_initiated_time=row["call_initiated_time"],
         call_end_time=row["call_end_time"],
         cost=row["cost"],
+        is_locked=row.get("is_locked", False),
         created_at=row["created_at"],
         updated_at=row["updated_at"],
     )
