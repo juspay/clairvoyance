@@ -91,6 +91,7 @@ class OrderConfirmationBot:
         self.updated_address = None
         self.cancellation_reason = None
         self.updated_fields = {}  # Track only updated fields for webhook
+        self.updated_phone_number = None
         self.serializer = serializer
         self.hangup_function = hangup_function
         self.completion_function = completion_function
@@ -619,7 +620,7 @@ class OrderConfirmationBot:
             ),
             FlowsFunctionSchema(
                 name="address_incorrect",
-                description="User says the address is wrong or wants to update it. Only landmark, pincode, locality, or city can be updated.",
+                description="User says the address or phone number is wrong or wants to update it. Only landmark, pincode, locality, or city or phone number can be updated.",
                 handler=self._handle_address_incorrect,
                 properties={},
                 required=[],
@@ -662,6 +663,13 @@ class OrderConfirmationBot:
                 handler=self._handle_unrelated_question_handler,
                 properties={},
                 required=[],
+            ),
+            FlowsFunctionSchema(
+                name="update_phone_number",
+                description="User provides the new phone number. Must be a 10-digit Indian mobile number.",
+                handler=self._handle_phone_number,
+                properties={"phone_number": {"type": "string"}},
+                required=["phone_number"],
             ),
         ]
 
@@ -769,7 +777,7 @@ class OrderConfirmationBot:
                     "task_messages": [
                         {
                             "role": "system",
-                            "content": "Sure, I can help with that. What part of the address would you like to update? You can update the locality, landmark, pincode, or city.",
+                            "content": "Sure, I can help with that. What part of the address would you like to update? You can update the locality, landmark, pincode, or city or phone number.",
                         }
                     ],
                     "functions": address_functions,
@@ -779,7 +787,7 @@ class OrderConfirmationBot:
                     "task_messages": [
                         {
                             "role": "system",
-                            "content": f"Got it. Your updated address is now: {self.updated_address}. Is there anything else you would like to update, or should I go ahead and confirm the order with this address?",
+                            "content": f"Got it. {'Your phone number has been updated to ' + ' '.join(self.updated_phone_number) + '. ' if self.updated_phone_number else ''}{f'Your updated address is now: {self.updated_address}. ' if self.updated_address else ''}Is there anything else you would like to update, or should I go ahead and confirm the order?",
                         }
                     ],
                     "functions": order_functions,
@@ -912,6 +920,35 @@ class OrderConfirmationBot:
         clean_value = self._update_address_field("locality", locality, "locality")
         logger.info(f"Updated locality to: {clean_value}")
         return {}, self._create_node_from_config("confirm_address_update")
+
+    @auto_trace("update_phone_number")
+    async def _handle_phone_number(self, phone_number: str):
+        logger.info(f"Updating phone number to: {phone_number}")
+        
+        # Handle dict objects directly (LLM passes dict objects, not strings)
+        if isinstance(phone_number, dict):
+            if not phone_number:
+                logger.warning("Empty dict provided for phone_number")
+                return {}, self._create_node_from_config("update_address")
+            clean_phone = str(next(iter(phone_number.values()))).strip()
+        else:
+            clean_phone = str(phone_number).strip()
+        
+        # Remove any non-digit characters
+        clean_phone = ''.join(filter(str.isdigit, clean_phone))
+        
+        # Validate phone number (should be 10 digits for Indian mobile)
+        if len(clean_phone) == 10:
+            self.updated_phone_number = clean_phone
+            self._update_address_field("phone_number", clean_phone, "phone_number")
+            self.outcome = "address_updated"
+            logger.info(f"Updated phone number to: {clean_phone}")
+            # Transition to confirm_address_update like other address fields
+            return {}, self._create_node_from_config("confirm_address_update")
+        else:
+            logger.warning(f"Invalid phone number length: {len(clean_phone)}")
+            # Return to update_address node to ask again
+            return {}, self._create_node_from_config("update_address")
 
     @auto_trace("user_available")
     async def _user_available_handler(self):
