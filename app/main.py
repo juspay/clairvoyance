@@ -14,7 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from pipecat.transports.daily.utils import DailyRESTHelper
 
 from app import __version__
-from app.api.routers import automatic, breeze_buddy
+from app.api.routers import automatic, breeze_buddy, health
 from app.core.config import (
     DAILY_API_KEY,
     DAILY_API_URL,
@@ -34,7 +34,7 @@ from app.core.security.jwt import validate_automatic_request
 from app.core.transport.http_client import create_aiohttp_session
 
 # Database imports
-from app.database import close_db_pool, get_db_connection, init_db_pool
+from app.database import close_db_pool, init_db_pool
 from app.helpers.automatic.daily_room_pool import (
     cleanup_room_pool,
     get_room_pool,
@@ -152,6 +152,7 @@ app.include_router(
 app.include_router(
     automatic.router, prefix="/agent/voice/automatic", tags=["Automatic Agent"]
 )
+app.include_router(health.router, prefix="/health", tags=["Health"])
 
 
 # Pipecat bot endpoint
@@ -191,7 +192,7 @@ async def bot_connect(
     }
 
     # 2. Get room from Daily room pool
-    session_id = str(uuid.uuid4())
+    session_id = request.voiceConversationId or str(uuid.uuid4())
     room_pool = get_room_pool()
     daily_room = await room_pool.get_room(session_id)
     room_url = daily_room.room_url
@@ -320,50 +321,6 @@ async def bot_connect(
 @app.get("/")
 async def get_client_html():
     return FileResponse("static/home.html")
-
-
-# Health check endpoint
-@app.get("/health")
-async def health_check():
-    logger.info("Health check endpoint called")
-    return JSONResponse({"status": "healthy"})
-
-
-# Database health check endpoint
-@app.get("/health/database")
-async def database_health_check():
-    """Check database connectivity and health."""
-    logger.info("Database health check endpoint called")
-    try:
-        async for conn in get_db_connection():
-            result = await conn.fetchval("SELECT 1")
-            if result == 1:
-                return JSONResponse(
-                    {
-                        "status": "healthy",
-                        "database": "connected",
-                        "message": "Database connection is healthy",
-                    }
-                )
-            else:
-                return JSONResponse(
-                    status_code=400,
-                    content={
-                        "status": "unhealthy",
-                        "database": "error",
-                        "message": "Database query returned unexpected result",
-                    },
-                )
-    except Exception as e:
-        logger.error(f"Database health check failed: {e}")
-        return JSONResponse(
-            status_code=400,
-            content={
-                "status": "unhealthy",
-                "database": "disconnected",
-                "message": f"Database connection failed: {str(e)}",
-            },
-        )
 
 
 # Version endpoint

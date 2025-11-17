@@ -26,6 +26,9 @@ from pipecat.utils.tracing.turn_context_provider import (
     get_current_turn_context,
 )
 
+from app.agents.voice.automatic.conversation.history.utils.request_handler import (
+    save_conversation_context,
+)
 from app.agents.voice.automatic.features.charts.chart_tools import (
     mark_hitl_operation,
     reset_chart_turn_state,
@@ -140,6 +143,11 @@ class LLMSpyProcessor(FrameProcessor):
         session_id: str,
         enable_charts: bool,
         stt_mute_filter: Optional[FrameProcessor] = None,
+        llm_context=None,
+        merchant_id: Optional[str] = None,
+        shop_id: Optional[str] = None,
+        breeze_token: Optional[str] = None,
+        reseller_id: Optional[str] = None,
         name: str = "LLMSpyProcessor",
     ):
         super().__init__(name=name)
@@ -147,6 +155,11 @@ class LLMSpyProcessor(FrameProcessor):
         self._session_id = session_id
         self._enable_charts = enable_charts
         self._stt_mute_filter = stt_mute_filter
+        self._llm_context = llm_context
+        self._merchant_id = merchant_id
+        self._shop_id = shop_id
+        self._breeze_token = breeze_token
+        self._reseller_id = reseller_id
 
         # Register this RTVI processor globally for function confirmations
         set_rtvi_processor(rtvi)
@@ -157,11 +170,17 @@ class LLMSpyProcessor(FrameProcessor):
         )
         self._active_spans: Dict[str, Any] = {}  # tool_call_id -> span
 
-        if self._enable_charts:
-            # LLM response collection
+        # LLM response collection (needed for charts OR conversation storage)
+        if self._enable_charts or config.ENABLE_AUTOMATIC_CONVERSATION_STORAGE:
             self._accumulated_text = ""
             self._is_collecting_response = False
 
+        # Tool call tracking for conversation storage (independent of charts)
+        if config.ENABLE_AUTOMATIC_CONVERSATION_STORAGE:
+            self._current_tool_calls = []
+            self._current_tool_results = []
+
+        if self._enable_charts:
             # Conversation management (delegates to service)
             self._conversation_manager = get_conversation_manager()
 
@@ -169,7 +188,18 @@ class LLMSpyProcessor(FrameProcessor):
         """Process frames and delegate conversation logic to ConversationManager."""
         await super().process_frame(frame, direction)
 
-        if isinstance(frame, TextFrame):
+        # LLM Output - accumulate streaming text (for charts OR conversation storage)
+        # Check LLMTextFrame FIRST (more specific) before TextFrame (more general)
+        if (
+            isinstance(frame, LLMTextFrame)
+            and self._is_collecting_response
+            and (self._enable_charts or config.ENABLE_AUTOMATIC_CONVERSATION_STORAGE)
+        ):
+            self._accumulated_text += frame.text
+            await self.push_frame(frame, direction)
+
+        # Handle TextFrame (LLMTextFrame already handled above, so no exclusion needed)
+        elif isinstance(frame, TextFrame):
             if config.SANITIZE_TEXT_FOR_TTS:
                 await self.push_frame(
                     TextFrame(text=sanitize_markdown(frame.text)), direction
@@ -177,31 +207,33 @@ class LLMSpyProcessor(FrameProcessor):
             else:
                 await self.push_frame(frame, direction)
 
-        elif isinstance(frame, UserStartedSpeakingFrame) and self._enable_charts:
-            reset_chart_turn_state(self._session_id)
+        elif isinstance(frame, UserStartedSpeakingFrame):
+            # Clear tool tracking for new turn (for conversation storage)
+            if config.ENABLE_AUTOMATIC_CONVERSATION_STORAGE:
+                self._current_tool_calls = []
+                self._current_tool_results = []
+
+            # Reset chart state (only for charts)
+            if self._enable_charts:
+                reset_chart_turn_state(self._session_id)
+
             await self.push_frame(frame, direction)
 
         # LLM Response Start - begin collecting text and start conversation turn
-        elif isinstance(frame, LLMFullResponseStartFrame) and self._enable_charts:
+        elif isinstance(frame, LLMFullResponseStartFrame) and (
+            self._enable_charts or config.ENABLE_AUTOMATIC_CONVERSATION_STORAGE
+        ):
             self._is_collecting_response = True
             self._accumulated_text = ""
 
-            # Start conversation turn via ConversationManager
-            event = await self._conversation_manager.start_turn_with_events(
-                self._session_id
-            )
-            if event:
-                await emit_rtvi_event(self._rtvi, event, self._session_id)
+            # Start conversation turn via ConversationManager (only for charts)
+            if self._enable_charts:
+                event = await self._conversation_manager.start_turn_with_events(
+                    self._session_id
+                )
+                if event:
+                    await emit_rtvi_event(self._rtvi, event, self._session_id)
 
-            await self.push_frame(frame, direction)
-
-        # LLM Output - accumulate streaming text
-        elif (
-            isinstance(frame, LLMTextFrame)
-            and self._is_collecting_response
-            and self._enable_charts
-        ):
-            self._accumulated_text += frame.text
             await self.push_frame(frame, direction)
 
         elif (
@@ -211,17 +243,38 @@ class LLMSpyProcessor(FrameProcessor):
             await self._stt_mute_filter.process_frame(frame, FrameDirection.DOWNSTREAM)
             await self.push_frame(frame, direction)
 
-        # LLM Response Complete - send to ConversationManager
-        elif isinstance(frame, LLMFullResponseEndFrame) and self._enable_charts:
-            if self._accumulated_text.strip():
-                event = await self._conversation_manager.add_llm_response_with_events(
-                    self._session_id, self._accumulated_text.strip()
+        # LLM Response Complete - send to ConversationManager and save to Redis
+        elif isinstance(frame, LLMFullResponseEndFrame):
+            # Save conversation context if enabled (happens whether user interrupted or not)
+            if config.ENABLE_AUTOMATIC_CONVERSATION_STORAGE:
+                await save_conversation_context(
+                    session_id=self._session_id,
+                    llm_context=self._llm_context,
+                    accumulated_text=self._accumulated_text,
+                    tool_calls=getattr(self, "_current_tool_calls", []),
+                    tool_results=getattr(self, "_current_tool_results", []),
+                    reseller_id=self._reseller_id,
+                    merchant_id=self._merchant_id,
+                    shop_id=self._shop_id,
+                    breeze_token=self._breeze_token,
                 )
-                if event:
-                    await emit_rtvi_event(self._rtvi, event, self._session_id)
 
-            self._accumulated_text = ""
-            self._is_collecting_response = False
+            # Handle chart-specific conversation management
+            if self._enable_charts:
+                if self._accumulated_text.strip():
+                    event = (
+                        await self._conversation_manager.add_llm_response_with_events(
+                            self._session_id, self._accumulated_text.strip()
+                        )
+                    )
+                    if event:
+                        await emit_rtvi_event(self._rtvi, event, self._session_id)
+
+            # Reset accumulated text for next turn (for both charts and conversation storage)
+            if self._enable_charts or config.ENABLE_AUTOMATIC_CONVERSATION_STORAGE:
+                self._accumulated_text = ""
+                self._is_collecting_response = False
+
             await self.push_frame(frame, direction)
 
         # Function Call Start - emit RTVI event and track in conversation
@@ -264,6 +317,16 @@ class LLMSpyProcessor(FrameProcessor):
             )
             await self.push_frame(frame, direction)
 
+            # Track tool call for conversation storage (independent of charts)
+            if config.ENABLE_AUTOMATIC_CONVERSATION_STORAGE:
+                self._current_tool_calls.append(
+                    {
+                        "tool_call_id": frame.tool_call_id,
+                        "function_name": frame.function_name,
+                        "arguments": frame.arguments,
+                    }
+                )
+
             # Track in conversation via ConversationManager
             if self._enable_charts:
                 event = await self._conversation_manager.add_tool_call_with_events(
@@ -303,6 +366,17 @@ class LLMSpyProcessor(FrameProcessor):
                 )
             )
             await self.push_frame(frame, direction)
+
+            # Track tool result for conversation storage (independent of charts)
+            if config.ENABLE_AUTOMATIC_CONVERSATION_STORAGE:
+                self._current_tool_results.append(
+                    {
+                        "tool_call_id": frame.tool_call_id,
+                        "function_name": frame.function_name,
+                        "arguments": frame.arguments,
+                        "result": frame.result,
+                    }
+                )
 
             if self._enable_charts:
                 # Check if this is a dangerous/HITL operation

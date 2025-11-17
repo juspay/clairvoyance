@@ -466,3 +466,8 @@ BUDDY_OTEL_EXPORTER_OTLP_TRACES_ENDPOINT = os.getenv(
 BUDDY_OTEL_EXPORTER_OTLP_TRACES_HEADERS = os.getenv(
     "BUDDY_OTEL_EXPORTER_OTLP_TRACES_HEADERS", ""
 )
+
+# Conversation Storage Configuration (via Lighthouse APIs)
+ENABLE_AUTOMATIC_CONVERSATION_STORAGE = (
+    os.getenv("ENABLE_AUTOMATIC_CONVERSATION_STORAGE", "false").lower() == "true"
+)

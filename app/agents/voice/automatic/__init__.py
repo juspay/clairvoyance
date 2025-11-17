@@ -44,6 +44,9 @@ from pipecat.utils.tracing.conversation_context_provider import (
     ConversationContextProvider,
 )
 
+from app.agents.voice.automatic.conversation.history.utils.request_handler import (
+    restore_conversation_context,
+)
 from app.agents.voice.automatic.features.llm_wrapper import LLMServiceWrapper
 from app.agents.voice.automatic.processors.llm_spy import handle_confirmation_response
 from app.agents.voice.automatic.services.fal import FalSmartTurnService
@@ -118,7 +121,6 @@ async def main():
         help="Platform Integrations that are supported by the shop (string array)",
     )
     parser.add_argument("--reseller-id", type=str, help="Reseller ID")
-
     # Pool mode arguments
     parser.add_argument("--pool-mode", action="store_true", help="Run in pool mode")
     parser.add_argument("--process-id", type=str, help="Process ID for pool mode")
@@ -495,6 +497,18 @@ async def run_normal_mode(args):
 
     context_aggregator = llm.create_context_aggregator(context)
 
+    # Restore conversation context from Lighthouse if enabled
+    restored_count = 0
+    if config.ENABLE_AUTOMATIC_CONVERSATION_STORAGE:
+        restored_count = await restore_conversation_context(
+            args.session_id,
+            context_aggregator,
+            args.reseller_id,
+            args.merchant_id,
+            args.shop_id,
+            args.breeze_token,
+        )
+
     # Initialize processors and pipeline components
     stt_mute_filter = None
     tool_call_processor = None
@@ -524,12 +538,26 @@ async def run_normal_mode(args):
             args.session_id,
             config.ENABLE_CHARTS,
             stt_mute_filter,
+            context_aggregator,
+            args.merchant_id,
+            args.shop_id,
+            args.breeze_token,
+            args.reseller_id,
             "LLMSpyProcessor",
         )
         pipeline_components.extend([stt_mute_filter])
     else:
         tool_call_processor = LLMSpyProcessor(
-            rtvi, args.session_id, config.ENABLE_CHARTS, None, "LLMSpyProcessor"
+            rtvi,
+            args.session_id,
+            config.ENABLE_CHARTS,
+            None,
+            context_aggregator,
+            args.merchant_id,
+            args.shop_id,
+            args.breeze_token,
+            args.reseller_id,
+            "LLMSpyProcessor",
         )
 
     pipeline_components.extend([rtvi, context_aggregator.user()])
@@ -603,7 +631,11 @@ async def run_normal_mode(args):
 
     @rtvi.event_handler("on_client_ready")
     async def on_client_ready(rtvi):
-        await rtvi.push_frame(RTVIServerMessageFrame(data={"type": "bot-ready"}))
+        await rtvi.push_frame(
+            RTVIServerMessageFrame(
+                data={"type": "bot-ready", "session_id": args.session_id}
+            )
+        )
 
     @rtvi.event_handler("on_client_message")
     async def on_client_message(rtvi, message):
@@ -676,7 +708,14 @@ async def run_normal_mode(args):
         if config.ENABLE_AUTOMATIC_DAILY_RECORDING:
             await transport.start_recording()
 
-        await task.queue_frames([LLMRunFrame()])
+        # Skip initial greeting if conversation was actually restored
+        if restored_count > 0:
+            logger.info(
+                f"Conversation restored ({restored_count} messages) - skipping initial greeting"
+            )
+        else:
+            logger.info(f"New session - sending initial greeting")
+            await task.queue_frames([LLMRunFrame()])
 
     @transport.event_handler("on_participant_left")
     async def on_participant_left(transport, participant, reason):

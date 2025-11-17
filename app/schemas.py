@@ -118,6 +118,7 @@ class AutomaticVoiceTTSServiceConfig(BaseModel):
 
 class AutomaticVoiceUserConnectRequest(BaseModel):
     sessionId: Optional[str] = None
+    voiceConversationId: Optional[str] = None
     mode: Optional[str] = None
     eulerToken: Optional[str] = None
     breezeToken: Optional[str] = None
