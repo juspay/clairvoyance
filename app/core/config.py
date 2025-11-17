@@ -46,7 +46,7 @@ GOOGLE_CREDENTIALS_JSON = get_required_env("GOOGLE_CREDENTIALS_JSON")
 
 # GCS Configuration
 GCS_CREDENTIALS_JSON = os.environ.get("GCS_CREDENTIALS_JSON", "")
-GCS_DEFAULT_BUCKET = os.environ.get("GCS_DEFAULT_BUCKET", "")
+GCS_BUCKET = os.environ.get("GCS_BUCKET", "atoms-sdk")
 
 ENABLE_NOISE_REDUCE_FILTER = (
     os.environ.get("ENABLE_NOISE_REDUCE_FILTER", "true").lower() == "true"
@@ -470,6 +470,9 @@ BUDDY_OTEL_EXPORTER_OTLP_TRACES_ENDPOINT = os.getenv(
 )
 BUDDY_OTEL_EXPORTER_OTLP_TRACES_HEADERS = os.getenv(
     "BUDDY_OTEL_EXPORTER_OTLP_TRACES_HEADERS", ""
+)
+UPLOAD_BREEZE_BUDDY_CALL_RECORDINGS_TO_CLOUD = (
+    os.getenv("UPLOAD_BREEZE_BUDDY_CALL_RECORDINGS_TO_CLOUD", "false").lower() == "true"
 )
 
 # Graceful Shutdown Configuration

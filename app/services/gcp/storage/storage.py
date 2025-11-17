@@ -3,9 +3,9 @@ GCS Storage - Google Cloud Storage operations
 Simplified module for uploading audio files to GCS
 """
 
-from pathlib import Path
-from typing import BinaryIO, Optional, Union
+from typing import BinaryIO, Optional
 
+from app.core.config import GCS_BUCKET
 from app.core.logger import logger
 
 from .client import get_gcs_bucket
@@ -17,76 +17,16 @@ class GCSStorage:
     Provides methods to upload audio files to GCS buckets.
     """
 
-    def __init__(self, bucket_name: str):
+    def __init__(self):
         """
         Initialize GCS Storage with a specific bucket.
-
-        Args:
-            bucket_name (str): The name of the GCS bucket to use
         """
-        self.bucket_name = bucket_name
-        self.bucket = get_gcs_bucket(bucket_name)
-
-    def upload_file(
-        self,
-        source_file_path: Union[str, Path],
-        destination_blob_name: str,
-        content_type: Optional[str] = None,
-        metadata: Optional[dict] = None,
-    ) -> bool:
-        """
-        Upload an audio file to GCS bucket.
-
-        Args:
-            source_file_path (Union[str, Path]): Local path to the audio file to upload
-            destination_blob_name (str): The destination path/name in GCS bucket
-            content_type (Optional[str]): MIME type of the file (e.g., 'audio/wav', 'audio/mp3')
-            metadata (Optional[dict]): Additional metadata to attach to the file
-
-        Returns:
-            bool: True if upload was successful, False otherwise
-        """
-        try:
-            if not self.bucket:
-                logger.error("GCS bucket not initialized")
-                return False
-
-            # Convert to Path object for easier handling
-            source_path = Path(source_file_path)
-
-            if not source_path.exists():
-                logger.error(f"Source file does not exist: {source_file_path}")
-                return False
-
-            # Create blob object
-            blob = self.bucket.blob(destination_blob_name)
-
-            # Set content type if provided
-            if content_type:
-                blob.content_type = content_type
-
-            # Set metadata if provided
-            if metadata:
-                blob.metadata = metadata
-
-            # Upload the file
-            blob.upload_from_filename(str(source_path))
-
-            logger.info(
-                f"File uploaded successfully: {source_file_path} -> gs://{self.bucket_name}/{destination_blob_name}"
-            )
-            return True
-
-        except Exception as e:
-            logger.error(
-                f"Failed to upload file {source_file_path} to GCS: {e}", exc_info=True
-            )
-            return False
+        self.bucket = get_gcs_bucket(GCS_BUCKET)
 
     def upload_file_object(
         self,
         file_obj: BinaryIO,
-        destination_blob_name: str,
+        destination_path: str,
         content_type: Optional[str] = None,
         metadata: Optional[dict] = None,
     ) -> bool:
@@ -95,7 +35,7 @@ class GCSStorage:
 
         Args:
             file_obj (BinaryIO): File-like object to upload
-            destination_blob_name (str): The destination path/name in GCS bucket
+            destination_path (str): The destination path/name in GCS bucket
             content_type (Optional[str]): MIME type of the file (e.g., 'audio/wav', 'audio/mp3')
             metadata (Optional[dict]): Additional metadata to attach to the file
 
@@ -108,7 +48,7 @@ class GCSStorage:
                 return False
 
             # Create blob object
-            blob = self.bucket.blob(destination_blob_name)
+            blob = self.bucket.blob(destination_path)
 
             # Set content type if provided
             if content_type:
@@ -123,10 +63,48 @@ class GCSStorage:
             blob.upload_from_file(file_obj)
 
             logger.info(
-                f"File object uploaded successfully to gs://{self.bucket_name}/{destination_blob_name}"
+                f"File object uploaded successfully to gs://{GCS_BUCKET}/{destination_path}"
             )
             return True
 
         except Exception as e:
             logger.error(f"Failed to upload file object to GCS: {e}", exc_info=True)
             return False
+
+
+def upload_file_to_gcs(
+    file_obj: BinaryIO,
+    destination_path: str,
+    content_type: Optional[str] = None,
+    metadata: Optional[dict] = None,
+) -> Optional[str]:
+    """
+    Simplified utility function to upload a file object to GCS.
+
+    Args:
+        file_obj (BinaryIO): File-like object to upload
+        destination_path (str): The destination path/name in GCS bucket (e.g., "recordings/twilio/call123.wav")
+        content_type (Optional[str]): MIME type of the file (e.g., 'audio/wav')
+        metadata (Optional[dict]): Additional metadata to attach to the file
+
+    Returns:
+        Optional[str]: The GCS URL if successful, None otherwise
+    """
+    try:
+        gcs_storage = GCSStorage()
+        success = gcs_storage.upload_file_object(
+            file_obj=file_obj,
+            destination_path=destination_path,
+            content_type=content_type,
+            metadata=metadata,
+        )
+
+        if success:
+            if GCS_BUCKET == "atoms-sdk":
+                gcs_url = f"https://sdk.beta.breezesdk.store/{destination_path}"
+                return gcs_url
+        return None
+
+    except Exception as e:
+        logger.error(f"Error in upload_file_to_gcs: {e}", exc_info=True)
+        return None
