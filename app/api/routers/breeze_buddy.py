@@ -96,7 +96,9 @@ async def logout():
 
 
 @router.get("/{provider}/callback/details")
-async def callback_details(request: Request, provider: str):
+async def callback_details(
+    request: Request, provider: str, background_tasks: BackgroundTasks
+):
     query_params = dict(request.query_params)
     logger.info(f"Received call-details with {provider} query params: {query_params}")
 
@@ -106,19 +108,23 @@ async def callback_details(request: Request, provider: str):
         )
 
     call_sid = query_params.get("CallSid")
-    recording_url = query_params.get("Stream[RecordingUrl]")
+    provider_recording_url = query_params.get("Stream[RecordingUrl]")
 
-    if recording_url and call_sid:
+    if provider_recording_url and call_sid:
         logger.info(
-            f"Extracted recording_url: {recording_url} and call_sid: {call_sid}"
+            f"Extracted recording_url: {provider_recording_url} and call_sid: {call_sid}"
         )
-        await update_call_recording(call_sid, recording_url)
+        background_tasks.add_task(
+            update_call_recording, call_sid, provider_recording_url, provider.lower()
+        )
 
     return Response(status_code=200)
 
 
 @router.post("/{provider}/callback/details")
-async def callback_details(request: Request, provider: str):
+async def callback_details_post(
+    request: Request, provider: str, background_tasks: BackgroundTasks
+):
     """
     Logs the request body and returns a 200 OK response.
     """
@@ -131,13 +137,15 @@ async def callback_details(request: Request, provider: str):
         )
 
     call_sid = form.get("CallSid")
-    recording_url = form.get("RecordingUrl")
+    provider_recording_url = form.get("RecordingUrl")
 
-    if recording_url and call_sid:
+    if provider_recording_url and call_sid:
         logger.info(
-            f"Extracted recording_url: {recording_url} and call_sid: {call_sid}"
+            f"Extracted recording_url: {provider_recording_url} and call_sid: {call_sid}"
         )
-        await update_call_recording(call_sid, recording_url)
+        background_tasks.add_task(
+            update_call_recording, call_sid, provider_recording_url, provider.lower()
+        )
 
     return Response(status_code=200)
 
