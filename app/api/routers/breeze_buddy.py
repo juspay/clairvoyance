@@ -45,6 +45,7 @@ from app.database.accessor import (
     get_all_lead_call_trackers,
     get_all_outbound_numbers,
     get_call_execution_config_by_merchant_id,
+    get_lead_based_analytics,
     get_lead_call_trackers_count,
     get_outbound_number_by_id,
 )
@@ -524,7 +525,7 @@ async def get_analytics(
     session: dict = Depends(get_breeze_buddy_session),
 ):
     """
-    Provides analytics data for the dashboard.
+    Provides analytics data for the dashboard with both call-based and lead-based metrics.
     """
     if not session:
         raise HTTPException(status_code=401, detail="Not authenticated")
@@ -552,7 +553,8 @@ async def get_analytics(
         start_date=start_datetime, end_date=end_datetime
     )
 
-    analytics = {
+    # Call-based analytics (counts every call)
+    call_based = {
         "calls_attempted": len(
             [t for t, _ in trackers if t.status and t.status.value == "FINISHED"]
         ),
@@ -576,6 +578,34 @@ async def get_analytics(
             ]
         ),
     }
+    # Get all lead details for lead-based analytics
+
+    lead_data = await get_lead_based_analytics(
+        start_date=start_datetime, end_date=end_datetime
+    )
+
+    lead_based = {
+        "calls_attempted": len(lead_data),
+        "picked_calls": len(
+            [
+                lead
+                for lead in lead_data
+                if lead["finished_calls"] > lead["no_answer_calls"]
+            ]
+        ),
+        "confirmed_address": len(
+            [lead for lead in lead_data if lead["confirmed_calls"] > 0]
+        ),
+        "requested_cancellation": len(
+            [lead for lead in lead_data if lead["cancelled_calls"] > 0]
+        ),
+        "address_updated": len(
+            [lead for lead in lead_data if lead["address_update_calls"] > 0]
+        ),
+    }
+
+    analytics = {"call_based": call_based, "lead_based": lead_based}
+
     return JSONResponse(content=analytics)
 
 
@@ -652,7 +682,7 @@ async def get_call_details(
                 "created_at": t.call_initiated_time,
                 "call_id": t.call_id,
                 "recording_url": t.recording_url,
-                "transcript": t.metaData.get("transcription") if t.metaData else None,
+                "transcript": (t.metaData.get("transcription") if t.metaData else None),
                 "calling_provider": calling_provider,
             }
         )

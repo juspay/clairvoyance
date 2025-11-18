@@ -13,6 +13,7 @@ from app.database.queries import run_parameterized_query
 from app.database.queries.breeze_buddy.lead_call_tracker import (
     acquire_lock_on_lead_by_id_query,
     get_all_lead_call_trackers_query,
+    get_lead_based_analytics_query,
     get_lead_by_call_id_query,
     get_lead_call_trackers_count_query,
     get_leads_based_on_status_and_next_attempt_query,
@@ -369,3 +370,25 @@ async def get_lead_call_trackers_count(
     except Exception as e:
         logger.error(f"Error getting lead call trackers count: {e}")
         return 0
+
+
+async def get_lead_based_analytics(
+    start_date: Optional[datetime] = None,
+    end_date: Optional[datetime] = None,
+) -> List[asyncpg.Record]:
+    """
+    Get per-lead call data for analytics.
+    Returns list of records with call counts per order_id.
+    """
+    logger.info("Getting lead-based analytics data")
+
+    try:
+        query_text, values = get_lead_based_analytics_query(
+            start_date=start_date,
+            end_date=end_date,
+        )
+        result = await run_parameterized_query(query_text, values)
+        return result if result else []
+    except Exception as e:
+        logger.error(f"Error getting lead-based analytics: {e}", exc_info=True)
+        return []
