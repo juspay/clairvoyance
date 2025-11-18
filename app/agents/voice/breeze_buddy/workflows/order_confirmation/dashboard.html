@@ -674,6 +674,57 @@
         background-color: #6c757d;
       }
 
+      .view-toggle {
+        display: flex;
+        justify-content: center;
+        gap: 40px;
+        margin-bottom: 40px;
+        position: relative;
+        z-index: 1;
+      }
+
+      .view-btn {
+        background: none;
+        border: none;
+        font-family: "Space Grotesk", sans-serif;
+        font-size: 1.4em;
+        font-weight: 600;
+        color: #718096;
+        cursor: pointer;
+        padding: 12px 20px;
+        position: relative;
+        transition: all 0.3s ease;
+      }
+
+      .view-btn:hover {
+        color: #0099ff;
+      }
+
+      .view-btn.active {
+        color: #0099ff;
+      }
+
+      .view-btn.active::after {
+        content: "";
+        position: absolute;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        height: 3px;
+        background: linear-gradient(90deg, #0066cc, #0099ff);
+        border-radius: 2px;
+        animation: slideIn 0.3s ease-out;
+      }
+
+      @keyframes slideIn {
+        from {
+          transform: scaleX(0);
+        }
+        to {
+          transform: scaleX(1);
+        }
+      }
+
       @media (max-width: 1200px) {
         body {
           padding: 40px 30px;
@@ -834,6 +885,12 @@
       </div>
     </div>
 
+    <!-- View Toggle for Analytics -->
+    <div class="view-toggle">
+      <button class="view-btn active" id="call-based-btn">Call Based</button>
+      <button class="view-btn" id="lead-based-btn">Lead Based</button>
+    </div>
+
     <div class="container" id="analytics-container"></div>
 
     <div class="table-container">
@@ -915,10 +972,33 @@
       const outcomeFilter = document.getElementById("outcome-filter");
       const orderIdFilter = document.getElementById("order-id-filter");
       let currentPage = 1;
+      let currentView = "call"; // Track current analytics view
 
       // Set start date to today by default
       const today = new Date().toISOString().split("T")[0];
       startDateInput.value = today;
+
+      // View toggle functionality
+      const callBasedBtn = document.getElementById("call-based-btn");
+      const leadBasedBtn = document.getElementById("lead-based-btn");
+
+      callBasedBtn.addEventListener("click", () => {
+        if (currentView !== "call") {
+          currentView = "call";
+          callBasedBtn.classList.add("active");
+          leadBasedBtn.classList.remove("active");
+          fetchAnalytics();
+        }
+      });
+
+      leadBasedBtn.addEventListener("click", () => {
+        if (currentView !== "lead") {
+          currentView = "lead";
+          leadBasedBtn.classList.add("active");
+          callBasedBtn.classList.remove("active");
+          fetchAnalytics();
+        }
+      });
 
       function getOutcomeClass(outcome) {
         if (!outcome || outcome === "N/A") return "outcome-n-a";
@@ -953,18 +1033,25 @@
           }
           const data = await response.json();
           container.innerHTML = "";
-          for (const [key, value] of Object.entries(data)) {
-            const card = document.createElement("div");
-            card.classList.add("card");
-            const title = document.createElement("h2");
-            title.textContent = key
-              .replace(/_/g, " ")
-              .replace(/\b\w/g, (l) => l.toUpperCase());
-            const count = document.createElement("p");
-            count.textContent = value;
-            card.appendChild(title);
-            card.appendChild(count);
-            container.appendChild(card);
+          
+          // Get metrics based on current view
+          const metrics = currentView === "call" ? data.call_based : data.lead_based;
+          
+          // Display all metrics from the backend
+          if (metrics) {
+            for (const [key, value] of Object.entries(metrics)) {
+              const card = document.createElement("div");
+              card.classList.add("card");
+              const title = document.createElement("h2");
+              title.textContent = key
+                .replace(/_/g, " ")
+                .replace(/\b\w/g, (l) => l.toUpperCase());
+              const count = document.createElement("p");
+              count.textContent = value;
+              card.appendChild(title);
+              card.appendChild(count);
+              container.appendChild(card);
+            }
           }
         } catch (error) {
           console.error("Failed to fetch analytics:", error);

@@ -310,3 +310,41 @@ def get_lead_call_trackers_count_query(
 
     text += ";"
     return text, values
+
+
+def get_lead_based_analytics_query(
+    start_date: Optional[datetime] = None,
+    end_date: Optional[datetime] = None,
+) -> Tuple[str, List[Any]]:
+    """
+    Generate query to get per-lead call data.
+    Returns one row per order_id with call counts. Aggregation done in Python.
+    """
+    values: List[Any] = []
+    conditions = []
+
+    if start_date:
+        values.append(start_date)
+        conditions.append(f'"call_initiated_time" >= ${len(values)}')
+
+    if end_date:
+        values.append(end_date)
+        conditions.append(f'"call_initiated_time" < ${len(values)}')
+
+    where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
+
+    text = f"""
+        SELECT
+            payload ->> 'order_id' AS order_id,
+            COUNT(*) AS total_calls,
+            COUNT(*) FILTER (WHERE status = 'FINISHED') AS finished_calls,
+            COUNT(*) FILTER (WHERE outcome = 'CONFIRM') AS confirmed_calls,
+            COUNT(*) FILTER (WHERE outcome = 'CANCEL') AS cancelled_calls,
+            COUNT(*) FILTER (WHERE outcome = 'ADDRESS_UPDATED') AS address_update_calls,
+            COUNT(*) FILTER (WHERE outcome = 'BUSY') AS busy_calls,
+            COUNT(*) FILTER (WHERE outcome = 'NO_ANSWER') AS no_answer_calls
+        FROM "{LEAD_CALL_TRACKER_TABLE}"
+        {where_clause}
+        GROUP BY payload ->> 'order_id';
+    """
+    return text, values
