@@ -13,6 +13,7 @@ from app.database.queries import run_parameterized_query
 from app.database.queries.breeze_buddy.lead_call_tracker import (
     acquire_lock_on_lead_by_id_query,
     get_all_lead_call_trackers_query,
+    get_call_count_for_phone_number_today_query,
     get_lead_based_analytics_query,
     get_lead_by_call_id_query,
     get_lead_call_trackers_count_query,
@@ -24,6 +25,7 @@ from app.database.queries.breeze_buddy.lead_call_tracker import (
     update_lead_call_details_query,
     update_lead_call_initiated_time_query,
     update_lead_call_recording_url_query,
+    update_lead_next_attempt_time_query,
 )
 from app.schemas import (
     LeadCallOutcome,
@@ -391,3 +393,49 @@ async def get_lead_based_analytics(
     except Exception as e:
         logger.error(f"Error getting lead-based analytics: {e}", exc_info=True)
         return []
+
+
+async def get_call_count_for_phone_number_today(
+    lead, start_of_day: datetime
+) -> int:
+    """
+    Get count of calls attempted to a phone number today.
+    """
+    phone_number = lead.payload.get("customer_mobile_number")
+    logger.info(f"Getting call count for phone number {phone_number} since {start_of_day}")
+
+    try:
+        query_text, values = get_call_count_for_phone_number_today_query(
+            lead, start_of_day
+        )
+        result = await run_parameterized_query(query_text, values)
+        if result and len(result) > 0:
+            return result[0]["call_count"]
+        return 0
+    except Exception as e:
+        logger.error(f"Error getting call count for phone number: {e}")
+        return 0
+
+
+async def update_lead_next_attempt_time(
+    id: str, next_attempt_at: datetime
+) -> Optional[LeadCallTracker]:
+    """
+    Update lead's next attempt time.
+    """
+    logger.info(f"Updating lead {id} with next attempt time {next_attempt_at}")
+
+    try:
+        query_text, values = update_lead_next_attempt_time_query(id, next_attempt_at)
+        result = await run_parameterized_query(query_text, values)
+        if result and get_row_count(result) > 0:
+            decoded_result = decode_lead_call_tracker(result[0])
+            logger.info(f"Lead updated successfully: {decoded_result}")
+            return decoded_result
+
+        logger.error("Failed to update lead")
+        return None
+
+    except Exception as e:
+        logger.error(f"Error updating lead: {e}")
+        return None

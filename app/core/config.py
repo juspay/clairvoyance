@@ -457,6 +457,11 @@ ENABLE_BREEZE_BUDDY_USER_INTERRUPTION = (
     os.environ.get("ENABLE_BREEZE_BUDDY_USER_INTERRUPTION", "false").lower() == "true"
 )
 
+# Call Limit Configuration
+MAX_CALLS_PER_PHONE_NUMBER_PER_DAY = int(
+    os.environ.get("MAX_CALLS_PER_PHONE_NUMBER_PER_DAY", "3")
+)
+
 ENABLE_BREEZE_BUDDY_VERIFY_ORDER_PRE_ACTIONS = (
     os.environ.get("ENABLE_BREEZE_BUDDY_VERIFY_ORDER_PRE_ACTIONS", "false").lower()
     == "true"

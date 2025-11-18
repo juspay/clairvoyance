@@ -312,6 +312,40 @@ def get_lead_call_trackers_count_query(
     return text, values
 
 
+def get_call_count_for_phone_number_today_query(
+    lead, start_of_day: datetime
+) -> Tuple[str, List[Any]]:
+    """
+    Generate query to count calls attempted to a specific phone number today.
+    Counts all calls where call_initiated_time is not NULL (i.e., call was attempted).
+    """
+    phone_number = lead.payload.get("customer_mobile_number")
+    text = f"""
+        SELECT COUNT(*) as call_count FROM "{LEAD_CALL_TRACKER_TABLE}"
+        WHERE payload->>'customer_mobile_number' = $1
+        AND call_initiated_time >= $2
+        AND call_initiated_time IS NOT NULL;
+    """
+    values = [phone_number, start_of_day]
+    return text, values
+
+
+def update_lead_next_attempt_time_query(
+    id: str, next_attempt_at: datetime
+) -> Tuple[str, List[Any]]:
+    """
+    Generate query to update lead's next attempt time.
+    """
+    text = f"""
+        UPDATE "{LEAD_CALL_TRACKER_TABLE}"
+        SET "next_attempt_at" = $1, "updated_at" = NOW()
+        WHERE "id" = $2
+        RETURNING *;
+    """
+    values = [next_attempt_at, id]
+    return text, values
+
+
 def get_lead_based_analytics_query(
     start_date: Optional[datetime] = None,
     end_date: Optional[datetime] = None,

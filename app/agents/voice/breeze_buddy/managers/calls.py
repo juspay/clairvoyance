@@ -5,10 +5,11 @@ Cron manager for handling background tasks.
 import json
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import Optional 
 
 from app.agents.voice.breeze_buddy.services.telephony.utils import get_voice_provider
 from app.core.config import (
+    MAX_CALLS_PER_PHONE_NUMBER_PER_DAY,
     ORDER_CONFIRMATION_WEBHOOK_SECRET_KEY,
     UPLOAD_BREEZE_BUDDY_CALL_RECORDINGS_TO_CLOUD,
 )
@@ -18,6 +19,7 @@ from app.core.transport.http_client import create_aiohttp_session
 from app.database.accessor import (
     acquire_lock_on_lead_by_id,
     create_lead_call_tracker,
+    get_call_count_for_phone_number_today,
     get_call_execution_config_by_merchant_id,
     get_lead_by_call_id,
     get_leads_based_on_status_and_next_attempt,
@@ -28,6 +30,7 @@ from app.database.accessor import (
     update_lead_call_completion_details,
     update_lead_call_details,
     update_lead_call_recording_url,
+    update_lead_next_attempt_time,
     update_outbound_number_channels,
     update_outbound_number_status,
 )
@@ -196,6 +199,63 @@ async def _retry_call(
                     logger.error(f"Error sending webhook on no_answer: {e}")
 
 
+async def _check_and_reschedule_if_limit_reached(lead: LeadCallTracker) -> bool:
+    """
+    Check if daily call limit is reached for a phone number.
+    If reached, reschedule to next day using call execution config time.
+    Returns True if rescheduled, False otherwise.
+    """
+
+    phone_number = lead.payload.get("customer_mobile_number")
+
+    # Get start of today in IST
+    IST = timezone(timedelta(hours=5, minutes=30))
+    now_ist = datetime.now(IST)
+    start_of_day = now_ist.replace(hour=0, minute=0, second=0, microsecond=0)
+    start_of_day_utc = start_of_day.astimezone(timezone.utc)
+
+    # Get call count for this phone number today
+    call_count = await get_call_count_for_phone_number_today(
+        lead, start_of_day_utc
+    )
+
+    if call_count >= MAX_CALLS_PER_PHONE_NUMBER_PER_DAY:
+        logger.info(
+            f"Phone number {phone_number} has reached daily limit ({call_count}/{MAX_CALLS_PER_PHONE_NUMBER_PER_DAY}). "
+            f"Checking if lead {lead.id} should be rescheduled."
+        )
+
+        # Get call execution config to use its call_start_time
+        config = await _get_lead_config(lead)
+        if not config:
+            logger.error(f"No call execution config found for lead {lead.id}. Using default time 16:00:00.000000.")
+            hour, minute, second, microsecond = 16, 0, 0, 0
+        else:
+            hour = config.call_start_time.hour
+            minute = config.call_start_time.minute
+            second = config.call_start_time.second
+            microsecond = config.call_start_time.microsecond
+
+        # Reschedule to next day - attempt_count stays the same since we're not processing
+        logger.info(
+            f"Rescheduling lead {lead.id} to next day (attempt {lead.attempt_count + 1}/{config.max_retry if config else 'unknown'} will retry tomorrow)."
+        )
+
+        # Calculate next day at call start time in IST
+        next_day = now_ist + timedelta(days=1)
+        next_attempt_time = next_day.replace(
+            hour=hour, minute=minute, second=second, microsecond=microsecond
+        )
+        next_attempt_time_utc = next_attempt_time.astimezone(timezone.utc)
+
+        # Update the existing lead's next_attempt_at to next day
+        await update_lead_next_attempt_time(lead.id, next_attempt_time_utc)
+
+        return True
+
+    return False
+
+
 async def _cleanup_stuck_leads():
     """
     Cleans up leads that are stuck in the PROCESSING state.
@@ -285,6 +345,11 @@ async def process_backlog_leads():
                         f"Current time: {datetime.now(timezone(timedelta(hours=5, minutes=30))).time()}, "
                         f"Allowed window: {config.call_start_time} - {config.call_end_time}"
                     )
+                    await release_lock_on_lead_by_id(locked_lead.id)
+                    continue
+
+                # Check if daily call limit reached for this phone number
+                if await _check_and_reschedule_if_limit_reached(lead):
                     await release_lock_on_lead_by_id(locked_lead.id)
                     continue
 
