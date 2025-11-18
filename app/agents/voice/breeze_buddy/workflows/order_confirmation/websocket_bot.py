@@ -55,6 +55,7 @@ from app.core.config import (
     ELEVENLABS_VOICE_SPEED,
     ENABLE_BREEZE_BUDDY_TRACING,
     ENABLE_BREEZE_BUDDY_USER_INTERRUPTION,
+    ENABLE_BREEZE_BUDDY_VERIFY_ORDER_PRE_ACTIONS,
     ORDER_CONFIRMATION_WEBHOOK_SECRET_KEY,
 )
 from app.core.logger import logger
@@ -664,6 +665,24 @@ class OrderConfirmationBot:
             ),
         ]
 
+        # Build verify_order_details node configuration with conditional pre_actions
+        verify_order_details_config = {
+            "name": "verify_order_details",
+            "task_messages": [
+                {
+                    "role": "system",
+                    "content": f"Now verify the order details with the customer. The order contains {self.order_summary}. The delivery address is {self.address}. Ask for confirmation of the order.",
+                }
+            ],
+            "functions": order_functions,
+        }
+
+        # Only add pre_actions if environment variable is enabled
+        if ENABLE_BREEZE_BUDDY_VERIFY_ORDER_PRE_ACTIONS:
+            verify_order_details_config["pre_actions"] = [
+                {"type": "tts_say", "text": "Okay."}
+            ]
+
         return {
             "initial_node": "initial",
             "nodes": {
@@ -674,17 +693,7 @@ class OrderConfirmationBot:
                     ],
                     "functions": initial_functions,
                 },
-                "verify_order_details": {
-                    "name": "verify_order_details",
-                    "pre_actions": [{"type": "tts_say", "text": "Okay."}],
-                    "task_messages": [
-                        {
-                            "role": "system",
-                            "content": f"Now verify the order details with the customer. The order contains {self.order_summary}. The delivery address is {self.address}. Ask for confirmation of the order.",
-                        }
-                    ],
-                    "functions": order_functions,
-                },
+                "verify_order_details": verify_order_details_config,
                 "order_confirmation_and_end": {
                     "name": "order_confirmation_and_end",
                     "pre_actions": [
