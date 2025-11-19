@@ -924,7 +924,7 @@ class OrderConfirmationBot:
     @auto_trace("update_phone_number")
     async def _handle_phone_number(self, phone_number: str):
         logger.info(f"Updating phone number to: {phone_number}")
-        
+
         # Handle dict objects directly (LLM passes dict objects, not strings)
         if isinstance(phone_number, dict):
             if not phone_number:
@@ -933,10 +933,10 @@ class OrderConfirmationBot:
             clean_phone = str(next(iter(phone_number.values()))).strip()
         else:
             clean_phone = str(phone_number).strip()
-        
+
         # Remove any non-digit characters
-        clean_phone = ''.join(filter(str.isdigit, clean_phone))
-        
+        clean_phone = "".join(filter(str.isdigit, clean_phone))
+
         # Validate phone number (should be 10 digits for Indian mobile)
         if len(clean_phone) == 10:
             self.updated_phone_number = clean_phone

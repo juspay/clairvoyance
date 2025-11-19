@@ -96,6 +96,19 @@ class CreateCallExecutionConfigRequest(BaseModel):
     enable_international_call: bool = True
 
 
+class UpdateCallExecutionConfigRequest(BaseModel):
+    merchant_id: str
+    workflow: Workflow
+    shop_identifier: Optional[str] = None
+    initial_offset: Optional[int] = None
+    retry_offset: Optional[int] = None
+    call_start_time: Optional[time] = None
+    call_end_time: Optional[time] = None
+    max_retry: Optional[int] = None
+    calling_provider: Optional[CallProvider] = None
+    enable_international_call: Optional[bool] = None
+
+
 class CallExecutionConfig(BaseModel):
     id: str
     initial_offset: int

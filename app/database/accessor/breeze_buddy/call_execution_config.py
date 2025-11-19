@@ -17,6 +17,7 @@ from app.database.queries.breeze_buddy.call_execution_config import (
     get_all_call_execution_configs_query,
     get_call_execution_config_by_merchant_id_query,
     insert_call_execution_config_query,
+    update_call_execution_config_query,
 )
 from app.schemas import CallExecutionConfig, CallProvider, Workflow
 
@@ -142,3 +143,53 @@ async def get_all_call_execution_configs() -> List[CallExecutionConfig]:
     except Exception as e:
         logger.error(f"Error getting all call execution configs: {e}")
         return []
+
+
+async def update_call_execution_config(
+    merchant_id: str,
+    workflow: Workflow,
+    shop_identifier: Optional[str] = None,
+    initial_offset: Optional[int] = None,
+    retry_offset: Optional[int] = None,
+    call_start_time: Optional[time] = None,
+    call_end_time: Optional[time] = None,
+    max_retry: Optional[int] = None,
+    calling_provider: Optional[CallProvider] = None,
+    enable_international_call: Optional[bool] = None,
+) -> Optional[CallExecutionConfig]:
+    """
+    Update an existing call execution config record based on merchant_id, workflow, and shop_identifier.
+    Only updates fields that are provided (not None).
+    """
+    logger.info(
+        f"Updating call execution config for merchant: {merchant_id}, workflow: {workflow}, shop_identifier: {shop_identifier}"
+    )
+
+    try:
+        query_text, values = update_call_execution_config_query(
+            merchant_id=merchant_id,
+            workflow=workflow,
+            shop_identifier=shop_identifier,
+            initial_offset=initial_offset,
+            retry_offset=retry_offset,
+            call_start_time=call_start_time,
+            call_end_time=call_end_time,
+            max_retry=max_retry,
+            calling_provider=calling_provider,
+            enable_international_call=enable_international_call,
+        )
+
+        result = await run_parameterized_query(query_text, values)
+        if result and get_row_count(result) > 0:
+            decoded_result = decode_call_execution_config(result)
+            logger.info(f"Call execution config updated successfully: {decoded_result}")
+            return decoded_result
+
+        logger.error(
+            f"Failed to update call execution config for merchant: {merchant_id}, workflow: {workflow}, shop_identifier: {shop_identifier}"
+        )
+        return None
+
+    except Exception as e:
+        logger.error(f"Error updating call execution config: {e}")
+        return None
