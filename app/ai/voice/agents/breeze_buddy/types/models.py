@@ -42,3 +42,12 @@ class LeadData(BaseModel):
 class LoginRequest(BaseModel):
     username: str
     password: str
+
+
+class LeadCancellation(BaseModel):
+    lead_id: str
+    cancellation_reason: str
+
+
+class CancelLeadRequest(BaseModel):
+    leads: List[LeadCancellation]

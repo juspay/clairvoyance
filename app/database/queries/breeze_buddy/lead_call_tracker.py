@@ -435,6 +435,7 @@ def get_lead_based_analytics_query(
             COUNT(*) FILTER (WHERE status = 'FINISHED') AS finished_calls,
             COUNT(*) FILTER (WHERE outcome = 'CONFIRM') AS confirmed_calls,
             COUNT(*) FILTER (WHERE outcome = 'CANCEL') AS cancelled_calls,
+            COUNT(*) FILTER (WHERE outcome = 'ABORT') AS aborted_calls,
             COUNT(*) FILTER (WHERE outcome = 'ADDRESS_UPDATED') AS address_update_calls,
             COUNT(*) FILTER (WHERE outcome = 'BUSY') AS busy_calls,
             COUNT(*) FILTER (WHERE outcome = 'NO_ANSWER') AS no_answer_calls
@@ -465,4 +466,45 @@ def update_langfuse_scores_query(
         RETURNING *;
     """
     values = [json.dumps(langfuse_scores), call_id]
+    return text, values
+
+
+def abort_lead_by_id_query(
+    lead_id: str, cancellation_reason: str
+) -> Tuple[str, List[Any]]:
+    """
+    Generate query to abort a lead by lead ID.
+    Sets status to FINISHED and outcome to ABORT.
+
+    Args:
+        lead_id: Lead UUID
+        cancellation_reason: Optional reason for cancellation
+    """
+    text = f"""
+        UPDATE "{LEAD_CALL_TRACKER_TABLE}"
+        SET 
+            "status" = $1, 
+            "outcome" = $2, 
+            "updated_at" = NOW(),
+            "meta_data" = COALESCE("meta_data", '{{}}')::jsonb || $3::jsonb
+        WHERE 
+            "id" = $4
+            AND "status" IN ($5, $6)
+            AND ("outcome" IS NULL OR "outcome" = '')
+        RETURNING *;
+    """
+
+    metadata = {
+        "aborted_at": datetime.now().isoformat(),
+        "outcome": {"abort_reason": cancellation_reason},
+    }
+
+    values = [
+        LeadCallStatus.FINISHED.value,
+        "ABORT",  # Outcome string literal
+        json.dumps(metadata),
+        lead_id,
+        LeadCallStatus.BACKLOG.value,
+        LeadCallStatus.RETRY.value,
+    ]
     return text, values

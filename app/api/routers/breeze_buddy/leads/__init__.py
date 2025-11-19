@@ -7,6 +7,7 @@ Leads represent individual call attempts to customers.
 Endpoints:
 - POST   /leads              - Push new lead for processing
 - GET    /leads/{id}         - Get lead details by ID
+- DELETE /leads/{id}         - Delete (abort) a lead by ID
 - GET    /leads/recording/{call_sid} - Get call recording audio
 
 For backward compatibility, old endpoints are available in deprecated/leads.py
@@ -15,13 +16,17 @@ For backward compatibility, old endpoints are available in deprecated/leads.py
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 
-from app.ai.voice.agents.breeze_buddy.types.models import PushLeadRequest
+from app.ai.voice.agents.breeze_buddy.types.models import (
+    CancelLeadRequest,
+    PushLeadRequest,
+)
 from app.api.security.breeze_buddy.rbac_token import get_current_user_with_rbac
 from app.core.logger import logger
 from app.database.accessor import get_lead_by_id
 from app.schemas import UserInfo
 
 from .handlers import (
+    delete_lead_handler,
     get_call_recording_handler,
     get_lead_handler,
     push_lead_handler,
@@ -163,3 +168,76 @@ async def get_call_recording(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Internal server error while fetching recording: {str(e)}",
         ) from e
+
+
+@router.post("/lead/abort", status_code=status.HTTP_200_OK)
+async def delete_lead(
+    request: CancelLeadRequest,
+    current_user: UserInfo = Depends(get_current_user_with_rbac),
+):
+    """
+    Delete (abort) multiple leads by IDs with individual cancellation reasons.
+
+    This endpoint aborts leads by setting their status to FINISHED and outcome to ABORT.
+    Each lead can have its own cancellation reason.
+    The lead records are not physically deleted but marked as aborted in the database.
+
+    Request Body:
+    {
+        "leads": [
+            {
+                "lead_id": "uuid1",
+                "cancellation_reason": "Customer requested cancellation"
+            },
+            {
+                "lead_id": "uuid2",
+                "cancellation_reason": "Duplicate order"
+            }
+        ]
+    }
+
+    RBAC:
+    - Admin: Can delete any lead
+    - Merchant: Can only delete leads for own merchants/shops
+
+    Returns:
+        {
+            "status": "success",
+            "message": "Processed N lead(s)",
+            "results": [
+                {
+                    "lead_id": "uuid1",
+                    "status": "aborted",
+                    "outcome": "ABORT",
+                    "cancellation_reason": "Customer requested cancellation",
+                    "message": "Lead uuid1 has been aborted"
+                },
+                {
+                    "lead_id": "uuid2",
+                    "status": "aborted",
+                    "outcome": "ABORT",
+                    "cancellation_reason": "Duplicate order",
+                    "message": "Lead uuid2 has been aborted"
+                }
+            ],
+            "errors": [
+                {
+                    "lead_id": "uuid3",
+                    "error": "Lead not found for ID: uuid3"
+                }
+            ]
+        }
+
+    Raises:
+        404 if not found or access denied
+        500 if abort operation fails
+    """
+    # Validate RBAC for each lead
+    for lead_cancellation in request.leads:
+        lead = await get_lead_by_id(lead_cancellation.lead_id)
+        if lead:
+            # RBAC: Check access (returns 404 to avoid leaking existence)
+            validate_lead_read_access(current_user, lead, operation="delete")
+
+    # Delete (abort) the leads
+    return await delete_lead_handler(request.leads, current_user)
