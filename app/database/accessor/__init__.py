@@ -7,6 +7,7 @@ from .breeze_buddy.call_execution_config import (
     create_call_execution_config,
     get_all_call_execution_configs,
     get_call_execution_config_by_merchant_id,
+    update_call_execution_config,
 )
 from .breeze_buddy.lead_call_tracker import (
     acquire_lock_on_lead_by_id,
@@ -44,6 +45,7 @@ __all__ = [
     "create_call_execution_config",
     "get_call_execution_config_by_merchant_id",
     "get_all_call_execution_configs",
+    "update_call_execution_config",
     "create_lead_call_tracker",
     "get_leads_based_on_status_and_next_attempt",
     "acquire_lock_on_lead_by_id",

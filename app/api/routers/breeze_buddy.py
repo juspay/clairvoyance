@@ -48,12 +48,14 @@ from app.database.accessor import (
     get_lead_based_analytics,
     get_lead_call_trackers_count,
     get_outbound_number_by_id,
+    update_call_execution_config,
 )
 from app.schemas import (
     CreateCallExecutionConfigRequest,
     CreateOutboundNumberRequest,
     RequestedBy,
     TokenData,
+    UpdateCallExecutionConfigRequest,
     Workflow,
 )
 
@@ -442,6 +444,51 @@ async def add_call_execution_config(
         raise HTTPException(status_code=400, detail="Unexpected error") from e
 
 
+@router.put("/call-execution-config")
+async def update_call_execution_config_endpoint(
+    config: UpdateCallExecutionConfigRequest,
+    current_user: TokenData = Depends(get_current_user),
+):
+    """
+    Updates an existing call execution config in the database based on merchant_id, workflow, and shop_identifier.
+    Requires JWT authentication.
+    """
+    logger.info(
+        f"Authenticated user {current_user.user_id} updating call execution config for merchant: {config.merchant_id}, workflow: {config.workflow}, shop_identifier: {config.shop_identifier}"
+    )
+
+    try:
+        call_execution_config = await update_call_execution_config(
+            merchant_id=config.merchant_id,
+            workflow=config.workflow,
+            shop_identifier=config.shop_identifier,
+            initial_offset=config.initial_offset,
+            retry_offset=config.retry_offset,
+            call_start_time=config.call_start_time,
+            call_end_time=config.call_end_time,
+            max_retry=config.max_retry,
+            calling_provider=config.calling_provider,
+            enable_international_call=config.enable_international_call,
+        )
+
+        if call_execution_config:
+            logger.info(
+                f"Call execution config updated successfully for merchant: {config.merchant_id}, workflow: {config.workflow}"
+            )
+            return call_execution_config
+        else:
+            logger.error(
+                f"Failed to update call execution config for merchant: {config.merchant_id}, workflow: {config.workflow}, shop_identifier: {config.shop_identifier}"
+            )
+            raise HTTPException(
+                status_code=404, detail="Call execution config not found"
+            )
+
+    except Exception as e:
+        logger.error("Error updating call execution config", exc_info=True)
+        raise HTTPException(status_code=400, detail="Unexpected error") from e
+
+
 @router.get("/cron/initiate")
 async def initiate_cron(
     background_tasks: BackgroundTasks,
@@ -474,13 +521,19 @@ async def get_call_execution_config(
         if call_execution_configs:
             return call_execution_configs
         else:
-            raise HTTPException(
-                status_code=404, detail="Call execution config not found"
+            logger.info(f"No call execution config found for merchant: {merchant_id}")
+            return JSONResponse(
+                status_code=404,
+                content={
+                    "detail": f"Call execution config not found for merchant_id: {merchant_id}"
+                },
             )
 
     except Exception as e:
         logger.error("Error getting call execution config", exc_info=True)
-        raise HTTPException(status_code=400, detail="Unexpected error") from e
+        return JSONResponse(
+            status_code=400, content={"detail": f"Unexpected error: {str(e)}"}
+        )
 
 
 @router.get("/breeze/order-confirmation/dashboard", include_in_schema=False)

@@ -29,6 +29,8 @@ def decode_call_execution_config_list(
             calling_provider=CallProvider(row["calling_provider"]),
             merchant_id=row["merchant_id"],
             workflow=Workflow(row["workflow"]),
+            shop_identifier=row["shop_identifier"],
+            enable_international_call=row["enable_international_call"],
             created_at=row["created_at"],
             updated_at=row["updated_at"],
         )
@@ -56,6 +58,8 @@ def decode_call_execution_config(
         calling_provider=CallProvider(row["calling_provider"]),
         merchant_id=row["merchant_id"],
         workflow=Workflow(row["workflow"]),
+        shop_identifier=row["shop_identifier"],
+        enable_international_call=row["enable_international_call"],
         created_at=row["created_at"],
         updated_at=row["updated_at"],
     )
