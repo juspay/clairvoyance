@@ -11,6 +11,7 @@ from app.core.logger import logger
 from app.database.decoder.breeze_buddy.lead_call_tracker import decode_lead_call_tracker
 from app.database.queries import run_parameterized_query
 from app.database.queries.breeze_buddy.lead_call_tracker import (
+    abort_lead_by_id_query,
     acquire_lock_on_lead_by_id_query,
     get_all_lead_call_trackers_query,
     get_lead_based_analytics_query,
@@ -486,4 +487,27 @@ async def update_langfuse_scores(
         return None
     except Exception as e:
         logger.error(f"Error updating langfuse_scores for call_id {call_id}: {e}")
+        return None
+
+
+async def handle_lead_abort(
+    lead_id: str, cancellation_reason: str
+) -> Optional[LeadCallTracker]:
+    """
+    Abort a lead by lead ID.
+    Sets status to FINISHED and outcome to ABORT.
+    """
+    try:
+        query_text, values = abort_lead_by_id_query(lead_id, cancellation_reason)
+        result = await run_parameterized_query(query_text, values)
+
+        if result and get_row_count(result) > 0:
+            decoded_result = decode_lead_call_tracker(result[0])
+            return decoded_result
+
+        logger.error("Failed to abort lead")
+        return None
+
+    except Exception as e:
+        logger.error(f"Error aborting lead {lead_id}: {e}")
         return None

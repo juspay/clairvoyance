@@ -16,7 +16,10 @@ from app.ai.voice.agents.breeze_buddy.services.telephony.exotel.recording import
 from app.ai.voice.agents.breeze_buddy.services.telephony.twilio.recording import (
     download_call_recording as download_call_recording_twilio,
 )
-from app.ai.voice.agents.breeze_buddy.types.models import PushLeadRequest
+from app.ai.voice.agents.breeze_buddy.types.models import (
+    LeadCancellation,
+    PushLeadRequest,
+)
 from app.ai.voice.agents.breeze_buddy.utils.common import (
     get_validation_error_message,
     validate_payload,
@@ -32,6 +35,7 @@ from app.database.accessor import (
     get_lead_by_id,
     get_outbound_number_by_id,
     get_template_by_merchant,
+    handle_lead_abort,
 )
 from app.schemas import ExecutionMode, LeadCallStatus, UserInfo
 
@@ -303,3 +307,108 @@ async def get_call_recording_handler(call_sid: str, current_user: UserInfo) -> B
 
     audio_file.seek(0)
     return audio_file
+
+
+async def delete_lead_handler(
+    leads: list[LeadCancellation], current_user: UserInfo
+) -> Dict:
+    """
+    Delete (abort) multiple leads by IDs with individual cancellation reasons.
+
+    This handler:
+    1. Fetches each lead to validate it exists
+    2. Checks if lead is already aborted
+    3. Calls handle_lead_abort to set status to FINISHED and outcome to ABORT
+    4. Stores the cancellation reason in metadata if provided
+
+    Args:
+        leads: List of LeadCancellation objects containing lead_id and cancellation_reason pairs
+        current_user: Current authenticated user
+
+    Returns:
+        Success message with aborted lead details for all leads
+
+    Raises:
+        HTTPException: 404 if not found, 500 on abort failure
+    """
+    lead_ids = [lead.lead_id for lead in leads]
+    logger.info(
+        f"User {current_user.username} (role: {current_user.role}) requesting to delete leads: {lead_ids}"
+    )
+
+    results = []
+    errors = []
+
+    try:
+        for lead_cancellation in leads:
+            lead_id = lead_cancellation.lead_id
+            cancellation_reason = lead_cancellation.cancellation_reason
+
+            try:
+                # Get lead to validate existence (will be used for RBAC validation)
+                lead = await get_lead_by_id(lead_id)
+
+                if not lead:
+                    errors.append(
+                        {
+                            "lead_id": lead_id,
+                            "error": f"Lead not found for ID: {lead_id}",
+                        }
+                    )
+                    continue
+
+                # Check if lead is already aborted
+                if lead.status.value == "FINISHED" and lead.outcome == "ABORT":
+                    logger.info(f"Lead {lead_id} is already aborted")
+                    results.append(
+                        {
+                            "lead_id": lead_id,
+                            "status": "already_aborted",
+                            "outcome": lead.outcome,
+                            "cancellation_reason": cancellation_reason,
+                            "message": f"Lead {lead_id} is already aborted",
+                        }
+                    )
+                    continue
+
+                # Abort the lead using existing function with cancellation reason
+                aborted_lead = await handle_lead_abort(lead_id, cancellation_reason)
+
+                if not aborted_lead:
+                    logger.error(f"Failed to abort lead {lead_id}")
+                    errors.append(
+                        {"lead_id": lead_id, "error": f"Failed to abort lead {lead_id}"}
+                    )
+                    continue
+
+                logger.info(
+                    f"Lead {lead_id} successfully aborted by user {current_user.username}"
+                )
+
+                results.append(
+                    {
+                        "lead_id": lead_id,
+                        "status": "aborted",
+                        "outcome": aborted_lead.outcome,
+                        "cancellation_reason": cancellation_reason,
+                        "message": f"Lead {lead_id} has been aborted",
+                    }
+                )
+
+            except Exception as e:
+                logger.error(f"Error deleting lead {lead_id}: {e}", exc_info=True)
+                errors.append({"lead_id": lead_id, "error": str(e)})
+
+        return {
+            "status": "success" if results else "failed",
+            "message": f"Processed {len(leads)} lead(s)",
+            "results": results,
+            "errors": errors if errors else None,
+        }
+
+    except Exception as e:
+        logger.error(f"Error deleting leads: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Unexpected error while deleting leads: {str(e)}",
+        )
