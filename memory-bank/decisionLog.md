@@ -6,6 +6,20 @@ This file records architectural and implementation decisions using a list format
 *
 
 ## Decision
+*   [2025-11-20 16:18:00] - Integrate ElevenLabs Realtime STT Service.
+
+## Rationale
+*   To provide an alternative to Google STT, offering potentially lower latency and different performance characteristics.
+*   The integration allows switching STT providers via environment configuration.
+
+## Implementation Details
+*   Modified `app/agents/voice/automatic/stt/__init__.py`:
+    *   Added `ElevenLabsRealtimeSTTService` to the `get_stt_service` function.
+    *   The service is selected when `config.STT_PROVIDER` is set to `"elevenlabs"`.
+    *   Configuration for the service, including API key, model, and other parameters, is drawn from `app.core.config`.
+*
+
+## Decision
 *   [2025-08-20 14:42:00] - Embed Dynamic Date Directly into SYSTEM_PROMPT F-String.
 
 ## Rationale
