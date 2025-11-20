@@ -176,18 +176,15 @@ ELEVENLABS_STT_MODEL = os.environ.get(
 ELEVENLABS_STT_LANGUAGE = os.environ.get(
     "ELEVENLABS_STT_LANGUAGE", "en"
 )  # Language code for transcription
-ELEVENLABS_STT_USE_REALTIME = (
-    os.environ.get("ELEVENLABS_STT_USE_REALTIME", "false").lower() == "true"
-)  # Use real-time WebSocket API (true) or file-based API (false)
 ELEVENLABS_STT_COMMIT_STRATEGY = os.environ.get(
     "ELEVENLABS_STT_COMMIT_STRATEGY", "manual"
-).lower()  # "manual" (Pipecat VAD) or "vad" (ElevenLabs VAD) - Only used with real-time API
+).lower()  # "manual" (Pipecat VAD) or "vad" (ElevenLabs VAD)
 ELEVENLABS_STT_VAD_SILENCE_THRESHOLD = float(
     os.environ.get("ELEVENLABS_STT_VAD_SILENCE_THRESHOLD", "1.0")
-)  # Seconds of silence before VAD commits (0.3-3.0) - Only used with real-time API
+)  # Seconds of silence before VAD commits (0.3-3.0)
 ELEVENLABS_STT_VAD_THRESHOLD = float(
     os.environ.get("ELEVENLABS_STT_VAD_THRESHOLD", "0.5")
-)  # VAD sensitivity (0.1-0.9, lower is more sensitive) - Only used with real-time API
+)  # VAD sensitivity (0.1-0.9, lower is more sensitive)
 
 # --- Deepgram STT Configuration ---
 DEEPGRAM_API_KEY = os.getenv(

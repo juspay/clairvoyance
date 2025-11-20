@@ -226,16 +226,16 @@ def get_stt_service(voice_name: Optional[str] = None):
             vad_force_turn_endpoint=config.SONIOX_VAD_FORCE_TURN_ENDPOINT,
         )
     elif config.STT_PROVIDER == "elevenlabs":
-        if not config.ELEVENLABS_API_KEY:
+        if not config.ELEVENLABS_STT_API_KEY:
             raise ValueError(
-                "ELEVENLABS_API_KEY is required when STT_PROVIDER=elevenlabs"
+                "ELEVENLABS_STT_API_KEY is required when STT_PROVIDER=elevenlabs"
             )
 
         logger.info(
             f"Using ElevenLabs Realtime STT service with model: {config.ELEVENLABS_STT_MODEL}"
         )
         return ElevenLabsRealtimeSTTService(
-            api_key=config.ELEVENLABS_API_KEY,
+            api_key=config.ELEVENLABS_STT_API_KEY,
             model=config.ELEVENLABS_STT_MODEL,
             params=ElevenLabsRealtimeSTTService.InputParams(
                 language_code=config.ELEVENLABS_STT_LANGUAGE,
