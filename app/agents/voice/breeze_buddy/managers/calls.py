@@ -511,6 +511,7 @@ async def update_call_recording(
         audio_file = await download_call_recording(provider_recording_url, call_id)
         if not audio_file:
             logger.error(f"Failed to download recording for call_id: {call_id}")
+            await update_lead_call_recording_url(call_id, provider_recording_url)
             return
 
         if provider == "twilio":

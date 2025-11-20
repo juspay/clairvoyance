@@ -53,7 +53,6 @@ from app.database.accessor import (
 from app.schemas import (
     CreateCallExecutionConfigRequest,
     CreateOutboundNumberRequest,
-    RequestedBy,
     TokenData,
     UpdateCallExecutionConfigRequest,
     Workflow,
@@ -209,11 +208,16 @@ async def add_outbound_number(
             return outbound_number
         else:
             logger.error(f"Failed to add outbound number {number.number}")
-            raise HTTPException(status_code=400, detail="Failed to add outbound number")
+            return JSONResponse(
+                status_code=400, content={"detail": "Failed to add outbound number"}
+            )
 
     except Exception as e:
         logger.error(f"Error adding outbound number: {e}")
-        raise HTTPException(status_code=400, detail=str(e))
+        return JSONResponse(
+            status_code=400,
+            content={"detail": f"Error adding outbound number: {str(e)}"},
+        )
 
 
 @router.get("/outbound-number")
@@ -232,13 +236,18 @@ async def get_outbound_number(
             if outbound_number:
                 return outbound_number
             else:
-                raise HTTPException(status_code=404, detail="Outbound number not found")
+                return JSONResponse(
+                    status_code=404, content={"detail": "Outbound number not found"}
+                )
         else:
             return await get_all_outbound_numbers()
 
     except Exception as e:
         logger.error(f"Error getting outbound number: {e}")
-        raise HTTPException(status_code=400, detail=str(e))
+        return JSONResponse(
+            status_code=400,
+            content={"detail": f"Error getting outbound number: {str(e)}"},
+        )
 
 
 @router.delete("/outbound-number/{number_id}")
@@ -261,18 +270,21 @@ async def delete_outbound_number(
             return outbound_number
         else:
             logger.error(f"Failed to disable outbound number {number_id}")
-            raise HTTPException(
-                status_code=400, detail="Failed to disable outbound number"
+            return JSONResponse(
+                status_code=400, content={"detail": "Failed to disable outbound number"}
             )
 
     except Exception as e:
         logger.error(f"Error disabling outbound number: {e}")
-        raise HTTPException(status_code=400, detail=str(e))
+        return JSONResponse(
+            status_code=400,
+            content={"detail": f"Error disabling outbound number: {str(e)}"},
+        )
 
 
 @router.post("/{identity}/{workflow}")
 async def trigger_order_confirmation(
-    identity: RequestedBy,
+    identity: str,
     workflow: Workflow,
     order: BreezeOrderData,
     current_user: TokenData = Depends(get_current_user),
@@ -281,8 +293,6 @@ async def trigger_order_confirmation(
     Receives order details and triggers a order confirmation workflow.
     Requires JWT authentication.
     """
-    if identity != "breeze":
-        raise HTTPException(status_code=404, detail="Feature not supported")
 
     logger.info(
         f"Authenticated user {current_user.user_id} requesting order confirmation for order: {order.order_id} for {order.customer_name}"
@@ -291,21 +301,25 @@ async def trigger_order_confirmation(
     try:
         # Get call execution config
         call_execution_configs = await get_call_execution_config_by_merchant_id(
-            identity.value, order.shop_identifier
+            identity, order.shop_identifier
         )
         if not call_execution_configs:
-            raise HTTPException(
+            return JSONResponse(
                 status_code=404,
-                detail="Call execution config not found for this merchant",
+                content={
+                    "detail": f"Call execution config not found for merchant_id: {identity}"
+                },
             )
 
         config = next(
             (c for c in call_execution_configs if c.workflow == workflow), None
         )
         if not config:
-            raise HTTPException(
+            return JSONResponse(
                 status_code=404,
-                detail=f"Call execution config not found for workflow: {workflow}",
+                content={
+                    "detail": f"Call execution config not found for workflow: {workflow}"
+                },
             )
 
         uuid = str(uuid4())
@@ -350,12 +364,18 @@ async def trigger_order_confirmation(
             }
         else:
             logger.error(f"Failed to add lead call tracker {order.order_id} to queue")
-            raise HTTPException(
-                status_code=400, detail="Failed to add lead call tracker to queue"
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "detail": f"Failed to add lead call tracker for order_id: {order.order_id}"
+                },
             )
     except Exception as e:
         logger.error("Error processing order confirmation request", exc_info=True)
-        raise HTTPException(status_code=400, detail="Unexpected error") from e
+        return JSONResponse(
+            status_code=400,
+            content={"detail": f"Error processing order confirmation: {str(e)}"},
+        )
 
 
 @router.websocket("/{service_provider}/callback/{workflow}")
@@ -435,13 +455,17 @@ async def add_call_execution_config(
             logger.error(
                 f"Failed to add call execution config for merchant {config.merchant_id}"
             )
-            raise HTTPException(
-                status_code=400, detail="Failed to add call execution config"
+            return JSONResponse(
+                status_code=400,
+                content={"detail": "Failed to add call execution config"},
             )
 
     except Exception as e:
-        logger.error("Error disabling outbound number", exc_info=True)
-        raise HTTPException(status_code=400, detail="Unexpected error") from e
+        logger.error("Error adding call execution config", exc_info=True)
+        return JSONResponse(
+            status_code=400,
+            content={"detail": f"Error adding call execution config: {str(e)}"},
+        )
 
 
 @router.put("/call-execution-config")
@@ -480,13 +504,16 @@ async def update_call_execution_config_endpoint(
             logger.error(
                 f"Failed to update call execution config for merchant: {config.merchant_id}, workflow: {config.workflow}, shop_identifier: {config.shop_identifier}"
             )
-            raise HTTPException(
-                status_code=404, detail="Call execution config not found"
+            return JSONResponse(
+                status_code=404, content={"detail": "Call execution config not found"}
             )
 
     except Exception as e:
         logger.error("Error updating call execution config", exc_info=True)
-        raise HTTPException(status_code=400, detail="Unexpected error") from e
+        return JSONResponse(
+            status_code=400,
+            content={"detail": f"Error updating call execution config: {str(e)}"},
+        )
 
 
 @router.get("/cron/initiate")

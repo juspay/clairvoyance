@@ -18,11 +18,6 @@ class CallProvider(str, Enum):
     EXOTEL = "EXOTEL"
 
 
-class RequestedBy(str, Enum):
-    BREEZE = "breeze"
-    SHOPIFY = "shopify"
-
-
 class Workflow(str, Enum):
     ORDER_CONFIRMATION = "order-confirmation"
 
@@ -46,7 +41,7 @@ class LeadCallOutcome(str, Enum):
 class LeadCallTracker(BaseModel):
     id: str
     outbound_number_id: Optional[str] = None
-    merchant_id: RequestedBy
+    merchant_id: str
     workflow: Workflow
     shop_identifier: Optional[str] = None
     attempt_count: int = 0

@@ -29,7 +29,6 @@ from app.schemas import (
     LeadCallOutcome,
     LeadCallStatus,
     LeadCallTracker,
-    RequestedBy,
     Workflow,
 )
 
@@ -43,7 +42,7 @@ def get_row_count(result: Optional[List[asyncpg.Record]]) -> int:
 
 async def create_lead_call_tracker(
     id: str,
-    merchant_id: RequestedBy,
+    merchant_id: str,
     workflow: Workflow,
     shop_identifier: Optional[str],
     next_attempt_at: Optional[datetime],

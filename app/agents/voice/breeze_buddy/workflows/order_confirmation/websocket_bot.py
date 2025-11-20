@@ -61,7 +61,7 @@ from app.core.config import (
 from app.core.logger import logger
 from app.core.security.sha import calculate_hmac_sha256
 from app.database.accessor import get_lead_by_call_id, update_lead_call_initiated_time
-from app.schemas import CallProvider, LeadCallOutcome, RequestedBy
+from app.schemas import CallProvider, LeadCallOutcome
 
 load_dotenv(override=True)
 

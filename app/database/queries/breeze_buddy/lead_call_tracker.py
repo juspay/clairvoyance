@@ -6,7 +6,7 @@ import json
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
-from app.schemas import LeadCallOutcome, LeadCallStatus, RequestedBy, Workflow
+from app.schemas import LeadCallOutcome, LeadCallStatus, Workflow
 
 # Table names
 LEAD_CALL_TRACKER_TABLE = "lead_call_tracker"
@@ -16,7 +16,7 @@ OUTBOUND_NUMBER_TABLE = "outbound_number"
 # Lead call tracker queries
 def insert_lead_call_tracker_query(
     id: str,
-    merchant_id: RequestedBy,
+    merchant_id: str,
     workflow: Workflow,
     shop_identifier: Optional[str],
     next_attempt_at: Optional[datetime],
@@ -53,7 +53,7 @@ def insert_lead_call_tracker_query(
 
     values = [
         id,
-        merchant_id.value,
+        merchant_id,
         workflow.value,
         shop_identifier,
         next_attempt_at,

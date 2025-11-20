@@ -10,7 +10,6 @@ from app.schemas import (
     LeadCallOutcome,
     LeadCallStatus,
     LeadCallTracker,
-    RequestedBy,
     Workflow,
 )
 from app.utils.common import parse_json
@@ -26,7 +25,7 @@ def decode_lead_call_tracker(row: asyncpg.Record) -> Optional[LeadCallTracker]:
     return LeadCallTracker(
         id=row["id"],
         outbound_number_id=row["outbound_number_id"],
-        merchant_id=RequestedBy(row["merchant_id"]),
+        merchant_id=row["merchant_id"],
         workflow=Workflow(row["workflow"]),
         shop_identifier=row["shop_identifier"],
         attempt_count=row["attempt_count"],
