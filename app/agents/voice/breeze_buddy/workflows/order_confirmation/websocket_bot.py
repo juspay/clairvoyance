@@ -460,6 +460,7 @@ class OrderConfirmationBot:
     async def _finalize_call(self):
         try:
             transcription = []
+            filtered_transcript = []
             if self.context:
                 history = self.context.messages
                 for msg in history:
@@ -472,6 +473,11 @@ class OrderConfirmationBot:
                         transcription.append(
                             {"role": msg["role"], "content": msg["content"]}
                         )
+                        # Only include user and assistant messages in webhook transcript
+                        if msg["role"] in ("user", "assistant"):
+                            filtered_transcript.append(
+                                {"role": msg["role"], "content": msg["content"]}
+                            )
 
             call_outcome = OUTCOME_TO_ENUM.get(self.outcome, LeadCallOutcome.BUSY)
 
@@ -490,6 +496,7 @@ class OrderConfirmationBot:
                 "outcome": call_outcome,
                 "updatedAddress": self.updated_address,
                 "attemptCount": self.lead.attempt_count + 1,
+                "transcription": json.dumps(filtered_transcript),
                 "callDuration": call_duration,
                 "orderId": self.order_id,
             }
