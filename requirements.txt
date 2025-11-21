@@ -46,3 +46,6 @@ PyJWT
 
 # Audio processing
 pydub
+
+# Redis cluster support
+redis[hiredis]>=5.0.0
