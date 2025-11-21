@@ -488,3 +488,9 @@ ENABLE_SIGTERM_HANDLER = (
     os.environ.get("ENABLE_SIGTERM_HANDLER", "false").lower() == "true"
 )
 BOT_MAX_DRAIN_SECONDS = int(os.environ.get("BOT_MAX_DRAIN_SECONDS", "25"))
+
+# Redis Configuration
+REDIS_HOST = os.getenv("REDIS_HOST", "")
+REDIS_PORT = os.getenv("REDIS_PORT", "")
+REDIS_CLUSTER_NODES = os.getenv("REDIS_CLUSTER_NODES", "")
+REDIS_TTL = int(os.getenv("REDIS_TTL", "3600"))  # Default TTL in seconds (1 hour)

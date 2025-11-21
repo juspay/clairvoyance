@@ -58,6 +58,11 @@ from app.helpers.automatic.session_manager import (
 from app.schemas import (
     AutomaticVoiceUserConnectRequest,
 )
+from app.services.redis import (
+    close_redis_connections,
+    get_redis_service,
+    is_redis_configured,
+)
 
 # Store Daily API helpers and room pool
 daily_helpers = {}
@@ -82,6 +87,16 @@ async def lifespan(_app: FastAPI):
         await init_db_pool()
     except Exception as e:
         logger.error(f"Failed to initialize database: {e}")
+    # Initialize Redis client
+    try:
+        if is_redis_configured():
+            redis_service = await get_redis_service()
+            await redis_service.ping()  # Test the connection
+            logger.info("Redis client initialized successfully")
+        else:
+            logger.info("Redis not configured - skipping Redis initialization")
+    except Exception as e:
+        logger.error(f"Failed to initialize Redis client: {e}")
 
     # Initialize aiohttp session with proxy support for Daily API
     aiohttp_session = create_aiohttp_session()
@@ -145,6 +160,8 @@ async def lifespan(_app: FastAPI):
     await cleanup_bot_processes()
     # Close database pool
     await close_db_pool()
+    # Close Redis connections
+    await close_redis_connections()
     # Close aiohttp session
     await aiohttp_session.close()
     logger.info("Aiohttp session closed.")
