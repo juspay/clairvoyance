@@ -15,6 +15,7 @@ from app.database.queries.breeze_buddy.lead_call_tracker import (
     get_all_lead_call_trackers_query,
     get_lead_based_analytics_query,
     get_lead_by_call_id_query,
+    get_lead_by_id_query,
     get_lead_call_trackers_count_query,
     get_leads_based_on_status_and_next_attempt_query,
     get_leads_by_status_and_time_before_query,
@@ -204,6 +205,28 @@ async def get_lead_by_call_id(call_id: str) -> Optional[LeadCallTracker]:
         return None
 
 
+async def get_lead_by_id(lead_id: str) -> Optional[LeadCallTracker]:
+    """
+    Get lead by ID.
+    """
+    logger.info(f"Getting lead with ID {lead_id}")
+
+    try:
+        query_text, values = get_lead_by_id_query(lead_id)
+        result = await run_parameterized_query(query_text, values)
+        if result and get_row_count(result) > 0:
+            decoded_result = decode_lead_call_tracker(result[0])
+            logger.info(f"Lead found: {decoded_result}")
+            return decoded_result
+
+        logger.error("Lead not found")
+        return None
+
+    except Exception as e:
+        logger.error(f"Error getting lead: {e}")
+        return None
+
+
 async def update_lead_call_initiated_time(
     call_id: str, call_initiated_time: datetime
 ) -> Optional[LeadCallTracker]:
@@ -293,6 +316,7 @@ async def get_all_lead_call_trackers(
     end_date: Optional[datetime] = None,
     outcome: Optional[str] = None,
     order_id: Optional[str] = None,
+    shop_name: Optional[str] = None,
     page: Optional[int] = None,
     page_size: Optional[int] = None,
 ) -> List[Tuple[LeadCallTracker, Optional[str]]]:
@@ -310,6 +334,7 @@ async def get_all_lead_call_trackers(
             end_date=end_date,
             outcome=outcome,
             order_id=order_id,
+            shop_name=shop_name,
             limit=limit,
             offset=offset,
         )
@@ -349,6 +374,7 @@ async def get_lead_call_trackers_count(
     end_date: Optional[datetime] = None,
     outcome: Optional[str] = None,
     order_id: Optional[str] = None,
+    shop_name: Optional[str] = None,
 ) -> int:
     """
     Get the count of all lead call trackers with optional filters.
@@ -361,6 +387,7 @@ async def get_lead_call_trackers_count(
             end_date=end_date,
             outcome=outcome,
             order_id=order_id,
+            shop_name=shop_name,
         )
         result = await run_parameterized_query(query_text, values)
         if result and result[0]["count"]:

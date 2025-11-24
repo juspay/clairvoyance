@@ -883,6 +883,14 @@
           placeholder="Search by Order ID"
         />
       </div>
+      <div class="filter-group">
+        <label for="shop-name-filter">Shop Name:</label>
+        <input
+          type="text"
+          id="shop-name-filter"
+          placeholder="Search by Shop Name"
+        />
+      </div>
     </div>
 
     <!-- View Toggle for Analytics -->
@@ -925,6 +933,7 @@
         <thead>
           <tr>
             <th>Merchant ID</th>
+            <th>Shop Identifier</th>
             <th>Workflow</th>
             <th>Initial Offset (s)</th>
             <th>Retry Offset (s)</th>
@@ -971,6 +980,7 @@
       const endDateInput = document.getElementById("end-date");
       const outcomeFilter = document.getElementById("outcome-filter");
       const orderIdFilter = document.getElementById("order-id-filter");
+      const shopNameFilter = document.getElementById("shop-name-filter");
       let currentPage = 1;
       let currentView = "call"; // Track current analytics view
 
@@ -1065,6 +1075,7 @@
         const endDate = endDateInput.value;
         const outcome = outcomeFilter.value;
         const orderId = orderIdFilter.value;
+        const shopName = shopNameFilter.value;
         let url = `/agent/voice/breeze-buddy/breeze/order-confirmation/call-details?page=${currentPage}&page_size=10`;
         const params = new URLSearchParams();
         if (startDate) {
@@ -1078,6 +1089,9 @@
         }
         if (orderId) {
           params.append("order_id", orderId);
+        }
+        if (shopName) {
+          params.append("shop_name", shopName);
         }
         if (params.toString()) {
           url += `&${params.toString()}`;
@@ -1187,6 +1201,7 @@
                 <p><strong>Calling Provider:</strong> ${
                   item.calling_provider ?? "-"
                 }</p>
+                <p><strong>Attempt Count:</strong> ${item.attempt_count + 1}</p>
                 <p><strong>Recording URL:</strong> <a href="${
                   item.recording_url
                 }" target="_blank">${item.recording_url}</a></p>
@@ -1225,6 +1240,11 @@
         loadDashboardData(false);
       });
 
+      shopNameFilter.addEventListener("input", () => {
+        currentPage = 1;
+        loadDashboardData(false);
+      });
+
       document.getElementById("prev-page").addEventListener("click", () => {
         if (currentPage > 1) {
           currentPage--;
@@ -1258,6 +1278,7 @@
             const row = document.createElement("tr");
             row.innerHTML = `
                         <td>${item.merchant_id}</td>
+                        <td>${item.shop_identifier ?? "-"}</td>
                         <td>${item.workflow}</td>
                         <td>${item.initial_offset}</td>
                         <td>${item.retry_offset}</td>

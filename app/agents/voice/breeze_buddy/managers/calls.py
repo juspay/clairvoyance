@@ -8,12 +8,11 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from app.agents.voice.breeze_buddy.services.telephony.utils import get_voice_provider
-from app.core.config import (
-    ORDER_CONFIRMATION_WEBHOOK_SECRET_KEY,
-    UPLOAD_BREEZE_BUDDY_CALL_RECORDINGS_TO_CLOUD,
+from app.agents.voice.breeze_buddy.workflows.order_confirmation.utils import (
+    send_webhook_with_retry,
 )
+from app.core.config import UPLOAD_BREEZE_BUDDY_CALL_RECORDINGS_TO_CLOUD
 from app.core.logger import logger
-from app.core.security.sha import calculate_hmac_sha256
 from app.core.transport.http_client import create_aiohttp_session
 from app.database.accessor import (
     acquire_lock_on_lead_by_id,
@@ -167,31 +166,17 @@ async def _retry_call(
 
                 try:
                     async with create_aiohttp_session() as session:
-                        payload = json.dumps(summary_data).replace(" ", "")
-                        signature = calculate_hmac_sha256(
-                            payload, ORDER_CONFIRMATION_WEBHOOK_SECRET_KEY
+                        success = await send_webhook_with_retry(
+                            session, reporting_webhook_url, summary_data, max_retries=3
                         )
-                        headers = {
-                            "Content-Type": "application/json",
-                        }
-
-                        if signature:
-                            headers["checksum"] = signature
-
-                        async with session.post(
-                            reporting_webhook_url,
-                            json=summary_data,
-                            headers=headers,
-                        ) as response:
-                            if response.status == 200:
-                                logger.info(
-                                    "Successfully sent call summary webhook on no_answer."
-                                )
-                            else:
-                                response_text = await response.text()
-                                logger.error(
-                                    f"Failed to send call summary webhook on no_answer. Status: {response.status}, Body: {response_text}"
-                                )
+                        if success:
+                            logger.info(
+                                "Successfully sent call summary webhook on no_answer."
+                            )
+                        else:
+                            logger.error(
+                                "Failed to send call summary webhook on no_answer after all retries."
+                            )
                 except Exception as e:
                     logger.error(f"Error sending webhook on no_answer: {e}")
 
@@ -331,7 +316,7 @@ async def process_backlog_leads():
                                 status=LeadCallStatus.FINISHED,
                                 outcome=LeadCallOutcome.UNKNOWN,
                                 meta_data={
-                                    "failure_reason": "Failed to initiate call, international calling disabled."
+                                    "failure_reason": "Failed to initiate call with EXOTEL, international calling disabled."
                                 },
                                 call_end_time=datetime.now(timezone.utc),
                             )
@@ -367,6 +352,15 @@ async def process_backlog_leads():
                     else:
                         logger.error(
                             f"Failed to initiate retry call for lead {locked_lead.id}. Call response: {retry_call}"
+                        )
+                        await update_lead_call_completion_details(
+                            id=locked_lead.id,
+                            status=LeadCallStatus.FINISHED,
+                            outcome=LeadCallOutcome.UNKNOWN,
+                            meta_data={
+                                "failure_reason": f"Failed to initiate call using {retry_calling_provider.value} after {config.calling_provider.value} failed."
+                            },
+                            call_end_time=datetime.now(timezone.utc),
                         )
                         await _release_number(
                             retry_number_to_use.id, retry_calling_provider

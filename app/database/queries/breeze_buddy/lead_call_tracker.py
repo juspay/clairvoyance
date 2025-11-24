@@ -149,6 +149,18 @@ def get_lead_by_call_id_query(call_id: str) -> Tuple[str, List[Any]]:
     return text, values
 
 
+def get_lead_by_id_query(lead_id: str) -> Tuple[str, List[Any]]:
+    """
+    Generate query to get lead by ID.
+    """
+    text = f"""
+        SELECT * FROM "{LEAD_CALL_TRACKER_TABLE}"
+        WHERE "id" = $1;
+    """
+    values = [lead_id]
+    return text, values
+
+
 def update_lead_call_recording_url_query(
     call_id: str, recording_url: str
 ) -> Tuple[str, List[Any]]:
@@ -206,6 +218,7 @@ def get_all_lead_call_trackers_query(
     end_date: Optional[datetime] = None,
     outcome: Optional[str] = None,
     order_id: Optional[str] = None,
+    shop_name: Optional[str] = None,
     limit: Optional[int] = None,
     offset: Optional[int] = None,
 ) -> Tuple[str, List[Any]]:
@@ -239,6 +252,10 @@ def get_all_lead_call_trackers_query(
     if order_id:
         values.append(f"%{order_id}%")
         conditions.append(f"payload->>'order_id' LIKE ${len(values)}")
+
+    if shop_name:
+        values.append(f"%{shop_name}%")
+        conditions.append(f"payload->>'shop_name' LIKE ${len(values)}")
 
     if conditions:
         text += " WHERE " + " AND ".join(conditions)
@@ -279,6 +296,7 @@ def get_lead_call_trackers_count_query(
     end_date: Optional[datetime] = None,
     outcome: Optional[str] = None,
     order_id: Optional[str] = None,
+    shop_name: Optional[str] = None,
 ) -> Tuple[str, List[Any]]:
     """
     Generate query to count all lead call trackers within a date range with optional filters.
@@ -304,6 +322,10 @@ def get_lead_call_trackers_count_query(
     if order_id:
         values.append(f"%{order_id}%")
         conditions.append(f"payload->>'order_id' LIKE ${len(values)}")
+
+    if shop_name:
+        values.append(f"%{shop_name}%")
+        conditions.append(f"payload->>'shop_name' LIKE ${len(values)}")
 
     if conditions:
         text += " WHERE " + " AND ".join(conditions)

@@ -1,3 +1,8 @@
+import json
+
+from app.core.config import ORDER_CONFIRMATION_WEBHOOK_SECRET_KEY
+from app.core.logger import logger
+from app.core.security.sha import calculate_hmac_sha256
 from app.schemas import LeadCallOutcome
 
 # Mapping dictionary for outcome strings to LeadCallOutcome enum values
@@ -53,3 +58,48 @@ def indian_number_to_speech(number: int) -> str:
         parts[-1] = h_part
 
     return " ".join(parts) + " rupees"
+
+
+async def send_webhook_with_retry(
+    session, url: str, data: dict, max_retries: int = 3
+) -> bool:
+    """
+    Sends a webhook with retry logic up to max_retries attempts.
+    Returns True if any attempt succeeds (status 200), False otherwise.
+
+    Args:
+        session: aiohttp session
+        url: webhook URL
+        data: payload data
+        max_retries: maximum number of attempts (default 3)
+
+    Returns:
+        bool: True if successful, False if all attempts failed
+    """
+    payload = json.dumps(data, separators=(",", ":"))
+    signature = calculate_hmac_sha256(payload, ORDER_CONFIRMATION_WEBHOOK_SECRET_KEY)
+    headers = {"Content-Type": "application/json"}
+    if signature:
+        headers["checksum"] = signature
+
+    for attempt in range(1, max_retries + 1):
+        try:
+            logger.info(f"Webhook attempt {attempt}/{max_retries} to {url}")
+            async with session.post(url, json=data, headers=headers) as response:
+                if response.status == 200:
+                    logger.info(f"Webhook succeeded on attempt {attempt}")
+                    return True
+                else:
+                    response_text = await response.text()
+                    logger.warning(
+                        f"Webhook attempt {attempt} failed. Status: {response.status}, Body: {response_text}"
+                    )
+        except Exception as e:
+            logger.error(f"Webhook attempt {attempt} error: {e}", exc_info=True)
+
+        # Don't sleep after the last attempt
+        if attempt < max_retries:
+            logger.info(f"Retrying webhook (attempt {attempt + 1}/{max_retries})...")
+
+    logger.error(f"All {max_retries} webhook attempts failed for {url}")
+    return False

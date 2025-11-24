@@ -46,6 +46,7 @@ from app.database.accessor import (
     get_all_outbound_numbers,
     get_call_execution_config_by_merchant_id,
     get_lead_based_analytics,
+    get_lead_by_id,
     get_lead_call_trackers_count,
     get_outbound_number_by_id,
     update_call_execution_config,
@@ -236,9 +237,7 @@ async def get_outbound_number(
             if outbound_number:
                 return outbound_number
             else:
-                return JSONResponse(
-                    status_code=404, content={"detail": "Outbound number not found"}
-                )
+                return []
         else:
             return await get_all_outbound_numbers()
 
@@ -549,12 +548,7 @@ async def get_call_execution_config(
             return call_execution_configs
         else:
             logger.info(f"No call execution config found for merchant: {merchant_id}")
-            return JSONResponse(
-                status_code=404,
-                content={
-                    "detail": f"Call execution config not found for merchant_id: {merchant_id}"
-                },
-            )
+            return []
 
     except Exception as e:
         logger.error("Error getting call execution config", exc_info=True)
@@ -697,6 +691,39 @@ async def get_analytics(
     return JSONResponse(content=analytics)
 
 
+@router.get("/lead/{lead_id}")
+async def get_lead(lead_id: str, current_user: TokenData = Depends(get_current_user)):
+    """
+    Gets a lead by ID from the database (excluding metadata, cost, is_locked, created_at, updated_at, outbound_number_id).
+    Requires JWT authentication.
+    """
+    logger.info(f"Authenticated user {current_user.user_id} requesting lead: {lead_id}")
+
+    try:
+        lead = await get_lead_by_id(lead_id)
+        if lead:
+            lead_dict = lead.model_dump()
+            lead_dict.pop("metaData", None)
+            lead_dict.pop("cost", None)
+            lead_dict.pop("is_locked", None)
+            lead_dict.pop("created_at", None)
+            lead_dict.pop("updated_at", None)
+            lead_dict.pop("outbound_number_id", None)
+            return lead_dict
+        else:
+            logger.info(f"No lead found for ID: {lead_id}")
+            return JSONResponse(
+                status_code=404,
+                content={"detail": f"Lead not found for ID: {lead_id}"},
+            )
+
+    except Exception as e:
+        logger.error("Error getting lead", exc_info=True)
+        return JSONResponse(
+            status_code=400, content={"detail": f"Unexpected error: {str(e)}"}
+        )
+
+
 @router.get("/breeze/order-confirmation/call-details", include_in_schema=False)
 async def get_call_details(
     start_date: Optional[str] = None,
@@ -705,6 +732,7 @@ async def get_call_details(
     page_size: int = 10,
     outcome: Optional[str] = None,
     order_id: Optional[str] = None,
+    shop_name: Optional[str] = None,
     session: dict = Depends(get_breeze_buddy_session),
 ):
     """
@@ -744,6 +772,7 @@ async def get_call_details(
         end_date=end_datetime,
         outcome=outcome,
         order_id=order_id,
+        shop_name=shop_name,
     )
 
     trackers = await get_all_lead_call_trackers(
@@ -751,6 +780,7 @@ async def get_call_details(
         end_date=end_datetime,
         outcome=outcome,
         order_id=order_id,
+        shop_name=shop_name,
         page=page,
         page_size=page_size,
     )
@@ -772,6 +802,7 @@ async def get_call_details(
                 "recording_url": t.recording_url,
                 "transcript": (t.metaData.get("transcription") if t.metaData else None),
                 "calling_provider": calling_provider,
+                "attempt_count": t.attempt_count,
             }
         )
 
