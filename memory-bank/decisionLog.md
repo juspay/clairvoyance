@@ -6,6 +6,35 @@ This file records architectural and implementation decisions using a list format
 *
 
 ## Decision
+*   [2025-11-24 12:04:00] - Implement voice-specific STT provider configuration.
+
+## Rationale
+*   To allow assigning a specific STT provider to a particular voice ("Rhea") while other voices use a global default. This provides greater flexibility in managing STT services for different voice personas.
+
+## Implementation Details
+*   Added `RHEA_STT_PROVIDER` to `app/core/config.py` to define a dedicated STT provider for the Rhea voice.
+*   Modified `app/agents/voice/automatic/stt/__init__.py`:
+    *   The `get_stt_service` function now checks for the `RHEA_STT_PROVIDER` setting when the voice is "Rhea".
+    *   If the setting is present, it initializes the specified STT service for Rhea.
+    *   Otherwise, it falls back to the global `STT_PROVIDER` setting.
+    *   The `.env` file was updated to set `RHEA_STT_PROVIDER` to `"elevenlabs"` and the default `STT_PROVIDER` to `"google"`.
+*
+
+## Decision
+*   [2025-11-20 16:18:00] - Integrate ElevenLabs Realtime STT Service.
+
+## Rationale
+*   To provide an alternative to Google STT, offering potentially lower latency and different performance characteristics.
+*   The integration allows switching STT providers via environment configuration.
+
+## Implementation Details
+*   Modified `app/agents/voice/automatic/stt/__init__.py`:
+    *   Added `ElevenLabsRealtimeSTTService` to the `get_stt_service` function.
+    *   The service is selected when `config.STT_PROVIDER` is set to `"elevenlabs"`.
+    *   Configuration for the service, including API key, model, and other parameters, is drawn from `app.core.config`.
+*
+
+## Decision
 *   [2025-08-20 14:42:00] - Embed Dynamic Date Directly into SYSTEM_PROMPT F-String.
 
 ## Rationale

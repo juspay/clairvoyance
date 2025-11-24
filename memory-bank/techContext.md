@@ -12,6 +12,7 @@
 
 - **Daily:** The transport layer service used for handling real-time audio/video communication and managing rooms.
 - **Google STT (Speech-to-Text):** The service used to transcribe user audio into text.
+- **ElevenLabs STT (Speech-to-Text):** The service used to transcribe user audio into text.
 - **Azure OpenAI:** The LLM provider used for natural language understanding, conversational logic, and function calling.
 - **TTS Services:** The agent is designed to be flexible with Text-to-Speech providers, with specific implementations for services like Google TTS.
 

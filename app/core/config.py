@@ -81,6 +81,7 @@ ELEVENLABS_TTS_SPEED = float(os.environ.get("ELEVENLABS_TTS_SPEED", "1.10"))
 ELEVENLABS_BB_VOICE_ID = os.environ.get(
     "ELEVENLABS_BB_VOICE_ID", "fG9s0SXJb213f4UxVHyG"
 )
+RHEA_STT_PROVIDER = os.environ.get("RHEA_STT_PROVIDER", "google").lower()
 GOOGLE_BRET_VOICE = os.environ.get("GOOGLE_BRET_VOICE", "en-IN-Chirp3-HD-Sadaltager")
 GOOGLE_MIA_VOICE = os.environ.get("GOOGLE_MIA_VOICE", "en-IN-Chirp3-HD-Despina")
 
@@ -155,7 +156,7 @@ GEMINI_SEARCH_RESULT_API_MODEL = os.environ.get(
 # --- STT Configuration ---
 STT_PROVIDER = os.environ.get(
     "STT_PROVIDER", "google"
-).lower()  # "google", "assemblyai", "openai", "deepgram", or "soniox"
+).lower()  # "google", "assemblyai", "openai", "deepgram", "soniox", or "elevenlabs"
 ASSEMBLYAI_API_KEY = os.getenv("ASSEMBLYAI_API_KEY")
 OPENAI_STT_API_KEY = os.getenv("OPENAI_STT_API_KEY")
 OPENAI_STT_MODEL = os.environ.get(
@@ -165,6 +166,26 @@ ENFORCED_OPENAI_STT_MODEL = os.environ.get("ENFORCED_OPENAI_STT_MODEL", "whisper
 ENABLE_OPENAI_FOR_MIA = (
     os.environ.get("ENABLE_OPENAI_FOR_MIA", "false").lower() == "true"
 )
+
+# --- ElevenLabs STT Configuration ---
+ELEVENLABS_STT_API_KEY = (
+    os.getenv("ELEVENLABS_STT_API_KEY") or ELEVENLABS_API_KEY
+)  # Use STT-specific key or fallback to main API key
+ELEVENLABS_STT_MODEL = os.environ.get(
+    "ELEVENLABS_STT_MODEL", "scribe_v2_realtime"
+)  # ElevenLabs STT model (scribe_v1, scribe_v2_realtime)
+ELEVENLABS_STT_LANGUAGE = os.environ.get(
+    "ELEVENLABS_STT_LANGUAGE", "en"
+)  # Language code for transcription
+ELEVENLABS_STT_COMMIT_STRATEGY = os.environ.get(
+    "ELEVENLABS_STT_COMMIT_STRATEGY", "manual"
+).lower()  # "manual" (Pipecat VAD) or "vad" (ElevenLabs VAD)
+ELEVENLABS_STT_VAD_SILENCE_THRESHOLD = float(
+    os.environ.get("ELEVENLABS_STT_VAD_SILENCE_THRESHOLD", "1.5")
+)  # Seconds of silence before VAD commits (0.3-3.0)
+ELEVENLABS_STT_VAD_THRESHOLD = float(
+    os.environ.get("ELEVENLABS_STT_VAD_THRESHOLD", "0.4")
+)  # VAD sensitivity (0.1-0.9, lower is more sensitive)
 
 # --- Deepgram STT Configuration ---
 DEEPGRAM_API_KEY = os.getenv(
