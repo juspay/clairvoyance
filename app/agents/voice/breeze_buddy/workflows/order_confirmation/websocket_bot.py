@@ -40,6 +40,7 @@ from app.agents.voice.breeze_buddy.workflows.order_confirmation.types import Ord
 from app.agents.voice.breeze_buddy.workflows.order_confirmation.utils import (
     OUTCOME_TO_ENUM,
     indian_number_to_speech,
+    send_webhook_with_retry,
 )
 from app.core.config import (
     AZURE_BREEZE_BUDDY_OPENAI_MODEL,
@@ -504,24 +505,18 @@ class OrderConfirmationBot:
 
             if self.reporting_webhook_url and call_outcome != LeadCallOutcome.BUSY:
                 try:
-                    payload = json.dumps(summary_data, separators=(",", ":"))
-                    signature = calculate_hmac_sha256(
-                        payload, ORDER_CONFIRMATION_WEBHOOK_SECRET_KEY
+                    success = await send_webhook_with_retry(
+                        self.aiohttp_session,
+                        self.reporting_webhook_url,
+                        summary_data,
+                        max_retries=3,
                     )
-                    headers = {"Content-Type": "application/json"}
-                    if signature:
-                        headers["checksum"] = signature
-
-                    async with self.aiohttp_session.post(
-                        self.reporting_webhook_url, json=summary_data, headers=headers
-                    ) as response:
-                        if response.status == 200:
-                            logger.info("Successfully sent call summary webhook.")
-                        else:
-                            response_text = await response.text()
-                            logger.error(
-                                f"Failed to send call summary webhook. Status: {response.status}, Body: {response_text}"
-                            )
+                    if success:
+                        logger.info("Successfully sent call summary webhook.")
+                    else:
+                        logger.error(
+                            "Failed to send call summary webhook after all retries."
+                        )
                 except Exception as e:
                     logger.error(f"Error sending webhook: {e}")
 
