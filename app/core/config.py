@@ -81,6 +81,7 @@ ELEVENLABS_TTS_SPEED = float(os.environ.get("ELEVENLABS_TTS_SPEED", "1.10"))
 ELEVENLABS_BB_VOICE_ID = os.environ.get(
     "ELEVENLABS_BB_VOICE_ID", "fG9s0SXJb213f4UxVHyG"
 )
+RHEA_STT_PROVIDER = os.environ.get("RHEA_STT_PROVIDER", "google").lower()
 GOOGLE_BRET_VOICE = os.environ.get("GOOGLE_BRET_VOICE", "en-IN-Chirp3-HD-Sadaltager")
 GOOGLE_MIA_VOICE = os.environ.get("GOOGLE_MIA_VOICE", "en-IN-Chirp3-HD-Despina")
 
@@ -180,10 +181,10 @@ ELEVENLABS_STT_COMMIT_STRATEGY = os.environ.get(
     "ELEVENLABS_STT_COMMIT_STRATEGY", "manual"
 ).lower()  # "manual" (Pipecat VAD) or "vad" (ElevenLabs VAD)
 ELEVENLABS_STT_VAD_SILENCE_THRESHOLD = float(
-    os.environ.get("ELEVENLABS_STT_VAD_SILENCE_THRESHOLD", "1.0")
+    os.environ.get("ELEVENLABS_STT_VAD_SILENCE_THRESHOLD", "1.5")
 )  # Seconds of silence before VAD commits (0.3-3.0)
 ELEVENLABS_STT_VAD_THRESHOLD = float(
-    os.environ.get("ELEVENLABS_STT_VAD_THRESHOLD", "0.5")
+    os.environ.get("ELEVENLABS_STT_VAD_THRESHOLD", "0.4")
 )  # VAD sensitivity (0.1-0.9, lower is more sensitive)
 
 # --- Deepgram STT Configuration ---

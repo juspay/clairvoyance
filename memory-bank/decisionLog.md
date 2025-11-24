@@ -6,6 +6,21 @@ This file records architectural and implementation decisions using a list format
 *
 
 ## Decision
+*   [2025-11-24 12:04:00] - Implement voice-specific STT provider configuration.
+
+## Rationale
+*   To allow assigning a specific STT provider to a particular voice ("Rhea") while other voices use a global default. This provides greater flexibility in managing STT services for different voice personas.
+
+## Implementation Details
+*   Added `RHEA_STT_PROVIDER` to `app/core/config.py` to define a dedicated STT provider for the Rhea voice.
+*   Modified `app/agents/voice/automatic/stt/__init__.py`:
+    *   The `get_stt_service` function now checks for the `RHEA_STT_PROVIDER` setting when the voice is "Rhea".
+    *   If the setting is present, it initializes the specified STT service for Rhea.
+    *   Otherwise, it falls back to the global `STT_PROVIDER` setting.
+    *   The `.env` file was updated to set `RHEA_STT_PROVIDER` to `"elevenlabs"` and the default `STT_PROVIDER` to `"google"`.
+*
+
+## Decision
 *   [2025-11-20 16:18:00] - Integrate ElevenLabs Realtime STT Service.
 
 ## Rationale
