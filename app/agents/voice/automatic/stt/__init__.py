@@ -4,8 +4,10 @@ from typing import Optional
 from deepgram import LiveOptions
 from pipecat.services.assemblyai.stt import AssemblyAISTTService
 from pipecat.services.deepgram.stt import DeepgramSTTService
+from pipecat.services.elevenlabs.stt import CommitStrategy, ElevenLabsRealtimeSTTService
 from pipecat.services.google.stt import GoogleSTTService
 from pipecat.services.openai.stt import OpenAISTTService
+from pipecat.services.sarvam.stt import SarvamSTTService
 from pipecat.services.soniox.stt import (
     SonioxContextGeneralItem,
     SonioxContextObject,
@@ -97,6 +99,11 @@ def get_stt_service(voice_name: Optional[str] = None):
     Args:
         voice_name: Voice name to determine STT provider override for specific voices
     """
+    # Determine the effective STT provider
+    effective_stt_provider = config.STT_PROVIDER
+    if voice_name == VoiceName.RHEA.value:
+        effective_stt_provider = config.RHEA_STT_PROVIDER
+
     # Check for MIA voice with OpenAI override
     if voice_name == VoiceName.MIA.value and config.ENABLE_OPENAI_FOR_MIA:
         if not config.OPENAI_STT_API_KEY:
@@ -117,7 +124,7 @@ def get_stt_service(voice_name: Optional[str] = None):
         )
 
     # Default behavior - use configured STT provider
-    if config.STT_PROVIDER == "assemblyai":
+    if effective_stt_provider == "assemblyai":
         if not config.ASSEMBLYAI_API_KEY:
             raise ValueError(
                 "ASSEMBLYAI_API_KEY is required when STT_PROVIDER=assemblyai"
@@ -130,7 +137,7 @@ def get_stt_service(voice_name: Optional[str] = None):
             vad_force_turn_endpoint=True,
             # No connection_params needed since we're using VAD for turn detection
         )
-    elif config.STT_PROVIDER == "openai":
+    elif effective_stt_provider == "openai":
         if not config.OPENAI_STT_API_KEY:
             raise ValueError(
                 "OPENAI_STT_API_KEY or OPENAI_API_KEY is required when STT_PROVIDER=openai"
@@ -147,7 +154,7 @@ def get_stt_service(voice_name: Optional[str] = None):
             prompt=config.AUTOMATIC_OPENAI_STT_PROMPT,
             temperature=0.0,  # Deterministic output for consistency
         )
-    elif config.STT_PROVIDER == "deepgram":
+    elif effective_stt_provider == "deepgram":
         if not config.DEEPGRAM_API_KEY:
             raise ValueError("DEEPGRAM_API_KEY is required when STT_PROVIDER=deepgram")
 
@@ -184,7 +191,7 @@ def get_stt_service(voice_name: Optional[str] = None):
         return DeepgramSTTService(
             api_key=config.DEEPGRAM_API_KEY, live_options=live_options
         )
-    elif config.STT_PROVIDER == "soniox":
+    elif effective_stt_provider == "soniox":
         if not config.SONIOX_API_KEY:
             raise ValueError("SONIOX_API_KEY is required when STT_PROVIDER=soniox")
 
@@ -223,6 +230,38 @@ def get_stt_service(voice_name: Optional[str] = None):
             api_key=config.SONIOX_API_KEY,
             params=soniox_params,
             vad_force_turn_endpoint=config.SONIOX_VAD_FORCE_TURN_ENDPOINT,
+        )
+    elif effective_stt_provider == "elevenlabs":
+        if not config.ELEVENLABS_STT_API_KEY:
+            raise ValueError(
+                "ELEVENLABS_STT_API_KEY is required when STT_PROVIDER=elevenlabs"
+            )
+
+        logger.info(
+            f"Using ElevenLabs Realtime STT service with model: {config.ELEVENLABS_STT_MODEL}"
+        )
+        return ElevenLabsRealtimeSTTService(
+            api_key=config.ELEVENLABS_STT_API_KEY,
+            model=config.ELEVENLABS_STT_MODEL,
+            params=ElevenLabsRealtimeSTTService.InputParams(
+                language_code=config.ELEVENLABS_STT_LANGUAGE,
+                commit_strategy=(
+                    CommitStrategy.VAD
+                    if config.ELEVENLABS_STT_COMMIT_STRATEGY == "vad"
+                    else CommitStrategy.MANUAL
+                ),
+                vad_silence_threshold_secs=config.ELEVENLABS_STT_VAD_SILENCE_THRESHOLD,
+                vad_threshold=config.ELEVENLABS_STT_VAD_THRESHOLD,
+            ),
+        )
+    elif effective_stt_provider == "sarvam":
+        if not config.SARVAM_API_KEY:
+            raise ValueError("SARVAM_API_KEY is required when STT_PROVIDER=sarvam")
+        logger.info("Using Sarvam STT service")
+        return SarvamSTTService(
+            api_key=config.SARVAM_API_KEY,
+            model_name=config.SARVAM_STT_MODEL_NAME,
+            language_code=config.SARVAM_STT_LANGUAGE_CODE,
         )
     else:  # Default to Google STT
         logger.info("Using Google STT service with VAD-based turn detection")

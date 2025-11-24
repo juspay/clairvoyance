@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field, Json
 class TTSProvider(str, Enum):
     ELEVENLABS = "ELEVENLABS"
     GOOGLE = "GOOGLE"
+    SARVAM = "SARVAM"
 
 
 class VoiceName(str, Enum):

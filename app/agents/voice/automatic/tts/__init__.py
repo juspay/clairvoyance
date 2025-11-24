@@ -2,6 +2,7 @@ from typing import Optional
 
 from pipecat.services.elevenlabs.tts import ElevenLabsTTSService
 from pipecat.services.google.tts import GoogleTTSService
+from pipecat.services.sarvam.tts import SarvamTTSService
 from pipecat.transcriptions.language import Language
 
 from app.agents.voice.automatic.features.charts.highlight_filter import (
@@ -33,6 +34,15 @@ def get_tts_service(
     if session_id and enable_chart_text_filter:
         highlight_filter = HighlightedChartTextFilter(session_id)
         text_filters.append(highlight_filter)
+
+    if tts_provider == TTSProvider.SARVAM.value:
+        logger.info("Using Sarvam TTS service")
+        return SarvamTTSService(
+            api_key=config.SARVAM_API_KEY,
+            voice_id=config.SARVAM_TTS_VOICE_ID,
+            model_id=config.SARVAM_TTS_MODEL_ID,
+            text_filters=text_filters,
+        )
 
     if (
         tts_provider == TTSProvider.ELEVENLABS.value
