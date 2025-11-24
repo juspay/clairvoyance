@@ -76,7 +76,7 @@ async def send_webhook_with_retry(
     Returns:
         bool: True if successful, False if all attempts failed
     """
-    payload = json.dumps(data, separators=(",", ":"))
+    payload = json.dumps(data, separators=(",", ":"), ensure_ascii=False)
     signature = calculate_hmac_sha256(payload, ORDER_CONFIRMATION_WEBHOOK_SECRET_KEY)
     headers = {"Content-Type": "application/json"}
     if signature:

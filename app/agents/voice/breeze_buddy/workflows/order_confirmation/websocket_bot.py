@@ -497,7 +497,7 @@ class OrderConfirmationBot:
                 "outcome": call_outcome,
                 "updatedAddress": self.updated_address,
                 "attemptCount": self.lead.attempt_count + 1,
-                "transcription": json.dumps(filtered_transcript),
+                "transcription": json.dumps(filtered_transcript, ensure_ascii=False),
                 "callDuration": call_duration,
                 "orderId": self.order_id,
             }
