@@ -167,11 +167,24 @@ class RedisService:
             logger.error(f"Redis GET error for key {key}: {e}")
             return None
 
-    async def set(self, key: str, value: str) -> bool:
-        """Set value in Redis"""
+    async def set(
+        self, key: str, value: str, nx: bool = False, ex: Optional[int] = None
+    ) -> bool:
+        """
+        Set value in Redis with optional NX (only if not exists) and EX (expiration).
+
+        Args:
+            key: Redis key
+            value: Value to set
+            nx: Only set if key doesn't exist (default: False)
+            ex: Expiration time in seconds (default: None)
+
+        Returns:
+            True if key was set, False otherwise
+        """
         try:
             client = await self.get_client()
-            result = await client.set(key, value)
+            result = await client.set(key, value, nx=nx, ex=ex)
             return bool(result)
         except RedisError as e:
             logger.error(f"Redis SET error for key {key}: {e}")
@@ -191,6 +204,7 @@ class RedisService:
         except RedisError as e:
             logger.error(f"Redis SETEX error for key {key}: {e}")
             return False
+
 
     async def delete(self, key: str) -> bool:
         """Delete key from Redis"""
