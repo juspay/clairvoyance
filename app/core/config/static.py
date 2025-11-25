@@ -481,3 +481,30 @@ REDIS_TTL = int(os.getenv("REDIS_TTL", "3600"))  # Default TTL in seconds (1 hou
 # DevCycle Configuration
 DEVCYCLE_WEBHOOK_SECRET = os.getenv("DEVCYCLE_WEBHOOK_SECRET", "")
 DEVCYCLE_SERVER_KEY = os.getenv("DEVCYCLE_SERVER_KEY", "")
+
+# Langfuse Score Monitoring Configuration
+LANGFUSE_EVALUATORS = [
+    name.strip()
+    for name in os.environ.get("LANGFUSE_EVALUATORS", "").split(",")
+    if name.strip()
+]
+
+# Slack Webhook Configuration
+SLACK_WEBHOOK_URL = os.environ.get("SLACK_WEBHOOK_URL", "")
+SLACK_TAG_USERS = os.environ.get("SLACK_TAG_USERS", "narsimha.reddy")
+
+# Background Tasks Configuration
+ENABLE_BACKGROUND_TASKS = (
+    os.environ.get("ENABLE_BACKGROUND_TASKS", "false").lower() == "true"
+)
+BACKGROUND_TASKS_LOOP_INTERVAL_SECONDS = int(
+    os.environ.get("BACKGROUND_TASKS_LOOP_INTERVAL_SECONDS", "60")
+)  # How often the scheduler checks tasks (in seconds)
+
+# Langfuse Score Monitoring Configuration
+ENABLE_BB_LANGFUSE_MONITORING_LOOP = (
+    os.environ.get("ENABLE_BB_LANGFUSE_MONITORING_LOOP", "false").lower() == "true"
+)
+SCORE_CHECK_INTERVAL_SECONDS = int(
+    os.environ.get("SCORE_CHECK_INTERVAL_SECONDS", "600")
+)  # 10 minutes

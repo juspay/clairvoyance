@@ -17,13 +17,18 @@ from pipecat.transports.daily.utils import DailyRESTHelper
 
 from app import __version__
 from app.api.routers import automatic, breeze_buddy, devcycle
+
+# Import background task scheduler
+from app.core.background_tasks import BackgroundTaskScheduler
 from app.core.config.static import (
+    BACKGROUND_TASKS_LOOP_INTERVAL_SECONDS,
     BOT_MAX_DRAIN_SECONDS,
     DAILY_API_KEY,
     DAILY_API_URL,
     DAILY_ROOM_MAX_POOL_SIZE,
     DAILY_ROOM_POOL_SIZE,
     ENABLE_AUTOMATIC_DAILY_RECORDING,
+    ENABLE_BACKGROUND_TASKS,
     ENABLE_SIGTERM_HANDLER,
     HOST,
     MAX_DAILY_SESSION_LIMIT,
@@ -58,6 +63,7 @@ from app.helpers.automatic.session_manager import (
 from app.schemas import (
     AutomaticVoiceUserConnectRequest,
 )
+from app.services.langfuse.tasks.task import initialize_langfuse_tasks
 from app.services.redis import (
     close_redis_connections,
     get_redis_service,
@@ -69,6 +75,9 @@ daily_helpers = {}
 
 # Flag to indicate if pod is draining (no new connections accepted)
 _is_draining = False
+
+# Background task scheduler
+_background_scheduler = None
 
 
 async def room_cleanup_callback(session_id: str):
@@ -138,9 +147,41 @@ async def lifespan(_app: FastAPI):
     except Exception as e:
         logger.error(f"Failed to initialize voice agent pool: {e}")
 
+    # Start background task scheduler if enabled
+    global _background_scheduler
+    if ENABLE_BACKGROUND_TASKS:
+        try:
+            # Create scheduler instance with configurable loop interval
+            _background_scheduler = BackgroundTaskScheduler(
+                loop_interval_seconds=BACKGROUND_TASKS_LOOP_INTERVAL_SECONDS
+            )
+
+            # Initialize Langfuse tasks (if configured)
+            await initialize_langfuse_tasks(_background_scheduler)
+
+            ### Register new tasks here
+
+            # Start the scheduler only if tasks are registered
+            if _background_scheduler.tasks:
+                await _background_scheduler.start()
+                logger.info("Background task scheduler started")
+            else:
+                logger.info("No background tasks registered, scheduler not started")
+        except Exception as e:
+            logger.error(f"Failed to start background task scheduler: {e}")
+    else:
+        logger.info(
+            "Background task scheduler disabled (ENABLE_BACKGROUND_TASKS=false)"
+        )
+
     yield
 
     logger.info("Application shutdown event triggered...")
+
+    # Stop background task scheduler if running
+    if _background_scheduler:
+        logger.info("Stopping background task scheduler...")
+        await _background_scheduler.stop()
 
     # Graceful drain period - wait for active sessions to complete if enabled
     if ENABLE_SIGTERM_HANDLER and _is_draining:
