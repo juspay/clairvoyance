@@ -1244,3 +1244,127 @@ This transformation will unlock significant value:
 - **Scalability**: Support thousands of custom workflows
 
 The implementation roadmap spans approximately 20 weeks and involves database changes, API development, compiler implementation, and a full-featured visual workflow builder UI.
+
+---
+
+## Quick Reference
+
+### Key Files
+
+| File Path | Description |
+|-----------|-------------|
+| `app/api/routers/breeze_buddy.py` | FastAPI router for Breeze Buddy endpoints |
+| `app/agents/voice/breeze_buddy/workflows/order_confirmation/websocket_bot.py` | Main bot implementation with workflow logic |
+| `app/agents/voice/breeze_buddy/managers/calls.py` | Call lifecycle management and retry logic |
+| `app/agents/voice/breeze_buddy/services/telephony/` | Telephony provider implementations |
+| `app/database/queries/breeze_buddy/` | Database queries for lead tracking |
+| `app/schemas.py` | Data models and enums |
+
+### Key Classes
+
+| Class | Purpose |
+|-------|---------|
+| `OrderConfirmationBot` | Main bot class that manages conversation flow |
+| `FlowManager` | Pipecat Flows manager that orchestrates node transitions |
+| `NodeConfig` | Configuration for a single conversation node |
+| `VoiceCallProvider` | Abstract base for telephony providers |
+| `TwilioProvider` / `ExotelProvider` | Concrete telephony implementations |
+
+### Key Database Tables
+
+| Table | Purpose |
+|-------|---------|
+| `lead_call_tracker` | Tracks individual call attempts |
+| `call_execution_config` | Per-merchant call configuration |
+| `outbound_number` | Available phone numbers for calls |
+| `workflow_templates` (future) | Stores workflow templates |
+
+### Key Endpoints
+
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/agent/voice/breeze-buddy/{identity}/{workflow}` | POST | Trigger a workflow call |
+| `/agent/voice/breeze-buddy/{provider}/callback/{workflow}` | WS | WebSocket for call handling |
+| `/agent/voice/breeze-buddy/cron/initiate` | GET | Process backlog leads |
+| `/agent/voice/breeze-buddy/call-execution-config` | GET/POST/PUT | Manage call configs |
+| `/agent/voice/breeze-buddy/outbound-number` | GET/POST/DELETE | Manage phone numbers |
+
+### Environment Variables
+
+| Variable | Purpose | Example |
+|----------|---------|---------|
+| `AZURE_OPENAI_API_KEY` | Azure OpenAI authentication | `sk-...` |
+| `AZURE_BREEZE_BUDDY_OPENAI_MODEL` | Model for conversations | `gpt-4o` |
+| `ELEVENLABS_API_KEY` | ElevenLabs TTS authentication | `el_...` |
+| `ELEVENLABS_BB_VOICE_ID` | Voice ID for TTS | `21m00Tcm...` |
+| `BREEZE_BUDDY_VAD_CONFIDENCE` | Voice activity detection threshold | `0.7` |
+| `ENABLE_BREEZE_BUDDY_TRACING` | Enable OpenTelemetry tracing | `true` |
+
+### Common Workflows
+
+#### Adding a New Node Type
+
+1. Define node in `_get_flow_config()`:
+   ```python
+   "my_new_node": {
+       "name": "my_new_node",
+       "task_messages": [{"role": "system", "content": "..."}],
+       "functions": [function_schema, ...],
+       "pre_actions": [...],
+       "post_actions": [...]
+   }
+   ```
+
+2. Add function handler:
+   ```python
+   async def _my_handler(self):
+       # Update state
+       self.outcome = "my_outcome"
+       # Return next node
+       return {}, self._create_node_from_config("next_node")
+   ```
+
+3. Add function schema to appropriate function list:
+   ```python
+   FlowsFunctionSchema(
+       name="my_function",
+       description="When to call this",
+       handler=self._my_handler,
+       properties={},
+       required=[]
+   )
+   ```
+
+#### Testing a Workflow Change
+
+1. Update workflow definition in `websocket_bot.py`
+2. Restart the server: `python run.py`
+3. Trigger a test call via API or dashboard
+4. Monitor logs: `tail -f logs/breeze_buddy.log`
+5. Check database for call outcome: `SELECT * FROM lead_call_tracker WHERE call_id = '...'`
+
+#### Debugging Call Issues
+
+1. Check lead status: `SELECT * FROM lead_call_tracker WHERE id = '...'`
+2. Verify call config: `SELECT * FROM call_execution_config WHERE merchant_id = '...'`
+3. Check outbound numbers: `SELECT * FROM outbound_number WHERE status = 'AVAILABLE'`
+4. Review logs with tracing enabled: `ENABLE_BREEZE_BUDDY_TRACING=true`
+5. Listen to call recording if available
+
+---
+
+## Additional Resources
+
+### Related Documentation
+- [Pipecat AI Documentation](https://docs.pipecat.ai/)
+- [Pipecat Flows Guide](https://github.com/pipecat-ai/pipecat-flows)
+- [n8n Workflow Examples](https://docs.n8n.io/workflows/examples/)
+
+### External Services
+- [Azure OpenAI Service](https://learn.microsoft.com/en-us/azure/ai-services/openai/)
+- [ElevenLabs API Documentation](https://docs.elevenlabs.io/)
+- [Twilio Voice API](https://www.twilio.com/docs/voice)
+- [Exotel API Documentation](https://developer.exotel.com/)
+
+### Contact & Support
+For questions or issues with Breeze Buddy workflows, please contact the development team or file an issue in the repository.

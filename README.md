@@ -101,3 +101,19 @@ The server will start on `http://0.0.0.0:8000` by default.
     *   Making calls to external services (e.g., starting a call via Twilio).
     *   Launching an agent as a subprocess to handle the real-time conversation.
 5.  The voice agent connects to the communication service (like Daily.co or a direct telephony stream) and manages the STT -> LLM -> TTS pipeline, using its specialized tools to complete its task.
+
+## 7. Documentation
+
+Detailed documentation for specific components:
+
+*   **[Breeze Buddy Workflow System](docs/BREEZE_BUDDY_WORKFLOW.md)**: Comprehensive documentation on the Breeze Buddy workflow system, including:
+    *   Current code-defined voice flow model architecture
+    *   Key components (FlowManager, NodeConfig, function handlers)
+    *   Workflow execution flow and database schema
+    *   Vision for template-driven workflow builder (n8n-like)
+    *   Transformation path from code to visual workflows
+    *   Implementation roadmap for merchant-level customization
+
+*   **[Redis Implementation](docs/REDIS_IMPLEMENTATION.md)**: Details on Redis integration and usage patterns.
+
+*   **[Pool Implementation](docs/POOL_IMPLEMENTATION.md)**: Information about connection pool management.
