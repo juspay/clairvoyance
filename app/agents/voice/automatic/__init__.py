@@ -8,7 +8,6 @@ import wave
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from dotenv import load_dotenv
 from langfuse import get_client
 from opentelemetry import trace
 from pipecat.audio.filters.aic_filter import AICFilter
@@ -89,9 +88,6 @@ from app.agents.voice.automatic.analytics.tracing_setup import setup_tracing
 from app.agents.voice.automatic.analytics.utils import (
     generate_open_observer_url_for_session_id,
 )
-
-# Simple environment loading - subprocess inherits from parent
-load_dotenv(override=True)
 
 
 async def main():

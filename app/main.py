@@ -16,7 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from pipecat.transports.daily.utils import DailyRESTHelper
 
 from app import __version__
-from app.api.routers import automatic, breeze_buddy
+from app.api.routers import automatic, breeze_buddy, devcycle
 from app.core.config import (
     BOT_MAX_DRAIN_SECONDS,
     DAILY_API_KEY,
@@ -187,6 +187,7 @@ app.include_router(
 app.include_router(
     automatic.router, prefix="/agent/voice/automatic", tags=["Automatic Agent"]
 )
+app.include_router(devcycle.router, prefix="", tags=["DevCycle"])
 
 
 # Pipecat bot endpoint
