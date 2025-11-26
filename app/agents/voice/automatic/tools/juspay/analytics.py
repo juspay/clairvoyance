@@ -14,7 +14,7 @@ from app.agents.voice.automatic.types.models import (
     ApiSuccess,
     GeniusApiResponse,
 )
-from app.core.config import EULER_DASHBOARD_API_URL, GENIUS_API_URL
+from app.core.config.static import EULER_DASHBOARD_API_URL, GENIUS_API_URL
 from app.core.logger import logger
 from app.core.transport.http_client import create_http_client
 

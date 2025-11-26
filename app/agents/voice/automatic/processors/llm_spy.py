@@ -36,7 +36,7 @@ from app.agents.voice.automatic.rtvi.rtvi import emit_rtvi_event
 from app.agents.voice.automatic.utils.conversation_manager import (
     get_conversation_manager,
 )
-from app.core import config
+from app.core.config import static
 from app.core.logger import logger
 
 from ..features.text_sanitizer.tts_sanitizer import sanitize_markdown
@@ -153,7 +153,7 @@ class LLMSpyProcessor(FrameProcessor):
 
         # Tracing setup
         self._tracer = (
-            trace.get_tracer("pipecat.tools") if config.ENABLE_TRACING else None
+            trace.get_tracer("pipecat.tools") if static.ENABLE_TRACING else None
         )
         self._active_spans: Dict[str, Any] = {}  # tool_call_id -> span
 
@@ -170,7 +170,7 @@ class LLMSpyProcessor(FrameProcessor):
         await super().process_frame(frame, direction)
 
         if isinstance(frame, TextFrame):
-            if config.SANITIZE_TEXT_FOR_TTS:
+            if static.SANITIZE_TEXT_FOR_TTS:
                 await self.push_frame(
                     TextFrame(text=sanitize_markdown(frame.text)), direction
                 )

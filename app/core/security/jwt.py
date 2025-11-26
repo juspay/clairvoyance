@@ -6,7 +6,7 @@ import jwt
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from app.core.config import (
+from app.core.config.static import (
     AUTOMATIC_CONNECT_BLOCKED_ORIGINS,
     BREEZE_BUDDY_SESSION_SECRET_KEY,
     ENABLE_LIGHTHOUSE_AUTH,

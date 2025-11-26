@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Optional
 from pipecat.adapters.services.open_ai_adapter import OpenAILLMInvocationParams
 from pipecat.processors.aggregators.openai_llm_context import OpenAILLMContext
 
-from app.core.config import KEEP_RECENT_TURNS, MAX_TURNS_BEFORE_SUMMARY
+from app.core.config.static import KEEP_RECENT_TURNS, MAX_TURNS_BEFORE_SUMMARY
 from app.core.logger import logger
 
 

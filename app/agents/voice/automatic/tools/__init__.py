@@ -2,7 +2,7 @@ from pipecat.adapters.schemas.tools_schema import ToolsSchema
 
 from app.agents.voice.automatic.tools.utils import filter_tools_by_authorization
 from app.agents.voice.automatic.types import Mode
-from app.core.config import (
+from app.core.config.static import (
     AUTOMATIC_WRITE_ACTIONS_AUTHORIZED_USERS,
     ENABLE_CHARTS,
     ENABLE_SEARCH_GROUNDING,

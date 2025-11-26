@@ -1,12 +1,21 @@
+# STEP 1: Load environment variables VERY FIRST - before any other imports
+from dotenv import load_dotenv
+
+load_dotenv()
+
+# STEP 2: Now safe to import everything else
+import asyncio
 import os
 
 import uvicorn
-from dotenv import load_dotenv
 
-# Load environment variables from .env file
-load_dotenv()
+# STEP 3: Initialize DevCycle feature flags (after env loaded)
+from app.services.live_config.store import initialize_feature_flags
 
-from app.core.config import HOST, PORT, UVICORN_LOG_LEVEL, UVICORN_RELOAD
+asyncio.run(initialize_feature_flags())
+
+# STEP 4: Now safe to import config and logger (after feature flags initialized)
+from app.core.config.static import HOST, PORT, UVICORN_LOG_LEVEL, UVICORN_RELOAD
 from app.core.logger import logger
 
 if __name__ == "__main__":

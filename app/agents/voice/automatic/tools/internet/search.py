@@ -6,7 +6,7 @@ from pipecat.adapters.schemas.tools_schema import ToolsSchema
 from pipecat.services.google.llm import GoogleLLMContext, GoogleLLMService
 from pipecat.services.llm_service import FunctionCallParams
 
-from app.core.config import GEMINI_API_KEY, GEMINI_SEARCH_RESULT_API_MODEL
+from app.core.config.static import GEMINI_API_KEY, GEMINI_SEARCH_RESULT_API_MODEL
 from app.core.logger import logger
 
 # ---------- 1. Set up Gemini (Google) LLM for search-only use ----------

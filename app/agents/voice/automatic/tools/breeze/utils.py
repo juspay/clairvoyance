@@ -11,7 +11,7 @@ from urllib.parse import urlparse
 
 import httpx
 
-from app.core.config import (
+from app.core.config.static import (
     DEFAULT_ANNOUNCEMENT_BANNER_BACKGROUND_COLOR,
     DEFAULT_ANNOUNCEMENT_BANNER_TEXT_COLOR,
     LIGHTHOUSE_APP_URL,

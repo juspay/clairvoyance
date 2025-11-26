@@ -1,6 +1,6 @@
 import json
 
-from app.core.config import ORDER_CONFIRMATION_WEBHOOK_SECRET_KEY
+from app.core.config.static import ORDER_CONFIRMATION_WEBHOOK_SECRET_KEY
 from app.core.logger import logger
 from app.core.security.sha import calculate_hmac_sha256
 from app.schemas import LeadCallOutcome

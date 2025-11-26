@@ -10,7 +10,7 @@ from app.agents.voice.breeze_buddy.services.telephony.base_provider import (
 from app.agents.voice.breeze_buddy.workflows.order_confirmation.websocket_bot import (
     main as telephony_websocket_conn,
 )
-from app.core import config
+from app.core.config import static
 from app.core.logger import logger
 from app.core.transport.http_client import get_proxy_config
 from app.schemas import CallProvider
@@ -18,7 +18,7 @@ from app.schemas import CallProvider
 
 class ExotelProvider(VoiceCallProvider):
     def __init__(self, aiohttp_session):
-        super().__init__(config, aiohttp_session)
+        super().__init__(static, aiohttp_session)
 
     async def handle_websocket(self, websocket: WebSocket, provider: CallProvider):
         serializer = lambda stream_sid, call_sid: ExotelFrameSerializer(

@@ -4,7 +4,7 @@ import numpy as np
 from pipecat.audio.filters.base_audio_filter import BaseAudioFilter
 from pipecat.frames.frames import FilterControlFrame, FilterEnableFrame
 
-from app.core.config import ENABLE_KRISP_FILTER, KRISP_MODEL_PATH
+from app.core.config.static import ENABLE_KRISP_FILTER, KRISP_MODEL_PATH
 from app.core.logger import logger
 
 # Optional import for krisp_audio

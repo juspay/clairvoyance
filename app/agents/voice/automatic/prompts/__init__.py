@@ -14,7 +14,7 @@ from app.agents.voice.automatic.prompts.system.utils import (
     process_langfuse_template_variables,
 )
 from app.agents.voice.automatic.types import TTSProvider
-from app.core.config import (
+from app.core.config.static import (
     AUTOMATIC_LANGFUSE_PROMPT_NAME,
     AUTOMATIC_LANGFUSE_SYSTEM_PROMPT_LABEL,
     ENABLE_LANGFUSE_PROMPTS,

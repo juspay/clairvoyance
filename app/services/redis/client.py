@@ -4,15 +4,21 @@ Simplified Redis Client Service
 Basic Redis client for essential key-value operations only.
 """
 
+import os
 from typing import Any, Dict, List, Optional
 
-from loguru import logger
 from redis.asyncio import Redis
 from redis.asyncio.cluster import RedisCluster
 from redis.exceptions import ConnectionError as RedisConnectionError
 from redis.exceptions import RedisError
 
-from app.core.config import REDIS_CLUSTER_NODES, REDIS_HOST, REDIS_PORT, REDIS_TTL
+from app.core.config.static import (
+    REDIS_CLUSTER_NODES,
+    REDIS_HOST,
+    REDIS_PORT,
+    REDIS_TTL,
+)
+from app.core.logger import logger
 
 
 def is_redis_configured() -> bool:

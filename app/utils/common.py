@@ -2,7 +2,7 @@ import json
 from datetime import datetime
 from typing import Any, Dict, Optional
 
-from app.core.config import AWS_BREEZE_PORTAL_URL, GCP_BREEZE_PORTAL_URL
+from app.core.config.static import AWS_BREEZE_PORTAL_URL, GCP_BREEZE_PORTAL_URL
 from app.core.logger import logger
 
 

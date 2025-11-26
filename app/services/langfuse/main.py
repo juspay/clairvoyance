@@ -7,7 +7,7 @@ from typing import Optional
 
 from langfuse import Langfuse
 
-from app.core.config import (
+from app.core.config.static import (
     ENABLE_LANGFUSE_PROMPTS,
     LANGFUSE_BASEURL,
     LANGFUSE_PUBLIC_KEY,

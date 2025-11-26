@@ -1,4 +1,4 @@
-from app.core.config import (
+from app.core.config.static import (
     ENABLE_SEARCH_GROUNDING,
     HITL_ENABLE,
     SHOPS_FOR_PERFORMANCE_DIRECTIVES,

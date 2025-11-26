@@ -5,7 +5,7 @@ Simplified module for uploading audio files to GCS
 
 from typing import BinaryIO, Optional
 
-from app.core.config import GCS_BUCKET
+from app.core.config.static import GCS_BUCKET
 from app.core.logger import logger
 
 from .client import get_gcs_bucket

@@ -1,9 +1,9 @@
 import os
 
-from dotenv import load_dotenv
 from loguru import logger
 
-load_dotenv()
+# Environment variables already loaded by run.py - no need to load again
+# Import get_config after environment is loaded (will work due to run.py initialization order)
 
 # --- Configuration ---
 
@@ -234,10 +234,7 @@ SONIOX_VAD_FORCE_TURN_ENDPOINT = (
 )  # CRITICAL: false = Use Soniox intelligent endpoint detection
 # true = Use external VAD (Silero)
 
-# Smart Turn Configuration
-ENABLE_FAL_SMART_TURN = (
-    os.environ.get("ENABLE_FAL_SMART_TURN", "false").lower() == "true"
-)
+# Smart Turn Configuration - These will be loaded lazily to avoid circular imports
 # Required API key for FAL_SMART_TURN
 FAL_SMART_TURN_API_KEY = os.getenv("FAL_SMART_TURN_API_KEY")
 
@@ -249,7 +246,6 @@ ENABLE_BREEZE_MCP_FOR_BRET = (
     os.environ.get("ENABLE_BREEZE_MCP_FOR_BRET", "false").lower() == "true"
 )
 MCP_CLIENT_TIMEOUT = int(os.environ.get("MCP_CLIENT_TIMEOUT", 30))  # seconds
-BREEZE_MCP_ENDPOINT_PATH = os.environ.get("BREEZE_MCP_ENDPOINT_PATH", "/ai/neurolink")
 shops_for_mcp = os.environ.get("SHOPS_FOR_BREEZE_MCP", "")
 SHOPS_FOR_BREEZE_MCP = [
     shop.strip() for shop in shops_for_mcp.split(",") if shop.strip()
@@ -494,3 +490,6 @@ REDIS_HOST = os.getenv("REDIS_HOST", "")
 REDIS_PORT = os.getenv("REDIS_PORT", "")
 REDIS_CLUSTER_NODES = os.getenv("REDIS_CLUSTER_NODES", "")
 REDIS_TTL = int(os.getenv("REDIS_TTL", "3600"))  # Default TTL in seconds (1 hour)
+
+# DevCycle Configuration
+DEVCYCLE_WEBHOOK_SECRET = os.getenv("DEVCYCLE_WEBHOOK_SECRET", "")
