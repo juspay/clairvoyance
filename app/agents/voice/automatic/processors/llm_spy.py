@@ -22,9 +22,7 @@ from pipecat.frames.frames import (
 )
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.processors.frameworks.rtvi import RTVIProcessor, RTVIServerMessageFrame
-from pipecat.utils.tracing.turn_context_provider import (
-    get_current_turn_context,
-)
+from pipecat.utils.tracing.turn_context_provider import get_current_turn_context
 
 from app.agents.voice.automatic.features.charts.chart_tools import (
     mark_hitl_operation,
@@ -229,11 +227,11 @@ class LLMSpyProcessor(FrameProcessor):
             if self._tracer:
                 # Use turn context directly for tool calls to be nested in turn span
                 turn_context = get_current_turn_context()
-
+                
                 span = self._tracer.start_span(
                     f"Tool: {frame.function_name}",
                     kind=trace.SpanKind.CLIENT,
-                    context=turn_context,
+                    context=turn_context,  # KEY: This nests the tool span under turn/llm
                 )
 
                 span.set_attributes(
