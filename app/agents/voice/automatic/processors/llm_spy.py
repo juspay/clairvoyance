@@ -34,7 +34,7 @@ from app.agents.voice.automatic.rtvi.rtvi import emit_rtvi_event
 from app.agents.voice.automatic.utils.conversation_manager import (
     get_conversation_manager,
 )
-from app.core.config import static
+from app.core.config.static import ENABLE_TRACING, SANITIZE_TEXT_FOR_TTS
 from app.core.logger import logger
 
 from ..features.text_sanitizer.tts_sanitizer import sanitize_markdown
@@ -150,9 +150,7 @@ class LLMSpyProcessor(FrameProcessor):
         set_rtvi_processor(rtvi)
 
         # Tracing setup
-        self._tracer = (
-            trace.get_tracer("pipecat.tools") if static.ENABLE_TRACING else None
-        )
+        self._tracer = trace.get_tracer("pipecat.tools") if ENABLE_TRACING else None
         self._active_spans: Dict[str, Any] = {}  # tool_call_id -> span
 
         if self._enable_charts:
@@ -168,7 +166,7 @@ class LLMSpyProcessor(FrameProcessor):
         await super().process_frame(frame, direction)
 
         if isinstance(frame, TextFrame):
-            if static.SANITIZE_TEXT_FOR_TTS:
+            if SANITIZE_TEXT_FOR_TTS:
                 await self.push_frame(
                     TextFrame(text=sanitize_markdown(frame.text)), direction
                 )
@@ -227,7 +225,7 @@ class LLMSpyProcessor(FrameProcessor):
             if self._tracer:
                 # Use turn context directly for tool calls to be nested in turn span
                 turn_context = get_current_turn_context()
-                
+
                 span = self._tracer.start_span(
                     f"Tool: {frame.function_name}",
                     kind=trace.SpanKind.CLIENT,

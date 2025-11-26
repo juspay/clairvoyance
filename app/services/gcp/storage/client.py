@@ -9,7 +9,7 @@ from typing import Optional
 from google.cloud import storage
 from google.oauth2 import service_account
 
-from app.core.config import static
+from app.core.config.static import GCS_CREDENTIALS_JSON
 from app.core.logger import logger
 
 
@@ -22,13 +22,13 @@ def get_gcs_client() -> Optional[storage.Client]:
     """
     try:
         # Check if GCS credentials are available
-        if not static.GCS_CREDENTIALS_JSON:
+        if not GCS_CREDENTIALS_JSON:
             logger.error("GCS_CREDENTIALS_JSON environment variable is not set")
             return None
 
         # Parse the JSON credentials
         try:
-            credentials_dict = json.loads(static.GCS_CREDENTIALS_JSON)
+            credentials_dict = json.loads(GCS_CREDENTIALS_JSON)
         except json.JSONDecodeError as e:
             logger.error(f"Failed to parse GCS credentials JSON: {e}")
             return None

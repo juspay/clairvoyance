@@ -10,7 +10,14 @@ from app.agents.voice.breeze_buddy.services.telephony.base_provider import (
 from app.agents.voice.breeze_buddy.workflows.order_confirmation.websocket_bot import (
     main as telephony_websocket_conn,
 )
-from app.core.config import static
+from app.core.config.static import (
+    APP_BASE_URL,
+    EXOTEL_ACCOUNT_SID,
+    EXOTEL_API_KEY,
+    EXOTEL_API_TOKEN,
+    EXOTEL_APPLET_APP_ID,
+    EXOTEL_SUBDOMAIN,
+)
 from app.core.logger import logger
 from app.core.transport.http_client import get_proxy_config
 from app.schemas import CallProvider
@@ -18,7 +25,16 @@ from app.schemas import CallProvider
 
 class ExotelProvider(VoiceCallProvider):
     def __init__(self, aiohttp_session):
-        super().__init__(static, aiohttp_session)
+        # Store config values directly as instance attributes
+        self.EXOTEL_ACCOUNT_SID = EXOTEL_ACCOUNT_SID
+        self.EXOTEL_API_KEY = EXOTEL_API_KEY
+        self.EXOTEL_API_TOKEN = EXOTEL_API_TOKEN
+        self.EXOTEL_APPLET_APP_ID = EXOTEL_APPLET_APP_ID
+        self.EXOTEL_SUBDOMAIN = EXOTEL_SUBDOMAIN
+        self.APP_BASE_URL = APP_BASE_URL
+
+        # Call parent without config object
+        super().__init__(None, aiohttp_session)
 
     async def handle_websocket(self, websocket: WebSocket, provider: CallProvider):
         serializer = lambda stream_sid, call_sid: ExotelFrameSerializer(
@@ -35,20 +51,19 @@ class ExotelProvider(VoiceCallProvider):
         )
 
     def make_call(self, customer_mobile_number: str, outbound_number: str):
-        flow_url = f"http://my.exotel.com/{self.config.EXOTEL_ACCOUNT_SID}/exoml/start_voice/{self.config.EXOTEL_APPLET_APP_ID}"
+        flow_url = f"http://my.exotel.com/{self.EXOTEL_ACCOUNT_SID}/exoml/start_voice/{self.EXOTEL_APPLET_APP_ID}"
 
         payload = {
             "From": customer_mobile_number,
             "CallerId": outbound_number,
             "Url": flow_url,
             "StatusCallback": (
-                self.config.APP_BASE_URL
-                + "/agent/voice/breeze-buddy/exotel/callback/status"
+                self.APP_BASE_URL + "/agent/voice/breeze-buddy/exotel/callback/status"
             ),
         }
-        url = f"https://{self.config.EXOTEL_API_KEY}:{self.config.EXOTEL_API_TOKEN}@{self.config.EXOTEL_SUBDOMAIN}/v1/Accounts/{self.config.EXOTEL_ACCOUNT_SID}/Calls/connect.json"
+        url = f"https://{self.EXOTEL_API_KEY}:{self.EXOTEL_API_TOKEN}@{self.EXOTEL_SUBDOMAIN}/v1/Accounts/{self.EXOTEL_ACCOUNT_SID}/Calls/connect.json"
 
-        logger.info(f"Making Exotel API call to: {self.config.EXOTEL_SUBDOMAIN}")
+        logger.info(f"Making Exotel API call to: {self.EXOTEL_SUBDOMAIN}")
         logger.info(f"Payload: {payload}")
 
         try:

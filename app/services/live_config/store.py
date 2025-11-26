@@ -8,15 +8,13 @@ Redis-based feature flag storage:
 4. Fallback: Redis -> environment -> default
 """
 
-import asyncio
 import json
-import os
 from typing import Any, Dict, Optional
 
 import aiohttp
 
 # Get basic environment variables directly (to avoid circular imports)
-from app.core.config.static import ENVIRONMENT
+from app.core.config.static import DEVCYCLE_SERVER_KEY, ENVIRONMENT
 from app.core.logger import logger
 from app.services.live_config.utils import (
     build_variable_mapping,
@@ -28,7 +26,6 @@ from app.services.redis.client import get_redis_service
 
 # Constants
 FEATURE_FLAGS_PREFIX = "devcycle:flags:"
-DEVCYCLE_SERVER_KEY = os.getenv("DEVCYCLE_SERVER_KEY", "")
 
 # Global state
 _INITIALIZED = False

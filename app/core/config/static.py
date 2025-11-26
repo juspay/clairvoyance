@@ -2,9 +2,6 @@ import os
 
 from loguru import logger
 
-# Environment variables already loaded by run.py - no need to load again
-# Import get_config after environment is loaded (will work due to run.py initialization order)
-
 # --- Configuration ---
 
 
@@ -493,3 +490,4 @@ REDIS_TTL = int(os.getenv("REDIS_TTL", "3600"))  # Default TTL in seconds (1 hou
 
 # DevCycle Configuration
 DEVCYCLE_WEBHOOK_SECRET = os.getenv("DEVCYCLE_WEBHOOK_SECRET", "")
+DEVCYCLE_SERVER_KEY = os.getenv("DEVCYCLE_SERVER_KEY", "")

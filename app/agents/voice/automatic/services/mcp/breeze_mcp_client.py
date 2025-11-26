@@ -9,7 +9,7 @@ from pipecat.services.mcp_service import MCPClient as PipecatMCPClient
 from app.agents.voice.automatic.services.mcp.utils import create_chart_aware_wrapper
 from app.agents.voice.automatic.tools import initialize_tools
 from app.agents.voice.automatic.types import Mode
-from app.core.config import static
+from app.core.config.static import MCP_CLIENT_TIMEOUT
 from app.core.logger import logger
 from app.utils.common import get_breeze_portal_url
 
@@ -37,8 +37,8 @@ async def init_breeze_mcp_tools(
                     json.dumps(mcp_context).encode()
                 ).decode(),
             },
-            timeout=timedelta(seconds=static.MCP_CLIENT_TIMEOUT),
-            sse_read_timeout=timedelta(seconds=static.MCP_CLIENT_TIMEOUT),
+            timeout=timedelta(seconds=MCP_CLIENT_TIMEOUT),
+            sse_read_timeout=timedelta(seconds=MCP_CLIENT_TIMEOUT),
             terminate_on_close=True,
         )
 
@@ -58,7 +58,7 @@ async def init_breeze_mcp_tools(
 
         try:
             tools = await asyncio.wait_for(
-                mcp_client.register_tools(llm), timeout=static.MCP_CLIENT_TIMEOUT
+                mcp_client.register_tools(llm), timeout=MCP_CLIENT_TIMEOUT
             )
         finally:
             # Restore original register_function
