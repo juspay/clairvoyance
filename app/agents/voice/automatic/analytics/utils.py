@@ -1,14 +1,14 @@
 import base64
 from urllib.parse import urlencode
 
-from app.core.config import static
+from app.core.config.static import OPEN_OBSERVE_BASE_URL
 
 
 def generate_open_observer_url_for_session_id(session_id: str) -> str:
     """Generate OpenObserve URL for a specific session ID"""
     query_string = f"sessionid='{session_id}'"
     encoded_query = base64.b64encode(query_string.encode("utf-8")).decode("utf-8")
-    base_url = f"{static.OPEN_OBSERVE_BASE_URL}/web/logs"
+    base_url = f"{OPEN_OBSERVE_BASE_URL}/web/logs"
 
     params = {
         "stream_type": "logs",

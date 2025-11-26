@@ -7,21 +7,25 @@ from typing import Optional
 import aiohttp
 import httpx
 
-from app.core.config import static
+from app.core.config.static import (
+    AWS_PROXY_HOST,
+    AWS_PROXY_PORT,
+    CLOUD_ENVIRONMENT,
+)
 from app.core.logger import logger
 
 
 def get_proxy_config() -> Optional[str]:
     """Get proxy configuration from environment variables"""
     # Only use proxy configuration for AWS cloud environment
-    if static.CLOUD_ENVIRONMENT.upper() != "AWS":
+    if CLOUD_ENVIRONMENT.upper() != "AWS":
         logger.debug(
-            f"Skipping proxy configuration for cloud environment: {static.CLOUD_ENVIRONMENT}"
+            f"Skipping proxy configuration for cloud environment: {CLOUD_ENVIRONMENT}"
         )
         return None
 
-    if static.AWS_PROXY_HOST and static.AWS_PROXY_PORT:
-        proxy_url = f"http://{static.AWS_PROXY_HOST}:{static.AWS_PROXY_PORT}"
+    if AWS_PROXY_HOST and AWS_PROXY_PORT:
+        proxy_url = f"http://{AWS_PROXY_HOST}:{AWS_PROXY_PORT}"
         logger.info(f"Using proxy configuration for AWS environment: {proxy_url}")
         return proxy_url
 

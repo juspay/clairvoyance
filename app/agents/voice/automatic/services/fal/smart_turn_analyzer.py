@@ -6,7 +6,7 @@ from typing import Optional, Tuple
 
 from pipecat.audio.turn.smart_turn.fal_smart_turn import FalSmartTurnAnalyzer
 
-from app.core.config import static
+from app.core.config.static import FAL_SMART_TURN_API_KEY
 from app.core.logger import logger
 from app.core.transport.http_client import create_aiohttp_session
 
@@ -31,7 +31,7 @@ class FalSmartTurnService:
             self._session = create_aiohttp_session()
             self._analyzer = FalSmartTurnAnalyzer(
                 aiohttp_session=self._session,
-                api_key=static.FAL_SMART_TURN_API_KEY,
+                api_key=FAL_SMART_TURN_API_KEY,
             )
             logger.info(
                 "SMART_TURN: Fal.ai Smart Turn analyzer configured for transport-level integration"

@@ -14,7 +14,7 @@ from app.agents.voice.automatic.processors.llm_spy import (
     register_pending_confirmation,
     wait_for_confirmation_response,
 )
-from app.core.config import static
+from app.core.config.static import FUNCTION_CONFIRMATION_TIMEOUT
 from app.core.logger import logger
 
 
@@ -147,7 +147,7 @@ class HITLManager:
         try:
             await self._send_confirmation_to_rtvi(sse_payload)
             response = await self._wait_for_user_response(
-                confirmation_id, static.FUNCTION_CONFIRMATION_TIMEOUT
+                confirmation_id, FUNCTION_CONFIRMATION_TIMEOUT
             )
             return response
         except asyncio.TimeoutError:

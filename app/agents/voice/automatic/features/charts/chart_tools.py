@@ -16,7 +16,7 @@ from app.agents.voice.automatic.features.charts.utils.highlight_parser import (
     HighlightTagParser,
 )
 from app.agents.voice.automatic.utils.session_context import get_current_session_id
-from app.core.config import static
+from app.core.config.static import MAX_CHARTS_PER_TURN
 from app.core.logger import logger
 
 # Color constants matching MCP implementation
@@ -58,10 +58,10 @@ class ChartTurnManager:
             )
             return
 
-        if self._chart_turn_counts[session_id] >= static.MAX_CHARTS_PER_TURN:
+        if self._chart_turn_counts[session_id] >= MAX_CHARTS_PER_TURN:
             logger.warning(
                 f"[{session_id}] Silently rejecting chart '{component_data.get('props', {}).get('title', 'Unknown')}' - "
-                f"maximum {static.MAX_CHARTS_PER_TURN} charts per turn exceeded (count: {self._chart_turn_counts[session_id] + 1})"
+                f"maximum {MAX_CHARTS_PER_TURN} charts per turn exceeded (count: {self._chart_turn_counts[session_id] + 1})"
             )
             return
 
