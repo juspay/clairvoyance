@@ -11,7 +11,7 @@ from app.agents.voice.breeze_buddy.services.telephony.utils import get_voice_pro
 from app.agents.voice.breeze_buddy.workflows.order_confirmation.utils import (
     send_webhook_with_retry,
 )
-from app.core.config import UPLOAD_BREEZE_BUDDY_CALL_RECORDINGS_TO_CLOUD
+from app.core.config.static import UPLOAD_BREEZE_BUDDY_CALL_RECORDINGS_TO_CLOUD
 from app.core.logger import logger
 from app.core.transport.http_client import create_aiohttp_session
 from app.database.accessor import (

@@ -6,8 +6,8 @@ from app.agents.voice.automatic.features.hitl.utils import is_dangerous_operatio
 from app.agents.voice.automatic.features.summarizer.context_summarizer import (
     ContextSummarizer,
 )
-from app.core import config
-from app.core.config import HITL_ENABLE
+from app.core.config import static
+from app.core.config.static import HITL_ENABLE
 from app.core.logger import logger
 
 
@@ -132,9 +132,9 @@ class LLMServiceWrapper:
             messages=messages,
             tools=tools,
             llm_service=self._llm_service,
-            max_turns_before_summary=config.MAX_TURNS_BEFORE_SUMMARY,
-            keep_recent_turns=config.KEEP_RECENT_TURNS,
-            enable_summarization=config.ENABLE_SUMMARIZATION,
+            max_turns_before_summary=static.MAX_TURNS_BEFORE_SUMMARY,
+            keep_recent_turns=static.KEEP_RECENT_TURNS,
+            enable_summarization=static.ENABLE_SUMMARIZATION,
         )
         return context
 

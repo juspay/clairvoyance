@@ -5,7 +5,7 @@ This module contains database connection and models.
 
 import asyncpg
 
-from app.core.config import (
+from app.core.config.static import (
     POSTGRES_DB,
     POSTGRES_HOST,
     POSTGRES_MAX_OVERFLOW,

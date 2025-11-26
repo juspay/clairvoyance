@@ -8,7 +8,7 @@ from app.agents.voice.automatic.features.charts.highlight_filter import (
     HighlightedChartTextFilter,
 )
 from app.agents.voice.automatic.types import TTSProvider, VoiceName
-from app.core import config
+from app.core.config import static
 from app.core.logger import logger
 
 
@@ -40,36 +40,36 @@ def get_tts_service(
     ):
         logger.info("Using ElevenLabs TTS service for RHEA voice.")
         return ElevenLabsTTSService(
-            api_key=config.ELEVENLABS_API_KEY,
-            voice_id=config.ELEVENLABS_RHEA_VOICE_ID,
-            model_id=config.ELEVENLABS_MODEL_ID,
+            api_key=static.ELEVENLABS_API_KEY,
+            voice_id=static.ELEVENLABS_RHEA_VOICE_ID,
+            model_id=static.ELEVENLABS_MODEL_ID,
             params=ElevenLabsTTSService.InputParams(
-                speed=config.ELEVENLABS_TTS_SPEED, language=Language.EN_IN
+                speed=static.ELEVENLABS_TTS_SPEED, language=Language.EN_IN
             ),
             text_filters=text_filters,
         )
 
-    voice_id = config.GOOGLE_BRET_VOICE  # Default to BRET
+    voice_id = static.GOOGLE_BRET_VOICE  # Default to BRET
     if tts_provider == TTSProvider.GOOGLE.value:
         if voice_name == VoiceName.MIA.value:
-            voice_id = config.GOOGLE_MIA_VOICE
+            voice_id = static.GOOGLE_MIA_VOICE
             logger.info(f"Using Google TTS service with MIA voice.")
         else:
             logger.info(f"Using Google TTS service with BRET voice.")
 
         # Minimal secure logging for Google credentials
-        if config.GOOGLE_CREDENTIALS_JSON:
+        if static.GOOGLE_CREDENTIALS_JSON:
             try:
                 import json
 
-                if isinstance(config.GOOGLE_CREDENTIALS_JSON, str):
-                    parsed = json.loads(config.GOOGLE_CREDENTIALS_JSON)
+                if isinstance(static.GOOGLE_CREDENTIALS_JSON, str):
+                    parsed = json.loads(static.GOOGLE_CREDENTIALS_JSON)
                     logger.info(
                         f"Google credentials: Valid JSON, project={parsed.get('project_id')}"
                     )
                 else:
                     logger.info(
-                        f"Google credentials: Dict format, project={config.GOOGLE_CREDENTIALS_JSON.get('project_id')}"
+                        f"Google credentials: Dict format, project={static.GOOGLE_CREDENTIALS_JSON.get('project_id')}"
                     )
             except json.JSONDecodeError as e:
                 logger.error(
@@ -83,6 +83,6 @@ def get_tts_service(
         params=GoogleTTSService.InputParams(
             language=Language.EN_IN,
         ),
-        credentials=config.GOOGLE_CREDENTIALS_JSON,
+        credentials=static.GOOGLE_CREDENTIALS_JSON,
         text_filters=text_filters,
     )

@@ -42,7 +42,7 @@ from app.agents.voice.breeze_buddy.workflows.order_confirmation.utils import (
     indian_number_to_speech,
     send_webhook_with_retry,
 )
-from app.core.config import (
+from app.core.config.static import (
     AZURE_BREEZE_BUDDY_OPENAI_MODEL,
     AZURE_OPENAI_API_KEY,
     AZURE_OPENAI_ENDPOINT,
@@ -99,7 +99,9 @@ class OrderConfirmationBot:
         self.vad_analyzer = None
         self.transport = None
         self.lead = None
-        self.root_span = None  # Store OpenTelemetry span reference for updating with evaluation data
+        self.root_span = (
+            None  # Store OpenTelemetry span reference for updating with evaluation data
+        )
 
     async def run(self):
         logger.info("Starting WebSocket bot")
@@ -362,7 +364,7 @@ class OrderConfirmationBot:
             with tracer.start_as_current_span(conversation_id) as root_span:
                 # Store root span reference for updating with evaluation data later
                 self.root_span = root_span
-                
+
                 logger.info(
                     f"Starting Langfuse trace for Breeze Buddy conversation: {conversation_id}"
                 )
@@ -511,64 +513,81 @@ class OrderConfirmationBot:
             if self.root_span and ENABLE_BREEZE_BUDDY_TRACING:
                 try:
                     # Convert transcription to readable text format
-                    transcript_text = "\n".join([
-                        f"{msg['role']}: {msg['content']}"
-                        for msg in transcription
-                    ])
-                    
+                    transcript_text = "\n".join(
+                        [f"{msg['role']}: {msg['content']}" for msg in transcription]
+                    )
+
                     # Core evaluation data
                     self.root_span.set_attribute("transcript", transcript_text)
                     self.root_span.set_attribute("call_outcome", self.outcome)
-                    
+
                     # Order context
                     self.root_span.set_attribute("order_summary", self.order_summary)
                     self.root_span.set_attribute("delivery_address", self.address)
-                    
+
                     # Customer data
                     if self.lead and self.lead.payload:
                         customer_name = self.lead.payload.get("customer_name")
                         customer_phone = self.lead.payload.get("customer_mobile_number")
                         total_price = self.lead.payload.get("total_price")
                         merchant_id = self.lead.merchant_id
-                        
+
                         if customer_name:
                             self.root_span.set_attribute("customer_name", customer_name)
                         if customer_phone:
-                            self.root_span.set_attribute("customer_phone", customer_phone)
+                            self.root_span.set_attribute(
+                                "customer_phone", customer_phone
+                            )
                         if total_price:
-                            self.root_span.set_attribute("total_price", str(total_price))
+                            self.root_span.set_attribute(
+                                "total_price", str(total_price)
+                            )
                         if merchant_id:
                             self.root_span.set_attribute("merchant_id", merchant_id)
-                    
+
                     # Optional fields
                     if self.updated_address:
-                        self.root_span.set_attribute("updated_address", self.updated_address)
+                        self.root_span.set_attribute(
+                            "updated_address", self.updated_address
+                        )
                     if self.cancellation_reason:
-                        self.root_span.set_attribute("cancellation_reason", self.cancellation_reason)
-                    
+                        self.root_span.set_attribute(
+                            "cancellation_reason", self.cancellation_reason
+                        )
+
                     # Performance metrics
                     if call_duration:
-                        self.root_span.set_attribute("call_duration_seconds", call_duration)
+                        self.root_span.set_attribute(
+                            "call_duration_seconds", call_duration
+                        )
                     if self.lead:
-                        self.root_span.set_attribute("attempt_count", self.lead.attempt_count + 1)
-                    
+                        self.root_span.set_attribute(
+                            "attempt_count", self.lead.attempt_count + 1
+                        )
+
                     # Add hardcoded recording URL for Langfuse
                     try:
                         # Determine file extension based on provider
                         file_extension = "wav" if self.provider == "twilio" else "mp3"
-                        
+
                         # Construct the recording URL using the known GCS pattern
                         recording_url = f"https://sdk.beta.breezesdk.store/breeze-buddy/recordings/{self.call_sid}.{file_extension}"
-                        
+
                         # Add to Langfuse root span
                         self.root_span.set_attribute("recording_url", recording_url)
-                        logger.info(f"Added recording URL to Langfuse span: {recording_url}")
-                        
+                        logger.info(
+                            f"Added recording URL to Langfuse span: {recording_url}"
+                        )
+
                     except Exception as e:
-                        logger.error(f"Error adding recording URL to Langfuse span: {e}")
-                    
-                    logger.info("Updated OpenTelemetry span with comprehensive evaluation data for LLM-as-a-Judge")
-                    
+                        logger.error(
+                            f"Error adding recording URL to Langfuse span: {e}"
+                        )
+
+                    logger.info(
+                        "Updated OpenTelemetry span with comprehensive evaluation data for LLM-as-a-Judge"
+                    )
+
                 except Exception as e:
                     logger.error(f"Error updating span with evaluation data: {e}")
 

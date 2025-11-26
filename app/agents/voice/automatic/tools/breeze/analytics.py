@@ -7,7 +7,10 @@ from pipecat.adapters.schemas.function_schema import FunctionSchema
 from pipecat.adapters.schemas.tools_schema import ToolsSchema
 from pipecat.services.llm_service import FunctionCallParams
 
-from app.core.config import BREEZE_DEFAULT_SALES_TAB, ENABLE_ALL_METRICS_FROM_CKH
+from app.core.config.static import (
+    BREEZE_DEFAULT_SALES_TAB,
+    ENABLE_ALL_METRICS_FROM_CKH,
+)
 from app.core.logger import logger
 from app.core.transport.http_client import create_http_client
 from app.utils.common import get_breeze_portal_url

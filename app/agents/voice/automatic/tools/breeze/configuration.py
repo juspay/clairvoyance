@@ -7,7 +7,7 @@ from pipecat.adapters.schemas.function_schema import FunctionSchema
 from pipecat.adapters.schemas.tools_schema import ToolsSchema
 from pipecat.services.llm_service import FunctionCallParams
 
-from app.core.config import (
+from app.core.config.static import (
     AWS_VAYU_READ_API_KEY,
     AWS_VAYU_URL,
     AWS_VAYU_WRITE_API_KEY,

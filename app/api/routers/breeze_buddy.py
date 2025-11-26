@@ -27,7 +27,7 @@ from app.agents.voice.breeze_buddy.workflows.order_confirmation.types import (
     BreezeOrderData,
     LoginRequest,
 )
-from app.core.config import (
+from app.core.config.static import (
     BREEZE_BUDDY_DASHBOARD_PASSWORD,
     BREEZE_BUDDY_DASHBOARD_USERNAME,
     BREEZE_BUDDY_SESSION_SECRET_KEY,

@@ -8,7 +8,7 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from pipecat.utils.tracing.turn_context_provider import get_current_turn_context
 
-from app.core.config import (
+from app.core.config.static import (
     BUDDY_OTEL_EXPORTER_OTLP_TRACES_ENDPOINT,
     BUDDY_OTEL_EXPORTER_OTLP_TRACES_HEADERS,
     ENABLE_BREEZE_BUDDY_TRACING,

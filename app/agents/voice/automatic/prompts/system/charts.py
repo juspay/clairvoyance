@@ -1,4 +1,4 @@
-from app.core.config import ENABLE_CHARTS, HITL_ENABLE
+from app.core.config.static import ENABLE_CHARTS, HITL_ENABLE
 
 
 def get_chart_visualization_instructions() -> str:

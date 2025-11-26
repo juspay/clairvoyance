@@ -1,4 +1,4 @@
-from app.core.config import SHOPS_FOR_PERFORMANCE_DIRECTIVES
+from app.core.config.static import SHOPS_FOR_PERFORMANCE_DIRECTIVES
 
 
 def get_performance_directives() -> str:

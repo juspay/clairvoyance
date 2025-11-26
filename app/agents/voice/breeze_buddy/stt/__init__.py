@@ -12,7 +12,7 @@ from pipecat.services.soniox.stt import (
 )
 from pipecat.transcriptions.language import Language
 
-from app.core import config
+from app.core.config import static
 from app.core.logger import logger
 
 
@@ -31,12 +31,12 @@ def parse_breeze_buddy_soniox_context() -> Optional[SonioxContextObject]:
     Returns:
         SonioxContextObject if parsing succeeds, None otherwise
     """
-    if not config.BREEZE_BUDDY_SONIOX_CONTEXT:
+    if not static.BREEZE_BUDDY_SONIOX_CONTEXT:
         return None
 
     try:
         # Parse JSON from environment variable
-        context_data = json.loads(config.BREEZE_BUDDY_SONIOX_CONTEXT)
+        context_data = json.loads(static.BREEZE_BUDDY_SONIOX_CONTEXT)
 
         # Extract fields from JSON
         general_items = context_data.get("general", [])
@@ -90,20 +90,20 @@ def get_stt_service():
     """
     Returns an STT service instance based on the environment configuration.
     """
-    if config.BREEZE_BUDDY_STT_SERVICE == "openai":
+    if static.BREEZE_BUDDY_STT_SERVICE == "openai":
         logger.info("Using OpenAI STT service for Breeze Buddy voice")
         return OpenAISTTService(
-            api_key=config.OPENAI_STT_API_KEY,
-            model=config.OPENAI_STT_MODEL,
+            api_key=static.OPENAI_STT_API_KEY,
+            model=static.OPENAI_STT_MODEL,
             language=Language.EN,
             temperature=0.0,
         )
-    elif config.BREEZE_BUDDY_STT_SERVICE == "soniox":
+    elif static.BREEZE_BUDDY_STT_SERVICE == "soniox":
         language_hints = None
-        if config.BREEZE_BUDDY_SONIOX_LANGUAGE_HINTS:
+        if static.BREEZE_BUDDY_SONIOX_LANGUAGE_HINTS:
             lang_list = [
                 lang.strip()
-                for lang in config.BREEZE_BUDDY_SONIOX_LANGUAGE_HINTS.split(",")
+                for lang in static.BREEZE_BUDDY_SONIOX_LANGUAGE_HINTS.split(",")
             ]
             language_hints = [Language(lang) for lang in lang_list if lang]
 
@@ -112,22 +112,22 @@ def get_stt_service():
 
         # Configure Soniox with supported parameters only
         soniox_params = SonioxInputParams(
-            model=config.BREEZE_BUDDY_SONIOX_MODEL,
+            model=static.BREEZE_BUDDY_SONIOX_MODEL,
             language_hints=language_hints,
             context=context,
-            enable_non_final_tokens=config.BREEZE_BUDDY_SONIOX_ENABLE_NON_FINAL_TOKENS,
+            enable_non_final_tokens=static.BREEZE_BUDDY_SONIOX_ENABLE_NON_FINAL_TOKENS,
             max_non_final_tokens_duration_ms=(
-                config.BREEZE_BUDDY_SONIOX_MAX_NON_FINAL_TOKENS_DURATION_MS
-                if config.BREEZE_BUDDY_SONIOX_MAX_NON_FINAL_TOKENS_DURATION_MS > 0
+                static.BREEZE_BUDDY_SONIOX_MAX_NON_FINAL_TOKENS_DURATION_MS
+                if static.BREEZE_BUDDY_SONIOX_MAX_NON_FINAL_TOKENS_DURATION_MS > 0
                 else None
             ),
             client_reference_id=None,
         )
 
         return SonioxSTTService(
-            api_key=config.SONIOX_API_KEY,
+            api_key=static.SONIOX_API_KEY,
             params=soniox_params,
-            vad_force_turn_endpoint=config.BREEZE_BUDDY_SONIOX_VAD_FORCE_TURN_ENDPOINT,
+            vad_force_turn_endpoint=static.BREEZE_BUDDY_SONIOX_VAD_FORCE_TURN_ENDPOINT,
         )
 
     else:
@@ -136,5 +136,5 @@ def get_stt_service():
             params=GoogleSTTService.InputParams(
                 languages=[Language.EN_US, Language.EN_IN], enable_interim_results=False
             ),
-            credentials=config.GOOGLE_CREDENTIALS_JSON,
+            credentials=static.GOOGLE_CREDENTIALS_JSON,
         )

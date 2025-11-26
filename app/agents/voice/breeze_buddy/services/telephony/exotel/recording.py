@@ -7,7 +7,7 @@ from typing import Optional
 
 import aiohttp
 
-from app.core.config import EXOTEL_API_KEY, EXOTEL_API_TOKEN
+from app.core.config.static import EXOTEL_API_KEY, EXOTEL_API_TOKEN
 from app.core.logger import logger
 from app.core.transport.http_client import get_proxy_config
 

@@ -8,7 +8,6 @@ import wave
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from dotenv import load_dotenv
 from langfuse import get_client
 from opentelemetry import trace
 from pipecat.audio.filters.aic_filter import AICFilter
@@ -63,7 +62,7 @@ from app.agents.voice.automatic.utils.session_context import (
     create_session_context,
     set_current_session_id,
 )
-from app.core import config
+from app.core.config import dynamic, static
 from app.core.logger import configure_session_logger, logger
 
 from .processors import LLMSpyProcessor
@@ -75,8 +74,8 @@ from .tts import get_tts_service
 
 # Load tool call sound
 tool_call_sound = None
-if config.ENABLE_TOOL_CALL_SOUND and os.path.exists(config.TOOL_CALL_SOUND_FILE):
-    with wave.open(config.TOOL_CALL_SOUND_FILE) as audio_file:
+if static.ENABLE_TOOL_CALL_SOUND and os.path.exists(static.TOOL_CALL_SOUND_FILE):
+    with wave.open(static.TOOL_CALL_SOUND_FILE) as audio_file:
         tool_call_sound = OutputAudioRawFrame(
             audio_file.readframes(-1),
             audio_file.getframerate(),
@@ -89,9 +88,6 @@ from app.agents.voice.automatic.analytics.tracing_setup import setup_tracing
 from app.agents.voice.automatic.analytics.utils import (
     generate_open_observer_url_for_session_id,
 )
-
-# Simple environment loading - subprocess inherits from parent
-load_dotenv(override=True)
 
 
 async def main():
@@ -197,15 +193,18 @@ async def _pre_init_silero_vad():
     try:
         # Pre-load the Silero VAD model
         vad_params = VADParams(
-            confidence=config.VAD_CONFIDENCE,
-            start_secs=config.VAD_START_SECS,
-            stop_secs=config.VAD_STOP_SECS,
-            min_volume=config.VAD_MIN_VOLUME,
+            confidence=static.VAD_CONFIDENCE,
+            start_secs=static.VAD_START_SECS,
+            stop_secs=static.VAD_STOP_SECS,
+            min_volume=static.VAD_MIN_VOLUME,
         )
 
         # Store in global cache for reuse
         global _silero_vad_cache
-        _silero_vad_cache = {"sample_rate": config.SAMPLE_RATE, "params": vad_params}
+        _silero_vad_cache = {
+            "sample_rate": static.SAMPLE_RATE,
+            "params": vad_params,
+        }
 
         logger.info("Silero VAD model pre-loaded")
 
@@ -267,16 +266,16 @@ async def run_normal_mode(args):
     # Initialize tools based on the mode and provided tokens
     # Only pass tokens if in live mode
 
-    use_breeze_mcp_server = config.ENABLE_BREEZE_MCP and (
-        not config.SHOPS_FOR_BREEZE_MCP  # Empty list = all shops
-        or args.shop_id in config.SHOPS_FOR_BREEZE_MCP  # Specific shops only
+    use_breeze_mcp_server = static.ENABLE_BREEZE_MCP and (
+        not static.SHOPS_FOR_BREEZE_MCP  # Empty list = all shops
+        or args.shop_id in static.SHOPS_FOR_BREEZE_MCP  # Specific shops only
     )
 
-    use_breeze_mcp_server_for_bret = config.ENABLE_BREEZE_MCP_FOR_BRET and (
+    use_breeze_mcp_server_for_bret = static.ENABLE_BREEZE_MCP_FOR_BRET and (
         voice_name == VoiceName.BRET
         and (
-            not config.SHOPS_FOR_BREEZE_MCP
-            or args.shop_id in config.SHOPS_FOR_BREEZE_MCP
+            not static.SHOPS_FOR_BREEZE_MCP
+            or args.shop_id in static.SHOPS_FOR_BREEZE_MCP
         )
     )
 
@@ -295,14 +294,14 @@ async def run_normal_mode(args):
         # Fallback to normal initialization
         logger.info("Using fallback Silero VAD initialization")
         vad_params = VADParams(
-            confidence=config.VAD_CONFIDENCE,
-            start_secs=config.VAD_START_SECS,
-            stop_secs=config.VAD_STOP_SECS,  # Use normal timeout - Smart Turn will intercept and decide
-            min_volume=config.VAD_MIN_VOLUME,
+            confidence=static.VAD_CONFIDENCE,
+            start_secs=static.VAD_START_SECS,
+            stop_secs=static.VAD_STOP_SECS,  # Use normal timeout - Smart Turn will intercept and decide
+            min_volume=static.VAD_MIN_VOLUME,
         )
 
         vad_analyzer = SileroVADAnalyzer(
-            sample_rate=config.SAMPLE_RATE,
+            sample_rate=static.SAMPLE_RATE,
             params=vad_params,
         )
 
@@ -311,7 +310,7 @@ async def run_normal_mode(args):
     fal_session = None
     fal_smart_turn_service = None
 
-    if config.ENABLE_SMART_TURN:
+    if static.ENABLE_SMART_TURN:
         try:
             # this can be tuned using sample_rate,vad_window_size,silence_threshold
             smart_turn_analyzer = LocalSmartTurnAnalyzer()
@@ -320,8 +319,8 @@ async def run_normal_mode(args):
             logger.error(
                 f"SMART_TURN: Failed to initialize LocalSmartTurnAnalyzer: {e}"
             )
-    elif config.ENABLE_FAL_SMART_TURN:
-        if config.FAL_SMART_TURN_API_KEY:
+    elif dynamic.ENABLE_FAL_SMART_TURN:
+        if static.FAL_SMART_TURN_API_KEY:
             fal_smart_turn_service = FalSmartTurnService()
             smart_turn_analyzer, fal_session = (
                 await fal_smart_turn_service.create_analyzer()
@@ -334,38 +333,38 @@ async def run_normal_mode(args):
     daily_params = DailyParams(
         audio_in_enabled=True,
         audio_out_enabled=True,
-        vad_analyzer=None if config.DISABLE_SILERO_VAD else vad_analyzer,
+        vad_analyzer=None if static.DISABLE_SILERO_VAD else vad_analyzer,
         turn_analyzer=smart_turn_analyzer,
     )
 
     # Audio filter configuration
     if (
-        config.ENABLE_KRISP_FILTER
-        and config.KRISP_MODEL_PATH
-        and os.path.isfile(config.KRISP_MODEL_PATH)
+        static.ENABLE_KRISP_FILTER
+        and static.KRISP_MODEL_PATH
+        and os.path.isfile(static.KRISP_MODEL_PATH)
     ):
         try:
             daily_params.audio_in_filter = NoiseFilterFromKrisp(
-                model_path=config.KRISP_MODEL_PATH
+                model_path=static.KRISP_MODEL_PATH
             )
         except Exception as e:
             logger.error(f"Krisp Filter failed: {e}")
-    elif config.ENABLE_AIC_FILTER and config.AICOUSTICS_LICENSE_KEY:
+    elif static.ENABLE_AIC_FILTER and static.AICOUSTICS_LICENSE_KEY:
         try:
             aic_filter = AICFilter(
-                license_key=config.AICOUSTICS_LICENSE_KEY,
-                enhancement_level=config.AIC_ENHANCEMENT_LEVEL,
-                voice_gain=config.AIC_VOICE_GAIN,
-                noise_gate_enable=config.AIC_NOISE_GATE_ENABLE,
+                license_key=static.AICOUSTICS_LICENSE_KEY,
+                enhancement_level=static.AIC_ENHANCEMENT_LEVEL,
+                voice_gain=static.AIC_VOICE_GAIN,
+                noise_gate_enable=static.AIC_NOISE_GATE_ENABLE,
             )
             daily_params.audio_in_filter = aic_filter
             logger.info(
-                f"AIC Filter: ENABLED (enhancement_level={config.AIC_ENHANCEMENT_LEVEL}, voice_gain={config.AIC_VOICE_GAIN}, noise_gate={config.AIC_NOISE_GATE_ENABLE})"
+                f"AIC Filter: ENABLED (enhancement_level={static.AIC_ENHANCEMENT_LEVEL}, voice_gain={static.AIC_VOICE_GAIN}, noise_gate={static.AIC_NOISE_GATE_ENABLE})"
             )
 
         except Exception as e:
             logger.error(f"AIC Filter failed: {e}")
-    elif config.ENABLE_NOISE_REDUCE_FILTER:
+    elif static.ENABLE_NOISE_REDUCE_FILTER:
         daily_params.audio_in_filter = NoisereduceFilter()
         logger.info("Audio Filter: NoiseReduce Enabled")
     else:
@@ -384,14 +383,14 @@ async def run_normal_mode(args):
         tts_provider=tts_provider.value,
         voice_name=voice_name.value,
         session_id=args.session_id,
-        enable_chart_text_filter=config.ENABLE_CHARTS,
+        enable_chart_text_filter=static.ENABLE_CHARTS,
     )
 
     llm = LLMServiceWrapper(
         AzureLLMService(
-            api_key=config.AZURE_OPENAI_API_KEY,
-            endpoint=config.AZURE_OPENAI_ENDPOINT,
-            model=config.AZURE_OPENAI_MODEL,
+            api_key=static.AZURE_OPENAI_API_KEY,
+            endpoint=static.AZURE_OPENAI_ENDPOINT,
+            model=static.AZURE_OPENAI_MODEL,
             run_in_parallel=True,
         )
     )
@@ -506,13 +505,13 @@ async def run_normal_mode(args):
     ]
 
     # Add PTT VAD filter only if it's enabled
-    if config.DISABLE_VAD_FOR_PTT:
+    if static.DISABLE_VAD_FOR_PTT:
         ptt_vad_filter = PTTVADFilter("PTTVADFilter")
         pipeline_components.append(ptt_vad_filter)  # Filter VAD frames after STT
 
     pipeline_components.append(stt)
 
-    if config.ENABLE_MUTE_UNTIL_FIRST_BOT_COMPLETE:
+    if static.ENABLE_MUTE_UNTIL_FIRST_BOT_COMPLETE:
         stt_mute_filter = STTMuteFilter(
             config=STTMuteConfig(
                 strategies={
@@ -523,29 +522,29 @@ async def run_normal_mode(args):
         tool_call_processor = LLMSpyProcessor(
             rtvi,
             args.session_id,
-            config.ENABLE_CHARTS,
+            static.ENABLE_CHARTS,
             stt_mute_filter,
             "LLMSpyProcessor",
         )
         pipeline_components.extend([stt_mute_filter])
     else:
         tool_call_processor = LLMSpyProcessor(
-            rtvi, args.session_id, config.ENABLE_CHARTS, None, "LLMSpyProcessor"
+            rtvi, args.session_id, static.ENABLE_CHARTS, None, "LLMSpyProcessor"
         )
 
     pipeline_components.extend([rtvi, context_aggregator.user()])
     if (
-        config.MEM0_ENABLED
+        static.MEM0_ENABLED
         and args.user_email
         and args.user_email.strip()
-        and config.MEM0_API_KEY
-        and config.MEM0_API_KEY.strip()
+        and static.MEM0_API_KEY
+        and static.MEM0_API_KEY.strip()
     ):
         try:
             logger.info("Initializing Mem0 memory service")
             memory_params = ImprovedMem0MemoryService.InputParams()
             memory = ImprovedMem0MemoryService(
-                api_key=config.MEM0_API_KEY,
+                api_key=static.MEM0_API_KEY,
                 user_id=args.user_email,
                 params=memory_params,
             )
@@ -556,12 +555,12 @@ async def run_normal_mode(args):
             logger.warning(
                 "Continuing without memory service - conversation will work normally"
             )
-    elif config.MEM0_ENABLED:
+    elif static.MEM0_ENABLED:
         if not args.user_email:
             logger.info(
                 "Skipping Mem0 memory service - no user email provided (guest flow)"
             )
-        elif not config.MEM0_API_KEY or not config.MEM0_API_KEY.strip():
+        elif not static.MEM0_API_KEY or not static.MEM0_API_KEY.strip():
             logger.warning("MEM0_API_KEY is not provided - skipping memory service")
     else:
         logger.debug("Mem0 memory service disabled via config")
@@ -588,14 +587,14 @@ async def run_normal_mode(args):
     conversation_id = f"{user_name}-{shopId}-{timestamp}"
 
     task_params = {
-        "idle_timeout_secs": config.AUTOMATIC_SESSION_INACTIVITY_TIMEOUT,
+        "idle_timeout_secs": static.AUTOMATIC_SESSION_INACTIVITY_TIMEOUT,
         "idle_timeout_frames": (BotSpeakingFrame, LLMFullResponseEndFrame),
         "params": PipelineParams(allow_interruptions=True),
         "cancel_on_idle_timeout": True,
         "observers": [GoogleRTVIObserver(rtvi)],
     }
 
-    if config.ENABLE_TRACING:
+    if static.ENABLE_TRACING:
         setup_tracing("breeze-voice-agent")
         task_params["conversation_id"] = conversation_id
         task_params["enable_tracing"] = True
@@ -674,7 +673,7 @@ async def run_normal_mode(args):
     @transport.event_handler("on_first_participant_joined")
     async def on_first_participant_joined(transport, participant):
         logger.info(f"First participant joined: {participant['id']}")
-        if config.ENABLE_AUTOMATIC_DAILY_RECORDING:
+        if static.ENABLE_AUTOMATIC_DAILY_RECORDING:
             await transport.start_recording()
 
         await task.queue_frames([LLMRunFrame()])
@@ -682,7 +681,7 @@ async def run_normal_mode(args):
     @transport.event_handler("on_participant_left")
     async def on_participant_left(transport, participant, reason):
         logger.info(f"Participant left: {participant['id']}")
-        if config.ENABLE_AUTOMATIC_DAILY_RECORDING:
+        if static.ENABLE_AUTOMATIC_DAILY_RECORDING:
             await transport.stop_recording()
         await task.cancel()
 
@@ -695,7 +694,7 @@ async def run_normal_mode(args):
         if isinstance(message, dict):
             message_type = message.get("type")
             if message_type == "function-confirmation-response" or (
-                config.DISABLE_VAD_FOR_PTT
+                static.DISABLE_VAD_FOR_PTT
                 and message_type in ["ptt-start", "ptt-end", "ptt-sync"]
             ):
                 # Manually trigger the RTVI handler since it might not be getting the message
@@ -726,7 +725,7 @@ async def run_normal_mode(args):
         except Exception as e:
             logger.error(f"Pipeline runner error: {e}")
 
-    if config.ENABLE_TRACING:
+    if static.ENABLE_TRACING:
         langfuse_client = get_client()
         tracer = trace.get_tracer(__name__)
         with tracer.start_as_current_span(conversation_id) as root_span:

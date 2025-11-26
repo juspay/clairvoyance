@@ -1,4 +1,4 @@
-from app.core.config import HITL_ACTIONS
+from app.core.config.static import HITL_ACTIONS
 
 
 def get_hitl_actions():

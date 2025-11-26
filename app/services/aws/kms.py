@@ -6,7 +6,7 @@ Only performs decryption when CLOUD_ENVIRONMENT=AWS, otherwise returns the origi
 import base64
 from typing import Optional
 
-from app.core import config
+from app.core.config import static
 from app.core.logger import logger
 from app.services.aws.utils import get_aws_client
 
@@ -42,16 +42,16 @@ async def decrypt_kms(encrypted_string: str) -> Optional[str]:
         logger.warning("Empty encrypted string provided")
         return None
 
-    if config.ENVIRONMENT.lower() == "dev":
+    if static.ENVIRONMENT.lower() == "dev":
         logger.info("Skipping KMS decryption in dev environment")
         return encrypted_string
 
-    if config.ENVIRONMENT.lower() == "beta" and config.SKIP_KMS_DECRYPT:
+    if static.ENVIRONMENT.lower() == "beta" and static.SKIP_KMS_DECRYPT:
         logger.info("Skipping KMS decryption in beta with skip flag")
         return encrypted_string
 
-    if config.CLOUD_ENVIRONMENT != "AWS":
-        logger.info(f"Skipping KMS decryption - provider is {config.CLOUD_ENVIRONMENT}")
+    if static.CLOUD_ENVIRONMENT != "AWS":
+        logger.info(f"Skipping KMS decryption - provider is {static.CLOUD_ENVIRONMENT}")
         return encrypted_string
 
     kms_client = get_aws_client("kms")

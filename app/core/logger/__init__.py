@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 import sys
 
 from loguru import logger
@@ -7,7 +8,8 @@ from loguru import logger
 # Remove the default sink to have full control over logging.
 logger.remove()
 
-from app.core.config import ENVIRONMENT, PROD_LOG_LEVEL
+# Use environment variables directly to avoid circular import
+from app.core.config.static import ENVIRONMENT, PROD_LOG_LEVEL
 
 
 def json_sink(message):

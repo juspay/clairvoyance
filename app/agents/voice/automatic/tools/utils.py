@@ -1,6 +1,6 @@
 from typing import Any, Dict, List, Optional
 
-from app.core.config import (
+from app.core.config.static import (
     AUTOMATIC_ACTIONS_REQUIRE_AUTH,
     AUTOMATIC_WRITE_ACTIONS_AUTHORIZED_USERS,
     ENABLE_WRITE_ACTIONS_FOR_MERCHANTS,
