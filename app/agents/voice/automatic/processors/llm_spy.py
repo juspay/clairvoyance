@@ -227,7 +227,7 @@ class LLMSpyProcessor(FrameProcessor):
             if self._tracer:
                 # Use turn context directly for tool calls to be nested in turn span
                 turn_context = get_current_turn_context()
-                
+
                 span = self._tracer.start_span(
                     f"Tool: {frame.function_name}",
                     kind=trace.SpanKind.CLIENT,

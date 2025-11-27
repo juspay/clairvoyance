@@ -4,6 +4,7 @@ from typing import Optional
 from deepgram import LiveOptions
 from pipecat.services.assemblyai.stt import AssemblyAISTTService
 from pipecat.services.deepgram.stt import DeepgramSTTService
+from pipecat.services.elevenlabs.stt import CommitStrategy, ElevenLabsRealtimeSTTService
 from pipecat.services.google.stt import GoogleSTTService
 from pipecat.services.openai.stt import OpenAISTTService
 from pipecat.services.soniox.stt import (
@@ -223,6 +224,29 @@ def get_stt_service(voice_name: Optional[str] = None):
             api_key=static.SONIOX_API_KEY,
             params=soniox_params,
             vad_force_turn_endpoint=static.SONIOX_VAD_FORCE_TURN_ENDPOINT,
+        )
+    elif static.STT_PROVIDER == "elevenlabs" and voice_name == VoiceName.RHEA.value:
+        if not static.ELEVENLABS_STT_API_KEY:
+            raise ValueError(
+                "ELEVENLABS_STT_API_KEY is required when STT_PROVIDER=elevenlabs"
+            )
+
+        logger.info(
+            f"Using ElevenLabs Realtime STT service with model: {static.ELEVENLABS_STT_MODEL}"
+        )
+        return ElevenLabsRealtimeSTTService(
+            api_key=static.ELEVENLABS_STT_API_KEY,
+            model=static.ELEVENLABS_STT_MODEL,
+            params=ElevenLabsRealtimeSTTService.InputParams(
+                language_code=static.ELEVENLABS_STT_LANGUAGE,
+                commit_strategy=(
+                    CommitStrategy.VAD
+                    if static.ELEVENLABS_STT_COMMIT_STRATEGY == "vad"
+                    else CommitStrategy.MANUAL
+                ),
+                vad_silence_threshold_secs=static.ELEVENLABS_STT_VAD_SILENCE_THRESHOLD,
+                vad_threshold=static.ELEVENLABS_STT_VAD_THRESHOLD,
+            ),
         )
     else:  # Default to Google STT
         logger.info("Using Google STT service with VAD-based turn detection")
