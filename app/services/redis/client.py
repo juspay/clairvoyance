@@ -8,13 +8,14 @@ import os
 from typing import Any, Dict, List, Optional
 
 from redis.asyncio import Redis
-from redis.asyncio.cluster import RedisCluster
+from redis.asyncio.cluster import ClusterNode, RedisCluster
 from redis.exceptions import ConnectionError as RedisConnectionError
 from redis.exceptions import RedisError
 
 from app.core.config.static import (
     REDIS_CLUSTER_NODES,
     REDIS_HOST,
+    REDIS_IS_CLUSTER,
     REDIS_PORT,
     REDIS_TTL,
 )
@@ -58,10 +59,35 @@ class RedisFactory:
         try:
             startup_nodes = self._get_startup_nodes()
 
-            # Single node - use Redis client
-            if len(startup_nodes) == 1:
+            # Determine if we should use cluster mode
+            # Use cluster if: explicitly set OR multiple nodes configured
+            use_cluster = REDIS_IS_CLUSTER or len(startup_nodes) > 1
+
+            if use_cluster:
+                # CLUSTER MODE
+                logger.info(f"Creating Redis CLUSTER with {len(startup_nodes)} node(s)")
+
+                # Convert dict nodes to ClusterNode objects
+                cluster_nodes = [
+                    ClusterNode(host=node["host"], port=node["port"])
+                    for node in startup_nodes
+                ]
+
+                self._cluster_client = RedisCluster(
+                    startup_nodes=cluster_nodes,
+                    decode_responses=True,  # Decode bytes to strings automatically
+                )
+
+                # Test connection
+                await self._cluster_client.ping()
+                logger.info("Redis cluster connection established")
+
+            else:
+                # SINGLE NODE MODE
                 node = startup_nodes[0]
-                logger.info(f"Creating Redis client: {node['host']}:{node['port']}")
+                logger.info(
+                    f"Creating Redis SINGLE NODE client: {node['host']}:{node['port']}"
+                )
 
                 self._single_client = Redis(
                     host=node["host"],
@@ -71,20 +97,7 @@ class RedisFactory:
 
                 # Test connection
                 await self._single_client.ping()
-                logger.info("Redis connection established")
-
-            # Multiple nodes - use Redis cluster
-            else:
-                logger.info(f"Creating Redis cluster with {len(startup_nodes)} nodes")
-
-                self._cluster_client = RedisCluster(
-                    startup_nodes=startup_nodes,
-                    decode_responses=True,  # Decode bytes to strings automatically
-                )
-
-                # Test connection
-                await self._cluster_client.ping()
-                logger.info("Redis cluster connection established")
+                logger.info("Redis single-node connection established")
 
         except Exception as e:
             logger.error(f"Failed to create Redis client: {e}")

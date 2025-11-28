@@ -489,6 +489,9 @@ BOT_MAX_DRAIN_SECONDS = int(os.environ.get("BOT_MAX_DRAIN_SECONDS", "25"))
 REDIS_HOST = os.getenv("REDIS_HOST", "")
 REDIS_PORT = os.getenv("REDIS_PORT", "")
 REDIS_CLUSTER_NODES = os.getenv("REDIS_CLUSTER_NODES", "")
+REDIS_IS_CLUSTER = (
+    os.getenv("REDIS_IS_CLUSTER", "").lower() == "true"
+)  # Force cluster mode
 REDIS_TTL = int(os.getenv("REDIS_TTL", "3600"))  # Default TTL in seconds (1 hour)
 
 # DevCycle Configuration
