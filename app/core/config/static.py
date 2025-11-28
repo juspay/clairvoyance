@@ -409,20 +409,10 @@ AWS_PROXY_HOST = os.environ.get("AWS_PROXY_HOST")
 AWS_PROXY_PORT = os.environ.get("AWS_PROXY_PORT")
 CLOUD_ENVIRONMENT = os.environ.get("CLOUD_ENVIRONMENT", "GCP")  # AWS, GCP, AZURE, etc.
 
-# LangFuse Configuration
-ENABLE_LANGFUSE_PROMPTS = (
-    os.environ.get("ENABLE_LANGFUSE_PROMPTS", "false").lower() == "true"
-)
+# LangFuse Configuration (for OpenTelemetry tracing only)
 LANGFUSE_SECRET_KEY = os.environ.get("LANGFUSE_SECRET_KEY", "")
 LANGFUSE_PUBLIC_KEY = os.environ.get("LANGFUSE_PUBLIC_KEY", "")
 LANGFUSE_BASEURL = os.environ.get("LANGFUSE_BASEURL", "https://us.cloud.langfuse.com")
-AUTOMATIC_LANGFUSE_PROMPT_NAME = os.environ.get(
-    "AUTOMATIC_LANGFUSE_PROMPT_NAME", "AUTOMATIC_VOICE_LANGFUSE_PROMPT"
-)
-AUTOMATIC_LANGFUSE_SYSTEM_PROMPT_LABEL = os.environ.get(
-    "AUTOMATIC_LANGFUSE_SYSTEM_PROMPT_LABEL", "automatic_system_langfuse_prompt"
-)
-
 
 BREEZE_BUDDY_SONIOX_MODEL = os.environ.get(
     "BREEZE_BUDDY_SONIOX_MODEL", "stt-rt-preview"
