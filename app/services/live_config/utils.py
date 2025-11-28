@@ -68,39 +68,3 @@ def build_variable_mapping(variables: list) -> Dict[str, Dict[str, str]]:
                 "type": variable.get("type", "String"),
             }
     return mapping
-
-
-async def process_feature_variables(
-    feature: dict, variable_mapping: Dict[str, Dict[str, str]], flag_setter_func
-) -> None:
-    """Process and store variables from a feature"""
-    targets = feature.get("configuration", {}).get("targets", [])
-    if not targets:
-        return
-
-    # Find primary variation (highest percentage)
-    distribution = targets[0].get("distribution", [])
-    if not distribution:
-        return
-
-    primary_variation_id = max(distribution, key=lambda d: d.get("percentage", 0)).get(
-        "_variation"
-    )
-    if not primary_variation_id:
-        return
-
-    # Process variables in primary variation
-    for variation in feature.get("variations", []):
-        if variation.get("_id") == primary_variation_id:
-            for var in variation.get("variables", []):
-                var_id = var.get("_var")
-                var_value = var.get("value")
-
-                if var_id in variable_mapping:
-                    var_info = variable_mapping[var_id]
-                    normalized_key = normalize_key(var_info["key"])
-                    processed_value = process_devcycle_value(
-                        var_value, var_info["type"]
-                    )
-                    await flag_setter_func(normalized_key, processed_value)
-            break

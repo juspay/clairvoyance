@@ -22,7 +22,8 @@ from app.services.live_config.utils import (
     build_variable_mapping,
     convert_type,
     get_env_value,
-    process_feature_variables,
+    normalize_key,
+    process_devcycle_value,
 )
 from app.services.redis.client import get_redis_service
 
@@ -34,77 +35,163 @@ DEVCYCLE_SERVER_KEY = os.getenv("DEVCYCLE_SERVER_KEY", "")
 _INITIALIZED = False
 
 
+async def process_feature_variables(
+    feature: dict, variable_mapping: Dict[str, Dict[str, str]], flag_setter_func
+) -> None:
+    """Extract and store variables from the primary variation of a feature."""
+
+    # Get target distribution → find primary variation → exit early if any missing
+    targets = feature.get("configuration", {}).get("targets") or []
+    if not targets:
+        return
+
+    distribution = targets[0].get("distribution") or []
+    if not distribution:
+        return
+
+    # Find highest-percentage variation
+    primary_variation_id = max(distribution, key=lambda d: d.get("percentage", 0)).get(
+        "_variation"
+    )
+    if not primary_variation_id:
+        return
+
+    # Get matching variation
+    variations = feature.get("variations") or []
+    primary_variation = next(
+        (v for v in variations if v.get("_id") == primary_variation_id), None
+    )
+    if not primary_variation:
+        return
+
+    # Extract all variables
+    for var in primary_variation.get("variables") or []:
+        var_id = var.get("_var")
+        var_value = var.get("value")
+        if not var_id or var_id not in variable_mapping:
+            continue
+
+        info = variable_mapping[var_id]
+        normalized_key = normalize_key(info["key"])
+        processed_value = process_devcycle_value(var_value, info["type"])
+        await flag_setter_func(normalized_key, processed_value)
+
+
 async def fetch_and_update_feature_flags() -> bool:
-    """Fetch DevCycle configuration and update Redis store"""
+    """Fetch DevCycle configuration and update Redis store with diff-based updates."""
     if not DEVCYCLE_SERVER_KEY:
         logger.warning("DEVCYCLE_SERVER_KEY not configured")
         return False
 
+    url = f"https://config-cdn.devcycle.com/config/v1/server/{DEVCYCLE_SERVER_KEY}.json"
+    timeout = aiohttp.ClientTimeout(total=30)
+
     try:
-        # Fetch DevCycle configuration
-        url = f"https://config-cdn.devcycle.com/config/v1/server/{DEVCYCLE_SERVER_KEY}.json"
-        timeout = aiohttp.ClientTimeout(total=10)
+        logger.debug(f"Fetching DevCycle config: {url}")
 
-        logger.debug(f"Fetching DevCycle config from: {url}")
-
+        # ----- Fetch DevCycle JSON -----
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.get(
                 url, headers={"Content-Type": "application/json"}
-            ) as response:
-                if response.status != 200:
-                    logger.error(f"DevCycle CDN failed: {response.status}")
-                    logger.error(f"Response: {await response.text()}")
+            ) as resp:
+                if resp.status != 200:
+                    logger.error(f"DevCycle CDN error: {resp.status}")
+                    logger.error(f"Response: {await resp.text()}")
                     return False
+                data = await resp.json()
 
-                try:
-                    data = await response.json()
-                except json.JSONDecodeError as e:
-                    logger.error(f"Failed to parse DevCycle response: {e}")
-                    return False
+        # ----- Validate Base Payload -----
+        if not isinstance(data, dict):
+            logger.error("DevCycle response is not a dictionary")
+            return False
 
-        # Store old flags for comparison and clear existing
+        # ----- Extract and Validate Variables & Features -----
+        variables = data.get("variables")
+        if not isinstance(variables, list):
+            logger.warning(
+                f"Invalid 'variables' format ({type(variables)}). Expected list."
+            )
+            variables = []
+
+        features = data.get("features")
+        if not isinstance(features, list):
+            logger.warning(
+                f"Invalid 'features' format ({type(features)}). Expected list."
+            )
+            features = []
+
+        # ----- EARLY EXIT — nothing to process -----
+        if not variables or not features:
+            logger.info(
+                "No variables or features found. Skipping feature-flag processing."
+            )
+            return False
+
+        # ----- Build New Flags -----
+        new_flags: dict[str, Any] = {}
+
+        variable_map = build_variable_mapping(variables)
+
+        async def set_flag(key: str, value: Any) -> bool:
+            new_flags[key] = value
+            return True
+
+        for feature in features:
+            if isinstance(feature, dict) and "key" in feature:
+                await process_feature_variables(feature, variable_map, set_flag)
+
+        # ----- Load Old Flags -----
         old_flags = await _get_all_flags_from_redis()
-        await _clear_all_flags_in_redis()
 
-        # Process DevCycle data
-        variables = data.get("variables", [])
-        features = data.get("features", [])
+        old_keys = set(old_flags.keys())
+        new_keys = set(new_flags.keys())
 
-        if isinstance(variables, list) and isinstance(features, list):
-            variable_mapping = build_variable_mapping(variables)
+        # Diff
+        keys_to_update = {
+            k for k in old_keys & new_keys if old_flags[k] != new_flags[k]
+        }
+        keys_to_add = new_keys - old_keys
+        keys_to_delete = old_keys - new_keys
 
-            for feature in features:
-                if isinstance(feature, dict) and "key" in feature:
-                    await process_feature_variables(
-                        feature, variable_mapping, _set_flag_in_redis
-                    )
+        total_changes = len(keys_to_update) + len(keys_to_add) + len(keys_to_delete)
 
-        # Log changes
-        new_flags = await _get_all_flags_from_redis()
-        logger.info(f"DevCycle flags updated: {len(old_flags)} -> {len(new_flags)}")
+        # ----- Nothing Changed -----
+        if total_changes == 0:
+            logger.info(f"No flag changes detected ({len(new_flags)} total flags)")
+            return True
 
-        changes = [
-            f"{k}: {old_flags.get(k)} -> {v}"
-            for k, v in new_flags.items()
-            if old_flags.get(k) != v
-        ]
+        # ----- Apply Redis Updates -----
+        redis_service = await get_redis_service()
+        redis_client = await redis_service.get_client()
+        pipe = redis_client.pipeline(transaction=False)
 
-        if changes:
-            logger.info(f"Changes: {changes}")
-        else:
-            logger.info("No flag value changes")
+        # Add/update
+        for key in keys_to_update | keys_to_add:
+            pipe.set(f"{FEATURE_FLAGS_PREFIX}{key}", json.dumps(new_flags[key]))
+
+        # Delete
+        for key in keys_to_delete:
+            pipe.delete(f"{FEATURE_FLAGS_PREFIX}{key}")
+
+        await pipe.execute()
+
+        # ----- Log Summary -----
+        logger.info(
+            f"DevCycle flags updated: old={len(old_flags)}, new={len(new_flags)}, "
+            f"updated={len(keys_to_update)}, added={len(keys_to_add)}, deleted={len(keys_to_delete)}"
+        )
 
         return True
 
+    except Exception as e:
+        logger.exception(f"Error fetching DevCycle feature flags: {e}")
+        return False
+
     except aiohttp.ClientError as e:
         logger.error(f"DevCycle API request failed: {e}")
-        if "old_flags" in locals():
-            await _restore_flags_to_redis(old_flags)
         return False
     except Exception as e:
         logger.error(f"DevCycle flag update failed: {e}")
-        if "old_flags" in locals():
-            await _restore_flags_to_redis(old_flags)
         return False
 
 
@@ -213,6 +300,21 @@ async def _set_flag_in_redis(key: str, value: Any) -> bool:
         )
     except Exception as e:
         logger.error(f"Error setting flag {key} in Redis: {e}")
+        return False
+
+
+async def _delete_flag_from_redis(key: str) -> bool:
+    """Delete a feature flag from Redis"""
+    try:
+        redis_service = await get_redis_service()
+        if not redis_service:
+            return False
+
+        redis_client = await redis_service.get_client()
+        await redis_client.delete(f"{FEATURE_FLAGS_PREFIX}{key}")
+        return True
+    except Exception as e:
+        logger.error(f"Error deleting flag {key} from Redis: {e}")
         return False
 
 
