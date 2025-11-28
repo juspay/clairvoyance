@@ -88,26 +88,25 @@ async def devcycle_webhook(
     try:
         # Fetch fresh configuration from DevCycle API and update store
         refresh_success = await fetch_and_update_feature_flags()
-        webhook_processing_time = time.time() - webhook_start_time
 
         if not refresh_success:
-            logger.error(
-                f"DevCycle webhook failed to refresh feature flags from {client_ip} "
-                f"in {webhook_processing_time*1000:.2f}ms"
+            logger.error("DevCycle webhook failed to refresh feature flags")
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "status": "error",
+                    "message": "Failed to refresh feature flags",
+                },
             )
-        else:
-            # Extract webhook trigger info for logging
-            webhook_key = webhook_data.get("key", "unknown")
-            webhook_type = webhook_data.get("type", "unknown")
 
-            logger.info(
-                f"DevCycle webhook processed successfully: refreshed {await get_flag_count()} flags "
-                f"triggered by {webhook_type} event for {webhook_key} in {webhook_processing_time*1000:.2f}ms"
-            )
+        logger.info("DevCycle webhook processed successfully")
+        return JSONResponse(
+            status_code=200,
+            content={"status": "success", "message": "Feature flags updated"},
+        )
 
     except Exception as e:
-        webhook_processing_time = time.time() - webhook_start_time
-        logger.error(
-            f"Failed to process DevCycle webhook from {client_ip}: {e}. "
-            f"Processing time: {webhook_processing_time*1000:.2f}ms"
+        logger.error(f"Failed to process DevCycle webhook: {e}")
+        return JSONResponse(
+            status_code=500, content={"status": "error", "message": str(e)}
         )
