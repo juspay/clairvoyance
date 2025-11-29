@@ -5,6 +5,7 @@ Database query functions for the application.
 from datetime import datetime
 from typing import Any, List, Optional, Tuple
 
+from app.database.queries.breeze_buddy.lead_call_tracker import LEAD_CALL_TRACKER_TABLE
 from app.schemas import CallProvider, OutboundNumberStatus
 
 # Table names
@@ -116,6 +117,42 @@ def get_all_outbound_numbers_query() -> Tuple[str, List[Any]]:
         ORDER BY "created_at" DESC;
     """
     values = []
+    return text, values
+
+
+def get_all_outbound_numbers_with_call_count_query(
+    start_date: Optional[datetime] = None,
+    end_date: Optional[datetime] = None,
+) -> Tuple[str, List[Any]]:
+    """
+    Generate query to get all outbound numbers with their call counts and no answer breakdown.
+    """
+
+    values: List[Any] = []
+    conditions = []
+
+    if start_date:
+        values.append(start_date)
+        conditions.append(f'lct."call_initiated_time" >= ${len(values)}')
+
+    if end_date:
+        values.append(end_date)
+        conditions.append(f'lct."call_initiated_time" < ${len(values)}')
+
+    where_clause = ""
+    if conditions:
+        where_clause = " AND " + " AND ".join(conditions)
+
+    text = f"""
+        SELECT 
+            ou.*,
+            COALESCE(COUNT(lct.id), 0) AS total_calls,
+            COALESCE(COUNT(lct.id) FILTER (WHERE lct.outcome = 'NO_ANSWER'), 0) AS calls_no_answer
+        FROM "{OUTBOUND_NUMBER_TABLE}" ou
+        LEFT JOIN "{LEAD_CALL_TRACKER_TABLE}" lct ON ou.id = lct.outbound_number_id{where_clause}
+        GROUP BY ou.id
+        ORDER BY ou.created_at DESC;
+    """
     return text, values
 
 

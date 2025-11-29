@@ -44,6 +44,7 @@ from app.database.accessor import (
     get_all_call_execution_configs,
     get_all_lead_call_trackers,
     get_all_outbound_numbers,
+    get_all_outbound_numbers_with_call_count,
     get_call_execution_config_by_merchant_id,
     get_lead_based_analytics,
     get_lead_by_id,
@@ -686,7 +687,29 @@ async def get_analytics(
         ),
     }
 
-    analytics = {"call_based": call_based, "lead_based": lead_based}
+    # Get outbound number analytics
+    outbound_numbers_data = await get_all_outbound_numbers_with_call_count(
+        start_date=start_datetime,
+        end_date=end_datetime,
+    )
+
+    outbound_analytics = []
+    for record in outbound_numbers_data:
+        calls_picked = record["total_calls"] - record["calls_no_answer"]
+        outbound_analytics.append(
+            {
+                "number": record["number"],
+                "provider": record["provider"],
+                "total_calls": record["total_calls"],
+                "calls_picked": calls_picked,
+            }
+        )
+
+    analytics = {
+        "call_based": call_based,
+        "lead_based": lead_based,
+        "outbound_numbers": outbound_analytics,
+    }
 
     return JSONResponse(content=analytics)
 

@@ -96,7 +96,7 @@ class BackgroundTaskScheduler:
         )
 
         self.tasks[task_id] = task
-        
+
         # Generate lock key from task name for logging
         lock_key = f"background:task:{name.lower().replace(' ', '_')}:lock"
         logger.info(
@@ -118,7 +118,7 @@ class BackgroundTaskScheduler:
         """
         # Generate lock key from task name
         lock_key = f"background:task:{task.name.lower().replace(' ', '_')}:lock"
-        
+
         # Try to acquire distributed lock using Redis SET NX EX
         try:
             redis_service = await get_redis_service()
@@ -129,9 +129,7 @@ class BackgroundTaskScheduler:
                 ex=task.interval_seconds,
             )
         except Exception as e:
-            logger.error(
-                f"Redis error for task '{task.name}': {e}. Skipping task."
-            )
+            logger.error(f"Redis error for task '{task.name}': {e}. Skipping task.")
             return
 
         if not lock_acquired:
