@@ -9,7 +9,7 @@ from typing import Dict, List, Optional
 
 import aiohttp
 
-from app.core.config.static import SLACK_WEBHOOK_URL, SLACK_TAG_USERS
+from app.core.config.static import SLACK_TAG_USERS, SLACK_WEBHOOK_URL
 from app.core.logger import logger
 
 
@@ -99,7 +99,9 @@ class Alert:
             # Add notifications section if users are configured for tagging
             if SLACK_TAG_USERS:
                 # Parse comma-separated usernames and filter out empty ones
-                users = [user.strip() for user in SLACK_TAG_USERS.split(",") if user.strip()]
+                users = [
+                    user.strip() for user in SLACK_TAG_USERS.split(",") if user.strip()
+                ]
                 if users:
                     # Format users as proper Slack mentions with angle brackets
                     mentions = []
@@ -107,10 +109,10 @@ class Alert:
                         # Remove @ if present and wrap in Slack mention format
                         clean_user = user.strip().lstrip("@")
                         mentions.append(f"<@{clean_user}>")
-                    
+
                     # Join mentions with spaces
                     mentions_text = " ".join(mentions)
-                    
+
                     # Add notifications section
                     blocks.append(
                         {

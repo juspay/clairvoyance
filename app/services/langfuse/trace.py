@@ -11,7 +11,9 @@ import aiohttp
 from app.core.logger import logger
 
 
-async def fetch_trace(http_client: aiohttp.ClientSession, trace_id: str) -> Dict[str, Any]:
+async def fetch_trace(
+    http_client: aiohttp.ClientSession, trace_id: str
+) -> Dict[str, Any]:
     """
     Fetch a trace from Langfuse via REST API.
 

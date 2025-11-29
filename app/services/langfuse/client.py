@@ -17,8 +17,6 @@ from app.core.config.static import (
 from app.core.logger import logger
 
 
-
-
 class LangFuseReadOnlyClient:
     """
     Read-only LangFuse client for score monitoring using REST API.
@@ -71,7 +69,6 @@ class LangFuseReadOnlyClient:
                 f"Failed to initialize Langfuse read-only client: {e}", exc_info=True
             )
             self.initialized = False
-
 
     async def close(self):
         """Close the async HTTP client."""

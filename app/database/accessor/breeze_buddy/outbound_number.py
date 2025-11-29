@@ -2,6 +2,7 @@
 Database accessor functions for the application.
 """
 
+from datetime import datetime
 from typing import List, Optional
 
 import asyncpg
@@ -15,6 +16,7 @@ from app.database.queries import run_parameterized_query
 from app.database.queries.breeze_buddy.outbound_number import (
     disable_outbound_number_query,
     get_all_outbound_numbers_query,
+    get_all_outbound_numbers_with_call_count_query,
     get_outbound_number_based_on_status_and_provider_query,
     get_outbound_number_by_id_query,
     insert_outbound_number_query,
@@ -202,6 +204,29 @@ async def get_all_outbound_numbers() -> List[OutboundNumber]:
 
     except Exception as e:
         logger.error(f"Error getting all outbound numbers: {e}")
+        return []
+
+
+async def get_all_outbound_numbers_with_call_count(
+    start_date: Optional[datetime] = None,
+    end_date: Optional[datetime] = None,
+) -> List[asyncpg.Record]:
+    """
+    Get all outbound numbers with their call counts.
+    """
+    logger.info("Getting all outbound numbers with call counts")
+
+    try:
+        query_text, values = get_all_outbound_numbers_with_call_count_query(
+            start_date=start_date,
+            end_date=end_date,
+        )
+        result = await run_parameterized_query(query_text, values)
+        return result if result else []
+    except Exception as e:
+        logger.error(
+            f"Error getting outbound numbers with call counts: {e}", exc_info=True
+        )
         return []
 
 

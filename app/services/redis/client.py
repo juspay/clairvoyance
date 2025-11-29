@@ -205,7 +205,6 @@ class RedisService:
             logger.error(f"Redis SETEX error for key {key}: {e}")
             return False
 
-
     async def delete(self, key: str) -> bool:
         """Delete key from Redis"""
         try:

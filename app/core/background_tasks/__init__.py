@@ -6,8 +6,8 @@ across multiple pods with Redis-based distributed locking to ensure
 only one pod executes each task at a time.
 """
 
-from app.core.background_tasks.task import BackgroundTask
 from app.core.background_tasks.scheduler import BackgroundTaskScheduler
+from app.core.background_tasks.task import BackgroundTask
 
 __all__ = [
     "BackgroundTaskScheduler",

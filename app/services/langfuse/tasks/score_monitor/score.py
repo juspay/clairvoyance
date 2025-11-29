@@ -32,7 +32,6 @@ class ScoreMonitor:
                 "Langfuse read-only client not initialized for score monitoring"
             )
 
-
     async def fetch_scores(
         self,
         http_client: aiohttp.ClientSession,

@@ -376,7 +376,8 @@
 
       #call-details-table,
       #call-execution-configs-table,
-      #outbound-numbers-table {
+      #outbound-numbers-table,
+      #outbound-numbers-analytics-table {
         width: 100%;
         border-collapse: separate;
         border-spacing: 0;
@@ -389,7 +390,9 @@
       #call-execution-configs-table th,
       #call-execution-configs-table td,
       #outbound-numbers-table th,
-      #outbound-numbers-table td {
+      #outbound-numbers-table td,
+      #outbound-numbers-analytics-table th,
+      #outbound-numbers-analytics-table td {
         padding: 18px 20px;
         text-align: left;
         border-bottom: 1px solid rgba(0, 100, 255, 0.08);
@@ -397,7 +400,8 @@
 
       #call-details-table th,
       #call-execution-configs-table th,
-      #outbound-numbers-table th {
+      #outbound-numbers-table th,
+      #outbound-numbers-analytics-table th {
         background: linear-gradient(
           135deg,
           rgba(0, 100, 255, 0.08),
@@ -415,7 +419,8 @@
 
       #call-details-table tbody tr,
       #call-execution-configs-table tbody tr,
-      #outbound-numbers-table tbody tr {
+      #outbound-numbers-table tbody tr,
+      #outbound-numbers-analytics-table tbody tr {
         transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
         background: rgba(255, 255, 255, 0.5);
       }
@@ -427,9 +432,16 @@
         box-shadow: 0 4px 12px rgba(0, 150, 255, 0.1);
       }
 
+      #outbound-numbers-analytics-table tbody tr:hover {
+        background: rgba(0, 150, 255, 0.08);
+        transform: scale(1.01);
+        box-shadow: 0 4px 12px rgba(0, 150, 255, 0.1);
+      }
+
       #call-details-table tbody tr:last-child td,
       #call-execution-configs-table tbody tr:last-child td,
-      #outbound-numbers-table tbody tr:last-child td {
+      #outbound-numbers-table tbody tr:last-child td,
+      #outbound-numbers-analytics-table tbody tr:last-child td {
         border-bottom: none;
       }
 
@@ -963,6 +975,21 @@
       </table>
     </div>
 
+    <div class="table-container">
+      <h2>Outbound Number Call Statistics</h2>
+      <table id="outbound-numbers-analytics-table">
+        <thead>
+          <tr>
+            <th>Number</th>
+            <th>Provider</th>
+            <th>Total Calls</th>
+            <th>Calls Picked</th>
+          </tr>
+        </thead>
+        <tbody id="outbound-numbers-analytics-body"></tbody>
+      </table>
+    </div>
+
     <div id="call-details-modal" class="modal">
       <div class="modal-content">
         <span class="close-button">&times;</span>
@@ -1329,6 +1356,59 @@
         }
       }
 
+      async function fetchOutboundNumbersAnalytics() {
+        const tableBody = document.getElementById("outbound-numbers-analytics-body");
+        const startDate = startDateInput.value;
+        const endDate = endDateInput.value;
+        
+        try {
+          // Get the analytics data that includes outbound numbers
+          let url = "/agent/voice/breeze-buddy/breeze/order-confirmation/analytics";
+          const params = new URLSearchParams();
+          if (startDate) {
+            params.append("start_date", startDate);
+          }
+          if (endDate) {
+            params.append("end_date", endDate);
+          }
+          if (params.toString()) {
+            url += `?${params.toString()}`;
+          }
+
+          const response = await fetch(url);
+          if (response.redirected) {
+            window.location.href = response.url;
+            return;
+          }
+          if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+          }
+          const data = await response.json();
+          tableBody.innerHTML = "";
+          
+          if (data.outbound_numbers && data.outbound_numbers.length > 0) {
+            data.outbound_numbers.forEach((item) => {
+              const row = document.createElement("tr");
+              row.innerHTML = `
+                          <td>${item.number}</td>
+                          <td>${item.provider}</td>
+                          <td>${item.total_calls}</td>
+                          <td>${item.calls_picked}</td>
+                      `;
+              tableBody.appendChild(row);
+            });
+          } else {
+            const row = document.createElement("tr");
+            row.innerHTML = '<td colspan="5">No call data available</td>';
+            tableBody.appendChild(row);
+          }
+        } catch (error) {
+          console.error("Failed to fetch outbound numbers analytics:", error);
+          tableBody.innerHTML =
+            '<tr><td colspan="3">Failed to load outbound numbers analytics</td></tr>';
+        }
+      }
+
       async function loadDashboardData(loadAnalytics = true) {
         const pageLoader = document.getElementById("page-loader");
         pageLoader.style.display = "flex";
@@ -1337,6 +1417,7 @@
           fetchCallDetails(),
           fetchCallExecutionConfigs(),
           fetchOutboundNumbers(),
+          fetchOutboundNumbersAnalytics(),
         ];
         if (loadAnalytics) {
           promises.push(fetchAnalytics());
