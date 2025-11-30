@@ -9,7 +9,7 @@ from pipecat.services.mcp_service import MCPClient as PipecatMCPClient
 from app.agents.voice.automatic.services.mcp.utils import create_chart_aware_wrapper
 from app.agents.voice.automatic.tools import initialize_tools
 from app.agents.voice.automatic.types import Mode
-from app.core.config.static import MCP_CLIENT_TIMEOUT
+from app.core.config.static import BREEZE_MCP_ENDPOINT_PATH, MCP_CLIENT_TIMEOUT
 from app.core.logger import logger
 from app.utils.common import get_breeze_portal_url
 
@@ -30,7 +30,7 @@ async def init_breeze_mcp_tools(
     try:
         # Use Pipecat MCP client directly (standard MCP protocol only)
         server_params = StreamableHttpParameters(
-            url=f"{get_breeze_portal_url(reseller_id)}{services.BREEZE_MCP_ENDPOINT_PATH}",
+            url=f"{get_breeze_portal_url(reseller_id)}{BREEZE_MCP_ENDPOINT_PATH}",
             headers={
                 "x-auth-token": breeze_token,
                 "x-context": base64.b64encode(

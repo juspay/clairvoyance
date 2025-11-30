@@ -242,6 +242,9 @@ ENABLE_BREEZE_MCP = os.environ.get("ENABLE_BREEZE_MCP", "false").lower() == "tru
 ENABLE_BREEZE_MCP_FOR_BRET = (
     os.environ.get("ENABLE_BREEZE_MCP_FOR_BRET", "false").lower() == "true"
 )
+
+BREEZE_MCP_ENDPOINT_PATH = os.environ.get("BREEZE_MCP_ENDPOINT_PATH", "/ai/mcp/v2")
+
 MCP_CLIENT_TIMEOUT = int(os.environ.get("MCP_CLIENT_TIMEOUT", 30))  # seconds
 shops_for_mcp = os.environ.get("SHOPS_FOR_BREEZE_MCP", "")
 SHOPS_FOR_BREEZE_MCP = [
