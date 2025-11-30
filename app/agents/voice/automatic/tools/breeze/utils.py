@@ -255,10 +255,7 @@ def detect_surcharge_rule_overlaps(
     """
     # Check overlaps with existing rules
     existing_payment_rules = [
-        r
-        for r in existing_rules
-        if r.get("paymentType") == payment_type
-        and r.get("paymentMethodType") == payment_method_type
+        r for r in existing_rules if r.get("paymentType") == payment_type
     ]
 
     overlaps = []
@@ -274,9 +271,11 @@ def detect_surcharge_rule_overlaps(
             existing_max = existing_rule.get("maximumOrderValue")
             existing_payment_method_type = existing_rule.get("paymentMethodType")
 
-            # Only check if payment method types match
+            # Skip if payment method types don't match, UNLESS existing method is '*'
+            # If existing method is '*', it covers all payment methods, so we must check for overlap
             if (
                 payment_method_type
+                and existing_payment_method_type != "*"
                 and existing_payment_method_type != new_payment_method_type
             ):
                 continue

@@ -128,7 +128,14 @@ async def get_surcharge_rules(params: FunctionCallParams):
 async def _handle_create_surcharge_rule(params: FunctionCallParams):
     """Internal helper: Creates one or more new surcharge rules for a specific payment type. Ensures rules are unique and not already present."""
     rules = params.arguments.get("rules", [])
-    payment_method_type = params.arguments.get("paymentMethodType", "*")
+    payment_method_type = params.arguments.get("paymentMethodType")
+
+    # Defensive check: paymentMethodType is required
+    if not payment_method_type:
+        await params.result_callback(
+            {"success": False, "error": "paymentMethodType is required"}
+        )
+        return
 
     if payment_method_type in CODE_PAYMENT_METHOD_TYPES:
         payment_type = "COD"
@@ -364,7 +371,14 @@ async def _handle_delete_surcharge_rule(params: FunctionCallParams):
 async def _handle_update_surcharge_rule(params: FunctionCallParams):
     """Internal helper: Simple update - delete all existing rules for payment type, then create new ones."""
     rules = params.arguments.get("rules", [])
-    payment_method_type = params.arguments.get("paymentMethodType", "*")
+    payment_method_type = params.arguments.get("paymentMethodType")
+
+    # Defensive check: paymentMethodType is required
+    if not payment_method_type:
+        await params.result_callback(
+            {"success": False, "error": "paymentMethodType is required"}
+        )
+        return
 
     if payment_method_type in CODE_PAYMENT_METHOD_TYPES:
         payment_type = "COD"
@@ -852,7 +866,7 @@ manage_vayu_surcharge_function = FunctionSchema(
             "description": "Payment method type 'CASH' for 'Cash On Delivery' or 'CASH' payment methods, 'UPI' for 'UPI' payment methods , 'WALLET' for 'WALLET' for payment methods, 'CARD' for 'CARD' payments methods, 'NB' for 'NET BANKING' payment methods, or '*' for all payment methods. Use 'PARTIAL' for PARTIAL payment type. Defaults to 'CASH'",
         },
     },
-    required=["action"],
+    required=["action", "paymentMethodType"],
 )
 
 # Clean tool registration: 4 tools → 2 tools (matches manage_announcement_banner pattern)
