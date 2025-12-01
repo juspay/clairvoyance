@@ -8,6 +8,7 @@ from pipecat.services.mcp_service import MCPClient as PipecatMCPClient
 
 from app.agents.voice.automatic.services.mcp.utils import create_chart_aware_wrapper
 from app.agents.voice.automatic.tools import initialize_tools
+from app.agents.voice.automatic.tools.internet import tool_functions as internet_tool_functions
 from app.agents.voice.automatic.types import Mode
 from app.core.config.static import BREEZE_MCP_ENDPOINT_PATH, MCP_CLIENT_TIMEOUT
 from app.core.logger import logger
@@ -57,9 +58,15 @@ async def init_breeze_mcp_tools(
             )
 
         try:
+            # Pre-register search_web with the same chart-aware wrapper before MCP tools
+            if ENABLE_SEARCH_GROUNDING:
+                create_chart_aware_wrapper(original_register_function)("search_web", internet_tool_functions["search_web"])
+                logger.info("Pre-registered search_web with chart-aware wrapper")
+            
+            # Register MCP tools (which will use the same wrapper infrastructure)
             tools = await asyncio.wait_for(
                 mcp_client.register_tools(llm), timeout=MCP_CLIENT_TIMEOUT
-            )
+            )         
         finally:
             # Restore original register_function
             if original_register_function is not None:
@@ -70,6 +77,7 @@ async def init_breeze_mcp_tools(
             logger.info(
                 f"Successfully registered MCP tools via pure Pipecat MCP client"
             )
+            logger.info("search_web has been registered alongside MCP tools ")
         else:
             logger.warning(f"MCP client returned None or empty tools object")
 
