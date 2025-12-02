@@ -3,11 +3,9 @@ LangFuse service initialization.
 Handles LangFuse client setup and configuration.
 """
 
-from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Optional
 
 import aiohttp
-from langfuse import Langfuse
 
 from app.core.config.static import (
     LANGFUSE_BASEURL,

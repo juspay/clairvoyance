@@ -14,7 +14,7 @@ from typing import Any, Dict, Optional
 import aiohttp
 
 # Get basic environment variables directly (to avoid circular imports)
-from app.core.config.static import DEVCYCLE_SERVER_KEY, ENVIRONMENT
+from app.core.config.static import DEVCYCLE_SERVER_KEY
 from app.core.logger import logger
 from app.services.live_config.utils import (
     build_variable_mapping,

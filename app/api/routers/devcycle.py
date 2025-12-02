@@ -6,7 +6,6 @@ including webhook handling, health checks, and performance monitoring.
 """
 
 import hmac
-import os
 import time
 from typing import Any, Dict, Optional
 
@@ -17,7 +16,6 @@ from app.core.config.static import DEVCYCLE_WEBHOOK_SECRET
 from app.core.logger import logger
 from app.services.live_config.store import (
     fetch_and_update_feature_flags,
-    get_flag_count,
 )
 
 router = APIRouter()

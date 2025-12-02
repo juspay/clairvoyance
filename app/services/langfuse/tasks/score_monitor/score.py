@@ -15,7 +15,7 @@ from app.core.logger import logger
 from app.database.accessor.breeze_buddy.lead_call_tracker import get_lead_by_call_id
 from app.services.langfuse.client import langfuse_readonly_client
 from app.services.langfuse.trace import fetch_trace
-from app.services.redis import get_redis_service, is_redis_configured
+from app.services.redis import get_redis_service
 from app.services.slack.alert import slack_alert
 
 

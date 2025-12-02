@@ -5,7 +5,6 @@ Endpoints for monitoring system health including Redis connectivity.
 """
 
 import time
-from typing import Any, Dict
 
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse

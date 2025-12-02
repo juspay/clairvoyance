@@ -2,7 +2,6 @@
 Cron manager for handling background tasks.
 """
 
-import json
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional

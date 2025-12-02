@@ -4,7 +4,6 @@ Simplified Redis Client Service
 Basic Redis client for essential key-value operations only.
 """
 
-import os
 from typing import Any, Dict, List, Optional
 
 from redis.asyncio import Redis

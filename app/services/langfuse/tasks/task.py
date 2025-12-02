@@ -5,11 +5,6 @@ This module provides functionality to initialize Langfuse background tasks,
 fetch scores from Langfuse via REST API, and monitor for failures.
 """
 
-from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
-
-import aiohttp
-
 from app.core.config.static import (
     ENABLE_BB_LANGFUSE_MONITORING_LOOP,
     LANGFUSE_EVALUATORS,

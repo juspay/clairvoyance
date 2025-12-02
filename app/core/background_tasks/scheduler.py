@@ -7,13 +7,12 @@ each task at a time.
 """
 
 import asyncio
-import time
 import uuid
 from typing import Callable, Dict, Optional
 
 from app.core.background_tasks.task import BackgroundTask
 from app.core.logger import logger
-from app.services.redis import get_redis_service, is_redis_configured
+from app.services.redis import get_redis_service
 
 
 class BackgroundTaskScheduler:

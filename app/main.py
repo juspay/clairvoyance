@@ -1,7 +1,5 @@
 import asyncio
 import json
-import os
-import signal
 import subprocess
 import uuid
 from contextlib import asynccontextmanager
@@ -43,7 +41,7 @@ from app.core.security.jwt import validate_automatic_request
 from app.core.transport.http_client import create_aiohttp_session
 
 # Database imports
-from app.database import close_db_pool, get_db_connection, init_db_pool
+from app.database import close_db_pool, init_db_pool
 from app.helpers.automatic.daily_room_pool import (
     cleanup_room_pool,
     get_room_pool,
