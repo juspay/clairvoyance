@@ -16,10 +16,11 @@ from fastapi.staticfiles import StaticFiles
 from pipecat.transports.daily.utils import DailyRESTHelper
 
 from app import __version__
-from app.api.routers import automatic, breeze_buddy, devcycle
+from app.api.routers import automatic, breeze_buddy, devcycle, systems
 
 # Import background task scheduler
 from app.core.background_tasks import BackgroundTaskScheduler
+from app.core.config.dynamic import ENABLE_BACKGROUND_TASKS
 from app.core.config.static import (
     BACKGROUND_TASKS_LOOP_INTERVAL_SECONDS,
     BOT_MAX_DRAIN_SECONDS,
@@ -28,7 +29,6 @@ from app.core.config.static import (
     DAILY_ROOM_MAX_POOL_SIZE,
     DAILY_ROOM_POOL_SIZE,
     ENABLE_AUTOMATIC_DAILY_RECORDING,
-    ENABLE_BACKGROUND_TASKS,
     ENABLE_SIGTERM_HANDLER,
     HOST,
     MAX_DAILY_SESSION_LIMIT,
@@ -100,12 +100,18 @@ async def lifespan(_app: FastAPI):
     try:
         if is_redis_configured():
             redis_service = await get_redis_service()
-            await redis_service.ping()  # Test the connection
+            await redis_service.get_client()  # Initialize the client
             logger.info("Redis client initialized successfully")
         else:
             logger.info("Redis not configured - skipping Redis initialization")
     except Exception as e:
         logger.error(f"Failed to initialize Redis client: {e}")
+
+    # DevCycle feature flags are initialized by parent process (run.py) before uvicorn starts
+    # Worker processes only need to read from Redis using get_config()
+    logger.info(
+        "Worker process: DevCycle flags pre-loaded by parent process, reading from Redis"
+    )
 
     # Initialize aiohttp session with proxy support for Daily API
     aiohttp_session = create_aiohttp_session()
@@ -149,7 +155,7 @@ async def lifespan(_app: FastAPI):
 
     # Start background task scheduler if enabled
     global _background_scheduler
-    if ENABLE_BACKGROUND_TASKS:
+    if await ENABLE_BACKGROUND_TASKS():
         try:
             # Create scheduler instance with configurable loop interval
             _background_scheduler = BackgroundTaskScheduler(
@@ -229,6 +235,9 @@ app.include_router(
     automatic.router, prefix="/agent/voice/automatic", tags=["Automatic Agent"]
 )
 app.include_router(devcycle.router, prefix="", tags=["DevCycle"])
+
+# System health endpoints
+app.include_router(systems.router, prefix="", tags=["Systems"])
 
 
 # Pipecat bot endpoint
@@ -397,57 +406,6 @@ async def bot_connect(
 @app.get("/")
 async def get_client_html():
     return FileResponse("static/home.html")
-
-
-# Health check endpoint
-@app.get("/health")
-async def health_check():
-    logger.info("Health check endpoint called")
-    return JSONResponse({"status": "healthy"})
-
-
-# Database health check endpoint
-@app.get("/health/database")
-async def database_health_check():
-    """Check database connectivity and health."""
-    logger.info("Database health check endpoint called")
-    try:
-        async for conn in get_db_connection():
-            result = await conn.fetchval("SELECT 1")
-            if result == 1:
-                return JSONResponse(
-                    {
-                        "status": "healthy",
-                        "database": "connected",
-                        "message": "Database connection is healthy",
-                    }
-                )
-            else:
-                return JSONResponse(
-                    status_code=400,
-                    content={
-                        "status": "unhealthy",
-                        "database": "error",
-                        "message": "Database query returned unexpected result",
-                    },
-                )
-    except Exception as e:
-        logger.error(f"Database health check failed: {e}")
-        return JSONResponse(
-            status_code=400,
-            content={
-                "status": "unhealthy",
-                "database": "disconnected",
-                "message": f"Database connection failed: {str(e)}",
-            },
-        )
-
-
-# Version endpoint
-@app.get("/version")
-async def get_version():
-    """Get application version."""
-    return JSONResponse({"version": __version__})
 
 
 # Drain endpoint for Kubernetes preStop hook

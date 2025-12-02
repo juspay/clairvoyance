@@ -496,10 +496,6 @@ LANGFUSE_EVALUATORS = [
 SLACK_WEBHOOK_URL = os.environ.get("SLACK_WEBHOOK_URL", "")
 SLACK_TAG_USERS = os.environ.get("SLACK_TAG_USERS", "narsimha.reddy")
 
-# Background Tasks Configuration
-ENABLE_BACKGROUND_TASKS = (
-    os.environ.get("ENABLE_BACKGROUND_TASKS", "false").lower() == "true"
-)
 BACKGROUND_TASKS_LOOP_INTERVAL_SECONDS = int(
     os.environ.get("BACKGROUND_TASKS_LOOP_INTERVAL_SECONDS", "60")
 )  # How often the scheduler checks tasks (in seconds)

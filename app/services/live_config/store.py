@@ -26,18 +26,24 @@ from app.services.live_config.utils import (
 from app.services.redis.client import get_redis_service
 
 # Constants
-FEATURE_FLAGS_PREFIX = "devcycle:flags:"
+FEATURE_FLAGS_KEY = "devcycle:flags"
 
-# Global state
+# Init state
 _INITIALIZED = False
 
 
-async def process_feature_variables(
-    feature: dict, variable_mapping: Dict[str, Dict[str, str]], flag_setter_func
-) -> None:
-    """Extract and store variables from the primary variation of a feature."""
+# ---------------------------------------------------------------------------
+#  PROCESS INDIVIDUAL FEATURE VARIABLES
+# ---------------------------------------------------------------------------
 
-    # Get target distribution → find primary variation → exit early if any missing
+
+async def process_feature_variables(
+    feature: dict,
+    variable_mapping: Dict[str, Dict[str, str]],
+    setter,
+) -> None:
+    """Extract variables from the highest-percentage variation."""
+
     targets = feature.get("configuration", {}).get("targets") or []
     if not targets:
         return
@@ -46,330 +52,222 @@ async def process_feature_variables(
     if not distribution:
         return
 
-    # Find highest-percentage variation
-    primary_variation_id = max(distribution, key=lambda d: d.get("percentage", 0)).get(
+    # Highest weight variation
+    primary_var_id = max(distribution, key=lambda d: d.get("percentage", 0)).get(
         "_variation"
     )
-    if not primary_variation_id:
+    if not primary_var_id:
         return
 
-    # Get matching variation
+    # Find variation object
     variations = feature.get("variations") or []
-    primary_variation = next(
-        (v for v in variations if v.get("_id") == primary_variation_id), None
-    )
-    if not primary_variation:
+    primary = next((v for v in variations if v.get("_id") == primary_var_id), None)
+    if not primary:
         return
 
-    # Extract all variables
-    for var in primary_variation.get("variables") or []:
+    for var in primary.get("variables") or []:
         var_id = var.get("_var")
-        var_value = var.get("value")
         if not var_id or var_id not in variable_mapping:
             continue
 
         info = variable_mapping[var_id]
-        normalized_key = normalize_key(info["key"])
-        processed_value = process_devcycle_value(var_value, info["type"])
-        await flag_setter_func(normalized_key, processed_value)
+        key = normalize_key(info["key"])
+        processed_val = process_devcycle_value(var.get("value"), info["type"])
+
+        await setter(key, processed_val)
+
+
+# ---------------------------------------------------------------------------
+#  FETCH + UPDATE FLAGS
+# ---------------------------------------------------------------------------
 
 
 async def fetch_and_update_feature_flags() -> bool:
-    """Fetch DevCycle configuration and update Redis store with diff-based updates."""
+    """Fetch DevCycle config and update Redis (cluster safe)."""
+
     if not DEVCYCLE_SERVER_KEY:
-        logger.warning("DEVCYCLE_SERVER_KEY not configured")
+        logger.warning("DEVCYCLE_SERVER_KEY missing")
         return False
 
     url = f"https://config-cdn.devcycle.com/config/v1/server/{DEVCYCLE_SERVER_KEY}.json"
     timeout = aiohttp.ClientTimeout(total=30)
 
     try:
-        logger.debug(f"Fetching DevCycle config: {url}")
-
-        # ----- Fetch DevCycle JSON -----
         async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.get(
-                url, headers={"Content-Type": "application/json"}
-            ) as resp:
+            async with session.get(url) as resp:
                 if resp.status != 200:
-                    logger.error(f"DevCycle CDN error: {resp.status}")
-                    logger.error(f"Response: {await resp.text()}")
+                    logger.error(
+                        f"DevCycle CDN error {resp.status}: {await resp.text()}"
+                    )
                     return False
                 data = await resp.json()
+        logger.debug("DevCycle config fetched successfully")
+        variables = data.get("variables") or []
+        features = data.get("features") or []
 
-        # ----- Validate Base Payload -----
-        if not isinstance(data, dict):
-            logger.error("DevCycle response is not a dictionary")
-            return False
-
-        # ----- Extract and Validate Variables & Features -----
-        variables = data.get("variables")
-        if not isinstance(variables, list):
-            logger.warning(
-                f"Invalid 'variables' format ({type(variables)}). Expected list."
-            )
-            variables = []
-
-        features = data.get("features")
-        if not isinstance(features, list):
-            logger.warning(
-                f"Invalid 'features' format ({type(features)}). Expected list."
-            )
-            features = []
-
-        # ----- EARLY EXIT — nothing to process -----
         if not variables or not features:
-            logger.info(
-                "No variables or features found. Skipping feature-flag processing."
-            )
+            logger.info("DevCycle response contains no features/variables")
             return False
-
-        # ----- Build New Flags -----
-        new_flags: dict[str, Any] = {}
-
         variable_map = build_variable_mapping(variables)
 
-        async def set_flag(key: str, value: Any) -> bool:
-            new_flags[key] = value
-            return True
+        new_flags: Dict[str, Any] = {}
 
-        for feature in features:
-            if isinstance(feature, dict) and "key" in feature:
-                await process_feature_variables(feature, variable_map, set_flag)
+        async def stash_flag(k, v):
+            new_flags[k] = v
 
-        # ----- Load Old Flags -----
+        for feat in features:
+            if isinstance(feat, dict):
+                await process_feature_variables(feat, variable_map, stash_flag)
+
+        # Load existing from Redis
         old_flags = await _get_all_flags_from_redis()
+        logger.info(f"Old flags from Redis: {old_flags}")
+        logger.debug(
+            f"Loaded {len(old_flags)} existing flags from Redis: {list(old_flags.keys())}"
+        )
+        logger.debug(
+            f"Built {len(new_flags)} new flags from DevCycle: {list(new_flags.keys())}"
+        )
 
-        old_keys = set(old_flags.keys())
-        new_keys = set(new_flags.keys())
-
-        # Diff
-        keys_to_update = {
-            k for k in old_keys & new_keys if old_flags[k] != new_flags[k]
-        }
-        keys_to_add = new_keys - old_keys
-        keys_to_delete = old_keys - new_keys
-
-        total_changes = len(keys_to_update) + len(keys_to_add) + len(keys_to_delete)
-
-        # ----- Nothing Changed -----
-        if total_changes == 0:
-            logger.info(f"No flag changes detected ({len(new_flags)} total flags)")
+        # Check if there are any changes
+        if old_flags == new_flags:
+            logger.info("No DevCycle changes detected")
             return True
 
-        # ----- Apply Redis Updates -----
-        redis_service = await get_redis_service()
-        redis_client = await redis_service.get_client()
-        pipe = redis_client.pipeline(transaction=False)
+        # Store all flags as a single JSON in Redis
+        redis = await get_redis_service()
+        client = await redis.get_client()
 
-        # Add/update
-        for key in keys_to_update | keys_to_add:
-            pipe.set(f"{FEATURE_FLAGS_PREFIX}{key}", json.dumps(new_flags[key]))
-
-        # Delete
-        for key in keys_to_delete:
-            pipe.delete(f"{FEATURE_FLAGS_PREFIX}{key}")
-
-        await pipe.execute()
-
-        # ----- Log Summary -----
-        logger.info(
-            f"DevCycle flags updated: old={len(old_flags)}, new={len(new_flags)}, "
-            f"updated={len(keys_to_update)}, added={len(keys_to_add)}, deleted={len(keys_to_delete)}"
-        )
+        try:
+            await client.set(FEATURE_FLAGS_KEY, json.dumps(new_flags))
+            logger.info(
+                f"DevCycle Flags Updated total={len(new_flags)} flags stored in Redis"
+            )
+        except Exception as e:
+            logger.error(
+                f"FAILED to update feature flags in Redis: {type(e).__name__}: {e}"
+            )
+            raise
 
         return True
 
+    except aiohttp.ClientError as e:
+        logger.error(f"DevCycle HTTP request failed: {type(e).__name__}: {e}")
+        return False
     except Exception as e:
-        logger.exception(f"Error fetching DevCycle feature flags: {e}")
+        logger.error(f"DevCycle update failed at unknown step: {type(e).__name__}: {e}")
+        logger.exception("Full traceback:")
         return False
 
-    except aiohttp.ClientError as e:
-        logger.error(f"DevCycle API request failed: {e}")
-        return False
-    except Exception as e:
-        logger.error(f"DevCycle flag update failed: {e}")
-        return False
+
+# ---------------------------------------------------------------------------
+#  INITIALIZE
+# ---------------------------------------------------------------------------
 
 
 async def initialize_feature_flags() -> None:
-    """Initialize feature flag store from DevCycle API"""
     global _INITIALIZED
-
     if _INITIALIZED:
         return
 
-    # DevCycle can be used in any environment when server key is available
-    if not DEVCYCLE_SERVER_KEY:
-        logger.info(
-            f"DevCycle initialization skipped for environment: {ENVIRONMENT} (no server key)"
-        )
-        logger.info("Using environment variables only when DevCycle is not configured")
-        _INITIALIZED = True
-        return
-
-    logger.info("Initializing DevCycle feature flags...")
+    logger.info("Initializing DevCycle feature flags…")
 
     try:
-        if not DEVCYCLE_SERVER_KEY:
-            logger.info(
-                "No DEVCYCLE_SERVER_KEY found, using environment variables only"
-            )
-        else:
-            success = await fetch_and_update_feature_flags()
-            if success:
-                flag_count = await get_flag_count()
-                store = await get_all_flags()
-                logger.info(f"DevCycle initialized with {flag_count} feature flags")
-                logger.info(f"Store: {store}")
+        if DEVCYCLE_SERVER_KEY:
+            response = await fetch_and_update_feature_flags()
+            if response:
+                logger.info(
+                    f"DevCycle initialized successfully ({await get_flag_count()} flags)"
+                )
             else:
                 logger.error(
-                    "DevCycle initialization failed, using environment variables only"
+                    "DevCycle init failed → falling back to environment variables"
                 )
-
+        else:
+            logger.info("DevCycle disabled (no server key)")
     except Exception as e:
-        logger.error(f"Feature flag initialization failed: {e}")
+        logger.error(f"DevCycle init error: {e}")
 
     _INITIALIZED = True
-    flag_count = await get_flag_count()
-    logger.info(f"Feature flag initialization completed ({flag_count} flags)")
 
 
-async def get_all_flags() -> Dict[str, Any]:
-    """Get all loaded feature flags"""
-    return await _get_all_flags_from_redis()
+# ---------------------------------------------------------------------------
+#  PUBLIC GETTERS
+# ---------------------------------------------------------------------------
 
 
 def is_initialized() -> bool:
-    """Check if feature flags have been initialized"""
     return _INITIALIZED
 
 
 async def get_flag_count() -> int:
-    """Get number of loaded flags"""
-    flags = await _get_all_flags_from_redis()
-    return len(flags)
+    return len(await _get_all_flags_from_redis())
+
+
+async def get_all_flags() -> Dict[str, Any]:
+    return await _get_all_flags_from_redis()
 
 
 async def get_config(key: str, default_value: Any, return_type: type = str) -> Any:
-    """Unified configuration getter with feature flag -> env var -> default fallback"""
+    """Unified: Redis → Environment → Default (async version)"""
+
+    # Always try Redis first (don't check _INITIALIZED to support cross-process reads)
     try:
-        # Only attempt Redis lookup if DevCycle is initialized
-        if not _INITIALIZED:
-            env_result = get_env_value(key, return_type)
-            return env_result if env_result is not None else default_value
-
-        # Try Redis lookup using existing service
-        flag_value = await _get_flag_from_redis(key)
-        if flag_value is not None:
-            converted = convert_type(flag_value, return_type)
+        val = await _get_flag_from_redis(key)
+        if val is not None:
+            converted = convert_type(val, return_type)
             if converted is not None:
+                logger.debug(f"get_config({key}): Retrieved from Redis -> {converted}")
                 return converted
+        else:
+            logger.debug(f"get_config({key}): Not found in Redis, checking environment")
     except Exception as e:
-        logger.debug(f"Redis lookup failed for {key}, using env fallback: {e}")
+        logger.warning(
+            f"get_config({key}): Redis lookup failed: {e}, falling back to environment"
+        )
 
-    # Fallback to environment variables
-    env_result = get_env_value(key, return_type)
-    return env_result if env_result is not None else default_value
+    env_val = get_env_value(key, return_type)
+    if env_val is not None:
+        logger.debug(f"get_config({key}): Retrieved from environment -> {env_val}")
+        return env_val
+
+    logger.debug(f"get_config({key}): Using default value -> {default_value}")
+    return default_value
+
+
+# ---------------------------------------------------------------------------
+#  REDIS OPERATIONS (CLUSTER SAFE)
+# ---------------------------------------------------------------------------
 
 
 async def _get_flag_from_redis(key: str) -> Optional[Any]:
-    """Get a single feature flag from Redis"""
     try:
-        redis_service = await get_redis_service()
-        if not redis_service:
+        redis = await get_redis_service()
+        client = await redis.get_client()
+
+        raw = await client.get(FEATURE_FLAGS_KEY)
+        if not raw:
             return None
-        value_str = await redis_service.get(f"{FEATURE_FLAGS_PREFIX}{key}")
-        return json.loads(value_str) if value_str else None
+
+        all_flags = json.loads(raw)
+        return all_flags.get(key)
     except Exception as e:
-        logger.error(f"Error getting flag {key} from Redis: {e}")
+        logger.error(f"Redis get error for {key}: {e}")
         return None
 
 
-async def _set_flag_in_redis(key: str, value: Any) -> bool:
-    """Set a feature flag in Redis"""
-    try:
-        redis_service = await get_redis_service()
-        if not redis_service:
-            return False
-        return await redis_service.set(
-            f"{FEATURE_FLAGS_PREFIX}{key}", json.dumps(value)
-        )
-    except Exception as e:
-        logger.error(f"Error setting flag {key} in Redis: {e}")
-        return False
-
-
-async def _delete_flag_from_redis(key: str) -> bool:
-    """Delete a feature flag from Redis"""
-    try:
-        redis_service = await get_redis_service()
-        if not redis_service:
-            return False
-
-        redis_client = await redis_service.get_client()
-        await redis_client.delete(f"{FEATURE_FLAGS_PREFIX}{key}")
-        return True
-    except Exception as e:
-        logger.error(f"Error deleting flag {key} from Redis: {e}")
-        return False
-
-
 async def _get_all_flags_from_redis() -> Dict[str, Any]:
-    """Get all feature flags from Redis"""
+    """Load all flags from single Redis key."""
     try:
-        redis_service = await get_redis_service()
-        if not redis_service:
+        redis = await get_redis_service()
+        client = await redis.get_client()
+
+        raw = await client.get(FEATURE_FLAGS_KEY)
+        if not raw:
             return {}
 
-        redis_client = await redis_service.get_client()
+        return json.loads(raw)
 
-        keys = await redis_client.keys(f"{FEATURE_FLAGS_PREFIX}*")
-        if not keys:
-            return {}
-
-        values = await redis_client.mget(keys)
-        result = {}
-
-        for key, value in zip(keys, values):
-            if value:
-                flag_key = key.replace(FEATURE_FLAGS_PREFIX, "")
-                try:
-                    result[flag_key] = json.loads(value)
-                except json.JSONDecodeError:
-                    logger.error(f"Error parsing flag value for {flag_key}")
-
-        return result
     except Exception as e:
-        logger.error(f"Error getting all flags from Redis: {e}")
+        logger.error(f"Error loading all flags: {e}")
         return {}
-
-
-async def _clear_all_flags_in_redis() -> bool:
-    """Clear all feature flags from Redis"""
-    try:
-        redis_service = await get_redis_service()
-        if not redis_service:
-            return False
-
-        redis_client = await redis_service.get_client()
-
-        keys = await redis_client.keys(f"{FEATURE_FLAGS_PREFIX}*")
-        if keys:
-            await redis_client.delete(*keys)
-        return True
-    except Exception as e:
-        logger.error(f"Error clearing flags from Redis: {e}")
-        return False
-
-
-async def _restore_flags_to_redis(flags: Dict[str, Any]) -> bool:
-    """Restore flags to Redis (rollback on failure)"""
-    try:
-        await _clear_all_flags_in_redis()
-        for key, value in flags.items():
-            await _set_flag_in_redis(key, value)
-        return True
-    except Exception as e:
-        logger.error(f"Error restoring flags to Redis: {e}")
-        return False
