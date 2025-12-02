@@ -8,7 +8,7 @@ import os
 from typing import Any, Dict, List, Optional
 
 from redis.asyncio import Redis
-from redis.asyncio.cluster import RedisCluster
+from redis.asyncio.cluster import ClusterNode, RedisCluster
 from redis.exceptions import ConnectionError as RedisConnectionError
 from redis.exceptions import RedisError
 
@@ -58,10 +58,37 @@ class RedisFactory:
         try:
             startup_nodes = self._get_startup_nodes()
 
-            # Single node - use Redis client
-            if len(startup_nodes) == 1:
+            # Determine if we should use cluster mode
+            # Use cluster if: explicitly set OR multiple nodes configured
+            use_cluster = len(startup_nodes) and REDIS_CLUSTER_NODES
+
+            if use_cluster:
+                # CLUSTER MODE
+                logger.info(
+                    f"Initializing Redis CLUSTER with {len(startup_nodes)} node(s): {startup_nodes}"
+                )
+
+                # Convert dict nodes to ClusterNode objects
+                cluster_nodes = [
+                    ClusterNode(host=node["host"], port=node["port"])
+                    for node in startup_nodes
+                ]
+
+                self._cluster_client = RedisCluster(
+                    startup_nodes=cluster_nodes,
+                    decode_responses=True,  # Decode bytes to strings automatically
+                )
+
+                # Test connection
+                await self._cluster_client.ping()
+                logger.info("Redis cluster connection established successfully")
+
+            else:
+                # SINGLE NODE MODE
                 node = startup_nodes[0]
-                logger.info(f"Creating Redis client: {node['host']}:{node['port']}")
+                logger.info(
+                    f"Initializing Redis SINGLE NODE at {node['host']}:{node['port']}"
+                )
 
                 self._single_client = Redis(
                     host=node["host"],
@@ -71,23 +98,16 @@ class RedisFactory:
 
                 # Test connection
                 await self._single_client.ping()
-                logger.info("Redis connection established")
+                logger.info("Redis single-node connection established successfully")
 
-            # Multiple nodes - use Redis cluster
-            else:
-                logger.info(f"Creating Redis cluster with {len(startup_nodes)} nodes")
-
-                self._cluster_client = RedisCluster(
-                    startup_nodes=startup_nodes,
-                    decode_responses=True,  # Decode bytes to strings automatically
-                )
-
-                # Test connection
-                await self._cluster_client.ping()
-                logger.info("Redis cluster connection established")
-
+        except RedisConnectionError as e:
+            logger.error(f"Redis connection failed: {e}", exc_info=True)
+            raise
+        except ValueError as e:
+            logger.error(f"Redis configuration error: {e}")
+            raise
         except Exception as e:
-            logger.error(f"Failed to create Redis client: {e}")
+            logger.error(f"Unexpected error creating Redis client: {e}", exc_info=True)
             raise RedisConnectionError(f"Cannot connect to Redis: {e}") from e
 
     def _get_startup_nodes(self) -> List[Dict[str, Any]]:
@@ -130,15 +150,20 @@ class RedisFactory:
 
     async def close(self) -> None:
         """Close Redis connections"""
-        if self._cluster_client:
-            await self._cluster_client.aclose()
+        try:
+            if self._cluster_client:
+                await self._cluster_client.aclose()
+                self._cluster_client = None
+
+            if self._single_client:
+                await self._single_client.aclose()
+                self._single_client = None
+
+            logger.info("Redis connections closed")
+        except Exception as e:
+            logger.error(f"Error closing Redis connections: {e}", exc_info=True)
             self._cluster_client = None
-
-        if self._single_client:
-            await self._single_client.aclose()
             self._single_client = None
-
-        logger.info("Redis connections closed")
 
 
 class RedisService:
@@ -262,5 +287,5 @@ async def close_redis_connections():
             await _redis_service.close()
             _redis_service = None
         except Exception as e:
-            logger.error(f"Error closing Redis connections: {e}")
+            logger.error(f"Error closing Redis connections: {e}", exc_info=True)
             _redis_service = None  # Reset even if close fails

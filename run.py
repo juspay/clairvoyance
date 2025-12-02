@@ -9,16 +9,56 @@ import os
 
 import uvicorn
 
-# STEP 3: Initialize DevCycle feature flags (after env loaded)
-from app.services.live_config.store import initialize_feature_flags
-
-asyncio.run(initialize_feature_flags())
-
-# STEP 4: Now safe to import config and logger (after feature flags initialized)
+# STEP 3: Now safe to import config and logger
 from app.core.config.static import HOST, PORT, UVICORN_LOG_LEVEL, UVICORN_RELOAD
 from app.core.logger import logger
+from app.services.live_config.store import initialize_feature_flags
+from app.services.redis import (
+    close_redis_connections,
+    get_redis_service,
+    is_redis_configured,
+)
+
+
+async def initialize_devcycle():
+    """Initialize DevCycle and populate Redis before uvicorn starts.
+
+    This ensures all worker processes and subprocesses can read flags from Redis
+    without needing to call DevCycle API themselves.
+    """
+    try:
+        if is_redis_configured():
+            # Initialize Redis connection
+            redis_service = await get_redis_service()
+            await redis_service.get_client()  # Initialize the client
+            logger.info("Parent process: Redis connection established")
+
+            # Initialize DevCycle and populate Redis
+            await initialize_feature_flags()
+            logger.info(
+                "Parent process: DevCycle feature flags initialized and stored in Redis"
+            )
+
+            # Close Redis connection (workers will create their own)
+            await close_redis_connections()
+            logger.info(
+                "Parent process: Redis connection closed (workers will create new connections)"
+            )
+        else:
+            logger.warning(
+                "Parent process: Redis not configured - DevCycle flags will use environment variables only"
+            )
+    except Exception as e:
+        logger.error(f"Parent process: Failed to initialize DevCycle: {e}")
+        logger.warning("Parent process: Continuing with environment variable fallback")
+
 
 if __name__ == "__main__":
+    # STEP 4: Initialize DevCycle in parent process before starting uvicorn
+    logger.info("Parent process: Initializing DevCycle before starting workers...")
+    asyncio.run(initialize_devcycle())
+
+    # STEP 5: Start uvicorn server (will spawn worker processes)
     logger.info(f"Starting Uvicorn server on {HOST}:{PORT}")
     logger.info(f"Reload enabled: {UVICORN_RELOAD}")
     logger.info(f"Log level: {UVICORN_LOG_LEVEL}")
