@@ -4,7 +4,6 @@ Slack Alert Integration
 This module provides functionality to send alerts to Slack via webhooks.
 """
 
-import json
 from typing import Dict, List, Optional
 
 import aiohttp

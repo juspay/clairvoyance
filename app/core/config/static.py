@@ -332,17 +332,17 @@ JWT_ACCESS_TOKEN_EXPIRE_MINUTES = int(
 LIGHTHOUSE_JWT_SECRET = os.getenv("LIGHTHOUSE_JWT_SECRET", "")
 ENABLE_LIGHTHOUSE_AUTH = os.getenv("ENABLE_LIGHTHOUSE_AUTH", "false").lower() == "true"
 
-BREEZE_BUDDY_VAD_CONFIDENCE = os.getenv(
-    "BREEZE_BUDDY_VAD_CONFIDENCE", 0.7
+BREEZE_BUDDY_VAD_CONFIDENCE = float(
+    os.getenv("BREEZE_BUDDY_VAD_CONFIDENCE", "0.7")
 )  # Require stronger confidence
-BREEZE_BUDDY_VAD_START_SECS = os.getenv(
-    "BREEZE_BUDDY_VAD_START_SECS", 0.2
+BREEZE_BUDDY_VAD_START_SECS = float(
+    os.getenv("BREEZE_BUDDY_VAD_START_SECS", "0.2")
 )  # Pick up quicker
-BREEZE_BUDDY_VAD_STOP_SECS = os.getenv(
-    "BREEZE_BUDDY_VAD_STOP_SECS", 0.8
+BREEZE_BUDDY_VAD_STOP_SECS = float(
+    os.getenv("BREEZE_BUDDY_VAD_STOP_SECS", "0.8")
 )  # Allow small pauses
-BREEZE_BUDDY_VAD_MIN_VOLUME = os.getenv(
-    "BREEZE_BUDDY_VAD_MIN_VOLUME", 0.6
+BREEZE_BUDDY_VAD_MIN_VOLUME = float(
+    os.getenv("BREEZE_BUDDY_VAD_MIN_VOLUME", "0.6")
 )  # More tolerant for soft voice
 BREEZE_BUDDY_STT_SERVICE = os.getenv(
     "BREEZE_BUDDY_STT_SERVICE", "soniox"
@@ -443,9 +443,9 @@ ENABLE_BREEZE_BUDDY_USER_INTERRUPTION = (
     os.environ.get("ENABLE_BREEZE_BUDDY_USER_INTERRUPTION", "false").lower() == "true"
 )
 
-ENABLE_BREEZE_BUDDY_VERIFY_ORDER_PRE_ACTIONS = (
-    os.environ.get("ENABLE_BREEZE_BUDDY_VERIFY_ORDER_PRE_ACTIONS", "false").lower()
-    == "true"
+BREEZE_BUDDY_PRE_ACTION_SPEAK_MESSAGE = os.environ.get(
+    "BREEZE_BUDDY_PRE_ACTION_SPEAK_MESSAGE",
+    "Okay",
 )
 
 # Dashboard Authentication

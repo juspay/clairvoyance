@@ -6,11 +6,11 @@ Handles all Juspay analytics data using the generic aggregator
 from typing import Any, Dict, List, Optional
 
 try:
-    from .aggregator import aggregate_data, get_data_indices
+    from .aggregator import get_data_indices
     from .juspay_data import ACME_JUSPAY_DATA
 except ImportError:
     # Fallback for direct execution
-    from aggregator import aggregate_data, get_data_indices
+    from aggregator import get_data_indices
     from juspay_data import ACME_JUSPAY_DATA
 
 

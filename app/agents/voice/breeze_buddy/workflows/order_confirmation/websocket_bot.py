@@ -10,6 +10,7 @@ from fastapi import WebSocket
 from opentelemetry import trace
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.vad.vad_analyzer import VADParams
+from pipecat.frames.frames import TTSSpeakFrame
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
@@ -46,6 +47,7 @@ from app.core.config.static import (
     AZURE_BREEZE_BUDDY_OPENAI_MODEL,
     AZURE_OPENAI_API_KEY,
     AZURE_OPENAI_ENDPOINT,
+    BREEZE_BUDDY_PRE_ACTION_SPEAK_MESSAGE,
     BREEZE_BUDDY_VAD_CONFIDENCE,
     BREEZE_BUDDY_VAD_MIN_VOLUME,
     BREEZE_BUDDY_VAD_START_SECS,
@@ -56,11 +58,8 @@ from app.core.config.static import (
     ELEVENLABS_VOICE_SPEED,
     ENABLE_BREEZE_BUDDY_TRACING,
     ENABLE_BREEZE_BUDDY_USER_INTERRUPTION,
-    ENABLE_BREEZE_BUDDY_VERIFY_ORDER_PRE_ACTIONS,
-    ORDER_CONFIRMATION_WEBHOOK_SECRET_KEY,
 )
 from app.core.logger import logger
-from app.core.security.sha import calculate_hmac_sha256
 from app.database.accessor import get_lead_by_call_id, update_lead_call_initiated_time
 from app.schemas import CallProvider, LeadCallOutcome
 
@@ -448,7 +447,23 @@ class OrderConfirmationBot:
         """Mute STT by setting VAD confidence to 1.0 before terminal nodes"""
         if self.vad_analyzer:
             self.vad_analyzer.params.confidence = 1.0
-            logger.info("STT muted via pre-action for terminal node")
+            logger.info("STT muted via VAD")
+
+    async def _unmute_stt_handler(self, flow_manager, args):
+        """Unmute STT by setting VAD confidence to BREEZE_BUDDY_VAD_CONFIDENCE"""
+        if self.vad_analyzer:
+            self.vad_analyzer.params.confidence = BREEZE_BUDDY_VAD_CONFIDENCE
+            logger.info("STT unmuted via VAD")
+
+    async def _speak_message_handler(self, flow_manager, args):
+        """Speak 'okay' before order verification using TTS"""
+        try:
+            await self.task.queue_frame(
+                TTSSpeakFrame(text=BREEZE_BUDDY_PRE_ACTION_SPEAK_MESSAGE)
+            )
+            logger.info("Queued TTS frame: 'okay' before order verification")
+        except Exception as e:
+            logger.error(f"Failed to queue TTS frame: {e}")
 
     async def _end_conversation_handler(self, flow_manager, args):
         if not self.conversation_ended:
@@ -766,6 +781,11 @@ class OrderConfirmationBot:
         # Build verify_order_details node configuration with conditional pre_actions
         verify_order_details_config = {
             "name": "verify_order_details",
+            "pre_actions": [
+                {"type": "function", "handler": self._speak_message_handler},
+                {"type": "function", "handler": self._mute_stt_handler},
+            ],
+            "post_actions": [{"type": "function", "handler": self._unmute_stt_handler}],
             "task_messages": [
                 {
                     "role": "system",
@@ -774,12 +794,6 @@ class OrderConfirmationBot:
             ],
             "functions": order_functions,
         }
-
-        # Only add pre_actions if environment variable is enabled
-        if ENABLE_BREEZE_BUDDY_VERIFY_ORDER_PRE_ACTIONS:
-            verify_order_details_config["pre_actions"] = [
-                {"type": "tts_say", "text": "Okay."}
-            ]
 
         return {
             "initial_node": "initial",
