@@ -1,5 +1,7 @@
 import uuid
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, cast
+
+from openai.types.chat import ChatCompletionMessageParam
 
 from app.agents.voice.automatic.features.hitl.hitl import get_hitl_manager
 from app.agents.voice.automatic.features.hitl.utils import is_dangerous_operation
@@ -119,12 +121,14 @@ class LLMServiceWrapper:
                             )
                         raise
 
-                self._original_register_function(name, wrapped_function)
+                if self._original_register_function:
+                    self._original_register_function(name, wrapped_function)
             else:
-                self._original_register_function(name, function)
+                if self._original_register_function:
+                    self._original_register_function(name, function)
         else:
-
-            self._original_register_function(name, function)
+            if self._original_register_function:
+                self._original_register_function(name, function)
 
     def create_summarizing_context(
         self,
@@ -132,8 +136,11 @@ class LLMServiceWrapper:
         tools: Optional[List[Dict[str, Any]]] = None,
     ) -> ContextSummarizer:
         """Create a summarizing context with the given parameters"""
+        # Convert messages to proper ChatCompletionMessageParam format
+        formatted_messages = cast(List[ChatCompletionMessageParam], messages)
+
         context = ContextSummarizer(
-            messages=messages,
+            messages=formatted_messages,
             tools=tools,
             llm_service=self._llm_service,
             max_turns_before_summary=MAX_TURNS_BEFORE_SUMMARY,

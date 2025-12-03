@@ -92,8 +92,11 @@ async def _make_breeze_request(params: FunctionCallParams, operational_tab: str)
     headers = {
         "Content-Type": "application/json",
         "accept": "*/*",
-        "x-auth-token": breeze_token,
     }
+
+    # Only add headers if values are not None
+    if breeze_token:
+        headers["x-auth-token"] = breeze_token
 
     if sessionId:
         headers["x-session-id"] = sessionId
@@ -222,8 +225,11 @@ async def get_breeze_marketing_data(params: FunctionCallParams):
     headers = {
         "Content-Type": "application/json",
         "accept": "*/*",
-        "x-auth-token": breeze_token,
     }
+
+    # Only add auth token if not None
+    if breeze_token:
+        headers["x-auth-token"] = breeze_token
 
     logger.info(f"Requesting Breeze marketing data with payload: {json.dumps(payload)}")
 
@@ -325,8 +331,11 @@ async def get_breeze_address_data(params: FunctionCallParams):
     headers = {
         "Content-Type": "application/json",
         "accept": "*/*",
-        "x-auth-token": breeze_token,
     }
+
+    # Only add auth token if not None
+    if breeze_token:
+        headers["x-auth-token"] = breeze_token
 
     logger.info(f"Requesting Breeze address data with payload: {json.dumps(payload)}")
 

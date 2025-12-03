@@ -194,7 +194,11 @@ def get_stt_service(voice_name: Optional[str] = None):
             punctuate=DEEPGRAM_PUNCTUATE,
             endpointing=DEEPGRAM_ENDPOINTING,  # Smart turn detection
             vad_events=DEEPGRAM_VAD_EVENTS,  # Built-in VAD
-            utterance_end_ms=DEEPGRAM_UTTERANCE_END_MS,
+            utterance_end_ms=(
+                str(DEEPGRAM_UTTERANCE_END_MS)
+                if DEEPGRAM_UTTERANCE_END_MS is not None
+                else None
+            ),
             no_delay=DEEPGRAM_NO_DELAY,  # Real-time processing
             interim_results=True,
             profanity_filter=DEEPGRAM_PROFANITY_FILTER,
@@ -242,6 +246,10 @@ def get_stt_service(voice_name: Optional[str] = None):
             f"VAD force endpoint: {SONIOX_VAD_FORCE_TURN_ENDPOINT}, "
             f"non_final_tokens: {SONIOX_ENABLE_NON_FINAL_TOKENS}"
         )
+        if not SONIOX_API_KEY:
+            logger.error("Soniox API key is not configured")
+            raise ValueError("Soniox API key is required for Soniox STT")
+
         return SonioxSTTService(
             api_key=SONIOX_API_KEY,
             params=soniox_params,

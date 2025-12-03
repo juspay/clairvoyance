@@ -47,9 +47,11 @@ class InterceptHandler(logging.Handler):
 
         # Find caller from where originated the logged message
         frame, depth = logging.currentframe(), 2
-        while frame.f_code.co_filename == logging.__file__:
+        while frame and frame.f_code.co_filename == logging.__file__:
             frame = frame.f_back
             depth += 1
+            if frame is None:
+                break
 
         logger.opt(depth=depth, exception=record.exc_info).log(
             level, record.getMessage()
@@ -151,7 +153,7 @@ def _setup_logger_sinks(
         )
 
 
-def configure_session_logger(session_id: str, client_sid: str = None):
+def configure_session_logger(session_id: str, client_sid: str | None = None):
     """
     Configure the logger to automatically include session_id and client_sid in all log entries.
     This should be called once at the start of a subprocess.

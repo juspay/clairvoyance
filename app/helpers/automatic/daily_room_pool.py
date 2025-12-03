@@ -51,7 +51,7 @@ class DailyRoom:
         user_token: str,
         bot_token: str,
         exp_timestamp: float,
-        token_exp_timestamp: float = None,
+        token_exp_timestamp: Optional[float] = None,
     ):
         self.room_url = room_url
         self.user_token = user_token

@@ -117,8 +117,16 @@ async def callback_details(
         logger.info(
             f"Extracted recording_url: {provider_recording_url} and call_sid: {call_sid}"
         )
+        # Ensure call_sid is a string
+        call_sid_str = str(call_sid) if call_sid else ""
+        provider_recording_url_str = (
+            str(provider_recording_url) if provider_recording_url else ""
+        )
         background_tasks.add_task(
-            update_call_recording, call_sid, provider_recording_url, provider.lower()
+            update_call_recording,
+            call_sid_str,
+            provider_recording_url_str,
+            provider.lower(),
         )
 
     return Response(status_code=200)
@@ -146,8 +154,16 @@ async def callback_details_post(
         logger.info(
             f"Extracted recording_url: {provider_recording_url} and call_sid: {call_sid}"
         )
+        # Ensure parameters are strings
+        call_sid_str = str(call_sid) if call_sid else ""
+        provider_recording_url_str = (
+            str(provider_recording_url) if provider_recording_url else ""
+        )
         background_tasks.add_task(
-            update_call_recording, call_sid, provider_recording_url, provider.lower()
+            update_call_recording,
+            call_sid_str,
+            provider_recording_url_str,
+            provider.lower(),
         )
 
     return Response(status_code=200)
@@ -175,7 +191,10 @@ async def callback_status(request: Request, provider: str):
 
     if call_status in ("no-answer", "failed", "busy"):
         logger.info(f"Call with SID {call_sid} failed with status: {call_status}")
-        await handle_unanswered_calls(call_sid)
+        # Ensure call_sid is a string
+        if call_sid:
+            call_sid_str = str(call_sid)
+            await handle_unanswered_calls(call_sid_str)
 
     return Response(status_code=200)
 
@@ -224,7 +243,7 @@ async def add_outbound_number(
 
 @router.get("/outbound-number")
 async def get_outbound_number(
-    id: str = None, current_user: TokenData = Depends(get_current_user)
+    id: Optional[str] = None, current_user: TokenData = Depends(get_current_user)
 ):
     """
     Gets an outbound number from the database based on the provided query parameters.
@@ -395,9 +414,19 @@ async def telephony_websocket_handler(
 
     async with create_aiohttp_session() as session:
         try:
-            provider = get_voice_provider(service_provider.upper(), session)
+            # Convert string to CallProvider enum
+            from app.schemas import CallProvider
+
+            try:
+                call_provider_enum = CallProvider(service_provider.upper())
+            except ValueError:
+                logger.error(f"Invalid service provider: {service_provider}")
+                await websocket.close(code=1003, reason="Unsupported service provider")
+                return
+
+            provider = get_voice_provider(call_provider_enum, session)
             provider.set_completion_callback(handle_call_completion)
-            await provider.handle_websocket(websocket, service_provider.upper())
+            await provider.handle_websocket(websocket, call_provider_enum)
         except WebSocketDisconnect:
             logger.warning("WebSocket client disconnected.")
         except Exception as e:
@@ -442,7 +471,7 @@ async def add_call_execution_config(
             calling_provider=config.calling_provider,
             merchant_id=config.merchant_id,
             workflow=config.workflow,
-            shop_identifier=config.shop_identifier,
+            shop_identifier=config.shop_identifier or "",
             enable_international_call=config.enable_international_call,
         )
 
@@ -815,10 +844,12 @@ async def get_call_details(
         items.append(
             {
                 "id": t.id,
-                "order_id": t.payload.get("order_id"),
-                "customer_name": t.payload.get("customer_name"),
-                "shop_name": t.payload.get("shop_name"),
-                "customer_mobile_number": t.payload.get("customer_mobile_number"),
+                "order_id": t.payload.get("order_id") if t.payload else None,
+                "customer_name": t.payload.get("customer_name") if t.payload else None,
+                "shop_name": t.payload.get("shop_name") if t.payload else None,
+                "customer_mobile_number": (
+                    t.payload.get("customer_mobile_number") if t.payload else None
+                ),
                 "outcome": t.outcome.value if t.outcome else "N/A",
                 "created_at": t.call_initiated_time,
                 "call_id": t.call_id,

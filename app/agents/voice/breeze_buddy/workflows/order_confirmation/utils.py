@@ -130,6 +130,11 @@ def load_audio(audio_path) -> OutputAudioRawFrame | None:
             # Get raw audio data
             raw_audio_data = audio_segment.raw_data
 
+            # Check if raw_audio_data is None
+            if raw_audio_data is None:
+                logger.warning("Raw audio data is None, cannot create audio frame")
+                return None
+
             # Create OutputAudioRawFrame with correct parameters
             audio_sound = OutputAudioRawFrame(
                 audio=raw_audio_data,

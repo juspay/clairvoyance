@@ -1,4 +1,13 @@
+from typing import List, Union
+
+from pipecat.adapters.schemas.function_schema import FunctionSchema
 from pipecat.adapters.schemas.tools_schema import ToolsSchema
+
+try:
+    from pipecat.adapters.schemas.direct_function import DirectFunction
+except ImportError:
+    # Fallback if DirectFunction is not available
+    DirectFunction = FunctionSchema
 
 from app.agents.voice.automatic.tools.utils import filter_tools_by_authorization
 from app.agents.voice.automatic.types import Mode
@@ -51,7 +60,7 @@ def initialize_tools(
 
     logger.info(f"Initializing tools in '{mode}' mode with providers: {providers}")
     logger.info(f"Shop context: id={shop_id}, url={shop_url}, type={shop_type}")
-    all_tools = []
+    all_tools: List[Union[DirectFunction, FunctionSchema]] = []
     all_tool_functions = {}
 
     # System tools are always available

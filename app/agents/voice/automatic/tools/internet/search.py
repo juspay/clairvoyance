@@ -3,7 +3,7 @@ from datetime import datetime
 from google.genai.types import GenerateContentConfig
 from pipecat.adapters.schemas.function_schema import FunctionSchema
 from pipecat.adapters.schemas.tools_schema import ToolsSchema
-from pipecat.services.google.llm import GoogleLLMContext, GoogleLLMService
+from pipecat.services.google.llm import GoogleLLMService
 from pipecat.services.llm_service import FunctionCallParams
 
 from app.core.config.static import GEMINI_API_KEY, GEMINI_SEARCH_RESULT_API_MODEL
@@ -31,12 +31,10 @@ async def gemini_search_fn(params: FunctionCallParams):
     logger.info(f"Performing Gemini search for query: {query}")
 
     try:
-        ctx = GoogleLLMContext(messages=[{"role": "user", "content": query}])
-
         # Include current date in system message to provide context for the search
         current_date = datetime.now().strftime("%Y-%m-%d")
 
-        ctx.system_message = (
+        system_instruction = (
             f"You are a helpful assistant that will always search the web for up-to-date information. "
             f"The current date is {current_date}. "
             f"Your responses must be concise—no more than 50 words—while maximizing useful detail and clarity. "
@@ -44,27 +42,32 @@ async def gemini_search_fn(params: FunctionCallParams):
             f"Avoid filler or repetition. Get straight to the point."
         )
 
-        ctx._restructure_from_openai_messages()
+        # Use proper message format for Google API
+        messages = query
 
         config = GenerateContentConfig(
             tools=gemini_llm._tools,
-            system_instruction=ctx.system_message,
+            system_instruction=system_instruction,
         )
 
         response = await gemini_llm._client.aio.models.generate_content_stream(
             model=gemini_llm._model_name,
-            contents=ctx.messages,
+            contents=messages,
             config=config,
         )
 
         # Collect the generated text
-        result_parts = []
+        result_parts: list[str] = []
 
         async for chunk in response:
-            for candidate in chunk.candidates:
-                for part in candidate.content.parts:
-                    if part.text:
-                        result_parts.append(part.text)
+            if chunk.candidates:  # Check if candidates exists
+                for candidate in chunk.candidates:
+                    if (
+                        candidate.content and candidate.content.parts
+                    ):  # Check if content and parts exist
+                        for part in candidate.content.parts:
+                            if hasattr(part, "text") and part.text:
+                                result_parts.append(part.text)
 
         full_result = "".join(result_parts).strip()
 

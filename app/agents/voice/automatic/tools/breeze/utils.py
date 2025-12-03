@@ -7,7 +7,7 @@ import json
 import re
 import time
 from typing import Any, Dict, Optional
-from urllib.parse import urlparse
+from urllib.parse import ParseResult, urlparse
 
 import httpx
 
@@ -22,7 +22,7 @@ from app.core.transport.http_client import create_http_client
 from ..utils import _rupees_to_paisa
 
 
-def safe_construct_url(url: str) -> Optional[urlparse]:
+def safe_construct_url(url: str) -> Optional[ParseResult]:
     """
     Safely parse a URL string into a urlparse object.
 
@@ -409,9 +409,17 @@ def process_surcharge_input_rules(rules, payment_type, payment_method_type):
         original_max = current_rule.get("maximumOrderValue")
         next_min = next_rule.get("minimumOrderValue")
 
-        if original_max is not None:
-            adjusted_max = next_min - 0.01
-            current_rule["maximumOrderValue"] = adjusted_max
+        if original_max is not None and next_min is not None:
+            # Ensure next_min is a number
+            try:
+                next_min_float = float(next_min) if next_min is not None else 0.0
+                adjusted_max = next_min_float - 0.01
+                current_rule["maximumOrderValue"] = adjusted_max
+            except (ValueError, TypeError):
+                logger.warning(
+                    f"Invalid next_min value: {next_min}, skipping adjustment"
+                )
+                continue
 
     # STEP 2: Handle the last rule - handle defined max for both single and multiple rules
     if len(result) > 0:
@@ -419,8 +427,14 @@ def process_surcharge_input_rules(rules, payment_type, payment_method_type):
         original_max = last_rule.get("maximumOrderValue")
 
         if original_max is not None:
-            # Store original max for creating the unlimited rule
-            stored_max = original_max
+            # Store original max for creating the unlimited rule, ensuring it's a float
+            try:
+                stored_max = float(original_max)
+            except (ValueError, TypeError):
+                logger.warning(
+                    f"Invalid original_max value: {original_max}, treating as 0"
+                )
+                stored_max = 0.0
             # Adjust the last rule max
             last_rule["maximumOrderValue"] = stored_max - 0.01
 

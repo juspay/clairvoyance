@@ -259,6 +259,11 @@ class VoiceAgentPool:
                 )
 
             try:
+                if not voice_process.process.stdout:
+                    raise RuntimeError(
+                        f"Process {voice_process.process_id} stdout is not available"
+                    )
+
                 ready_line = await asyncio.wait_for(
                     voice_process.process.stdout.readline(), timeout=0.5
                 )
@@ -298,6 +303,12 @@ class VoiceAgentPool:
         try:
             while voice_process.is_healthy():
                 try:
+                    if not voice_process.process.stdout:
+                        logger.warning(
+                            f"Process {voice_process.process_id} stdout is not available"
+                        )
+                        break
+
                     line = await asyncio.wait_for(
                         voice_process.process.stdout.readline(), timeout=2.0
                     )

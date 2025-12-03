@@ -187,10 +187,10 @@ def handle_genius_response(func):
 
 
 @handle_genius_response
-def get_sr_success_rate_by_time(params: FunctionCallParams) -> GeniusApiResponse:
+async def get_sr_success_rate_by_time(params: FunctionCallParams) -> GeniusApiResponse:
     logger.info(f"Fetching real-time SR success rate with params: {params.arguments}")
     payload_details = {"dimensions": [], "domain": "kvorders", "metric": "success_rate"}
-    return _make_genius_api_request(params, payload_details)
+    return await _make_genius_api_request(params, payload_details)
 
 
 async def get_payment_analytics_by_dimension(params: FunctionCallParams):
@@ -357,7 +357,7 @@ async def list_offers_by_filter(params: FunctionCallParams):
 
 
 @handle_genius_response
-def get_failure_transactional_data_by_time(
+async def get_failure_transactional_data_by_time(
     params: FunctionCallParams,
 ) -> GeniusApiResponse:
     logger.info(f"Fetching real-time failure data with params: {params.arguments}")
@@ -386,11 +386,11 @@ def get_failure_transactional_data_by_time(
         },
         "metric": "order_with_transactions",
     }
-    return _make_genius_api_request(params, payload_details)
+    return await _make_genius_api_request(params, payload_details)
 
 
 @handle_genius_response
-def get_success_transactional_data_by_time(
+async def get_success_transactional_data_by_time(
     params: FunctionCallParams,
 ) -> GeniusApiResponse:
     logger.info(f"Fetching real-time success data with params: {params.arguments}")
@@ -400,7 +400,7 @@ def get_success_transactional_data_by_time(
         "filters": {"condition": "In", "field": "payment_status", "val": ["SUCCESS"]},
         "metric": "success_volume",
     }
-    return _make_genius_api_request(params, payload_details)
+    return await _make_genius_api_request(params, payload_details)
 
 
 async def get_gmv_order_value_payment_method_wise_by_time(params: FunctionCallParams):
@@ -462,7 +462,7 @@ async def get_gmv_order_value_payment_method_wise_by_time(params: FunctionCallPa
 
 
 @handle_genius_response
-def get_average_ticket_payment_wise_by_time(
+async def get_average_ticket_payment_wise_by_time(
     params: FunctionCallParams,
 ) -> GeniusApiResponse:
     logger.info(
@@ -473,7 +473,7 @@ def get_average_ticket_payment_wise_by_time(
         "domain": "kvorders",
         "metric": "avg_ticket_size",
     }
-    return _make_genius_api_request(params, payload_details)
+    return await _make_genius_api_request(params, payload_details)
 
 
 async def create_euler_offer(params: FunctionCallParams):
@@ -598,6 +598,8 @@ async def create_euler_offer(params: FunctionCallParams):
             ist = pytz.timezone("Asia/Kolkata")
 
             # Parse start_date from IST format and convert to ISO
+            if not start_date:
+                raise ValueError("Start date is required")
             start_date_ist = ist.localize(
                 datetime.strptime(start_date, "%Y-%m-%d %H:%M:%S")
             )
@@ -941,8 +943,10 @@ async def delete_euler_offer(params: FunctionCallParams):
     Deletes a promotional offer from the Euler platform based on its offer code.
     This permanently removes the offer and cannot be undone.
     """
+    # Extract offer_code early to ensure it's available in exception handlers
+    offer_code = params.arguments.get("offerCode")
+
     try:
-        offer_code = params.arguments.get("offerCode")
 
         if not offer_code:
             await params.result_callback({"error": "Missing required field: offerCode"})
@@ -1056,8 +1060,10 @@ async def update_euler_offer(params: FunctionCallParams):
     This function handles status changes (PAUSED/EXPIRED/ACTIVE) and offer modifications.
     When discount value is updated, the offer title and description are automatically updated to match.
     """
+    # Extract offer_code early to ensure it's available in exception handlers
+    offer_code = params.arguments.get("offerCode")
+
     try:
-        offer_code = params.arguments.get("offerCode")
 
         if not offer_code:
             await params.result_callback({"error": "Missing required field: offerCode"})
@@ -1625,33 +1631,32 @@ async def update_euler_offer(params: FunctionCallParams):
         )
 
 
-time_input_schema = {
-    "type": "object",
-    "properties": {
-        "startTime": {
-            "type": "string",
-            "description": "The start time for the analysis in IST format 'YYYY-MM-DD HH:MM:SS'. This is mandatory.",
-        },
-        "endTime": {
-            "type": "string",
-            "description": "The end time for the analysis in IST format 'YYYY-MM-DD HH:MM:SS'. Defaults to the current time if not provided.",
-        },
+# Time input properties and required fields for analytics tools
+TIME_INPUT_PROPERTIES = {
+    "startTime": {
+        "type": "string",
+        "description": "The start time for the analysis in IST format 'YYYY-MM-DD HH:MM:SS'. This is mandatory.",
     },
-    "required": ["startTime", "endTime"],
+    "endTime": {
+        "type": "string",
+        "description": "The end time for the analysis in IST format 'YYYY-MM-DD HH:MM:SS'. Defaults to the current time if not provided.",
+    },
 }
+
+TIME_INPUT_REQUIRED = ["startTime", "endTime"]
 
 get_sr_success_rate_function = FunctionSchema(
     name="get_sr_success_rate_by_time",
     description="Get the overall payment success rate for all transactions within a specified time range. Use this to understand the general health of the payment system. Default to today if no timeframe specified.",
-    properties=time_input_schema["properties"],
-    required=time_input_schema["required"],
+    properties=TIME_INPUT_PROPERTIES,
+    required=TIME_INPUT_REQUIRED,
 )
 
 payment_analytics_by_dimension_function = FunctionSchema(
     name="get_payment_analytics_by_dimension",
     description="Retrieves time-bound KPIs—total transaction volume, success rate, and transaction count—broken down by the selected dimension. Useful to analyze performance by gateway, instrument category, or specific instrument type (e.g., Visa, Mastercard). Always aim to extract as many dimensions as possible for a comprehensive snapshot. Default to today if no timeframe specified.",
     properties={
-        **time_input_schema["properties"],
+        **TIME_INPUT_PROPERTIES,
         "dimension": {
             "type": "string",
             "description": "How to slice the data: 'payment_gateway' for each gateway (Stripe, Razorpay), 'payment_instrument_overview' for high-level groups (Credit, Debit, UPI, Wallet), or 'payment_instrument_breakdown' for granular types (Visa, Mastercard, UPI-Collect, Rupay, etc.). Choose the most specific level containing the metric you need.",
@@ -1668,36 +1673,36 @@ payment_analytics_by_dimension_function = FunctionSchema(
 failure_transactional_data_function = FunctionSchema(
     name="get_failure_transactional_data_by_time",
     description="Get a list of the top transaction failure reasons and the payment methods they occurred on within a specified time range. Use this to diagnose the most common payment issues. Default to today if no timeframe specified.",
-    properties=time_input_schema["properties"],
-    required=time_input_schema["required"],
+    properties=TIME_INPUT_PROPERTIES,
+    required=TIME_INPUT_REQUIRED,
 )
 
 success_transactional_data_function = FunctionSchema(
     name="get_success_transactional_data_by_time",
     description="Get the total count of successful transactions for each payment method within a specified time range. Use this to see which payment methods are most popular. Default to today if no timeframe specified.",
-    properties=time_input_schema["properties"],
-    required=time_input_schema["required"],
+    properties=TIME_INPUT_PROPERTIES,
+    required=TIME_INPUT_REQUIRED,
 )
 
 gmv_order_value_payment_method_wise_function = FunctionSchema(
     name="get_gmv_order_value_payment_method_wise_by_time",
     description="Get the total Gross Merchandise Value (GMV) for each payment method within a specified time range. The results can be summed to calculate the total payment method GMV/sales. Use this to understand the revenue contribution of each payment method and the overall sales performance. Default to today if no timeframe specified.",
-    properties=time_input_schema["properties"],
-    required=time_input_schema["required"],
+    properties=TIME_INPUT_PROPERTIES,
+    required=TIME_INPUT_REQUIRED,
 )
 
 average_ticket_payment_wise_function = FunctionSchema(
     name="get_average_ticket_payment_wise_by_time",
     description="Get the average transaction value (ticket size) for each payment method within a specified time range. Use this to analyze customer spending habits across different payment options. Default to today if no timeframe specified.",
-    properties=time_input_schema["properties"],
-    required=time_input_schema["required"],
+    properties=TIME_INPUT_PROPERTIES,
+    required=TIME_INPUT_REQUIRED,
 )
 
 merchant_offer_analytics_function = FunctionSchema(
     name="merchant_offer_analytics",
     description="Fetches a list of all active merchant offers and their performance data. Use this to find out what the current offers are, how they are performing, and to diagnose any errors related to offer application. Default to today if no timeframe specified.",
-    properties=time_input_schema["properties"],
-    required=time_input_schema["required"],
+    properties=TIME_INPUT_PROPERTIES,
+    required=TIME_INPUT_REQUIRED,
 )
 
 create_euler_offer_function = FunctionSchema(

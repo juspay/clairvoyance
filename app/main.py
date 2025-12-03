@@ -141,8 +141,9 @@ async def lifespan(_app: FastAPI):
 
         # Set up callbacks to avoid circular imports
         pool = get_voice_agent_pool()
-        pool.room_cleanup_callback = room_cleanup_callback
-        pool.session_cleanup_callback = session_cleanup_callback
+        # Type ignore for dynamic callback assignment
+        pool.room_cleanup_callback = room_cleanup_callback  # type: ignore
+        pool.session_cleanup_callback = session_cleanup_callback  # type: ignore
 
         logger.info("Voice agent process pool initialized with callbacks")
 
@@ -313,8 +314,11 @@ async def bot_connect(
             }
 
             config_json = json.dumps(session_config) + "\n"
-            voice_process.process.stdin.write(config_json.encode("utf-8"))
-            await voice_process.process.stdin.drain()
+            if voice_process.process.stdin:
+                voice_process.process.stdin.write(config_json.encode("utf-8"))
+                await voice_process.process.stdin.drain()
+            else:
+                raise Exception("Process stdin is not available")
 
             logger.bind(session_id=session_id).info(
                 f"Assigned pre-warmed process {voice_process.process_id} to session {session_id}"
@@ -379,10 +383,16 @@ async def bot_connect(
         for key, value in session_params.items():
             if value is not None:
                 arg_name = arg_map.get(key)
-                if isinstance(value, list):
-                    cmd.extend([arg_name] + value)
-                else:
-                    cmd.extend([arg_name, str(value)])
+                if arg_name is not None:
+                    if isinstance(value, list):
+                        # Filter out None values from the list
+                        filtered_value = [
+                            str(item) for item in value if item is not None
+                        ]
+                        if filtered_value:
+                            cmd.extend([arg_name] + filtered_value)
+                    else:
+                        cmd.extend([arg_name, str(value)])
 
         logger.bind(session_id=session_id).info(
             f"Launching subprocess with command: {' '.join(cmd)}"

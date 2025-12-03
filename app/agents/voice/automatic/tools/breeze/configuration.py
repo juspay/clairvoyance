@@ -66,8 +66,9 @@ async def get_surcharge_rules(params: FunctionCallParams):
 
     headers = {
         "Content-Type": "application/json",
-        "Authorization": AWS_VAYU_READ_API_KEY,
     }
+    if AWS_VAYU_READ_API_KEY is not None:
+        headers["Authorization"] = AWS_VAYU_READ_API_KEY
 
     endpoint = f"{AWS_VAYU_URL}/surcharge/rule?shopId={shop_id}"
     if payment_type != "ALL":
@@ -90,13 +91,13 @@ async def get_surcharge_rules(params: FunctionCallParams):
                 converted_rule = rule.copy()
                 # Convert minimumOrderValue and maximumOrderValue from paisa to rupees
                 if "minimumOrderValue" in converted_rule:
-                    converted_rule["minimumOrderValue"] = round(
-                        _paisa_to_rupees(converted_rule["minimumOrderValue"])
-                    )
+                    min_value = _paisa_to_rupees(converted_rule["minimumOrderValue"])
+                    if min_value is not None:
+                        converted_rule["minimumOrderValue"] = round(min_value)
                 if "maximumOrderValue" in converted_rule:
-                    converted_rule["maximumOrderValue"] = round(
-                        _paisa_to_rupees(converted_rule["maximumOrderValue"])
-                    )
+                    max_value = _paisa_to_rupees(converted_rule["maximumOrderValue"])
+                    if max_value is not None:
+                        converted_rule["maximumOrderValue"] = round(max_value)
                 converted_rules.append(converted_rule)
 
             await params.result_callback(
@@ -178,8 +179,9 @@ async def _handle_create_surcharge_rule(params: FunctionCallParams):
 
         headers = {
             "Content-Type": "application/json",
-            "Authorization": AWS_VAYU_READ_API_KEY,
         }
+        if AWS_VAYU_READ_API_KEY is not None:
+            headers["Authorization"] = AWS_VAYU_READ_API_KEY
         endpoint = f"{AWS_VAYU_URL}/surcharge/rule?shopId={shop_id}"
 
         try:
@@ -251,8 +253,9 @@ async def _handle_create_surcharge_rule(params: FunctionCallParams):
 
         headers = {
             "Content-Type": "application/json",
-            "Authorization": AWS_VAYU_WRITE_API_KEY,
         }
+        if AWS_VAYU_WRITE_API_KEY is not None:
+            headers["Authorization"] = AWS_VAYU_WRITE_API_KEY
 
         payload = {"rules": api_rules, "shopId": shop_id}
 
@@ -333,6 +336,8 @@ async def _handle_delete_surcharge_rule(params: FunctionCallParams):
             "Content-Type": "application/json",
             "Authorization": AWS_VAYU_WRITE_API_KEY,
         }
+        # Filter out None values from headers
+        headers = {k: v for k, v in headers.items() if v is not None}
 
         endpoint = f"{AWS_VAYU_URL}/surcharge/rule?ruleId={rule_id}"
 
@@ -441,8 +446,9 @@ async def _handle_update_surcharge_rule(params: FunctionCallParams):
         # Step 2: Get existing rules to delete
         headers = {
             "Content-Type": "application/json",
-            "Authorization": AWS_VAYU_READ_API_KEY,
         }
+        if AWS_VAYU_READ_API_KEY is not None:
+            headers["Authorization"] = AWS_VAYU_READ_API_KEY
         endpoint = f"{AWS_VAYU_URL}/surcharge/rule?shopId={shop_id}"
 
         async with create_http_client() as client:
@@ -459,7 +465,8 @@ async def _handle_update_surcharge_rule(params: FunctionCallParams):
         ]
         deleted_count = 0
 
-        headers["Authorization"] = AWS_VAYU_WRITE_API_KEY
+        if AWS_VAYU_WRITE_API_KEY is not None:
+            headers["Authorization"] = AWS_VAYU_WRITE_API_KEY
         for rule in rules_to_delete:
             if rule_id := rule.get("id"):
                 try:
@@ -699,9 +706,12 @@ async def manage_announcement_banner(params: FunctionCallParams):
 
         if action == BannerAction.ADD or action == BannerAction.UPDATE:
             # Format the description with HTML styling
-            formatted_description = format_announcement_html(
-                description, background_color, text_color
-            )
+            if description is not None:
+                formatted_description = format_announcement_html(
+                    description, background_color, text_color
+                )
+            else:
+                formatted_description = ""
 
             # Update both announcement types with the same formatted content
             config_to_patch[login_page_key] = formatted_description
@@ -718,8 +728,10 @@ async def manage_announcement_banner(params: FunctionCallParams):
             logger.info("Deleted both announcement types")
 
         if merchant_id == config.get("merchantId"):
+            # Ensure user_id is not None
+            user_id_str = user_id if user_id is not None else "unknown"
             patch_result = await patch_shop_config(
-                shop_url, user_id, config_to_patch, breeze_token
+                shop_url, user_id_str, config_to_patch, breeze_token
             )
 
             logger.info(
@@ -880,4 +892,8 @@ tool_functions = {
     "get_surcharge_rules": get_surcharge_rules,
     "manage_vayu_surcharge": manage_vayu_surcharge,
 }
-tools = ToolsSchema(standard_tools=standard_tools)
+
+# Type ignore the specific union type issue as the casting seems to have compatibility issues
+# with different versions of the pipecat library
+tools = ToolsSchema(standard_tools=standard_tools)  # type: ignore[arg-type]
+configuration_tools = ToolsSchema(standard_tools=standard_tools)  # type: ignore[arg-type]

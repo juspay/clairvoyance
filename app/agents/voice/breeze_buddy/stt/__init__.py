@@ -135,6 +135,16 @@ def get_stt_service():
             client_reference_id=None,
         )
 
+        if not SONIOX_API_KEY:
+            logger.error("SONIOX_API_KEY is not configured, falling back to Google STT")
+            return GoogleSTTService(
+                params=GoogleSTTService.InputParams(
+                    languages=[Language.EN_US, Language.EN_IN],
+                    enable_interim_results=False,
+                ),
+                credentials=GOOGLE_CREDENTIALS_JSON,
+            )
+
         return SonioxSTTService(
             api_key=SONIOX_API_KEY,
             params=soniox_params,

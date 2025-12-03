@@ -3,20 +3,15 @@ ACME Juspay Data Parser
 Handles all Juspay analytics data using the generic aggregator
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
-try:
-    from .aggregator import get_data_indices
-    from .juspay_data import ACME_JUSPAY_DATA
-except ImportError:
-    # Fallback for direct execution
-    from aggregator import get_data_indices
-    from juspay_data import ACME_JUSPAY_DATA
+from .aggregator import get_data_indices
+from .juspay_data import ACME_JUSPAY_DATA
 
 
 def get_success_rate(
     start_time: Optional[str] = None, end_time: Optional[str] = None
-) -> Optional[Dict[str, Any]]:
+) -> Optional[Union[Dict[str, Any], List[Any], str, bool, float]]:
     """
     Get Juspay success rate data with aggregation
 
@@ -46,12 +41,16 @@ def get_success_rate(
     failed_transactions = 0
 
     for index in indices:
+        # Ensure index is an integer
+        index = int(index)
         if index < len(ACME_JUSPAY_DATA):
             data = ACME_JUSPAY_DATA[index]["overall_success_rate_data"]
-            success_rates.append(data["success_rate"])
-            total_attempts += data["total_attempts"]
-            successful_transactions += data["successful_transactions"]
-            failed_transactions += data["failed_transactions"]
+            # Ensure data is a dictionary
+            if isinstance(data, dict):
+                success_rates.append(float(data.get("success_rate", 0)))
+                total_attempts += int(data.get("total_attempts", 0))
+                successful_transactions += int(data.get("successful_transactions", 0))
+                failed_transactions += int(data.get("failed_transactions", 0))
 
     if not success_rates:
         return None
@@ -70,7 +69,7 @@ def get_success_rate(
 
 def get_payment_method_sr(
     start_time: Optional[str] = None, end_time: Optional[str] = None
-) -> Optional[List[Dict[str, Any]]]:
+) -> Optional[Union[List[Dict[str, Any]], Dict[str, Any], str, bool, float]]:
     """
     Get payment method success rates with aggregation
 
@@ -98,21 +97,30 @@ def get_payment_method_sr(
 
     for index in indices:
         if index < len(ACME_JUSPAY_DATA):
-            for method in ACME_JUSPAY_DATA[index]["payment_method_success_rates"]:
-                pm_type = method["payment_method_type"]
-                if pm_type not in method_totals:
-                    method_totals[pm_type] = {
-                        "payment_method_type": pm_type,
-                        "success_rates": [],
-                        "total_attempts": 0,
-                        "successful": 0,
-                        "failed": 0,
-                    }
+            payment_methods = ACME_JUSPAY_DATA[index]["payment_method_success_rates"]
+            if isinstance(payment_methods, list):
+                for method in payment_methods:
+                    if isinstance(method, dict):
+                        pm_type = method.get("payment_method_type", "unknown")
+                        if pm_type not in method_totals:
+                            method_totals[pm_type] = {
+                                "payment_method_type": pm_type,
+                                "success_rates": [],
+                                "total_attempts": 0,
+                                "successful": 0,
+                                "failed": 0,
+                            }
 
-                method_totals[pm_type]["success_rates"].append(method["success_rate"])
-                method_totals[pm_type]["total_attempts"] += method["total_attempts"]
-                method_totals[pm_type]["successful"] += method["successful"]
-                method_totals[pm_type]["failed"] += method["failed"]
+                        method_totals[pm_type]["success_rates"].append(
+                            method.get("success_rate", 0)
+                        )
+                        method_totals[pm_type]["total_attempts"] += method.get(
+                            "total_attempts", 0
+                        )
+                        method_totals[pm_type]["successful"] += method.get(
+                            "successful", 0
+                        )
+                        method_totals[pm_type]["failed"] += method.get("failed", 0)
 
     # Build result
     result = []
@@ -138,7 +146,7 @@ def get_payment_method_sr(
 
 def get_success_transactional_data(
     start_time: Optional[str] = None, end_time: Optional[str] = None
-) -> Optional[List[Dict[str, Any]]]:
+) -> Optional[Union[List[Dict[str, Any]], Dict[str, Any], str, bool, float]]:
     """
     Get success transactional data with aggregation
 
@@ -166,21 +174,26 @@ def get_success_transactional_data(
 
     for index in indices:
         if index < len(ACME_JUSPAY_DATA):
-            for method in ACME_JUSPAY_DATA[index]["success_volume_by_payment_method"]:
-                pm_type = method["payment_method_type"]
-                if pm_type not in method_totals:
-                    method_totals[pm_type] = {
-                        "payment_method_type": pm_type,
-                        "transaction_count": 0,
-                        "peak_hour_volume": 0,
-                    }
+            success_volume_data = ACME_JUSPAY_DATA[index][
+                "success_volume_by_payment_method"
+            ]
+            if isinstance(success_volume_data, list):
+                for method in success_volume_data:
+                    if isinstance(method, dict):
+                        pm_type = method.get("payment_method_type", "unknown")
+                        if pm_type not in method_totals:
+                            method_totals[pm_type] = {
+                                "payment_method_type": pm_type,
+                                "transaction_count": 0,
+                                "peak_hour_volume": 0,
+                            }
 
-                method_totals[pm_type]["transaction_count"] += method.get(
-                    "transaction_count", 0
-                )
-                method_totals[pm_type]["peak_hour_volume"] += method.get(
-                    "peak_hour_volume", 0
-                )
+                        method_totals[pm_type]["transaction_count"] += method.get(
+                            "transaction_count", 0
+                        )
+                        method_totals[pm_type]["peak_hour_volume"] += method.get(
+                            "peak_hour_volume", 0
+                        )
 
     # Calculate percentages
     total_transactions = sum(
@@ -208,7 +221,7 @@ def get_success_transactional_data(
 
 def get_failure_transactional_data(
     start_time: Optional[str] = None, end_time: Optional[str] = None
-) -> Optional[List[Dict[str, Any]]]:
+) -> Optional[Union[List[Dict[str, Any]], Dict[str, Any], str, bool, float]]:
     """
     Get failure transactional data with aggregation
 
@@ -241,7 +254,7 @@ def get_failure_transactional_data(
 
 def get_gmv_by_payment_method(
     start_time: Optional[str] = None, end_time: Optional[str] = None
-) -> Optional[List[Dict[str, Any]]]:
+) -> Optional[Union[List[Dict[str, Any]], Dict[str, Any], str, bool, float]]:
     """
     Get GMV by payment method with aggregation
 
@@ -269,15 +282,18 @@ def get_gmv_by_payment_method(
 
     for index in indices:
         if index < len(ACME_JUSPAY_DATA):
-            for method in ACME_JUSPAY_DATA[index]["gmv_by_payment_method"]:
-                pm_type = method["payment_method_type"]
-                if pm_type not in method_totals:
-                    method_totals[pm_type] = {
-                        "payment_method_type": pm_type,
-                        "gmv": 0,
-                    }
+            gmv_data = ACME_JUSPAY_DATA[index]["gmv_by_payment_method"]
+            if isinstance(gmv_data, list):
+                for method in gmv_data:
+                    if isinstance(method, dict):
+                        pm_type = method.get("payment_method_type", "unknown")
+                        if pm_type not in method_totals:
+                            method_totals[pm_type] = {
+                                "payment_method_type": pm_type,
+                                "gmv": 0,
+                            }
 
-                method_totals[pm_type]["gmv"] += method.get("gmv", 0)
+                        method_totals[pm_type]["gmv"] += method.get("gmv", 0)
 
     # Calculate percentages
     total_gmv = sum(data["gmv"] for data in method_totals.values())
@@ -298,7 +314,7 @@ def get_gmv_by_payment_method(
 
 def get_average_ticket_size(
     start_time: Optional[str] = None, end_time: Optional[str] = None
-) -> Optional[List[Dict[str, Any]]]:
+) -> Optional[Union[List[Dict[str, Any]], Dict[str, Any], str, bool, float]]:
     """
     Get average ticket size with aggregation
 

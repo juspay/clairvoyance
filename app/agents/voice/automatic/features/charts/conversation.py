@@ -259,10 +259,11 @@ class ConversationDebugData(BaseModel):
 
         # Calculate average turn duration
         completed_turns = [turn for turn in self.turns if turn.duration_ms is not None]
+        valid_durations = [
+            turn.duration_ms for turn in completed_turns if turn.duration_ms is not None
+        ]
         avg_turn_duration_ms = (
-            sum(turn.duration_ms for turn in completed_turns) / len(completed_turns)
-            if completed_turns
-            else None
+            sum(valid_durations) / len(valid_durations) if valid_durations else None
         )
 
         # Calculate total conversation duration

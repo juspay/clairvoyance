@@ -4,6 +4,7 @@ Fal.ai Smart Turn service for managing smart turn analyzer lifecycle and session
 
 from typing import Optional, Tuple
 
+from aiohttp import ClientSession
 from pipecat.audio.turn.smart_turn.fal_smart_turn import FalSmartTurnAnalyzer
 
 from app.core.config.static import FAL_SMART_TURN_API_KEY
@@ -15,8 +16,8 @@ class FalSmartTurnService:
     """Service for managing Fal.ai Smart Turn analyzer with proper session lifecycle."""
 
     def __init__(self):
-        self._session = None
-        self._analyzer = None
+        self._session: Optional[ClientSession] = None
+        self._analyzer: Optional[FalSmartTurnAnalyzer] = None
 
     async def create_analyzer(
         self,

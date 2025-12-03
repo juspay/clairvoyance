@@ -1,7 +1,10 @@
 # app/agents/voice/automatic/context_summarizer.py
 import asyncio
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union, cast
 
+from openai._types import NotGiven
+from openai.types.chat import ChatCompletionMessageParam
+from pipecat.adapters.schemas.tools_schema import ToolsSchema
 from pipecat.adapters.services.open_ai_adapter import OpenAILLMInvocationParams
 from pipecat.processors.aggregators.openai_llm_context import OpenAILLMContext
 
@@ -17,14 +20,30 @@ class ContextSummarizer(OpenAILLMContext):
 
     def __init__(
         self,
-        messages: List[Dict[str, Any]],
-        tools: Optional[List[Dict[str, Any]]] = None,
+        messages: Optional[List[ChatCompletionMessageParam]] = None,
+        tools: Optional[Union[List[Dict[str, Any]], ToolsSchema]] = None,
         max_turns_before_summary: int = MAX_TURNS_BEFORE_SUMMARY,
         keep_recent_turns: int = KEEP_RECENT_TURNS,
         enable_summarization: bool = True,
         llm_service=None,
     ):
-        super().__init__(messages, tools)
+        # Convert Dict messages to proper ChatCompletionMessageParam if needed
+        converted_messages: List[ChatCompletionMessageParam] = []
+        if messages:
+            for msg in messages:
+                converted_messages.append(msg)
+
+        # Handle tools parameter properly
+        tools_param = NotGiven()
+        if tools is not None:
+            if isinstance(tools, list):
+                tools_param = (
+                    ToolsSchema(standard_tools=[]) if not tools else NotGiven()
+                )
+            else:
+                tools_param = tools
+
+        super().__init__(converted_messages, tools_param)
         self._max_turns_before_summary = max_turns_before_summary
         self._keep_recent_turns = keep_recent_turns
         self._enable_summarization = enable_summarization
@@ -35,10 +54,10 @@ class ContextSummarizer(OpenAILLMContext):
             messages[0] if messages and messages[0]["role"] == "system" else None
         )
 
-    def add_message(self, message: Dict[str, Any]):
+    def add_message(self, message: ChatCompletionMessageParam):
         """Adds a message to the context and increments the turn count if it's a user message."""
         super().add_message(message)
-        if message["role"] == "user":
+        if isinstance(message, dict) and message.get("role") == "user":
             self._turn_count += 1
             logger.debug(
                 f"--- Summarizer: Turn count incremented to: {self._turn_count} ---"
@@ -86,14 +105,16 @@ class ContextSummarizer(OpenAILLMContext):
             previous_summary = ""
             for msg in self._messages:
                 if (
-                    msg["role"] == "system"
-                    and "Previous conversation summary:" in msg["content"]
+                    isinstance(msg, dict)
+                    and msg.get("role") == "system"
+                    and isinstance(msg.get("content"), str)
+                    and "Previous conversation summary:" in msg.get("content", "")
                 ):
-                    previous_summary = (
-                        msg["content"]
-                        .replace("Previous conversation summary:", "")
-                        .strip()
-                    )
+                    content = msg.get("content", "")
+                    if isinstance(content, str):
+                        previous_summary = content.replace(
+                            "Previous conversation summary:", ""
+                        ).strip()
                     break
 
             # Create summarization prompt
@@ -108,11 +129,28 @@ class ContextSummarizer(OpenAILLMContext):
                 )
 
             for msg in messages_to_summarize:
-                role = "User" if msg["role"] == "user" else "Assistant"
-                content = msg.get(
-                    "content",
-                    f"[{msg.get('tool_calls', [{}])[0].get('function', {}).get('name', 'tool call')}]",
-                )
+                role = "User" if msg.get("role") == "user" else "Assistant"
+                content = msg.get("content")
+                if not content:
+                    # Handle tool calls safely
+                    tool_calls = msg.get("tool_calls", [])
+                    if (
+                        tool_calls
+                        and isinstance(tool_calls, list)
+                        and len(tool_calls) > 0
+                    ):
+                        tool_call = tool_calls[0]
+                        if isinstance(tool_call, dict):
+                            function_info = tool_call.get("function", {})
+                            if isinstance(function_info, dict):
+                                tool_name = function_info.get("name", "tool call")
+                                content = f"[{tool_name}]"
+                            else:
+                                content = "[tool call]"
+                        else:
+                            content = "[tool call]"
+                    else:
+                        content = "[unknown content]"
                 if content:
                     prompt_parts.append(f"\n{role}: {content}")
 
@@ -125,7 +163,18 @@ class ContextSummarizer(OpenAILLMContext):
             ]
 
             # Get summary from LLM
-            params_from_context = OpenAILLMInvocationParams(messages=summary_messages)
+            if self._llm_service is None:
+                logger.warning("LLM service not available for summarization")
+                return
+
+            # Convert to proper ChatCompletionMessageParam format
+            formatted_summary_messages: List[ChatCompletionMessageParam] = []
+            for msg in summary_messages:
+                formatted_summary_messages.append(cast(ChatCompletionMessageParam, msg))
+
+            params_from_context = OpenAILLMInvocationParams(
+                messages=formatted_summary_messages, tools=[], tool_choice="none"
+            )
             chunks = await self._llm_service.get_chat_completions(params_from_context)
             summary_parts = [
                 chunk.choices[0].delta.content
@@ -143,17 +192,22 @@ class ContextSummarizer(OpenAILLMContext):
             logger.debug(f"--- Summarizer: Generated summary: {summary} ---")
 
             # Reconstruct messages
-            new_messages = []
+            new_messages: List[ChatCompletionMessageParam] = []
             if self._original_system_message:
                 new_messages.append(self._original_system_message)
 
             new_messages.append(
-                {
-                    "role": "system",
-                    "content": f"Previous conversation summary: {summary}",
-                }
+                cast(
+                    ChatCompletionMessageParam,
+                    {
+                        "role": "system",
+                        "content": f"Previous conversation summary: {summary}",
+                    },
+                )
             )
-            new_messages.extend(messages_to_keep)
+            new_messages.extend(
+                cast(List[ChatCompletionMessageParam], messages_to_keep)
+            )
             logger.debug(f"New Context to LLm is: {new_messages}")
             self._messages = new_messages
             self._turn_count = 0

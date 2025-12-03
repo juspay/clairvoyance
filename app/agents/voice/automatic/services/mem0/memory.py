@@ -2,7 +2,7 @@ import asyncio
 import datetime
 import hashlib
 import time
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from pipecat.frames.frames import Frame, LLMMessagesFrame
 from pipecat.processors.aggregators.openai_llm_context import (
@@ -75,13 +75,15 @@ class ImprovedMem0MemoryService(Mem0MemoryService):
 
         # Incremental message tracking (replaces hash-based deduplication)
         self._last_stored_message_count = 0  # Track how many messages we've stored
-        self._user_id_hash = None  # Track which user's count this is for
+        self._user_id_hash: Optional[str] = None  # Track which user's count this is for
         self._session_start_time = time.time()  # Track session start for validation
 
         # Circuit breaker for memory operations
         self._memory_enabled = True
         self._consecutive_failures = 0  # Track consecutive failures
-        self._last_failure_time = None  # Track when memory was disabled
+        self._last_failure_time: Optional[float] = (
+            None  # Track when memory was disabled
+        )
 
     def _check_memory_health(self) -> bool:
         """
@@ -330,28 +332,56 @@ class ImprovedMem0MemoryService(Mem0MemoryService):
         # Use new_messages instead of cleaned_messages for storage
         messages_to_store = new_messages
 
-        try:
-            params = {
-                "messages": messages_to_store,  # Send only new messages
-                "metadata": {
-                    "platform": "pipecat",
-                    "incremental": True,
-                    "total_count": len(cleaned_messages),
-                    "new_count": len(messages_to_store),
-                    "offset": self._last_stored_message_count,
-                },
-                "output_format": "v1.1",
-            }
-            for id in ["user_id", "agent_id", "run_id"]:
-                if getattr(self, id):
-                    params[id] = getattr(self, id)
+        # Initialize params to None to avoid unbound variable error
+        params = None
 
-            if isinstance(self.memory_client, Memory):
-                del params["output_format"]
+        try:
+            # Create properly typed parameters for Memory.add()
+            add_kwargs: Dict[str, Any] = {}
+
+            # Add messages
+            add_kwargs["messages"] = messages_to_store
+
+            # Add metadata
+            add_kwargs["metadata"] = {
+                "platform": "pipecat",
+                "incremental": True,
+                "total_count": len(cleaned_messages),
+                "new_count": len(messages_to_store),
+                "offset": self._last_stored_message_count,
+            }
+
+            # Add string parameters with proper type checking
+            if hasattr(self, "user_id") and getattr(self, "user_id"):
+                user_id_val = getattr(self, "user_id")
+                if isinstance(user_id_val, str):
+                    add_kwargs["user_id"] = user_id_val
+
+            if hasattr(self, "agent_id") and getattr(self, "agent_id"):
+                agent_id_val = getattr(self, "agent_id")
+                if isinstance(agent_id_val, str):
+                    add_kwargs["agent_id"] = agent_id_val
+
+            if hasattr(self, "run_id") and getattr(self, "run_id"):
+                run_id_val = getattr(self, "run_id")
+                if isinstance(run_id_val, str):
+                    add_kwargs["run_id"] = run_id_val
+
+            # Handle output_format for non-Memory clients
+            try:
+                from mem0 import Memory as Mem0Memory
+
+                if not isinstance(self.memory_client, Mem0Memory):
+                    add_kwargs["output_format"] = "v1.1"
+            except ImportError:
+                # If we can't import Memory, assume we need output_format
+                add_kwargs["output_format"] = "v1.1"
 
             # Run in an executor to prevent blocking
             loop = asyncio.get_event_loop()
-            await loop.run_in_executor(None, lambda: self.memory_client.add(**params))
+            await loop.run_in_executor(
+                None, lambda: self.memory_client.add(**add_kwargs)
+            )
 
             end_time = datetime.datetime.now()
             duration = end_time - start_time
@@ -369,9 +399,10 @@ class ImprovedMem0MemoryService(Mem0MemoryService):
             logger.error(
                 f"[ERROR] {end_time.isoformat()} - Error storing messages in Mem0 (async) after {duration}: {e}"
             )
-            logger.error(
-                f"Failed params were: {params if 'params' in locals() else 'params not created'}"
-            )
+            try:
+                logger.error(f"Failed params were: {params}")
+            except NameError:
+                logger.error("Failed params were: params not created")
 
             # Handle failure with circuit breaker
             self._handle_memory_failure("storage", e)
@@ -411,13 +442,13 @@ class ImprovedMem0MemoryService(Mem0MemoryService):
             try:
                 # Get the latest user message to use as a query for memory retrieval
                 context_messages = context.get_messages()
-                latest_user_message = None
+                latest_user_message: Optional[str] = None
 
                 for message in reversed(context_messages):
                     if message.get("role") == "user":
                         content = message.get("content")
                         # Handle both string and complex content types
-                        if isinstance(content, str):
+                        if isinstance(content, str) and content.strip():
                             latest_user_message = content
                         elif isinstance(content, list) and len(content) > 0:
                             # Extract text from content array if it exists
@@ -426,8 +457,10 @@ class ImprovedMem0MemoryService(Mem0MemoryService):
                                     isinstance(part, dict)
                                     and part.get("type") == "text"
                                 ):
-                                    latest_user_message = part.get("text", "")
-                                    break
+                                    text_content = part.get("text", "")
+                                    if text_content and text_content.strip():
+                                        latest_user_message = text_content
+                                        break
 
                         if latest_user_message:
                             message_preview = (

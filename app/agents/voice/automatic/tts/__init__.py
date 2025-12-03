@@ -1,3 +1,4 @@
+import json
 from typing import Optional
 
 from pipecat.services.elevenlabs.tts import ElevenLabsTTSService
@@ -46,6 +47,10 @@ def get_tts_service(
         tts_provider == TTSProvider.ELEVENLABS.value
         and voice_name == VoiceName.RHEA.value
     ):
+        if not ELEVENLABS_API_KEY:
+            logger.error("ElevenLabs API key is not configured")
+            raise ValueError("ElevenLabs API key is required for RHEA voice")
+
         logger.info("Using ElevenLabs TTS service for RHEA voice.")
         return ElevenLabsTTSService(
             api_key=ELEVENLABS_API_KEY,
@@ -68,8 +73,6 @@ def get_tts_service(
         # Minimal secure logging for Google credentials
         if GOOGLE_CREDENTIALS_JSON:
             try:
-                import json
-
                 if isinstance(GOOGLE_CREDENTIALS_JSON, str):
                     parsed = json.loads(GOOGLE_CREDENTIALS_JSON)
                     logger.info(

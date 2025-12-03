@@ -134,180 +134,179 @@ async def get_breeze_weekly_ad_spend_and_roas(params: FunctionCallParams):
     await params.result_callback(breeze_weekly["adSpendAndRoas"])
 
 
-time_input_schema = {
-    "type": "object",
-    "properties": {
-        "startTime": {
-            "type": "string",
-            "description": "Start time in ISO format (e.g., 2023-01-01T00:00:00Z)",
-        },
-        "endTime": {
-            "type": "string",
-            "description": "End time in ISO format (e.g., 2023-01-01T01:00:00Z)",
-        },
+# Define the properties and required fields directly
+time_properties = {
+    "startTime": {
+        "type": "string",
+        "description": "Start time in ISO format (e.g., 2023-01-01T00:00:00Z)",
     },
-    "required": ["startTime", "endTime"],
+    "endTime": {
+        "type": "string",
+        "description": "End time in ISO format (e.g., 2023-01-01T01:00:00Z)",
+    },
 }
+
+time_required = ["startTime", "endTime"]
 
 get_sr_success_rate_function = FunctionSchema(
     name="get_sr_success_rate_by_time",
     description="Calculates overall success rate (SR) for transactions. Default to today if no timeframe specified.",
-    properties=time_input_schema["properties"],
-    required=time_input_schema["required"],
+    properties=time_properties,
+    required=time_required,
 )
 
 payment_method_wise_sr_function = FunctionSchema(
     name="get_payment_method_wise_sr_by_time",
     description="Fetches success rate (SR) by payment method. Default to today if no timeframe specified.",
-    properties=time_input_schema["properties"],
-    required=time_input_schema["required"],
+    properties=time_properties,
+    required=time_required,
 )
 
 failure_transactional_data_function = FunctionSchema(
     name="get_failure_transactional_data",
     description="Retrieves data for failed transactions. Default to today if no timeframe specified.",
-    properties=time_input_schema["properties"],
-    required=time_input_schema["required"],
+    properties=time_properties,
+    required=time_required,
 )
 
 success_transactional_data_function = FunctionSchema(
     name="get_success_transactional_data",
     description="Retrieves count of successful transactions by payment method. Default to today if no timeframe specified.",
-    properties=time_input_schema["properties"],
-    required=time_input_schema["required"],
+    properties=time_properties,
+    required=time_required,
 )
 
 gmv_order_value_payment_method_wise_function = FunctionSchema(
     name="get_gmv_order_value_payment_method_wise",
     description="Retrieves Gross Merchandise Value (GMV) by payment method. Default to today if no timeframe specified.",
-    properties=time_input_schema["properties"],
-    required=time_input_schema["required"],
+    properties=time_properties,
+    required=time_required,
 )
 
 average_ticket_payment_wise_function = FunctionSchema(
     name="get_average_ticket_payment_wise",
     description="Calculates average ticket size by payment method. Default to today if no timeframe specified.",
-    properties=time_input_schema["properties"],
-    required=time_input_schema["required"],
+    properties=time_properties,
+    required=time_required,
 )
 
 get_weekly_sr_success_rate_function = FunctionSchema(
     name="get_weekly_sr_success_rate",
     description="Calculates weekly overall success rate (SR) for transactions. Default to today if no timeframe specified.",
-    properties=time_input_schema["properties"],
-    required=time_input_schema["required"],
+    properties=time_properties,
+    required=time_required,
 )
 
 weekly_payment_method_wise_sr_function = FunctionSchema(
     name="get_weekly_payment_method_wise_sr",
     description="Fetches weekly success rate (SR) by payment method. Default to today if no timeframe specified.",
-    properties=time_input_schema["properties"],
-    required=time_input_schema["required"],
+    properties=time_properties,
+    required=time_required,
 )
 
 weekly_failure_transactional_data_function = FunctionSchema(
     name="get_weekly_failure_transactional_data",
     description="Retrieves weekly data for failed transactions. Default to today if no timeframe specified.",
-    properties=time_input_schema["properties"],
-    required=time_input_schema["required"],
+    properties=time_properties,
+    required=time_required,
 )
 
 weekly_success_transactional_data_function = FunctionSchema(
     name="get_weekly_success_transactional_data",
     description="Retrieves weekly count of successful transactions by payment method. Default to today if no timeframe specified.",
-    properties=time_input_schema["properties"],
-    required=time_input_schema["required"],
+    properties=time_properties,
+    required=time_required,
 )
 
 weekly_gmv_order_value_payment_method_wise_function = FunctionSchema(
     name="get_weekly_gmv_order_value_payment_method_wise",
     description="Retrieves weekly Gross Merchandise Value (GMV) by payment method. Default to today if no timeframe specified.",
-    properties=time_input_schema["properties"],
-    required=time_input_schema["required"],
+    properties=time_properties,
+    required=time_required,
 )
 
 weekly_average_ticket_payment_wise_function = FunctionSchema(
     name="get_weekly_average_ticket_payment_wise",
     description="Calculates weekly average ticket size by payment method. Default to today if no timeframe specified.",
-    properties=time_input_schema["properties"],
-    required=time_input_schema["required"],
+    properties=time_properties,
+    required=time_required,
 )
 
 breeze_daily_sales_breakdown_function = FunctionSchema(
     name="get_breeze_daily_sales_breakdown",
     description="Retrieves the sales breakdown for today. Default to today if no timeframe specified.",
-    properties=time_input_schema["properties"],
-    required=time_input_schema["required"],
+    properties=time_properties,
+    required=time_required,
 )
 
 breeze_daily_orders_breakdown_function = FunctionSchema(
     name="get_breeze_daily_orders_breakdown",
     description="Retrieves the orders breakdown for today. Default to today if no timeframe specified.",
-    properties=time_input_schema["properties"],
-    required=time_input_schema["required"],
+    properties=time_properties,
+    required=time_required,
 )
 
 breeze_daily_conversion_breakdown_function = FunctionSchema(
     name="get_breeze_daily_conversion_breakdown",
     description="Retrieves the conversion breakdown for today. Default to today if no timeframe specified.",
-    properties=time_input_schema["properties"],
-    required=time_input_schema["required"],
+    properties=time_properties,
+    required=time_required,
 )
 
 breeze_daily_payment_success_rate_function = FunctionSchema(
     name="get_breeze_daily_payment_success_rate",
     description="Retrieves the payment success rate for today. Default to today if no timeframe specified.",
-    properties=time_input_schema["properties"],
-    required=time_input_schema["required"],
+    properties=time_properties,
+    required=time_required,
 )
 
 breeze_daily_average_order_value_function = FunctionSchema(
     name="get_breeze_daily_average_order_value",
     description="Retrieves the average order value for today. Default to today if no timeframe specified.",
-    properties=time_input_schema["properties"],
-    required=time_input_schema["required"],
+    properties=time_properties,
+    required=time_required,
 )
 
 breeze_weekly_sales_breakdown_function = FunctionSchema(
     name="get_breeze_weekly_sales_breakdown",
     description="Retrieves the sales breakdown for the week. Default to today if no timeframe specified.",
-    properties=time_input_schema["properties"],
-    required=time_input_schema["required"],
+    properties=time_properties,
+    required=time_required,
 )
 
 breeze_weekly_orders_breakdown_function = FunctionSchema(
     name="get_breeze_weekly_orders_breakdown",
     description="Retrieves the orders breakdown for the week. Default to today if no timeframe specified.",
-    properties=time_input_schema["properties"],
-    required=time_input_schema["required"],
+    properties=time_properties,
+    required=time_required,
 )
 
 breeze_weekly_conversion_breakdown_function = FunctionSchema(
     name="get_breeze_weekly_conversion_breakdown",
     description="Retrieves the conversion breakdown for the week. Default to today if no timeframe specified.",
-    properties=time_input_schema["properties"],
-    required=time_input_schema["required"],
+    properties=time_properties,
+    required=time_required,
 )
 
 breeze_weekly_payment_success_rate_function = FunctionSchema(
     name="get_breeze_weekly_payment_success_rate",
     description="Retrieves the payment success rate for the week. Default to today if no timeframe specified.",
-    properties=time_input_schema["properties"],
-    required=time_input_schema["required"],
+    properties=time_properties,
+    required=time_required,
 )
 
 breeze_weekly_average_order_value_function = FunctionSchema(
     name="get_breeze_weekly_average_order_value",
     description="Retrieves the average order value for the week. Default to today if no timeframe specified.",
-    properties=time_input_schema["properties"],
-    required=time_input_schema["required"],
+    properties=time_properties,
+    required=time_required,
 )
 
 breeze_weekly_ad_spend_and_roas_function = FunctionSchema(
     name="get_breeze_weekly_ad_spend_and_roas",
     description="Retrieves the ad spend and ROAS for the week. Default to today if no timeframe specified.",
-    properties=time_input_schema["properties"],
-    required=time_input_schema["required"],
+    properties=time_properties,
+    required=time_required,
 )
 
 

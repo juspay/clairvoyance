@@ -4,28 +4,19 @@ Handles all Breeze analytics data using the generic aggregator
 """
 
 import copy
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Union
 
-try:
-    from .aggregator import (
-        aggregate_complete_structure,
-        get_data_indices,
-        get_nested_value,
-    )
-    from .breeze_data import ACME_BREEZE_DATA
-except ImportError:
-    # Fallback for direct execution
-    from aggregator import (
-        aggregate_complete_structure,
-        get_data_indices,
-        get_nested_value,
-    )
-    from breeze_data import ACME_BREEZE_DATA
+from .aggregator import (
+    aggregate_complete_structure,
+    get_data_indices,
+    get_nested_value,
+)
+from .breeze_data import ACME_BREEZE_DATA
 
 
 def get_sales_breakdown(
     start_time: Optional[str] = None, end_time: Optional[str] = None
-) -> Optional[Dict[str, Any]]:
+) -> Optional[Union[Dict[str, Any], List[Any], str, bool, float]]:
     """
     Get sales breakdown data with aggregation
 
@@ -46,7 +37,7 @@ def get_sales_breakdown(
 
 def get_orders_breakdown(
     start_time: Optional[str] = None, end_time: Optional[str] = None
-) -> Optional[Dict[str, Any]]:
+) -> Optional[Union[Dict[str, Any], List[Any], str, bool, float]]:
     """
     Get orders breakdown data with aggregation
 
@@ -67,7 +58,7 @@ def get_orders_breakdown(
 
 def get_conversion_breakdown(
     start_time: Optional[str] = None, end_time: Optional[str] = None
-) -> Optional[Dict[str, Any]]:
+) -> Optional[Union[Dict[str, Any], List[Any], str, bool, float]]:
     """
     Get conversion breakdown data with aggregation
 
@@ -88,7 +79,7 @@ def get_conversion_breakdown(
 
 def get_payment_success_rate(
     start_time: Optional[str] = None, end_time: Optional[str] = None
-) -> Optional[Dict[str, Any]]:
+) -> Optional[Union[Dict[str, Any], List[Any], str, bool, float]]:
     """
     Get payment success rate data with aggregation
 
@@ -109,7 +100,7 @@ def get_payment_success_rate(
 
 def get_average_order_value(
     start_time: Optional[str] = None, end_time: Optional[str] = None
-) -> Optional[Dict[str, Any]]:
+) -> Optional[Union[Dict[str, Any], List[Any], str, bool, float]]:
     """
     Get average order value data with aggregation
 

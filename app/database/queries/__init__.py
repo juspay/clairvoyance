@@ -18,6 +18,7 @@ async def run_parameterized_query(
     Execute a parameterized query and return the results.
     """
     try:
+        # get_db_connection() is an async generator, so we iterate over it
         async for conn in get_db_connection():
             if query_text.strip().upper().startswith("SELECT"):
                 result = await conn.fetch(query_text, *values)

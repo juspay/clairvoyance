@@ -10,21 +10,19 @@ from pipecat.services.llm_service import FunctionCallParams
 from app.agents.voice.automatic.data.dummy.acme import breeze_parser, juspay_parser
 from app.core.logger import logger
 
-# Time input schema for all ACME tools
-time_input_schema = {
-    "type": "object",
-    "properties": {
-        "startTime": {
-            "type": "string",
-            "description": "Start time in ISO format (e.g., 2023-01-01T00:00:00Z). Optional - defaults to today if not provided.",
-        },
-        "endTime": {
-            "type": "string",
-            "description": "End time in ISO format (e.g., 2023-01-01T01:00:00Z). Optional - defaults to today if not provided.",
-        },
+# Time input properties and required fields for all ACME tools
+TIME_INPUT_PROPERTIES = {
+    "startTime": {
+        "type": "string",
+        "description": "Start time in ISO format (e.g., 2023-01-01T00:00:00Z). Optional - defaults to today if not provided.",
     },
-    "required": [],  # Make time parameters optional
+    "endTime": {
+        "type": "string",
+        "description": "End time in ISO format (e.g., 2023-01-01T01:00:00Z). Optional - defaults to today if not provided.",
+    },
 }
+
+TIME_INPUT_REQUIRED = []  # Make time parameters optional
 
 
 # =============================================================================
@@ -188,79 +186,79 @@ async def get_acme_juspay_average_ticket_size(params: FunctionCallParams):
 acme_sales_breakdown_function = FunctionSchema(
     name="get_acme_sales_breakdown",
     description="Get ACME store sales breakdown data for specified time range",
-    properties=time_input_schema["properties"],
-    required=time_input_schema["required"],
+    properties=TIME_INPUT_PROPERTIES,
+    required=TIME_INPUT_REQUIRED,
 )
 
 acme_orders_breakdown_function = FunctionSchema(
     name="get_acme_orders_breakdown",
     description="Get ACME store orders breakdown data for specified time range",
-    properties=time_input_schema["properties"],
-    required=time_input_schema["required"],
+    properties=TIME_INPUT_PROPERTIES,
+    required=TIME_INPUT_REQUIRED,
 )
 
 acme_conversion_breakdown_function = FunctionSchema(
     name="get_acme_conversion_breakdown",
     description="Get ACME store conversion breakdown data for specified time range",
-    properties=time_input_schema["properties"],
-    required=time_input_schema["required"],
+    properties=TIME_INPUT_PROPERTIES,
+    required=TIME_INPUT_REQUIRED,
 )
 
 acme_payment_success_rate_function = FunctionSchema(
     name="get_acme_payment_success_rate",
     description="Get ACME store payment success rate for specified time range",
-    properties=time_input_schema["properties"],
-    required=time_input_schema["required"],
+    properties=TIME_INPUT_PROPERTIES,
+    required=TIME_INPUT_REQUIRED,
 )
 
 acme_average_order_value_function = FunctionSchema(
     name="get_acme_average_order_value",
     description="Get ACME store average order value for specified time range",
-    properties=time_input_schema["properties"],
-    required=time_input_schema["required"],
+    properties=TIME_INPUT_PROPERTIES,
+    required=TIME_INPUT_REQUIRED,
 )
 
 # Juspay tool schemas
 acme_juspay_success_rate_function = FunctionSchema(
     name="get_acme_juspay_success_rate",
     description="Get ACME store Juspay success rate for specified time range",
-    properties=time_input_schema["properties"],
-    required=time_input_schema["required"],
+    properties=TIME_INPUT_PROPERTIES,
+    required=TIME_INPUT_REQUIRED,
 )
 
 acme_juspay_payment_method_sr_function = FunctionSchema(
     name="get_acme_juspay_payment_method_sr",
     description="Get ACME store Juspay payment method success rates for specified time range",
-    properties=time_input_schema["properties"],
-    required=time_input_schema["required"],
+    properties=TIME_INPUT_PROPERTIES,
+    required=TIME_INPUT_REQUIRED,
 )
 
 acme_juspay_success_transactional_function = FunctionSchema(
     name="get_acme_juspay_success_transactional_data",
     description="Get ACME store Juspay success transactional data for specified time range",
-    properties=time_input_schema["properties"],
-    required=time_input_schema["required"],
+    properties=TIME_INPUT_PROPERTIES,
+    required=TIME_INPUT_REQUIRED,
 )
 
 acme_juspay_failure_transactional_function = FunctionSchema(
     name="get_acme_juspay_failure_transactional_data",
     description="Get ACME store Juspay failure transactional data for specified time range",
-    properties=time_input_schema["properties"],
-    required=time_input_schema["required"],
+    properties=TIME_INPUT_PROPERTIES,
+    required=TIME_INPUT_REQUIRED,
 )
 
 acme_juspay_gmv_function = FunctionSchema(
     name="get_acme_juspay_gmv_by_payment_method",
     description="Get ACME store Juspay GMV by payment method for specified time range",
-    properties=time_input_schema["properties"],
-    required=time_input_schema["required"],
+    properties=TIME_INPUT_PROPERTIES,
+    required=TIME_INPUT_REQUIRED,
 )
 
 acme_juspay_ticket_size_function = FunctionSchema(
     name="get_acme_juspay_average_ticket_size",
     description="Get ACME store Juspay average ticket size for specified time range",
-    properties=time_input_schema["properties"],
-    required=time_input_schema["required"],
+    properties=TIME_INPUT_PROPERTIES,
+    required=TIME_INPUT_REQUIRED,
 )
 
 

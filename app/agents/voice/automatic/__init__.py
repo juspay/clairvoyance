@@ -6,6 +6,7 @@ import random
 import sys
 import wave
 from datetime import datetime
+from typing import Any, Dict
 from zoneinfo import ZoneInfo
 
 from langfuse import get_client
@@ -319,7 +320,7 @@ async def run_normal_mode(args):
             logger.error(
                 f"SMART_TURN: Failed to initialize LocalSmartTurnAnalyzer: {e}"
             )
-    elif dynamic.ENABLE_FAL_SMART_TURN:
+    elif dynamic.ENABLE_FAL_SMART_TURN():
         if static.FAL_SMART_TURN_API_KEY:
             fal_smart_turn_service = FalSmartTurnService()
             smart_turn_analyzer, fal_session = (
@@ -490,7 +491,7 @@ async def run_normal_mode(args):
 
     context = llm.create_summarizing_context(
         messages,
-        tools,
+        getattr(tools, "standard_tools", []) if tools else [],
     )
 
     context_aggregator = llm.create_context_aggregator(context)
@@ -500,7 +501,7 @@ async def run_normal_mode(args):
     tool_call_processor = None
 
     # Build pipeline components list
-    pipeline_components = [
+    pipeline_components: list = [
         transport.input(),
     ]
 
@@ -586,7 +587,7 @@ async def run_normal_mode(args):
     timestamp = ist_time.strftime("%Y-%m-%d_%H-%M-%S")
     conversation_id = f"{user_name}-{shopId}-{timestamp}"
 
-    task_params = {
+    task_params: Dict[str, Any] = {
         "idle_timeout_secs": static.AUTOMATIC_SESSION_INACTIVITY_TIMEOUT,
         "idle_timeout_frames": (BotSpeakingFrame, LLMFullResponseEndFrame),
         "params": PipelineParams(allow_interruptions=True),
@@ -713,7 +714,8 @@ async def run_normal_mode(args):
         elif smart_turn_analyzer and hasattr(smart_turn_analyzer, "shutdown"):
             await smart_turn_analyzer.shutdown()
         main_task = asyncio.current_task()
-        main_task.cancel()
+        if main_task:
+            main_task.cancel()
 
     runner = PipelineRunner()
 
@@ -759,12 +761,15 @@ async def run_normal_mode(args):
 
             # Set Pipecat conversation context for proper tool call nesting
             provider = ConversationContextProvider.get_instance()
-            provider.set_current_conversation_context(
-                root_span.get_span_context(), conversation_id
-            )
-            logger.info(
-                f"Set Pipecat conversation context with span ID: {root_span.get_span_context().span_id}"
-            )
+            if provider:
+                provider.set_current_conversation_context(
+                    root_span.get_span_context(), conversation_id
+                )
+                logger.info(
+                    f"Set Pipecat conversation context with span ID: {root_span.get_span_context().span_id}"
+                )
+            else:
+                logger.warning("ConversationContextProvider instance is None")
 
             await run_pipeline()
     else:

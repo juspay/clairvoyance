@@ -29,7 +29,7 @@ class HITLManager:
         logger.debug("HITL Manager: Initialized")
 
     async def request_confirmation(
-        self, function_name: str, arguments: dict, tool_call_id: str = None
+        self, function_name: str, arguments: dict, tool_call_id: str | None = None
     ) -> Dict[str, Any]:
         """
         Request user confirmation for a dangerous operation.
@@ -93,7 +93,7 @@ class HITLManager:
 
     async def _request_user_confirmation(
         self, confirmation_id: str, function_name: str, arguments: dict
-    ) -> dict:
+    ) -> Dict[str, Any]:
         """Send confirmation request to user and wait for response"""
         action_type = get_action_description(function_name)
 
@@ -193,7 +193,7 @@ class HITLManager:
 
     async def _wait_for_user_response(
         self, confirmation_id: str, timeout_seconds: int
-    ) -> dict:
+    ) -> Dict[str, Any]:
         """Wait for user response via RTVI"""
         try:
             register_pending_confirmation(confirmation_id)
@@ -203,7 +203,7 @@ class HITLManager:
             logger.debug(
                 f"Received user response via RTVI for function {confirmation_id}: approved={response.get('approved', False) if response else False}"
             )
-            return response
+            return response if response is not None else {}
         except asyncio.TimeoutError:
             logger.warning(
                 f"Timeout waiting for RTVI confirmation response: {confirmation_id}"

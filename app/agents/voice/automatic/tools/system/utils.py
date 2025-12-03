@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import cast
 
 import pytz
 from pipecat.adapters.schemas.function_schema import FunctionSchema
@@ -36,7 +37,7 @@ get_current_time_function = FunctionSchema(
 # Build tools list conditionally
 standard_tools_list = [get_current_time_function]
 
-tools = ToolsSchema(standard_tools=standard_tools_list)
+tools = ToolsSchema(standard_tools=cast(list, standard_tools_list))
 
 # Build tool functions dictionary conditionally
 tool_functions = {"get_current_time": get_current_time}

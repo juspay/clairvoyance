@@ -47,7 +47,7 @@ class ConversationManager:
         self._lock = threading.RLock()
 
         # Cleanup task
-        self._cleanup_task = None
+        self._cleanup_task: Optional[asyncio.Task[None]] = None
         self._shutdown_event = asyncio.Event()
 
         logger.info(
@@ -494,7 +494,12 @@ def start_conversation_turn(session_id: str, user_input: str) -> ConversationTur
     """Convenience function to start a new conversation turn"""
     manager = get_conversation_manager()
     manager.add_user_message(session_id, user_input)
-    return manager.get_conversation(session_id).current_turn
+    conversation = manager.get_conversation(session_id)
+    if conversation is None:
+        raise ValueError(f"No conversation found for session_id: {session_id}")
+    if conversation.current_turn is None:
+        raise ValueError(f"No current turn found for session_id: {session_id}")
+    return conversation.current_turn
 
 
 def add_llm_response(session_id: str, response: str) -> Optional[ConversationMessage]:

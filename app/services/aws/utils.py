@@ -3,7 +3,7 @@ AWS Utils - Generalized AWS client initialization
 Provides reusable AWS client creation for various AWS services
 """
 
-from typing import Optional
+from typing import Any, Optional
 
 import boto3
 
@@ -15,7 +15,7 @@ from app.core.config.static import (
 from app.core.logger import logger
 
 
-def get_aws_client(service_name: str) -> Optional[any]:
+def get_aws_client(service_name: str) -> Optional[Any]:
     """
     Initializes and returns an AWS client for the specified service.
 
@@ -23,7 +23,7 @@ def get_aws_client(service_name: str) -> Optional[any]:
         service_name (str): The AWS service name (e.g., 'kms', 's3', 'ec2', 'lambda')
 
     Returns:
-        Optional[any]: The AWS client instance or None if initialization fails
+        Optional[Any]: The AWS client instance or None if initialization fails
     """
     try:
         # Check if AWS credentials are available

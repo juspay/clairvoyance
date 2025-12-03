@@ -70,6 +70,9 @@ async def get_db_connection():
     if pool is None:
         await init_db_pool()
 
+    if pool is None:
+        raise RuntimeError("Database pool is not initialized")
+
     async with pool.acquire() as connection:
         yield connection
 

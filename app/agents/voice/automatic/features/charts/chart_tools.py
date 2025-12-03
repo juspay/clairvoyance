@@ -129,14 +129,22 @@ def get_pending_chart_emissions(session_id: str) -> List[Dict[str, Any]]:
 
 async def generate_bar_chart(params) -> None:
     """Generate a bar chart component for comparative data analysis."""
+    session_id = None
     try:
+        # Extract session_id first for error logging
+        session_id = params.arguments.get("session_id") or get_current_session_id()
+        if not session_id or not isinstance(session_id, str):
+            await params.result_callback(
+                "Tool Error: [generate_bar_chart] Invalid or missing session ID"
+            )
+            return
+
         # Extract parameters from LLM call
         title = params.arguments.get("title")
         categories = params.arguments.get("categories")
         series_data = params.arguments.get("series_data")
         voice_description = params.arguments.get("voice_description")
         subtitle = params.arguments.get("subtitle")
-        session_id = params.arguments.get("session_id") or get_current_session_id()
 
         # Validate series_data - only one series allowed like MCP
         if len(series_data) > 1:
@@ -214,7 +222,16 @@ async def generate_bar_chart(params) -> None:
 
 async def generate_line_chart(params) -> None:
     """Generate a line chart component for time series or trend analysis."""
+    session_id = None
     try:
+        # Extract session_id first for error logging
+        session_id = params.arguments.get("session_id") or get_current_session_id()
+        if not session_id or not isinstance(session_id, str):
+            await params.result_callback(
+                "Tool Error: [generate_line_chart] Invalid or missing session ID"
+            )
+            return
+
         # Extract parameters from LLM call
         title = params.arguments.get("title")
         categories = params.arguments.get("categories")
@@ -222,7 +239,6 @@ async def generate_line_chart(params) -> None:
         voice_description = params.arguments.get("voice_description")
         subtitle = params.arguments.get("subtitle")
         data_type = params.arguments.get("data_type", "unknown")
-        session_id = params.arguments.get("session_id") or get_current_session_id()
 
         # Generate chart ID using MCP format
         chart_id = generate_chart_id("line_chart")
@@ -296,7 +312,16 @@ async def generate_line_chart(params) -> None:
 
 async def generate_donut_chart(params) -> None:
     """Generate a donut chart component for percentage/proportion analysis."""
+    session_id = None
     try:
+        # Extract session_id first for error logging
+        session_id = params.arguments.get("session_id") or get_current_session_id()
+        if not session_id or not isinstance(session_id, str):
+            await params.result_callback(
+                "Tool Error: [generate_donut_chart] Invalid or missing session ID"
+            )
+            return
+
         # Extract parameters from LLM call
         title = params.arguments.get("title")
         categories = params.arguments.get("categories")
@@ -305,7 +330,6 @@ async def generate_donut_chart(params) -> None:
         voice_description = params.arguments.get("voice_description")
         subtitle = params.arguments.get("subtitle")
         colors = params.arguments.get("colors")
-        session_id = params.arguments.get("session_id") or get_current_session_id()
 
         # Validate data_type parameter
         valid_data_types = ["currency", "numericalValue", "percentage", "unknown"]
@@ -411,7 +435,16 @@ async def generate_donut_chart(params) -> None:
 
 async def generate_single_stat_card(params) -> None:
     """Generate a single statistic card showing a key metric."""
+    session_id = None
     try:
+        # Extract session_id first for error logging
+        session_id = params.arguments.get("session_id") or get_current_session_id()
+        if not session_id or not isinstance(session_id, str):
+            await params.result_callback(
+                "Tool Error: [generate_single_stat_card] Invalid or missing session ID"
+            )
+            return
+
         # Extract parameters from LLM call
         title = params.arguments.get("title")
         primary_value = params.arguments.get("primary_value")
@@ -421,7 +454,6 @@ async def generate_single_stat_card(params) -> None:
         delta_positive = params.arguments.get("delta_positive", True)
         date_range = params.arguments.get("date_range")
         data_type = params.arguments.get("data_type", "unknown")
-        session_id = params.arguments.get("session_id") or get_current_session_id()
 
         # Format primary_value based on data_type
         formatted_primary_value = primary_value
