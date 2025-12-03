@@ -128,7 +128,7 @@ class ConversationManager:
     ) -> ConversationMessage:
         """Add a user message and start a new turn"""
         user_message = ConversationMessage.create_user_message(content, message_id)
-        turn = self.start_turn(session_id, user_message)
+        self.start_turn(session_id, user_message)
         return user_message
 
     def add_assistant_message(
@@ -232,7 +232,7 @@ class ConversationManager:
     ) -> Optional[ConversationEvent]:
         """Start a new conversation turn and return event for RTVI emission."""
         try:
-            user_message = self.add_user_message(session_id, user_content)
+            self.add_user_message(session_id, user_content)
             conversation = self.get_conversation(session_id)
             turn = conversation.current_turn if conversation else None
 
@@ -493,7 +493,7 @@ async def stop_conversation_manager():
 def start_conversation_turn(session_id: str, user_input: str) -> ConversationTurn:
     """Convenience function to start a new conversation turn"""
     manager = get_conversation_manager()
-    user_message = manager.add_user_message(session_id, user_input)
+    manager.add_user_message(session_id, user_input)
     return manager.get_conversation(session_id).current_turn
 
 

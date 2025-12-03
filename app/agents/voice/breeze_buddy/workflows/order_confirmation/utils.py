@@ -1,4 +1,8 @@
 import json
+import os
+
+from pipecat.frames.frames import OutputAudioRawFrame
+from pydub import AudioSegment
 
 from app.core.config.static import ORDER_CONFIRMATION_WEBHOOK_SECRET_KEY
 from app.core.logger import logger
@@ -103,3 +107,42 @@ async def send_webhook_with_retry(
 
     logger.error(f"All {max_retries} webhook attempts failed for {url}")
     return False
+
+
+def load_audio(audio_path) -> OutputAudioRawFrame | None:
+    """
+    Load and process the audio file.
+
+    Returns:
+        OutputAudioRawFrame: Processed audio frame ready for transport, or None if loading failed
+    """
+
+    if os.path.exists(audio_path):
+        try:
+            # Load audio file using pydub and convert to transport format
+            audio_segment = AudioSegment.from_wav(audio_path)
+
+            # Convert to 8000 Hz sample rate, mono channel, 16-bit PCM to match transport config
+            audio_segment = (
+                audio_segment.set_frame_rate(8000).set_channels(1).set_sample_width(2)
+            )
+
+            # Get raw audio data
+            raw_audio_data = audio_segment.raw_data
+
+            # Create OutputAudioRawFrame with correct parameters
+            audio_sound = OutputAudioRawFrame(
+                audio=raw_audio_data,
+                sample_rate=8000,  # Match transport sample rate
+                num_channels=1,  # Match transport channels (mono)
+            )
+            logger.info(
+                "Loaded and resampled one moment audio from WAV file successfully"
+            )
+            return audio_sound
+        except Exception as e:
+            logger.warning(f"Failed to load and process WAV audio: {e}")
+    else:
+        logger.warning(f"One moment audio file not found: {audio_path}")
+
+    return None

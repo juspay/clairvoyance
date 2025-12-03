@@ -5,7 +5,6 @@ load_dotenv()
 
 # STEP 2: Now safe to import everything else
 import asyncio
-import os
 
 import uvicorn
 

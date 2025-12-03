@@ -253,7 +253,7 @@ async def run_normal_mode(args):
     )
 
     # Create session context for passing to components
-    session_context = create_session_context(args.session_id)
+    create_session_context(args.session_id)
 
     # Set global session ID for chart tools
     set_current_session_id(args.session_id)
