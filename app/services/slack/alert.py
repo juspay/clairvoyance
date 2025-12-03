@@ -8,7 +8,10 @@ from typing import Dict, List, Optional
 
 import aiohttp
 
-from app.core.config.static import SLACK_TAG_USERS, SLACK_WEBHOOK_URL
+from app.core.config.static import (
+    SLACK_TAG_USERS,
+    SLACK_WEBHOOK_URL,
+)
 from app.core.logger import logger
 
 

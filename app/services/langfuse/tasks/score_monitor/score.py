@@ -10,13 +10,43 @@ from typing import Any, Dict, List, Optional
 
 import aiohttp
 
-from app.core.config.static import LANGFUSE_BASEURL, LANGFUSE_EVALUATORS
+from app.core.config.dynamic import DAILY_SUMMARY_HOUR
+from app.core.config.static import (
+    LANGFUSE_BASEURL,
+    LANGFUSE_EVALUATORS,
+)
 from app.core.logger import logger
 from app.database.accessor.breeze_buddy.lead_call_tracker import get_lead_by_call_id
 from app.services.langfuse.client import langfuse_readonly_client
 from app.services.langfuse.trace import fetch_trace
-from app.services.redis import get_redis_service
+from app.services.redis import get_redis_service, is_redis_configured
 from app.services.slack.alert import slack_alert
+
+
+async def track_evaluator_alert(evaluator_name: str) -> None:
+    """
+    Track alert count for a Langfuse evaluator in Redis.
+
+    Increments the Redis counter for the given evaluator for daily tracking.
+
+    Args:
+        evaluator_name: Name of the evaluator to track
+    """
+    try:
+        if not is_redis_configured():
+            logger.warning("Redis not configured - cannot track alert count")
+            return
+
+        date_str = datetime.now().strftime("%Y-%m-%d")
+        key = f"alerts:count:{evaluator_name}:{date_str}"
+        redis_service = await get_redis_service()
+        new_count = await redis_service.incr(key)
+        await redis_service.expire(key, 160000)
+        logger.info(
+            f"Alert tracked successfully. New count for '{evaluator_name}' on {date_str}: {new_count}"
+        )
+    except Exception as e:
+        logger.warning(f"Failed to track alert for {evaluator_name}: {e}")
 
 
 class ScoreMonitor:
@@ -291,13 +321,128 @@ class ScoreMonitor:
         links = [{"text": "View Trace in Langfuse", "url": trace_url}]
 
         # Use the generic send function
-        return await slack_alert.send(
+        success = await slack_alert.send(
             title=f"🔴 Breeze Buddy - {evaluator_name}",
             fields=fields,
             sections=sections if sections else None,
             links=links,
             fallback_text=f"LLM Judge Failure: {evaluator_name} - Score 0.0",
         )
+
+        # Track alert count in Redis after successful Slack send
+        if success:
+            await track_evaluator_alert(evaluator_name)
+
+        return success
+
+    async def get_alert_counts_for_date(self, target_date: str) -> Dict[str, int]:
+        """Get alert counts for all evaluators for a specific date."""
+        if not is_redis_configured():
+            return {}
+
+        try:
+            redis_service = await get_redis_service()
+            counts = {}
+
+            for evaluator in LANGFUSE_EVALUATORS:
+                key = f"alerts:count:{evaluator}:{target_date}"
+                count = await redis_service.get(key)
+                counts[evaluator] = int(count) if count else 0
+
+            logger.debug(f"Retrieved alert counts for {target_date}: {counts}")
+            return counts
+        except Exception as e:
+            logger.error(f"Failed to retrieve alert counts for {target_date}: {e}")
+            return {}
+
+    async def send_daily_summary_if_time(self) -> bool:
+        """
+        Send daily alert summary if it's the configured hour.
+        Returns True if summary was sent, False otherwise.
+        """
+        try:
+            now = datetime.now()
+            today = now.strftime("%Y-%m-%d")
+
+            # Only send summary during the configured hour
+            summary_hour = await DAILY_SUMMARY_HOUR()
+            if now.hour != summary_hour:
+                return False
+
+            # Skip if Redis is not configured
+            if not is_redis_configured():
+                logger.warning(
+                    "Redis not configured - cannot track summary status or retrieve alert counts"
+                )
+                return False
+
+            summary_sent_key = f"alerts:summary_sent:{today}"
+            redis_service = None  # Initialize to avoid UnboundLocalError
+
+            # Check if we already sent today's summary
+            try:
+                redis_service = await get_redis_service()
+                already_sent = await redis_service.get(summary_sent_key)
+                if already_sent:
+                    logger.debug(
+                        f"Daily alert summary already sent for {today} - skipping"
+                    )
+                    return False
+            except Exception as e:
+                logger.warning(f"Could not check summary status: {e}")
+
+            # Get today's alert counts
+            alert_counts = await self.get_alert_counts_for_date(today)
+            total_alerts = sum(alert_counts.values())
+
+            # Build and send Slack summary message
+            try:
+                # Build summary message with dd-mm-yy format
+                display_date = now.strftime("%d-%m-%y")
+                title = f"📊 Breeze Buddy Alerts Summary - {display_date}"
+                fields = [
+                    {"name": "Total Alerts", "value": str(total_alerts)},
+                ]
+
+                # Evaluator breakdown
+                evaluator_breakdown = []
+                for evaluator, count in alert_counts.items():
+                    evaluator_breakdown.append(f"• {evaluator}: {count}")
+
+                sections = [
+                    {
+                        "title": "Breakdown by Evaluator",
+                        "text": "\n".join(evaluator_breakdown),
+                    }
+                ]
+
+                # Send to Slack
+                success = await slack_alert.send(
+                    title=title,
+                    fields=fields,
+                    sections=sections,
+                    fallback_text=f"Breeze Buddy Alerts Summary - {today}: {total_alerts} total alerts",
+                )
+
+            except Exception as e:
+                logger.error(f"Error sending Slack alert summary: {e}", exc_info=True)
+                success = False
+
+            # Mark summary as sent for today (only if Redis service is available)
+            if success and redis_service is not None:
+                try:
+                    await redis_service.setex(
+                        summary_sent_key, "1", 65000
+                    )  # TTL=18 hours
+                    logger.info(f"Daily alert summary sent successfully for {today}")
+                except Exception as e:
+                    logger.warning(f"Could not mark summary as sent: {e}")
+
+            return success
+
+        except Exception as e:
+            logger.error(f"Error sending daily alert summary: {e}", exc_info=True)
+            return False
 
     async def get_trace_details(self, trace_id: str) -> Optional[Dict[str, Any]]:
         """
@@ -350,6 +495,14 @@ class ScoreMonitor:
         """
         # Set end time to now
         to_time = datetime.now(timezone.utc)
+
+        # Check if it's time to send daily summary (integrated into monitoring task)
+        try:
+            summary_sent = await self.send_daily_summary_if_time()
+            if summary_sent:
+                logger.info("Daily alert summary sent as part of monitoring task")
+        except Exception as summary_error:
+            logger.error(f"Error checking/sending daily summary: {summary_error}")
 
         # Get last check time from Redis (shared across all pods)
         last_check_time = await self._get_last_check_time()
