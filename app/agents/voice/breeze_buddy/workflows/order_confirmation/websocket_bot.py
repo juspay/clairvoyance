@@ -10,7 +10,6 @@ from fastapi import WebSocket
 from opentelemetry import trace
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.vad.vad_analyzer import VADParams
-from pipecat.frames.frames import TTSSpeakFrame
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
@@ -41,13 +40,13 @@ from app.agents.voice.breeze_buddy.workflows.order_confirmation.types import Ord
 from app.agents.voice.breeze_buddy.workflows.order_confirmation.utils import (
     OUTCOME_TO_ENUM,
     indian_number_to_speech,
+    load_audio,
     send_webhook_with_retry,
 )
 from app.core.config.static import (
     AZURE_BREEZE_BUDDY_OPENAI_MODEL,
     AZURE_OPENAI_API_KEY,
     AZURE_OPENAI_ENDPOINT,
-    BREEZE_BUDDY_PRE_ACTION_SPEAK_MESSAGE,
     BREEZE_BUDDY_VAD_CONFIDENCE,
     BREEZE_BUDDY_VAD_MIN_VOLUME,
     BREEZE_BUDDY_VAD_START_SECS,
@@ -455,15 +454,19 @@ class OrderConfirmationBot:
             self.vad_analyzer.params.confidence = BREEZE_BUDDY_VAD_CONFIDENCE
             logger.info("STT unmuted via VAD")
 
-    async def _speak_message_handler(self, flow_manager, args):
-        """Speak 'okay' before order verification using TTS"""
-        try:
-            await self.task.queue_frame(
-                TTSSpeakFrame(text=BREEZE_BUDDY_PRE_ACTION_SPEAK_MESSAGE)
-            )
-            logger.info("Queued TTS frame: 'okay' before order verification")
-        except Exception as e:
-            logger.error(f"Failed to queue TTS frame: {e}")
+    async def _play_audio_handler(self, flow_manager, args):
+        """Play audio before order verification"""
+        audio = load_audio(
+            audio_path="app/agents/voice/breeze_buddy/static/audio/cough.wav"
+        )
+        if audio:
+            try:
+                await self.transport.output().write_audio_frame(audio)
+                logger.info("Played audio")
+            except Exception as e:
+                logger.error(f"Failed to play audio: {e}")
+        else:
+            logger.warning("audio not loaded, skipping")
 
     async def _end_conversation_handler(self, flow_manager, args):
         if not self.conversation_ended:
@@ -782,7 +785,7 @@ class OrderConfirmationBot:
         verify_order_details_config = {
             "name": "verify_order_details",
             "pre_actions": [
-                {"type": "function", "handler": self._speak_message_handler},
+                {"type": "function", "handler": self._play_audio_handler},
                 {"type": "function", "handler": self._mute_stt_handler},
             ],
             "post_actions": [{"type": "function", "handler": self._unmute_stt_handler}],

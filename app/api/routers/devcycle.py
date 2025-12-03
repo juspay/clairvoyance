@@ -66,7 +66,7 @@ async def devcycle_webhook(
     Raises:
         HTTPException: 401 if authentication fails
     """
-    webhook_start_time = time.time()
+    time.time()
     client_ip = request.client.host if request.client else "unknown"
 
     # Authenticate the webhook request
