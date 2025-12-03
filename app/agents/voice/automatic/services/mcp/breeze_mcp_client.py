@@ -6,7 +6,7 @@ from datetime import timedelta
 from mcp.client.session_group import StreamableHttpParameters
 from pipecat.services.mcp_service import MCPClient as PipecatMCPClient
 
-from app.agents.voice.automatic.services.mcp.utils import create_chart_aware_wrapper
+from app.agents.voice.automatic.services.mcp.utils import create_mcp_hitl_chart_wrapper
 from app.agents.voice.automatic.tools import initialize_tools
 from app.agents.voice.automatic.types import Mode
 from app.core.config.static import BREEZE_MCP_ENDPOINT_PATH, MCP_CLIENT_TIMEOUT
@@ -44,15 +44,15 @@ async def init_breeze_mcp_tools(
 
         mcp_client = PipecatMCPClient(server_params=server_params)
 
-        # Wrap all MCP functions to intercept chart results
+        # Wrap all MCP functions to add HITL and chart interception
         if not hasattr(llm, "register_function") or not callable(llm.register_function):
             logger.warning(
-                "LLM service does not have register_function method - MCP chart interception disabled"
+                "LLM service does not have register_function method - MCP HITL and chart interception disabled"
             )
             original_register_function = None
         else:
             original_register_function = llm.register_function
-            llm.register_function = create_chart_aware_wrapper(
+            llm.register_function = create_mcp_hitl_chart_wrapper(
                 original_register_function
             )
 
