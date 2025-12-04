@@ -46,6 +46,11 @@ class HITLManager:
 
         Returns:
             Dict containing approval status and any modified arguments
+
+        Raises:
+            HITLUserRejectedOperationError: If user rejects the operation
+            HITLOperationTimeoutError: If confirmation times out
+            HITLConfirmationError: If confirmation process fails
         """
         confirmation_id = str(uuid.uuid4())
 
