@@ -465,6 +465,7 @@ async def run_normal_mode(args):
                     "generate_line_chart",
                     "generate_donut_chart",
                     "generate_single_stat_card",
+                    "tool_execution_rules",
                 ]
                 if function_call.function_name not in instant_functions:
                     # Play tool call sound if enabled, otherwise use phrases
