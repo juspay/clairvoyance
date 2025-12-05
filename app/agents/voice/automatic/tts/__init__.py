@@ -2,12 +2,25 @@ from typing import Optional
 
 from pipecat.services.elevenlabs.tts import ElevenLabsTTSService
 from pipecat.services.google.tts import GoogleTTSService
+from pipecat.services.sarvam.tts import SarvamTTSService
 from pipecat.transcriptions.language import Language
 
 from app.agents.voice.automatic.features.charts.highlight_filter import (
     HighlightedChartTextFilter,
 )
 from app.agents.voice.automatic.types import TTSProvider, VoiceName
+from app.agents.voice.automatic.utils.common import (
+    SarvamServiceType,
+    get_sarvam_language,
+)
+from app.core.config import static
+from app.core.config.dynamic import (
+    SARVAM_TTS_LANGUAGE_CODE,
+    SARVAM_TTS_MODEL,
+    SARVAM_TTS_PACE,
+    SARVAM_TTS_PITCH,
+    SARVAM_TTS_VOICE_ID,
+)
 from app.core.config.static import (
     ELEVENLABS_API_KEY,
     ELEVENLABS_MODEL_ID,
@@ -16,11 +29,12 @@ from app.core.config.static import (
     GOOGLE_BRET_VOICE,
     GOOGLE_CREDENTIALS_JSON,
     GOOGLE_MIA_VOICE,
+    SARVAM_API_KEY,
 )
 from app.core.logger import logger
 
 
-def get_tts_service(
+async def get_tts_service(
     tts_provider: str | None = None,
     voice_name: str | None = None,
     session_id: Optional[str] = None,
@@ -41,6 +55,41 @@ def get_tts_service(
     if session_id and enable_chart_text_filter:
         highlight_filter = HighlightedChartTextFilter(session_id)
         text_filters.append(highlight_filter)
+
+    if voice_name == VoiceName.RHEA.value or tts_provider == TTSProvider.SARVAM.value:
+        if not SARVAM_API_KEY:
+            logger.error("SARVAM_API_KEY is not set. Sarvam TTS cannot be used.")
+            raise ValueError("SARVAM_API_KEY is required for Sarvam TTS")
+
+        # Get dynamic config values from Redis (same pattern as ENABLE_BACKGROUND_TASKS in main.py)
+        sarvam_tts_language_code = await SARVAM_TTS_LANGUAGE_CODE()
+        sarvam_tts_model = await SARVAM_TTS_MODEL()
+        sarvam_tts_voice_id = await SARVAM_TTS_VOICE_ID()
+        sarvam_tts_pitch = await SARVAM_TTS_PITCH()
+        sarvam_tts_pace = await SARVAM_TTS_PACE()
+
+        # Get language for TTS (with EN_IN fallback)
+        tts_language = get_sarvam_language(
+            language_code=sarvam_tts_language_code,
+            service_type=SarvamServiceType.TTS,
+        )
+
+        service = SarvamTTSService(
+            api_key=SARVAM_API_KEY,
+            voice_id=sarvam_tts_voice_id,
+            model=sarvam_tts_model,
+            params=SarvamTTSService.InputParams(
+                language=tts_language,
+                pitch=sarvam_tts_pitch,
+                pace=sarvam_tts_pace,
+            ),
+        )
+        logger.info(
+            f"Using Sarvam TTS service with model={sarvam_tts_model}, "
+            f"voice_id={sarvam_tts_voice_id}, language={tts_language}, "
+            f"pitch={sarvam_tts_pitch}, pace={sarvam_tts_pace}"
+        )
+        return service
 
     if (
         tts_provider == TTSProvider.ELEVENLABS.value

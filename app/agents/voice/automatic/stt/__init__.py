@@ -6,6 +6,7 @@ from pipecat.services.assemblyai.stt import AssemblyAISTTService
 from pipecat.services.deepgram.stt import DeepgramSTTService
 from pipecat.services.google.stt import GoogleSTTService
 from pipecat.services.openai.stt import OpenAISTTService
+from pipecat.services.sarvam.stt import SarvamSTTService
 from pipecat.services.soniox.stt import (
     SonioxContextGeneralItem,
     SonioxContextObject,
@@ -16,6 +17,17 @@ from pipecat.services.soniox.stt import (
 from pipecat.transcriptions.language import Language
 
 from app.agents.voice.automatic.types import VoiceName
+from app.agents.voice.automatic.utils.common import (
+    SarvamServiceType,
+    get_sarvam_language,
+)
+from app.core.config.dynamic import (
+    SARVAM_STT_HIGH_VAD_SENSITIVITY,
+    SARVAM_STT_LANGUAGE_CODE,
+    SARVAM_STT_MODEL,
+    SARVAM_STT_PROMPT,
+    SARVAM_STT_VAD_SIGNALS,
+)
 from app.core.config.static import (
     ASSEMBLYAI_API_KEY,
     AUTOMATIC_OPENAI_STT_PROMPT,
@@ -37,6 +49,8 @@ from app.core.config.static import (
     GOOGLE_CREDENTIALS_JSON,
     OPENAI_STT_API_KEY,
     OPENAI_STT_MODEL,
+    SAMPLE_RATE,
+    SARVAM_API_KEY,
     SONIOX_API_KEY,
     SONIOX_CONTEXT,
     SONIOX_ENABLE_NON_FINAL_TOKENS,
@@ -119,7 +133,7 @@ def parse_soniox_context() -> Optional[SonioxContextObject]:
         return None
 
 
-def get_stt_service(voice_name: Optional[str] = None):
+async def get_stt_service(voice_name: Optional[str] = None):
     """
     Returns an STT service instance based on the environment configuration.
 
@@ -143,6 +157,51 @@ def get_stt_service(voice_name: Optional[str] = None):
             # Optimized prompt for business analytics voice agent
             prompt=AUTOMATIC_OPENAI_STT_PROMPT,
             temperature=0.0,  # Deterministic output for consistency
+        )
+
+    # Check for RHEA voice or Sarvam STT provider
+    if STT_PROVIDER == "sarvam" or voice_name == VoiceName.RHEA.value:
+        if not SARVAM_API_KEY:
+            raise ValueError("SARVAM_API_KEY is required when STT_PROVIDER=sarvam")
+
+        # Get dynamic config values from Redis (same pattern as ENABLE_BACKGROUND_TASKS in main.py)
+        sarvam_stt_model = await SARVAM_STT_MODEL()
+        sarvam_stt_language_code = await SARVAM_STT_LANGUAGE_CODE()
+        sarvam_stt_prompt = await SARVAM_STT_PROMPT()
+        sarvam_stt_vad_signals = await SARVAM_STT_VAD_SIGNALS()
+        sarvam_stt_high_vad_sensitivity = await SARVAM_STT_HIGH_VAD_SENSITIVITY()
+
+        # Initialize parameters based on model type
+        prompt_param = None
+        language_param = None
+
+        if "saaras" in sarvam_stt_model.lower():
+            # STT-Translate model: accepts prompt, no language (auto-detects)
+            prompt_param = sarvam_stt_prompt if sarvam_stt_prompt else None
+        else:
+            # saarika (pure STT) model: accepts language, no prompt
+            language_param = get_sarvam_language(
+                language_code=sarvam_stt_language_code,
+                service_type=SarvamServiceType.STT,
+            )
+
+        logger.info(
+            f"Using Sarvam STT service with model={sarvam_stt_model}, "
+            f"language={'set' if language_param else 'none'}, "
+            f"prompt={'set' if prompt_param else 'none'}, "
+            f"vad_signals={sarvam_stt_vad_signals}, high_vad_sensitivity={sarvam_stt_high_vad_sensitivity}"
+        )
+
+        return SarvamSTTService(
+            api_key=SARVAM_API_KEY,
+            model=sarvam_stt_model,
+            sample_rate=SAMPLE_RATE,
+            params=SarvamSTTService.InputParams(
+                language=language_param,
+                prompt=prompt_param,
+                vad_signals=sarvam_stt_vad_signals,
+                high_vad_sensitivity=sarvam_stt_high_vad_sensitivity,
+            ),
         )
 
     # Default behavior - use configured STT provider
