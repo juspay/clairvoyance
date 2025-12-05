@@ -152,7 +152,7 @@ GEMINI_SEARCH_RESULT_API_MODEL = os.environ.get(
 # --- STT Configuration ---
 STT_PROVIDER = os.environ.get(
     "STT_PROVIDER", "google"
-).lower()  # "google", "assemblyai", "openai", "deepgram", or "soniox"
+).lower()  # "google", "assemblyai", "openai", "deepgram", "soniox", "elevenlabs", or "sarvam"
 ASSEMBLYAI_API_KEY = os.getenv("ASSEMBLYAI_API_KEY")
 OPENAI_STT_API_KEY = os.getenv("OPENAI_STT_API_KEY")
 OPENAI_STT_MODEL = os.environ.get(
@@ -205,6 +205,9 @@ DEEPGRAM_AUTO_DETECT_LANGUAGE = (
     os.environ.get("DEEPGRAM_AUTO_DETECT_LANGUAGE", "false").lower() == "true"
 )  # Enable automatic language detection (uses 'multi' parameter)
 
+# --- Sarvam STT & TTS Configuration ---
+SARVAM_API_KEY = os.getenv("SARVAM_API_KEY")
+
 # --- Soniox STT Configuration ---
 # Soniox is optimized to solve the 0.5-second speech pause issue experienced with Deepgram
 SONIOX_API_KEY = os.getenv(
@@ -238,7 +241,6 @@ FAL_SMART_TURN_API_KEY = os.getenv("FAL_SMART_TURN_API_KEY")
 ENABLE_SMART_TURN = os.getenv("ENABLE_SMART_TURN", "false").lower() == "true"
 
 # Automatic MCP Tool Server
-ENABLE_BREEZE_MCP = os.environ.get("ENABLE_BREEZE_MCP", "false").lower() == "true"
 ENABLE_BREEZE_MCP_FOR_BRET = (
     os.environ.get("ENABLE_BREEZE_MCP_FOR_BRET", "false").lower() == "true"
 )

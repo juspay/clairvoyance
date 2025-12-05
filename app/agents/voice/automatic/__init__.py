@@ -63,6 +63,7 @@ from app.agents.voice.automatic.utils.session_context import (
     set_current_session_id,
 )
 from app.core.config import dynamic, static
+from app.core.config.dynamic import ENABLE_BREEZE_MCP
 from app.core.logger import configure_session_logger, logger
 
 from .processors import LLMSpyProcessor
@@ -266,7 +267,10 @@ async def run_normal_mode(args):
     # Initialize tools based on the mode and provided tokens
     # Only pass tokens if in live mode
 
-    use_breeze_mcp_server = static.ENABLE_BREEZE_MCP and (
+    # Get dynamic config value from Redis (same pattern as ENABLE_BACKGROUND_TASKS in main.py)
+    enable_breeze_mcp = await ENABLE_BREEZE_MCP()
+
+    use_breeze_mcp_server = enable_breeze_mcp and (
         not static.SHOPS_FOR_BREEZE_MCP  # Empty list = all shops
         or args.shop_id in static.SHOPS_FOR_BREEZE_MCP  # Specific shops only
     )
@@ -377,9 +381,9 @@ async def run_normal_mode(args):
         daily_params,
     )
 
-    stt = get_stt_service(voice_name=voice_name.value)
+    stt = await get_stt_service(voice_name=voice_name.value)
 
-    tts = get_tts_service(
+    tts = await get_tts_service(
         tts_provider=tts_provider.value,
         voice_name=voice_name.value,
         session_id=args.session_id,
