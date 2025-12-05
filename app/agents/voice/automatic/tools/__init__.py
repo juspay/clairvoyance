@@ -42,6 +42,8 @@ def initialize_tools(
     :param session_id: The client session ID for tool calls (now receives client_sid).
     :param merchant_id: The merchant ID, if available.
     :param user_id: The user ID, if available.
+    :param user_email: The user email, if available.
+    :param reseller_id: The reseller ID, if available.
     """
     providers = []
     if breeze_token:
@@ -59,7 +61,7 @@ def initialize_tools(
     all_tool_functions.update(system_tool_functions)
     logger.info(f"Loaded {len(system_tools.standard_tools)} system tools.")
 
-    # Internet tools are always available
+    # Internet tools are available when search grounding is enabled
     if ENABLE_SEARCH_GROUNDING:
         all_tools.extend(internet.tools.standard_tools)
         all_tool_functions.update(internet.tool_functions)

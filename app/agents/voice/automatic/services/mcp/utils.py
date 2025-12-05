@@ -4,10 +4,17 @@ MCP utilities for intercepting and processing chart tool results.
 
 import json
 
+from pipecat.adapters.schemas.tools_schema import ToolsSchema
+
 from app.agents.voice.automatic.features.charts.chart_tools import (
     _register_pending_chart_emission,
 )
+from app.agents.voice.automatic.tools.internet import (
+    tool_functions as internet_tool_functions,
+)
+from app.agents.voice.automatic.tools.internet import tools as internet_tools
 from app.agents.voice.automatic.utils.session_context import get_current_session_id
+from app.core.config.static import ENABLE_SEARCH_GROUNDING
 from app.core.logger import logger
 
 
@@ -48,9 +55,11 @@ def create_chart_aware_wrapper(original_register_function):
 
                 # Check for error in result
                 if isinstance(result, dict):
-                    if "error" in result:
+                    if "errorType" in result:
+                        error_type = result.get("errorType")
+                        error_message = result.get("message", "")
                         logger.error(
-                            f"Tool Error: [Tool '{name}'] Tool returned error: {result.get('error')}"
+                            f"Tool Error: [Tool '{name}'] Tool returned error: {error_type} {error_message}"
                         )
 
                     comments = result.get("comments", {})
@@ -101,3 +110,33 @@ def create_chart_aware_wrapper(original_register_function):
         original_register_function(name, mcp_wrapper, *rf_args, **rf_kwargs)
 
     return wrapped_register_function
+
+
+def extend_mcp_tools_schema(llm, base_tools):
+    """
+    Helper function to register additional tools and add them to the existing tools schema.
+
+    Args:
+        llm: The LLM service to register the function with
+        base_tools: The base ToolsSchema object from MCP
+
+    Returns:
+        Updated ToolsSchema with additional tools added
+    """
+    if ENABLE_SEARCH_GROUNDING:
+        # Register search_web function
+        llm.register_function("search_web", internet_tool_functions["search_web"])
+        logger.info("Registered function: search_web")
+
+        if not base_tools:
+            logger.warning(
+                "Base tools is None, creating new schema with only search_web"
+            )
+            return ToolsSchema(standard_tools=internet_tools.standard_tools)
+
+        # Combine base tools with search_web
+        combined_tools = base_tools.standard_tools + internet_tools.standard_tools
+        return ToolsSchema(standard_tools=combined_tools)
+
+    # If search grounding is disabled, return base_tools unchanged
+    return base_tools

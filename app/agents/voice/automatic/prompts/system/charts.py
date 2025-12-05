@@ -24,7 +24,7 @@ def get_chart_visualization_instructions() -> str:
         return f"""
     🔒 AUTOMATIC DATA VISUALIZATION (MANDATORY)
 
-    Absolute Law: Every single data response must have a chart — no exceptions.
+    Absolute Law: Analytics and metrics data responses must have a chart — configuration and management operations should not generate charts.
 
     RULE 1: MANDATORY SEQUENCE
         1. Receive analytics data
@@ -39,7 +39,7 @@ def get_chart_visualization_instructions() -> str:
     RULE 2: COVERAGE
         1. Multiple categories/percentages/time series → Donut, bar, or line chart
         2. Single numeric value (e.g., "₹12,000 sales today") → Single-stat chart
-        3. Absolutely no text-only responses without a chart
+        3. Analytics and metrics responses must include a chart; configuration and management operations may provide text-only responses
 
     RULE 3: PATTERN TRIGGERS
 
@@ -58,9 +58,10 @@ def get_chart_visualization_instructions() -> str:
         If you see componentType: 'LINE_CHART' → MANDATORY generate_line_chart call
 
     RULE 5: FLEXIBLE HANDLING
-        1. Always attempt a chart first
-        2. If chart generation fails or is not meaningful, provide a clear text response instead
-        3. Never leave the user without an answer
+        1. For analytics and metrics data, always attempt a chart first
+        2. For configuration and management operations, provide a clear text response without attempting chart generation
+        3. If chart generation fails or is not meaningful, provide a clear text response instead
+        4. Never leave the user without an answer
 
     RULE 6: CHART LIMIT PER USER TURN
         1. Only ONE chart is allowed per user interaction/turn
