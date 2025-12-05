@@ -25,7 +25,12 @@ def create_chart_aware_wrapper(original_register_function):
     def wrapped_register_function(name, function, *rf_args, **rf_kwargs):
         async def mcp_wrapper(params):
             if not hasattr(params, "result_callback"):
-                await function(params)
+                try:
+                    await function(params)
+                except Exception as e:
+                    logger.error(
+                        f"Tool Error: [Tool name'{name}'] Unexpected error during execution: {e}"
+                    )
                 return
 
             original_callback = params.result_callback
@@ -35,10 +40,19 @@ def create_chart_aware_wrapper(original_register_function):
                 if isinstance(result, str):
                     try:
                         result = json.loads(result)
-                    except json.JSONDecodeError:
-                        pass
+                    except json.JSONDecodeError as e:
+                        logger.error(
+                            f"Tool Error: [Tool '{name}'] Failed to parse JSON result: {e}"
+                        )
+                        # Continue with string result
 
+                # Check for error in result
                 if isinstance(result, dict):
+                    if "error" in result:
+                        logger.error(
+                            f"Tool Error: [Tool '{name}'] Tool returned error: {result.get('error')}"
+                        )
+
                     comments = result.get("comments", {})
                     chart_data = comments.get("data")
                     if (
@@ -50,6 +64,7 @@ def create_chart_aware_wrapper(original_register_function):
                             session_id = get_current_session_id()
                             if session_id:
                                 _register_pending_chart_emission(session_id, chart_data)
+
                         except Exception as e:
                             # Don't break MCP flow if chart registration fails
                             logger.warning(
@@ -67,10 +82,21 @@ def create_chart_aware_wrapper(original_register_function):
                         return
 
                 # For non-chart results, use original callback
-                await original_callback(result)
+                try:
+                    await original_callback(result)
+                except Exception as e:
+                    logger.error(
+                        f"Tool Error: [Tool '{name}'] Failed to execute result callback: {e}"
+                    )
 
             params.result_callback = chart_aware_callback
-            await function(params)
+
+            try:
+                await function(params)
+            except Exception as e:
+                logger.error(
+                    f"Tool Error: [Tool '{name}'] Unexpected error during execution: {e}"
+                )
 
         original_register_function(name, mcp_wrapper, *rf_args, **rf_kwargs)
 
