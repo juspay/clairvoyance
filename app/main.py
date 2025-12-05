@@ -272,6 +272,8 @@ async def bot_connect(
         "merchant_id": request.merchantId,
         "platform_integrations": request.platformIntegrations,
         "reseller_id": request.resellerId,
+        "customer_id": request.customerId,
+        "shopify_connected_shop": request.shopifyConnectedShop,
     }
 
     # 2. Get room from Daily room pool
@@ -374,6 +376,8 @@ async def bot_connect(
             "merchant_id": "--merchant-id",
             "platform_integrations": "--platform-integrations",
             "reseller_id": "--reseller-id",
+            "customer_id": "--customer-id",
+            "shopify_connected_shop": "--shopify-connected-shop",
         }
 
         for key, value in session_params.items():

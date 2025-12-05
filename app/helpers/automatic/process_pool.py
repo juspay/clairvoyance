@@ -209,6 +209,7 @@ class VoiceAgentPool:
         try:
             cmd = f"python3 -u -m app.agents.voice.automatic --pool-mode --process-id {process_id}"
 
+            # Increase stream limit to 10MB to handle large log outputs (default is 64KB)
             proc = await asyncio.create_subprocess_shell(
                 cmd,
                 cwd=Path(__file__).parent.parent.parent.parent,
@@ -216,6 +217,7 @@ class VoiceAgentPool:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,  # Merge stderr for easier logging
                 env=os.environ,
+                limit=10 * 1024 * 1024,  # 10MB limit for subprocess streams
             )
 
             voice_process = VoiceAgentProcess(proc, process_id, is_managed=True)
@@ -322,6 +324,19 @@ class VoiceAgentPool:
                                     )
 
                 except asyncio.TimeoutError:
+                    continue
+                except asyncio.LimitOverrunError as e:
+                    # Handle oversized lines gracefully - read and discard the oversized chunk
+                    logger.warning(
+                        f"Process {voice_process.process_id[:8]} output line exceeds limit ({e.consumed} bytes). "
+                        f"Truncating and continuing. This may indicate very large log output."
+                    )
+                    try:
+                        # Read and discard the remaining data up to the separator
+                        await voice_process.process.stdout.readuntil(b"\n")
+                    except Exception:
+                        # If we can't recover, just continue monitoring
+                        pass
                     continue
                 except Exception as e:
                     logger.debug(

@@ -139,6 +139,8 @@ class AutomaticVoiceUserConnectRequest(BaseModel):
     merchantId: Optional[str] = None
     platformIntegrations: Optional[List[str]] = None
     resellerId: Optional[str] = None
+    customerId: Optional[str] = None
+    shopifyConnectedShop: Optional[str] = None
 
 
 class TokenData(BaseModel):
