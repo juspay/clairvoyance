@@ -114,6 +114,8 @@ async def main():
         help="Platform Integrations that are supported by the shop (string array)",
     )
     parser.add_argument("--reseller-id", type=str, help="Reseller ID")
+    parser.add_argument("--customer-id", type=str, help="Customer ID from breeze token")
+    parser.add_argument("--shopify-connected-shop", type=str, help="Shopify connected shop domain")
 
     # Pool mode arguments
     parser.add_argument("--pool-mode", action="store_true", help="Run in pool mode")
@@ -428,15 +430,18 @@ async def run_normal_mode(args):
 
         mcp_context = {
             "sessionId": args.client_sid,  # Pass client_sid instead of session_id
-            "juspayToken": args.euler_token,
-            "shopUrl": args.shop_url,
-            "shopId": args.shop_id,
-            "shopType": args.shop_type,
-            "userId": args.user_name,
-            "userEmail": args.user_email,
+            "juspayToken": getattr(args, "euler_token", None),
+            "breezeToken": getattr(args, "breeze_token", None),
+            "shopUrl": getattr(args, "shop_url", None),
+            "shopId": getattr(args, "shop_id", None),
+            "shopType": getattr(args, "shop_type", None),
+            "userId": getattr(args, "user_name", None),
+            "userEmail": getattr(args, "user_email", None),
             "enableDemoMode": mode != Mode.LIVE,
-            "merchantId": args.merchant_id,
-            "platformIntegrations": args.platform_integrations,
+            "merchantId": getattr(args, "merchant_id", None),
+            "platformIntegrations": getattr(args, "platform_integrations", None),
+            "customerId": getattr(args, "customer_id", None),
+            "shopifyConnectedShop": getattr(args, "shopify_connected_shop", None),
         }
 
         tools = await init_breeze_mcp_tools(
