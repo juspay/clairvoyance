@@ -64,15 +64,15 @@ def _setup_logger_sinks(
     Reduces code duplication between initial setup and session configuration.
     """
 
-    # Filter function to completely block websockets, daily_core, and specific openai spam logs
+    # Filter function to completely block websockets, daily_core, audio logs, and specific spam logs
     def filter_spam_logs(record):
         logger_name = record["name"]
+        message = record["message"]
         return not (
             logger_name.startswith("websockets")
             or logger_name.startswith("daily_core")
-            or logger_name.startswith(
-                "openai._base_client"
-            )  # Only block _base_client logs, not all openai logs
+            or logger_name.startswith("openai._base_client")
+            or (logger_name.startswith("logging") and 'TEXT \'{"audio":' in message)
         )
 
     if ENVIRONMENT == "dev":
