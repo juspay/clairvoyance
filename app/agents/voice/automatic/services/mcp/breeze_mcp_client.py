@@ -6,7 +6,10 @@ from datetime import timedelta
 from mcp.client.session_group import StreamableHttpParameters
 from pipecat.services.mcp_service import MCPClient as PipecatMCPClient
 
-from app.agents.voice.automatic.services.mcp.utils import create_chart_aware_wrapper
+from app.agents.voice.automatic.services.mcp.utils import (
+    create_chart_aware_wrapper,
+    extend_mcp_tools_schema,
+)
 from app.agents.voice.automatic.tools import initialize_tools
 from app.agents.voice.automatic.types import Mode
 from app.core.config.static import BREEZE_MCP_ENDPOINT_PATH, MCP_CLIENT_TIMEOUT
@@ -64,6 +67,8 @@ async def init_breeze_mcp_tools(
             # Restore original register_function
             if original_register_function is not None:
                 llm.register_function = original_register_function
+
+        tools = extend_mcp_tools_schema(llm, tools)
 
         # Log registration success
         if tools:

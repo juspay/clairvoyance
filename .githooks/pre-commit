@@ -1,11 +1,13 @@
 #!/bin/sh
-echo "Running Black formatter before commit..."
+echo "Running formatters before commit..."
 
 # Activate virtual environment
 source venv/bin/activate
 
 # Ensure dependencies are installed
 pip install -r requirements-dev.txt
+
+autoflake --in-place --remove-all-unused-imports --remove-unused-variables --exclude "app/__init__.py,venv/*" -r app/
 
 # Format all python files
 python -m isort . --profile black

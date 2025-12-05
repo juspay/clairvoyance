@@ -5,6 +5,11 @@ from typing import Any, Dict
 
 from pipecat.processors.frameworks.rtvi import RTVIServerMessageFrame
 
+from app.agents.voice.automatic.features.hitl.exceptions import (
+    HITLConfirmationError,
+    HITLOperationTimeoutError,
+    HITLUserRejectedOperationError,
+)
 from app.agents.voice.automatic.features.hitl.utils import (
     generate_success_message,
     get_action_description,
@@ -73,16 +78,13 @@ class HITLManager:
                 # Raise appropriate exception based on reason
                 if reason == "timeout":
                     error_msg = f"Operation '{function_name}' timed out waiting for user confirmation"
-                    logger.warning(error_msg)
-                    return {"approved": False, "reason": reason}
+                    raise HITLOperationTimeoutError(error_msg)
                 elif "reject" in reason.lower() or "denied" in reason.lower():
                     error_msg = f"User rejected operation '{function_name}'"
-                    logger.warning(error_msg)
-                    return {"approved": False, "reason": reason}
+                    raise HITLUserRejectedOperationError(error_msg)
                 else:
                     error_msg = f"Operation '{function_name}' failed during confirmation: {reason}"
-                    logger.error(error_msg)
-                    return {"approved": False, "reason": reason}
+                    raise HITLConfirmationError(error_msg)
 
         except Exception as e:
             logger.error(f"Confirmation process failed for {function_name}: {e}")

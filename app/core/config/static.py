@@ -335,16 +335,16 @@ LIGHTHOUSE_JWT_SECRET = os.getenv("LIGHTHOUSE_JWT_SECRET", "")
 ENABLE_LIGHTHOUSE_AUTH = os.getenv("ENABLE_LIGHTHOUSE_AUTH", "false").lower() == "true"
 
 BREEZE_BUDDY_VAD_CONFIDENCE = float(
-    os.getenv("BREEZE_BUDDY_VAD_CONFIDENCE", "0.7")
+    os.getenv("BREEZE_BUDDY_VAD_CONFIDENCE", "0.5")
 )  # Require stronger confidence
 BREEZE_BUDDY_VAD_START_SECS = float(
-    os.getenv("BREEZE_BUDDY_VAD_START_SECS", "0.2")
+    os.getenv("BREEZE_BUDDY_VAD_START_SECS", "0.1")
 )  # Pick up quicker
 BREEZE_BUDDY_VAD_STOP_SECS = float(
-    os.getenv("BREEZE_BUDDY_VAD_STOP_SECS", "0.8")
+    os.getenv("BREEZE_BUDDY_VAD_STOP_SECS", "0.3")
 )  # Allow small pauses
 BREEZE_BUDDY_VAD_MIN_VOLUME = float(
-    os.getenv("BREEZE_BUDDY_VAD_MIN_VOLUME", "0.6")
+    os.getenv("BREEZE_BUDDY_VAD_MIN_VOLUME", "0.4")
 )  # More tolerant for soft voice
 BREEZE_BUDDY_STT_SERVICE = os.getenv(
     "BREEZE_BUDDY_STT_SERVICE", "soniox"
@@ -437,17 +437,12 @@ BREEZE_BUDDY_SONIOX_MAX_NON_FINAL_TOKENS_DURATION_MS = int(
     os.environ.get("BREEZE_BUDDY_SONIOX_MAX_NON_FINAL_TOKENS_DURATION_MS", "0")
 )
 BREEZE_BUDDY_SONIOX_VAD_FORCE_TURN_ENDPOINT = (
-    os.environ.get("BREEZE_BUDDY_SONIOX_VAD_FORCE_TURN_ENDPOINT", "false").lower()
+    os.environ.get("BREEZE_BUDDY_SONIOX_VAD_FORCE_TURN_ENDPOINT", "true").lower()
     == "true"
 )
 
 ENABLE_BREEZE_BUDDY_USER_INTERRUPTION = (
     os.environ.get("ENABLE_BREEZE_BUDDY_USER_INTERRUPTION", "false").lower() == "true"
-)
-
-BREEZE_BUDDY_PRE_ACTION_SPEAK_MESSAGE = os.environ.get(
-    "BREEZE_BUDDY_PRE_ACTION_SPEAK_MESSAGE",
-    "Okay",
 )
 
 # Dashboard Authentication

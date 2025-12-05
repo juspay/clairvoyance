@@ -74,3 +74,8 @@ async def SARVAM_TTS_PITCH() -> float:
 async def SARVAM_TTS_PACE() -> float:
     """Returns SARVAM_TTS_PACE from Redis"""
     return await get_config("SARVAM_TTS_PACE", 1.0, float)
+ 
+
+async def DAILY_SUMMARY_HOUR() -> int:
+    """Returns DAILY_SUMMARY_HOUR from Redis (24-hour format: 0-23)"""
+    return await get_config("DAILY_SUMMARY_HOUR", 21, int)
