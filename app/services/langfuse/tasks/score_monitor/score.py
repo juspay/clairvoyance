@@ -16,7 +16,11 @@ from app.core.config.static import (
     LANGFUSE_EVALUATORS,
 )
 from app.core.logger import logger
-from app.database.accessor.breeze_buddy.lead_call_tracker import get_lead_by_call_id
+from app.database.accessor.breeze_buddy.lead_call_tracker import (
+    get_all_lead_call_trackers,
+    get_lead_based_analytics,
+    get_lead_by_call_id,
+)
 from app.services.langfuse.client import langfuse_readonly_client
 from app.services.langfuse.trace import fetch_trace
 from app.services.redis import get_redis_service, is_redis_configured
@@ -355,6 +359,190 @@ class ScoreMonitor:
             logger.error(f"Failed to retrieve alert counts for {target_date}: {e}")
             return {}
 
+    async def _get_daily_call_stats(self) -> Dict[str, Any]:
+        """
+        Get call and lead statistics for the last 24 hours.
+
+        Returns:
+            Dictionary with call stats, lead stats, provider split, and merchant count.
+            Returns zeros for all metrics if DB query fails.
+        """
+        # Default stats with zeros
+        default_stats = {
+            # Call-based metrics
+            "calls_attempted": 0,
+            "calls_picked": 0,
+            "calls_picked_pct": 0.0,
+            "calls_successful": 0,  # CONFIRM + CANCEL + ADDRESS_UPDATED
+            "calls_successful_pct": 0.0,
+            "calls_busy": 0,  # BUSY outcome (picked but not successful)
+            "calls_busy_pct": 0.0,
+            # Lead-based metrics
+            "total_leads": 0,
+            "leads_picked": 0,
+            "leads_picked_pct": 0.0,
+            "leads_successful": 0,  # Leads with CONFIRM, CANCEL, or ADDRESS_UPDATED
+            "leads_successful_pct": 0.0,
+            "leads_confirmed": 0,
+            "leads_confirmed_pct": 0.0,
+            "leads_cancelled": 0,
+            "leads_cancelled_pct": 0.0,
+            "leads_address_updated": 0,
+            "leads_address_updated_pct": 0.0,
+            # Provider split
+            "provider_split": {
+                "TWILIO": 0,
+                "EXOTEL": 0,
+            },
+        }
+
+        try:
+            # Calculate 24-hour rolling window
+            now = datetime.now(timezone.utc)
+            start_time = now - timedelta(hours=24)
+
+            # Fetch all call trackers for the last 24 hours
+            call_trackers = await get_all_lead_call_trackers(
+                start_date=start_time,
+                end_date=now,
+            )
+
+            if not call_trackers:
+                logger.info("No call trackers found for the last 24 hours")
+                return default_stats
+
+            # Initialize counters for call-based metrics
+            calls_attempted = 0  # FINISHED status
+            calls_no_answer = 0
+            calls_confirm = 0
+            calls_cancel = 0
+            calls_address_updated = 0
+            calls_busy = 0
+            provider_counts = default_stats["provider_split"].copy()
+
+            # Process each call tracker for call-based stats
+            for tracker, calling_provider in call_trackers:
+                # Count attempted calls (FINISHED status)
+                if tracker.status and tracker.status.value == "FINISHED":
+                    calls_attempted += 1
+
+                # Count by outcome
+                outcome_value = tracker.outcome.value if tracker.outcome else None
+                if outcome_value == "NO_ANSWER":
+                    calls_no_answer += 1
+                elif outcome_value == "CONFIRM":
+                    calls_confirm += 1
+                elif outcome_value == "CANCEL":
+                    calls_cancel += 1
+                elif outcome_value == "ADDRESS_UPDATED":
+                    calls_address_updated += 1
+                elif outcome_value == "BUSY":
+                    calls_busy += 1
+
+                # Count by provider
+                if calling_provider:
+                    provider_upper = calling_provider.upper()
+                    if provider_upper in provider_counts:
+                        provider_counts[provider_upper] += 1
+
+            # Calculate call-based derived metrics
+            calls_picked = calls_attempted - calls_no_answer
+            calls_successful = calls_confirm + calls_cancel + calls_address_updated
+
+            calls_picked_pct = (
+                (calls_picked / calls_attempted * 100) if calls_attempted > 0 else 0.0
+            )
+            calls_successful_pct = (
+                (calls_successful / calls_picked * 100) if calls_picked > 0 else 0.0
+            )
+            calls_busy_pct = (
+                (calls_busy / calls_picked * 100) if calls_picked > 0 else 0.0
+            )
+
+            # Get lead-based analytics
+            lead_data = await get_lead_based_analytics(
+                start_date=start_time,
+                end_date=now,
+            )
+
+            # Calculate lead-based metrics
+            total_leads = len(lead_data) if lead_data else 0
+            leads_picked = 0
+            leads_confirmed = 0
+            leads_cancelled = 0
+            leads_address_updated = 0
+
+            if lead_data:
+                for lead in lead_data:
+                    # Lead is "picked" if finished_calls > no_answer_calls
+                    if lead["finished_calls"] > lead["no_answer_calls"]:
+                        leads_picked += 1
+                    if lead["confirmed_calls"] > 0:
+                        leads_confirmed += 1
+                    if lead["cancelled_calls"] > 0:
+                        leads_cancelled += 1
+                    if lead["address_update_calls"] > 0:
+                        leads_address_updated += 1
+
+            # A lead is "successful" if it has CONFIRM, CANCEL, or ADDRESS_UPDATED
+            leads_successful = leads_confirmed + leads_cancelled + leads_address_updated
+
+            # Calculate lead-based percentages
+            leads_picked_pct = (
+                (leads_picked / total_leads * 100) if total_leads > 0 else 0.0
+            )
+            leads_successful_pct = (
+                (leads_successful / leads_picked * 100) if leads_picked > 0 else 0.0
+            )
+            # Confirmed/Cancelled/Address Updated are % of successful leads
+            leads_confirmed_pct = (
+                (leads_confirmed / leads_successful * 100)
+                if leads_successful > 0
+                else 0.0
+            )
+            leads_cancelled_pct = (
+                (leads_cancelled / leads_successful * 100)
+                if leads_successful > 0
+                else 0.0
+            )
+            leads_address_updated_pct = (
+                (leads_address_updated / leads_successful * 100)
+                if leads_successful > 0
+                else 0.0
+            )
+
+            stats = {
+                # Call-based metrics
+                "calls_attempted": calls_attempted,
+                "calls_picked": calls_picked,
+                "calls_picked_pct": round(calls_picked_pct, 1),
+                "calls_successful": calls_successful,
+                "calls_successful_pct": round(calls_successful_pct, 1),
+                "calls_busy": calls_busy,
+                "calls_busy_pct": round(calls_busy_pct, 1),
+                # Lead-based metrics
+                "total_leads": total_leads,
+                "leads_picked": leads_picked,
+                "leads_picked_pct": round(leads_picked_pct, 1),
+                "leads_successful": leads_successful,
+                "leads_successful_pct": round(leads_successful_pct, 1),
+                "leads_confirmed": leads_confirmed,
+                "leads_confirmed_pct": round(leads_confirmed_pct, 1),
+                "leads_cancelled": leads_cancelled,
+                "leads_cancelled_pct": round(leads_cancelled_pct, 1),
+                "leads_address_updated": leads_address_updated,
+                "leads_address_updated_pct": round(leads_address_updated_pct, 1),
+                # Provider split
+                "provider_split": provider_counts,
+            }
+
+            logger.info(f"Daily call stats: {stats}")
+            return stats
+
+        except Exception as e:
+            logger.error(f"Error fetching daily call stats: {e}", exc_info=True)
+            return default_stats
+
     async def send_daily_summary_if_time(self) -> bool:
         """
         Send daily alert summary if it's the configured hour.
@@ -395,13 +583,28 @@ class ScoreMonitor:
             alert_counts = await self.get_alert_counts_for_date(today)
             total_alerts = sum(alert_counts.values())
 
+            # Get daily call stats
+            call_stats = await self._get_daily_call_stats()
+
             # Build and send Slack summary message
             try:
                 # Build summary message with dd-mm-yy format
                 display_date = now.strftime("%d-%m-%y")
-                title = f"📊 Breeze Buddy Alerts Summary - {display_date}"
+                title = f"📊 Breeze Buddy Daily Summary - {display_date}"
+
+                # Section 1: Total alerts and breakdown by evaluator
+                # Calculate alerts as % of calls answered (picked)
+                calls_picked = call_stats["calls_picked"]
+                alerts_pct = (
+                    round((total_alerts / calls_picked * 100), 1)
+                    if calls_picked > 0
+                    else 0.0
+                )
                 fields = [
-                    {"name": "Total Alerts", "value": str(total_alerts)},
+                    {
+                        "name": "Total Alerts",
+                        "value": f"{total_alerts} ({alerts_pct}% of calls answered)",
+                    },
                 ]
 
                 # Evaluator breakdown
@@ -411,17 +614,64 @@ class ScoreMonitor:
 
                 sections = [
                     {
-                        "title": "Breakdown by Evaluator",
-                        "text": "\n".join(evaluator_breakdown),
+                        "title": "Alerts Breakdown by Evaluator",
+                        "text": (
+                            "\n".join(evaluator_breakdown)
+                            if evaluator_breakdown
+                            else "No evaluators configured"
+                        ),
                     }
                 ]
+
+                # Section 2: Provider split (Twilio vs Exotel)
+                provider_split = call_stats["provider_split"]
+                provider_text = (
+                    f"• Twilio: {provider_split.get('TWILIO', 0)}\n"
+                    f"• Exotel: {provider_split.get('EXOTEL', 0)}"
+                )
+                sections.append(
+                    {
+                        "title": "Calls by Provider",
+                        "text": provider_text,
+                    }
+                )
+
+                # Section 3: Call-based analytics
+                call_analytics_text = (
+                    f"• Total Calls Attempted: *{call_stats['calls_attempted']}*\n"
+                    f"• Calls Picked Up: *{call_stats['calls_picked']}* ({call_stats['calls_picked_pct']}% of attempted calls)\n"
+                    f"• Successful Calls: *{call_stats['calls_successful']}* ({call_stats['calls_successful_pct']}% of picked calls)\n"
+                    f"• Picked & Busy Calls: *{call_stats['calls_busy']}* ({call_stats['calls_busy_pct']}% of picked calls)"
+                )
+                sections.append(
+                    {
+                        "title": "Call-Based Stats",
+                        "text": call_analytics_text,
+                    }
+                )
+
+                # Section 4: Lead-based analytics
+                lead_analytics_text = (
+                    f"• Total Leads Processed: *{call_stats['total_leads']}*\n"
+                    f"• Leads Picked: *{call_stats['leads_picked']}* ({call_stats['leads_picked_pct']}% of total leads)\n"
+                    f"• Successful Leads: *{call_stats['leads_successful']}* ({call_stats['leads_successful_pct']}% of picked leads)\n"
+                    f"• Confirmed: *{call_stats['leads_confirmed']}* ({call_stats['leads_confirmed_pct']}% of successful)\n"
+                    f"• Cancelled: *{call_stats['leads_cancelled']}* ({call_stats['leads_cancelled_pct']}% of successful)\n"
+                    f"• Address Updated: *{call_stats['leads_address_updated']}* ({call_stats['leads_address_updated_pct']}% of successful)"
+                )
+                sections.append(
+                    {
+                        "title": "Lead-Based Stats",
+                        "text": lead_analytics_text,
+                    }
+                )
 
                 # Send to Slack
                 success = await slack_alert.send(
                     title=title,
                     fields=fields,
                     sections=sections,
-                    fallback_text=f"Breeze Buddy Alerts Summary - {today}: {total_alerts} total alerts",
+                    fallback_text=f"Breeze Buddy Daily Summary - {today}: {total_alerts} alerts, {call_stats['calls_attempted']} calls",
                 )
 
             except Exception as e:
