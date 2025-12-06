@@ -64,8 +64,13 @@ def _setup_logger_sinks(
     Reduces code duplication between initial setup and session configuration.
     """
 
-    # Filter function to completely block websockets, daily_core, audio logs, and specific spam logs
+    # Filter function to completely block websockets, daily_core, audio logs, specific spam logs,
+    # and raw subprocess output (which has its own dedicated passthrough sink in process_pool.py)
     def filter_spam_logs(record):
+        # Exclude raw subprocess output - these go through a separate passthrough sink
+        if record["extra"].get("subprocess_raw", False):
+            return False
+
         logger_name = record["name"]
         message = record["message"]
         return not (
@@ -119,6 +124,7 @@ def _setup_logger_sinks(
         logger.add(
             json_sink,
             level=PROD_LOG_LEVEL,  # Configurable log level via PROD_LOG_LEVEL env var defaulting to INFO
+            filter=filter_spam_logs,  # Also filter spam and subprocess_raw logs in production
             enqueue=True,
             backtrace=False,  # Keep JSON logs concise and predictable
             diagnose=False,  # Prevent sensitive data leakage and performance overhead

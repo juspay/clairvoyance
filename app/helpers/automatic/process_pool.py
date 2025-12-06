@@ -35,10 +35,15 @@ from loguru import logger as subprocess_logger
 
 from app.core.logger import logger
 
-# Configure a dedicated logger for raw subprocess output.
-# This uses loguru's optimized async sink but prevents it from adding any formatting.
-subprocess_logger.remove()
-subprocess_logger.add(sys.stdout, format="{message}", enqueue=True)
+# Configure a FILTERED sink for raw subprocess output.
+# This sink ONLY handles logs marked with subprocess_raw=True in their extras.
+# It does NOT remove any existing sinks, preserving all other logging.
+_subprocess_sink_id = subprocess_logger.add(
+    sys.stdout,
+    format="{message}",
+    filter=lambda record: record["extra"].get("subprocess_raw", False),
+    enqueue=True,
+)
 
 
 class VoiceAgentProcess:
@@ -176,8 +181,9 @@ class VoiceAgentPool:
                     logger.info("Stopping subprocess log writer")
                     break
                 proc_id, line = item
-                # Use the dedicated, non-blocking logger to print the raw, prefixed line.
-                subprocess_logger.info(f"{line}")
+                # Use bind() to mark this log for the subprocess-only sink.
+                # This outputs just the raw line without any additional formatting.
+                subprocess_logger.bind(subprocess_raw=True).info(line)
             except Exception as e:
                 logger.error(f"Error in log writer: {e}")
 
