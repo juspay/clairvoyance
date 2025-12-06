@@ -259,6 +259,26 @@ class RedisService:
             logger.error(f"Redis PING error: {e}")
             return False
 
+    async def incr(self, key: str) -> int:
+        """Increment value in Redis by 1. Creates key with value 1 if it doesn't exist."""
+        try:
+            client = await self.get_client()
+            result = await client.incr(key)
+            return result
+        except RedisError as e:
+            logger.error(f"Redis INCR error for key {key}: {e}")
+            raise
+
+    async def expire(self, key: str, seconds: int) -> bool:
+        """Set expiration time on a key in seconds."""
+        try:
+            client = await self.get_client()
+            result = await client.expire(key, seconds)
+            return bool(result)
+        except RedisError as e:
+            logger.error(f"Redis EXPIRE error for key {key}: {e}")
+            return False
+
     async def close(self) -> None:
         """Close Redis connections"""
         if self._factory:
