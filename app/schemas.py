@@ -4,7 +4,7 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
-from app.agents.voice.automatic.types.models import TTSProvider, VoiceName
+from app.ai.voice.agents.automatic.types.models import TTSProvider, VoiceName
 
 
 class OutboundNumberStatus(str, Enum):

@@ -12,7 +12,7 @@ This file records architectural and implementation decisions using a list format
 *   Per user instruction, the implementation for dynamic dating was changed to embed the `datetime` call directly within the `SYSTEM_PROMPT` f-string. This approach, while setting the date only once at application startup, was the explicitly requested method.
 
 ## Implementation Details
-*   Modified `app/agents/voice/automatic/prompts/system.py`:
+*   Modified `app/ai/voice/agents/automatic/prompts/system.py`:
     *   The `SYSTEM_PROMPT` variable was converted to an f-string.
     *   The placeholder `{current_date}` was replaced with the direct call `{datetime.datetime.now().strftime("%B %d, %Y")}`.
     *   The `get_system_prompt` function was simplified to remove the `.format()` call, as the date is now embedded directly in the `SYSTEM_PROMPT` constant.
@@ -25,10 +25,10 @@ This file records architectural and implementation decisions using a list format
 *   To simplify the system message structure and ensure the date is always present, the timestamp was embedded directly into the system prompt. This removes the need for a separate timestamp message.
 
 ## Implementation Details
-*   Modified `app/agents/voice/automatic/prompts/system.py`:
+*   Modified `app/ai/voice/agents/automatic/prompts/system.py`:
     *   Imported the `datetime` module.
     *   The `SYSTEM_PROMPT` is now an f-string that includes the `CURRENT_TIMESTAMP` with the format `YYYY-MM-DD`.
-*   Modified `app/agents/voice/automatic/__init__.py`:
+*   Modified `app/ai/voice/agents/automatic/__init__.py`:
     *   Removed the separate system message that contained the timestamp, as it is now part of the main `system_prompt`.
 *
 
@@ -240,7 +240,7 @@ This file records architectural and implementation decisions using a list format
 *   A robust, code-based solution was needed to strip this formatting from the text before it reaches the Text-to-Speech (TTS) service, without affecting the UI or causing application instability.
 
 ## Implementation Details
-*   Modified `app/agents/voice/automatic/processors/llm_spy.py`.
+*   Modified `app/ai/voice/agents/automatic/processors/llm_spy.py`.
 *   The `LLMSpyProcessor` now intercepts `TextFrame` objects and sanitizes the text in-place.
 *   A new `_sanitize_text` method was added to this processor. It uses a set of pre-compiled regular expressions to efficiently remove a wide range of markdown syntax, including headings, horizontal rules, and table structures.
 *   The `process_frame` method was updated to check for `TextFrame`s and apply this sanitization before passing the frame down the pipeline. This ensures that both the UI and the TTS receive the same, sanitized text, which is the safest and most stable solution.
