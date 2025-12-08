@@ -30,7 +30,7 @@ Reduce voice agent connection time from **~8 seconds to 3-4 seconds** by impleme
 - **Monitoring**: Added `/pool/status` and `/pool/rooms/status` endpoints.
 - **Cleanup**: Proper dual pool cleanup during application shutdown.
 
-### 4. Voice Agent Changes (`app/agents/voice/automatic/__init__.py`)
+### 4. Voice Agent Changes (`app/ai/voice/agents/automatic/__init__.py`)
 - **Pool Mode**: Added `--pool-mode` support for pre-warmed processes.
 - **Session Handling**: Processes wait for session assignments via `stdin`.
 - **Configuration**: Dynamic session configuration without a restart.

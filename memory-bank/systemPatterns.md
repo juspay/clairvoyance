@@ -26,9 +26,9 @@ It is optional, but recommended to be updated as the project evolves.
 
 *   **[2025-07-14] - Remote Tooling via MCP Client:**
     *   **Description:** The system architecture was updated to support fetching and executing tools from a remote server that adheres to the Model Context Protocol (MCP). This decouples the agent from the tool implementations.
-        *   **`MCPClient` Service:** A dedicated client (`app/agents/voice/automatic/services/mcp/automatic_client.py`) handles all communication with the remote MCP server.
+        *   **`MCPClient` Service:** A dedicated client (`app/ai/voice/agents/automatic/services/mcp/automatic_client.py`) handles all communication with the remote MCP server.
         *   **`StreamableHTTPTransport`:** A robust transport layer within the client manages the SSE (Server-Sent Events) connection, including request signing and response parsing.
-        *   **Pydantic Model Validation:** The transport layer uses Pydantic models (`app/agents/voice/automatic/types/models.py`) to validate all incoming data against the MCP specification, ensuring resilience against malformed or unexpected responses.
+        *   **Pydantic Model Validation:** The transport layer uses Pydantic models (`app/ai/voice/agents/automatic/types/models.py`) to validate all incoming data against the MCP specification, ensuring resilience against malformed or unexpected responses.
         *   **Dynamic Registration:** On startup, the `MCPClient` connects to the remote server, fetches the list of available tools, and dynamically registers them with the LLM service, making the agent's capabilities extensible without redeployment.
     *   **Rationale:**
         *   Decouples the voice agent from the tool logic, allowing tools to be updated independently.
@@ -38,11 +38,11 @@ It is optional, but recommended to be updated as the project evolves.
 
 *   **[2025-08-24] - Shop Configuration Management Pattern:**
     *   **Description:** A new pattern has been established for managing shop configurations through the voice agent. This pattern is first implemented with the banner management tool.
-        *   **Utility Functions:** Common shop configuration operations are abstracted into utility functions in `app/agents/voice/automatic/tools/breeze/utils.py`:
+        *   **Utility Functions:** Common shop configuration operations are abstracted into utility functions in `app/ai/voice/agents/automatic/tools/breeze/utils.py`:
             *   `get_current_shop_config_data`: Fetches the current configuration for a shop.
             *   `patch_shop_config`: Updates the shop configuration with new values.
             *   Helper functions for URL parsing and shop identification.
-        *   **Tool Implementation:** Specific tools like the banner management tool in `app/agents/voice/automatic/tools/breeze/banner.py` use these utility functions to perform their operations.
+        *   **Tool Implementation:** Specific tools like the banner management tool in `app/ai/voice/agents/automatic/tools/breeze/banner.py` use these utility functions to perform their operations.
         *   **Context Passing:** Shop-specific context (shop ID, URL, merchant ID, user ID) is passed during tool initialization and stored as module-level variables.
         *   **Error Handling:** Comprehensive error handling with detailed logging and user-friendly error messages.
     *   **Rationale:**

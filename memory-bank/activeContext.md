@@ -6,7 +6,7 @@ The primary focus of recent development has been to enable the voice agent to us
 
 ## 2. Key Changes and Implementations
 
-- **`MCPClient` Relocated and Refactored:** The `MCPClient` service was moved to a more appropriate location at `app/agents/voice/automatic/services/mcp/automatic_client.py`. Its associated Pydantic models were also moved to `app/agents/voice/automatic/types/models.py` to improve code organization.
+- **`MCPClient` Relocated and Refactored:** The `MCPClient` service was moved to a more appropriate location at `app/ai/voice/agents/automatic/services/mcp/automatic_client.py`. Its associated Pydantic models were also moved to `app/ai/voice/agents/automatic/types/models.py` to improve code organization.
 
 - **Robust `StreamableHTTPTransport`:** The transport layer was significantly refactored for robustness. It now uses the relocated Pydantic models to validate all incoming responses against the official MCP specification. The streaming logic now correctly handles HTTP errors by reading the response body before raising an exception, preventing crashes from race conditions on closed streams. The client timeout has also been made configurable via the `MCP_CLIENT_TIMEOUT` environment variable, defaulting to 30 seconds.
 
@@ -20,8 +20,8 @@ The primary focus of recent development has been to enable the voice agent to us
 - **Date-Preserving Summarization:** The summarization logic has been updated to explicitly instruct the LLM to preserve dates and time ranges, improving the accuracy of long-term context.
 
 - **Banner Management Tool:** A new tool has been implemented to allow the voice agent to manage announcement banners on login and payment pages:
-    1. The tool is defined in `app/agents/voice/automatic/tools/breeze/banner.py` and provides functionality to create, update, and remove banners.
-    2. Utility functions for shop configuration management have been added in `app/agents/voice/automatic/tools/breeze/utils.py`.
+    1. The tool is defined in `app/ai/voice/agents/automatic/tools/breeze/banner.py` and provides functionality to create, update, and remove banners.
+    2. Utility functions for shop configuration management have been added in `app/ai/voice/agents/automatic/tools/breeze/utils.py`.
     3. The tool requires shop ID, shop URL, merchant ID, and user ID to function properly, which are passed during initialization.
     4. Two types of banners are supported: login page announcements and payment page announcements.
     5. The tool interacts with the shop configuration API to manage these banners.

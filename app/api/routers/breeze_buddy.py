@@ -16,14 +16,14 @@ from fastapi.responses import RedirectResponse
 from starlette.responses import FileResponse, JSONResponse
 from starlette.websockets import WebSocketDisconnect
 
-from app.agents.voice.breeze_buddy.managers.calls import (
+from app.ai.voice.agents.breeze_buddy.managers.calls import (
     handle_call_completion,
     handle_unanswered_calls,
     process_backlog_leads,
     update_call_recording,
 )
-from app.agents.voice.breeze_buddy.services.telephony.utils import get_voice_provider
-from app.agents.voice.breeze_buddy.workflows.order_confirmation.types import (
+from app.ai.voice.agents.breeze_buddy.services.telephony.utils import get_voice_provider
+from app.ai.voice.agents.breeze_buddy.workflows.order_confirmation.types import (
     BreezeOrderData,
     LoginRequest,
 )
@@ -66,7 +66,7 @@ router = APIRouter()
 @router.get("/login", include_in_schema=False)
 async def get_login_page():
     return FileResponse(
-        "app/agents/voice/breeze_buddy/workflows/order_confirmation/login.html"
+        "app/ai/voice/agents/breeze_buddy/workflows/order_confirmation/login.html"
     )
 
 
@@ -566,7 +566,7 @@ async def get_dashboard(session: dict = Depends(get_breeze_buddy_session)):
     if not session:
         return RedirectResponse(url="/agent/voice/breeze-buddy/login")
     response = FileResponse(
-        "app/agents/voice/breeze_buddy/workflows/order_confirmation/dashboard.html"
+        "app/ai/voice/agents/breeze_buddy/workflows/order_confirmation/dashboard.html"
     )
     response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
     response.headers["Pragma"] = "no-cache"

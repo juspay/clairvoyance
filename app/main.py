@@ -346,7 +346,7 @@ async def bot_connect(
         )
 
         # 5. Fallback: Launch subprocess directly
-        bot_file = "app.agents.voice.automatic"
+        bot_file = "app.ai.voice.agents.automatic"
         cmd = [
             "python3",
             "-m",
