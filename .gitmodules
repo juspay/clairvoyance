@@ -1,0 +1,3 @@
+[submodule "frontend/loom"]
+	path = frontend/loom
+	url = https://github.com/manas-narra/loom.git

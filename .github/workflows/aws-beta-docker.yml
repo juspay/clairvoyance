@@ -18,8 +18,10 @@ jobs:
       AWS_BETA_REPO: breeze-clairvoyance
 
     steps:
-      - name: Checkout code
+      - name: Checkout code with submodules
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       # OIDC auth → assumes role in AWS Beta account
       - name: Configure AWS credentials
