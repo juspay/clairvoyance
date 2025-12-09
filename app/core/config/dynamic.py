@@ -79,3 +79,29 @@ async def SARVAM_TTS_PITCH() -> float:
 async def SARVAM_TTS_PACE() -> float:
     """Returns SARVAM_TTS_PACE from Redis"""
     return await get_config("SARVAM_TTS_PACE", 1.0, float)
+
+
+# --- Breeze Buddy Sarvam STT Configuration ---
+async def BB_SARVAM_STT_MODEL() -> str:
+    """Returns BB_SARVAM_STT_MODEL from Redis"""
+    return await get_config("BB_SARVAM_STT_MODEL", "saarika:v2.5", str)
+
+
+async def BB_SARVAM_STT_LANGUAGE_CODE() -> str:
+    """Returns BB_SARVAM_STT_LANGUAGE_CODE from Redis"""
+    return await get_config("BB_SARVAM_STT_LANGUAGE_CODE", "", str)
+
+
+async def BB_SARVAM_STT_PROMPT() -> str:
+    """Returns BB_SARVAM_STT_PROMPT from Redis"""
+    return await get_config("BB_SARVAM_STT_PROMPT", "", str)
+
+
+async def BB_SARVAM_STT_VAD_SIGNALS() -> bool:
+    """Returns BB_SARVAM_STT_VAD_SIGNALS from Redis"""
+    return await get_config("BB_SARVAM_STT_VAD_SIGNALS", True, bool)
+
+
+async def BB_SARVAM_STT_HIGH_VAD_SENSITIVITY() -> bool:
+    """Returns BB_SARVAM_STT_HIGH_VAD_SENSITIVITY from Redis"""
+    return await get_config("BB_SARVAM_STT_HIGH_VAD_SENSITIVITY", False, bool)
