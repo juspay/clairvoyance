@@ -1,25 +1,18 @@
-import json
 from typing import Optional
 
-from deepgram import LiveOptions
-from pipecat.services.assemblyai.stt import AssemblyAISTTService
-from pipecat.services.deepgram.stt import DeepgramSTTService
-from pipecat.services.google.stt import GoogleSTTService
-from pipecat.services.openai.stt import OpenAISTTService
-from pipecat.services.sarvam.stt import SarvamSTTService
-from pipecat.services.soniox.stt import (
-    SonioxContextGeneralItem,
-    SonioxContextObject,
-    SonioxContextTranslationTerm,
-    SonioxInputParams,
-    SonioxSTTService,
-)
 from pipecat.transcriptions.language import Language
 
 from app.ai.voice.agents.automatic.types import VoiceName
-from app.ai.voice.agents.automatic.utils.common import (
-    SarvamServiceType,
-    get_sarvam_language,
+from app.ai.voice.stt import (
+    DeepgramConfig,
+    SarvamConfig,
+    SonioxConfig,
+    build_assemblyai_stt,
+    build_deepgram_stt,
+    build_google_stt,
+    build_openai_stt,
+    build_sarvam_stt,
+    build_soniox_stt,
 )
 from app.core.config.dynamic import (
     SARVAM_STT_HIGH_VAD_SENSITIVITY,
@@ -63,76 +56,6 @@ from app.core.config.static import (
 from app.core.logger import logger
 
 
-def parse_soniox_context() -> Optional[SonioxContextObject]:
-    """
-    Parse Soniox context from JSON environment variable into SonioxContextObject.
-
-    Expected JSON structure:
-    {
-        "general": [{"key": "organisation", "value": "Juspay"}, ...],
-        "text": "User Persona: D2C ecommerce merchants...",
-        "terms": ["Juspay", "Breeze Automatic", "PSR", ...],
-        "translation_terms": [{"source": "...", "target": "..."}, ...]
-    }
-
-    Returns:
-        SonioxContextObject if parsing succeeds, None otherwise
-    """
-    if not SONIOX_CONTEXT:
-        return None
-
-    try:
-        # Parse JSON from environment variable
-        context_data = json.loads(SONIOX_CONTEXT)
-
-        # Extract fields from JSON
-        general_items = context_data.get("general", [])
-        text = context_data.get("text")
-        terms = context_data.get("terms", [])
-        translation_terms_items = context_data.get("translation_terms", [])
-
-        # Convert general items to SonioxContextGeneralItem objects
-        general_objects = None
-        if general_items:
-            general_objects = [
-                SonioxContextGeneralItem(key=item["key"], value=item["value"])
-                for item in general_items
-            ]
-
-        # Convert translation_terms items to SonioxContextTranslationTerm objects
-        translation_terms_objects = None
-        if translation_terms_items:
-            translation_terms_objects = [
-                SonioxContextTranslationTerm(
-                    source=item["source"], target=item["target"]
-                )
-                for item in translation_terms_items
-            ]
-
-        # Create and return SonioxContextObject
-        context_object = SonioxContextObject(
-            general=general_objects if general_objects else None,
-            text=text,
-            terms=terms if terms else None,
-            translation_terms=(
-                translation_terms_objects if translation_terms_objects else None
-            ),
-        )
-
-        logger.info(
-            f"Successfully parsed Soniox context with {len(general_objects or [])} general items, "
-            f"{len(terms) if terms else 0} terms, "
-            f"{len(translation_terms_objects or [])} translation terms"
-        )
-        return context_object
-
-    except Exception as e:
-        logger.warning(
-            f"Failed to parse SONIOX_CONTEXT: {e}. Falling back to None context."
-        )
-        return None
-
-
 async def get_stt_service(voice_name: Optional[str] = None):
     """
     Returns an STT service instance based on the environment configuration.
@@ -150,13 +73,12 @@ async def get_stt_service(voice_name: Optional[str] = None):
         logger.info(
             f"Using OpenAI STT service for MIA voice (override enabled) with model: {ENFORCED_OPENAI_STT_MODEL}"
         )
-        return OpenAISTTService(
+        return build_openai_stt(
             api_key=OPENAI_STT_API_KEY,
             model=ENFORCED_OPENAI_STT_MODEL,
             language=Language.EN,
-            # Optimized prompt for business analytics voice agent
             prompt=AUTOMATIC_OPENAI_STT_PROMPT,
-            temperature=0.0,  # Deterministic output for consistency
+            temperature=0.0,
         )
 
     # Check for RHEA voice or Sarvam STT provider
@@ -171,37 +93,17 @@ async def get_stt_service(voice_name: Optional[str] = None):
         sarvam_stt_vad_signals = await SARVAM_STT_VAD_SIGNALS()
         sarvam_stt_high_vad_sensitivity = await SARVAM_STT_HIGH_VAD_SENSITIVITY()
 
-        # Initialize parameters based on model type
-        prompt_param = None
-        language_param = None
-
-        if "saaras" in sarvam_stt_model.lower():
-            # STT-Translate model: accepts prompt, no language (auto-detects)
-            prompt_param = sarvam_stt_prompt if sarvam_stt_prompt else None
-        else:
-            # saarika (pure STT) model: accepts language, no prompt
-            language_param = get_sarvam_language(
+        # Pass raw config values - model-specific logic is handled internally by build_sarvam_stt
+        return build_sarvam_stt(
+            SarvamConfig(
+                api_key=SARVAM_API_KEY,
+                model=sarvam_stt_model,
+                sample_rate=SAMPLE_RATE,
                 language_code=sarvam_stt_language_code,
-                service_type=SarvamServiceType.STT,
-            )
-
-        logger.info(
-            f"Using Sarvam STT service with model={sarvam_stt_model}, "
-            f"language={'set' if language_param else 'none'}, "
-            f"prompt={'set' if prompt_param else 'none'}, "
-            f"vad_signals={sarvam_stt_vad_signals}, high_vad_sensitivity={sarvam_stt_high_vad_sensitivity}"
-        )
-
-        return SarvamSTTService(
-            api_key=SARVAM_API_KEY,
-            model=sarvam_stt_model,
-            sample_rate=SAMPLE_RATE,
-            params=SarvamSTTService.InputParams(
-                language=language_param,
-                prompt=prompt_param,
+                prompt=sarvam_stt_prompt,
                 vad_signals=sarvam_stt_vad_signals,
                 high_vad_sensitivity=sarvam_stt_high_vad_sensitivity,
-            ),
+            )
         )
 
     # Default behavior - use configured STT provider
@@ -211,13 +113,7 @@ async def get_stt_service(voice_name: Optional[str] = None):
                 "ASSEMBLYAI_API_KEY is required when STT_PROVIDER=assemblyai"
             )
 
-        logger.info("Using AssemblyAI STT service with Silero VAD-based turn detection")
-        return AssemblyAISTTService(
-            api_key=ASSEMBLYAI_API_KEY,
-            # Use Silero VAD for turn detection instead of AssemblyAI's built-in turn detection
-            vad_force_turn_endpoint=True,
-            # No connection_params needed since we're using VAD for turn detection
-        )
+        return build_assemblyai_stt(api_key=ASSEMBLYAI_API_KEY)
     elif STT_PROVIDER == "openai":
         if not OPENAI_STT_API_KEY:
             raise ValueError(
@@ -227,91 +123,54 @@ async def get_stt_service(voice_name: Optional[str] = None):
         logger.info(
             f"Using OpenAI STT service ({OPENAI_STT_MODEL}) with Silero VAD-based turn detection"
         )
-        return OpenAISTTService(
+        return build_openai_stt(
             api_key=OPENAI_STT_API_KEY,
             model=OPENAI_STT_MODEL,
             language=Language.EN,
-            # Optimized prompt for business analytics voice agent
             prompt=AUTOMATIC_OPENAI_STT_PROMPT,
-            temperature=0.0,  # Deterministic output for consistency
+            temperature=0.0,
         )
     elif STT_PROVIDER == "deepgram":
         if not DEEPGRAM_API_KEY:
             raise ValueError("DEEPGRAM_API_KEY is required when STT_PROVIDER=deepgram")
 
-        # Determine language configuration based on settings
-        if DEEPGRAM_AUTO_DETECT_LANGUAGE:
-            language_config = "multi"  # Automatic detection
-        else:
-            language_config = DEEPGRAM_LANGUAGE  # Single language (current behavior)
-
-        # Configure Deepgram with smart turn detection and audio enhancement
-        live_options = LiveOptions(
-            model=DEEPGRAM_MODEL,
-            language=language_config,
-            smart_format=DEEPGRAM_SMART_FORMAT,
-            punctuate=DEEPGRAM_PUNCTUATE,
-            endpointing=DEEPGRAM_ENDPOINTING,  # Smart turn detection
-            vad_events=DEEPGRAM_VAD_EVENTS,  # Built-in VAD
-            utterance_end_ms=DEEPGRAM_UTTERANCE_END_MS,
-            no_delay=DEEPGRAM_NO_DELAY,  # Real-time processing
-            interim_results=True,
-            profanity_filter=DEEPGRAM_PROFANITY_FILTER,
-            # Enhanced for Indian English and business terms
-            numerals=DEEPGRAM_NUMERALS,  # Better number recognition
-            diarize=DEEPGRAM_DIARIZE,  # Speaker identification
+        # Pass raw config values - language configuration is handled internally by build_deepgram_stt
+        return build_deepgram_stt(
+            DeepgramConfig(
+                api_key=DEEPGRAM_API_KEY,
+                model=DEEPGRAM_MODEL,
+                language=DEEPGRAM_LANGUAGE,
+                auto_detect_language=DEEPGRAM_AUTO_DETECT_LANGUAGE,
+                smart_format=DEEPGRAM_SMART_FORMAT,
+                punctuate=DEEPGRAM_PUNCTUATE,
+                endpointing=DEEPGRAM_ENDPOINTING,
+                vad_events=DEEPGRAM_VAD_EVENTS,
+                utterance_end_ms=DEEPGRAM_UTTERANCE_END_MS,
+                no_delay=DEEPGRAM_NO_DELAY,
+                interim_results=True,
+                profanity_filter=DEEPGRAM_PROFANITY_FILTER,
+                numerals=DEEPGRAM_NUMERALS,
+                diarize=DEEPGRAM_DIARIZE,
+            )
         )
-
-        logger.info(
-            f"Using Deepgram STT service with model: {DEEPGRAM_MODEL}, "
-            f"language: {language_config} "
-            f"(VAD: {DEEPGRAM_VAD_EVENTS}, Endpointing: {DEEPGRAM_ENDPOINTING})"
-        )
-        return DeepgramSTTService(api_key=DEEPGRAM_API_KEY, live_options=live_options)
     elif STT_PROVIDER == "soniox":
         if not SONIOX_API_KEY:
             raise ValueError("SONIOX_API_KEY is required when STT_PROVIDER=soniox")
 
-        # Parse language hints from comma-separated string
-        language_hints = None
-        if SONIOX_LANGUAGE_HINTS:
-            lang_list = [lang.strip() for lang in SONIOX_LANGUAGE_HINTS.split(",")]
-            language_hints = [Language(lang) for lang in lang_list if lang]
-
-        # Parse context from JSON environment variable
-        context = parse_soniox_context()
-
-        # Configure Soniox with supported parameters only
-        soniox_params = SonioxInputParams(
-            model=SONIOX_MODEL,
-            language_hints=language_hints,
-            context=context,
-            enable_non_final_tokens=SONIOX_ENABLE_NON_FINAL_TOKENS,
-            max_non_final_tokens_duration_ms=(
-                SONIOX_MAX_NON_FINAL_TOKENS_DURATION_MS
-                if SONIOX_MAX_NON_FINAL_TOKENS_DURATION_MS > 0
-                else None
-            ),
-            client_reference_id=None,
-        )
-
-        logger.info(
-            f"Using Soniox STT service with model: {SONIOX_MODEL}, "
-            f"language_hints: {SONIOX_LANGUAGE_HINTS}, "
-            f"VAD force endpoint: {SONIOX_VAD_FORCE_TURN_ENDPOINT}, "
-            f"non_final_tokens: {SONIOX_ENABLE_NON_FINAL_TOKENS}"
-        )
-        return SonioxSTTService(
-            api_key=SONIOX_API_KEY,
-            params=soniox_params,
-            vad_force_turn_endpoint=SONIOX_VAD_FORCE_TURN_ENDPOINT,
+        # Pass raw config values - language hints parsing is handled internally by build_soniox_stt
+        return build_soniox_stt(
+            SonioxConfig(
+                api_key=SONIOX_API_KEY,
+                model=SONIOX_MODEL,
+                vad_force_turn_endpoint=SONIOX_VAD_FORCE_TURN_ENDPOINT,
+                language_hints=SONIOX_LANGUAGE_HINTS,
+                context_json=SONIOX_CONTEXT,
+                enable_non_final_tokens=SONIOX_ENABLE_NON_FINAL_TOKENS,
+                max_non_final_tokens_duration_ms=SONIOX_MAX_NON_FINAL_TOKENS_DURATION_MS,
+                log_context="Automatic",
+            )
         )
     else:  # Default to Google STT
         logger.info("Using Google STT service with VAD-based turn detection")
 
-        return GoogleSTTService(
-            params=GoogleSTTService.InputParams(
-                languages=[Language.EN_US, Language.EN_IN], enable_interim_results=False
-            ),
-            credentials=GOOGLE_CREDENTIALS_JSON,
-        )
+        return build_google_stt(credentials_json=GOOGLE_CREDENTIALS_JSON)

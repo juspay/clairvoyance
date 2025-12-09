@@ -1,17 +1,20 @@
-import json
-from typing import Optional
-
-from pipecat.services.google.stt import GoogleSTTService
-from pipecat.services.openai.stt import OpenAISTTService
-from pipecat.services.soniox.stt import (
-    SonioxContextGeneralItem,
-    SonioxContextObject,
-    SonioxContextTranslationTerm,
-    SonioxInputParams,
-    SonioxSTTService,
-)
 from pipecat.transcriptions.language import Language
 
+from app.ai.voice.stt import (
+    SarvamConfig,
+    SonioxConfig,
+    build_google_stt,
+    build_openai_stt,
+    build_sarvam_stt,
+    build_soniox_stt,
+)
+from app.core.config.dynamic import (
+    BB_SARVAM_STT_HIGH_VAD_SENSITIVITY,
+    BB_SARVAM_STT_LANGUAGE_CODE,
+    BB_SARVAM_STT_MODEL,
+    BB_SARVAM_STT_PROMPT,
+    BB_SARVAM_STT_VAD_SIGNALS,
+)
 from app.core.config.static import (
     BREEZE_BUDDY_SONIOX_CONTEXT,
     BREEZE_BUDDY_SONIOX_ENABLE_NON_FINAL_TOKENS,
@@ -23,129 +26,64 @@ from app.core.config.static import (
     GOOGLE_CREDENTIALS_JSON,
     OPENAI_STT_API_KEY,
     OPENAI_STT_MODEL,
+    SAMPLE_RATE,
+    SARVAM_API_KEY,
     SONIOX_API_KEY,
 )
 from app.core.logger import logger
 
 
-def parse_breeze_buddy_soniox_context() -> Optional[SonioxContextObject]:
-    """
-    Parse Breeze Buddy Soniox context from JSON environment variable into SonioxContextObject.
-
-    Expected JSON structure:
-    {
-        "general": [{"key": "organisation", "value": "Juspay"}, ...],
-        "text": "Breeze Buddy is an automated voice agent...",
-        "terms": ["Juspay", "Breeze Buddy", "COD", ...],
-        "translation_terms": [{"source": "...", "target": "..."}, ...]
-    }
-
-    Returns:
-        SonioxContextObject if parsing succeeds, None otherwise
-    """
-    if not BREEZE_BUDDY_SONIOX_CONTEXT:
-        return None
-
-    try:
-        # Parse JSON from environment variable
-        context_data = json.loads(BREEZE_BUDDY_SONIOX_CONTEXT)
-
-        # Extract fields from JSON
-        general_items = context_data.get("general", [])
-        text = context_data.get("text")
-        terms = context_data.get("terms", [])
-        translation_terms_items = context_data.get("translation_terms", [])
-
-        # Convert general items to SonioxContextGeneralItem objects
-        general_objects = None
-        if general_items:
-            general_objects = [
-                SonioxContextGeneralItem(key=item["key"], value=item["value"])
-                for item in general_items
-            ]
-
-        # Convert translation_terms items to SonioxContextTranslationTerm objects
-        translation_terms_objects = None
-        if translation_terms_items:
-            translation_terms_objects = [
-                SonioxContextTranslationTerm(
-                    source=item["source"], target=item["target"]
-                )
-                for item in translation_terms_items
-            ]
-
-        # Create and return SonioxContextObject
-        context_object = SonioxContextObject(
-            general=general_objects if general_objects else None,
-            text=text,
-            terms=terms if terms else None,
-            translation_terms=(
-                translation_terms_objects if translation_terms_objects else None
-            ),
-        )
-
-        logger.info(
-            f"Successfully parsed Breeze Buddy Soniox context with {len(general_objects or [])} general items, "
-            f"{len(terms) if terms else 0} terms, "
-            f"{len(translation_terms_objects or [])} translation terms"
-        )
-        return context_object
-
-    except Exception as e:
-        logger.warning(
-            f"Failed to parse BREEZE_BUDDY_SONIOX_CONTEXT: {e}. Falling back to None context."
-        )
-        return None
-
-
-def get_stt_service():
+async def get_stt_service():
     """
     Returns an STT service instance based on the environment configuration.
     """
-    if BREEZE_BUDDY_STT_SERVICE == "openai":
+    if BREEZE_BUDDY_STT_SERVICE == "sarvam":
+        if not SARVAM_API_KEY:
+            raise ValueError(
+                "SARVAM_API_KEY is required when BREEZE_BUDDY_STT_SERVICE=sarvam"
+            )
+
+        # Get Breeze Buddy-specific dynamic config values from Redis
+        bb_sarvam_stt_model = await BB_SARVAM_STT_MODEL()
+        bb_sarvam_stt_language_code = await BB_SARVAM_STT_LANGUAGE_CODE()
+        bb_sarvam_stt_prompt = await BB_SARVAM_STT_PROMPT()
+        bb_sarvam_stt_vad_signals = await BB_SARVAM_STT_VAD_SIGNALS()
+        bb_sarvam_stt_high_vad_sensitivity = await BB_SARVAM_STT_HIGH_VAD_SENSITIVITY()
+
+        # Pass raw config values - model-specific logic is handled internally by build_sarvam_stt
+        return build_sarvam_stt(
+            SarvamConfig(
+                api_key=SARVAM_API_KEY,
+                model=bb_sarvam_stt_model,
+                sample_rate=SAMPLE_RATE,
+                language_code=bb_sarvam_stt_language_code,
+                prompt=bb_sarvam_stt_prompt,
+                vad_signals=bb_sarvam_stt_vad_signals,
+                high_vad_sensitivity=bb_sarvam_stt_high_vad_sensitivity,
+            )
+        )
+    elif BREEZE_BUDDY_STT_SERVICE == "openai":
         logger.info("Using OpenAI STT service for Breeze Buddy voice")
-        return OpenAISTTService(
+        return build_openai_stt(
             api_key=OPENAI_STT_API_KEY,
             model=OPENAI_STT_MODEL,
             language=Language.EN,
             temperature=0.0,
         )
     elif BREEZE_BUDDY_STT_SERVICE == "soniox":
-        language_hints = None
-        if BREEZE_BUDDY_SONIOX_LANGUAGE_HINTS:
-            lang_list = [
-                lang.strip() for lang in BREEZE_BUDDY_SONIOX_LANGUAGE_HINTS.split(",")
-            ]
-            language_hints = [Language(lang) for lang in lang_list if lang]
-
-        # Parse context from JSON environment variable
-        context = parse_breeze_buddy_soniox_context()
-
-        # Configure Soniox with supported parameters only
-        soniox_params = SonioxInputParams(
-            model=BREEZE_BUDDY_SONIOX_MODEL,
-            language_hints=language_hints,
-            context=context,
-            enable_non_final_tokens=BREEZE_BUDDY_SONIOX_ENABLE_NON_FINAL_TOKENS,
-            max_non_final_tokens_duration_ms=(
-                BREEZE_BUDDY_SONIOX_MAX_NON_FINAL_TOKENS_DURATION_MS
-                if BREEZE_BUDDY_SONIOX_MAX_NON_FINAL_TOKENS_DURATION_MS > 0
-                else None
-            ),
-            client_reference_id=None,
+        # Pass raw config values - language hints parsing is handled internally by build_soniox_stt
+        return build_soniox_stt(
+            SonioxConfig(
+                api_key=SONIOX_API_KEY,
+                model=BREEZE_BUDDY_SONIOX_MODEL,
+                vad_force_turn_endpoint=BREEZE_BUDDY_SONIOX_VAD_FORCE_TURN_ENDPOINT,
+                language_hints=BREEZE_BUDDY_SONIOX_LANGUAGE_HINTS,
+                context_json=BREEZE_BUDDY_SONIOX_CONTEXT,
+                enable_non_final_tokens=BREEZE_BUDDY_SONIOX_ENABLE_NON_FINAL_TOKENS,
+                max_non_final_tokens_duration_ms=BREEZE_BUDDY_SONIOX_MAX_NON_FINAL_TOKENS_DURATION_MS,
+                log_context="Breeze Buddy",
+            )
         )
-
-        return SonioxSTTService(
-            api_key=SONIOX_API_KEY,
-            params=soniox_params,
-            vad_force_turn_endpoint=BREEZE_BUDDY_SONIOX_VAD_FORCE_TURN_ENDPOINT,
-        )
-
     else:
         logger.info("Using Google STT service with VAD-based turn detection")
-        return GoogleSTTService(
-            params=GoogleSTTService.InputParams(
-                languages=[Language.EN_US, Language.EN_IN], enable_interim_results=False
-            ),
-            credentials=GOOGLE_CREDENTIALS_JSON,
-        )
+        return build_google_stt(credentials_json=GOOGLE_CREDENTIALS_JSON)
