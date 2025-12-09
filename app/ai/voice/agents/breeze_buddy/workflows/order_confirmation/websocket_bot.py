@@ -256,7 +256,7 @@ class OrderConfirmationBot:
             ),
         )
 
-        stt = get_stt_service()
+        stt = await get_stt_service()
         llm = AzureLLMService(
             api_key=AZURE_OPENAI_API_KEY,
             endpoint=AZURE_OPENAI_ENDPOINT,
