@@ -1,4 +1,4 @@
-# app/ai/voice/agents/automatic/services/local_smart_turn.py
+# app/ai/voice/agents/automatic/services/smart_turn/local_smart_turn.py
 
 from loguru import logger
 from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import LocalSmartTurnAnalyzerV3

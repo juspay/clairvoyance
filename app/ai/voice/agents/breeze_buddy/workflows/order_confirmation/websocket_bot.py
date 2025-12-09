@@ -35,7 +35,6 @@ from app.ai.voice.agents.breeze_buddy.analytics.tracing_setup import (
     auto_trace,
     setup_tracing,
 )
-from app.ai.voice.agents.breeze_buddy.stt import get_stt_service
 from app.ai.voice.agents.breeze_buddy.workflows.order_confirmation.types import (
     OrderData,
 )
@@ -45,6 +44,9 @@ from app.ai.voice.agents.breeze_buddy.workflows.order_confirmation.utils import 
     load_audio,
     send_webhook_with_retry,
 )
+
+# Import shared STT service
+from app.ai.voice.stt import get_stt_service
 from app.core.config.static import (
     AZURE_BREEZE_BUDDY_OPENAI_MODEL,
     AZURE_OPENAI_API_KEY,
@@ -256,7 +258,7 @@ class OrderConfirmationBot:
             ),
         )
 
-        stt = get_stt_service()
+        stt = await get_stt_service(agent_type="breeze_buddy")
         llm = AzureLLMService(
             api_key=AZURE_OPENAI_API_KEY,
             endpoint=AZURE_OPENAI_ENDPOINT,

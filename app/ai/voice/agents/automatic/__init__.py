@@ -66,6 +66,9 @@ from app.ai.voice.agents.automatic.utils.session_context import (
     create_session_context,
     set_current_session_id,
 )
+
+# Import shared STT service
+from app.ai.voice.stt import get_stt_service
 from app.core.config import dynamic, static
 from app.core.config.dynamic import ENABLE_BREEZE_MCP
 from app.core.logger import configure_session_logger, logger
@@ -73,7 +76,6 @@ from app.core.logger import configure_session_logger, logger
 from .processors import LLMSpyProcessor
 from .processors.ptt_vad_filter import PTTVADFilter
 from .prompts import get_system_prompt
-from .stt import get_stt_service
 from .tools import initialize_tools
 from .tts import get_tts_service
 
