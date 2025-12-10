@@ -63,6 +63,10 @@ async def get_stt_service():
             )
         )
     elif BREEZE_BUDDY_STT_SERVICE == "openai":
+        if not OPENAI_STT_API_KEY:
+            raise ValueError(
+                "OPENAI_STT_API_KEY is required when BREEZE_BUDDY_STT_SERVICE=openai"
+            )
         logger.info("Using OpenAI STT service for Breeze Buddy voice")
         return build_openai_stt(
             api_key=OPENAI_STT_API_KEY,
@@ -71,6 +75,10 @@ async def get_stt_service():
             temperature=0.0,
         )
     elif BREEZE_BUDDY_STT_SERVICE == "soniox":
+        if not SONIOX_API_KEY:
+            raise ValueError(
+                "SONIOX_API_KEY is required when BREEZE_BUDDY_STT_SERVICE=soniox"
+            )
         # Pass raw config values - language hints parsing is handled internally by build_soniox_stt
         return build_soniox_stt(
             SonioxConfig(

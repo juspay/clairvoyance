@@ -105,3 +105,33 @@ async def BB_SARVAM_STT_VAD_SIGNALS() -> bool:
 async def BB_SARVAM_STT_HIGH_VAD_SENSITIVITY() -> bool:
     """Returns BB_SARVAM_STT_HIGH_VAD_SENSITIVITY from Redis"""
     return await get_config("BB_SARVAM_STT_HIGH_VAD_SENSITIVITY", False, bool)
+
+
+async def BB_SARVAM_TTS_MODEL() -> str:
+    """Returns BB_SARVAM_TTS_MODEL from Redis"""
+    return await get_config("BB_SARVAM_TTS_MODEL", "bulbul:v2", str)
+
+
+async def BB_SARVAM_TTS_VOICE_ID() -> str:
+    """Returns BB_SARVAM_TTS_VOICE_ID from Redis"""
+    return await get_config("BB_SARVAM_TTS_VOICE_ID", "manisha", str)
+
+
+async def BB_SARVAM_TTS_LANGUAGE_CODE() -> str:
+    """Returns BB_SARVAM_TTS_LANGUAGE_CODE from Redis"""
+    return await get_config("BB_SARVAM_TTS_LANGUAGE_CODE", "en-IN", str)
+
+
+async def BB_SARVAM_TTS_PITCH() -> float:
+    """Returns BB_SARVAM_TTS_PITCH from Redis"""
+    return await get_config("BB_SARVAM_TTS_PITCH", 0.0, float)
+
+
+async def BB_SARVAM_TTS_PACE() -> float:
+    """Returns BB_SARVAM_TTS_PACE from Redis"""
+    return await get_config("BB_SARVAM_TTS_PACE", 1.0, float)
+
+
+async def BB_TTS_SERVICE() -> str:
+    """Returns BREEZE_BUDDY_TTS_SERVICE from Redis"""
+    return await get_config("BREEZE_BUDDY_TTS_SERVICE", "elevenlabs", str)

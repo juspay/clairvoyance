@@ -21,8 +21,6 @@ from pipecat.processors.filters.stt_mute_filter import (
     STTMuteStrategy,
 )
 from pipecat.services.azure.llm import AzureLLMService
-from pipecat.services.elevenlabs.tts import ElevenLabsTTSService
-from pipecat.transcriptions.language import Language
 from pipecat.transports.websocket.fastapi import (
     FastAPIWebsocketParams,
     FastAPIWebsocketTransport,
@@ -36,6 +34,7 @@ from app.ai.voice.agents.breeze_buddy.analytics.tracing_setup import (
     setup_tracing,
 )
 from app.ai.voice.agents.breeze_buddy.stt import get_stt_service
+from app.ai.voice.agents.breeze_buddy.tts import get_tts_service
 from app.ai.voice.agents.breeze_buddy.workflows.order_confirmation.types import (
     OrderData,
 )
@@ -53,10 +52,6 @@ from app.core.config.static import (
     BREEZE_BUDDY_VAD_MIN_VOLUME,
     BREEZE_BUDDY_VAD_START_SECS,
     BREEZE_BUDDY_VAD_STOP_SECS,
-    ELEVENLABS_API_KEY,
-    ELEVENLABS_BB_VOICE_ID,
-    ELEVENLABS_MODEL_ID,
-    ELEVENLABS_VOICE_SPEED,
     ENABLE_BREEZE_BUDDY_TRACING,
     ENABLE_BREEZE_BUDDY_USER_INTERRUPTION,
 )
@@ -264,14 +259,7 @@ class OrderConfirmationBot:
         )
 
         # Create TTS with event handlers for VAD muting
-        tts = ElevenLabsTTSService(
-            api_key=ELEVENLABS_API_KEY,
-            voice_id=ELEVENLABS_BB_VOICE_ID,
-            model_id=ELEVENLABS_MODEL_ID,
-            params=ElevenLabsTTSService.InputParams(
-                speed=ELEVENLABS_VOICE_SPEED, language=Language.EN_IN
-            ),
-        )
+        tts = await get_tts_service()
 
         self.system_prompt = self._get_system_prompt(
             self.shop_name,
