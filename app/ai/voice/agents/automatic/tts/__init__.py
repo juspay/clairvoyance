@@ -1,17 +1,18 @@
 from typing import Optional
 
-from pipecat.services.elevenlabs.tts import ElevenLabsTTSService
-from pipecat.services.google.tts import GoogleTTSService
-from pipecat.services.sarvam.tts import SarvamTTSService
 from pipecat.transcriptions.language import Language
 
 from app.ai.voice.agents.automatic.features.charts.highlight_filter import (
     HighlightedChartTextFilter,
 )
 from app.ai.voice.agents.automatic.types import TTSProvider, VoiceName
-from app.ai.voice.agents.automatic.utils.common import (
-    SarvamServiceType,
-    get_sarvam_language,
+from app.ai.voice.tts import (
+    ElevenLabsConfig,
+    GoogleConfig,
+    SarvamTTSConfig,
+    build_elevenlabs_tts,
+    build_google_tts,
+    build_sarvam_tts,
 )
 from app.core.config.dynamic import (
     SARVAM_TTS_LANGUAGE_CODE,
@@ -60,49 +61,37 @@ async def get_tts_service(
             logger.error("SARVAM_API_KEY is not set. Sarvam TTS cannot be used.")
             raise ValueError("SARVAM_API_KEY is required for Sarvam TTS")
 
-        # Get dynamic config values from Redis (same pattern as ENABLE_BACKGROUND_TASKS in main.py)
         sarvam_tts_language_code = await SARVAM_TTS_LANGUAGE_CODE()
         sarvam_tts_model = await SARVAM_TTS_MODEL()
         sarvam_tts_voice_id = await SARVAM_TTS_VOICE_ID()
         sarvam_tts_pitch = await SARVAM_TTS_PITCH()
         sarvam_tts_pace = await SARVAM_TTS_PACE()
 
-        # Get language for TTS (with EN_IN fallback)
-        tts_language = get_sarvam_language(
-            language_code=sarvam_tts_language_code,
-            service_type=SarvamServiceType.TTS,
-        )
-
-        service = SarvamTTSService(
-            api_key=SARVAM_API_KEY,
-            voice_id=sarvam_tts_voice_id,
-            model=sarvam_tts_model,
-            params=SarvamTTSService.InputParams(
-                language=tts_language,
+        return build_sarvam_tts(
+            SarvamTTSConfig(
+                api_key=SARVAM_API_KEY,
+                voice_id=sarvam_tts_voice_id,
+                model=sarvam_tts_model,
                 pitch=sarvam_tts_pitch,
                 pace=sarvam_tts_pace,
-            ),
+                language_code=sarvam_tts_language_code,
+            )
         )
-        logger.info(
-            f"Using Sarvam TTS service with model={sarvam_tts_model}, "
-            f"voice_id={sarvam_tts_voice_id}, language={tts_language}, "
-            f"pitch={sarvam_tts_pitch}, pace={sarvam_tts_pace}"
-        )
-        return service
 
     if (
         tts_provider == TTSProvider.ELEVENLABS.value
         and voice_name == VoiceName.RHEA.value
     ):
         logger.info("Using ElevenLabs TTS service for RHEA voice.")
-        return ElevenLabsTTSService(
-            api_key=ELEVENLABS_API_KEY,
-            voice_id=ELEVENLABS_RHEA_VOICE_ID,
-            model_id=ELEVENLABS_MODEL_ID,
-            params=ElevenLabsTTSService.InputParams(
-                speed=ELEVENLABS_TTS_SPEED, language=Language.EN_IN
-            ),
-            text_filters=text_filters,
+        return build_elevenlabs_tts(
+            ElevenLabsConfig(
+                api_key=ELEVENLABS_API_KEY,
+                voice_id=ELEVENLABS_RHEA_VOICE_ID,
+                model_id=ELEVENLABS_MODEL_ID,
+                speed=ELEVENLABS_TTS_SPEED,
+                language=Language.EN_IN,
+                text_filters=text_filters,
+            )
         )
 
     voice_id = GOOGLE_BRET_VOICE  # Default to BRET
@@ -134,11 +123,11 @@ async def get_tts_service(
         else:
             logger.warning("Google credentials: Not provided")
 
-    return GoogleTTSService(
-        voice_id=voice_id,
-        params=GoogleTTSService.InputParams(
+    return build_google_tts(
+        GoogleConfig(
+            voice_id=voice_id,
             language=Language.EN_IN,
-        ),
-        credentials=GOOGLE_CREDENTIALS_JSON,
-        text_filters=text_filters,
+            credentials=GOOGLE_CREDENTIALS_JSON,
+            text_filters=text_filters,
+        )
     )
