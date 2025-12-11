@@ -504,3 +504,14 @@ ENABLE_BB_LANGFUSE_MONITORING_LOOP = (
 SCORE_CHECK_INTERVAL_SECONDS = int(
     os.environ.get("SCORE_CHECK_INTERVAL_SECONDS", "600")
 )  # 10 minutes
+
+# Breeze Buddy Quantity Flow Configuration
+# Comma-separated list of shop identifiers that should use quantity flow (total items count)
+enable_quantity_flow_shop_list_str = os.environ.get(
+    "ENABLE_QUANTITY_FLOW_SHOP_LIST", ""
+)
+ENABLE_QUANTITY_FLOW_SHOP_LIST = [
+    shop.strip()
+    for shop in enable_quantity_flow_shop_list_str.split(",")
+    if shop.strip()
+]

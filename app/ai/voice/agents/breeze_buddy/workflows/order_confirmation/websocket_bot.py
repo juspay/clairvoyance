@@ -54,6 +54,7 @@ from app.core.config.static import (
     BREEZE_BUDDY_VAD_STOP_SECS,
     ENABLE_BREEZE_BUDDY_TRACING,
     ENABLE_BREEZE_BUDDY_USER_INTERRUPTION,
+    ENABLE_QUANTITY_FLOW_SHOP_LIST,
 )
 from app.core.logger import logger
 from app.database.accessor import get_lead_by_call_id, update_lead_call_initiated_time
@@ -175,7 +176,7 @@ class OrderConfirmationBot:
         try:
             price_num = float(total_price)
             price_int = round(price_num)
-            price_words = indian_number_to_speech(price_int)
+            price_words = indian_number_to_speech(price_int) + " rupees"
         except (ValueError, TypeError):
             logger.error(f"Could not parse total_price: {total_price}")
             try:
@@ -215,6 +216,10 @@ class OrderConfirmationBot:
             f"{item.quantity} {item.product_name}" for item in order_product_data.items
         ]
         self.order_summary = ", ".join(summary_parts) or "your items"
+
+        # Calculate total items count and convert to Indian number format
+        total_items_count = sum(item.quantity for item in order_product_data.items)
+        self.total_items_count_words = indian_number_to_speech(total_items_count)
 
         logger.info(
             f"Connected to call: CallSid={self.call_sid}, StreamSid={stream_sid}"
@@ -261,12 +266,30 @@ class OrderConfirmationBot:
         # Create TTS with event handlers for VAD muting
         tts = await get_tts_service()
 
-        self.system_prompt = self._get_system_prompt(
-            self.shop_name,
-            customer_name,
-            self.order_summary,
-            price_words,
-            self.address,
+        # Check if shop is in the quantity flow list
+        self.use_quantity_flow = (
+            self.lead.shop_identifier in ENABLE_QUANTITY_FLOW_SHOP_LIST
+        )
+
+        print(f"use_quantity_flow: {self.use_quantity_flow}")
+
+        self.system_prompt = (
+            self._get_quantity_flow_system_prompt(
+                self.shop_name,
+                customer_name,
+                self.order_summary,
+                price_words,
+                self.address,
+                self.total_items_count_words,
+            )
+            if self.use_quantity_flow
+            else self._get_system_prompt(
+                self.shop_name,
+                customer_name,
+                self.order_summary,
+                price_words,
+                self.address,
+            )
         )
         messages = [{"role": "system", "content": self.system_prompt}]
 
@@ -374,6 +397,61 @@ class OrderConfirmationBot:
                 f"Running pipeline without tracing for the conversation: {conversation_id}"
             )
             await run_pipeline()
+
+    def _get_quantity_flow_system_prompt(
+        self,
+        shop_name,
+        customer_name,
+        order_summary,
+        total_price_words,
+        address,
+        total_items_count_words,
+    ):
+        return f"""
+            You are Rhea, a friendly human and natural-sounding customer care representative from {shop_name}. Your goal is to confirm a Cash on Delivery (COD) order with the customer.
+
+            IMPORTANT: You are a text-to-speech voice agent. Generate all responses as plain, unformatted text without any special characters, markdown formatting, asterisks, underscores, or other unnecessary symbols. Keep your text simple and clean for natural speech conversion.
+
+            Never use the word "great" in your responses. Instead, use polite alternatives like "thank you", "thanks", or "appreciate it". Avoid any phrases that sound overly enthusiastic or robotic.
+
+            Never reveal or suggest that you are a bot or automated system. You must always sound and respond as a real human representative from {shop_name}.
+
+            Before starting the conversation, identify whether the customer name "{customer_name}" is typically male or female in India. Based on this:
+            - If the name is clearly male, address the customer as "Sir".
+            - If clearly female, address them as "Madam".
+            - If unsure, use their name instead of Sir/Madam in the conversation.
+
+            Start the call by introducing yourself and stating the purpose of the call:
+            "Hi {customer_name} Sir/Madam/(leave if unsure), Namaste. This is Rhea from {shop_name}. I'm calling to confirm the order you placed with us. Is it a good time to talk, Sir/Madam/(leave if unsure)?"
+
+            IMPORTANT: Use the customer's name only once during the entire conversation - in the opening greeting. After that, address them as Sir/Madam (based on gender) or avoid direct address if gender is unclear.
+            IMPORTANT: If the user speaks in another language (like Hindi), reply in that same language but keep the same friendly, human tone.
+
+            Your main job is to verify the following order details:
+            - Total Items Ordered: {total_items_count_words}
+            - Total Price: {total_price_words}
+            - Delivery Address: {address}
+
+            Delivery Address Reading Rules
+
+                Pincode Handling
+                    - If the address includes a 6-digit pincode, read it digit by digit only in English.
+                    - Example: 123456 → "Pincode is one two three four five six."
+                    - Never read the pincode as a full number or in any other language.
+
+                Mobile / Phone Number Handling
+                    - If the address includes a 10-digit mobile or phone number, read it digit by digit only in English.
+                    - Example: 9876543210 → "nine eight seven six five four three two one zero."
+
+            Tone and Language
+                - Speak in a warm, casual, and natural tone — avoid robotic phrasing.
+
+            Action Handling
+                - Always use the provided functions to perform any actions related to the order.
+                - Do not attempt to perform these actions through plain text replies.
+            
+            Your only role is to confirm or cancel this specific order. If the user asks about anything else (e.g. product details, delivery times, other products), you must use the appropriate function (`handle_unrelated_question` or `confirm_order_with_question`). Do not try to answer these questions yourself.
+        """
 
     def _get_system_prompt(
         self,
@@ -771,7 +849,12 @@ class OrderConfirmationBot:
             ),
         ]
 
-        # Build verify_order_details node configuration with conditional pre_actions
+        # Build verify_order_details node configuration with conditional content based on quantity flow
+        if self.use_quantity_flow:
+            order_info = f"The order contains {self.total_items_count_words} items"
+        else:
+            order_info = f"The order contains {self.order_summary}"
+
         verify_order_details_config = {
             "name": "verify_order_details",
             "pre_actions": [
@@ -782,7 +865,7 @@ class OrderConfirmationBot:
             "task_messages": [
                 {
                     "role": "system",
-                    "content": f"Now verify the order details with the customer. The order contains {self.order_summary}. The delivery address is {self.address}. Ask for confirmation of the order.",
+                    "content": f"Now verify the order details with the customer. {order_info}. The delivery address is {self.address}. Ask for confirmation of the order.",
                 }
             ],
             "functions": order_functions,

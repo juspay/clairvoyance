@@ -22,7 +22,7 @@ OUTCOME_TO_ENUM = {
 
 def indian_number_to_speech(number: int) -> str:
     if number < 100:
-        return f"{number} rupees"
+        return f"{number}"
 
     parts = []
     num_str = str(number)
@@ -61,7 +61,7 @@ def indian_number_to_speech(number: int) -> str:
             h_part += f" {rest}"
         parts[-1] = h_part
 
-    return " ".join(parts) + " rupees"
+    return " ".join(parts)
 
 
 async def send_webhook_with_retry(
