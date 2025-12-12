@@ -1,6 +1,7 @@
 from typing import Optional
 
 from pipecat.services.elevenlabs.tts import ElevenLabsTTSService
+from pipecat.services.fish.tts import FishAudioTTSService
 from pipecat.services.google.tts import GoogleTTSService
 from pipecat.services.sarvam.tts import SarvamTTSService
 from pipecat.transcriptions.language import Language
@@ -14,6 +15,14 @@ from app.ai.voice.agents.automatic.utils.common import (
     get_sarvam_language,
 )
 from app.core.config.dynamic import (
+    FISH_TTS_LANGUAGE_CODE,
+    FISH_TTS_LATENCY,
+    FISH_TTS_MODEL_ID,
+    FISH_TTS_NORMALIZE,
+    FISH_TTS_OUTPUT_FORMAT,
+    FISH_TTS_PROSODY_SPEED,
+    FISH_TTS_PROSODY_VOLUME,
+    FISH_TTS_REFERENCE_ID,
     SARVAM_TTS_LANGUAGE_CODE,
     SARVAM_TTS_MODEL,
     SARVAM_TTS_PACE,
@@ -25,9 +34,11 @@ from app.core.config.static import (
     ELEVENLABS_MODEL_ID,
     ELEVENLABS_RHEA_VOICE_ID,
     ELEVENLABS_TTS_SPEED,
+    FISH_API_KEY,
     GOOGLE_BRET_VOICE,
     GOOGLE_CREDENTIALS_JSON,
     GOOGLE_MIA_VOICE,
+    SAMPLE_RATE,
     SARVAM_API_KEY,
 )
 from app.core.logger import logger
@@ -87,6 +98,56 @@ async def get_tts_service(
             f"Using Sarvam TTS service with model={sarvam_tts_model}, "
             f"voice_id={sarvam_tts_voice_id}, language={tts_language}, "
             f"pitch={sarvam_tts_pitch}, pace={sarvam_tts_pace}"
+        )
+        return service
+
+    if tts_provider == TTSProvider.FISH.value:
+        if not FISH_API_KEY:
+            logger.error("FISH_API_KEY is not set. Fish AI TTS cannot be used.")
+            raise ValueError("FISH_API_KEY is required for Fish AI TTS")
+
+        # Get dynamic config values from Redis
+        fish_tts_reference_id = await FISH_TTS_REFERENCE_ID()
+        fish_tts_model_id = await FISH_TTS_MODEL_ID()
+        fish_tts_language_code = await FISH_TTS_LANGUAGE_CODE()
+        fish_tts_latency = await FISH_TTS_LATENCY()
+        fish_tts_prosody_speed = await FISH_TTS_PROSODY_SPEED()
+        fish_tts_prosody_volume = await FISH_TTS_PROSODY_VOLUME()
+        fish_tts_normalize = await FISH_TTS_NORMALIZE()
+        fish_tts_output_format = await FISH_TTS_OUTPUT_FORMAT()
+
+        # Convert language code to Language enum
+        try:
+            fish_language = (
+                Language(fish_tts_language_code)
+                if fish_tts_language_code
+                else Language.EN_IN
+            )
+        except ValueError:
+            logger.warning(
+                f"Invalid Fish AI language code: {fish_tts_language_code}, using EN_IN"
+            )
+            fish_language = Language.EN_IN
+
+        service = FishAudioTTSService(
+            api_key=FISH_API_KEY,
+            reference_id=fish_tts_reference_id,
+            model_id=fish_tts_model_id,
+            output_format=fish_tts_output_format,
+            sample_rate=SAMPLE_RATE,
+            params=FishAudioTTSService.InputParams(
+                language=fish_language,
+                latency=fish_tts_latency,
+                normalize=fish_tts_normalize,
+                prosody_speed=fish_tts_prosody_speed,
+                prosody_volume=fish_tts_prosody_volume,
+            ),
+        )
+        logger.info(
+            f"Using Fish AI TTS service with reference_id={fish_tts_reference_id}, "
+            f"model_id={fish_tts_model_id}, output_format={fish_tts_output_format}, "
+            f"sample_rate={SAMPLE_RATE}, language={fish_language}, "
+            f"speed={fish_tts_prosody_speed}, volume={fish_tts_prosody_volume}"
         )
         return service
 

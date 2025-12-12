@@ -79,3 +79,44 @@ async def SARVAM_TTS_PITCH() -> float:
 async def SARVAM_TTS_PACE() -> float:
     """Returns SARVAM_TTS_PACE from Redis"""
     return await get_config("SARVAM_TTS_PACE", 1.0, float)
+
+
+# --- Fish AI TTS Configuration (for Automatic agent) ---
+async def FISH_TTS_REFERENCE_ID() -> str:
+    """Returns FISH_TTS_REFERENCE_ID (voice ID) from Redis"""
+    return await get_config("FISH_TTS_REFERENCE_ID", "", str)
+
+
+async def FISH_TTS_MODEL_ID() -> str:
+    """Returns FISH_TTS_MODEL_ID from Redis"""
+    return await get_config("FISH_TTS_MODEL_ID", "speech-1.5", str)
+
+
+async def FISH_TTS_LANGUAGE_CODE() -> str:
+    """Returns FISH_TTS_LANGUAGE_CODE from Redis"""
+    return await get_config("FISH_TTS_LANGUAGE_CODE", "en-IN", str)
+
+
+async def FISH_TTS_LATENCY() -> str:
+    """Returns FISH_TTS_LATENCY from Redis"""
+    return await get_config("FISH_TTS_LATENCY", "normal", str)
+
+
+async def FISH_TTS_PROSODY_SPEED() -> float:
+    """Returns FISH_TTS_PROSODY_SPEED from Redis"""
+    return await get_config("FISH_TTS_PROSODY_SPEED", 1.0, float)
+
+
+async def FISH_TTS_PROSODY_VOLUME() -> int:
+    """Returns FISH_TTS_PROSODY_VOLUME from Redis"""
+    return await get_config("FISH_TTS_PROSODY_VOLUME", 0, int)
+
+
+async def FISH_TTS_NORMALIZE() -> bool:
+    """Returns FISH_TTS_NORMALIZE from Redis"""
+    return await get_config("FISH_TTS_NORMALIZE", True, bool)
+
+
+async def FISH_TTS_OUTPUT_FORMAT() -> str:
+    """Returns FISH_TTS_OUTPUT_FORMAT from Redis"""
+    return await get_config("FISH_TTS_OUTPUT_FORMAT", "pcm", str)

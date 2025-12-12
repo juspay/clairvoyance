@@ -9,6 +9,7 @@ class TTSProvider(str, Enum):
     ELEVENLABS = "ELEVENLABS"
     GOOGLE = "GOOGLE"
     SARVAM = "SARVAM"
+    FISH = "FISH"
 
 
 class VoiceName(str, Enum):

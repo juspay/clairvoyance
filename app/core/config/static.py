@@ -81,6 +81,9 @@ ELEVENLABS_BB_VOICE_ID = os.environ.get(
 GOOGLE_BRET_VOICE = os.environ.get("GOOGLE_BRET_VOICE", "en-IN-Chirp3-HD-Sadaltager")
 GOOGLE_MIA_VOICE = os.environ.get("GOOGLE_MIA_VOICE", "en-IN-Chirp3-HD-Despina")
 
+# Fish AI TTS Configuration
+FISH_API_KEY = os.environ.get("FISH_API_KEY")
+
 # Tool Call Sound Configuration
 ENABLE_TOOL_CALL_SOUND = (
     os.environ.get("ENABLE_TOOL_CALL_SOUND", "false").lower() == "true"
