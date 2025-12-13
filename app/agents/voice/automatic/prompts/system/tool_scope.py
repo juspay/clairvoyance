@@ -118,7 +118,11 @@ def get_tool_scope_instructions(shop_id: str | None) -> str:
             - Individual customer purchase history or profiles
             - SKU-level inventory analytics
             - Store/location-specific breakdowns (for multi-location merchants)
-            - Category-wise detailed breakdowns (unless already present in the data shown)
+            - Category-wise detailed breakdowns
+
+            ALLOWED ENHANCEMENTS:
+            - If the data response already contains category breakdowns (e.g., Electronics, Fashion), you MAY reference them in follow-ups
+            - Only suggest deeper analysis of data that was explicitly returned by the tool
 
             DELIVERY RULES:
             1. Exactly 2-3 suggestions that logically follow from current conversation
