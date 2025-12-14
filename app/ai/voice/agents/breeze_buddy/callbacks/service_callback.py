@@ -1,0 +1,129 @@
+import json
+from datetime import datetime, timezone
+
+from app.ai.voice.agents.breeze_buddy.template.context import TemplateContext
+from app.ai.voice.agents.breeze_buddy.utils.common import (
+    send_webhook_with_retry,
+)
+from app.core.logger import logger
+from app.schemas import LeadCallOutcome
+
+
+async def service_callback(context: TemplateContext, args, transition_to=None):
+    """
+    Handler to send webhook with call summary to the calling service.
+
+    This handler sends the call summary data to the reporting webhook URL.
+
+    Args:
+        context: Handler context with bot state access
+        args: Function arguments containing outcome and other data
+        transition_to: Target node to transition to (not used for action handlers)
+
+    Returns:
+        Empty dict
+    """
+    logger.debug(f"service_callback called with args: {args}")
+
+    try:
+        filtered_transcript = context.lead.metaData.get("transcription", [])
+        outcome = context.lead.outcome
+        expected_schema = context.expected_callback_response_schema
+
+        # Calculate call duration
+        call_duration = None
+        if context.lead and context.lead.call_initiated_time:
+            call_initiated_time_utc = context.lead.call_initiated_time.astimezone(
+                timezone.utc
+            )
+            call_duration = (
+                datetime.now(timezone.utc) - call_initiated_time_utc
+            ).total_seconds()
+            logger.debug(
+                f"Calculated call duration: {call_duration} seconds for call {context.call_sid}"
+            )
+        else:
+            logger.warning(
+                f"Could not calculate call duration for call {context.call_sid} "
+                f"(lead: {context.lead is not None}, "
+                f"call_initiated_time: {context.lead.call_initiated_time if context.lead else None})"
+            )
+
+        # Prepare webhook summary data
+        summary_data = {
+            "callSid": context.call_sid,
+            "outcome": outcome,
+            "attemptCount": context.lead.attempt_count + 1 if context.lead else 1,
+            "transcription": json.dumps(filtered_transcript, ensure_ascii=False),
+            "callDuration": call_duration,
+            "orderId": (
+                context.lead.payload.get("order_id")
+                if context.lead and context.lead.payload
+                else None
+            ),
+        }
+
+        if expected_schema:
+            meta = context.lead.metaData or {}
+            extracted_fields = {}
+
+            for field in expected_schema:
+                if field in meta:
+                    extracted_fields[field] = meta[field]
+
+            summary_data.update(extracted_fields)
+            logger.debug(
+                f"Extracted schema fields added to summary_data: {extracted_fields}"
+            )
+
+        logger.info(
+            f"Prepared webhook summary data for call {context.call_sid}: "
+            f"outcome={outcome}, order_id={context.lead.payload.get('order_id') if context.lead and context.lead.payload else None}, "
+            f"call_duration={call_duration}s"
+        )
+
+        # Send webhook
+        if (
+            context.reporting_webhook_url
+            and outcome != LeadCallOutcome.BUSY
+            and outcome != LeadCallOutcome.NO_ANSWER
+        ):
+            logger.info(
+                f"Sending webhook to {context.reporting_webhook_url} for call {context.call_sid} "
+                f"with outcome {outcome}"
+            )
+            try:
+                success = await send_webhook_with_retry(
+                    context.bot.aiohttp_session,
+                    context.reporting_webhook_url,
+                    summary_data,
+                )
+                if not success:
+                    logger.error(
+                        f"Failed to send call summary webhook after all retries for call {context.call_sid}. "
+                        f"URL: {context.reporting_webhook_url}"
+                    )
+                else:
+                    logger.info(
+                        f"Successfully sent webhook for call {context.call_sid} "
+                        f"with outcome: {outcome}"
+                    )
+            except Exception as e:
+                logger.error(
+                    f"Error sending webhook for call {context.call_sid}: {e}",
+                    exc_info=True,
+                )
+        else:
+            logger.info(
+                f"Skipping webhook send for call {context.call_sid} "
+                f"(url={'present' if context.reporting_webhook_url else 'missing'}, "
+                f"outcome={outcome})"
+            )
+
+    except Exception as e:
+        logger.error(
+            f"Error in service_callback for call {context.call_sid}: {e}",
+            exc_info=True,
+        )
+
+    return {}

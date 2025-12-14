@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel
 
@@ -12,7 +12,15 @@ class OrderData(BaseModel):
     items: List[OrderItem]
 
 
-class BreezeOrderData(BaseModel):
+class PushLeadRequest(BaseModel):
+    payload: Dict[str, Any]
+    template: str
+    merchant: str
+    identifier: Optional[str] = None
+    reporting_webhook_url: str | None = None
+
+
+class LeadData(BaseModel):
     customer_mobile_number: str
     shop_identifier: Optional[str] = None
     shop_name: str

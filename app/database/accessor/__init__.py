@@ -35,8 +35,14 @@ from .breeze_buddy.outbound_number import (
     update_outbound_number_channels,
     update_outbound_number_status,
 )
+from .breeze_buddy.template import (
+    create_template,
+    get_template_by_merchant,
+)
 
 __all__ = [
+    "create_template",
+    "get_template_by_merchant",
     "create_outbound_number",
     "get_outbound_number_by_id",
     "update_outbound_number_status",

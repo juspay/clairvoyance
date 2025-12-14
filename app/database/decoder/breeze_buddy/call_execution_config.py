@@ -6,7 +6,7 @@ from typing import List, Optional
 
 import asyncpg
 
-from app.schemas import CallExecutionConfig, CallProvider, Workflow
+from app.schemas import CallExecutionConfig, CallProvider
 
 
 def decode_call_execution_config_list(
@@ -28,7 +28,7 @@ def decode_call_execution_config_list(
             max_retry=row["max_retry"],
             calling_provider=CallProvider(row["calling_provider"]),
             merchant_id=row["merchant_id"],
-            workflow=Workflow(row["workflow"]),
+            template=row["template"],
             shop_identifier=row["shop_identifier"],
             enable_international_call=row["enable_international_call"],
             created_at=row["created_at"],
@@ -57,7 +57,7 @@ def decode_call_execution_config(
         max_retry=row["max_retry"],
         calling_provider=CallProvider(row["calling_provider"]),
         merchant_id=row["merchant_id"],
-        workflow=Workflow(row["workflow"]),
+        template=row["template"],
         shop_identifier=row["shop_identifier"],
         enable_international_call=row["enable_international_call"],
         created_at=row["created_at"],

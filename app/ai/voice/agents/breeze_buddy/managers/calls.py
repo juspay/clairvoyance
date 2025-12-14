@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from app.ai.voice.agents.breeze_buddy.services.telephony.utils import get_voice_provider
-from app.ai.voice.agents.breeze_buddy.workflows.order_confirmation.utils import (
+from app.ai.voice.agents.breeze_buddy.utils.common import (
     send_webhook_with_retry,
 )
 from app.core.config.static import UPLOAD_BREEZE_BUDDY_CALL_RECORDINGS_TO_CLOUD
@@ -54,9 +54,9 @@ async def _get_lead_config(lead: LeadCallTracker) -> Optional[CallExecutionConfi
         )
         return None
 
-    config = next((c for c in configs if c.workflow == lead.workflow), None)
+    config = next((c for c in configs if c.template == lead.template), None)
     if not config:
-        logger.warning(f"No call execution config found for workflow: {lead.workflow}")
+        logger.warning(f"No call execution config found for template: {lead.template}")
     return config
 
 
@@ -136,7 +136,7 @@ async def _retry_call(
         await create_lead_call_tracker(
             id=str(uuid.uuid4()),
             merchant_id=lead.merchant_id,
-            workflow=lead.workflow,
+            template=lead.template,
             shop_identifier=lead.shop_identifier,
             next_attempt_at=next_attempt_at,
             payload=lead.payload,
@@ -280,7 +280,13 @@ async def process_backlog_leads():
                 await _acquire_number(number_to_use)
 
                 call_provider = get_voice_provider(
-                    config.calling_provider.value, session
+                    config.calling_provider.value,
+                    session,
+                    (
+                        lead.metaData.get("use_template_flow", False)
+                        if lead.metaData
+                        else False
+                    ),
                 )
                 call = call_provider.make_call(
                     locked_lead.payload.get("customer_mobile_number"),
@@ -373,12 +379,10 @@ async def process_backlog_leads():
 
 async def handle_call_completion(
     call_id: str,
-    outcome: LeadCallOutcome,
-    transcription: dict,
-    call_end_time: datetime,
-    updated_address: str | None = None,
-    cancellation_reason: str | None = None,
-):
+    outcome: LeadCallOutcome | None = None,
+    call_end_time: datetime | None = None,
+    meta_data: dict | None = None,
+) -> Optional[LeadCallTracker]:
     """
     Handles call completion events.
     """
@@ -400,13 +404,7 @@ async def handle_call_completion(
     if not config:
         return
 
-    meta_data = {"transcription": transcription}
-    if updated_address:
-        meta_data["updated_address"] = updated_address
-    if cancellation_reason:
-        meta_data["cancellation_reason"] = cancellation_reason
-
-    await update_lead_call_completion_details(
+    updated_lead = await update_lead_call_completion_details(
         id=lead.id,
         status=LeadCallStatus.FINISHED,
         outcome=outcome,
@@ -416,6 +414,8 @@ async def handle_call_completion(
 
     if outcome in [LeadCallOutcome.BUSY, LeadCallOutcome.NO_ANSWER]:
         await _retry_call(lead, config, outcome)
+
+    return updated_lead
 
 
 async def handle_unanswered_calls(call_id: str):

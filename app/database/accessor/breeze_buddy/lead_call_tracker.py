@@ -30,7 +30,6 @@ from app.schemas import (
     LeadCallOutcome,
     LeadCallStatus,
     LeadCallTracker,
-    Workflow,
 )
 
 
@@ -44,7 +43,7 @@ def get_row_count(result: Optional[List[asyncpg.Record]]) -> int:
 async def create_lead_call_tracker(
     id: str,
     merchant_id: str,
-    workflow: Workflow,
+    template: str,
     shop_identifier: Optional[str],
     next_attempt_at: Optional[datetime],
     payload: Optional[Dict[str, Any]],
@@ -63,7 +62,7 @@ async def create_lead_call_tracker(
         query_text, values = insert_lead_call_tracker_query(
             id=id,
             merchant_id=merchant_id,
-            workflow=workflow,
+            template=template,
             shop_identifier=shop_identifier,
             next_attempt_at=next_attempt_at,
             payload=payload,
@@ -281,13 +280,14 @@ async def update_lead_call_recording_url(
 
 async def update_lead_call_completion_details(
     id: str,
-    status: LeadCallStatus,
-    outcome: LeadCallOutcome,
-    meta_data: Dict[str, Any],
-    call_end_time: datetime,
+    status: Optional[LeadCallStatus] = None,
+    outcome: Optional[LeadCallOutcome] = None,
+    meta_data: Optional[Dict[str, Any]] = None,
+    call_end_time: Optional[datetime] = None,
 ) -> Optional[LeadCallTracker]:
     """
     Update lead call completion details.
+    Only updates fields that are not None.
     """
     logger.info(f"Updating lead call completion details for ID: {id}")
 

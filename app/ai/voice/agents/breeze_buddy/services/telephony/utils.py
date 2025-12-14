@@ -11,10 +11,10 @@ from app.schemas import CallProvider
 
 
 def get_voice_provider(
-    provider_name: CallProvider, aiohttp_session
+    provider_name: CallProvider, aiohttp_session, use_template_flow: bool = False
 ) -> VoiceCallProvider:
     if provider_name == CallProvider.EXOTEL:
-        return ExotelProvider(aiohttp_session)
+        return ExotelProvider(aiohttp_session, use_template_flow)
     if provider_name == CallProvider.TWILIO:
-        return TwilioProvider(aiohttp_session)
+        return TwilioProvider(aiohttp_session, use_template_flow)
     raise ValueError(f"Unsupported voice provider: {provider_name}")
