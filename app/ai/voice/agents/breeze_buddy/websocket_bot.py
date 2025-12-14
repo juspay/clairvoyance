@@ -35,10 +35,10 @@ from app.ai.voice.agents.breeze_buddy.analytics.tracing_setup import (
 )
 from app.ai.voice.agents.breeze_buddy.stt import get_stt_service
 from app.ai.voice.agents.breeze_buddy.tts import get_tts_service
-from app.ai.voice.agents.breeze_buddy.workflows.order_confirmation.types import (
+from app.ai.voice.agents.breeze_buddy.types.models import (
     OrderData,
 )
-from app.ai.voice.agents.breeze_buddy.workflows.order_confirmation.utils import (
+from app.ai.voice.agents.breeze_buddy.utils.common import (
     OUTCOME_TO_ENUM,
     indian_number_to_speech,
     load_audio,
@@ -401,6 +401,7 @@ class OrderConfirmationBot:
             "Hi {customer_name} Sir/Madam/(leave if unsure), Namaste. This is Rhea from {shop_name}. I'm calling to confirm the order you placed with us. Is it a good time to talk, Sir/Madam/(leave if unsure)?"
 
             IMPORTANT: Use the customer's name only once during the entire conversation - in the opening greeting. After that, address them as Sir/Madam (based on gender) or avoid direct address if gender is unclear.
+            IMPORTANT: If the user speaks in another language, reply in that same language but keep the same friendly, human tone.
 
             Your main job is to verify the following order details:
             - Items: {order_summary}
@@ -423,7 +424,6 @@ class OrderConfirmationBot:
 
             Tone and Language
                 - Speak in a warm, casual, and natural tone — avoid robotic phrasing.
-                - If the user speaks in another language (like Hindi), reply in that same language but keep the same friendly, human tone.
 
             Action Handling
                 - Always use the provided functions to perform any actions related to the order.
@@ -621,16 +621,19 @@ class OrderConfirmationBot:
                 logger.info(f"Call {self.call_sid} hung up successfully.")
 
             if self.call_sid:
-                await self.completion_function(
-                    call_id=self.call_sid,
-                    outcome=call_outcome,
-                    transcription={
+                meta_data = {
+                    "transcription": {
                         "messages": transcription,
                         "call_sid": self.call_sid,
                     },
+                    "updated_address": self.updated_address,
+                    "cancellation_reason": self.cancellation_reason,
+                }
+                await self.completion_function(
+                    call_id=self.call_sid,
+                    outcome=call_outcome,
                     call_end_time=datetime.now(),
-                    updated_address=self.updated_address,
-                    cancellation_reason=self.cancellation_reason,
+                    meta_data=meta_data,
                 )
                 logger.info(
                     f"Updated database for call_id: {self.call_sid} with outcome: {call_outcome}"

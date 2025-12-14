@@ -19,7 +19,7 @@ from app.database.queries.breeze_buddy.call_execution_config import (
     insert_call_execution_config_query,
     update_call_execution_config_query,
 )
-from app.schemas import CallExecutionConfig, CallProvider, Workflow
+from app.schemas import CallExecutionConfig, CallProvider
 
 
 def get_row_count(result: Optional[List[asyncpg.Record]]) -> int:
@@ -38,7 +38,7 @@ async def create_call_execution_config(
     max_retry: int,
     calling_provider: CallProvider,
     merchant_id: str,
-    workflow: Workflow,
+    template: str,
     shop_identifier: str,
     enable_international_call: bool,
 ) -> Optional[CallExecutionConfig]:
@@ -57,7 +57,7 @@ async def create_call_execution_config(
             max_retry=max_retry,
             calling_provider=calling_provider,
             merchant_id=merchant_id,
-            workflow=workflow,
+            template=template,
             shop_identifier=shop_identifier,
             enable_international_call=enable_international_call,
         )
@@ -147,7 +147,7 @@ async def get_all_call_execution_configs() -> List[CallExecutionConfig]:
 
 async def update_call_execution_config(
     merchant_id: str,
-    workflow: Workflow,
+    template: str,
     shop_identifier: Optional[str] = None,
     initial_offset: Optional[int] = None,
     retry_offset: Optional[int] = None,
@@ -158,17 +158,17 @@ async def update_call_execution_config(
     enable_international_call: Optional[bool] = None,
 ) -> Optional[CallExecutionConfig]:
     """
-    Update an existing call execution config record based on merchant_id, workflow, and shop_identifier.
+    Update an existing call execution config record based on merchant_id, template, and shop_identifier.
     Only updates fields that are provided (not None).
     """
     logger.info(
-        f"Updating call execution config for merchant: {merchant_id}, workflow: {workflow}, shop_identifier: {shop_identifier}"
+        f"Updating call execution config for merchant: {merchant_id}, template: {template}, shop_identifier: {shop_identifier}"
     )
 
     try:
         query_text, values = update_call_execution_config_query(
             merchant_id=merchant_id,
-            workflow=workflow,
+            template=template,
             shop_identifier=shop_identifier,
             initial_offset=initial_offset,
             retry_offset=retry_offset,
@@ -186,7 +186,7 @@ async def update_call_execution_config(
             return decoded_result
 
         logger.error(
-            f"Failed to update call execution config for merchant: {merchant_id}, workflow: {workflow}, shop_identifier: {shop_identifier}"
+            f"Failed to update call execution config for merchant: {merchant_id}, template: {template}, shop_identifier: {shop_identifier}"
         )
         return None
 

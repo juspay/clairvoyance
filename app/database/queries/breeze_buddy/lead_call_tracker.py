@@ -6,7 +6,7 @@ import json
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
-from app.schemas import LeadCallOutcome, LeadCallStatus, Workflow
+from app.schemas import LeadCallOutcome, LeadCallStatus
 
 # Table names
 LEAD_CALL_TRACKER_TABLE = "lead_call_tracker"
@@ -17,7 +17,7 @@ OUTBOUND_NUMBER_TABLE = "outbound_number"
 def insert_lead_call_tracker_query(
     id: str,
     merchant_id: str,
-    workflow: Workflow,
+    template: str,
     shop_identifier: Optional[str],
     next_attempt_at: Optional[datetime],
     payload: Optional[Dict[str, Any]],
@@ -35,7 +35,7 @@ def insert_lead_call_tracker_query(
         (
             "id",
             "merchant_id",
-            "workflow",
+            "template",
             "shop_identifier",
             "next_attempt_at",
             "payload",
@@ -54,7 +54,7 @@ def insert_lead_call_tracker_query(
     values = [
         id,
         merchant_id,
-        workflow.value,
+        template,
         shop_identifier,
         next_attempt_at,
         json.dumps(payload) if payload else None,
@@ -195,21 +195,48 @@ def update_lead_call_initiated_time_query(
 
 def update_lead_call_completion_details_query(
     id: str,
-    status: LeadCallStatus,
-    outcome: LeadCallOutcome,
-    meta_data: Dict[str, Any],
-    call_end_time: datetime,
+    status: Optional[LeadCallStatus] = None,
+    outcome: Optional[LeadCallOutcome] = None,
+    meta_data: Optional[Dict[str, Any]] = None,
+    call_end_time: Optional[datetime] = None,
 ) -> Tuple[str, List[Any]]:
     """
     Generate query to update lead call completion details.
+    Only updates fields that are not None.
     """
+    set_clauses = []
+    values = []
+
+    if status is not None:
+        values.append(status.value)
+        set_clauses.append(f'"status" = ${len(values)}')
+
+    if outcome is not None:
+        values.append(outcome.value)
+        set_clauses.append(f'"outcome" = ${len(values)}')
+
+    if meta_data is not None:
+        values.append(json.dumps(meta_data))
+        set_clauses.append(f'"meta_data" = ${len(values)}')
+
+    if call_end_time is not None:
+        values.append(call_end_time)
+        set_clauses.append(f'"call_end_time" = ${len(values)}')
+
+    # Always update updated_at
+    set_clauses.append('"updated_at" = NOW()')
+
+    # Add id for WHERE clause
+    values.append(id)
+    where_clause = f'"id" = ${len(values)}'
+
     text = f"""
         UPDATE "{LEAD_CALL_TRACKER_TABLE}"
-        SET "status" = $1, "outcome" = $2, "meta_data" = $3, "call_end_time" = $4, "updated_at" = NOW()
-        WHERE "id" = $5
+        SET {', '.join(set_clauses)}
+        WHERE {where_clause}
         RETURNING *;
     """
-    values = [status.value, outcome.value, json.dumps(meta_data), call_end_time, id]
+
     return text, values
 
 

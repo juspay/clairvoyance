@@ -18,10 +18,6 @@ class CallProvider(str, Enum):
     EXOTEL = "EXOTEL"
 
 
-class Workflow(str, Enum):
-    ORDER_CONFIRMATION = "order-confirmation"
-
-
 class LeadCallStatus(str, Enum):
     BACKLOG = "BACKLOG"
     PROCESSING = "PROCESSING"
@@ -42,7 +38,7 @@ class LeadCallTracker(BaseModel):
     id: str
     outbound_number_id: Optional[str] = None
     merchant_id: str
-    workflow: Workflow
+    template: str
     shop_identifier: Optional[str] = None
     attempt_count: int = 0
     next_attempt_at: Optional[datetime] = None
@@ -86,14 +82,14 @@ class CreateCallExecutionConfigRequest(BaseModel):
     max_retry: int
     calling_provider: CallProvider
     merchant_id: str
-    workflow: Workflow
+    workflow: str
     shop_identifier: Optional[str] = None
     enable_international_call: bool = True
 
 
 class UpdateCallExecutionConfigRequest(BaseModel):
     merchant_id: str
-    workflow: Workflow
+    workflow: str
     shop_identifier: Optional[str] = None
     initial_offset: Optional[int] = None
     retry_offset: Optional[int] = None
@@ -113,7 +109,7 @@ class CallExecutionConfig(BaseModel):
     max_retry: int
     calling_provider: CallProvider
     merchant_id: str
-    workflow: Workflow
+    template: str
     shop_identifier: Optional[str] = None
     enable_international_call: bool = True
     created_at: Optional[datetime] = None

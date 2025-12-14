@@ -5,7 +5,7 @@ Database query functions for the application.
 from datetime import datetime, time
 from typing import Any, List, Optional, Tuple
 
-from app.schemas import CallProvider, Workflow
+from app.schemas import CallProvider
 
 # Table names
 CALL_EXECUTION_CONFIG_TABLE = "call_execution_config"
@@ -21,7 +21,7 @@ def insert_call_execution_config_query(
     max_retry: int,
     calling_provider: CallProvider,
     merchant_id: str,
-    workflow: Workflow,
+    template: str,
     shop_identifier: Optional[str],
     enable_international_call: bool,
 ) -> Tuple[str, List[Any]]:
@@ -39,7 +39,7 @@ def insert_call_execution_config_query(
             "max_retry",
             "calling_provider",
             "merchant_id",
-            "workflow",
+            "template",
             "shop_identifier",
             "enable_international_call",
             "created_at",
@@ -57,7 +57,7 @@ def insert_call_execution_config_query(
         max_retry,
         calling_provider.value,
         merchant_id,
-        workflow.value,
+        template,
         shop_identifier,
         enable_international_call,
         datetime.now(),
@@ -94,7 +94,7 @@ def get_all_call_execution_configs_query() -> Tuple[str, List[Any]]:
 
 def update_call_execution_config_query(
     merchant_id: str,
-    workflow: Workflow,
+    template: str,
     shop_identifier: Optional[str] = None,
     initial_offset: Optional[int] = None,
     retry_offset: Optional[int] = None,
@@ -105,7 +105,7 @@ def update_call_execution_config_query(
     enable_international_call: Optional[bool] = None,
 ) -> Tuple[str, List[Any]]:
     """
-    Generate query to update call execution config record based on merchant_id, workflow, and shop_identifier.
+    Generate query to update call execution config record based on merchant_id, template, and shop_identifier.
     Only updates fields that are provided (not None).
     """
     updates = []
@@ -152,21 +152,21 @@ def update_call_execution_config_query(
     values.append(datetime.now())
     param_count += 1
 
-    # Build WHERE clause based on merchant_id, workflow, and shop_identifier
+    # Build WHERE clause based on merchant_id, template, and shop_identifier
     values.append(merchant_id)
     merchant_id_param = param_count
     param_count += 1
 
-    values.append(workflow.value)
-    workflow_param = param_count
+    values.append(template)
+    template_param = param_count
     param_count += 1
 
     if shop_identifier:
         values.append(shop_identifier)
         shop_identifier_param = param_count
-        where_clause = f'"merchant_id" = ${merchant_id_param} AND "workflow" = ${workflow_param} AND "shop_identifier" = ${shop_identifier_param}'
+        where_clause = f'"merchant_id" = ${merchant_id_param} AND "template" = ${template_param} AND "shop_identifier" = ${shop_identifier_param}'
     else:
-        where_clause = f'"merchant_id" = ${merchant_id_param} AND "workflow" = ${workflow_param} AND "shop_identifier" IS NULL'
+        where_clause = f'"merchant_id" = ${merchant_id_param} AND "template" = ${template_param} AND "shop_identifier" IS NULL'
 
     text = f"""
         UPDATE "{CALL_EXECUTION_CONFIG_TABLE}"
