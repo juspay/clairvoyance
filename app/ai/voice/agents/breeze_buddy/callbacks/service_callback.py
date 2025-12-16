@@ -6,10 +6,10 @@ from app.ai.voice.agents.breeze_buddy.utils.common import (
     send_webhook_with_retry,
 )
 from app.core.logger import logger
-from app.schemas import LeadCallOutcome
+from app.database.accessor import get_call_execution_config_by_merchant_id
 
 
-async def service_callback(context: TemplateContext, args, transition_to=None):
+async def service_callback(context: TemplateContext, args):
     """
     Handler to send webhook with call summary to the calling service.
 
@@ -18,7 +18,6 @@ async def service_callback(context: TemplateContext, args, transition_to=None):
     Args:
         context: Handler context with bot state access
         args: Function arguments containing outcome and other data
-        transition_to: Target node to transition to (not used for action handlers)
 
     Returns:
         Empty dict
@@ -26,8 +25,12 @@ async def service_callback(context: TemplateContext, args, transition_to=None):
     logger.debug(f"service_callback called with args: {args}")
 
     try:
-        filtered_transcript = context.lead.metaData.get("transcription", [])
-        outcome = context.lead.outcome
+        if context.lead and context.lead.metaData:
+            transcript = context.lead.metaData.get("transcription", [])
+        else:
+            transcript = []
+        filtered_transcript = [msg for msg in transcript if msg.get("role") != "system"]
+        outcome = context.lead.outcome if context.lead else None
         expected_schema = context.expected_callback_response_schema
 
         # Calculate call duration
@@ -56,20 +59,36 @@ async def service_callback(context: TemplateContext, args, transition_to=None):
             "attemptCount": context.lead.attempt_count + 1 if context.lead else 1,
             "transcription": json.dumps(filtered_transcript, ensure_ascii=False),
             "callDuration": call_duration,
-            "orderId": (
-                context.lead.payload.get("order_id")
-                if context.lead and context.lead.payload
-                else None
-            ),
+            "orderId": (context.lead.request_id if context.lead else None),
         }
 
         if expected_schema:
-            meta = context.lead.metaData or {}
+            meta = (
+                context.lead.metaData if context.lead and context.lead.metaData else {}
+            )
             extracted_fields = {}
 
-            for field in expected_schema:
-                if field in meta:
-                    extracted_fields[field] = meta[field]
+            # Check for required fields before processing
+            missing_required_fields = []
+            for field_name, field_config in expected_schema.items():
+                # Check if field is required (not marked as optional)
+                is_optional = field_config.get("optional", False)
+
+                if not is_optional and field_name not in meta:
+                    missing_required_fields.append(field_name)
+
+            # If any required fields are missing, don't send the webhook
+            if missing_required_fields:
+                logger.warning(
+                    f"Skipping webhook send for call {context.call_sid} - "
+                    f"missing required fields in metadata: {missing_required_fields}"
+                )
+                return {}
+
+            # Extract fields that exist in metadata
+            for field_name in expected_schema:
+                if field_name in meta:
+                    extracted_fields[field_name] = meta[field_name]
 
             summary_data.update(extracted_fields)
             logger.debug(
@@ -82,19 +101,45 @@ async def service_callback(context: TemplateContext, args, transition_to=None):
             f"call_duration={call_duration}s"
         )
 
-        # Send webhook
-        if (
-            context.reporting_webhook_url
-            and outcome != LeadCallOutcome.BUSY
-            and outcome != LeadCallOutcome.NO_ANSWER
-        ):
+        # Check if this is the last retry attempt
+        is_last_attempt = False
+        if context.lead:
+            try:
+                configs = await get_call_execution_config_by_merchant_id(
+                    context.lead.merchant_id, context.lead.shop_identifier
+                )
+                if configs:
+                    config = next(
+                        (c for c in configs if c.template == context.lead.template),
+                        None,
+                    )
+                    if config:
+                        current_attempt = context.lead.attempt_count + 1
+                        is_last_attempt = current_attempt >= config.max_retry
+                        logger.debug(
+                            f"Call {context.call_sid}: attempt {current_attempt}/{config.max_retry}, "
+                            f"is_last_attempt={is_last_attempt}"
+                        )
+            except Exception as e:
+                logger.error(
+                    f"Error checking max retry for call {context.call_sid}: {e}",
+                    exc_info=True,
+                )
+
+        # Send webhook - skip BUSY/NO_ANSWER unless it's the last attempt
+        should_send_webhook = context.reporting_webhook_url and (
+            outcome not in ["BUSY", "NO_ANSWER"] or is_last_attempt
+        )
+
+        if should_send_webhook:
             logger.info(
                 f"Sending webhook to {context.reporting_webhook_url} for call {context.call_sid} "
                 f"with outcome {outcome}"
+                + (" (last attempt)" if is_last_attempt else "")
             )
             try:
                 success = await send_webhook_with_retry(
-                    context.bot.aiohttp_session,
+                    context.aiohttp_session,
                     context.reporting_webhook_url,
                     summary_data,
                 )

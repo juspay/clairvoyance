@@ -10,6 +10,7 @@ from app.ai.voice.agents.breeze_buddy.template.types import (
     TemplateModel,
 )
 from app.core.logger import logger
+from app.database.accessor.breeze_buddy.template import get_template_by_merchant
 
 
 class FlowConfigLoader:
@@ -36,9 +37,6 @@ class FlowConfigLoader:
             f"Loading template for merchant={merchant_id}, name={name}, "
             f"shop={shop_identifier}"
         )
-
-        # Import here to avoid circular dependency
-        from app.database.accessor.breeze_buddy.template import get_template_by_merchant
 
         # Load from database using accessor
         template = await get_template_by_merchant(merchant_id, shop_identifier, name)

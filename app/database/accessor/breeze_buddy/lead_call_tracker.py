@@ -27,7 +27,6 @@ from app.database.queries.breeze_buddy.lead_call_tracker import (
     update_lead_call_recording_url_query,
 )
 from app.schemas import (
-    LeadCallOutcome,
     LeadCallStatus,
     LeadCallTracker,
 )
@@ -52,6 +51,7 @@ async def create_lead_call_tracker(
     call_initiated_time: Optional[datetime] = None,
     call_end_time: Optional[datetime] = None,
     cost: Optional[float] = None,
+    request_id: Optional[str] = None,
 ) -> Optional[LeadCallTracker]:
     """
     Create a new lead call tracker record.
@@ -71,6 +71,7 @@ async def create_lead_call_tracker(
             call_end_time=call_end_time,
             attempt_count=attempt_count,
             cost=cost,
+            request_id=request_id,
         )
 
         result = await run_parameterized_query(query_text, values)
@@ -281,7 +282,7 @@ async def update_lead_call_recording_url(
 async def update_lead_call_completion_details(
     id: str,
     status: Optional[LeadCallStatus] = None,
-    outcome: Optional[LeadCallOutcome] = None,
+    outcome: Optional[str] = None,
     meta_data: Optional[Dict[str, Any]] = None,
     call_end_time: Optional[datetime] = None,
 ) -> Optional[LeadCallTracker]:
@@ -315,7 +316,7 @@ async def get_all_lead_call_trackers(
     start_date: Optional[datetime] = None,
     end_date: Optional[datetime] = None,
     outcome: Optional[str] = None,
-    order_id: Optional[str] = None,
+    request_id: Optional[str] = None,
     shop_name: Optional[str] = None,
     page: Optional[int] = None,
     page_size: Optional[int] = None,
@@ -333,7 +334,7 @@ async def get_all_lead_call_trackers(
             start_date=start_date,
             end_date=end_date,
             outcome=outcome,
-            order_id=order_id,
+            request_id=request_id,
             shop_name=shop_name,
             limit=limit,
             offset=offset,
@@ -373,7 +374,7 @@ async def get_lead_call_trackers_count(
     start_date: Optional[datetime] = None,
     end_date: Optional[datetime] = None,
     outcome: Optional[str] = None,
-    order_id: Optional[str] = None,
+    request_id: Optional[str] = None,
     shop_name: Optional[str] = None,
 ) -> int:
     """
@@ -386,7 +387,7 @@ async def get_lead_call_trackers_count(
             start_date=start_date,
             end_date=end_date,
             outcome=outcome,
-            order_id=order_id,
+            request_id=request_id,
             shop_name=shop_name,
         )
         result = await run_parameterized_query(query_text, values)

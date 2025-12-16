@@ -8,17 +8,6 @@ from pydub import AudioSegment
 from app.core.config.static import ORDER_CONFIRMATION_WEBHOOK_SECRET_KEY
 from app.core.logger import logger
 from app.core.security.sha import calculate_hmac_sha256
-from app.schemas import LeadCallOutcome
-
-# Mapping dictionary for outcome strings to LeadCallOutcome enum values
-OUTCOME_TO_ENUM = {
-    "confirmed": LeadCallOutcome.CONFIRM,
-    "cancelled": LeadCallOutcome.CANCEL,
-    "busy": LeadCallOutcome.BUSY,
-    "address_updated": LeadCallOutcome.ADDRESS_UPDATED,
-    "no_answer": LeadCallOutcome.NO_ANSWER,
-    "unknown": LeadCallOutcome.UNKNOWN,
-}
 
 
 def indian_number_to_speech(number: int) -> str:
@@ -199,14 +188,21 @@ def validate_payload(
 
     # Check for missing required fields and validate types
     for field_name, field_schema in expected_schema.items():
-        if field_name not in payload:
+        # Check if field is marked as required
+        is_optional = False
+        if isinstance(field_schema, dict):
+            is_optional = field_schema.get("optional", False)
+
+        # Validate required fields
+        if not is_optional and field_name not in payload:
             errors.append(f"Missing required field: '{field_name}'")
             continue
 
-        # Validate field type
-        value = payload[field_name]
-        field_errors = _validate_field(value, field_schema, field_name)
-        errors.extend(field_errors)
+        # Validate field type if field exists in payload
+        if field_name in payload:
+            value = payload[field_name]
+            field_errors = _validate_field(value, field_schema, field_name)
+            errors.extend(field_errors)
 
     is_valid = len(errors) == 0
     return is_valid, errors
@@ -257,11 +253,23 @@ def _validate_field(value: Any, field_schema: Any, field_path: str) -> List[str]
             properties = field_schema.get("properties", {})
             for prop_name, prop_schema in properties.items():
                 prop_path = f"{field_path}.{prop_name}"
-                if prop_name not in value:
+
+                # Check if property is required
+                is_prop_optional = False
+                if isinstance(prop_schema, dict):
+                    is_prop_optional = prop_schema.get("optional", False)
+                    logger.debug(f"Property '{prop_name}' optional: {is_prop_optional}")
+
+                if not is_prop_optional and prop_name not in value:
                     errors.append(f"Missing required property: '{prop_path}'")
                     continue
-                prop_errors = _validate_field(value[prop_name], prop_schema, prop_path)
-                errors.extend(prop_errors)
+
+                # Validate property if it exists
+                if prop_name in value:
+                    prop_errors = _validate_field(
+                        value[prop_name], prop_schema, prop_path
+                    )
+                    errors.extend(prop_errors)
 
         # Validate array items
         elif schema_type == "array" and isinstance(value, list):

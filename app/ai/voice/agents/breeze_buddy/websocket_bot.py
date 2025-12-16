@@ -39,7 +39,6 @@ from app.ai.voice.agents.breeze_buddy.types.models import (
     OrderData,
 )
 from app.ai.voice.agents.breeze_buddy.utils.common import (
-    OUTCOME_TO_ENUM,
     indian_number_to_speech,
     load_audio,
     send_webhook_with_retry,
@@ -56,8 +55,12 @@ from app.core.config.static import (
     ENABLE_BREEZE_BUDDY_USER_INTERRUPTION,
 )
 from app.core.logger import logger
-from app.database.accessor import get_lead_by_call_id, update_lead_call_initiated_time
-from app.schemas import CallProvider, LeadCallOutcome
+from app.database.accessor import (
+    get_call_execution_config_by_merchant_id,
+    get_lead_by_call_id,
+    update_lead_call_initiated_time,
+)
+from app.schemas import CallProvider
 
 load_dotenv(override=True)
 
@@ -76,7 +79,7 @@ class OrderConfirmationBot:
         self.aiohttp_session = aiohttp_session
         self.provider = provider
         self.task: PipelineTask = None
-        self.outcome = "unknown"
+        self.outcome = "UNKNOWN"
         self.context: OpenAILLMContext = None
         self.conversation_ended = False
         self.reporting_webhook_url = None
@@ -166,7 +169,7 @@ class OrderConfirmationBot:
 
         self.lead = lead
         call_payload = lead.payload
-        self.order_id = call_payload.get("order_id", "N/A")
+        self.order_id = lead.request_id or "N/A"
         customer_name = call_payload.get("customer_name", "Valued Customer")
         self.shop_name = call_payload.get("shop_name", "the shop")
         customer_address = call_payload.get("customer_address", "your address")
@@ -468,8 +471,8 @@ class OrderConfirmationBot:
         if not self.conversation_ended:
             self.conversation_ended = True
             logger.info(f"{reason}. Updating call status directly.")
-            if self.outcome == "unknown":
-                self.outcome = "busy"
+            if self.outcome == "UNKNOWN":
+                self.outcome = "BUSY"
             await self._finalize_call()
 
     async def _finalize_call(self):
@@ -494,8 +497,6 @@ class OrderConfirmationBot:
                                 {"role": msg["role"], "content": msg["content"]}
                             )
 
-            call_outcome = OUTCOME_TO_ENUM.get(self.outcome, LeadCallOutcome.BUSY)
-
             call_duration = None
             if self.lead and self.lead.call_initiated_time:
                 call_initiated_time_utc = self.lead.call_initiated_time.astimezone(
@@ -508,7 +509,7 @@ class OrderConfirmationBot:
             summary_data = {
                 "callSid": self.call_sid,
                 "cancellationReason": self.cancellation_reason,
-                "outcome": call_outcome,
+                "outcome": self.outcome,
                 "updatedAddress": self.updated_address,
                 "attemptCount": self.lead.attempt_count + 1,
                 "transcription": json.dumps(filtered_transcript, ensure_ascii=False),
@@ -599,7 +600,41 @@ class OrderConfirmationBot:
                 except Exception as e:
                     logger.error(f"Error updating span with evaluation data: {e}")
 
-            if self.reporting_webhook_url and call_outcome != LeadCallOutcome.BUSY:
+            # Check if this is the last retry attempt
+            is_last_attempt = False
+            if self.lead:
+                try:
+                    configs = await get_call_execution_config_by_merchant_id(
+                        self.lead.merchant_id, self.lead.shop_identifier
+                    )
+                    if configs:
+                        config = next(
+                            (c for c in configs if c.template == self.lead.template),
+                            None,
+                        )
+                        if config:
+                            current_attempt = self.lead.attempt_count + 1
+                            is_last_attempt = current_attempt >= config.max_retry
+                            logger.debug(
+                                f"Call {self.call_sid}: attempt {current_attempt}/{config.max_retry}, "
+                                f"is_last_attempt={is_last_attempt}"
+                            )
+                except Exception as e:
+                    logger.error(
+                        f"Error checking max retry for call {self.call_sid}: {e}",
+                        exc_info=True,
+                    )
+
+            # Send webhook - skip BUSY/NO_ANSWER unless it's the last attempt
+            should_send_webhook = self.reporting_webhook_url and (
+                self.outcome not in ["BUSY", "NO_ANSWER"] or is_last_attempt
+            )
+
+            if should_send_webhook:
+                logger.info(
+                    f"Sending webhook for call {self.call_sid} with outcome {self.outcome}"
+                    + (" (last attempt)" if is_last_attempt else "")
+                )
                 try:
                     success = await send_webhook_with_retry(
                         self.aiohttp_session,
@@ -631,12 +666,12 @@ class OrderConfirmationBot:
                 }
                 await self.completion_function(
                     call_id=self.call_sid,
-                    outcome=call_outcome,
+                    outcome=self.outcome,
                     call_end_time=datetime.now(),
                     meta_data=meta_data,
                 )
                 logger.info(
-                    f"Updated database for call_id: {self.call_sid} with outcome: {call_outcome}"
+                    f"Updated database for call_id: {self.call_sid} with outcome: {self.outcome}"
                 )
             else:
                 logger.warning("No call_id found, skipping database update")
@@ -916,8 +951,8 @@ class OrderConfirmationBot:
     @auto_trace("confirm_order")
     async def _confirm_order_handler(self):
         logger.info("Order confirmed. Transitioning to confirmation node.")
-        if self.outcome != "address_updated":
-            self.outcome = "confirmed"
+        if self.outcome != "ADDRESS_UPDATED":
+            self.outcome = "CONFIRM"
         return {}, self._create_node_from_config("order_confirmation_and_end")
 
     @auto_trace("confirm_order_with_question")
@@ -925,8 +960,8 @@ class OrderConfirmationBot:
         logger.info(
             "Order confirmed with an unrelated question. Transitioning to custom end node."
         )
-        if self.outcome != "address_updated":
-            self.outcome = "confirmed"
+        if self.outcome != "ADDRESS_UPDATED":
+            self.outcome = "CONFIRM"
         return {}, self._create_node_from_config(
             "order_confirmation_with_question_and_end"
         )
@@ -942,14 +977,14 @@ class OrderConfirmationBot:
         logger.info(
             f"Order denied with reason: {reason}. Transitioning to cancellation node."
         )
-        self.outcome = "cancelled"
+        self.outcome = "CANCEL"
         self.cancellation_reason = self._get_cancellation_reason(reason)
         return {}, self._create_node_from_config("order_cancellation_and_end")
 
     @auto_trace("user_busy")
     async def _user_busy_handler(self):
         logger.info("User is busy. Transitioning to busy node.")
-        self.outcome = "busy"
+        self.outcome = "BUSY"
         return {}, self._create_node_from_config("user_busy_and_end")
 
     @auto_trace("handle_unrelated_question")
@@ -989,7 +1024,7 @@ class OrderConfirmationBot:
         # Convert {"locality": "madhya Pradesh"} to "locality:madhya Pradesh"
         updated_pairs = [f"{key}:{value}" for key, value in self.updated_fields.items()]
         self.updated_address = ",".join(updated_pairs)
-        self.outcome = "address_updated"
+        self.outcome = "ADDRESS_UPDATED"
 
         return clean_value
 
@@ -1041,7 +1076,7 @@ class OrderConfirmationBot:
         if len(clean_phone) == 10:
             self.updated_phone_number = clean_phone
             self._update_address_field("phone_number", clean_phone, "phone_number")
-            self.outcome = "address_updated"
+            self.outcome = "ADDRESS_UPDATED"
             logger.info(f"Updated phone number to: {clean_phone}")
             # Transition to confirm_address_update like other address fields
             return {}, self._create_node_from_config("confirm_address_update")

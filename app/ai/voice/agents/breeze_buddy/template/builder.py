@@ -249,7 +249,8 @@ class FlowConfigBuilder:
             Action configuration dictionary
         """
         logger.debug(
-            f"Building action: type={action.type}, handler={action.handler if hasattr(action, 'handler') else 'N/A'}"
+            f"Building action: type={action.type}, handler={action.handler if hasattr(action, 'handler') else 'N/A'}, "
+            f"args={action.args if hasattr(action, 'args') else 'N/A'}"
         )
 
         action_type = action.type
@@ -264,9 +265,12 @@ class FlowConfigBuilder:
                 logger.error(f"Handler not found for name: {action.handler}")
                 raise ValueError(f"Handler not found for name: {action.handler}")
             logger.debug(
-                f"Successfully built FUNCTION action for handler: {action.handler}"
+                f"Successfully built FUNCTION action for handler: {action.handler} with args: {action.args}"
             )
-            return {"type": "function", "handler": handler}
+            result = {"type": "function", "handler": handler}
+            if action.args:
+                result["args"] = action.args
+            return result
         else:
             logger.warning(f"Unknown action type: {action_type}, returning as string")
             return {"type": str(action_type)}

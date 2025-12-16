@@ -520,7 +520,7 @@ Main hook implementation ([hooks.py:90-249](app/ai/voice/agents/breeze_buddy/tem
 5. **Update Context**: Refresh lead in context for subsequent hooks
    ```python
    if updated_lead:
-       context.bot.lead = updated_lead
+       context.lead = updated_lead
    ```
 
 #### HookRegistry
@@ -1295,7 +1295,7 @@ New capabilities can be added without code changes:
    ```python
    updated_lead = await update_lead_call_completion_details(...)
    if updated_lead:
-       context.bot.lead = updated_lead
+       context.lead = updated_lead
    ```
 
 3. **Use `expected_fields` Correctly**

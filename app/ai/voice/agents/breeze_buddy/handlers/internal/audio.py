@@ -4,6 +4,8 @@ from app.ai.voice.agents.breeze_buddy.utils.common import (
 )
 from app.core.logger import logger
 
+base_audio_path = "app/ai/voice/agents/breeze_buddy/static/audio/"
+
 
 async def play_audio_sound(context: TemplateContext, args, transition_to=None):
     """
@@ -25,8 +27,8 @@ async def play_audio_sound(context: TemplateContext, args, transition_to=None):
         f"play_audio_sound called for call {context.call_sid} with args: {args}"
     )
 
-    # TODO: Make audio_path configurable
-    audio_path = "app/ai/voice/agents/breeze_buddy/static/audio/cough.wav"
+    audio_file_name = args.get("audio", "cough") if args else "cough"
+    audio_path = f"{base_audio_path}{audio_file_name}" + ".wav"
 
     logger.info(
         f"Attempting to play audio from: {audio_path} for call {context.call_sid}"

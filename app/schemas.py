@@ -25,28 +25,20 @@ class LeadCallStatus(str, Enum):
     RETRY = "RETRY"
 
 
-class LeadCallOutcome(str, Enum):
-    NO_ANSWER = "NO_ANSWER"
-    BUSY = "BUSY"
-    CANCEL = "CANCEL"
-    CONFIRM = "CONFIRM"
-    ADDRESS_UPDATED = "ADDRESS_UPDATED"
-    UNKNOWN = "UNKNOWN"
-
-
 class LeadCallTracker(BaseModel):
     id: str
     outbound_number_id: Optional[str] = None
     merchant_id: str
     template: str
     shop_identifier: Optional[str] = None
+    request_id: Optional[str] = None
     attempt_count: int = 0
     next_attempt_at: Optional[datetime] = None
     payload: Optional[Dict[str, Any]] = None
     metaData: Optional[Dict[str, Any]] = None
     recording_url: Optional[str] = None
     status: LeadCallStatus = LeadCallStatus.BACKLOG
-    outcome: Optional[LeadCallOutcome] = None
+    outcome: Optional[str] = None
     call_id: Optional[str] = None
     call_initiated_time: Optional[datetime] = None
     call_end_time: Optional[datetime] = None

@@ -135,3 +135,9 @@ async def BB_SARVAM_TTS_PACE() -> float:
 async def BB_TTS_SERVICE() -> str:
     """Returns BREEZE_BUDDY_TTS_SERVICE from Redis"""
     return await get_config("BREEZE_BUDDY_TTS_SERVICE", "elevenlabs", str)
+
+
+async def SHOPS_FOR_TEMPLATE_FLOW() -> list[str]:
+    """Returns SHOPS_FOR_TEMPLATE_FLOW from Redis as a list of shop identifiers"""
+    config_value = await get_config("SHOPS_FOR_TEMPLATE_FLOW", "", str)
+    return [shop.strip() for shop in config_value.split(",") if shop.strip()]

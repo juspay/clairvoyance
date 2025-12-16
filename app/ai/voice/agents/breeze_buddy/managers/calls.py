@@ -7,9 +7,6 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from app.ai.voice.agents.breeze_buddy.services.telephony.utils import get_voice_provider
-from app.ai.voice.agents.breeze_buddy.utils.common import (
-    send_webhook_with_retry,
-)
 from app.core.config.static import UPLOAD_BREEZE_BUDDY_CALL_RECORDINGS_TO_CLOUD
 from app.core.logger import logger
 from app.core.transport.http_client import create_aiohttp_session
@@ -32,7 +29,6 @@ from app.database.accessor import (
 from app.schemas import (
     CallExecutionConfig,
     CallProvider,
-    LeadCallOutcome,
     LeadCallStatus,
     LeadCallTracker,
     OutboundNumber,
@@ -123,9 +119,7 @@ async def _release_number(number_id: str, provider: CallProvider):
             )
 
 
-async def _retry_call(
-    lead: LeadCallTracker, config: CallExecutionConfig, outcome: LeadCallOutcome
-):
+async def _retry_call(lead: LeadCallTracker, config: CallExecutionConfig):
     """
     Schedules a retry for a call.
     """
@@ -142,42 +136,6 @@ async def _retry_call(
             payload=lead.payload,
             attempt_count=lead.attempt_count + 1,
         )
-    else:
-        if outcome == LeadCallOutcome.NO_ANSWER or outcome == LeadCallOutcome.BUSY:
-            reporting_webhook_url = lead.payload.get("reporting_webhook_url")
-            if reporting_webhook_url:
-                call_duration = None
-                if lead.call_initiated_time:
-                    call_initiated_time_utc = lead.call_initiated_time.astimezone(
-                        timezone.utc
-                    )
-                    call_duration = (
-                        datetime.now(timezone.utc) - call_initiated_time_utc
-                    ).total_seconds()
-
-                summary_data = {
-                    "callSid": lead.call_id,
-                    "outcome": outcome.value,
-                    "attemptCount": lead.attempt_count + 1,
-                    "callDuration": call_duration,
-                    "orderId": lead.payload.get("order_id"),
-                }
-
-                try:
-                    async with create_aiohttp_session() as session:
-                        success = await send_webhook_with_retry(
-                            session, reporting_webhook_url, summary_data, max_retries=3
-                        )
-                        if success:
-                            logger.info(
-                                "Successfully sent call summary webhook on no_answer."
-                            )
-                        else:
-                            logger.error(
-                                "Failed to send call summary webhook on no_answer after all retries."
-                            )
-                except Exception as e:
-                    logger.error(f"Error sending webhook on no_answer: {e}")
 
 
 async def _cleanup_stuck_leads():
@@ -209,7 +167,7 @@ async def _cleanup_stuck_leads():
             await update_lead_call_completion_details(
                 id=locked_lead.id,
                 status=LeadCallStatus.FINISHED,
-                outcome=LeadCallOutcome.UNKNOWN,
+                outcome="UNKNOWN",
                 meta_data={"cleanup": "stuck_processing_timeout"},
                 call_end_time=datetime.now(timezone.utc),
             )
@@ -222,7 +180,7 @@ async def _cleanup_stuck_leads():
 
             config = await _get_lead_config(locked_lead)
             if config:
-                await _retry_call(locked_lead, config, LeadCallOutcome.UNKNOWN)
+                await _retry_call(locked_lead, config)
 
         except Exception as e:
             logger.error(f"Error cleaning up stuck lead {lead.id}: {e}")
@@ -319,7 +277,7 @@ async def process_backlog_leads():
                             await update_lead_call_completion_details(
                                 id=locked_lead.id,
                                 status=LeadCallStatus.FINISHED,
-                                outcome=LeadCallOutcome.UNKNOWN,
+                                outcome="UNKNOWN",
                                 meta_data={
                                     "failure_reason": "Failed to initiate call with EXOTEL, international calling disabled."
                                 },
@@ -361,7 +319,7 @@ async def process_backlog_leads():
                         await update_lead_call_completion_details(
                             id=locked_lead.id,
                             status=LeadCallStatus.FINISHED,
-                            outcome=LeadCallOutcome.UNKNOWN,
+                            outcome="UNKNOWN",
                             meta_data={
                                 "failure_reason": f"Failed to initiate call using {retry_calling_provider.value} after {config.calling_provider.value} failed."
                             },
@@ -379,7 +337,7 @@ async def process_backlog_leads():
 
 async def handle_call_completion(
     call_id: str,
-    outcome: LeadCallOutcome | None = None,
+    outcome: str | None = None,
     call_end_time: datetime | None = None,
     meta_data: dict | None = None,
 ) -> Optional[LeadCallTracker]:
@@ -412,8 +370,8 @@ async def handle_call_completion(
         call_end_time=call_end_time,
     )
 
-    if outcome in [LeadCallOutcome.BUSY, LeadCallOutcome.NO_ANSWER]:
-        await _retry_call(lead, config, outcome)
+    if outcome in ["BUSY", "NO_ANSWER"]:
+        await _retry_call(lead, config)
 
     return updated_lead
 
@@ -443,12 +401,12 @@ async def handle_unanswered_calls(call_id: str):
     await update_lead_call_completion_details(
         id=lead.id,
         status=LeadCallStatus.FINISHED,
-        outcome=LeadCallOutcome.NO_ANSWER,
+        outcome="NO_ANSWER",
         meta_data={},
         call_end_time=datetime.now(timezone.utc),
     )
 
-    await _retry_call(lead, config, LeadCallOutcome.NO_ANSWER)
+    await _retry_call(lead, config)
 
 
 async def update_call_recording(

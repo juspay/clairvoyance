@@ -44,6 +44,22 @@ async def get_template_by_merchant(
             logger.info(f"Template found: {decoded_result.id} with flow structure")
             return decoded_result
 
+        # If no template found with shop_identifier, retry with shop_identifier=None
+        if shop_identifier is not None:
+            logger.info(
+                f"No template found with shop_identifier: {shop_identifier}, retrying with shop_identifier=None"
+            )
+            query, values = get_template_by_merchant_query(merchant_id, None, name)
+            result = await run_parameterized_query(query, values)
+
+            if result and get_row_count(result) > 0:
+                decoded_result = decode_template(result[0])
+
+                logger.info(
+                    f"Template found: {decoded_result.id} with flow structure (shop_identifier=None)"
+                )
+                return decoded_result
+
         logger.info(f"No template found for merchant: {merchant_id}")
         return None
 

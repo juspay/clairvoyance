@@ -18,6 +18,7 @@ class FlowAction(BaseModel):
     type: ActionType
     text: Optional[str] = None
     handler: Optional[str] = None
+    args: Optional[Dict[str, Any]] = None
 
 
 class TaskMessage(BaseModel):

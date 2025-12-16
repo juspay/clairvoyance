@@ -76,9 +76,9 @@ async def end_conversation(context: TemplateContext, args, transition_to=None):
             )
 
         # Hangup call
-        if context.bot.hangup_function:
+        if context.hangup_function:
             logger.info(f"Calling hangup_function for call {context.call_sid}")
-            context.bot.hangup_function(context.call_sid)
+            context.hangup_function(context.call_sid)
             logger.info(f"Successfully hung up call {context.call_sid}")
         else:
             logger.warning(f"No hangup_function available for call {context.call_sid}")
@@ -88,7 +88,7 @@ async def end_conversation(context: TemplateContext, args, transition_to=None):
             logger.info(
                 f"Updating database with call completion details for call {context.call_sid}"
             )
-            context.bot.lead = await context.bot.completion_function(
+            context.lead = await context.completion_function(
                 call_id=context.call_sid,
                 outcome=context.lead.outcome,
                 call_end_time=datetime.now(),
@@ -110,7 +110,7 @@ async def end_conversation(context: TemplateContext, args, transition_to=None):
                         logger.info(
                             f"Calling callback '{callback_name}' for call {context.call_sid}"
                         )
-                        await callback_handler(context, args, transition_to=None)
+                        await callback_handler(context, args)
                         logger.info(
                             f"Successfully executed callback '{callback_name}' for call {context.call_sid}"
                         )
