@@ -11,7 +11,6 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 # Install system dependencies required for audio processing and compilation + curl for GCP CLI
 # Added cmake for Krisp native component compilation, unzip for manual wheel extraction
-# Added Node.js and supervisor for running frontend + backend together
 RUN apt-get update && apt-get install -y \
     build-essential \
     cmake \
@@ -23,14 +22,7 @@ RUN apt-get update && apt-get install -y \
     python3-dev \
     curl \
     unzip \
-    supervisor \
     && rm -rf /var/lib/apt/lists/*
-
-# Install Node.js 20 for frontend
-RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
-    apt-get install -y nodejs && \
-    npm install -g pnpm && \
-    rm -rf /var/lib/apt/lists/*
 
 
 # Create app and krisp directory
@@ -97,36 +89,17 @@ RUN pip install --no-cache-dir nltk && \
 # Copy application code
 COPY . .
 
-# Build frontend (SvelteKit) if it exists
-RUN if [ -d "frontend/loom" ]; then \
-        echo "=== Building frontend ===" && \
-        cd frontend/loom && \
-        pnpm install --frozen-lockfile && \
-        pnpm run build && \
-        cd /app; \
-    else \
-        echo "Warning: frontend/loom not found, skipping frontend build"; \
-    fi
-
 # Set proper permissions
 RUN chmod +x run.py
-
-# Create supervisor configuration directory and copy config
-RUN mkdir -p /var/log/supervisor /etc/supervisor/conf.d
-COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 
 # Create non-root user for security
 RUN groupadd -r appuser && useradd -r -g appuser appuser
 RUN chown -R appuser:appuser /app && \
-    chown -R appuser:appuser /usr/local/nltk_data && \
-    chown -R appuser:appuser /var/log/supervisor && \
-    chmod 644 /etc/supervisor/conf.d/supervisord.conf
-
+    chown -R appuser:appuser /usr/local/nltk_data
 USER appuser
 
-# Expose ports (backend 8000, frontend 5173)
+# Expose port
 EXPOSE ${PORT}
-EXPOSE 5173
 
-# Run supervisord to start both frontend and backend
-CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"]
+# Run the application
+CMD ["python", "run.py"]
