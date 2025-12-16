@@ -1,12 +1,19 @@
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
+import aiohttp
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, StreamingResponse
 from starlette.responses import FileResponse, JSONResponse
 
 from app.ai.voice.agents.breeze_buddy.managers.calls import (
     process_backlog_leads,
+)
+from app.ai.voice.agents.breeze_buddy.services.telephony.exotel.recording import (
+    download_call_recording as download_call_recording_exotel,
+)
+from app.ai.voice.agents.breeze_buddy.services.telephony.twilio.recording import (
+    download_call_recording as download_call_recording_twilio,
 )
 from app.core.logger import logger
 from app.core.security.jwt import get_breeze_buddy_session, get_current_user
@@ -15,6 +22,7 @@ from app.database.accessor import (
     get_all_outbound_numbers_with_call_count,
     get_lead_based_analytics,
     get_lead_call_trackers_count,
+    get_recording_url_and_provider_by_call_id,
 )
 from app.schemas import TokenData
 
@@ -246,3 +254,67 @@ async def get_call_details(
         "page_size": page_size,
         "items": items,
     }
+
+
+@router.get("/recording/{call_sid}")
+async def get_call_recording(
+    call_sid: str,
+    current_user: TokenData = Depends(get_current_user),
+):
+    """
+    Fetches call recording audio for a given call SID.
+    Automatically detects the provider (TWILIO or EXOTEL) and uses appropriate credentials.
+    Returns the audio file as a streaming response.
+    """
+    logger.info(
+        f"Authenticated user {current_user.user_id} requesting call recording for call_sid: {call_sid}"
+    )
+
+    try:
+        # Get recording URL and provider from database
+        result = await get_recording_url_and_provider_by_call_id(call_sid)
+
+        if not result:
+            logger.error(f"No recording found for call_sid: {call_sid}")
+            raise HTTPException(
+                status_code=404, detail=f"Recording not found for call_sid: {call_sid}"
+            )
+
+        recording_url, call_provider = result
+
+        # Fetch audio with provider-specific credentials
+        logger.info(f"Fetching recording from URL: {recording_url}")
+        async with aiohttp.ClientSession() as session:
+            if call_provider.upper() == "TWILIO":
+                # Twilio authentication using Basic Auth
+                audio_file = await download_call_recording_twilio(
+                    recording_url, call_sid
+                )
+
+            elif call_provider.upper() == "EXOTEL":
+                audio_file = await download_call_recording_exotel(
+                    recording_url, call_sid
+                )
+            else:
+                logger.error(f"Unsupported provider: {call_provider}")
+                raise HTTPException(
+                    status_code=400, detail=f"Unsupported provider: {call_provider}"
+                )
+
+            audio_file.seek(0)
+
+            return StreamingResponse(
+                audio_file,
+                media_type="audio/mpeg",
+                headers={
+                    "Content-Disposition": f'inline; filename="recording_{call_sid}.mp3"'
+                },
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching call recording: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Internal server error while fetching recording: {str(e)}",
+        ) from e

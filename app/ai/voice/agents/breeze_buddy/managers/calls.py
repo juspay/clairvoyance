@@ -6,6 +6,12 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
+from app.ai.voice.agents.breeze_buddy.services.telephony.exotel.recording import (
+    download_call_recording as download_call_recording_exotel,
+)
+from app.ai.voice.agents.breeze_buddy.services.telephony.twilio.recording import (
+    download_call_recording as download_call_recording_twilio,
+)
 from app.ai.voice.agents.breeze_buddy.services.telephony.utils import get_voice_provider
 from app.core.config.static import UPLOAD_BREEZE_BUDDY_CALL_RECORDINGS_TO_CLOUD
 from app.core.logger import logger
@@ -449,18 +455,17 @@ async def update_call_recording(
 
         # Cloud upload is enabled - download from provider and upload to GCS
         if provider == "twilio":
-            from app.ai.voice.agents.breeze_buddy.services.telephony.twilio.recording import (
-                download_call_recording,
+            audio_file = await download_call_recording_twilio(
+                provider_recording_url, call_id
             )
         elif provider == "exotel":
-            from app.ai.voice.agents.breeze_buddy.services.telephony.exotel.recording import (
-                download_call_recording,
+            audio_file = await download_call_recording_exotel(
+                provider_recording_url, call_id
             )
         else:
             logger.error(f"Unsupported provider: {provider}")
             return
 
-        audio_file = await download_call_recording(provider_recording_url, call_id)
         if not audio_file:
             logger.error(f"Failed to download recording for call_id: {call_id}")
             await update_lead_call_recording_url(call_id, provider_recording_url)

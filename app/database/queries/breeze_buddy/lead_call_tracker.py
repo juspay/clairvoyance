@@ -400,3 +400,22 @@ def get_lead_based_analytics_query(
         GROUP BY request_id;
     """
     return text, values
+
+
+def get_recording_url_and_provider_by_call_id_query(
+    call_id: str,
+) -> Tuple[str, List[Any]]:
+    """
+    Generate query to get recording URL and provider by call ID.
+    Joins with outbound_number table to get the provider information.
+    """
+    text = f"""
+        SELECT 
+            lct.recording_url,
+            ou.provider as call_provider
+        FROM "{LEAD_CALL_TRACKER_TABLE}" lct
+        LEFT JOIN "{OUTBOUND_NUMBER_TABLE}" ou ON lct.outbound_number_id = ou.id
+        WHERE lct.call_id = $1;
+    """
+    values = [call_id]
+    return text, values

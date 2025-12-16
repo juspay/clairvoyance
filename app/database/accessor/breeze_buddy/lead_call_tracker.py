@@ -19,6 +19,7 @@ from app.database.queries.breeze_buddy.lead_call_tracker import (
     get_lead_call_trackers_count_query,
     get_leads_based_on_status_and_next_attempt_query,
     get_leads_by_status_and_time_before_query,
+    get_recording_url_and_provider_by_call_id_query,
     insert_lead_call_tracker_query,
     release_lock_on_lead_by_id_query,
     update_lead_call_completion_details_query,
@@ -419,3 +420,39 @@ async def get_lead_based_analytics(
     except Exception as e:
         logger.error(f"Error getting lead-based analytics: {e}", exc_info=True)
         return []
+
+
+async def get_recording_url_and_provider_by_call_id(
+    call_id: str,
+) -> Optional[Tuple[str, str]]:
+    """
+    Get recording URL and call provider by call ID.
+    Returns tuple of (recording_url, call_provider) or None if not found.
+    """
+    logger.info(f"Getting recording URL and provider for call ID: {call_id}")
+
+    try:
+        query_text, values = get_recording_url_and_provider_by_call_id_query(call_id)
+        result = await run_parameterized_query(query_text, values)
+        if result and get_row_count(result) > 0:
+            row = result[0]
+            recording_url = row.get("recording_url")
+            call_provider = row.get("call_provider")
+
+            if recording_url and call_provider:
+                logger.info(
+                    f"Found recording URL and provider for call ID {call_id}: {call_provider}"
+                )
+                return (recording_url, call_provider)
+            else:
+                logger.warning(
+                    f"Recording URL or provider missing for call ID {call_id}"
+                )
+                return None
+
+        logger.warning(f"No recording found for call ID: {call_id}")
+        return None
+
+    except Exception as e:
+        logger.error(f"Error getting recording URL and provider: {e}")
+        return None
