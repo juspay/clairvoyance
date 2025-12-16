@@ -217,7 +217,7 @@ app = FastAPI(title="Breeze Automatic Server", version=__version__, lifespan=lif
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://buddy.breezelabs.app", "*"],
+    allow_origins=["https://buddy.breezelabs.app"],
     allow_credentials=True,
     allow_methods=["*"],  # Allows all methods
     allow_headers=["*"],  # Allows all headers
