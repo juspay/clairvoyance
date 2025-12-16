@@ -506,3 +506,13 @@ ENABLE_BB_LANGFUSE_MONITORING_LOOP = (
 SCORE_CHECK_INTERVAL_SECONDS = int(
     os.environ.get("SCORE_CHECK_INTERVAL_SECONDS", "600")
 )  # 10 minutes
+
+# CORS Configuration
+CORS_ALLOWED_ORIGINS = [
+    origin.strip()
+    for origin in os.environ.get(
+        "CORS_ALLOWED_ORIGINS",
+        "https://buddy.breezelabs.app,https://portal.breeze.in,https://portal.breezesdk.store",
+    ).split(",")
+    if origin.strip()
+]

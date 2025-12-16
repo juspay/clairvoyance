@@ -22,6 +22,7 @@ from app.core.config.dynamic import ENABLE_BACKGROUND_TASKS
 from app.core.config.static import (
     BACKGROUND_TASKS_LOOP_INTERVAL_SECONDS,
     BOT_MAX_DRAIN_SECONDS,
+    CORS_ALLOWED_ORIGINS,
     DAILY_API_KEY,
     DAILY_API_URL,
     DAILY_ROOM_MAX_POOL_SIZE,
@@ -217,7 +218,7 @@ app = FastAPI(title="Breeze Automatic Server", version=__version__, lifespan=lif
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://buddy.breezelabs.app"],
+    allow_origins=CORS_ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],  # Allows all methods
     allow_headers=["*"],  # Allows all headers
