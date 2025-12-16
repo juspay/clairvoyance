@@ -89,23 +89,19 @@ async def get_analytics(
             [t for t, _ in trackers if t.status and t.status.value == "FINISHED"]
         ),
         "no_answer": len(
-            [t for t, _ in trackers if t.outcome and t.outcome.value == "NO_ANSWER"]
+            [t for t, _ in trackers if t.outcome and t.outcome == "NO_ANSWER"]
         ),
         "connected_and_busy": len(
-            [t for t, _ in trackers if t.outcome and t.outcome.value == "BUSY"]
+            [t for t, _ in trackers if t.outcome and t.outcome == "BUSY"]
         ),
         "address_confirmed": len(
-            [t for t, _ in trackers if t.outcome and t.outcome.value == "CONFIRM"]
+            [t for t, _ in trackers if t.outcome and t.outcome == "CONFIRM"]
         ),
         "order_cancelled": len(
-            [t for t, _ in trackers if t.outcome and t.outcome.value == "CANCEL"]
+            [t for t, _ in trackers if t.outcome and t.outcome == "CANCEL"]
         ),
         "address_updated": len(
-            [
-                t
-                for t, _ in trackers
-                if t.outcome and t.outcome.value == "ADDRESS_UPDATED"
-            ]
+            [t for t, _ in trackers if t.outcome and t.outcome == "ADDRESS_UPDATED"]
         ),
     }
     # Get all lead details for lead-based analytics
@@ -208,7 +204,7 @@ async def get_call_details(
         start_date=start_datetime,
         end_date=end_datetime,
         outcome=outcome,
-        order_id=order_id,
+        request_id=order_id,
         shop_name=shop_name,
     )
 
@@ -216,7 +212,7 @@ async def get_call_details(
         start_date=start_datetime,
         end_date=end_datetime,
         outcome=outcome,
-        order_id=order_id,
+        request_id=order_id,
         shop_name=shop_name,
         page=page,
         page_size=page_size,
@@ -229,11 +225,11 @@ async def get_call_details(
         items.append(
             {
                 "id": t.id,
-                "order_id": t.payload.get("order_id"),
+                "order_id": t.request_id,
                 "customer_name": t.payload.get("customer_name"),
                 "shop_name": t.payload.get("shop_name"),
                 "customer_mobile_number": t.payload.get("customer_mobile_number"),
-                "outcome": t.outcome.value if t.outcome else "N/A",
+                "outcome": t.outcome if t.outcome else "N/A",
                 "created_at": t.call_initiated_time,
                 "call_id": t.call_id,
                 "recording_url": t.recording_url,

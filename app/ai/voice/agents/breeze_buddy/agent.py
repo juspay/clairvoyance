@@ -13,11 +13,6 @@ from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
 from pipecat.processors.aggregators.llm_response import LLMUserAggregatorParams
 from pipecat.processors.aggregators.openai_llm_context import OpenAILLMContext
-from pipecat.processors.filters.stt_mute_filter import (
-    STTMuteConfig,
-    STTMuteFilter,
-    STTMuteStrategy,
-)
 from pipecat.services.azure.llm import AzureLLMService
 from pipecat.transports.websocket.fastapi import (
     FastAPIWebsocketParams,
@@ -35,10 +30,10 @@ from app.ai.voice.agents.breeze_buddy.handlers.internal.end_conversation import 
 from app.ai.voice.agents.breeze_buddy.stt import get_stt_service
 from app.ai.voice.agents.breeze_buddy.template import (
     FlowConfigBuilder,
-    FlowConfigLoader,
     TemplateContext,
     with_context,
 )
+from app.ai.voice.agents.breeze_buddy.template.loader import FlowConfigLoader
 from app.ai.voice.agents.breeze_buddy.tts import get_tts_service
 from app.core.config.static import (
     AZURE_BREEZE_BUDDY_OPENAI_MODEL,
@@ -71,7 +66,7 @@ class Agent:
         self.aiohttp_session = aiohttp_session
         self.provider = provider
         self.task: PipelineTask = None
-        self.outcome = "unknown"
+        self.outcome = "UNKNOWN"
         self.context: OpenAILLMContext = None
         self.conversation_ended = False
         self.reporting_webhook_url = None
@@ -274,12 +269,6 @@ class Agent:
         # Create TTS with event handlers for VAD muting
         tts = await get_tts_service()
 
-        stt_mute_filter = STTMuteFilter(
-            config=STTMuteConfig(
-                strategies={STTMuteStrategy.MUTE_UNTIL_FIRST_BOT_COMPLETE}
-            )
-        )
-
         self.context = OpenAILLMContext()
         user_params = LLMUserAggregatorParams(
             enable_emulated_vad_interruptions=ENABLE_BREEZE_BUDDY_USER_INTERRUPTION
@@ -292,7 +281,6 @@ class Agent:
             [
                 self.transport.input(),
                 stt,
-                stt_mute_filter,
                 context_aggregator.user(),
                 llm,
                 tts,
@@ -397,9 +385,7 @@ class Agent:
                 root_span.set_attribute("user.name", customer_name)
                 root_span.set_attribute("service.name", "breeze-buddy")
                 root_span.set_attribute("call_sid", self.call_sid)
-                root_span.set_attribute(
-                    "order_id", self.template_vars.get("order_id", "unknown")
-                )
+                root_span.set_attribute("order_id", self.lead.request_id or "unknown")
                 root_span.set_attribute("shop_name", shop_name)
                 root_span.set_attribute("provider", self.provider)
                 root_span.set_attribute("template.type", self.lead.template)
@@ -414,11 +400,15 @@ class Agent:
 
     async def _handle_unexpected_disconnect(self, reason: str):
         if not self.conversation_ended:
-            self.conversation_ended = True
             logger.info(f"{reason}. Updating call status directly.")
-            if self.outcome == "unknown":
-                self.outcome = "busy"
+            if self.outcome == "UNKNOWN":
+                self.outcome = "BUSY"
+
+            if self.lead and self.lead.metaData is None:
+                self.lead.metaData = {}
+
             context = TemplateContext(self)
+            context.lead.outcome = self.outcome
             await end_conversation(context, {})
 
 

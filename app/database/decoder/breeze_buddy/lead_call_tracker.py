@@ -7,7 +7,6 @@ from typing import Optional
 import asyncpg
 
 from app.schemas import (
-    LeadCallOutcome,
     LeadCallStatus,
     LeadCallTracker,
 )
@@ -27,13 +26,14 @@ def decode_lead_call_tracker(row: asyncpg.Record) -> Optional[LeadCallTracker]:
         merchant_id=row["merchant_id"],
         template=row["template"],
         shop_identifier=row["shop_identifier"],
+        request_id=row.get("request_id"),
         attempt_count=row["attempt_count"],
         next_attempt_at=row["next_attempt_at"],
         payload=parse_json(row, "payload"),
         metaData=parse_json(row, "meta_data"),
         recording_url=row["recording_url"],
         status=LeadCallStatus(row["status"]),
-        outcome=LeadCallOutcome(row["outcome"]) if row["outcome"] else None,
+        outcome=row["outcome"],
         call_id=row["call_id"],
         call_initiated_time=row["call_initiated_time"],
         call_end_time=row["call_end_time"],

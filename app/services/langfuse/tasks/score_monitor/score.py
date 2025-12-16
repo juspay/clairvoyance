@@ -427,7 +427,7 @@ class ScoreMonitor:
                     calls_attempted += 1
 
                 # Count by outcome
-                outcome_value = tracker.outcome.value if tracker.outcome else None
+                outcome_value = tracker.outcome if tracker.outcome else None
                 if outcome_value == "NO_ANSWER":
                     calls_no_answer += 1
                 elif outcome_value == "CONFIRM":

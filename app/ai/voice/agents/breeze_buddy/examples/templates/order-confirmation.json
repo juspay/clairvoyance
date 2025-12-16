@@ -1,30 +1,48 @@
 {
   "merchant": "breeze",
   "template_name": "order-confirmation",
-  "identifier": "breeze_buddy_order_confirmation.myshopify.com",
   "is_active": true,
   "description": "Complete order confirmation workflow with address updates",
   "expected_payload_schema": {
-    "order_id": "string",
-    "customer_name": "string",
-    "shop_name": "string",
-    "total_price": "number",
-    "customer_address": "string",
-    "customer_mobile_number": "string",
+    "customer_name": {
+      "type": "string"
+    },
+    "shop_name": {
+      "type": "string"
+    },
+    "total_price": {
+      "type": "number"
+    },
+    "customer_address": {
+      "type": "string"
+    },
+    "customer_mobile_number": {
+      "type": "string"
+    },
     "items": {
       "type": "array",
       "items": {
         "type": "object",
         "properties": {
-          "product_name": "string",
-          "quantity": "number"
+          "product_name": {
+            "type": "string"
+          },
+          "quantity": {
+            "type": "number"
+          }
         }
       }
     }
   },
   "expected_callback_response_schema": {
-    "cancellation_reason": "string",
-    "updated_address": "string"
+    "cancellation_reason": {
+      "type": "string",
+      "optional": true
+    },
+    "updated_address": {
+      "type": "string",
+      "optional": true
+    }
   },
   "flow": {
     "initial_node": "initial",
@@ -44,8 +62,18 @@
             "content": "You are Rhea, a friendly human and natural-sounding customer care representative from {shop_name}. Your goal is to confirm a Cash on Delivery (COD) order with the customer.\n\nIMPORTANT: You are a text-to-speech voice agent. Generate all responses as plain, unformatted text without any special characters, markdown formatting, asterisks, underscores, or other unnecessary symbols. Keep your text simple and clean for natural speech conversion.\n\nNever use the word \"great\" in your responses. Instead, use polite alternatives like \"thank you\", \"thanks\", or \"appreciate it\". Avoid any phrases that sound overly enthusiastic or robotic.\n\nNever reveal or suggest that you are a bot or automated system. You must always sound and respond as a real human representative from {shop_name}.\n\nBefore starting the conversation, identify whether the customer name \"{customer_name}\" is typically male or female in India. Based on this:\n- If the name is clearly male, address the customer as \"Sir\".\n- If clearly female, address them as \"Madam\".\n- If unsure, use their name instead of Sir/Madam in the conversation.\n\nIMPORTANT: Use the customer's name only once during the entire conversation - in the opening greeting. After that, address them as Sir/Madam (based on gender) or avoid direct address if gender is unclear.\n\nIMPORTANT: - If the user speaks in another language (like Hindi), reply in that same language but keep the same friendly, human tone.\n\nYour main job is to verify the following order details:\n- Items: {items}\n- Total Price: {total_price}\n- Delivery Address: {customer_address}\n\nDelivery Address Reading Rules\n\n    Pincode Handling\n        - If the address includes a 6-digit pincode, read it digit by digit only in English.\n        - Example: 123456 → \"Pincode is one two three four five six.\"\n        - Never read the pincode as a full number or in any other language.\n\n    Mobile / Phone Number Handling\n        - If the address includes a 10-digit mobile or phone number, read it digit by digit only in English.\n        - Example: 9876543210 → \"nine eight seven six five four three two one zero.\"\n\n    Example of correct usage when speaking adress in other language e.g. Hindi:\n        \"आपका पता है [address in Hindi], aur pincode hai one two three four five six.\"\n\nTone and Language\n    - Speak in a warm, casual, and natural tone — avoid robotic phrasing.\n\nAction Handling\n    - Always use the provided functions to perform any actions related to the order.\n    - Do not attempt to perform these actions through plain text replies.\n\nYour only role is to confirm or cancel this specific order. If the user asks about anything else (e.g. product details, delivery times, other products), you must use the appropriate function (`handle_unrelated_question_node` or `confirm_order_with_question`). Do not try to answer these questions yourself."
           }
         ],
-        "pre_actions": [],
-        "post_actions": [],
+        "pre_actions": [
+          {
+            "type": "function",
+            "handler": "mute_stt"
+          }
+        ],
+        "post_actions": [
+          {
+            "type": "function",
+            "handler": "unmute_stt"
+          }
+        ],
         "functions": [
           {
             "function_name": "user_available",
@@ -120,7 +148,10 @@
         "pre_actions": [
           {
             "type": "function",
-            "handler": "play_audio_sound"
+            "handler": "play_audio_sound",
+            "args": {
+              "audio": "cough"
+            }
           },
           {
             "type": "function",

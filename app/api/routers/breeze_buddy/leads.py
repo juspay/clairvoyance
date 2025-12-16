@@ -9,6 +9,7 @@ from app.ai.voice.agents.breeze_buddy.utils.common import (
     get_validation_error_message,
     validate_payload,
 )
+from app.core.config.dynamic import SHOPS_FOR_TEMPLATE_FLOW
 from app.core.logger import logger
 from app.core.security.jwt import get_current_user
 from app.database.accessor import (
@@ -64,6 +65,7 @@ async def trigger_order_confirmation(
 ):
     """
     Receives order details and triggers a order confirmation template.
+    Routes to push_lead_v2 if shop_identifier is in SHOPS_FOR_TEMPLATE_FLOW.
     Requires JWT authentication.
     """
 
@@ -72,6 +74,36 @@ async def trigger_order_confirmation(
     )
 
     try:
+        # Get dynamic config for shops enabled for template flow
+        shops_for_template_flow = await SHOPS_FOR_TEMPLATE_FLOW()
+
+        # Check if shop_identifier is in enabled list for template flow
+        if order.shop_identifier and order.shop_identifier in shops_for_template_flow:
+            logger.info(
+                f"Shop {order.shop_identifier} is in template flow enabled list, routing to push_lead_v2"
+            )
+
+            # Transform LeadData to PushLeadRequest format
+            push_request = PushLeadRequest(
+                merchant=merchant,
+                template=template,
+                identifier=order.shop_identifier,
+                reporting_webhook_url=order.reporting_webhook_url,
+                request_id=order.order_id,
+                payload={
+                    "customer_name": order.customer_name,
+                    "shop_name": order.shop_name,
+                    "total_price": order.total_price,
+                    "customer_address": order.customer_address,
+                    "customer_mobile_number": order.customer_mobile_number,
+                    "items": [item.model_dump() for item in order.order_data.items],
+                },
+            )
+
+            # Call push_lead_v2 logic
+            return await push_lead_v2(push_request, current_user)
+
+        # Fallback to original logic for shops not in the enabled list
         # Get call execution config
         call_execution_configs = await get_call_execution_config_by_merchant_id(
             merchant, order.shop_identifier
@@ -121,6 +153,7 @@ async def trigger_order_confirmation(
             next_attempt_at=next_attempt_at,
             payload=call_payload,
             attempt_count=0,
+            request_id=order.order_id,
         )
 
         if lead_call_tracker:
@@ -244,27 +277,26 @@ async def push_lead_v2(
             payload=lead_payload,
             attempt_count=0,
             meta_data={"use_template_flow": True},
+            request_id=req.request_id,
         )
 
         if lead_call_tracker:
             logger.info(
-                f"Lead call tracker {req.payload.get('order_id')} added to queue with ID {uuid}"
+                f"Lead call tracker {req.request_id} added to queue with ID {uuid}"
             )
 
             return {
                 "status": "queued",
                 "lead_call_tracker_id": uuid,
-                "order_id": req.payload.get("order_id"),
+                "order_id": req.request_id,
                 "message": "Call request added to queue for processing",
             }
         else:
-            logger.error(
-                f"Failed to add lead call tracker {req.payload.get('order_id')} to queue"
-            )
+            logger.error(f"Failed to add lead call tracker {req.request_id} to queue")
             return JSONResponse(
                 status_code=400,
                 content={
-                    "detail": f"Failed to add lead call tracker for order_id: {req.payload.get('order_id')}"
+                    "detail": f"Failed to add lead call tracker for request_id: {req.request_id}"
                 },
             )
     except Exception as e:

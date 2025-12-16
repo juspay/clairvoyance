@@ -13,6 +13,7 @@ class OrderData(BaseModel):
 
 
 class PushLeadRequest(BaseModel):
+    request_id: str
     payload: Dict[str, Any]
     template: str
     merchant: str

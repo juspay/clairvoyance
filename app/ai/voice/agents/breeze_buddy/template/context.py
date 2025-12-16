@@ -44,6 +44,21 @@ class TemplateContext:
         return self.bot.vad_analyzer
 
     @property
+    def aiohttp_session(self):
+        """Get AIO Http Session instance"""
+        return self.bot.aiohttp_session
+
+    @property
+    def completion_function(self):
+        """Get Completion Function instance"""
+        return self.bot.completion_function
+
+    @property
+    def hangup_function(self):
+        """Get Hangup Function instance"""
+        return self.bot.hangup_function
+
+    @property
     def transport(self):
         """Get Transport instance"""
         return self.bot.transport
@@ -62,6 +77,11 @@ class TemplateContext:
     def lead(self):
         """Get lead information"""
         return self.bot.lead
+
+    @lead.setter
+    def lead(self, value):
+        """Set lead information"""
+        self.bot.lead = value
 
     @property
     def call_sid(self):

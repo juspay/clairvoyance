@@ -17,14 +17,10 @@ from app.ai.voice.agents.breeze_buddy.template.types import (
     HookFieldConfig,
     HookFieldConfigSource,
 )
-from app.ai.voice.agents.breeze_buddy.utils.common import (
-    OUTCOME_TO_ENUM,
-)
 from app.core.logger import logger
 from app.database.accessor.breeze_buddy.lead_call_tracker import (
     update_lead_call_completion_details,
 )
-from app.schemas import LeadCallOutcome
 
 
 class Hook(ABC):
@@ -179,12 +175,7 @@ class UpdateOutcomeInDatabaseHook(Hook):
             return
 
         try:
-            # Convert outcome string to enum
-            call_outcome = OUTCOME_TO_ENUM.get(outcome, LeadCallOutcome.UNKNOWN)
-            logger.debug(
-                f"Converted outcome '{outcome}' to enum '{call_outcome.value}' "
-                f"for lead {context.lead.id}"
-            )
+            logger.debug(f"outcome '{outcome}' for lead {context.lead.id}")
 
             # Initialize metadata with existing data
             meta_data = context.lead.metaData or {}
@@ -210,14 +201,14 @@ class UpdateOutcomeInDatabaseHook(Hook):
 
             # Update lead in database with outcome
             logger.info(
-                f"Updating lead {context.lead.id} in database with outcome: {call_outcome.value}, "
+                f"Updating lead {context.lead.id} in database with outcome: {outcome}, "
                 f"metadata: {meta_data}, via function '{function_name}'"
             )
 
             updated_lead = await update_lead_call_completion_details(
                 id=context.lead.id,
                 status=None,
-                outcome=call_outcome,
+                outcome=outcome,
                 meta_data=meta_data,
                 call_end_time=None,
             )
@@ -229,10 +220,10 @@ class UpdateOutcomeInDatabaseHook(Hook):
 
             if updated_lead:
                 # Update the lead in context so subsequent hook calls have the latest metadata
-                context.bot.lead = updated_lead
+                context.lead = updated_lead
                 logger.info(
                     f"Successfully updated outcome in database for lead {context.lead.id}: "
-                    f"{call_outcome.value} (function: '{function_name}') and refreshed context.lead"
+                    f"{outcome} (function: '{function_name}') and refreshed context.lead"
                 )
             else:
                 logger.error(

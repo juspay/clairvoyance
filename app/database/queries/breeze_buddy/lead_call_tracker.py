@@ -6,7 +6,7 @@ import json
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
-from app.schemas import LeadCallOutcome, LeadCallStatus
+from app.schemas import LeadCallStatus
 
 # Table names
 LEAD_CALL_TRACKER_TABLE = "lead_call_tracker"
@@ -26,6 +26,7 @@ def insert_lead_call_tracker_query(
     attempt_count: int = 0,
     call_initiated_time: Optional[datetime] = None,
     cost: Optional[float] = None,
+    request_id: Optional[str] = None,
 ) -> Tuple[str, List[Any]]:
     """
     Generate query to insert lead call tracker record.
@@ -37,6 +38,7 @@ def insert_lead_call_tracker_query(
             "merchant_id",
             "template",
             "shop_identifier",
+            "request_id",
             "next_attempt_at",
             "payload",
             "meta_data",
@@ -48,7 +50,7 @@ def insert_lead_call_tracker_query(
             "created_at",
             "updated_at"
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) RETURNING *;
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) RETURNING *;
     """
 
     values = [
@@ -56,6 +58,7 @@ def insert_lead_call_tracker_query(
         merchant_id,
         template,
         shop_identifier,
+        request_id,
         next_attempt_at,
         json.dumps(payload) if payload else None,
         json.dumps(meta_data) if meta_data else None,
@@ -196,7 +199,7 @@ def update_lead_call_initiated_time_query(
 def update_lead_call_completion_details_query(
     id: str,
     status: Optional[LeadCallStatus] = None,
-    outcome: Optional[LeadCallOutcome] = None,
+    outcome: Optional[str] = None,
     meta_data: Optional[Dict[str, Any]] = None,
     call_end_time: Optional[datetime] = None,
 ) -> Tuple[str, List[Any]]:
@@ -212,7 +215,7 @@ def update_lead_call_completion_details_query(
         set_clauses.append(f'"status" = ${len(values)}')
 
     if outcome is not None:
-        values.append(outcome.value)
+        values.append(outcome)
         set_clauses.append(f'"outcome" = ${len(values)}')
 
     if meta_data is not None:
@@ -244,7 +247,7 @@ def get_all_lead_call_trackers_query(
     start_date: Optional[datetime] = None,
     end_date: Optional[datetime] = None,
     outcome: Optional[str] = None,
-    order_id: Optional[str] = None,
+    request_id: Optional[str] = None,
     shop_name: Optional[str] = None,
     limit: Optional[int] = None,
     offset: Optional[int] = None,
@@ -276,9 +279,9 @@ def get_all_lead_call_trackers_query(
         values.append(outcome)
         conditions.append(f"outcome = ${len(values)}")
 
-    if order_id:
-        values.append(f"%{order_id}%")
-        conditions.append(f"payload->>'order_id' LIKE ${len(values)}")
+    if request_id:
+        values.append(f"%{request_id}%")
+        conditions.append(f"lct.request_id LIKE ${len(values)}")
 
     if shop_name:
         values.append(f"%{shop_name}%")
@@ -322,7 +325,7 @@ def get_lead_call_trackers_count_query(
     start_date: Optional[datetime] = None,
     end_date: Optional[datetime] = None,
     outcome: Optional[str] = None,
-    order_id: Optional[str] = None,
+    request_id: Optional[str] = None,
     shop_name: Optional[str] = None,
 ) -> Tuple[str, List[Any]]:
     """
@@ -346,9 +349,9 @@ def get_lead_call_trackers_count_query(
         values.append(outcome)
         conditions.append(f"outcome = ${len(values)}")
 
-    if order_id:
-        values.append(f"%{order_id}%")
-        conditions.append(f"payload->>'order_id' LIKE ${len(values)}")
+    if request_id:
+        values.append(f"%{request_id}%")
+        conditions.append(f"request_id LIKE ${len(values)}")
 
     if shop_name:
         values.append(f"%{shop_name}%")
@@ -367,7 +370,7 @@ def get_lead_based_analytics_query(
 ) -> Tuple[str, List[Any]]:
     """
     Generate query to get per-lead call data.
-    Returns one row per order_id with call counts. Aggregation done in Python.
+    Returns one row per request_id with call counts. Aggregation done in Python.
     """
     values: List[Any] = []
     conditions = []
@@ -384,7 +387,7 @@ def get_lead_based_analytics_query(
 
     text = f"""
         SELECT
-            payload ->> 'order_id' AS order_id,
+            request_id AS order_id,
             COUNT(*) AS total_calls,
             COUNT(*) FILTER (WHERE status = 'FINISHED') AS finished_calls,
             COUNT(*) FILTER (WHERE outcome = 'CONFIRM') AS confirmed_calls,
@@ -394,6 +397,6 @@ def get_lead_based_analytics_query(
             COUNT(*) FILTER (WHERE outcome = 'NO_ANSWER') AS no_answer_calls
         FROM "{LEAD_CALL_TRACKER_TABLE}"
         {where_clause}
-        GROUP BY payload ->> 'order_id';
+        GROUP BY request_id;
     """
     return text, values

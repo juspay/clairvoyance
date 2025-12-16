@@ -17,16 +17,12 @@ from app.ai.voice.agents.breeze_buddy.template.hooks import (
     HookRegistry,
     UpdateOutcomeInDatabaseHook,
 )
-from app.ai.voice.agents.breeze_buddy.template.loader import (
-    FlowConfigLoader,
-)
 from app.ai.voice.agents.breeze_buddy.template.transition import (
     transition_handler,
 )
 
 __all__ = [
     "FlowConfigBuilder",
-    "FlowConfigLoader",
     "Hook",
     "HookRegistry",
     "TemplateContext",
