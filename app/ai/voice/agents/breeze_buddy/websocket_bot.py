@@ -169,7 +169,7 @@ class OrderConfirmationBot:
 
         self.lead = lead
         call_payload = lead.payload
-        self.order_id = lead.request_id or "N/A"
+        self.order_id = lead.request_id or lead.payload.get("order_id")
         customer_name = call_payload.get("customer_name", "Valued Customer")
         self.shop_name = call_payload.get("shop_name", "the shop")
         customer_address = call_payload.get("customer_address", "your address")
