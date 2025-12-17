@@ -135,6 +135,7 @@ async def _retry_call(lead: LeadCallTracker, config: CallExecutionConfig):
             next_attempt_at=next_attempt_at,
             payload=lead.payload,
             attempt_count=lead.attempt_count + 1,
+            request_id=lead.request_id,
         )
 
 
