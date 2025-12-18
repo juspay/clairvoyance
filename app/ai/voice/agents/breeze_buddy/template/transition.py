@@ -65,9 +65,15 @@ async def transition_handler(
         next_node = context.create_node_from_template(transition_to)
         return {}, next_node
     else:
-        logger.debug(f"No transition specified for function '{function_name}'")
+        logger.info(
+            f"No transition specified for function '{function_name}', staying in current node"
+        )
 
-    return {}, None
+        result_message = {
+            "result": f"Successfully executed {function_name}",
+            "status": "success",
+        }
+        return result_message, None
 
 
 async def _execute_hooks_async(

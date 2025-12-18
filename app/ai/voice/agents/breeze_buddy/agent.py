@@ -66,7 +66,6 @@ class Agent:
         self.aiohttp_session = aiohttp_session
         self.provider = provider
         self.task: PipelineTask = None
-        self.outcome = "UNKNOWN"
         self.context: OpenAILLMContext = None
         self.conversation_ended = False
         self.reporting_webhook_url = None
@@ -401,14 +400,13 @@ class Agent:
     async def _handle_unexpected_disconnect(self, reason: str):
         if not self.conversation_ended:
             logger.info(f"{reason}. Updating call status directly.")
-            if self.outcome == "UNKNOWN":
-                self.outcome = "BUSY"
+            if self.lead.outcome is None:
+                self.lead.outcome = "BUSY"
 
             if self.lead and self.lead.metaData is None:
                 self.lead.metaData = {}
 
             context = TemplateContext(self)
-            context.lead.outcome = self.outcome
             await end_conversation(context, {})
 
 
