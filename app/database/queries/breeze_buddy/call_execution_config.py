@@ -92,6 +92,24 @@ def get_all_call_execution_configs_query() -> Tuple[str, List[Any]]:
     return text, values
 
 
+def get_call_execution_config_by_id_query(config_id: str) -> Tuple[str, List[Any]]:
+    """
+    Generate query to get call execution config by ID.
+    """
+    text = f'SELECT * FROM "{CALL_EXECUTION_CONFIG_TABLE}" WHERE "id" = $1;'
+    values: List[Any] = [config_id]
+    return text, values
+
+
+def delete_call_execution_config_query(config_id: str) -> Tuple[str, List[Any]]:
+    """
+    Generate query to delete call execution config by ID.
+    """
+    text = f'DELETE FROM "{CALL_EXECUTION_CONFIG_TABLE}" WHERE "id" = $1 RETURNING *;'
+    values: List[Any] = [config_id]
+    return text, values
+
+
 def update_call_execution_config_query(
     merchant_id: str,
     template: str,

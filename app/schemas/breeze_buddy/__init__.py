@@ -1,15 +1,5 @@
-"""
-DEPRECATED: This module is kept for backward compatibility only.
+"""Breeze Buddy agent schemas."""
 
-Please use the new organized schema structure:
-- app.schemas.breeze_buddy.auth - Authentication & authorization models
-- app.schemas.breeze_buddy.analytics - Analytics request/response models
-- app.schemas.breeze_buddy.core - Core domain models (leads, numbers, configs)
-- app.schemas.automatic_voice.connection - Automatic Voice connection schemas
-"""
-
-# Re-export all schemas from the new organized structure for backward compatibility
-# This allows existing code to continue using `from app.schemas import XYZ`
 from app.schemas.breeze_buddy.analytics import (
     AnalyticsFilters,
     AnalyticsOptions,
@@ -50,46 +40,43 @@ from app.schemas.breeze_buddy.core import (
     OutboundNumberStatus,
     UpdateCallExecutionConfigRequest,
 )
-from app.schemas.automatic_voice.connection import (
-    AutomaticVoiceTTSServiceConfig,
-    AutomaticVoiceUserConnectRequest,
-)
 
 __all__ = [
-    "AnalyticsFilters",
-    "AnalyticsOptions",
-    "AnalyticsRequest",
-    "AnalyticsResponse",
-    "AnalyticsType",
+    # Auth
     "AuthTokenData",
-    "AutomaticVoiceTTSServiceConfig",
-    "AutomaticVoiceUserConnectRequest",
-    "CallDetailResult",
-    "CallExecutionConfig",
-    "CallProvider",
-    "CreateCallExecutionConfigRequest",
-    "CreateOutboundNumberRequest",
-    "LeadCallStatus",
-    "LeadCallTracker",
     "LoginRequest",
     "LoginResponse",
-    "OutboundNumber",
-    "OutboundNumberStat",
-    "OutboundNumberStatus",
-    "PaginationInfo",
     "Permission",
     "S2STokenRequest",
     "S2STokenResponse",
-    "SummaryAnalyticsResult",
-    "TimeGranularity",
     "TokenData",
     "TokenResponse",
-    "TrendDataPoint",
-    "UpdateCallExecutionConfigRequest",
     "User",
     "UserCreate",
     "UserInDB",
     "UserInfo",
     "UserRole",
     "UserUpdate",
+    # Analytics
+    "AnalyticsFilters",
+    "AnalyticsOptions",
+    "AnalyticsRequest",
+    "AnalyticsResponse",
+    "AnalyticsType",
+    "CallDetailResult",
+    "OutboundNumberStat",
+    "PaginationInfo",
+    "SummaryAnalyticsResult",
+    "TimeGranularity",
+    "TrendDataPoint",
+    # Core
+    "CallExecutionConfig",
+    "CallProvider",
+    "CreateCallExecutionConfigRequest",
+    "CreateOutboundNumberRequest",
+    "LeadCallStatus",
+    "LeadCallTracker",
+    "OutboundNumber",
+    "OutboundNumberStatus",
+    "UpdateCallExecutionConfigRequest",
 ]
