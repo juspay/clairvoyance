@@ -57,7 +57,7 @@ if __name__ == "__main__":
     logger.info("Parent process: Initializing DevCycle before starting workers...")
     asyncio.run(initialize_devcycle())
 
-    # STEP 5: Start uvicorn server (will spawn worker processes)
+    # STEP 6: Start uvicorn server (will spawn worker processes)
     logger.info(f"Starting Uvicorn server on {HOST}:{PORT}")
     logger.info(f"Reload enabled: {UVICORN_RELOAD}")
     logger.info(f"Log level: {UVICORN_LOG_LEVEL}")

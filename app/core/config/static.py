@@ -131,6 +131,10 @@ OPEN_OBSERVE_BASE_URL = os.environ.get(
     "OPEN_OBSERVE_BASE_URL", "https://periscope.breeze.in"
 )
 
+# OTEL Logging
+ENABLE_OTEL_LOGS = os.environ.get("ENABLE_OTEL_LOGS", "false").lower() == "true"
+OTEL_EXPORTER_OTLP_LOGS_ENDPOINT = os.environ.get("OTEL_EXPORTER_OTLP_LOGS_ENDPOINT", "https://crane.beta.breeze.in")
+
 # Text sanitization
 SANITIZE_TEXT_FOR_TTS = (
     os.environ.get("SANITIZE_TEXT_FOR_TTS", "false").lower() == "true"

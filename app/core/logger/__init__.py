@@ -32,6 +32,77 @@ def json_sink(message):
     print(json.dumps(log_entry))
 
 
+# Global reference to OTEL logger provider - set by setup_otel_logging()
+_otel_logger_provider = None
+
+
+def otel_sink(message):
+    """
+    Custom sink function to send logs to OTEL/Crane.
+    This is added dynamically when setup_otel_logging() is called.
+    """
+    global _otel_logger_provider
+    if _otel_logger_provider is None:
+        return
+
+    record = message.record
+
+    # Skip logs about Crane/OTEL to prevent feedback loop
+    # These logs will still appear in console but won't be sent to Crane
+    logger_name = record["name"]
+    log_message = record["message"]
+    if (
+        logger_name.startswith("opentelemetry")
+        or "crane.beta.breeze.in" in log_message
+        or "/v1/logs" in log_message
+    ):
+        return
+
+    import time
+
+    from app.core.logger.otel_logs import LEVEL_TO_SEVERITY
+
+    level_name = record["level"].name
+    severity = LEVEL_TO_SEVERITY.get(level_name, 9)  # Default to INFO
+
+    # Build attributes from record extras
+    attributes = {
+        "logger": record["name"],
+        "function": record["function"],
+        "line": record["line"],
+        "module": record["module"],
+        "process_id": record["process"].id if record["process"] else None,
+        "thread_id": record["thread"].id if record["thread"] else None,
+        **{k: v for k, v in record["extra"].items() if v is not None},
+    }
+    # Filter out None values
+    attributes = {k: v for k, v in attributes.items() if v is not None}
+
+    # Get a logger and emit the log using the proper API
+    otel_logger = _otel_logger_provider.get_logger("clairvoyance")
+
+    # Use the logger's internal emit with a properly constructed record
+    from opentelemetry._logs import LogRecord as APILogRecord
+
+    log_record = APILogRecord(
+        timestamp=int(time.time() * 1e9),  # nanoseconds
+        observed_timestamp=int(time.time() * 1e9),
+        body=record["message"],
+        severity_number=severity,
+        attributes=attributes,
+    )
+    otel_logger.emit(log_record)
+
+
+def set_otel_logger_provider(logger_provider):
+    """
+    Set the global OTEL logger provider instance.
+    Called by setup_otel_logging() after initializing the OTEL logger provider.
+    """
+    global _otel_logger_provider
+    _otel_logger_provider = logger_provider
+
+
 class InterceptHandler(logging.Handler):
     """
     Intercept standard logging messages toward Loguru sinks.

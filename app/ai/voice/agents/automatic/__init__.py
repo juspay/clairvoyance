@@ -93,6 +93,7 @@ from app.ai.voice.agents.automatic.analytics.tracing_setup import setup_tracing
 from app.ai.voice.agents.automatic.analytics.utils import (
     generate_open_observer_url_for_session_id,
 )
+from app.core.logger.otel_logs import setup_otel_logging
 
 
 async def main():
@@ -609,6 +610,10 @@ async def run_normal_mode(args):
         "cancel_on_idle_timeout": True,
         "observers": [GoogleRTVIObserver(rtvi)],
     }
+
+    # Initialize OTEL logging for Crane (per-subprocess)
+    if static.ENABLE_OTEL_LOGS:
+        setup_otel_logging("clairvoyance")
 
     if static.ENABLE_TRACING:
         setup_tracing("breeze-voice-agent")
