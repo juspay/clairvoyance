@@ -9,8 +9,8 @@ from typing import Any, Dict
 import uvicorn
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import JSONResponse
+from datetime import datetime, timezone
 from pipecat.transports.daily.utils import DailyRESTHelper
 
 from app import __version__
@@ -224,9 +224,6 @@ app.add_middleware(
     allow_headers=["*"],  # Allows all headers
 )
 
-# Mount static files directory
-app.mount("/static", StaticFiles(directory="static"), name="static")
-
 app.include_router(
     breeze_buddy.router, prefix="/agent/voice/breeze-buddy", tags=["Breeze Buddy"]
 )
@@ -405,10 +402,20 @@ async def bot_connect(
         return {"room_url": room_url, "token": token, "session_id": session_id}
 
 
-# Serve client.html at the root
+# Root endpoint - health check
 @app.get("/")
-async def get_client_html():
-    return FileResponse("static/home.html")
+async def health_check():
+    """
+    Root endpoint - health check.
+
+    Returns basic service information and status.
+    """
+    return {
+        "service": "Clairvoyance API",
+        "version": __version__,
+        "status": "healthy",
+        "timestamp": datetime.now(timezone.utc).isoformat()
+    }
 
 
 # Drain endpoint for Kubernetes preStop hook

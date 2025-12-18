@@ -43,7 +43,7 @@ async def add_call_execution_config(
             max_retry=config.max_retry,
             calling_provider=config.calling_provider,
             merchant_id=config.merchant_id,
-            template=config.workflow,
+            template=config.template,
             shop_identifier=config.shop_identifier,
             enable_international_call=config.enable_international_call,
         )
@@ -80,13 +80,13 @@ async def update_call_execution_config_endpoint(
     Requires JWT authentication.
     """
     logger.info(
-        f"Authenticated user {current_user.user_id} updating call execution config for merchant: {config.merchant_id}, template: {config.workflow}, shop_identifier: {config.shop_identifier}"
+        f"Authenticated user {current_user.user_id} updating call execution config for merchant: {config.merchant_id}, template: {config.template}, shop_identifier: {config.shop_identifier}"
     )
 
     try:
         call_execution_config = await update_call_execution_config(
             merchant_id=config.merchant_id,
-            template=config.workflow,
+            template=config.template,
             shop_identifier=config.shop_identifier,
             initial_offset=config.initial_offset,
             retry_offset=config.retry_offset,
@@ -99,12 +99,12 @@ async def update_call_execution_config_endpoint(
 
         if call_execution_config:
             logger.info(
-                f"Call execution config updated successfully for merchant: {config.merchant_id}, template: {config.workflow}"
+                f"Call execution config updated successfully for merchant: {config.merchant_id}, template: {config.template}"
             )
             return call_execution_config
         else:
             logger.error(
-                f"Failed to update call execution config for merchant: {config.merchant_id}, template: {config.workflow}, shop_identifier: {config.shop_identifier}"
+                f"Failed to update call execution config for merchant: {config.merchant_id}, template: {config.template}, shop_identifier: {config.shop_identifier}"
             )
             return JSONResponse(
                 status_code=404, content={"detail": "Call execution config not found"}

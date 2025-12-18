@@ -14,7 +14,9 @@ from app.database.decoder.breeze_buddy.call_execution_config import (
 )
 from app.database.queries import run_parameterized_query
 from app.database.queries.breeze_buddy.call_execution_config import (
+    delete_call_execution_config_query,
     get_all_call_execution_configs_query,
+    get_call_execution_config_by_id_query,
     get_call_execution_config_by_merchant_id_query,
     insert_call_execution_config_query,
     update_call_execution_config_query,
@@ -193,3 +195,49 @@ async def update_call_execution_config(
     except Exception as e:
         logger.error(f"Error updating call execution config: {e}")
         return None
+
+
+async def get_call_execution_config_by_id(config_id: str) -> Optional[CallExecutionConfig]:
+    """
+    Get call execution config by ID.
+    """
+    logger.info(f"Getting call execution config by ID: {config_id}")
+
+    try:
+        query_text, values = get_call_execution_config_by_id_query(config_id)
+        result = await run_parameterized_query(query_text, values)
+
+        if result and get_row_count(result) > 0:
+            decoded_result = decode_call_execution_config(result)
+            logger.info(f"Found call execution config: {decoded_result}")
+            return decoded_result
+
+        logger.info(f"No call execution config found with ID: {config_id}")
+        return None
+
+    except Exception as e:
+        logger.error(f"Error getting call execution config by ID: {e}")
+        return None
+
+
+async def delete_call_execution_config(config_id: str) -> bool:
+    """
+    Delete call execution config by ID.
+    Returns True if deletion was successful, False otherwise.
+    """
+    logger.info(f"Deleting call execution config by ID: {config_id}")
+
+    try:
+        query_text, values = delete_call_execution_config_query(config_id)
+        result = await run_parameterized_query(query_text, values)
+
+        if result and get_row_count(result) > 0:
+            logger.info(f"Call execution config deleted successfully: {config_id}")
+            return True
+
+        logger.warning(f"No call execution config found to delete with ID: {config_id}")
+        return False
+
+    except Exception as e:
+        logger.error(f"Error deleting call execution config: {e}")
+        return False
