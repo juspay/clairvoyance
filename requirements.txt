@@ -44,6 +44,9 @@ twilio
 # JWT Authentication
 PyJWT
 
+# Password Hashing
+bcrypt>=4.0.0
+
 # Audio processing
 pydub
 

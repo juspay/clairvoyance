@@ -213,7 +213,8 @@ class VoiceAgentPool:
         process_id = str(uuid.uuid4())
 
         try:
-            cmd = f"python3 -u -m app.ai.voice.agents.automatic --pool-mode --process-id {process_id}"
+            # Use the same Python interpreter as the parent process (respects virtualenv)
+            cmd = f"{sys.executable} -u -m app.ai.voice.agents.automatic --pool-mode --process-id {process_id}"
 
             # Increase stream limit to 10MB to handle large log outputs (default is 64KB)
             proc = await asyncio.create_subprocess_shell(
@@ -526,7 +527,8 @@ class VoiceAgentPool:
         process_id = str(uuid.uuid4())
 
         try:
-            cmd = f"python3 -u -m app.ai.voice.agents.automatic --pool-mode --process-id {process_id}"
+            # Use the same Python interpreter as the parent process (respects virtualenv)
+            cmd = f"{sys.executable} -u -m app.ai.voice.agents.automatic --pool-mode --process-id {process_id}"
 
             proc = await asyncio.create_subprocess_shell(
                 cmd,
