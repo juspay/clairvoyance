@@ -1,62 +1,61 @@
 from datetime import datetime, timedelta, timezone
 from typing import Optional
+import warnings
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
-from fastapi.responses import RedirectResponse
-from starlette.responses import FileResponse, JSONResponse
+from fastapi import APIRouter, Depends, HTTPException
+from starlette.responses import JSONResponse
 
-from app.ai.voice.agents.breeze_buddy.managers.calls import (
-    process_backlog_leads,
-)
 from app.core.logger import logger
-from app.core.security.jwt import get_breeze_buddy_session, get_current_user
+from app.core.security.jwt import get_breeze_buddy_session
 from app.database.accessor import (
     get_all_lead_call_trackers,
     get_all_outbound_numbers_with_call_count,
     get_lead_based_analytics,
     get_lead_call_trackers_count,
 )
-from app.schemas import TokenData
 
 router = APIRouter()
 
 
-@router.get("/dashboard", include_in_schema=False)
-async def get_dashboard(session: dict = Depends(get_breeze_buddy_session)):
-    """
-    Serves the dashboard HTML file.
-    """
-    if not session:
-        return RedirectResponse(url="/agent/voice/breeze-buddy/login")
-    response = FileResponse("app/ai/voice/agents/breeze_buddy/dashboard/index.html")
-    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
-    response.headers["Pragma"] = "no-cache"
-    response.headers["Expires"] = "0"
-    return response
-
-
-@router.get("/cron/initiate")
-async def initiate_cron(
-    background_tasks: BackgroundTasks,
-    current_user: TokenData = Depends(get_current_user),
-):
-    """
-    Initiates the cron job to process backlog leads.
-    """
-    logger.info(f"Authenticated user {current_user.user_id} initiating cron job")
-    background_tasks.add_task(process_backlog_leads)
-    return {"status": "success", "message": "Lead processing initiated"}
-
-
-@router.get("/breeze/order-confirmation/analytics", include_in_schema=False)
+@router.get("/breeze/order-confirmation/analytics", include_in_schema=False, deprecated=True)
 async def get_analytics(
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
     session: dict = Depends(get_breeze_buddy_session),
 ):
     """
-    Provides analytics data for the dashboard with both call-based and lead-based metrics.
+    [DEPRECATED] Provides analytics data for the dashboard with both call-based and lead-based metrics.
+
+    **This endpoint is deprecated and will be removed in a future version.**
+
+    Please migrate to the new analytics endpoint:
+    - New endpoint: POST /agent/voice/breeze-buddy/analytics
+    - Benefits: Template-agnostic, flexible filtering, RBAC support
+    - See API documentation for migration guide
+
+    Migration example:
+        Old: GET /breeze/order-confirmation/analytics?start_date=2025-12-01&end_date=2025-12-31
+        New: POST /analytics
+             {
+                 "type": "summary",
+                 "filters": {
+                     "template": "order-confirmation",
+                     "date_from": "2025-12-01",
+                     "date_to": "2025-12-31"
+                 }
+             }
     """
+    # Log deprecation warning
+    logger.warning(
+        "DEPRECATED ENDPOINT CALLED: GET /breeze/order-confirmation/analytics - "
+        "Please migrate to POST /analytics endpoint"
+    )
+    warnings.warn(
+        "This endpoint is deprecated. Use POST /analytics instead.",
+        DeprecationWarning,
+        stacklevel=2
+    )
+
     if not session:
         raise HTTPException(status_code=401, detail="Not authenticated")
     try:
@@ -157,7 +156,7 @@ async def get_analytics(
     return JSONResponse(content=analytics)
 
 
-@router.get("/breeze/order-confirmation/call-details", include_in_schema=False)
+@router.get("/breeze/order-confirmation/call-details", include_in_schema=False, deprecated=True)
 async def get_call_details(
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
@@ -169,8 +168,42 @@ async def get_call_details(
     session: dict = Depends(get_breeze_buddy_session),
 ):
     """
-    Provides paginated call details for the dashboard.
+    [DEPRECATED] Provides paginated call details for the dashboard.
+
+    **This endpoint is deprecated and will be removed in a future version.**
+
+    Please migrate to the new analytics endpoint:
+    - New endpoint: POST /agent/voice/breeze-buddy/analytics
+    - Type: "call-details"
+    - Benefits: Template-agnostic, flexible filtering, RBAC support
+
+    Migration example:
+        Old: GET /breeze/order-confirmation/call-details?page=1&page_size=10&outcome=CONFIRM
+        New: POST /analytics
+             {
+                 "type": "call-details",
+                 "filters": {
+                     "template": "order-confirmation",
+                     "outcome": "CONFIRM",
+                     "date_from": "2025-12-01"
+                 },
+                 "options": {
+                     "page": 1,
+                     "limit": 10
+                 }
+             }
     """
+    # Log deprecation warning
+    logger.warning(
+        "DEPRECATED ENDPOINT CALLED: GET /breeze/order-confirmation/call-details - "
+        "Please migrate to POST /analytics endpoint with type='call-details'"
+    )
+    warnings.warn(
+        "This endpoint is deprecated. Use POST /analytics with type='call-details' instead.",
+        DeprecationWarning,
+        stacklevel=2
+    )
+
     if not session:
         raise HTTPException(status_code=401, detail="Not authenticated")
 
