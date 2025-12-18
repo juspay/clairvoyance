@@ -136,6 +136,13 @@ async def _retry_call(lead: LeadCallTracker, config: CallExecutionConfig):
             payload=lead.payload,
             attempt_count=lead.attempt_count + 1,
             request_id=lead.request_id,
+            meta_data={
+                "use_template_flow": (
+                    lead.metaData.get("use_template_flow", False)
+                    if lead.metaData
+                    else False
+                )
+            },
         )
 
 
