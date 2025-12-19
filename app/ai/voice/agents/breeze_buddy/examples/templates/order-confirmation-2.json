@@ -35,11 +35,11 @@
     }
   },
   "expected_callback_response_schema": {
-    "cancellation_reason": {
+    "cancellationReason": {
       "type": "string",
       "optional": true
     },
-    "updated_address": {
+    "updatedAddress": {
       "type": "string",
       "optional": true
     }
@@ -123,7 +123,7 @@
             "function_name": "cancel_order",
             "description": "Call this function if the customer explicitly asks to cancel the order.",
             "properties": {
-              "cancellation_reason": {
+              "cancellationReason": {
                 "type": "string",
                 "description": "The reason for cancelling the order."
               }
@@ -137,7 +137,7 @@
                     "source": "static",
                     "value": "CANCEL"
                   },
-                  "cancellation_reason": {
+                  "cancellationReason": {
                     "source": "llm"
                   }
                 }
@@ -169,12 +169,12 @@
             "function_name": "update_address",
             "description": "Update the address and after that confirm the order with the updated address",
             "properties": {
-              "updated_address": {
+              "updatedAddress": {
                 "type": "string",
                 "description": "Updated address as per the user's input"
               }
             },
-            "required": ["updated_address"],
+            "required": ["updatedAddress"],
             "transition_to": "confirm_adderess_update",
             "hooks": [
               {
@@ -184,7 +184,7 @@
                     "source": "static",
                     "value": "ADDRESS_UPDATED"
                   },
-                  "updated_address": {
+                  "updatedAddress": {
                     "source": "llm"
                   }
                 }
