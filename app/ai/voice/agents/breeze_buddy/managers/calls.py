@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from app.ai.voice.agents.breeze_buddy.services.telephony.utils import get_voice_provider
+from app.ai.voice.agents.breeze_buddy.utils.common import send_webhook_with_retry
 from app.core.config.static import UPLOAD_BREEZE_BUDDY_CALL_RECORDINGS_TO_CLOUD
 from app.core.logger import logger
 from app.core.transport.http_client import create_aiohttp_session
@@ -291,7 +292,34 @@ async def process_backlog_leads():
                                 },
                                 call_end_time=datetime.now(timezone.utc),
                             )
+
+                            # Send webhook for failed call
+                            reporting_webhook_url = (
+                                locked_lead.payload.get("reporting_webhook_url")
+                                if locked_lead.payload
+                                else None
+                            )
+                            if reporting_webhook_url:
+                                webhook_data = {
+                                    "outcome": "FAILED",
+                                    "attemptCount": locked_lead.attempt_count + 1,
+                                    "failureReason": "Failed to initiate call due to NCPR, international calling disabled.",
+                                    "orderId": locked_lead.request_id,
+                                }
+                                logger.info(
+                                    f"Sending failure webhook for lead {locked_lead.id} to {reporting_webhook_url}"
+                                )
+                                try:
+                                    await send_webhook_with_retry(
+                                        session, reporting_webhook_url, webhook_data
+                                    )
+                                except Exception as e:
+                                    logger.error(
+                                        f"Error sending failure webhook for lead {locked_lead.id}: {e}"
+                                    )
+
                             await release_lock_on_lead_by_id(locked_lead.id)
+
                             continue
                         retry_calling_provider = CallProvider.TWILIO
 
@@ -336,6 +364,31 @@ async def process_backlog_leads():
                         await _release_number(
                             retry_number_to_use.id, retry_calling_provider
                         )
+
+                        # Send webhook for failed call
+                        reporting_webhook_url = (
+                            locked_lead.payload.get("reporting_webhook_url")
+                            if locked_lead.payload
+                            else None
+                        )
+                        if reporting_webhook_url:
+                            webhook_data = {
+                                "outcome": "FAILED",
+                                "attemptCount": locked_lead.attempt_count + 1,
+                                "failureReason": "Failed to initiate call with both providers.",
+                                "orderId": locked_lead.request_id,
+                            }
+                            logger.info(
+                                f"Sending failure webhook for lead {locked_lead.id} to {reporting_webhook_url}"
+                            )
+                            try:
+                                await send_webhook_with_retry(
+                                    session, reporting_webhook_url, webhook_data
+                                )
+                            except Exception as e:
+                                logger.error(
+                                    f"Error sending failure webhook for lead {locked_lead.id}: {e}"
+                                )
 
                 await release_lock_on_lead_by_id(locked_lead.id)
 
