@@ -9,6 +9,7 @@ from app.api.routers.breeze_buddy.configurations import router as configurations
 from app.api.routers.breeze_buddy.cron import router as cron_router
 
 # Deprecated routers (backward compatibility)
+from app.api.routers.breeze_buddy.daily import router as daily_router
 from app.api.routers.breeze_buddy.deprecated import router as deprecated_router
 from app.api.routers.breeze_buddy.leads import router as leads_router
 from app.api.routers.breeze_buddy.merchants import router as merchants_router
@@ -60,3 +61,4 @@ router.include_router(websocket_router, prefix="", tags=["websocket"])
 # They will eventually be removed in a future version.
 # Please migrate to the modern RESTful endpoints above.
 router.include_router(deprecated_router, prefix="", tags=["deprecated"])
+router.include_router(daily_router, prefix="", tags=["daily"])
