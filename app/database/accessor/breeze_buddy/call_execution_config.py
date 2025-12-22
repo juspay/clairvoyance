@@ -14,6 +14,7 @@ from app.database.decoder.breeze_buddy.call_execution_config import (
 )
 from app.database.queries import run_parameterized_query
 from app.database.queries.breeze_buddy.call_execution_config import (
+    calling_activation_for_merchant_query,
     delete_call_execution_config_query,
     get_all_call_execution_configs_query,
     get_call_execution_config_by_id_query,
@@ -43,6 +44,7 @@ async def create_call_execution_config(
     template: str,
     shop_identifier: str,
     enable_international_call: bool,
+    enable_calling: bool = True,
 ) -> Optional[CallExecutionConfig]:
     """
     Create a new call execution config record.
@@ -62,6 +64,7 @@ async def create_call_execution_config(
             template=template,
             shop_identifier=shop_identifier,
             enable_international_call=enable_international_call,
+            enable_calling=enable_calling,
         )
 
         result = await run_parameterized_query(query_text, values)
@@ -158,6 +161,7 @@ async def update_call_execution_config(
     max_retry: Optional[int] = None,
     calling_provider: Optional[CallProvider] = None,
     enable_international_call: Optional[bool] = None,
+    enable_calling: Optional[bool] = None,
 ) -> Optional[CallExecutionConfig]:
     """
     Update an existing call execution config record based on merchant_id, template, and shop_identifier.
@@ -179,6 +183,7 @@ async def update_call_execution_config(
             max_retry=max_retry,
             calling_provider=calling_provider,
             enable_international_call=enable_international_call,
+            enable_calling=enable_calling,
         )
 
         result = await run_parameterized_query(query_text, values)
@@ -243,3 +248,41 @@ async def delete_call_execution_config(config_id: str) -> bool:
     except Exception as e:
         logger.error(f"Error deleting call execution config: {e}")
         return False
+
+
+async def calling_activation_for_merchant(
+    enable_calling: bool,
+    merchant_id: Optional[str] = None,
+    shop_identifier: Optional[str] = None,
+) -> List[CallExecutionConfig]:
+    """
+    Toggle enable_calling for configs.
+    - If merchant_id is None: All configs across all merchants are updated
+    - If merchant_id is provided but shop_identifier is None: All configs for that merchant are updated
+    - If both merchant_id and shop_identifier are provided: Only that specific config is updated
+    """
+    logger.info(
+        f"Toggling calling to {enable_calling} for merchant: {merchant_id}, shop_identifier: {shop_identifier}"
+    )
+
+    try:
+        query_text, values = calling_activation_for_merchant_query(
+            merchant_id=merchant_id,
+            enable_calling=enable_calling,
+            shop_identifier=shop_identifier,
+        )
+
+        result = await run_parameterized_query(query_text, values)
+        if result:
+            decoded_result = decode_call_execution_config_list(result)
+            logger.info(f"Successfully updated {len(decoded_result)} config(s)")
+            return decoded_result
+
+        logger.info(
+            f"No configs found for merchant {merchant_id} with shop_identifier {shop_identifier}"
+        )
+        return []
+
+    except Exception as e:
+        logger.error(f"Error toggling calling status: {e}")
+        return []

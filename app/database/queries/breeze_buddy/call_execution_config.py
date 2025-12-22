@@ -24,6 +24,7 @@ def insert_call_execution_config_query(
     template: str,
     shop_identifier: Optional[str],
     enable_international_call: bool,
+    enable_calling: bool = True,
 ) -> Tuple[str, List[Any]]:
     """
     Generate query to insert call execution config record.
@@ -42,10 +43,11 @@ def insert_call_execution_config_query(
             "template",
             "shop_identifier",
             "enable_international_call",
+            "enable_calling",
             "created_at",
             "updated_at"
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING *;
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) RETURNING *;
     """
 
     values = [
@@ -60,6 +62,7 @@ def insert_call_execution_config_query(
         template,
         shop_identifier,
         enable_international_call,
+        enable_calling,
         datetime.now(),
         datetime.now(),
     ]
@@ -121,6 +124,7 @@ def update_call_execution_config_query(
     max_retry: Optional[int] = None,
     calling_provider: Optional[CallProvider] = None,
     enable_international_call: Optional[bool] = None,
+    enable_calling: Optional[bool] = None,
 ) -> Tuple[str, List[Any]]:
     """
     Generate query to update call execution config record based on merchant_id, template, and shop_identifier.
@@ -165,6 +169,11 @@ def update_call_execution_config_query(
         values.append(enable_international_call)
         param_count += 1
 
+    if enable_calling is not None:
+        updates.append(f'"enable_calling" = ${param_count}')
+        values.append(enable_calling)
+        param_count += 1
+
     # Always update the updated_at timestamp
     updates.append(f'"updated_at" = ${param_count}')
     values.append(datetime.now())
@@ -192,5 +201,48 @@ def update_call_execution_config_query(
         WHERE {where_clause}
         RETURNING *;
     """
+
+    return text, values
+
+
+def calling_activation_for_merchant_query(
+    enable_calling: bool,
+    merchant_id: Optional[str] = None,
+    shop_identifier: Optional[str] = None,
+) -> Tuple[str, List[Any]]:
+    """
+    Generate query to toggle enable_calling for configs.
+    - If merchant_id is None: All configs across all merchants are updated
+    - If merchant_id is provided but shop_identifier is None: All configs for that merchant are updated
+    - If both merchant_id and shop_identifier are provided: Only that specific config is updated
+    """
+    values: List[Any] = [enable_calling, datetime.now()]
+
+    if merchant_id is None:
+        # Update all configs across all merchants
+        text = f"""
+            UPDATE "{CALL_EXECUTION_CONFIG_TABLE}"
+            SET "enable_calling" = $1, "updated_at" = $2
+            RETURNING *;
+        """
+    elif shop_identifier:
+        # Update specific shop for specific merchant
+        text = f"""
+            UPDATE "{CALL_EXECUTION_CONFIG_TABLE}"
+            SET "enable_calling" = $1, "updated_at" = $2
+            WHERE "merchant_id" = $3 AND "shop_identifier" = $4
+            RETURNING *;
+        """
+        values.append(merchant_id)
+        values.append(shop_identifier)
+    else:
+        # Update all configs for specific merchant
+        text = f"""
+            UPDATE "{CALL_EXECUTION_CONFIG_TABLE}"
+            SET "enable_calling" = $1, "updated_at" = $2
+            WHERE "merchant_id" = $3
+            RETURNING *;
+        """
+        values.append(merchant_id)
 
     return text, values

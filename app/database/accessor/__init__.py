@@ -4,6 +4,7 @@ This module exports all database accessor functions.
 """
 
 from .breeze_buddy.call_execution_config import (
+    calling_activation_for_merchant,
     create_call_execution_config,
     delete_call_execution_config,
     get_all_call_execution_configs,
@@ -59,6 +60,7 @@ __all__ = [
     "get_all_call_execution_configs",
     "update_call_execution_config",
     "delete_call_execution_config",
+    "calling_activation_for_merchant",
     "create_lead_call_tracker",
     "get_leads_based_on_status_and_next_attempt",
     "acquire_lock_on_lead_by_id",

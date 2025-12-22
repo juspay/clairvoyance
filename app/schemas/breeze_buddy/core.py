@@ -91,6 +91,7 @@ class CreateCallExecutionConfigRequest(BaseModel):
     template: str
     shop_identifier: Optional[str] = None
     enable_international_call: bool = True
+    enable_calling: Optional[bool] = True
 
 
 class UpdateCallExecutionConfigRequest(BaseModel):
@@ -106,6 +107,7 @@ class UpdateCallExecutionConfigRequest(BaseModel):
     max_retry: Optional[int] = None
     calling_provider: Optional[CallProvider] = None
     enable_international_call: Optional[bool] = None
+    enable_calling: Optional[bool] = None
 
 
 class CallExecutionConfig(BaseModel):
@@ -122,5 +124,6 @@ class CallExecutionConfig(BaseModel):
     template: str
     shop_identifier: Optional[str] = None
     enable_international_call: bool = True
+    enable_calling: bool = True
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None

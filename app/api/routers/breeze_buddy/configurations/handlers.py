@@ -10,6 +10,7 @@ from fastapi import HTTPException, status
 
 from app.core.logger import logger
 from app.database.accessor import (
+    calling_activation_for_merchant,
     create_call_execution_config,
     delete_call_execution_config,
     get_all_call_execution_configs,
@@ -292,4 +293,60 @@ async def delete_configuration_handler(config_id: str, current_user: UserInfo) -
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to delete configuration. Please try again later.",
+        )
+
+
+async def calling_activation_handler(
+    enable_calling: bool,
+    merchant_id: Optional[str],
+    shop_identifier: Optional[str],
+    current_user: UserInfo,
+) -> dict:
+    """
+    Enable or disable calling globally or for specific merchants/shops.
+
+    Args:
+        enable_calling: Boolean to enable or disable calling
+        merchant_id: Optional merchant ID filter
+        shop_identifier: Optional shop identifier filter
+        current_user: Current authenticated user
+
+    Returns:
+        Dictionary with status, message, and updated configs
+
+    Raises:
+        HTTPException: 404 if no configs found, 500 on error
+    """
+    logger.info(
+        f"User {current_user.username} (role: {current_user.role}) toggling calling to {enable_calling} "
+        f"for merchant: {merchant_id}, shop_identifier: {shop_identifier}"
+    )
+
+    try:
+        updated_configs = await calling_activation_for_merchant(
+            enable_calling=enable_calling,
+            merchant_id=merchant_id,
+            shop_identifier=shop_identifier,
+        )
+
+        if updated_configs:
+            logger.info(f"Successfully updated {len(updated_configs)} config(s)")
+            return {
+                "status": "success",
+                "message": f"Updated {len(updated_configs)} config(s)",
+                "configs": updated_configs,
+            }
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="No call execution config found matching the criteria",
+            )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error toggling calling status: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to toggle calling status. Please try again later.",
         )
