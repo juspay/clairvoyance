@@ -9,12 +9,14 @@ from app.ai.voice.agents.automatic.types.models import TTSProvider, VoiceName
 
 class AutomaticVoiceTTSServiceConfig(BaseModel):
     """TTS service configuration for Automatic Voice agent"""
+
     ttsProvider: TTSProvider
     voiceName: VoiceName
 
 
 class AutomaticVoiceUserConnectRequest(BaseModel):
     """User connection request for Automatic Voice agent"""
+
     sessionId: Optional[str] = None
     mode: Optional[str] = None
     eulerToken: Optional[str] = None

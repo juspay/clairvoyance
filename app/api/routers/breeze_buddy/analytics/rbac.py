@@ -11,7 +11,9 @@ from app.core.logger import logger
 from app.schemas import UserInfo
 
 
-def get_accessible_merchants_and_shops(current_user: UserInfo) -> tuple[Optional[List[str]], Optional[List[str]]]:
+def get_accessible_merchants_and_shops(
+    current_user: UserInfo,
+) -> tuple[Optional[List[str]], Optional[List[str]]]:
     """
     Get user's accessible merchant IDs and shop identifiers from JWT token.
 
@@ -39,21 +41,24 @@ def get_accessible_merchants_and_shops(current_user: UserInfo) -> tuple[Optional
     if "*" in current_user.merchant_ids:
         accessible_merchants = None  # Wildcard access
     else:
-        accessible_merchants = current_user.merchant_ids  # Specific access (or empty for no access)
+        accessible_merchants = (
+            current_user.merchant_ids
+        )  # Specific access (or empty for no access)
 
     # Check shop access
     # Same logic as merchant access
     if "*" in current_user.shop_identifiers:
         accessible_shops = None  # Wildcard access
     else:
-        accessible_shops = current_user.shop_identifiers  # Specific access (or empty for no access)
+        accessible_shops = (
+            current_user.shop_identifiers
+        )  # Specific access (or empty for no access)
 
     return accessible_merchants, accessible_shops
 
 
 def apply_hierarchical_filters(
-    filters: Dict[str, Any],
-    current_user: UserInfo
+    filters: Dict[str, Any], current_user: UserInfo
 ) -> Dict[str, Any]:
     """
     Apply hierarchical merchant + shop filtering based on user's JWT token.
@@ -71,7 +76,9 @@ def apply_hierarchical_filters(
     Raises:
         HTTPException: 403 if user tries to access unauthorized shops/merchants
     """
-    accessible_merchants, accessible_shops = get_accessible_merchants_and_shops(current_user)
+    accessible_merchants, accessible_shops = get_accessible_merchants_and_shops(
+        current_user
+    )
 
     # Apply merchant filtering
     if accessible_merchants is None:
@@ -88,7 +95,7 @@ def apply_hierarchical_filters(
             )
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Access denied: user has no merchant assignments"
+                detail="Access denied: user has no merchant assignments",
             )
 
         if "merchant_id" in filters:
@@ -99,7 +106,7 @@ def apply_hierarchical_filters(
                 )
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
-                    detail=f"Access denied to merchant {filters['merchant_id']}"
+                    detail=f"Access denied to merchant {filters['merchant_id']}",
                 )
         elif "merchant_ids" in filters:
             # Validate user has access to all requested merchants
@@ -109,7 +116,7 @@ def apply_hierarchical_filters(
                 )
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Access denied to one or more requested merchants"
+                    detail="Access denied to one or more requested merchants",
                 )
         else:
             # No merchant filter - apply user's accessible merchants
@@ -130,7 +137,7 @@ def apply_hierarchical_filters(
             )
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Access denied: user has no shop assignments"
+                detail="Access denied: user has no shop assignments",
             )
 
         if "shop_identifier" in filters:
@@ -141,17 +148,19 @@ def apply_hierarchical_filters(
                 )
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
-                    detail=f"Access denied to shop {filters['shop_identifier']}"
+                    detail=f"Access denied to shop {filters['shop_identifier']}",
                 )
         elif "shop_identifiers" in filters:
             # Validate user has access to all requested shops
-            if not all(shop in accessible_shops for shop in filters["shop_identifiers"]):
+            if not all(
+                shop in accessible_shops for shop in filters["shop_identifiers"]
+            ):
                 logger.warning(
                     f"User {current_user.username} attempted to access unauthorized shops"
                 )
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Access denied to one or more requested shops"
+                    detail="Access denied to one or more requested shops",
                 )
         else:
             # No shop filter - apply user's accessible shops

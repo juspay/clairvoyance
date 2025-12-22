@@ -15,8 +15,8 @@ from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.ai.voice.agents.breeze_buddy.types.models import PushLeadRequest
 from app.api.security.breeze_buddy.rbac_token import get_current_user_with_rbac
-from app.schemas import UserInfo
 from app.database.accessor import get_lead_by_id
+from app.schemas import UserInfo
 
 from .handlers import (
     get_lead_handler,
@@ -75,10 +75,7 @@ async def push_lead(
     """
     # RBAC: Check permission to push leads for this merchant/shop
     validate_lead_access(
-        current_user,
-        req.merchant,
-        req.identifier,
-        operation="push leads for"
+        current_user, req.merchant, req.identifier, operation="push leads for"
     )
 
     return await push_lead_handler(req, current_user)
@@ -112,7 +109,7 @@ async def get_lead(
     if not lead:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Lead not found for ID: {lead_id}"
+            detail=f"Lead not found for ID: {lead_id}",
         )
 
     # RBAC: Check access (returns 404 to avoid leaking existence)

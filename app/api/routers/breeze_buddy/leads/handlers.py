@@ -24,10 +24,7 @@ from app.database.accessor import (
 from app.schemas import UserInfo
 
 
-async def get_lead_handler(
-    lead_id: str,
-    current_user: UserInfo
-) -> Dict:
+async def get_lead_handler(lead_id: str, current_user: UserInfo) -> Dict:
     """
     Get a lead by ID (excluding sensitive fields).
 
@@ -51,7 +48,7 @@ async def get_lead_handler(
         if not lead:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Lead not found for ID: {lead_id}"
+                detail=f"Lead not found for ID: {lead_id}",
             )
 
         # Remove sensitive/internal fields
@@ -71,14 +68,11 @@ async def get_lead_handler(
         logger.error(f"Error getting lead {lead_id}: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Unexpected error: {str(e)}"
+            detail=f"Unexpected error: {str(e)}",
         )
 
 
-async def push_lead_handler(
-    req: PushLeadRequest,
-    current_user: UserInfo
-) -> Dict:
+async def push_lead_handler(req: PushLeadRequest, current_user: UserInfo) -> Dict:
     """
     Push a new lead for processing.
 
@@ -112,7 +106,7 @@ async def push_lead_handler(
         if not template:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Template '{req.template}' not found for merchant: {req.merchant}"
+                detail=f"Template '{req.template}' not found for merchant: {req.merchant}",
             )
 
         # Validate payload against expected schema if schema exists
@@ -141,7 +135,7 @@ async def push_lead_handler(
         if not call_execution_configs:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Call execution config not found for merchant_id: {req.merchant}"
+                detail=f"Call execution config not found for merchant_id: {req.merchant}",
             )
 
         config = next(
@@ -151,7 +145,7 @@ async def push_lead_handler(
         if not config:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Call execution config not found for template: {req.template}"
+                detail=f"Call execution config not found for template: {req.template}",
             )
 
         uuid = str(uuid4())
@@ -182,12 +176,10 @@ async def push_lead_handler(
         if not lead_call_tracker:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Failed to add lead call tracker for request_id: {req.request_id}"
+                detail=f"Failed to add lead call tracker for request_id: {req.request_id}",
             )
 
-        logger.info(
-            f"Lead call tracker {req.request_id} added to queue with ID {uuid}"
-        )
+        logger.info(f"Lead call tracker {req.request_id} added to queue with ID {uuid}")
 
         return {
             "status": "queued",
@@ -202,5 +194,5 @@ async def push_lead_handler(
         logger.error(f"Error processing lead push request: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error processing lead push request: {str(e)}"
+            detail=f"Error processing lead push request: {str(e)}",
         )

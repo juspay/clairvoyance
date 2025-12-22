@@ -18,9 +18,7 @@ from app.schemas import CallDetailResult, UserInfo
 
 
 async def get_summary_analytics(
-    filters: Dict[str, Any],
-    options: Dict[str, Any],
-    current_user: UserInfo
+    filters: Dict[str, Any], options: Dict[str, Any], current_user: UserInfo
 ) -> Dict[str, Any]:
     """
     Get enhanced summary analytics with outcome breakdowns.
@@ -29,17 +27,11 @@ async def get_summary_analytics(
     # Get summary from database (all filtering and aggregation at DB level)
     results = await get_summary_analytics_from_db(filters)
 
-    return {
-        "type": "summary",
-        "filters_applied": filters,
-        "results": results
-    }
+    return {"type": "summary", "filters_applied": filters, "results": results}
 
 
 async def get_call_details_analytics(
-    filters: Dict[str, Any],
-    options: Dict[str, Any],
-    current_user: UserInfo
+    filters: Dict[str, Any], options: Dict[str, Any], current_user: UserInfo
 ) -> Dict[str, Any]:
     """
     Get paginated call details with database-level filtering and pagination.
@@ -60,7 +52,7 @@ async def get_call_details_analytics(
         limit=limit,
         offset=offset,
         sort_by=sort_by,
-        sort_order=sort_order
+        sort_order=sort_order,
     )
 
     total_pages = (total + limit - 1) // limit if limit > 0 else 0
@@ -71,30 +63,56 @@ async def get_call_details_analytics(
         # Calculate duration
         duration = None
         if tracker.get("call_initiated_time") and tracker.get("call_end_time"):
-            duration = int((tracker["call_end_time"] - tracker["call_initiated_time"]).total_seconds())
+            duration = int(
+                (
+                    tracker["call_end_time"] - tracker["call_initiated_time"]
+                ).total_seconds()
+            )
 
-        results.append(CallDetailResult(
-            call_id=tracker.get("call_id") or tracker["id"],
-            lead_id=tracker["id"],
-            order_id=tracker.get("request_id"),
-            template=tracker["template"],
-            merchant_id=tracker["merchant_id"],
-            shop_identifier=tracker.get("shop_identifier"),
-            shop_name=tracker["payload"].get("shop_name") if tracker.get("payload") else None,
-            customer_name=tracker["payload"].get("customer_name") if tracker.get("payload") else None,
-            customer_phone=tracker["payload"].get("phone") if tracker.get("payload") else None,
-            customer_mobile_number=tracker["payload"].get("customer_mobile_number") if tracker.get("payload") else None,
-            status=tracker.get("status", "UNKNOWN"),
-            outcome=tracker.get("outcome") if tracker.get("outcome") else "N/A",
-            duration=duration,
-            recording_url=tracker.get("recording_url"),
-            transcript=tracker["metaData"].get("transcription") if tracker.get("metaData") else None,
-            calling_provider=tracker.get("calling_provider"),
-            attempt_count=tracker.get("attempt_count"),
-            cost=tracker.get("cost"),
-            created_at=tracker.get("call_initiated_time") or tracker.get("created_at") or datetime.now(),
-            updated_at=tracker.get("updated_at")
-        ))
+        results.append(
+            CallDetailResult(
+                call_id=tracker.get("call_id") or tracker["id"],
+                lead_id=tracker["id"],
+                order_id=tracker.get("request_id"),
+                template=tracker["template"],
+                merchant_id=tracker["merchant_id"],
+                shop_identifier=tracker.get("shop_identifier"),
+                shop_name=(
+                    tracker["payload"].get("shop_name")
+                    if tracker.get("payload")
+                    else None
+                ),
+                customer_name=(
+                    tracker["payload"].get("customer_name")
+                    if tracker.get("payload")
+                    else None
+                ),
+                customer_phone=(
+                    tracker["payload"].get("phone") if tracker.get("payload") else None
+                ),
+                customer_mobile_number=(
+                    tracker["payload"].get("customer_mobile_number")
+                    if tracker.get("payload")
+                    else None
+                ),
+                status=tracker.get("status", "UNKNOWN"),
+                outcome=tracker.get("outcome") if tracker.get("outcome") else "N/A",
+                duration=duration,
+                recording_url=tracker.get("recording_url"),
+                transcript=(
+                    tracker["metaData"].get("transcription")
+                    if tracker.get("metaData")
+                    else None
+                ),
+                calling_provider=tracker.get("calling_provider"),
+                attempt_count=tracker.get("attempt_count"),
+                cost=tracker.get("cost"),
+                created_at=tracker.get("call_initiated_time")
+                or tracker.get("created_at")
+                or datetime.now(),
+                updated_at=tracker.get("updated_at"),
+            )
+        )
 
     return {
         "type": "call-details",
@@ -104,15 +122,13 @@ async def get_call_details_analytics(
             "page": page,
             "limit": limit,
             "total": total,
-            "total_pages": total_pages
-        }
+            "total_pages": total_pages,
+        },
     }
 
 
 async def get_lead_based_analytics(
-    filters: Dict[str, Any],
-    options: Dict[str, Any],
-    current_user: UserInfo
+    filters: Dict[str, Any], options: Dict[str, Any], current_user: UserInfo
 ) -> Dict[str, Any]:
     """
     Get lead-based analytics (counts by unique lead).
@@ -130,25 +146,21 @@ async def get_lead_based_analytics(
     for lead in lead_data:
         if lead.get("outcome_breakdown"):
             for outcome, count in lead["outcome_breakdown"].items():
-                outcome_counts[outcome] = outcome_counts.get(outcome, 0) + (1 if count > 0 else 0)
+                outcome_counts[outcome] = outcome_counts.get(outcome, 0) + (
+                    1 if count > 0 else 0
+                )
 
     lead_based = {
         "total_leads": total_leads,
         "picked_calls": picked_calls,
-        "outcome_counts": outcome_counts
+        "outcome_counts": outcome_counts,
     }
 
-    return {
-        "type": "lead-based",
-        "filters_applied": filters,
-        "results": lead_based
-    }
+    return {"type": "lead-based", "filters_applied": filters, "results": lead_based}
 
 
 async def get_outbound_numbers_analytics(
-    filters: Dict[str, Any],
-    options: Dict[str, Any],
-    current_user: UserInfo
+    filters: Dict[str, Any], options: Dict[str, Any], current_user: UserInfo
 ) -> Dict[str, Any]:
     """
     Get analytics grouped by outbound number.
@@ -159,25 +171,25 @@ async def get_outbound_numbers_analytics(
 
     outbound_analytics = []
     for record in outbound_data:
-        outbound_analytics.append({
-            "number": record["number"],
-            "provider": record["provider"],
-            "total_calls": record["total_calls"],
-            "calls_picked": record["calls_picked"],
-            "calls_no_answer": record["calls_no_answer"],
-        })
+        outbound_analytics.append(
+            {
+                "number": record["number"],
+                "provider": record["provider"],
+                "total_calls": record["total_calls"],
+                "calls_picked": record["calls_picked"],
+                "calls_no_answer": record["calls_no_answer"],
+            }
+        )
 
     return {
         "type": "outbound-numbers",
         "filters_applied": filters,
-        "results": outbound_analytics
+        "results": outbound_analytics,
     }
 
 
 async def get_trends_analytics(
-    filters: Dict[str, Any],
-    options: Dict[str, Any],
-    current_user: UserInfo
+    filters: Dict[str, Any], options: Dict[str, Any], current_user: UserInfo
 ) -> Dict[str, Any]:
     """
     Get time-series trends analytics with database-level time bucketing.
@@ -199,8 +211,12 @@ async def get_trends_analytics(
             "total_calls": total_calls,
             "completed_calls": completed_calls,
             "success_rate": round(success_rate, 2),
-            "average_duration": round(float(row["average_duration"]), 2) if row["average_duration"] else None,
-            "outcome_breakdown": row["outcome_breakdown"] or {}
+            "average_duration": (
+                round(float(row["average_duration"]), 2)
+                if row["average_duration"]
+                else None
+            ),
+            "outcome_breakdown": row["outcome_breakdown"] or {},
         }
 
         if time_granularity == "day":
@@ -223,14 +239,12 @@ async def get_trends_analytics(
         "type": "trends",
         "filters_applied": filters,
         "time_granularity": time_granularity,
-        "results": trend_data
+        "results": trend_data,
     }
 
 
 async def get_conversion_analytics(
-    filters: Dict[str, Any],
-    options: Dict[str, Any],
-    current_user: UserInfo
+    filters: Dict[str, Any], options: Dict[str, Any], current_user: UserInfo
 ) -> Dict[str, Any]:
     """
     Get conversion funnel analytics.
@@ -253,7 +267,11 @@ async def get_conversion_analytics(
     calls_no_answer = 0
     for outcome, count in outcome_breakdown.items():
         outcome_lower = str(outcome).lower()
-        if 'no_answer' in outcome_lower or 'no answer' in outcome_lower or outcome_lower == 'noanswer':
+        if (
+            "no_answer" in outcome_lower
+            or "no answer" in outcome_lower
+            or outcome_lower == "noanswer"
+        ):
             calls_no_answer += count
 
     # Calculate funnel stages
@@ -263,34 +281,44 @@ async def get_conversion_analytics(
 
     # Build funnel stages
     funnel_stages = [
-        {
-            "stage": "initiated",
-            "count": total_initiated,
-            "percentage": 100.0
-        },
+        {"stage": "initiated", "count": total_initiated, "percentage": 100.0},
         {
             "stage": "connected",
             "count": total_connected,
-            "percentage": (total_connected / total_initiated * 100) if total_initiated > 0 else 0.0
+            "percentage": (
+                (total_connected / total_initiated * 100)
+                if total_initiated > 0
+                else 0.0
+            ),
         },
         {
             "stage": "completed",
             "count": total_completed,
-            "percentage": (total_completed / total_initiated * 100) if total_initiated > 0 else 0.0
-        }
+            "percentage": (
+                (total_completed / total_initiated * 100)
+                if total_initiated > 0
+                else 0.0
+            ),
+        },
     ]
 
     # Add outcome-based stages
     for outcome, count in outcome_breakdown.items():
         if count > 0:
-            funnel_stages.append({
-                "stage": outcome.lower().replace(" ", "_"),
-                "count": count,
-                "percentage": (count / total_initiated * 100) if total_initiated > 0 else 0.0
-            })
+            funnel_stages.append(
+                {
+                    "stage": outcome.lower().replace(" ", "_"),
+                    "count": count,
+                    "percentage": (
+                        (count / total_initiated * 100) if total_initiated > 0 else 0.0
+                    ),
+                }
+            )
 
     # Calculate conversion rate (initiated to completed)
-    conversion_rate = (total_completed / total_initiated * 100) if total_initiated > 0 else 0.0
+    conversion_rate = (
+        (total_completed / total_initiated * 100) if total_initiated > 0 else 0.0
+    )
 
     # Calculate drop-off points
     drop_off_points = []
@@ -298,20 +326,32 @@ async def get_conversion_analytics(
     # Drop-off from initiated to connected
     initiated_to_connected_dropoff = total_initiated - total_connected
     if initiated_to_connected_dropoff > 0:
-        drop_off_points.append({
-            "stage": "initiated_to_connected",
-            "drop_off": initiated_to_connected_dropoff,
-            "drop_off_rate": (initiated_to_connected_dropoff / total_initiated * 100) if total_initiated > 0 else 0.0
-        })
+        drop_off_points.append(
+            {
+                "stage": "initiated_to_connected",
+                "drop_off": initiated_to_connected_dropoff,
+                "drop_off_rate": (
+                    (initiated_to_connected_dropoff / total_initiated * 100)
+                    if total_initiated > 0
+                    else 0.0
+                ),
+            }
+        )
 
     # Drop-off from connected to completed
     connected_to_completed_dropoff = total_connected - total_completed
     if connected_to_completed_dropoff > 0:
-        drop_off_points.append({
-            "stage": "connected_to_completed",
-            "drop_off": connected_to_completed_dropoff,
-            "drop_off_rate": (connected_to_completed_dropoff / total_connected * 100) if total_connected > 0 else 0.0
-        })
+        drop_off_points.append(
+            {
+                "stage": "connected_to_completed",
+                "drop_off": connected_to_completed_dropoff,
+                "drop_off_rate": (
+                    (connected_to_completed_dropoff / total_connected * 100)
+                    if total_connected > 0
+                    else 0.0
+                ),
+            }
+        )
 
     conversion_data = {
         "total_initiated": total_initiated,
@@ -319,20 +359,18 @@ async def get_conversion_analytics(
         "total_completed": total_completed,
         "funnel_stages": funnel_stages,
         "conversion_rate": round(conversion_rate, 2),
-        "drop_off_points": drop_off_points
+        "drop_off_points": drop_off_points,
     }
 
     return {
         "type": "conversion",
         "filters_applied": filters,
-        "results": conversion_data
+        "results": conversion_data,
     }
 
 
 async def get_performance_analytics(
-    filters: Dict[str, Any],
-    options: Dict[str, Any],
-    current_user: UserInfo
+    filters: Dict[str, Any], options: Dict[str, Any], current_user: UserInfo
 ) -> Dict[str, Any]:
     """
     Get performance metrics analytics.
@@ -355,9 +393,13 @@ async def get_performance_analytics(
     calls_busy = 0
     for outcome, count in outcome_breakdown.items():
         outcome_lower = str(outcome).lower()
-        if 'no_answer' in outcome_lower or 'no answer' in outcome_lower or outcome_lower == 'noanswer':
+        if (
+            "no_answer" in outcome_lower
+            or "no answer" in outcome_lower
+            or outcome_lower == "noanswer"
+        ):
             calls_no_answer += count
-        elif 'busy' in outcome_lower:
+        elif "busy" in outcome_lower:
             calls_busy += count
 
     # Use completed_calls as calls_picked
@@ -367,7 +409,11 @@ async def get_performance_analytics(
     success_rate = summary.get("success_rate", 0.0)
 
     # Calculate answer rate (calls picked + no answer / total calls)
-    answer_rate = ((calls_picked + calls_no_answer) / total_calls * 100) if total_calls > 0 else 0.0
+    answer_rate = (
+        ((calls_picked + calls_no_answer) / total_calls * 100)
+        if total_calls > 0
+        else 0.0
+    )
 
     # Calculate failure rate
     failure_rate = (failed_calls / total_calls * 100) if total_calls > 0 else 0.0
@@ -379,14 +425,16 @@ async def get_performance_analytics(
     total_cost = summary.get("total_cost", 0)
 
     # Calculate cost per successful call
-    cost_per_success = (total_cost / calls_picked) if calls_picked > 0 and total_cost > 0 else 0.0
+    cost_per_success = (
+        (total_cost / calls_picked) if calls_picked > 0 and total_cost > 0 else 0.0
+    )
 
     # Calculate outcome distribution percentages
     outcome_distribution = {}
     for outcome, count in outcome_breakdown.items():
         outcome_distribution[outcome] = {
             "count": count,
-            "percentage": (count / total_calls * 100) if total_calls > 0 else 0.0
+            "percentage": (count / total_calls * 100) if total_calls > 0 else 0.0,
         }
 
     # Build performance metrics
@@ -402,13 +450,13 @@ async def get_performance_analytics(
             "picked": calls_picked,
             "no_answer": calls_no_answer,
             "busy": calls_busy,
-            "failed": failed_calls
+            "failed": failed_calls,
         },
-        "outcome_distribution": outcome_distribution
+        "outcome_distribution": outcome_distribution,
     }
 
     return {
         "type": "performance",
         "filters_applied": filters,
-        "results": performance_data
+        "results": performance_data,
     }

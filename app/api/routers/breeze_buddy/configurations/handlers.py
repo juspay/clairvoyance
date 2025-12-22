@@ -11,11 +11,11 @@ from fastapi import HTTPException, status
 from app.core.logger import logger
 from app.database.accessor import (
     create_call_execution_config,
+    delete_call_execution_config,
     get_all_call_execution_configs,
     get_call_execution_config_by_id,
     get_call_execution_config_by_merchant_id,
     update_call_execution_config,
-    delete_call_execution_config,
 )
 from app.schemas import (
     CallExecutionConfig,
@@ -26,8 +26,7 @@ from app.schemas import (
 
 
 async def create_configuration_handler(
-    config: CreateCallExecutionConfigRequest,
-    current_user: UserInfo
+    config: CreateCallExecutionConfigRequest, current_user: UserInfo
 ) -> CallExecutionConfig:
     """
     Create a new call execution configuration.
@@ -71,14 +70,14 @@ async def create_configuration_handler(
         else:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Failed to create configuration"
+                detail="Failed to create configuration",
             )
 
     except Exception as e:
         logger.error(f"Error creating configuration: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to create configuration. Please check your input and try again."
+            detail="Failed to create configuration. Please check your input and try again.",
         )
 
 
@@ -86,7 +85,7 @@ async def list_configurations_handler(
     merchant_id: Optional[str],
     template: Optional[str],
     shop_identifier: Optional[str],
-    current_user: UserInfo
+    current_user: UserInfo,
 ) -> List[CallExecutionConfig]:
     """
     List configurations with optional filters.
@@ -126,13 +125,12 @@ async def list_configurations_handler(
         logger.error(f"Error listing configurations: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to retrieve configurations. Please try again later."
+            detail="Failed to retrieve configurations. Please try again later.",
         )
 
 
 async def get_configuration_handler(
-    config_id: str,
-    current_user: UserInfo
+    config_id: str, current_user: UserInfo
 ) -> CallExecutionConfig:
     """
     Get a single configuration by ID.
@@ -158,7 +156,7 @@ async def get_configuration_handler(
         if not config:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Configuration {config_id} not found"
+                detail=f"Configuration {config_id} not found",
             )
 
         return config
@@ -169,14 +167,12 @@ async def get_configuration_handler(
         logger.error(f"Error getting configuration {config_id}: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to retrieve configuration. Please try again later."
+            detail="Failed to retrieve configuration. Please try again later.",
         )
 
 
 async def update_configuration_handler(
-    config_id: str,
-    config: UpdateCallExecutionConfigRequest,
-    current_user: UserInfo
+    config_id: str, config: UpdateCallExecutionConfigRequest, current_user: UserInfo
 ) -> CallExecutionConfig:
     """
     Update an existing configuration.
@@ -192,9 +188,7 @@ async def update_configuration_handler(
     Raises:
         HTTPException: 404 if not found
     """
-    logger.info(
-        f"Admin {current_user.username} updating configuration: {config_id}"
-    )
+    logger.info(f"Admin {current_user.username} updating configuration: {config_id}")
 
     try:
         # Verify configuration exists
@@ -202,7 +196,7 @@ async def update_configuration_handler(
         if not existing_config:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Configuration {config_id} not found"
+                detail=f"Configuration {config_id} not found",
             )
 
         # Validate that identity fields match the existing configuration
@@ -210,19 +204,19 @@ async def update_configuration_handler(
         if existing_config.merchant_id != config.merchant_id:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Cannot change merchant_id from {existing_config.merchant_id} to {config.merchant_id}"
+                detail=f"Cannot change merchant_id from {existing_config.merchant_id} to {config.merchant_id}",
             )
 
         if existing_config.template != config.template:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Cannot change template from {existing_config.template} to {config.template}"
+                detail=f"Cannot change template from {existing_config.template} to {config.template}",
             )
 
         if existing_config.shop_identifier != config.shop_identifier:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Cannot change shop_identifier from {existing_config.shop_identifier} to {config.shop_identifier}"
+                detail=f"Cannot change shop_identifier from {existing_config.shop_identifier} to {config.shop_identifier}",
             )
 
         # Update configuration
@@ -245,7 +239,7 @@ async def update_configuration_handler(
         else:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Configuration {config_id} not found"
+                detail=f"Configuration {config_id} not found",
             )
 
     except HTTPException:
@@ -254,14 +248,11 @@ async def update_configuration_handler(
         logger.error(f"Error updating configuration {config_id}: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to update configuration. Please check your input and try again."
+            detail="Failed to update configuration. Please check your input and try again.",
         )
 
 
-async def delete_configuration_handler(
-    config_id: str,
-    current_user: UserInfo
-) -> None:
+async def delete_configuration_handler(config_id: str, current_user: UserInfo) -> None:
     """
     Delete a configuration.
 
@@ -272,9 +263,7 @@ async def delete_configuration_handler(
     Raises:
         HTTPException: 404 if not found
     """
-    logger.info(
-        f"Admin {current_user.username} deleting configuration: {config_id}"
-    )
+    logger.info(f"Admin {current_user.username} deleting configuration: {config_id}")
 
     try:
         # Verify configuration exists
@@ -282,7 +271,7 @@ async def delete_configuration_handler(
         if not existing_config:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Configuration {config_id} not found"
+                detail=f"Configuration {config_id} not found",
             )
 
         # Delete configuration
@@ -291,7 +280,7 @@ async def delete_configuration_handler(
         if not success:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Configuration {config_id} not found"
+                detail=f"Configuration {config_id} not found",
             )
 
         logger.info(f"Configuration {config_id} deleted successfully")
@@ -302,5 +291,5 @@ async def delete_configuration_handler(
         logger.error(f"Error deleting configuration {config_id}: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to delete configuration. Please try again later."
+            detail="Failed to delete configuration. Please try again later.",
         )

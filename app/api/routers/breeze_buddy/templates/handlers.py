@@ -17,8 +17,7 @@ from app.schemas import UserInfo
 
 
 async def create_template_handler(
-    template_data: CreateTemplateRequest,
-    current_user: UserInfo
+    template_data: CreateTemplateRequest, current_user: UserInfo
 ):
     """
     Create a new template.
@@ -61,7 +60,7 @@ async def create_template_handler(
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=f"Template already exists for merchant {template_data.merchant} "
-                       f"and template name: {template_data.template_name}"
+                f"and template name: {template_data.template_name}",
             )
 
         # Create the template
@@ -81,7 +80,7 @@ async def create_template_handler(
         if not template:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to create template"
+                detail="Failed to create template",
             )
 
         logger.info(
@@ -93,22 +92,19 @@ async def create_template_handler(
             "status": "success",
             "template_id": template.id,
             "message": f"Template '{template_data.template_name}' created successfully "
-                      f"with {len(flow.get('nodes', []))} nodes"
+            f"with {len(flow.get('nodes', []))} nodes",
         }
 
     except HTTPException:
         raise
     except ValueError as e:
         logger.error(f"Validation error creating template: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e)
-        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except Exception as e:
         logger.error(f"Error creating template: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error creating template: {str(e)}"
+            detail=f"Error creating template: {str(e)}",
         )
 
 
@@ -116,7 +112,7 @@ async def get_template_handler(
     merchant_id: str,
     shop_identifier: Optional[str],
     name: Optional[str],
-    current_user: UserInfo
+    current_user: UserInfo,
 ):
     """
     Get template(s) by merchant, shop, and name.
@@ -152,12 +148,12 @@ async def get_template_handler(
             )
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Template '{name}' not found for merchant: {merchant_id}"
+                detail=f"Template '{name}' not found for merchant: {merchant_id}",
             )
 
     except Exception as e:
         logger.error(f"Error getting template: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error getting template: {str(e)}"
+            detail=f"Error getting template: {str(e)}",
         )

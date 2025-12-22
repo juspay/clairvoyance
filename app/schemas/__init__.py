@@ -10,6 +10,24 @@ organized hierarchically:
 - automatic_voice/: Automatic Voice agent schemas
 """
 
+from app.schemas.automatic_voice.connection import (
+    AutomaticVoiceTTSServiceConfig,
+    AutomaticVoiceUserConnectRequest,
+)
+from app.schemas.breeze_buddy.analytics import (
+    AnalyticsFilters,
+    AnalyticsOptions,
+    AnalyticsRequest,
+    AnalyticsResponse,
+    AnalyticsType,
+    CallDetailResult,
+    OutboundNumberStat,
+    PaginationInfo,
+    SummaryAnalyticsResult,
+    TimeGranularity,
+    TrendDataPoint,
+)
+
 # Re-export commonly used schemas for backward compatibility
 from app.schemas.breeze_buddy.auth import (
     AuthTokenData,
@@ -27,19 +45,6 @@ from app.schemas.breeze_buddy.auth import (
     UserRole,
     UserUpdate,
 )
-from app.schemas.breeze_buddy.analytics import (
-    AnalyticsFilters,
-    AnalyticsOptions,
-    AnalyticsRequest,
-    AnalyticsResponse,
-    AnalyticsType,
-    CallDetailResult,
-    OutboundNumberStat,
-    PaginationInfo,
-    SummaryAnalyticsResult,
-    TimeGranularity,
-    TrendDataPoint,
-)
 from app.schemas.breeze_buddy.core import (
     CallExecutionConfig,
     CallProvider,
@@ -50,10 +55,6 @@ from app.schemas.breeze_buddy.core import (
     OutboundNumber,
     OutboundNumberStatus,
     UpdateCallExecutionConfigRequest,
-)
-from app.schemas.automatic_voice.connection import (
-    AutomaticVoiceTTSServiceConfig,
-    AutomaticVoiceUserConnectRequest,
 )
 
 __all__ = [

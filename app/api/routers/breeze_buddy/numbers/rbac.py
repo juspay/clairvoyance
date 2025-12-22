@@ -11,7 +11,9 @@ from app.core.logger import logger
 from app.schemas import UserInfo
 
 
-def require_admin_access(current_user: UserInfo, operation: str = "perform this operation") -> None:
+def require_admin_access(
+    current_user: UserInfo, operation: str = "perform this operation"
+) -> None:
     """
     Validate user is an admin.
 
@@ -31,14 +33,11 @@ def require_admin_access(current_user: UserInfo, operation: str = "perform this 
         )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"Admin access required to {operation}"
+            detail=f"Admin access required to {operation}",
         )
 
 
-def filter_numbers_by_rbac(
-    numbers: List,
-    current_user: UserInfo
-) -> List:
+def filter_numbers_by_rbac(numbers: List, current_user: UserInfo) -> List:
     """
     Filter outbound numbers based on user's RBAC permissions.
 

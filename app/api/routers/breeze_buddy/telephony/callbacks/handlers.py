@@ -20,9 +20,7 @@ from app.core.logger import logger
 
 
 async def handle_callback_details_get(
-    request: Request,
-    provider: str,
-    background_tasks: BackgroundTasks
+    request: Request, provider: str, background_tasks: BackgroundTasks
 ) -> Response:
     """
     Handle GET callback for call details (typically from Exotel).
@@ -64,9 +62,7 @@ async def handle_callback_details_get(
 
 
 async def handle_callback_details_post(
-    request: Request,
-    provider: str,
-    background_tasks: BackgroundTasks
+    request: Request, provider: str, background_tasks: BackgroundTasks
 ) -> Response:
     """
     Handle POST callback for call details (typically from Twilio).
@@ -107,10 +103,7 @@ async def handle_callback_details_post(
     return Response(status_code=200)
 
 
-async def handle_callback_status(
-    request: Request,
-    provider: str
-) -> Response:
+async def handle_callback_status(request: Request, provider: str) -> Response:
     """
     Handle POST callback for call status updates.
 

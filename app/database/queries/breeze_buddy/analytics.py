@@ -7,14 +7,13 @@ import re
 from datetime import datetime
 from typing import Any, Dict, List, Tuple
 
-
 # Table names
 LEAD_CALL_TRACKER_TABLE = "lead_call_tracker"
 OUTBOUND_NUMBER_TABLE = "outbound_number"
 
 # Pattern for valid JSONB key names (alphanumeric, underscore, hyphen only)
 # This prevents SQL injection via malicious key names in payload filters
-VALID_JSONB_KEY_PATTERN = re.compile(r'^[a-zA-Z0-9_-]+$')
+VALID_JSONB_KEY_PATTERN = re.compile(r"^[a-zA-Z0-9_-]+$")
 
 
 def is_valid_payload_filter_key(key: str) -> bool:
@@ -36,8 +35,7 @@ def is_valid_payload_filter_key(key: str) -> bool:
 
 
 def build_analytics_where_clause(
-    filters: Dict[str, Any],
-    value_offset: int = 0
+    filters: Dict[str, Any], value_offset: int = 0
 ) -> Tuple[List[str], List[Any]]:
     """
     Build WHERE clause conditions and values from generic filters.
@@ -160,7 +158,7 @@ def get_analytics_call_details_query(
     limit: int = 50,
     offset: int = 0,
     sort_by: str = "created_at",
-    sort_order: str = "desc"
+    sort_order: str = "desc",
 ) -> Tuple[str, List[Any]]:
     """
     Generate query for paginated call details.
@@ -169,7 +167,12 @@ def get_analytics_call_details_query(
     where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
 
     # Validate sort column to prevent SQL injection
-    allowed_sort_columns = ["created_at", "call_initiated_time", "call_end_time", "updated_at"]
+    allowed_sort_columns = [
+        "created_at",
+        "call_initiated_time",
+        "call_end_time",
+        "updated_at",
+    ]
     if sort_by not in allowed_sort_columns:
         sort_by = "created_at"
 
@@ -208,8 +211,7 @@ def get_analytics_count_query(filters: Dict[str, Any]) -> Tuple[str, List[Any]]:
 
 
 def get_analytics_trends_query(
-    filters: Dict[str, Any],
-    time_granularity: str = "day"
+    filters: Dict[str, Any], time_granularity: str = "day"
 ) -> Tuple[str, List[Any]]:
     """
     Generate query for trends analytics with time bucketing done at DB level.
@@ -291,7 +293,9 @@ def get_analytics_lead_based_query(filters: Dict[str, Any]) -> Tuple[str, List[A
     return text, values
 
 
-def get_analytics_outbound_numbers_query(filters: Dict[str, Any]) -> Tuple[str, List[Any]]:
+def get_analytics_outbound_numbers_query(
+    filters: Dict[str, Any],
+) -> Tuple[str, List[Any]]:
     """
     Generate query for outbound numbers analytics.
     """

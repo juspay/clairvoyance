@@ -9,6 +9,7 @@ from pydantic import BaseModel
 
 class OutboundNumberStatus(str, Enum):
     """Status of outbound phone numbers"""
+
     AVAILABLE = "AVAILABLE"
     IN_USE = "IN_USE"
     DISABLED = "DISABLED"
@@ -16,12 +17,14 @@ class OutboundNumberStatus(str, Enum):
 
 class CallProvider(str, Enum):
     """Supported telephony providers"""
+
     TWILIO = "TWILIO"
     EXOTEL = "EXOTEL"
 
 
 class LeadCallStatus(str, Enum):
     """Status of lead call execution"""
+
     BACKLOG = "BACKLOG"
     PROCESSING = "PROCESSING"
     FINISHED = "FINISHED"
@@ -30,6 +33,7 @@ class LeadCallStatus(str, Enum):
 
 class LeadCallTracker(BaseModel):
     """Lead call tracking model"""
+
     id: str
     outbound_number_id: Optional[str] = None
     merchant_id: str
@@ -54,6 +58,7 @@ class LeadCallTracker(BaseModel):
 
 class CreateOutboundNumberRequest(BaseModel):
     """Request to create a new outbound number"""
+
     number: str
     provider: CallProvider
     status: OutboundNumberStatus = OutboundNumberStatus.AVAILABLE
@@ -62,6 +67,7 @@ class CreateOutboundNumberRequest(BaseModel):
 
 class OutboundNumber(BaseModel):
     """Outbound phone number model"""
+
     id: str
     number: str
     provider: CallProvider
@@ -74,6 +80,7 @@ class OutboundNumber(BaseModel):
 
 class CreateCallExecutionConfigRequest(BaseModel):
     """Request to create call execution configuration"""
+
     initial_offset: int
     retry_offset: int
     call_start_time: time
@@ -88,6 +95,7 @@ class CreateCallExecutionConfigRequest(BaseModel):
 
 class UpdateCallExecutionConfigRequest(BaseModel):
     """Request to update call execution configuration"""
+
     merchant_id: str
     template: str
     shop_identifier: Optional[str] = None
@@ -102,6 +110,7 @@ class UpdateCallExecutionConfigRequest(BaseModel):
 
 class CallExecutionConfig(BaseModel):
     """Call execution configuration model"""
+
     id: str
     initial_offset: int
     retry_offset: int

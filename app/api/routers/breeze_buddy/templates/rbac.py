@@ -15,7 +15,7 @@ def validate_template_access(
     current_user: UserInfo,
     merchant_id: str,
     shop_identifier: Optional[str],
-    operation: str = "access"
+    operation: str = "access",
 ) -> None:
     """
     Validate user has access to template for given merchant and shop.
@@ -34,33 +34,36 @@ def validate_template_access(
         return
 
     # Check merchant access
-    if merchant_id not in current_user.merchant_ids and "*" not in current_user.merchant_ids:
+    if (
+        merchant_id not in current_user.merchant_ids
+        and "*" not in current_user.merchant_ids
+    ):
         logger.warning(
             f"User {current_user.username} attempted to {operation} template "
             f"for unauthorized merchant: {merchant_id}"
         )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"Access denied to merchant {merchant_id}"
+            detail=f"Access denied to merchant {merchant_id}",
         )
 
     # Check shop access (if shop_identifier is specified)
     if shop_identifier:
-        if shop_identifier not in current_user.shop_identifiers and "*" not in current_user.shop_identifiers:
+        if (
+            shop_identifier not in current_user.shop_identifiers
+            and "*" not in current_user.shop_identifiers
+        ):
             logger.warning(
                 f"User {current_user.username} attempted to {operation} template "
                 f"for unauthorized shop: {shop_identifier}"
             )
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Access denied to shop {shop_identifier}"
+                detail=f"Access denied to shop {shop_identifier}",
             )
 
 
-def filter_templates_by_rbac(
-    templates: List,
-    current_user: UserInfo
-) -> List:
+def filter_templates_by_rbac(templates: List, current_user: UserInfo) -> List:
     """
     Filter templates based on user's RBAC permissions.
 
@@ -83,15 +86,15 @@ def filter_templates_by_rbac(
     for template in templates:
         # Check merchant access
         has_merchant_access = (
-            "*" in current_user.merchant_ids or
-            template.merchant_id in current_user.merchant_ids
+            "*" in current_user.merchant_ids
+            or template.merchant_id in current_user.merchant_ids
         )
 
         # Check shop access (templates might not have shop_identifier)
         if template.shop_identifier:
             has_shop_access = (
-                "*" in current_user.shop_identifiers or
-                template.shop_identifier in current_user.shop_identifiers
+                "*" in current_user.shop_identifiers
+                or template.shop_identifier in current_user.shop_identifiers
             )
         else:
             # Templates without shop_identifier are accessible if merchant access granted
@@ -104,9 +107,7 @@ def filter_templates_by_rbac(
 
 
 def require_admin_or_merchant_owner(
-    current_user: UserInfo,
-    merchant_id: str,
-    operation: str = "perform this operation"
+    current_user: UserInfo, merchant_id: str, operation: str = "perform this operation"
 ) -> None:
     """
     Require user to be admin or merchant owner.
@@ -135,5 +136,5 @@ def require_admin_or_merchant_owner(
     )
     raise HTTPException(
         status_code=status.HTTP_403_FORBIDDEN,
-        detail=f"Access denied to {operation} for merchant {merchant_id}"
+        detail=f"Access denied to {operation} for merchant {merchant_id}",
     )

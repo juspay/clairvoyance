@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 
 class TokenData(BaseModel):
     """Token data model for JWT payload (legacy)"""
+
     user_id: Optional[str] = None
     username: Optional[str] = None
     email: Optional[str] = None
@@ -17,6 +18,7 @@ class TokenData(BaseModel):
 
 class UserRole(str, Enum):
     """User role enum for RBAC"""
+
     ADMIN = "admin"
     RESELLER = "reseller"
     MERCHANT = "merchant"
@@ -25,6 +27,7 @@ class UserRole(str, Enum):
 
 class Permission(str, Enum):
     """Permission enum for granular access control"""
+
     # Read permissions
     READ_ALL = "read:all"
     READ_OWN_DATA = "read:own_data"
@@ -56,18 +59,21 @@ class Permission(str, Enum):
 
 class LoginRequest(BaseModel):
     """Login request model"""
+
     username: str
     password: str
 
 
 class LoginResponse(BaseModel):
     """Login response model (deprecated - use TokenResponse)"""
+
     success: bool
     detail: Optional[str] = None
 
 
 class TokenResponse(BaseModel):
     """JWT token response model"""
+
     access_token: str
     token_type: str = "Bearer"
     expires_in: int  # seconds
@@ -75,18 +81,17 @@ class TokenResponse(BaseModel):
 
 class S2STokenRequest(BaseModel):
     """S2S token generation request model"""
+
     username: str
     password: str
     token_lifetime_days: int = Field(
-        default=365,
-        ge=1,
-        le=365,
-        description="Token lifetime in days (1-365)"
+        default=365, ge=1, le=365, description="Token lifetime in days (1-365)"
     )
 
 
 class S2STokenResponse(BaseModel):
     """S2S token generation response model"""
+
     success: bool
     access_token: str
     token_type: str = "Bearer"
@@ -97,6 +102,7 @@ class S2STokenResponse(BaseModel):
 
 class UserInfo(BaseModel):
     """User information extracted from JWT token"""
+
     id: str
     username: str
     role: UserRole
@@ -108,6 +114,7 @@ class UserInfo(BaseModel):
 
 class UserCreate(BaseModel):
     """User creation request model"""
+
     username: str
     password: str
     role: UserRole
@@ -119,6 +126,7 @@ class UserCreate(BaseModel):
 
 class UserUpdate(BaseModel):
     """User update request model"""
+
     password: Optional[str] = None
     role: Optional[UserRole] = None
     email: Optional[str] = None
@@ -129,6 +137,7 @@ class UserUpdate(BaseModel):
 
 class UserInDB(BaseModel):
     """User model as stored in database"""
+
     id: str
     username: str
     password_hash: str
@@ -143,6 +152,7 @@ class UserInDB(BaseModel):
 
 class User(BaseModel):
     """User model for API responses (without password_hash)"""
+
     id: str
     username: str
     role: UserRole
@@ -156,6 +166,7 @@ class User(BaseModel):
 
 class AuthTokenData(BaseModel):
     """Enhanced token data model for JWT payload with RBAC"""
+
     sub: str  # user_id
     username: str
     role: UserRole

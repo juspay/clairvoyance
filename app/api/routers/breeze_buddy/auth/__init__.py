@@ -19,16 +19,16 @@ from fastapi.responses import RedirectResponse
 from app.api.security.breeze_buddy.rbac_token import get_current_user_with_rbac
 from app.schemas import (
     LoginRequest,
-    TokenResponse,
     S2STokenRequest,
     S2STokenResponse,
+    TokenResponse,
     UserInfo,
 )
 
 from .handlers import (
-    login_handler,
     generate_s2s_token_handler,
     get_user_info_handler,
+    login_handler,
     logout_handler,
 )
 
@@ -118,7 +118,9 @@ async def generate_s2s_token(request: S2STokenRequest):
 
 
 @router.get("/auth/me", response_model=UserInfo)
-async def get_current_user_info(current_user: UserInfo = Depends(get_current_user_with_rbac)):
+async def get_current_user_info(
+    current_user: UserInfo = Depends(get_current_user_with_rbac),
+):
     """
     Get current authenticated user information from JWT token.
 

@@ -8,6 +8,7 @@ Sub-modules:
 """
 
 from fastapi import APIRouter
+
 from .callbacks import router as callbacks_router
 
 router = APIRouter()

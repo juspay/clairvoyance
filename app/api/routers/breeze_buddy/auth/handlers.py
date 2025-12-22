@@ -9,8 +9,10 @@ This module contains the business logic for authentication operations:
 """
 
 from datetime import datetime, timedelta, timezone
+
 import jwt
 from fastapi import HTTPException, Response, status
+
 from app.api.security.breeze_buddy.rbac_token import rbac_token_manager
 from app.core.config.static import (
     BREEZE_BUDDY_DASHBOARD_PASSWORD,
@@ -22,10 +24,19 @@ from app.core.config.static import (
 from app.core.logger import logger
 from app.core.security.password import verify_password
 from app.database.queries.breeze_buddy.users import get_user_by_username
-from app.schemas import TokenResponse, S2STokenRequest, S2STokenResponse, UserRole, UserInfo, LoginRequest
+from app.schemas import (
+    LoginRequest,
+    S2STokenRequest,
+    S2STokenResponse,
+    TokenResponse,
+    UserInfo,
+    UserRole,
+)
 
 
-async def login_handler(login_request: LoginRequest, response: Response) -> TokenResponse:
+async def login_handler(
+    login_request: LoginRequest, response: Response
+) -> TokenResponse:
     """
     Handle user login with JWT token-based authentication.
 
@@ -157,16 +168,16 @@ async def generate_s2s_token_handler(request: S2STokenRequest) -> S2STokenRespon
     if not user:
         logger.warning(f"S2S token request failed: user not found - {request.username}")
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid credentials"
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials"
         )
 
     # Verify password
     if not verify_password(request.password, user.password_hash):
-        logger.warning(f"S2S token request failed: invalid password - {request.username}")
+        logger.warning(
+            f"S2S token request failed: invalid password - {request.username}"
+        )
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid credentials"
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials"
         )
 
     # Check if user is active
@@ -174,7 +185,7 @@ async def generate_s2s_token_handler(request: S2STokenRequest) -> S2STokenRespon
         logger.warning(f"S2S token request failed: inactive user - {request.username}")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Account is inactive. Please contact administrator."
+            detail="Account is inactive. Please contact administrator.",
         )
 
     # Security restriction: Only admins can generate S2S tokens
@@ -184,7 +195,7 @@ async def generate_s2s_token_handler(request: S2STokenRequest) -> S2STokenRespon
         )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only admin users can generate S2S tokens. Please contact your administrator."
+            detail="Only admin users can generate S2S tokens. Please contact your administrator.",
         )
 
     # Generate long-lived token
@@ -197,7 +208,7 @@ async def generate_s2s_token_handler(request: S2STokenRequest) -> S2STokenRespon
         merchant_ids=user.merchant_ids,
         shop_identifiers=user.shop_identifiers,
         email=user.email,
-        expires_delta=expires_delta
+        expires_delta=expires_delta,
     )
 
     # Calculate response metadata
@@ -219,7 +230,7 @@ async def generate_s2s_token_handler(request: S2STokenRequest) -> S2STokenRespon
         note=(
             f"Long-lived S2S token valid for {request.token_lifetime_days} days. "
             f"Store securely and rotate before expiration!"
-        )
+        ),
     )
 
 
@@ -233,7 +244,9 @@ async def get_user_info_handler(current_user: UserInfo) -> UserInfo:
     Returns:
         UserInfo object with user details
     """
-    logger.info(f"User info request from {current_user.username} (role: {current_user.role})")
+    logger.info(
+        f"User info request from {current_user.username} (role: {current_user.role})"
+    )
     return current_user
 
 
@@ -258,6 +271,6 @@ async def logout_handler() -> dict:
             "step_1": "Remove token from localStorage or cookies",
             "step_2": "Clear user state in your application",
             "step_3": "Redirect to login page",
-            "note": "Token remains valid until expiration but client discards it"
-        }
+            "note": "Token remains valid until expiration but client discards it",
+        },
     }
