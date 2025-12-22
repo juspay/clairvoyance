@@ -5,7 +5,10 @@ All filtering is done at database level for optimal performance.
 
 import re
 from datetime import datetime
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
+
+from app.core.logger import logger
+
 
 # Table names
 LEAD_CALL_TRACKER_TABLE = "lead_call_tracker"
@@ -57,7 +60,7 @@ def build_analytics_where_clause(
             values.append(date_from)
         else:
             values.append(datetime.combine(date_from, datetime.min.time()))
-        conditions.append(f'lct."call_initiated_time" >= ${len(values) + value_offset}')
+        conditions.append(f'lct.call_initiated_time >= ${len(values) + value_offset}')
 
     if "date_to" in filters and filters["date_to"]:
         date_to = filters["date_to"]
@@ -65,41 +68,41 @@ def build_analytics_where_clause(
             values.append(date_to)
         else:
             values.append(datetime.combine(date_to, datetime.max.time()))
-        conditions.append(f'lct."call_initiated_time" < ${len(values) + value_offset}')
+        conditions.append(f'lct.call_initiated_time < ${len(values) + value_offset}')
 
     # Standard column filters
     if "template" in filters and filters["template"]:
         values.append(filters["template"])
-        conditions.append(f'lct."template" = ${len(values) + value_offset}')
+        conditions.append(f'lct.template = ${len(values) + value_offset}')
 
     if "merchant_id" in filters and filters["merchant_id"]:
         values.append(filters["merchant_id"])
-        conditions.append(f'lct."merchant_id" = ${len(values) + value_offset}')
+        conditions.append(f'lct.merchant_id = ${len(values) + value_offset}')
 
     if "merchant_ids" in filters and filters["merchant_ids"]:
         # Use ANY for array matching
         values.append(filters["merchant_ids"])
-        conditions.append(f'lct."merchant_id" = ANY(${len(values) + value_offset})')
+        conditions.append(f'lct.merchant_id = ANY(${len(values) + value_offset})')
 
     if "shop_identifier" in filters and filters["shop_identifier"]:
         values.append(filters["shop_identifier"])
-        conditions.append(f'lct."shop_identifier" = ${len(values) + value_offset}')
+        conditions.append(f'lct.shop_identifier = ${len(values) + value_offset}')
 
     if "shop_identifiers" in filters and filters["shop_identifiers"]:
         values.append(filters["shop_identifiers"])
-        conditions.append(f'lct."shop_identifier" = ANY(${len(values) + value_offset})')
+        conditions.append(f'lct.shop_identifier = ANY(${len(values) + value_offset})')
 
     if "status" in filters and filters["status"]:
         values.append(filters["status"])
-        conditions.append(f'lct."status" = ${len(values) + value_offset}')
+        conditions.append(f'lct.status = ${len(values) + value_offset}')
 
     if "outcome" in filters and filters["outcome"]:
         values.append(filters["outcome"])
-        conditions.append(f'lct."outcome" = ${len(values) + value_offset}')
+        conditions.append(f'lct.outcome = ${len(values) + value_offset}')
 
     if "request_id" in filters and filters["request_id"]:
         values.append(filters["request_id"])
-        conditions.append(f'lct."request_id" = ${len(values) + value_offset}')
+        conditions.append(f'lct.request_id = ${len(values) + value_offset}')
 
     # Generic payload filters (JSONB queries)
     # Validate keys to prevent SQL injection
@@ -114,41 +117,121 @@ def build_analytics_where_clause(
     return conditions, values
 
 
-def get_analytics_summary_query(filters: Dict[str, Any]) -> Tuple[str, List[Any]]:
+def get_analytics_summary_query(filters: Dict[str, Any], group_by: Optional[str] = None) -> Tuple[str, List[Any]]:
     """
     Generate query for summary analytics with aggregations done at DB level.
     Returns counts, averages, and outcome breakdowns.
+
+    Args:
+        filters: Analytics filters
+        group_by: Optional field to group by (e.g., 'shop_identifier', 'template')
+
+    Uses a filtered_data CTE to avoid duplicating WHERE clauses and parameters.
     """
     conditions, values = build_analytics_where_clause(filters)
     where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
 
-    text = f"""
-        SELECT
-            COUNT(*) as total_calls,
-            COUNT(*) FILTER (WHERE lct.status = 'FINISHED') as completed_calls,
-            COUNT(*) FILTER (WHERE lct.status != 'FINISHED' OR lct.status IS NULL) as failed_calls,
-            AVG(
-                EXTRACT(EPOCH FROM (lct.call_end_time - lct.call_initiated_time))
-            ) FILTER (
-                WHERE lct.call_initiated_time IS NOT NULL
-                AND lct.call_end_time IS NOT NULL
-            ) as average_duration,
-            COUNT(DISTINCT lct.template) as total_templates,
-            COUNT(DISTINCT lct.shop_identifier) FILTER (WHERE lct.shop_identifier IS NOT NULL) as total_shops,
-            jsonb_object_agg(
-                COALESCE(lct.outcome, 'N/A'),
-                outcome_counts.count
-            ) as outcome_breakdown
-        FROM "{LEAD_CALL_TRACKER_TABLE}" lct
-        LEFT JOIN "{OUTBOUND_NUMBER_TABLE}" ou ON lct.outbound_number_id = ou.id
-        LEFT JOIN LATERAL (
-            SELECT lct2.outcome, COUNT(*) as count
-            FROM "{LEAD_CALL_TRACKER_TABLE}" lct2
-            {where_clause.replace('lct.', 'lct2.')}
-            GROUP BY lct2.outcome
-        ) outcome_counts ON true
-        {where_clause};
-    """
+    # Validate group_by to prevent SQL injection
+    allowed_group_by_fields = ["shop_identifier", "template", "merchant_id"]
+    if group_by and group_by not in allowed_group_by_fields:
+        group_by = None
+
+    if group_by:
+        # Grouped analytics
+        text = f"""
+            WITH filtered_data AS (
+                SELECT
+                    lct.status,
+                    lct.outcome,
+                    lct.call_initiated_time,
+                    lct.call_end_time,
+                    lct.template,
+                    lct.shop_identifier,
+                    lct.merchant_id,
+                    lct.payload
+                FROM "{LEAD_CALL_TRACKER_TABLE}" lct
+                {where_clause}
+            ),
+            outcome_groups AS (
+                SELECT
+                    {group_by},
+                    outcome,
+                    COUNT(*) as outcome_count
+                FROM filtered_data
+                GROUP BY {group_by}, outcome
+            )
+            SELECT
+                fd.{group_by},
+                (SELECT payload->>'shop_name' FROM filtered_data WHERE {group_by} = fd.{group_by} LIMIT 1) as shop_name,
+                COUNT(*) as total_calls,
+                COUNT(*) FILTER (WHERE fd.status = 'FINISHED') as completed_calls,
+                COUNT(*) FILTER (WHERE fd.status != 'FINISHED' OR fd.status IS NULL) as failed_calls,
+                AVG(
+                    EXTRACT(EPOCH FROM (fd.call_end_time - fd.call_initiated_time))
+                ) FILTER (
+                    WHERE fd.call_initiated_time IS NOT NULL
+                    AND fd.call_end_time IS NOT NULL
+                ) as average_duration,
+                COUNT(DISTINCT fd.template) as total_templates,
+                COUNT(DISTINCT fd.shop_identifier) FILTER (WHERE fd.shop_identifier IS NOT NULL) as total_shops,
+                (
+                    SELECT jsonb_object_agg(COALESCE(outcome, 'N/A'), outcome_count)
+                    FROM outcome_groups og
+                    WHERE og.{group_by} = fd.{group_by}
+                ) as outcome_breakdown
+            FROM filtered_data fd
+            GROUP BY fd.{group_by}
+            ORDER BY total_calls DESC;
+        """
+    else:
+        # Aggregate analytics (original behavior)
+        text = f"""
+            WITH filtered_data AS (
+                SELECT
+                    lct.status,
+                    lct.outcome,
+                    lct.call_initiated_time,
+                    lct.call_end_time,
+                    lct.template,
+                    lct.shop_identifier
+                FROM "{LEAD_CALL_TRACKER_TABLE}" lct
+                {where_clause}
+            ),
+            base_stats AS (
+                SELECT
+                    COUNT(*) as total_calls,
+                    COUNT(*) FILTER (WHERE status = 'FINISHED') as completed_calls,
+                    COUNT(*) FILTER (WHERE status != 'FINISHED' OR status IS NULL) as failed_calls,
+                    AVG(
+                        EXTRACT(EPOCH FROM (call_end_time - call_initiated_time))
+                    ) FILTER (
+                        WHERE call_initiated_time IS NOT NULL
+                        AND call_end_time IS NOT NULL
+                    ) as average_duration,
+                    COUNT(DISTINCT template) as total_templates,
+                    COUNT(DISTINCT shop_identifier) FILTER (WHERE shop_identifier IS NOT NULL) as total_shops
+                FROM filtered_data
+            ),
+            outcome_stats AS (
+                SELECT
+                    jsonb_object_agg(
+                        COALESCE(outcome, 'N/A'),
+                        outcome_count
+                    ) as outcome_breakdown
+                FROM (
+                    SELECT
+                        outcome,
+                        COUNT(*) as outcome_count
+                    FROM filtered_data
+                    GROUP BY outcome
+                ) grouped_outcomes
+            )
+            SELECT
+                base_stats.*,
+                COALESCE(outcome_stats.outcome_breakdown, '{{}}'::jsonb) as outcome_breakdown
+            FROM base_stats
+            CROSS JOIN outcome_stats;
+        """
 
     return text, values
 
@@ -174,6 +257,7 @@ def get_analytics_call_details_query(
         "updated_at",
     ]
     if sort_by not in allowed_sort_columns:
+        logger.warning(f"[Analytics Query] Invalid sort column '{sort_by}', defaulting to 'created_at'")
         sort_by = "created_at"
 
     sort_direction = "DESC" if sort_order.lower() == "desc" else "ASC"
@@ -185,12 +269,13 @@ def get_analytics_call_details_query(
         FROM "{LEAD_CALL_TRACKER_TABLE}" lct
         LEFT JOIN "{OUTBOUND_NUMBER_TABLE}" ou ON lct.outbound_number_id = ou.id
         {where_clause}
-        ORDER BY lct."{sort_by}" {sort_direction}
+        ORDER BY lct.{sort_by} {sort_direction}
         LIMIT ${len(values) + 1}
         OFFSET ${len(values) + 2};
     """
 
     values.extend([limit, offset])
+
     return text, values
 
 
@@ -215,6 +300,8 @@ def get_analytics_trends_query(
 ) -> Tuple[str, List[Any]]:
     """
     Generate query for trends analytics with time bucketing done at DB level.
+
+    Uses a filtered_data CTE to avoid duplicating WHERE clauses and parameters.
     """
     conditions, values = build_analytics_where_clause(filters)
     where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
@@ -227,67 +314,269 @@ def get_analytics_trends_query(
     else:
         date_trunc = "day"
 
+    # Add call_initiated_time NOT NULL condition
+    extra_condition = "lct.call_initiated_time IS NOT NULL"
+    if where_clause:
+        where_clause = f"{where_clause} AND {extra_condition}"
+    else:
+        where_clause = f" WHERE {extra_condition}"
+
     text = f"""
+        WITH filtered_data AS (
+            SELECT
+                lct.call_initiated_time,
+                lct.call_end_time,
+                lct.status,
+                lct.outcome
+            FROM "{LEAD_CALL_TRACKER_TABLE}" lct
+            {where_clause}
+        ),
+        base_trends AS (
+            SELECT
+                DATE_TRUNC('{date_trunc}', call_initiated_time) as time_bucket,
+                COUNT(*) as total_calls,
+                COUNT(*) FILTER (WHERE status = 'FINISHED') as completed_calls,
+                AVG(
+                    EXTRACT(EPOCH FROM (call_end_time - call_initiated_time))
+                ) FILTER (
+                    WHERE call_initiated_time IS NOT NULL
+                    AND call_end_time IS NOT NULL
+                ) as average_duration
+            FROM filtered_data
+            GROUP BY time_bucket
+        ),
+        outcome_trends AS (
+            SELECT
+                time_bucket,
+                jsonb_object_agg(
+                    COALESCE(outcome, 'N/A'),
+                    outcome_count
+                ) as outcome_breakdown
+            FROM (
+                SELECT
+                    DATE_TRUNC('{date_trunc}', filtered_data.call_initiated_time) as time_bucket,
+                    filtered_data.outcome,
+                    COUNT(*) as outcome_count
+                FROM filtered_data
+                GROUP BY 1, 2
+            ) grouped_outcomes
+            GROUP BY time_bucket
+        )
         SELECT
-            DATE_TRUNC('{date_trunc}', lct.call_initiated_time) as time_bucket,
-            COUNT(*) as total_calls,
-            COUNT(*) FILTER (WHERE lct.status = 'FINISHED') as completed_calls,
-            AVG(
-                EXTRACT(EPOCH FROM (lct.call_end_time - lct.call_initiated_time))
-            ) FILTER (
-                WHERE lct.call_initiated_time IS NOT NULL
-                AND lct.call_end_time IS NOT NULL
-            ) as average_duration,
-            jsonb_object_agg(
-                COALESCE(lct.outcome, 'N/A'),
-                outcome_counts.count
-            ) as outcome_breakdown
-        FROM "{LEAD_CALL_TRACKER_TABLE}" lct
-        LEFT JOIN LATERAL (
-            SELECT lct2.outcome, COUNT(*) as count
-            FROM "{LEAD_CALL_TRACKER_TABLE}" lct2
-            WHERE DATE_TRUNC('{date_trunc}', lct2.call_initiated_time) = DATE_TRUNC('{date_trunc}', lct.call_initiated_time)
-            {(' AND ' + ' AND '.join([c.replace('lct.', 'lct2.') for c in conditions])) if conditions else ''}
-            GROUP BY lct2.outcome
-        ) outcome_counts ON true
-        {where_clause}
-        AND lct.call_initiated_time IS NOT NULL
-        GROUP BY time_bucket
+            base_trends.time_bucket,
+            base_trends.total_calls,
+            base_trends.completed_calls,
+            base_trends.average_duration,
+            COALESCE(outcome_trends.outcome_breakdown, '{{}}'::jsonb) as outcome_breakdown
+        FROM base_trends
+        LEFT JOIN outcome_trends ON base_trends.time_bucket = outcome_trends.time_bucket
         ORDER BY time_bucket ASC;
     """
 
     return text, values
 
 
-def get_analytics_lead_based_query(filters: Dict[str, Any]) -> Tuple[str, List[Any]]:
+def get_analytics_lead_based_query(filters: Dict[str, Any], group_by: Optional[str] = None) -> Tuple[str, List[Any]]:
     """
     Generate query for lead-based analytics (one row per unique lead/request_id).
     Generic - no hardcoded outcomes.
+
+    Args:
+        filters: Analytics filters
+        group_by: Optional field to group by (e.g., 'shop_identifier', 'template')
+
+    Uses a filtered_data CTE to avoid duplicating WHERE clauses and parameters.
     """
     conditions, values = build_analytics_where_clause(filters)
     where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
 
+    # Add request_id NOT NULL condition
+    extra_condition = "lct.request_id IS NOT NULL"
+    if where_clause:
+        where_clause = f"{where_clause} AND {extra_condition}"
+    else:
+        where_clause = f" WHERE {extra_condition}"
+
+    # Validate group_by to prevent SQL injection
+    allowed_group_by_fields = ["shop_identifier", "template", "merchant_id"]
+    if group_by and group_by not in allowed_group_by_fields:
+        group_by = None
+
+    if group_by:
+        # Grouped lead-based analytics
+        text = f"""
+            WITH filtered_data AS (
+                SELECT
+                    lct.request_id,
+                    lct.{group_by},
+                    lct.status,
+                    lct.outcome,
+                    lct.payload
+                FROM "{LEAD_CALL_TRACKER_TABLE}" lct
+                {where_clause}
+            ),
+            unique_leads AS (
+                SELECT DISTINCT
+                    request_id,
+                    {group_by}
+                FROM filtered_data
+            ),
+            outcome_counts AS (
+                SELECT
+                    {group_by},
+                    outcome,
+                    COUNT(DISTINCT request_id) as outcome_count
+                FROM filtered_data
+                WHERE outcome IS NOT NULL
+                GROUP BY {group_by}, outcome
+            )
+            SELECT
+                ul.{group_by},
+                (SELECT payload->>'shop_name' FROM filtered_data WHERE {group_by} = ul.{group_by} LIMIT 1) as shop_name,
+                COUNT(DISTINCT ul.request_id) as total_leads,
+                COUNT(DISTINCT CASE WHEN fd.outcome IS NOT NULL AND fd.outcome != 'NO_ANSWER' THEN ul.request_id END) as picked_calls,
+                (
+                    SELECT jsonb_object_agg(outcome, outcome_count)
+                    FROM outcome_counts oc
+                    WHERE oc.{group_by} = ul.{group_by}
+                ) as outcome_counts
+            FROM unique_leads ul
+            LEFT JOIN filtered_data fd ON ul.request_id = fd.request_id AND ul.{group_by} = fd.{group_by}
+            GROUP BY ul.{group_by}
+            ORDER BY total_leads DESC;
+        """
+    else:
+        # Aggregate lead-based analytics (original behavior)
+        text = f"""
+            WITH filtered_data AS (
+                SELECT
+                    lct.request_id,
+                    lct.status,
+                    lct.outcome
+                FROM "{LEAD_CALL_TRACKER_TABLE}" lct
+                {where_clause}
+            ),
+            base_leads AS (
+                SELECT
+                    request_id,
+                    COUNT(*) as total_calls,
+                    COUNT(*) FILTER (WHERE status = 'FINISHED') as finished_calls,
+                    COUNT(*) FILTER (WHERE outcome IS NOT NULL) as calls_with_outcome
+                FROM filtered_data
+                GROUP BY request_id
+            ),
+            outcome_leads AS (
+                SELECT
+                    request_id,
+                    jsonb_object_agg(
+                        COALESCE(outcome, 'N/A'),
+                        outcome_count
+                    ) as outcome_breakdown
+                FROM (
+                    SELECT
+                        request_id,
+                        outcome,
+                        COUNT(*) as outcome_count
+                    FROM filtered_data
+                    GROUP BY request_id, outcome
+                ) grouped_outcomes
+                GROUP BY request_id
+            )
+            SELECT
+                base_leads.request_id,
+                base_leads.total_calls,
+                base_leads.finished_calls,
+                base_leads.calls_with_outcome,
+                COALESCE(outcome_leads.outcome_breakdown, '{{}}'::jsonb) as outcome_breakdown
+            FROM base_leads
+            LEFT JOIN outcome_leads ON base_leads.request_id = outcome_leads.request_id;
+        """
+
+    return text, values
+
+
+def get_analytics_lead_based_trends_query(
+    filters: Dict[str, Any],
+    time_granularity: str = "day"
+) -> Tuple[str, List[Any]]:
+    """
+    Generate query for lead-based trends analytics with time bucketing.
+    Groups by unique request_id (lead) within each time bucket.
+
+    Returns one row per unique lead per time bucket with outcome breakdown.
+    """
+    conditions, values = build_analytics_where_clause(filters)
+    where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
+
+    # Determine date truncation based on granularity
+    if time_granularity == "week":
+        date_trunc = "week"
+    elif time_granularity == "month":
+        date_trunc = "month"
+    else:
+        date_trunc = "day"
+
+    # Add call_initiated_time NOT NULL condition
+    extra_condition = "lct.call_initiated_time IS NOT NULL AND lct.request_id IS NOT NULL"
+    if where_clause:
+        where_clause = f"{where_clause} AND {extra_condition}"
+    else:
+        where_clause = f" WHERE {extra_condition}"
+
     text = f"""
+        WITH filtered_data AS (
+            SELECT
+                lct.request_id,
+                lct.call_initiated_time,
+                lct.status,
+                lct.outcome
+            FROM "{LEAD_CALL_TRACKER_TABLE}" lct
+            {where_clause}
+        ),
+        base_lead_trends AS (
+            SELECT
+                DATE_TRUNC('{date_trunc}', filtered_data.call_initiated_time) as time_bucket,
+                filtered_data.request_id,
+                COUNT(*) as total_calls_for_lead,
+                COUNT(*) FILTER (WHERE filtered_data.status = 'FINISHED') as finished_calls
+            FROM filtered_data
+            GROUP BY 1, 2
+        ),
+        lead_aggregates AS (
+            SELECT
+                time_bucket,
+                COUNT(DISTINCT request_id) as total_leads,
+                SUM(total_calls_for_lead) as total_calls,
+                SUM(finished_calls) as finished_calls
+            FROM base_lead_trends
+            GROUP BY time_bucket
+        ),
+        outcome_trends AS (
+            SELECT
+                time_bucket,
+                jsonb_object_agg(
+                    COALESCE(outcome, 'N/A'),
+                    outcome_count
+                ) as outcome_breakdown
+            FROM (
+                SELECT
+                    DATE_TRUNC('{date_trunc}', filtered_data.call_initiated_time) as time_bucket,
+                    filtered_data.outcome,
+                    COUNT(DISTINCT filtered_data.request_id) as outcome_count
+                FROM filtered_data
+                GROUP BY 1, 2
+            ) grouped_outcomes
+            GROUP BY time_bucket
+        )
         SELECT
-            lct.request_id,
-            COUNT(*) as total_calls,
-            COUNT(*) FILTER (WHERE lct.status = 'FINISHED') as finished_calls,
-            COUNT(*) FILTER (WHERE lct.outcome IS NOT NULL) as calls_with_outcome,
-            jsonb_object_agg(
-                COALESCE(outcome_counts.outcome, 'N/A'),
-                outcome_counts.count
-            ) as outcome_breakdown
-        FROM "{LEAD_CALL_TRACKER_TABLE}" lct
-        LEFT JOIN LATERAL (
-            SELECT lct2.outcome, COUNT(*) as count
-            FROM "{LEAD_CALL_TRACKER_TABLE}" lct2
-            WHERE lct2.request_id = lct.request_id
-            {(' AND ' + ' AND '.join([c.replace('lct.', 'lct2.') for c in conditions])) if conditions else ''}
-            GROUP BY lct2.outcome
-        ) outcome_counts ON true
-        {where_clause}
-        GROUP BY lct.request_id
-        HAVING lct.request_id IS NOT NULL;
+            lead_aggregates.time_bucket,
+            lead_aggregates.total_leads,
+            lead_aggregates.total_calls,
+            lead_aggregates.finished_calls,
+            COALESCE(outcome_trends.outcome_breakdown, '{{}}'::jsonb) as outcome_breakdown
+        FROM lead_aggregates
+        LEFT JOIN outcome_trends ON lead_aggregates.time_bucket = outcome_trends.time_bucket
+        ORDER BY lead_aggregates.time_bucket ASC;
     """
 
     return text, values
@@ -300,21 +589,31 @@ def get_analytics_outbound_numbers_query(
     Generate query for outbound numbers analytics.
     """
     conditions, values = build_analytics_where_clause(filters)
-    # Always include the NOT NULL condition to ensure valid SQL
-    conditions.append("ou.number IS NOT NULL")
-    where_clause = " WHERE " + " AND ".join(conditions)
+
+    # Build WHERE clause from lct conditions
+    where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
+
+    # Add the NOT NULL condition for outbound number
+    if where_clause:
+        where_clause = f"{where_clause} AND ou.number IS NOT NULL"
+    else:
+        where_clause = " WHERE ou.number IS NOT NULL"
 
     text = f"""
         SELECT
+            ou.id,
             ou.number,
             ou.provider,
+            ou.status,
+            ou.channels,
+            ou.maximum_channels,
             COUNT(*) as total_calls,
             COUNT(*) FILTER (WHERE lct.outcome != 'NO_ANSWER' AND lct.outcome IS NOT NULL) as calls_picked,
             COUNT(*) FILTER (WHERE lct.outcome = 'NO_ANSWER') as calls_no_answer
         FROM "{LEAD_CALL_TRACKER_TABLE}" lct
         LEFT JOIN "{OUTBOUND_NUMBER_TABLE}" ou ON lct.outbound_number_id = ou.id
         {where_clause}
-        GROUP BY ou.number, ou.provider
+        GROUP BY ou.id, ou.number, ou.provider, ou.status, ou.channels, ou.maximum_channels
         ORDER BY total_calls DESC;
     """
 

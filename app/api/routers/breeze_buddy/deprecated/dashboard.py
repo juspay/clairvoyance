@@ -39,7 +39,7 @@ async def get_analytics(
         Old: GET /breeze/order-confirmation/analytics?start_date=2025-12-01&end_date=2025-12-31
         New: POST /analytics
              {
-                 "type": "summary",
+                 "type": "call-based",
                  "filters": {
                      "template": "order-confirmation",
                      "date_from": "2025-12-01",

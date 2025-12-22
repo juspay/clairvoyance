@@ -6,10 +6,10 @@ from app.schemas.breeze_buddy.analytics import (
     AnalyticsRequest,
     AnalyticsResponse,
     AnalyticsType,
+    CallBasedAnalyticsResult,
     CallDetailResult,
     OutboundNumberStat,
     PaginationInfo,
-    SummaryAnalyticsResult,
     TimeGranularity,
     TrendDataPoint,
 )
@@ -63,10 +63,10 @@ __all__ = [
     "AnalyticsRequest",
     "AnalyticsResponse",
     "AnalyticsType",
+    "CallBasedAnalyticsResult",
     "CallDetailResult",
     "OutboundNumberStat",
     "PaginationInfo",
-    "SummaryAnalyticsResult",
     "TimeGranularity",
     "TrendDataPoint",
     # Core
