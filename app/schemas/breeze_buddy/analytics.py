@@ -9,12 +9,10 @@ from pydantic import BaseModel, Field
 
 class AnalyticsType(str, Enum):
     """Types of analytics queries supported"""
-
-    SUMMARY = "summary"
+    CALL_BASED = "call-based"
     CALL_DETAILS = "call-details"
     LEAD_BASED = "lead-based"
     OUTBOUND_NUMBERS = "outbound-numbers"
-    TRENDS = "trends"
     CONVERSION = "conversion"
     PERFORMANCE = "performance"
 
@@ -74,14 +72,8 @@ class AnalyticsOptions(BaseModel):
 
     page: int = Field(default=1, ge=1, description="Page number (1-indexed)")
     limit: int = Field(default=50, ge=1, le=1000, description="Items per page")
-    group_by: Optional[str] = Field(
-        None,
-        description="Group results by field (template, shop_identifier, date, etc.)",
-    )
-    time_granularity: TimeGranularity = Field(
-        default=TimeGranularity.DAY,
-        description="Time aggregation granularity for trends",
-    )
+    group_by: Optional[str] = Field(None, description="Group results by field (template, shop_identifier, date, etc.)")
+    time_granularity: Optional[TimeGranularity] = Field(None, description="Time aggregation granularity (if provided, returns time-series; if null, returns aggregate)")
     sort_by: Optional[str] = Field(default="created_at", description="Field to sort by")
     sort_order: Literal["asc", "desc"] = Field(
         default="desc", description="Sort direction"
@@ -110,9 +102,8 @@ class PaginationInfo(BaseModel):
     total_pages: int
 
 
-class SummaryAnalyticsResult(BaseModel):
-    """Summary analytics result model"""
-
+class CallBasedAnalyticsResult(BaseModel):
+    """Call-based analytics result model"""
     total_calls: int
     completed_calls: int
     failed_calls: int
@@ -163,9 +154,12 @@ class TrendDataPoint(BaseModel):
 
 class OutboundNumberStat(BaseModel):
     """Statistics for a single outbound number"""
-
+    id: str
     number: str
     provider: str
+    status: str
+    channels: Optional[int] = None
+    maximum_channels: Optional[int] = None
     total_calls: int
     calls_picked: int
     calls_no_answer: int

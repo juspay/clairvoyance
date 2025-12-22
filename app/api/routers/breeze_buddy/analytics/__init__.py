@@ -15,13 +15,12 @@ from app.schemas import (
 )
 
 from .handlers import (
+    get_call_based_analytics,
     get_call_details_analytics,
     get_conversion_analytics,
     get_lead_based_analytics,
     get_outbound_numbers_analytics,
     get_performance_analytics,
-    get_summary_analytics,
-    get_trends_analytics,
 )
 from .rbac import apply_hierarchical_filters
 
@@ -37,11 +36,10 @@ async def get_analytics(
     Single flexible analytics endpoint with RBAC enforcement.
 
     Supports multiple analytics types:
-    - summary: Aggregate statistics with outcome breakdowns
+    - call-based: Aggregate or time-series call statistics (use time_granularity for trends)
     - call-details: Paginated call records with all fields
-    - lead-based: Analytics by unique lead (not by call attempt)
+    - lead-based: Aggregate or time-series lead statistics (use time_granularity for trends)
     - outbound-numbers: Analytics grouped by outbound number
-    - trends: Time-series data
     - conversion: Conversion funnel metrics
     - performance: Performance metrics
 
@@ -53,7 +51,7 @@ async def get_analytics(
 
     Example Request:
         {
-            "type": "summary",
+            "type": "call-based",
             "filters": {
                 "template": "order-confirmation",
                 "date_from": "2025-12-01",
@@ -79,16 +77,14 @@ async def get_analytics(
         )
 
         # Route to appropriate handler based on analytics type
-        if request.type == AnalyticsType.SUMMARY:
-            data = await get_summary_analytics(filters, options, current_user)
+        if request.type == AnalyticsType.CALL_BASED:
+            data = await get_call_based_analytics(filters, options, current_user)
         elif request.type == AnalyticsType.CALL_DETAILS:
             data = await get_call_details_analytics(filters, options, current_user)
         elif request.type == AnalyticsType.LEAD_BASED:
             data = await get_lead_based_analytics(filters, options, current_user)
         elif request.type == AnalyticsType.OUTBOUND_NUMBERS:
             data = await get_outbound_numbers_analytics(filters, options, current_user)
-        elif request.type == AnalyticsType.TRENDS:
-            data = await get_trends_analytics(filters, options, current_user)
         elif request.type == AnalyticsType.CONVERSION:
             data = await get_conversion_analytics(filters, options, current_user)
         elif request.type == AnalyticsType.PERFORMANCE:

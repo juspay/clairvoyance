@@ -19,7 +19,9 @@ async def run_parameterized_query(
     """
     try:
         async for conn in get_db_connection():
-            if query_text.strip().upper().startswith("SELECT"):
+            # Check if it's a SELECT query (including CTEs that start with WITH)
+            query_upper = query_text.strip().upper()
+            if query_upper.startswith("SELECT") or query_upper.startswith("WITH"):
                 result = await conn.fetch(query_text, *values)
                 return result
             else:
