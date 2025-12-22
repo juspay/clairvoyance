@@ -230,6 +230,13 @@ async def process_backlog_leads():
                     await release_lock_on_lead_by_id(locked_lead.id)
                     continue
 
+                if not config.enable_calling:
+                    logger.info(
+                        f"Skipping lead {locked_lead.id} - calling is disabled for merchant {locked_lead.merchant_id}, template {locked_lead.template}"
+                    )
+                    await release_lock_on_lead_by_id(locked_lead.id)
+                    continue
+
                 if not _is_within_calling_hours(config):
                     logger.info(
                         f"Skipping lead {locked_lead.id} - outside calling hours. "

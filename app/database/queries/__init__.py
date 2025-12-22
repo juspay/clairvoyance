@@ -23,8 +23,8 @@ async def run_parameterized_query(
                 result = await conn.fetch(query_text, *values)
                 return result
             else:
-                result = await conn.fetchrow(query_text, *values)
-                return [result] if result else None
+                result = await conn.fetch(query_text, *values)
+                return result if result else None
     except Exception as e:
         logger.error(f"Database query error: {e}")
         return None

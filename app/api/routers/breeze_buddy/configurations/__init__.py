@@ -27,6 +27,7 @@ from app.schemas import (
 )
 
 from .handlers import (
+    calling_activation_handler,
     create_configuration_handler,
     delete_configuration_handler,
     get_configuration_handler,
@@ -250,3 +251,67 @@ async def delete_configuration(
 
     await delete_configuration_handler(config_id, current_user)
     return None  # 204 No Content
+
+
+@router.patch("/configurations/calling/activation")
+async def calling_activation(
+    enable_calling: bool,
+    merchant_id: Optional[str] = None,
+    shop_identifier: Optional[str] = None,
+    current_user: UserInfo = Depends(get_current_user_with_rbac),
+):
+    """
+    Enable or disable calling globally or for specific merchants/shops.
+
+    Query Parameters:
+    - enable_calling: Boolean to enable or disable calling
+    - merchant_id: Optional merchant ID filter
+    - shop_identifier: Optional shop identifier filter
+
+    Behavior:
+    - If merchant_id is None: All configs across all merchants are updated (admin only)
+    - If merchant_id is provided but shop_identifier is None: All configs for that merchant are updated
+    - If both merchant_id and shop_identifier are provided: Only that specific config is updated
+
+    Permissions:
+    - Admin: Can toggle calling for any merchant/shop or globally
+    - Merchant: Can only toggle calling for own merchants/shops
+
+    Example Requests:
+        PATCH /configurations/toggle-calling?enable_calling=false                           # Global disable (admin only)
+        PATCH /configurations/toggle-calling?enable_calling=true&merchant_id=shop_123       # Enable for merchant
+        PATCH /configurations/toggle-calling?enable_calling=false&merchant_id=shop_123&shop_identifier=shop_456  # Disable for specific shop
+
+    Returns:
+        {
+            "status": "success",
+            "message": "Updated N config(s)",
+            "configs": [...]
+        }
+    """
+    # RBAC: Check permissions
+    if merchant_id is None:
+        # Global toggle - only admins allowed
+        if current_user.role != "admin":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only admin users can toggle calling globally",
+            )
+    else:
+        # Merchant-specific toggle - validate access
+        validate_config_access(
+            current_user, merchant_id, shop_identifier, operation="toggle calling for"
+        )
+
+    result = await calling_activation_handler(
+        enable_calling=enable_calling,
+        merchant_id=merchant_id,
+        shop_identifier=shop_identifier,
+        current_user=current_user,
+    )
+
+    # Apply RBAC filtering to returned configs
+    result["configs"] = filter_configs_by_rbac(result["configs"], current_user)
+    result["message"] = f"Updated {len(result['configs'])} config(s)"
+
+    return result

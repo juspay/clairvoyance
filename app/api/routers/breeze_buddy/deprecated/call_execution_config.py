@@ -46,6 +46,7 @@ async def add_call_execution_config(
             template=config.template,
             shop_identifier=config.shop_identifier,
             enable_international_call=config.enable_international_call,
+            enable_calling=config.enable_calling,
         )
 
         if call_execution_config:
@@ -95,6 +96,7 @@ async def update_call_execution_config_endpoint(
             max_retry=config.max_retry,
             calling_provider=config.calling_provider,
             enable_international_call=config.enable_international_call,
+            enable_calling=config.enable_calling,
         )
 
         if call_execution_config:

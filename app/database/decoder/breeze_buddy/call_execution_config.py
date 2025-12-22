@@ -31,6 +31,7 @@ def decode_call_execution_config_list(
             template=row["template"],
             shop_identifier=row["shop_identifier"],
             enable_international_call=row["enable_international_call"],
+            enable_calling=row["enable_calling"],
             created_at=row["created_at"],
             updated_at=row["updated_at"],
         )
@@ -60,6 +61,7 @@ def decode_call_execution_config(
         template=row["template"],
         shop_identifier=row["shop_identifier"],
         enable_international_call=row["enable_international_call"],
+        enable_calling=row["enable_calling"],
         created_at=row["created_at"],
         updated_at=row["updated_at"],
     )
