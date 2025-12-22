@@ -3,6 +3,7 @@ import json
 import subprocess
 import uuid
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict
 
@@ -10,7 +11,6 @@ import uvicorn
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from datetime import datetime, timezone
 from pipecat.transports.daily.utils import DailyRESTHelper
 
 from app import __version__
@@ -414,7 +414,7 @@ async def health_check():
         "service": "Clairvoyance API",
         "version": __version__,
         "status": "healthy",
-        "timestamp": datetime.now(timezone.utc).isoformat()
+        "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
 

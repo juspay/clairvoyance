@@ -23,8 +23,7 @@ from app.schemas import (
 
 
 async def create_number_handler(
-    number: CreateOutboundNumberRequest,
-    current_user: UserInfo
+    number: CreateOutboundNumberRequest, current_user: UserInfo
 ) -> OutboundNumber:
     """
     Create a new outbound number.
@@ -61,21 +60,19 @@ async def create_number_handler(
         else:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Failed to create outbound number"
+                detail="Failed to create outbound number",
             )
 
     except Exception as e:
         logger.error(f"Error creating outbound number: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error creating outbound number: {str(e)}"
+            detail=f"Error creating outbound number: {str(e)}",
         )
 
 
 async def list_numbers_handler(
-    provider: Optional[str],
-    status_filter: Optional[str],
-    current_user: UserInfo
+    provider: Optional[str], status_filter: Optional[str], current_user: UserInfo
 ) -> List[OutboundNumber]:
     """
     List all outbound numbers with optional filters.
@@ -110,14 +107,11 @@ async def list_numbers_handler(
         logger.error(f"Error listing outbound numbers: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error listing outbound numbers: {str(e)}"
+            detail=f"Error listing outbound numbers: {str(e)}",
         )
 
 
-async def get_number_handler(
-    number_id: str,
-    current_user: UserInfo
-) -> OutboundNumber:
+async def get_number_handler(number_id: str, current_user: UserInfo) -> OutboundNumber:
     """
     Get a single outbound number by ID.
 
@@ -142,7 +136,7 @@ async def get_number_handler(
         if not number:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Outbound number {number_id} not found"
+                detail=f"Outbound number {number_id} not found",
             )
 
         return number
@@ -153,13 +147,12 @@ async def get_number_handler(
         logger.error(f"Error getting outbound number {number_id}: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error getting outbound number: {str(e)}"
+            detail=f"Error getting outbound number: {str(e)}",
         )
 
 
 async def delete_number_handler(
-    number_id: str,
-    current_user: UserInfo
+    number_id: str, current_user: UserInfo
 ) -> OutboundNumber:
     """
     Delete (disable) an outbound number.
@@ -176,9 +169,7 @@ async def delete_number_handler(
     Raises:
         HTTPException: 404 if not found
     """
-    logger.info(
-        f"Admin {current_user.username} disabling outbound number: {number_id}"
-    )
+    logger.info(f"Admin {current_user.username} disabling outbound number: {number_id}")
 
     try:
         outbound_number = await disable_outbound_number(number_id)
@@ -189,7 +180,7 @@ async def delete_number_handler(
         else:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Outbound number {number_id} not found"
+                detail=f"Outbound number {number_id} not found",
             )
 
     except HTTPException:
@@ -198,5 +189,5 @@ async def delete_number_handler(
         logger.error(f"Error disabling outbound number {number_id}: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error disabling outbound number: {str(e)}"
+            detail=f"Error disabling outbound number: {str(e)}",
         )

@@ -15,7 +15,7 @@ def validate_lead_access(
     current_user: UserInfo,
     merchant_id: str,
     shop_identifier: Optional[str],
-    operation: str = "access"
+    operation: str = "access",
 ) -> None:
     """
     Validate user has access to leads for given merchant and shop.
@@ -34,33 +34,37 @@ def validate_lead_access(
         return
 
     # Check merchant access
-    if merchant_id not in current_user.merchant_ids and "*" not in current_user.merchant_ids:
+    if (
+        merchant_id not in current_user.merchant_ids
+        and "*" not in current_user.merchant_ids
+    ):
         logger.warning(
             f"User {current_user.username} attempted to {operation} leads "
             f"for unauthorized merchant: {merchant_id}"
         )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"Access denied to merchant {merchant_id}"
+            detail=f"Access denied to merchant {merchant_id}",
         )
 
     # Check shop access (if shop_identifier is specified)
     if shop_identifier:
-        if shop_identifier not in current_user.shop_identifiers and "*" not in current_user.shop_identifiers:
+        if (
+            shop_identifier not in current_user.shop_identifiers
+            and "*" not in current_user.shop_identifiers
+        ):
             logger.warning(
                 f"User {current_user.username} attempted to {operation} leads "
                 f"for unauthorized shop: {shop_identifier}"
             )
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Access denied to shop {shop_identifier}"
+                detail=f"Access denied to shop {shop_identifier}",
             )
 
 
 def validate_lead_read_access(
-    current_user: UserInfo,
-    lead: Any,
-    operation: str = "access"
+    current_user: UserInfo, lead: Any, operation: str = "access"
 ) -> None:
     """
     Validate user has access to read a specific lead.
@@ -78,24 +82,28 @@ def validate_lead_read_access(
         return
 
     # Check merchant access
-    if lead.merchant_id not in current_user.merchant_ids and "*" not in current_user.merchant_ids:
+    if (
+        lead.merchant_id not in current_user.merchant_ids
+        and "*" not in current_user.merchant_ids
+    ):
         logger.warning(
             f"User {current_user.username} attempted to {operation} lead {lead.id} "
             f"for unauthorized merchant: {lead.merchant_id}"
         )
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Lead not found"
+            status_code=status.HTTP_404_NOT_FOUND, detail=f"Lead not found"
         )
 
     # Check shop access
     if lead.shop_identifier:
-        if lead.shop_identifier not in current_user.shop_identifiers and "*" not in current_user.shop_identifiers:
+        if (
+            lead.shop_identifier not in current_user.shop_identifiers
+            and "*" not in current_user.shop_identifiers
+        ):
             logger.warning(
                 f"User {current_user.username} attempted to {operation} lead {lead.id} "
                 f"for unauthorized shop: {lead.shop_identifier}"
             )
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Lead not found"
+                status_code=status.HTTP_404_NOT_FOUND, detail=f"Lead not found"
             )

@@ -28,17 +28,21 @@ from app.schemas import (
 
 from .handlers import (
     create_configuration_handler,
-    list_configurations_handler,
-    get_configuration_handler,
-    update_configuration_handler,
     delete_configuration_handler,
+    get_configuration_handler,
+    list_configurations_handler,
+    update_configuration_handler,
 )
-from .rbac import validate_config_access, filter_configs_by_rbac
+from .rbac import filter_configs_by_rbac, validate_config_access
 
 router = APIRouter()
 
 
-@router.post("/configurations", response_model=CallExecutionConfig, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/configurations",
+    response_model=CallExecutionConfig,
+    status_code=status.HTTP_201_CREATED,
+)
 async def create_configuration(
     config: CreateCallExecutionConfigRequest,
     current_user: UserInfo = Depends(get_current_user_with_rbac),
@@ -75,7 +79,7 @@ async def create_configuration(
         current_user,
         config.merchant_id,
         config.shop_identifier,
-        operation="create configuration for"
+        operation="create configuration for",
     )
 
     return await create_configuration_handler(config, current_user)
@@ -84,8 +88,12 @@ async def create_configuration(
 @router.get("/configurations", response_model=List[CallExecutionConfig])
 async def list_configurations(
     merchant_id: Optional[str] = Query(None, description="Filter by merchant ID"),
-    template: Optional[str] = Query(None, description="Filter by template name (e.g., 'order-confirmation')"),
-    shop_identifier: Optional[str] = Query(None, description="Filter by shop identifier"),
+    template: Optional[str] = Query(
+        None, description="Filter by template name (e.g., 'order-confirmation')"
+    ),
+    shop_identifier: Optional[str] = Query(
+        None, description="Filter by shop identifier"
+    ),
     current_user: UserInfo = Depends(get_current_user_with_rbac),
 ):
     """
@@ -111,10 +119,13 @@ async def list_configurations(
     """
     # Validate merchant access if filter provided
     if merchant_id and current_user.role != "admin":
-        if merchant_id not in current_user.merchant_ids and "*" not in current_user.merchant_ids:
+        if (
+            merchant_id not in current_user.merchant_ids
+            and "*" not in current_user.merchant_ids
+        ):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Access denied to merchant {merchant_id}"
+                detail=f"Access denied to merchant {merchant_id}",
             )
 
     # Get configurations
@@ -156,12 +167,12 @@ async def get_configuration(
             current_user,
             config.merchant_id,
             config.shop_identifier,
-            operation="access configuration for"
+            operation="access configuration for",
         )
     except HTTPException:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Configuration {config_id} not found"
+            detail=f"Configuration {config_id} not found",
         )
 
     return config
@@ -204,7 +215,7 @@ async def update_configuration(
     if current_user.role != "admin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only admin users can update configurations"
+            detail="Only admin users can update configurations",
         )
 
     return await update_configuration_handler(config_id, config, current_user)
@@ -234,7 +245,7 @@ async def delete_configuration(
     if current_user.role != "admin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only admin users can delete configurations"
+            detail="Only admin users can delete configurations",
         )
 
     await delete_configuration_handler(config_id, current_user)

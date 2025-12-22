@@ -24,8 +24,8 @@ from .handlers import (
     get_template_handler,
 )
 from .rbac import (
-    validate_template_access,
     require_admin_or_merchant_owner,
+    validate_template_access,
 )
 
 router = APIRouter()
@@ -79,9 +79,7 @@ async def create_template(
     """
     # RBAC: Check permission to create template for this merchant
     require_admin_or_merchant_owner(
-        current_user,
-        template_data.merchant,
-        operation="create templates"
+        current_user, template_data.merchant, operation="create templates"
     )
 
     return await create_template_handler(template_data, current_user)
@@ -90,7 +88,9 @@ async def create_template(
 @router.get("/templates")
 async def get_templates(
     merchant_id: str = Query(..., description="Merchant ID to filter by"),
-    shop_identifier: Optional[str] = Query(None, description="Shop identifier to filter by"),
+    shop_identifier: Optional[str] = Query(
+        None, description="Shop identifier to filter by"
+    ),
     name: Optional[str] = Query(None, description="Template name to filter by"),
     current_user: UserInfo = Depends(get_current_user_with_rbac),
 ):
@@ -116,10 +116,7 @@ async def get_templates(
     """
     # RBAC: Check access to merchant and shop
     validate_template_access(
-        current_user,
-        merchant_id,
-        shop_identifier,
-        operation="access templates for"
+        current_user, merchant_id, shop_identifier, operation="access templates for"
     )
 
     return await get_template_handler(merchant_id, shop_identifier, name, current_user)

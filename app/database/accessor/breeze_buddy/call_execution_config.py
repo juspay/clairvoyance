@@ -197,7 +197,9 @@ async def update_call_execution_config(
         return None
 
 
-async def get_call_execution_config_by_id(config_id: str) -> Optional[CallExecutionConfig]:
+async def get_call_execution_config_by_id(
+    config_id: str,
+) -> Optional[CallExecutionConfig]:
     """
     Get call execution config by ID.
     """

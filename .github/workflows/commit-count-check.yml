@@ -1,0 +1,36 @@
+name: PR Build Check
+
+on:
+  pull_request_target:
+    branches:
+      - main
+      - release
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      # Step 1: Checkout code from the PR head
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      # Step 2: Check commit count (must be exactly 1)
+      - name: Check commit count
+        run: |
+          COMMIT_COUNT=${{ github.event.pull_request.commits }}
+          echo "Commit count: $COMMIT_COUNT"
+
+          if [ "$COMMIT_COUNT" -gt 1 ]; then
+            echo "PR must contain exactly one commit."
+            exit 1
+          fi
+
+          echo "Commit count is 1. Build successful."

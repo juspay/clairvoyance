@@ -2,19 +2,19 @@ from fastapi import APIRouter
 
 # Modern RESTful routers
 from app.api.routers.breeze_buddy.analytics import router as analytics_router
-from app.api.routers.breeze_buddy.configurations import router as configurations_router
-from app.api.routers.breeze_buddy.numbers import router as numbers_router
-from app.api.routers.breeze_buddy.templates import router as templates_router
-from app.api.routers.breeze_buddy.leads import router as leads_router
 
 # Auth, telephony, cron, websocket
 from app.api.routers.breeze_buddy.auth import router as auth_router
-from app.api.routers.breeze_buddy.telephony import router as telephony_router
+from app.api.routers.breeze_buddy.configurations import router as configurations_router
 from app.api.routers.breeze_buddy.cron import router as cron_router
-from app.api.routers.breeze_buddy.websocket import router as websocket_router
 
 # Deprecated routers (backward compatibility)
 from app.api.routers.breeze_buddy.deprecated import router as deprecated_router
+from app.api.routers.breeze_buddy.leads import router as leads_router
+from app.api.routers.breeze_buddy.numbers import router as numbers_router
+from app.api.routers.breeze_buddy.telephony import router as telephony_router
+from app.api.routers.breeze_buddy.templates import router as templates_router
+from app.api.routers.breeze_buddy.websocket import router as websocket_router
 
 router = APIRouter()
 

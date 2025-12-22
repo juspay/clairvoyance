@@ -6,6 +6,7 @@ All queries are optimized to filter at database level.
 from typing import Any, Dict, List
 
 from app.core.logger import logger
+from app.database.queries import run_parameterized_query
 from app.database.queries.breeze_buddy.analytics import (
     get_analytics_call_details_query,
     get_analytics_count_query,
@@ -14,7 +15,6 @@ from app.database.queries.breeze_buddy.analytics import (
     get_analytics_summary_query,
     get_analytics_trends_query,
 )
-from app.database.queries import run_parameterized_query
 
 
 async def get_summary_analytics_from_db(filters: Dict[str, Any]) -> Dict[str, Any]:
@@ -39,7 +39,7 @@ async def get_summary_analytics_from_db(filters: Dict[str, Any]) -> Dict[str, An
                 "average_duration": None,
                 "total_templates": 0,
                 "total_shops": 0,
-                "outcome_breakdown": {}
+                "outcome_breakdown": {},
             }
 
         row = result[0]
@@ -53,10 +53,14 @@ async def get_summary_analytics_from_db(filters: Dict[str, Any]) -> Dict[str, An
             "completed_calls": completed_calls,
             "failed_calls": failed_calls,
             "success_rate": round(success_rate, 2),
-            "average_duration": round(float(row["average_duration"]), 2) if row["average_duration"] else None,
+            "average_duration": (
+                round(float(row["average_duration"]), 2)
+                if row["average_duration"]
+                else None
+            ),
             "total_templates": row["total_templates"] or 0,
             "total_shops": row["total_shops"] or 0,
-            "outcome_breakdown": row["outcome_breakdown"] or {}
+            "outcome_breakdown": row["outcome_breakdown"] or {},
         }
 
     except Exception as e:
@@ -69,7 +73,7 @@ async def get_call_details_from_db(
     limit: int = 50,
     offset: int = 0,
     sort_by: str = "created_at",
-    sort_order: str = "desc"
+    sort_order: str = "desc",
 ) -> List[Dict[str, Any]]:
     """
     Get paginated call details with database-level filtering.
@@ -77,7 +81,9 @@ async def get_call_details_from_db(
     Returns:
         List of call detail records
     """
-    logger.info(f"Getting call details with filters: {filters}, limit: {limit}, offset: {offset}")
+    logger.info(
+        f"Getting call details with filters: {filters}, limit: {limit}, offset: {offset}"
+    )
 
     try:
         query_text, values = get_analytics_call_details_query(
@@ -114,8 +120,7 @@ async def get_analytics_count_from_db(filters: Dict[str, Any]) -> int:
 
 
 async def get_trends_analytics_from_db(
-    filters: Dict[str, Any],
-    time_granularity: str = "day"
+    filters: Dict[str, Any], time_granularity: str = "day"
 ) -> List[Dict[str, Any]]:
     """
     Get time-series trends with aggregations done at database level.
@@ -123,7 +128,9 @@ async def get_trends_analytics_from_db(
     Returns:
         List of trend data points (one per time bucket)
     """
-    logger.info(f"Getting trends analytics with filters: {filters}, granularity: {time_granularity}")
+    logger.info(
+        f"Getting trends analytics with filters: {filters}, granularity: {time_granularity}"
+    )
 
     try:
         query_text, values = get_analytics_trends_query(filters, time_granularity)
@@ -135,7 +142,9 @@ async def get_trends_analytics_from_db(
         raise
 
 
-async def get_lead_based_analytics_from_db(filters: Dict[str, Any]) -> List[Dict[str, Any]]:
+async def get_lead_based_analytics_from_db(
+    filters: Dict[str, Any],
+) -> List[Dict[str, Any]]:
     """
     Get lead-based analytics (one row per unique lead/request_id).
 
@@ -154,7 +163,9 @@ async def get_lead_based_analytics_from_db(filters: Dict[str, Any]) -> List[Dict
         raise
 
 
-async def get_outbound_numbers_analytics_from_db(filters: Dict[str, Any]) -> List[Dict[str, Any]]:
+async def get_outbound_numbers_analytics_from_db(
+    filters: Dict[str, Any],
+) -> List[Dict[str, Any]]:
     """
     Get outbound numbers analytics.
 

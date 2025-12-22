@@ -3,8 +3,9 @@ Password hashing and verification utilities using bcrypt.
 Provides secure password storage and validation for user authentication.
 """
 
-import bcrypt
 from typing import Tuple
+
+import bcrypt
 
 from app.core.logger import logger
 
@@ -36,16 +37,18 @@ class PasswordHasher:
 
         if len(password) > 72:
             # bcrypt has a 72-byte password limit
-            logger.warning("Password exceeds 72 characters, will be truncated by bcrypt")
+            logger.warning(
+                "Password exceeds 72 characters, will be truncated by bcrypt"
+            )
 
         try:
             # Generate salt and hash password
             salt = bcrypt.gensalt(rounds=cls.BCRYPT_ROUNDS)
-            password_bytes = password.encode('utf-8')
+            password_bytes = password.encode("utf-8")
             hashed = bcrypt.hashpw(password_bytes, salt)
 
             # Return as string
-            return hashed.decode('utf-8')
+            return hashed.decode("utf-8")
 
         except Exception as e:
             logger.error(f"Error hashing password: {e}")
@@ -73,8 +76,8 @@ class PasswordHasher:
             raise ValueError("Hash must be a non-empty string")
 
         try:
-            password_bytes = plain_password.encode('utf-8')
-            hash_bytes = hashed_password.encode('utf-8')
+            password_bytes = plain_password.encode("utf-8")
+            hash_bytes = hashed_password.encode("utf-8")
 
             # bcrypt.checkpw handles timing attack resistance
             return bcrypt.checkpw(password_bytes, hash_bytes)

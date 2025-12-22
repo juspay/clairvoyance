@@ -26,16 +26,18 @@ from app.schemas import (
 
 from .handlers import (
     create_number_handler,
-    list_numbers_handler,
-    get_number_handler,
     delete_number_handler,
+    get_number_handler,
+    list_numbers_handler,
 )
-from .rbac import require_admin_access, filter_numbers_by_rbac
+from .rbac import filter_numbers_by_rbac, require_admin_access
 
 router = APIRouter()
 
 
-@router.post("/numbers", response_model=OutboundNumber, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/numbers", response_model=OutboundNumber, status_code=status.HTTP_201_CREATED
+)
 async def create_outbound_number(
     number: CreateOutboundNumberRequest,
     current_user: UserInfo = Depends(get_current_user_with_rbac),
@@ -68,8 +70,12 @@ async def create_outbound_number(
 
 @router.get("/numbers", response_model=List[OutboundNumber])
 async def list_outbound_numbers(
-    provider: Optional[str] = Query(None, description="Filter by provider (TWILIO, EXOTEL)"),
-    status: Optional[str] = Query(None, description="Filter by status (AVAILABLE, IN_USE, DISABLED)"),
+    provider: Optional[str] = Query(
+        None, description="Filter by provider (TWILIO, EXOTEL)"
+    ),
+    status: Optional[str] = Query(
+        None, description="Filter by status (AVAILABLE, IN_USE, DISABLED)"
+    ),
     current_user: UserInfo = Depends(get_current_user_with_rbac),
 ):
     """

@@ -1,6 +1,6 @@
+import warnings
 from datetime import datetime, timedelta, timezone
 from typing import Optional
-import warnings
 
 from fastapi import APIRouter, Depends, HTTPException
 from starlette.responses import JSONResponse
@@ -17,7 +17,9 @@ from app.database.accessor import (
 router = APIRouter()
 
 
-@router.get("/breeze/order-confirmation/analytics", include_in_schema=False, deprecated=True)
+@router.get(
+    "/breeze/order-confirmation/analytics", include_in_schema=False, deprecated=True
+)
 async def get_analytics(
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
@@ -53,7 +55,7 @@ async def get_analytics(
     warnings.warn(
         "This endpoint is deprecated. Use POST /analytics instead.",
         DeprecationWarning,
-        stacklevel=2
+        stacklevel=2,
     )
 
     if not session:
@@ -156,7 +158,9 @@ async def get_analytics(
     return JSONResponse(content=analytics)
 
 
-@router.get("/breeze/order-confirmation/call-details", include_in_schema=False, deprecated=True)
+@router.get(
+    "/breeze/order-confirmation/call-details", include_in_schema=False, deprecated=True
+)
 async def get_call_details(
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
@@ -201,7 +205,7 @@ async def get_call_details(
     warnings.warn(
         "This endpoint is deprecated. Use POST /analytics with type='call-details' instead.",
         DeprecationWarning,
-        stacklevel=2
+        stacklevel=2,
     )
 
     if not session:

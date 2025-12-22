@@ -8,6 +8,11 @@ Please use the new organized schema structure:
 - app.schemas.automatic_voice.connection - Automatic Voice connection schemas
 """
 
+from app.schemas.automatic_voice.connection import (
+    AutomaticVoiceTTSServiceConfig,
+    AutomaticVoiceUserConnectRequest,
+)
+
 # Re-export all schemas from the new organized structure for backward compatibility
 # This allows existing code to continue using `from app.schemas import XYZ`
 from app.schemas.breeze_buddy.analytics import (
@@ -49,10 +54,6 @@ from app.schemas.breeze_buddy.core import (
     OutboundNumber,
     OutboundNumberStatus,
     UpdateCallExecutionConfigRequest,
-)
-from app.schemas.automatic_voice.connection import (
-    AutomaticVoiceTTSServiceConfig,
-    AutomaticVoiceUserConnectRequest,
 )
 
 __all__ = [

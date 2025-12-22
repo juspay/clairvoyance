@@ -96,24 +96,18 @@ async def get_analytics(
         else:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Unknown analytics type: {request.type}"
+                detail=f"Unknown analytics type: {request.type}",
             )
 
-        return AnalyticsResponse(
-            success=True,
-            data=data
-        )
+        return AnalyticsResponse(success=True, data=data)
 
     except HTTPException:
         raise
     except NotImplementedError as e:
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=str(e)
-        )
+        raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail=str(e))
     except Exception as e:
         logger.error(f"Error processing analytics request: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error processing analytics request: {str(e)}"
+            detail=f"Error processing analytics request: {str(e)}",
         )
