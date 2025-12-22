@@ -219,7 +219,7 @@ async def _handle_create_surcharge_rule(params: FunctionCallParams):
                 f"Cannot create rules due to overlaps with existing {payment_type} rules:\n"
                 + "\n".join(overlap_details)
             )
-            logger.error(error_message)
+            logger.warning(error_message)
             await params.result_callback({"success": False, "error": error_message})
             return
 
