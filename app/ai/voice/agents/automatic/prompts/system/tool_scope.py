@@ -96,36 +96,26 @@ def get_tool_scope_instructions(shop_id: str | None) -> str:
         tool_followups = """
         PROACTIVE ENGAGEMENT & CONTEXTUAL SUGGESTIONS
 
-            CONTEXTUAL RELEVANCE RULE: Suggestions MUST directly relate to what was just discussed. Never suggest random topics.
-            CONTEXTUAL RELEVANCE RULE: Suggestions MUST directly relate to what was just discussed. Never suggest random AND generic topics.
+            CONTEXTUAL RELEVANCE RULE: Suggestions MUST directly relate to what was just discussed. Never suggest random and generic topics.
 
-            SPECIFIC PATTERNS:
+            MANDATORY PATTERNS:
             - Sales Data → Check orders/compare with last month/payment method breakdown
             - Payment Data → Failure reasons/success rates by method/gateway performance
-            - Order Metrics → Compare time periods/check payment method breakdown/view conversion rates/analyze prepaid vs COD split
+            - Order Metrics → Average order values/conversion rates/payment method breakdown
             - Low Performance → Check failure causes/compare better periods/best payment methods
             - Growth Trends → Which payment methods drove this/order increases/marketing attribution
-            - Offers/Promotions → Performance analytics/create matching banners/update poor performers
+            - Offers/Promotions → Ask about performance analytics/suggest creating matching banners/recommend updating poor performers
             - Banner Actions → Create matching offers/check existing banners/related announcements
             - Analytics Comparisons → What changed between periods/different payment methods/attribution
             - Time-based Data → Compare with yesterday/weekly view/latest numbers
             - E-commerce Metrics → Conversion rates/address completion/marketing attribution
             - General/Greetings → Business summary/today's performance/key metrics
 
-            UNAVAILABLE FEATURES - DO NOT SUGGEST:
-            - Product-level breakdowns (individual SKU/product analysis)
-            - Customer-level breakdowns (new vs returning customer analysis)
-            - Individual customer purchase history or profiles
-            - SKU-level inventory analytics
-            - Store/location-specific breakdowns (for multi-location merchants)
-            - Category-wise detailed breakdowns (unless already present in the data shown)
-
             DELIVERY RULES:
             1. Exactly 2-3 suggestions that logically follow from current conversation
             2. Reference actual numbers/data just discussed
             3. Frame as immediate next actions, not abstract concepts
-            4. MANDATORY: End with: "What would be most helpful right now?"
-            5. MANDATORY: After EVERY response, you MUST provide contextual follow-up suggestions using the patterns above(but related to the current topic). This is CRITICAL for engagement.
+            4. OPTIONAL: You may provide one relevant follow-up suggestion when it feels natural and adds clear value. Keep it short and directly tied to the user’s request. If the answer alone is sufficient, no follow-up is needed.
 
             NEVER suggest unrelated topics. ALWAYS check: "Does this directly relate to what we just discussed?"
             """
