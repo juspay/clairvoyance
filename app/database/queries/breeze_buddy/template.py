@@ -24,7 +24,7 @@ def get_template_by_merchant_query(
         values.append(name)
 
     query = f"""
-        SELECT id, merchant_id, shop_identifier, name, flow, expected_payload_schema, expected_callback_response_schema, is_active, created_at, updated_at
+        SELECT id, merchant_id, shop_identifier, name, flow, expected_payload_schema, expected_callback_response_schema, configurations, is_active, created_at, updated_at
         FROM {TEMPLATE_TABLE}
         WHERE {' AND '.join(conditions)}
         LIMIT 1
@@ -41,15 +41,16 @@ def create_template_query(
     flow: str,  # JSON string containing flow structure
     expected_payload_schema: str,  # JSON string containing expected payload schema
     expected_callback_response_schema: str,  # JSON string containing expected callback response schema
+    configurations: str,  # JSON string containing configurations (tts_voice_name, stt_language, etc.)
     is_active: bool,
     created_at,
     updated_at,
 ) -> Tuple[str, List[Any]]:
     """Generate query to create a new template."""
     query = f"""
-        INSERT INTO {TEMPLATE_TABLE} (id, merchant_id, shop_identifier, name, flow, expected_payload_schema, expected_callback_response_schema, is_active, created_at, updated_at)
-        VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7::jsonb, $8, $9, $10)
-        RETURNING id, merchant_id, shop_identifier, name, flow, expected_payload_schema, expected_callback_response_schema, is_active, created_at, updated_at
+        INSERT INTO {TEMPLATE_TABLE} (id, merchant_id, shop_identifier, name, flow, expected_payload_schema, expected_callback_response_schema, configurations, is_active, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7::jsonb, $8::jsonb, $9, $10, $11)
+        RETURNING id, merchant_id, shop_identifier, name, flow, expected_payload_schema, expected_callback_response_schema, configurations, is_active, created_at, updated_at
     """
 
     return query, [
@@ -60,6 +61,7 @@ def create_template_query(
         flow,
         expected_payload_schema,
         expected_callback_response_schema,
+        configurations,
         is_active,
         created_at,
         updated_at,

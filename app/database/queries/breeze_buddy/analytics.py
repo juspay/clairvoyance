@@ -9,7 +9,6 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.logger import logger
 
-
 # Table names
 LEAD_CALL_TRACKER_TABLE = "lead_call_tracker"
 OUTBOUND_NUMBER_TABLE = "outbound_number"
@@ -60,7 +59,7 @@ def build_analytics_where_clause(
             values.append(date_from)
         else:
             values.append(datetime.combine(date_from, datetime.min.time()))
-        conditions.append(f'lct.call_initiated_time >= ${len(values) + value_offset}')
+        conditions.append(f"lct.call_initiated_time >= ${len(values) + value_offset}")
 
     if "date_to" in filters and filters["date_to"]:
         date_to = filters["date_to"]
@@ -68,41 +67,41 @@ def build_analytics_where_clause(
             values.append(date_to)
         else:
             values.append(datetime.combine(date_to, datetime.max.time()))
-        conditions.append(f'lct.call_initiated_time < ${len(values) + value_offset}')
+        conditions.append(f"lct.call_initiated_time < ${len(values) + value_offset}")
 
     # Standard column filters
     if "template" in filters and filters["template"]:
         values.append(filters["template"])
-        conditions.append(f'lct.template = ${len(values) + value_offset}')
+        conditions.append(f"lct.template = ${len(values) + value_offset}")
 
     if "merchant_id" in filters and filters["merchant_id"]:
         values.append(filters["merchant_id"])
-        conditions.append(f'lct.merchant_id = ${len(values) + value_offset}')
+        conditions.append(f"lct.merchant_id = ${len(values) + value_offset}")
 
     if "merchant_ids" in filters and filters["merchant_ids"]:
         # Use ANY for array matching
         values.append(filters["merchant_ids"])
-        conditions.append(f'lct.merchant_id = ANY(${len(values) + value_offset})')
+        conditions.append(f"lct.merchant_id = ANY(${len(values) + value_offset})")
 
     if "shop_identifier" in filters and filters["shop_identifier"]:
         values.append(filters["shop_identifier"])
-        conditions.append(f'lct.shop_identifier = ${len(values) + value_offset}')
+        conditions.append(f"lct.shop_identifier = ${len(values) + value_offset}")
 
     if "shop_identifiers" in filters and filters["shop_identifiers"]:
         values.append(filters["shop_identifiers"])
-        conditions.append(f'lct.shop_identifier = ANY(${len(values) + value_offset})')
+        conditions.append(f"lct.shop_identifier = ANY(${len(values) + value_offset})")
 
     if "status" in filters and filters["status"]:
         values.append(filters["status"])
-        conditions.append(f'lct.status = ${len(values) + value_offset}')
+        conditions.append(f"lct.status = ${len(values) + value_offset}")
 
     if "outcome" in filters and filters["outcome"]:
         values.append(filters["outcome"])
-        conditions.append(f'lct.outcome = ${len(values) + value_offset}')
+        conditions.append(f"lct.outcome = ${len(values) + value_offset}")
 
     if "request_id" in filters and filters["request_id"]:
         values.append(filters["request_id"])
-        conditions.append(f'lct.request_id = ${len(values) + value_offset}')
+        conditions.append(f"lct.request_id = ${len(values) + value_offset}")
 
     # Generic payload filters (JSONB queries)
     # Validate keys to prevent SQL injection
@@ -117,7 +116,9 @@ def build_analytics_where_clause(
     return conditions, values
 
 
-def get_analytics_summary_query(filters: Dict[str, Any], group_by: Optional[str] = None) -> Tuple[str, List[Any]]:
+def get_analytics_summary_query(
+    filters: Dict[str, Any], group_by: Optional[str] = None
+) -> Tuple[str, List[Any]]:
     """
     Generate query for summary analytics with aggregations done at DB level.
     Returns counts, averages, and outcome breakdowns.
@@ -257,7 +258,9 @@ def get_analytics_call_details_query(
         "updated_at",
     ]
     if sort_by not in allowed_sort_columns:
-        logger.warning(f"[Analytics Query] Invalid sort column '{sort_by}', defaulting to 'created_at'")
+        logger.warning(
+            f"[Analytics Query] Invalid sort column '{sort_by}', defaulting to 'created_at'"
+        )
         sort_by = "created_at"
 
     sort_direction = "DESC" if sort_order.lower() == "desc" else "ASC"
@@ -376,7 +379,9 @@ def get_analytics_trends_query(
     return text, values
 
 
-def get_analytics_lead_based_query(filters: Dict[str, Any], group_by: Optional[str] = None) -> Tuple[str, List[Any]]:
+def get_analytics_lead_based_query(
+    filters: Dict[str, Any], group_by: Optional[str] = None
+) -> Tuple[str, List[Any]]:
     """
     Generate query for lead-based analytics (one row per unique lead/request_id).
     Generic - no hardcoded outcomes.
@@ -496,8 +501,7 @@ def get_analytics_lead_based_query(filters: Dict[str, Any], group_by: Optional[s
 
 
 def get_analytics_lead_based_trends_query(
-    filters: Dict[str, Any],
-    time_granularity: str = "day"
+    filters: Dict[str, Any], time_granularity: str = "day"
 ) -> Tuple[str, List[Any]]:
     """
     Generate query for lead-based trends analytics with time bucketing.
@@ -517,7 +521,9 @@ def get_analytics_lead_based_trends_query(
         date_trunc = "day"
 
     # Add call_initiated_time NOT NULL condition
-    extra_condition = "lct.call_initiated_time IS NOT NULL AND lct.request_id IS NOT NULL"
+    extra_condition = (
+        "lct.call_initiated_time IS NOT NULL AND lct.request_id IS NOT NULL"
+    )
     if where_clause:
         where_clause = f"{where_clause} AND {extra_condition}"
     else:

@@ -76,8 +76,9 @@ async def create_template(
     flow: dict,
     expected_payload_schema: Optional[dict],
     expected_callback_response_schema: Optional[dict],
-    is_active: bool,
     now,
+    configurations: Optional[dict] = None,
+    is_active: bool = True,
 ) -> Optional[TemplateModel]:
     """Create a new template with flow stored as JSON."""
     logger.info(f"Creating template with ID: {template_id}")
@@ -94,6 +95,9 @@ async def create_template(
             else None
         )
 
+        # Convert configurations to JSON string
+        configurations_json = json.dumps(configurations) if configurations else None
+
         query, values = create_template_query(
             template_id,
             merchant,
@@ -102,6 +106,7 @@ async def create_template(
             flow_json,
             expected_payload_schema_json,
             expected_callback_response_schema_json,
+            configurations_json,
             is_active,
             now,
             now,

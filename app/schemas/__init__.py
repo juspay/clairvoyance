@@ -20,6 +20,7 @@ from app.schemas.breeze_buddy.analytics import (
     AnalyticsRequest,
     AnalyticsResponse,
     AnalyticsType,
+    CallBasedAnalyticsResult,
     CallDetailResult,
     OutboundNumberStat,
     PaginationInfo,
@@ -43,19 +44,6 @@ from app.schemas.breeze_buddy.auth import (
     UserInfo,
     UserRole,
     UserUpdate,
-)
-from app.schemas.breeze_buddy.analytics import (
-    AnalyticsFilters,
-    AnalyticsOptions,
-    AnalyticsRequest,
-    AnalyticsResponse,
-    AnalyticsType,
-    CallBasedAnalyticsResult,
-    CallDetailResult,
-    OutboundNumberStat,
-    PaginationInfo,
-    TimeGranularity,
-    TrendDataPoint,
 )
 from app.schemas.breeze_buddy.core import (
     CallExecutionConfig,

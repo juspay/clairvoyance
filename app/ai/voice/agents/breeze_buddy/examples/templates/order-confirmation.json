@@ -1,6 +1,7 @@
 {
   "merchant": "breeze",
   "template_name": "order-confirmation",
+  "identifier": "<shop-url-goes-here>",
   "is_active": true,
   "description": "Complete order confirmation workflow with address updates",
   "expected_payload_schema": {
@@ -33,6 +34,10 @@
         }
       }
     }
+  },
+  "configurations": {
+    "tts_voice_name": "rhea",
+    "stt_language": "en"
   },
   "expected_callback_response_schema": {
     "cancellation_reason": {

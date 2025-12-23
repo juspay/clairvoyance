@@ -51,9 +51,7 @@ def parse_outcome_breakdown(outcome_breakdown: Any) -> Dict[str, int]:
 
 
 async def get_call_based_analytics(
-    filters: Dict[str, Any],
-    options: Dict[str, Any],
-    current_user: UserInfo
+    filters: Dict[str, Any], options: Dict[str, Any], current_user: UserInfo
 ) -> Dict[str, Any]:
     """
     Get call-based analytics with outcome breakdowns.
@@ -68,7 +66,9 @@ async def get_call_based_analytics(
 
     if time_granularity:
         # Time-series mode: Get trends data
-        trend_data_from_db = await get_trends_analytics_from_db(filters, time_granularity)
+        trend_data_from_db = await get_trends_analytics_from_db(
+            filters, time_granularity
+        )
 
         # Format results for response
         results = []
@@ -77,15 +77,23 @@ async def get_call_based_analytics(
             total_calls = row["total_calls"] or 0
             completed_calls = row["completed_calls"] or 0
             failed_calls = total_calls - completed_calls
-            success_rate = (completed_calls / total_calls * 100) if total_calls > 0 else 0.0
+            success_rate = (
+                (completed_calls / total_calls * 100) if total_calls > 0 else 0.0
+            )
 
             data_point = {
                 "total_calls": total_calls,
                 "completed_calls": completed_calls,
                 "failed_calls": failed_calls,
                 "success_rate": round(success_rate, 2),
-                "average_duration": round(float(row["average_duration"]), 2) if row["average_duration"] else None,
-                "outcome_breakdown": parse_outcome_breakdown(row.get("outcome_breakdown"))
+                "average_duration": (
+                    round(float(row["average_duration"]), 2)
+                    if row["average_duration"]
+                    else None
+                ),
+                "outcome_breakdown": parse_outcome_breakdown(
+                    row.get("outcome_breakdown")
+                ),
             }
 
             if time_granularity == "day":
@@ -108,7 +116,7 @@ async def get_call_based_analytics(
             "type": "call-based",
             "filters_applied": filters,
             "time_granularity": time_granularity,
-            "results": results
+            "results": results,
         }
     else:
         # Aggregate mode: Get summary data
@@ -125,7 +133,7 @@ async def get_call_based_analytics(
             "type": "call-based",
             "filters_applied": filters,
             "time_granularity": None,
-            "results": results
+            "results": results,
         }
 
 
@@ -181,32 +189,42 @@ async def get_call_details_analytics(
                 # If it's a dict, try to extract the actual transcript text
                 if isinstance(transcription_data, dict):
                     # Look for common transcript field names
-                    transcript = transcription_data.get("transcript") or transcription_data.get("text") or transcription_data.get("content")
+                    transcript = (
+                        transcription_data.get("transcript")
+                        or transcription_data.get("text")
+                        or transcription_data.get("content")
+                    )
                 elif isinstance(transcription_data, str):
                     transcript = transcription_data
 
-        results.append(CallDetailResult(
-            call_id=tracker.get("call_id") or tracker["id"],
-            lead_id=tracker["id"],
-            order_id=tracker.get("request_id"),
-            template=tracker["template"],
-            merchant_id=tracker["merchant_id"],
-            shop_identifier=tracker.get("shop_identifier"),
-            shop_name=payload.get("shop_name") if payload else None,
-            customer_name=payload.get("customer_name") if payload else None,
-            customer_phone=payload.get("phone") if payload else None,
-            customer_mobile_number=payload.get("customer_mobile_number") if payload else None,
-            status=tracker.get("status", "UNKNOWN"),
-            outcome=tracker.get("outcome") if tracker.get("outcome") else "N/A",
-            duration=duration,
-            recording_url=tracker.get("recording_url"),
-            transcript=transcript,
-            calling_provider=tracker.get("calling_provider"),
-            attempt_count=tracker.get("attempt_count"),
-            cost=tracker.get("cost"),
-            created_at=tracker.get("call_initiated_time") or tracker.get("created_at") or datetime.now(),
-            updated_at=tracker.get("updated_at")
-        ))
+        results.append(
+            CallDetailResult(
+                call_id=tracker.get("call_id") or tracker["id"],
+                lead_id=tracker["id"],
+                order_id=tracker.get("request_id"),
+                template=tracker["template"],
+                merchant_id=tracker["merchant_id"],
+                shop_identifier=tracker.get("shop_identifier"),
+                shop_name=payload.get("shop_name") if payload else None,
+                customer_name=payload.get("customer_name") if payload else None,
+                customer_phone=payload.get("phone") if payload else None,
+                customer_mobile_number=(
+                    payload.get("customer_mobile_number") if payload else None
+                ),
+                status=tracker.get("status", "UNKNOWN"),
+                outcome=tracker.get("outcome") if tracker.get("outcome") else "N/A",
+                duration=duration,
+                recording_url=tracker.get("recording_url"),
+                transcript=transcript,
+                calling_provider=tracker.get("calling_provider"),
+                attempt_count=tracker.get("attempt_count"),
+                cost=tracker.get("cost"),
+                created_at=tracker.get("call_initiated_time")
+                or tracker.get("created_at")
+                or datetime.now(),
+                updated_at=tracker.get("updated_at"),
+            )
+        )
 
     return {
         "type": "call-details",
@@ -237,7 +255,9 @@ async def get_lead_based_analytics(
 
     if time_granularity:
         # Time-series mode: Get lead-based trends data
-        trend_data_from_db = await get_lead_based_trends_from_db(filters, time_granularity)
+        trend_data_from_db = await get_lead_based_trends_from_db(
+            filters, time_granularity
+        )
 
         # Format results for response
         results = []
@@ -252,7 +272,11 @@ async def get_lead_based_analytics(
             no_answer_count = 0
             for outcome, count in outcome_breakdown.items():
                 outcome_lower = str(outcome).lower()
-                if 'no_answer' in outcome_lower or 'no answer' in outcome_lower or outcome_lower == 'noanswer':
+                if (
+                    "no_answer" in outcome_lower
+                    or "no answer" in outcome_lower
+                    or outcome_lower == "noanswer"
+                ):
                     no_answer_count += count
 
             picked_calls = total_leads - no_answer_count
@@ -262,7 +286,7 @@ async def get_lead_based_analytics(
                 "total_calls": total_calls,
                 "finished_calls": finished_calls,
                 "picked_calls": picked_calls,
-                "outcome_counts": outcome_breakdown
+                "outcome_counts": outcome_breakdown,
             }
 
             if time_granularity == "day":
@@ -285,7 +309,7 @@ async def get_lead_based_analytics(
             "type": "lead-based",
             "filters_applied": filters,
             "time_granularity": time_granularity,
-            "results": results
+            "results": results,
         }
     else:
         # Aggregate mode: Get lead-based summary data
@@ -296,19 +320,23 @@ async def get_lead_based_analytics(
             # Grouped results - data is already aggregated by database
             results = []
             for row in lead_data:
-                results.append({
-                    group_by: row[group_by],
-                    "shop_name": row.get("shop_name"),
-                    "total_leads": row["total_leads"] or 0,
-                    "picked_calls": row["picked_calls"] or 0,
-                    "outcome_counts": parse_outcome_breakdown(row.get("outcome_counts"))
-                })
+                results.append(
+                    {
+                        group_by: row[group_by],
+                        "shop_name": row.get("shop_name"),
+                        "total_leads": row["total_leads"] or 0,
+                        "picked_calls": row["picked_calls"] or 0,
+                        "outcome_counts": parse_outcome_breakdown(
+                            row.get("outcome_counts")
+                        ),
+                    }
+                )
 
             return {
                 "type": "lead-based",
                 "filters_applied": filters,
                 "time_granularity": None,
-                "results": results
+                "results": results,
             }
         else:
             # Aggregate (original behavior)
@@ -319,13 +347,19 @@ async def get_lead_based_analytics(
             outcome_counts = {}
             no_answer_count = 0
             for lead in lead_data:
-                outcome_breakdown = parse_outcome_breakdown(lead.get("outcome_breakdown"))
+                outcome_breakdown = parse_outcome_breakdown(
+                    lead.get("outcome_breakdown")
+                )
                 for outcome, count in outcome_breakdown.items():
                     if count > 0:
                         outcome_counts[outcome] = outcome_counts.get(outcome, 0) + 1
                         # Track NO_ANSWER leads (case-insensitive)
                         outcome_lower = str(outcome).lower()
-                        if 'no_answer' in outcome_lower or 'no answer' in outcome_lower or outcome_lower == 'noanswer':
+                        if (
+                            "no_answer" in outcome_lower
+                            or "no answer" in outcome_lower
+                            or outcome_lower == "noanswer"
+                        ):
                             no_answer_count += 1
 
             # picked_calls = total_leads - NO_ANSWER
@@ -334,14 +368,14 @@ async def get_lead_based_analytics(
             lead_based = {
                 "total_leads": total_leads,
                 "picked_calls": picked_calls,
-                "outcome_counts": outcome_counts
+                "outcome_counts": outcome_counts,
             }
 
             return {
                 "type": "lead-based",
                 "filters_applied": filters,
                 "time_granularity": None,
-                "results": [lead_based]  # Wrap in array for consistency
+                "results": [lead_based],  # Wrap in array for consistency
             }
 
 
@@ -357,17 +391,19 @@ async def get_outbound_numbers_analytics(
 
     outbound_analytics = []
     for record in outbound_data:
-        outbound_analytics.append({
-            "id": record["id"],
-            "number": record["number"],
-            "provider": record["provider"],
-            "status": record["status"],
-            "channels": record.get("channels"),
-            "maximum_channels": record.get("maximum_channels"),
-            "total_calls": record["total_calls"],
-            "calls_picked": record["calls_picked"],
-            "calls_no_answer": record["calls_no_answer"],
-        })
+        outbound_analytics.append(
+            {
+                "id": record["id"],
+                "number": record["number"],
+                "provider": record["provider"],
+                "status": record["status"],
+                "channels": record.get("channels"),
+                "maximum_channels": record.get("maximum_channels"),
+                "total_calls": record["total_calls"],
+                "calls_picked": record["calls_picked"],
+                "calls_no_answer": record["calls_no_answer"],
+            }
+        )
 
     return {
         "type": "outbound-numbers",
