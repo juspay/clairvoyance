@@ -16,6 +16,7 @@ from app.database.queries import run_parameterized_query
 from app.database.queries.breeze_buddy.template import (
     create_template_query,
     get_template_by_merchant_query,
+    update_template_approval_query,
 )
 
 
@@ -118,4 +119,30 @@ async def create_template(
 
     except Exception as e:
         logger.error(f"Error creating template: {e}")
+        return None
+
+
+async def update_template_approval(
+    template_id: str,
+    is_approved: bool,
+    now,
+) -> Optional[TemplateModel]:
+    """Update approval status for a template."""
+    logger.info(f"Updating template approval for template ID: {template_id}")
+
+    try:
+        query, values = update_template_approval_query(template_id, is_approved, now)
+        result = await run_parameterized_query(query, values)
+
+        if result and get_row_count(result) > 0:
+            decoded_result = decode_template(result[0])
+            logger.info(
+                f"Template approval updated successfully: {decoded_result.id}"
+            )
+            return decoded_result
+
+        logger.error("Failed to update template approval")
+        return None
+    except Exception as e:
+        logger.error(f"Error updating template approval: {e}")
         return None

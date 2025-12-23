@@ -55,6 +55,7 @@ def decode_template(result: asyncpg.Record) -> Optional[TemplateModel]:
         expected_payload_schema=expected_payload_schema_data,
         expected_callback_response_schema=expected_callback_response_schema_data,
         is_active=result["is_active"],
+        is_approved=result["is_approved"],
     )
 
 

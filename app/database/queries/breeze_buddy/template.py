@@ -24,7 +24,7 @@ def get_template_by_merchant_query(
         values.append(name)
 
     query = f"""
-        SELECT id, merchant_id, shop_identifier, name, flow, expected_payload_schema, expected_callback_response_schema, is_active, created_at, updated_at
+        SELECT id, merchant_id, shop_identifier, name, flow, expected_payload_schema, expected_callback_response_schema, is_active, is_approved, created_at, updated_at
         FROM {TEMPLATE_TABLE}
         WHERE {' AND '.join(conditions)}
         LIMIT 1
@@ -49,7 +49,7 @@ def create_template_query(
     query = f"""
         INSERT INTO {TEMPLATE_TABLE} (id, merchant_id, shop_identifier, name, flow, expected_payload_schema, expected_callback_response_schema, is_active, created_at, updated_at)
         VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7::jsonb, $8, $9, $10)
-        RETURNING id, merchant_id, shop_identifier, name, flow, expected_payload_schema, expected_callback_response_schema, is_active, created_at, updated_at
+        RETURNING id, merchant_id, shop_identifier, name, flow, expected_payload_schema, expected_callback_response_schema, is_active, is_approved, created_at, updated_at
     """
 
     return query, [
@@ -64,3 +64,20 @@ def create_template_query(
         created_at,
         updated_at,
     ]
+
+
+def update_template_approval_query(
+    template_id: str,
+    is_approved: bool,
+    updated_at,
+) -> Tuple[str, List[Any]]:
+    """Generate query to update template approval status."""
+    query = f"""
+        UPDATE {TEMPLATE_TABLE}
+        SET is_approved = $2,
+            updated_at = $3
+        WHERE id = $1
+        RETURNING id, merchant_id, shop_identifier, name, flow, expected_payload_schema, expected_callback_response_schema, is_active, is_approved, created_at, updated_at
+    """
+
+    return query, [template_id, is_approved, updated_at]

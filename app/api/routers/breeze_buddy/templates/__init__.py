@@ -15,15 +15,20 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, Query, status
 
-from app.ai.voice.agents.breeze_buddy.template.types import CreateTemplateRequest
+from app.ai.voice.agents.breeze_buddy.template.types import (
+    CreateTemplateRequest,
+    UpdateTemplateApprovalRequest,
+)
 from app.api.security.breeze_buddy.rbac_token import get_current_user_with_rbac
 from app.schemas import UserInfo
 
 from .handlers import (
     create_template_handler,
     get_template_handler,
+    update_template_approval_handler,
 )
 from .rbac import (
+    require_admin,
     require_admin_or_merchant_owner,
     validate_template_access,
 )
@@ -120,3 +125,22 @@ async def get_templates(
     )
 
     return await get_template_handler(merchant_id, shop_identifier, name, current_user)
+
+
+@router.patch("/templates/{template_id}")
+async def update_template_approval(
+    template_id: str,
+    approval_data: UpdateTemplateApprovalRequest,
+    current_user: UserInfo = Depends(get_current_user_with_rbac),
+):
+    """
+    Update template approval status.
+
+    Permissions:
+    - Admin: Can approve templates
+    """
+    require_admin(current_user, operation="update template approval")
+
+    return await update_template_approval_handler(
+        template_id, approval_data, current_user
+    )

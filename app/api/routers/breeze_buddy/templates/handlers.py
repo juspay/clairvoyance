@@ -9,10 +9,16 @@ from uuid import uuid4
 
 from fastapi import HTTPException, status
 
-from app.ai.voice.agents.breeze_buddy.template.types import CreateTemplateRequest
+from app.ai.voice.agents.breeze_buddy.template.types import (
+    CreateTemplateRequest,
+    UpdateTemplateApprovalRequest,
+)
 from app.core.logger import logger
 from app.database.accessor import get_template_by_merchant
-from app.database.accessor.breeze_buddy.template import create_template
+from app.database.accessor.breeze_buddy.template import (
+    create_template,
+    update_template_approval,
+)
 from app.schemas import UserInfo
 
 
@@ -156,4 +162,51 @@ async def get_template_handler(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error getting template: {str(e)}",
+        )
+
+
+async def update_template_approval_handler(
+    template_id: str,
+    approval_data: UpdateTemplateApprovalRequest,
+    current_user: UserInfo,
+):
+    """
+    Update template approval status.
+
+    Args:
+        template_id: Template ID
+        approval_data: Approval request data
+        current_user: Current authenticated user
+
+    Returns:
+        Updated template
+    """
+    logger.info(
+        f"User {current_user.username} (role: {current_user.role}) updating approval "
+        f"for template: {template_id}"
+    )
+
+    try:
+        now = datetime.now(timezone.utc)
+        template = await update_template_approval(
+            template_id=template_id,
+            is_approved=approval_data.is_approved,
+            now=now,
+        )
+
+        if not template:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Template '{template_id}' not found",
+            )
+
+        logger.info(f"Template approval updated for template: {template.id}")
+        return template
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating template approval: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error updating template approval: {str(e)}",
         )

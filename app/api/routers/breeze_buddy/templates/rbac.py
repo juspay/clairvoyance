@@ -138,3 +138,29 @@ def require_admin_or_merchant_owner(
         status_code=status.HTTP_403_FORBIDDEN,
         detail=f"Access denied to {operation} for merchant {merchant_id}",
     )
+
+
+def require_admin(
+    current_user: UserInfo, operation: str = "perform this operation"
+) -> None:
+    """
+    Require user to be admin.
+
+    Args:
+        current_user: Current authenticated user
+        operation: Operation being performed (for error message)
+
+    Raises:
+        HTTPException: 403 if user lacks permission
+    """
+    if current_user.role == "admin":
+        return
+
+    logger.warning(
+        f"User {current_user.username} (role: {current_user.role}) "
+        f"attempted to {operation} without admin access"
+    )
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail=f"Access denied to {operation}",
+    )

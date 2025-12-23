@@ -5,7 +5,7 @@ Pydantic models for the dynamic workflow engine.
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class ActionType(str, Enum):
@@ -72,7 +72,11 @@ class TemplateModel(BaseModel):
     expected_payload_schema: Optional[Dict[str, Any]] = None
     expected_callback_response_schema: Optional[Dict[str, Any]] = None
     is_active: bool = True
+    is_approved: bool = Field(False, alias="isApproved")
     rendered_system_prompt: str = ""
+
+    class Config:
+        allow_population_by_field_name = True
 
 
 # Request models for API
@@ -103,3 +107,10 @@ class CreateTemplateRequest(BaseModel):
     flow: Dict[str, Any]
     expected_payload_schema: Optional[Dict[str, Any]] = None
     expected_callback_response_schema: Optional[Dict[str, Any]] = None
+
+
+class UpdateTemplateApprovalRequest(BaseModel):
+    is_approved: bool = Field(..., alias="isApproved")
+
+    class Config:
+        allow_population_by_field_name = True
