@@ -160,11 +160,14 @@ async def push_lead_handler(req: PushLeadRequest, current_user: UserInfo) -> Dic
         if req.reporting_webhook_url:
             lead_payload["reporting_webhook_url"] = req.reporting_webhook_url
 
-        # Insert lead call tracker record
+        # Insert lead call tracker record with both template name and template_id
         lead_call_tracker = await create_lead_call_tracker(
             id=uuid,
             merchant_id=req.merchant,
             template=req.template,
+            template_id=str(
+                template.id
+            ),  # NEW: Pass template UUID for referential integrity
             shop_identifier=req.identifier,
             next_attempt_at=next_attempt_at,
             payload=lead_payload,

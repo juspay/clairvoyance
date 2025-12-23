@@ -52,9 +52,14 @@ async def create_lead_call_tracker(
     call_end_time: Optional[datetime] = None,
     cost: Optional[float] = None,
     request_id: Optional[str] = None,
+    template_id: Optional[str] = None,  # NEW: Add template_id parameter
 ) -> Optional[LeadCallTracker]:
     """
     Create a new lead call tracker record.
+
+    Args:
+        template_id: UUID of the template (preferred, for referential integrity)
+        template: Name of the template (kept for backward compatibility)
     """
     logger.info(f"Creating lead call tracker for merchant ID: {merchant_id}")
 
@@ -63,6 +68,7 @@ async def create_lead_call_tracker(
             id=id,
             merchant_id=merchant_id,
             template=template,
+            template_id=template_id,  # NEW
             shop_identifier=shop_identifier,
             next_attempt_at=next_attempt_at,
             payload=payload,

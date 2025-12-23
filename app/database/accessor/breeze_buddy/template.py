@@ -3,7 +3,7 @@ Database accessor functions for templates.
 """
 
 import json
-from typing import Optional
+from typing import Any, Dict, List, Optional
 
 import asyncpg
 
@@ -13,10 +13,16 @@ from app.ai.voice.agents.breeze_buddy.template.types import (
 from app.core.logger import logger
 from app.database.decoder.breeze_buddy.template import decode_template
 from app.database.queries import run_parameterized_query
+from app.database.queries.breeze_buddy.call_execution_config import (
+    get_merchant_id_by_shop_identifier_from_config_query,
+)
 from app.database.queries.breeze_buddy.template import (
     create_template_query,
+    get_template_by_id_query,
     get_template_by_merchant_query,
+    get_templates_list_query,
 )
+from app.schemas.breeze_buddy.template import TemplateMetadata
 
 
 def get_row_count(result: Optional[list[asyncpg.Record]]) -> int:
@@ -123,4 +129,143 @@ async def create_template(
 
     except Exception as e:
         logger.error(f"Error creating template: {e}")
+        return None
+
+
+async def get_templates_list(filters: Dict[str, Any]) -> List[TemplateMetadata]:
+    """
+    Get list of templates (metadata only, no flow) based on filters.
+
+    Implements fallback mechanism: if searching by shop_identifier and no results found,
+    falls back to merchant-level (generic) templates where shop_identifier IS NULL.
+
+    Auto-detects when merchant_id looks like a shop identifier (contains domain) and
+    resolves it to the actual parent merchant_id.
+
+    Args:
+        filters: Dictionary containing:
+            - merchant_ids (optional): List of merchant IDs to filter by
+            - shop_identifiers (optional): List of shop identifiers to filter by
+            - is_active (optional): Filter by active status
+            - merchant_id (optional): Single merchant ID to filter by
+            - shop_identifier (optional): Single shop identifier to filter by
+
+    Returns:
+        List of TemplateMetadata objects
+    """
+    logger.info(f"Getting templates list with filters: {filters}")
+
+    try:
+        # Auto-detect if merchant_id is actually a shop_identifier (contains domain-like pattern)
+        if "merchant_id" in filters and filters["merchant_id"]:
+            merchant_id_value = filters["merchant_id"]
+            # Check if it looks like a shop identifier (contains domain patterns)
+            if "." in merchant_id_value and (
+                "myshopify.com" in merchant_id_value or "http" in merchant_id_value
+            ):
+                logger.info(
+                    f"Detected merchant_id '{merchant_id_value}' looks like shop_identifier, resolving to actual merchant_id from call_execution_config"
+                )
+
+                # Look up the actual merchant_id for this shop_identifier from call_execution_config table
+                lookup_query, lookup_values = (
+                    get_merchant_id_by_shop_identifier_from_config_query(
+                        merchant_id_value
+                    )
+                )
+                lookup_result = await run_parameterized_query(
+                    lookup_query, lookup_values
+                )
+
+                if lookup_result and len(lookup_result) > 0:
+                    actual_merchant_id = lookup_result[0]["merchant_id"]
+                    logger.info(
+                        f"Resolved shop '{merchant_id_value}' to merchant_id '{actual_merchant_id}'"
+                    )
+
+                    # Update filters: move merchant_id to shop_identifier and use resolved merchant_id
+                    filters = {k: v for k, v in filters.items() if k != "merchant_id"}
+                    filters["merchant_id"] = actual_merchant_id
+                    filters["shop_identifier"] = merchant_id_value
+                else:
+                    logger.warning(
+                        f"Could not resolve shop_identifier '{merchant_id_value}' to merchant_id"
+                    )
+                    # Continue with original filters, will likely return empty
+
+        query, values = get_templates_list_query(filters)
+        result = await run_parameterized_query(query, values)
+
+        # If no results found and we're filtering by shop_identifier, try fallback to generic templates
+        if not result and (
+            "shop_identifier" in filters or "shop_identifiers" in filters
+        ):
+            logger.info(
+                "No shop-specific templates found, falling back to generic merchant templates (shop_identifier IS NULL)"
+            )
+
+            # Create fallback filters without shop_identifier
+            fallback_filters = {
+                k: v
+                for k, v in filters.items()
+                if k not in ["shop_identifier", "shop_identifiers"]
+            }
+
+            # Query for generic templates (shop_identifier IS NULL)
+            query, values = get_templates_list_query(fallback_filters)
+            result = await run_parameterized_query(query, values)
+
+        if not result:
+            logger.info("No templates found matching filters (including fallback)")
+            return []
+
+        # Convert database records to TemplateMetadata objects
+        templates = []
+        for row in result:
+            templates.append(
+                TemplateMetadata(
+                    id=str(row["id"]),  # Convert UUID to string
+                    merchant_id=row["merchant_id"],
+                    shop_identifier=row.get("shop_identifier"),
+                    name=row["name"],
+                    is_active=row["is_active"],
+                    created_at=row["created_at"],
+                    updated_at=row["updated_at"],
+                )
+            )
+
+        logger.info(f"Found {len(templates)} templates matching filters")
+        return templates
+
+    except Exception as e:
+        logger.error(f"Error getting templates list: {e}", exc_info=True)
+        return []
+
+
+async def get_template_by_id(template_id: str) -> Optional[TemplateModel]:
+    """
+    Get a complete template by ID (includes full flow).
+
+    Args:
+        template_id: Template UUID
+
+    Returns:
+        TemplateModel if found, None otherwise
+    """
+    logger.info(f"Getting template by ID: {template_id}")
+
+    try:
+        query, values = get_template_by_id_query(template_id)
+        result = await run_parameterized_query(query, values)
+
+        if result and get_row_count(result) > 0:
+            decoded_result = decode_template(result[0])
+            logger.info(f"Template found: {decoded_result.id}")
+            return decoded_result
+
+        logger.info(f"No template found with ID: {template_id}")
+        return None
+
+    except Exception as e:
+        logger.error(f"Error getting template by ID: {e}", exc_info=True)
         return None
