@@ -258,7 +258,15 @@ class Agent:
             ),
         )
 
-        stt = await get_stt_service()
+        # Use stt_language from template if available
+        stt_language = (
+            template.configurations.stt_language
+            if template and template.configurations
+            else None
+        )
+        if stt_language:
+            logger.info(f"Using STT language from template: {stt_language}")
+        stt = await get_stt_service(language_hints=stt_language)
         llm = AzureLLMService(
             api_key=AZURE_OPENAI_API_KEY,
             endpoint=AZURE_OPENAI_ENDPOINT,
@@ -266,7 +274,15 @@ class Agent:
         )
 
         # Create TTS with event handlers for VAD muting
-        tts = await get_tts_service()
+        # Use tts_voice_name from template if available
+        tts_voice_name = (
+            template.configurations.tts_voice_name
+            if template and template.configurations
+            else None
+        )
+        if tts_voice_name:
+            logger.info(f"Using TTS voice from template: {tts_voice_name}")
+        tts = await get_tts_service(voice_name=tts_voice_name)
 
         self.context = OpenAILLMContext()
         user_params = LLMUserAggregatorParams(

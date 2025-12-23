@@ -129,7 +129,7 @@ async def BB_SARVAM_TTS_PITCH() -> float:
 
 async def BB_SARVAM_TTS_PACE() -> float:
     """Returns BB_SARVAM_TTS_PACE from Redis"""
-    return await get_config("BB_SARVAM_TTS_PACE", 1.0, float)
+    return await get_config("BB_SARVAM_TTS_PACE", 0.9, float)
 
 
 async def BB_TTS_SERVICE() -> str:

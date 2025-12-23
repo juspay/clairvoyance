@@ -39,6 +39,7 @@ class SonioxConfig:
     max_non_final_tokens_duration_ms: Optional[int] = None
     client_reference_id: Optional[str] = None
     log_context: str = "Soniox"
+    language_hints_strict: bool = False
 
 
 def _parse_soniox_context(
@@ -147,6 +148,7 @@ def build_soniox_stt(config: SonioxConfig):
             else None
         ),
         client_reference_id=config.client_reference_id,
+        language_hints_strict=config.language_hints_strict,
     )
 
     # Format language hints for logging

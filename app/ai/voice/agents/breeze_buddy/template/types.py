@@ -14,6 +14,16 @@ class ActionType(str, Enum):
     FUNCTION = "function"
 
 
+class TTSVoiceName(str, Enum):
+    RHEA = "rhea"
+    SARA = "sara"
+
+
+class ConfigurationModel(BaseModel):
+    tts_voice_name: Optional[TTSVoiceName] = None
+    stt_language: Optional[str] = None
+
+
 class FlowAction(BaseModel):
     type: ActionType
     text: Optional[str] = None
@@ -71,8 +81,11 @@ class TemplateModel(BaseModel):
     flow: Dict[str, Any]
     expected_payload_schema: Optional[Dict[str, Any]] = None
     expected_callback_response_schema: Optional[Dict[str, Any]] = None
+    configurations: Optional[ConfigurationModel] = None
     is_active: bool = True
     rendered_system_prompt: str = ""
+    created_at: Optional[Any] = None
+    updated_at: Optional[Any] = None
 
 
 # Request models for API
@@ -103,3 +116,4 @@ class CreateTemplateRequest(BaseModel):
     flow: Dict[str, Any]
     expected_payload_schema: Optional[Dict[str, Any]] = None
     expected_callback_response_schema: Optional[Dict[str, Any]] = None
+    configurations: Optional[ConfigurationModel] = None

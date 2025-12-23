@@ -421,9 +421,7 @@ LANGFUSE_SECRET_KEY = os.environ.get("LANGFUSE_SECRET_KEY", "")
 LANGFUSE_PUBLIC_KEY = os.environ.get("LANGFUSE_PUBLIC_KEY", "")
 LANGFUSE_BASEURL = os.environ.get("LANGFUSE_BASEURL", "https://us.cloud.langfuse.com")
 
-BREEZE_BUDDY_SONIOX_MODEL = os.environ.get(
-    "BREEZE_BUDDY_SONIOX_MODEL", "stt-rt-preview"
-)
+BREEZE_BUDDY_SONIOX_MODEL = os.environ.get("BREEZE_BUDDY_SONIOX_MODEL", "stt-rt-v3")
 BREEZE_BUDDY_SONIOX_LANGUAGE_HINTS = os.environ.get(
     "BREEZE_BUDDY_SONIOX_LANGUAGE_HINTS", "en,hi"
 )

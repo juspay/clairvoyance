@@ -65,6 +65,12 @@ async def create_template_handler(
 
         # Create the template
         now = datetime.now(timezone.utc)
+
+        # Build configurations dict from the ConfigurationModel
+        configurations = None
+        if template_data.configurations:
+            configurations = template_data.configurations.model_dump(exclude_none=True)
+
         template = await create_template(
             template_id=str(uuid4()),
             merchant=template_data.merchant,
@@ -73,6 +79,7 @@ async def create_template_handler(
             flow=flow,
             expected_payload_schema=template_data.expected_payload_schema,
             expected_callback_response_schema=template_data.expected_callback_response_schema,
+            configurations=configurations,
             is_active=template_data.is_active,
             now=now,
         )
