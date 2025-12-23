@@ -40,6 +40,11 @@ from app.schemas.breeze_buddy.core import (
     OutboundNumberStatus,
     UpdateCallExecutionConfigRequest,
 )
+from app.schemas.breeze_buddy.merchants import MerchantsResponse
+from app.schemas.breeze_buddy.template import (
+    TemplateListResponse,
+    TemplateMetadata,
+)
 
 __all__ = [
     # Auth
@@ -79,4 +84,9 @@ __all__ = [
     "OutboundNumber",
     "OutboundNumberStatus",
     "UpdateCallExecutionConfigRequest",
+    # Template
+    "TemplateListResponse",
+    "TemplateMetadata",
+    # Merchants
+    "MerchantsResponse",
 ]

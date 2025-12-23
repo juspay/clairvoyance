@@ -27,9 +27,14 @@ def insert_lead_call_tracker_query(
     call_initiated_time: Optional[datetime] = None,
     cost: Optional[float] = None,
     request_id: Optional[str] = None,
+    template_id: Optional[str] = None,  # NEW: Add template_id parameter
 ) -> Tuple[str, List[Any]]:
     """
     Generate query to insert lead call tracker record.
+
+    Args:
+        template_id: UUID of the template (preferred, for referential integrity)
+        template: Name of the template (kept for backward compatibility)
     """
     text = f"""
         INSERT INTO "{LEAD_CALL_TRACKER_TABLE}"
@@ -37,6 +42,7 @@ def insert_lead_call_tracker_query(
             "id",
             "merchant_id",
             "template",
+            "template_id",
             "shop_identifier",
             "request_id",
             "next_attempt_at",
@@ -50,13 +56,14 @@ def insert_lead_call_tracker_query(
             "created_at",
             "updated_at"
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) RETURNING *;
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) RETURNING *;
     """
 
     values = [
         id,
         merchant_id,
         template,
+        template_id,  # NEW
         shop_identifier,
         request_id,
         next_attempt_at,

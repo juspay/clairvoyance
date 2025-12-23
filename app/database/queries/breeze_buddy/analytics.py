@@ -4,6 +4,7 @@ All filtering is done at database level for optimal performance.
 """
 
 import re
+import uuid as uuid_module
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -16,6 +17,23 @@ OUTBOUND_NUMBER_TABLE = "outbound_number"
 # Pattern for valid JSONB key names (alphanumeric, underscore, hyphen only)
 # This prevents SQL injection via malicious key names in payload filters
 VALID_JSONB_KEY_PATTERN = re.compile(r"^[a-zA-Z0-9_-]+$")
+
+
+def is_uuid(value: str) -> bool:
+    """
+    Check if a string is a valid UUID.
+
+    Args:
+        value: String to check
+
+    Returns:
+        True if value is a valid UUID, False otherwise
+    """
+    try:
+        uuid_module.UUID(value)
+        return True
+    except (ValueError, AttributeError, TypeError):
+        return False
 
 
 def is_valid_payload_filter_key(key: str) -> bool:
@@ -70,9 +88,25 @@ def build_analytics_where_clause(
         conditions.append(f"lct.call_initiated_time < ${len(values) + value_offset}")
 
     # Standard column filters
+    # Template filter - supports BOTH template name and template_id for backward compatibility
     if "template" in filters and filters["template"]:
-        values.append(filters["template"])
-        conditions.append(f"lct.template = ${len(values) + value_offset}")
+        template_value = filters["template"]
+        # Auto-detect if it's a UUID (template_id) or a name (template)
+        if is_uuid(template_value):
+            # Filter by template_id (UUID)
+            values.append(template_value)
+            conditions.append(f"lct.template_id = ${len(values) + value_offset}::UUID")
+            logger.debug(f"Filtering by template_id (UUID): {template_value}")
+        else:
+            # Filter by template name (backward compat)
+            values.append(template_value)
+            conditions.append(f"lct.template = ${len(values) + value_offset}")
+            logger.debug(f"Filtering by template name: {template_value}")
+
+    # Explicit template_id filter (takes precedence if both provided)
+    if "template_id" in filters and filters["template_id"]:
+        values.append(filters["template_id"])
+        conditions.append(f"lct.template_id = ${len(values) + value_offset}::UUID")
 
     if "merchant_id" in filters and filters["merchant_id"]:
         values.append(filters["merchant_id"])

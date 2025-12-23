@@ -17,6 +17,7 @@ from app.database.queries.breeze_buddy.call_execution_config import (
     calling_activation_for_merchant_query,
     delete_call_execution_config_query,
     get_all_call_execution_configs_query,
+    get_all_merchants_query,
     get_call_execution_config_by_id_query,
     get_call_execution_config_by_merchant_id_query,
     insert_call_execution_config_query,
@@ -45,9 +46,14 @@ async def create_call_execution_config(
     shop_identifier: str,
     enable_international_call: bool,
     enable_calling: bool = True,
+    template_id: Optional[str] = None,  # NEW: Add template_id parameter
 ) -> Optional[CallExecutionConfig]:
     """
     Create a new call execution config record.
+
+    Args:
+        template_id: UUID of the template (preferred, for referential integrity)
+        template: Name of the template (kept for backward compatibility)
     """
     logger.info(f"Creating call execution config for merchant ID: {merchant_id}")
 
@@ -62,6 +68,7 @@ async def create_call_execution_config(
             calling_provider=calling_provider,
             merchant_id=merchant_id,
             template=template,
+            template_id=template_id,  # NEW
             shop_identifier=shop_identifier,
             enable_international_call=enable_international_call,
             enable_calling=enable_calling,
@@ -162,10 +169,15 @@ async def update_call_execution_config(
     calling_provider: Optional[CallProvider] = None,
     enable_international_call: Optional[bool] = None,
     enable_calling: Optional[bool] = None,
+    template_id: Optional[str] = None,  # NEW: Add template_id parameter
 ) -> Optional[CallExecutionConfig]:
     """
     Update an existing call execution config record based on merchant_id, template, and shop_identifier.
     Only updates fields that are provided (not None).
+
+    Args:
+        template_id: UUID of the template (optional update)
+        template: Name of the template (kept for backward compatibility)
     """
     logger.info(
         f"Updating call execution config for merchant: {merchant_id}, template: {template}, shop_identifier: {shop_identifier}"
@@ -184,6 +196,7 @@ async def update_call_execution_config(
             calling_provider=calling_provider,
             enable_international_call=enable_international_call,
             enable_calling=enable_calling,
+            template_id=template_id,  # NEW
         )
 
         result = await run_parameterized_query(query_text, values)
@@ -285,4 +298,34 @@ async def calling_activation_for_merchant(
 
     except Exception as e:
         logger.error(f"Error toggling calling status: {e}")
+        return []
+
+
+async def get_all_merchants() -> List[str]:
+    """
+    Get all unique merchants (shop_identifiers).
+
+    Each shop_identifier represents a distinct merchant in the system.
+    This assumes every shop has at least one call execution config.
+
+    Returns:
+        List of unique shop_identifier strings
+    """
+    logger.info("Getting all merchants (shop_identifiers)")
+
+    try:
+        query_text, values = get_all_merchants_query()
+        result = await run_parameterized_query(query_text, values)
+
+        if result:
+            # Extract shop_identifier from each row
+            merchants = [row["shop_identifier"] for row in result]
+            logger.info(f"Found {len(merchants)} unique merchants")
+            return merchants
+
+        logger.info("No merchants found")
+        return []
+
+    except Exception as e:
+        logger.error(f"Error getting all merchants: {e}", exc_info=True)
         return []

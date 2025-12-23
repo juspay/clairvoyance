@@ -25,9 +25,14 @@ def insert_call_execution_config_query(
     shop_identifier: Optional[str],
     enable_international_call: bool,
     enable_calling: bool = True,
+    template_id: Optional[str] = None,  # NEW: Add template_id parameter
 ) -> Tuple[str, List[Any]]:
     """
     Generate query to insert call execution config record.
+
+    Args:
+        template_id: UUID of the template (preferred, for referential integrity)
+        template: Name of the template (kept for backward compatibility)
     """
     text = f"""
         INSERT INTO "{CALL_EXECUTION_CONFIG_TABLE}"
@@ -41,13 +46,14 @@ def insert_call_execution_config_query(
             "calling_provider",
             "merchant_id",
             "template",
+            "template_id",
             "shop_identifier",
             "enable_international_call",
             "enable_calling",
             "created_at",
             "updated_at"
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) RETURNING *;
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) RETURNING *;
     """
 
     values = [
@@ -60,6 +66,7 @@ def insert_call_execution_config_query(
         calling_provider.value,
         merchant_id,
         template,
+        template_id,  # NEW
         shop_identifier,
         enable_international_call,
         enable_calling,
@@ -125,10 +132,15 @@ def update_call_execution_config_query(
     calling_provider: Optional[CallProvider] = None,
     enable_international_call: Optional[bool] = None,
     enable_calling: Optional[bool] = None,
+    template_id: Optional[str] = None,  # NEW: Add template_id parameter
 ) -> Tuple[str, List[Any]]:
     """
     Generate query to update call execution config record based on merchant_id, template, and shop_identifier.
     Only updates fields that are provided (not None).
+
+    Args:
+        template_id: UUID of the template (preferred, for referential integrity)
+        template: Name of the template (kept for backward compatibility)
     """
     updates = []
     values: List[Any] = []
@@ -172,6 +184,11 @@ def update_call_execution_config_query(
     if enable_calling is not None:
         updates.append(f'"enable_calling" = ${param_count}')
         values.append(enable_calling)
+        param_count += 1
+
+    if template_id is not None:  # NEW
+        updates.append(f'"template_id" = ${param_count}')
+        values.append(template_id)
         param_count += 1
 
     # Always update the updated_at timestamp
@@ -246,3 +263,47 @@ def calling_activation_for_merchant_query(
         values.append(merchant_id)
 
     return text, values
+
+
+def get_all_merchants_query() -> Tuple[str, List[Any]]:
+    """
+    Generate query to get all unique merchants (shop_identifiers).
+
+    Returns all unique shop_identifier values from call_execution_config.
+    Each shop_identifier represents a distinct merchant in the system.
+
+    Returns:
+        Tuple of (query string, empty values list)
+    """
+    query = f"""
+        SELECT DISTINCT shop_identifier
+        FROM {CALL_EXECUTION_CONFIG_TABLE}
+        WHERE shop_identifier IS NOT NULL
+        ORDER BY shop_identifier ASC
+    """
+
+    return query, []
+
+
+def get_merchant_id_by_shop_identifier_from_config_query(
+    shop_identifier: str,
+) -> Tuple[str, List[Any]]:
+    """
+    Generate query to get merchant_id for a given shop_identifier from call_execution_config.
+
+    Looks up the parent merchant_id for a shop from call execution config table.
+
+    Args:
+        shop_identifier: Shop identifier to look up
+
+    Returns:
+        Tuple of (query string, values list)
+    """
+    query = f"""
+        SELECT DISTINCT merchant_id
+        FROM {CALL_EXECUTION_CONFIG_TABLE}
+        WHERE shop_identifier = $1
+        LIMIT 1
+    """
+
+    return query, [shop_identifier]

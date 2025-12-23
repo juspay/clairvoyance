@@ -11,6 +11,7 @@ from app.api.routers.breeze_buddy.cron import router as cron_router
 # Deprecated routers (backward compatibility)
 from app.api.routers.breeze_buddy.deprecated import router as deprecated_router
 from app.api.routers.breeze_buddy.leads import router as leads_router
+from app.api.routers.breeze_buddy.merchants import router as merchants_router
 from app.api.routers.breeze_buddy.numbers import router as numbers_router
 from app.api.routers.breeze_buddy.telephony import router as telephony_router
 from app.api.routers.breeze_buddy.templates import router as templates_router
@@ -36,6 +37,9 @@ router.include_router(numbers_router, prefix="", tags=["numbers"])
 
 # Templates (conversational flow definitions)
 router.include_router(templates_router, prefix="", tags=["templates"])
+
+# Merchants (shop identifiers - admin only)
+router.include_router(merchants_router, prefix="", tags=["merchants"])
 
 # Leads (call requests/trackers)
 router.include_router(leads_router, prefix="", tags=["leads"])
