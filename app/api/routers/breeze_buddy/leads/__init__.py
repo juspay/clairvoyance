@@ -7,18 +7,22 @@ Leads represent individual call attempts to customers.
 Endpoints:
 - POST   /leads              - Push new lead for processing
 - GET    /leads/{id}         - Get lead details by ID
+- GET    /leads/recording/{call_sid} - Get call recording audio
 
 For backward compatibility, old endpoints are available in deprecated/leads.py
 """
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import StreamingResponse
 
 from app.ai.voice.agents.breeze_buddy.types.models import PushLeadRequest
 from app.api.security.breeze_buddy.rbac_token import get_current_user_with_rbac
+from app.core.logger import logger
 from app.database.accessor import get_lead_by_id
 from app.schemas import UserInfo
 
 from .handlers import (
+    get_call_recording_handler,
     get_lead_handler,
     push_lead_handler,
 )
@@ -117,3 +121,45 @@ async def get_lead(
 
     # Get sanitized lead data
     return await get_lead_handler(lead_id, current_user)
+
+
+@router.get("/leads/recording/{call_sid}")
+async def get_call_recording(
+    call_sid: str,
+    current_user: UserInfo = Depends(get_current_user_with_rbac),
+):
+    """
+    Fetches call recording audio for a given call SID.
+
+    Automatically detects the provider (TWILIO or EXOTEL) and uses appropriate credentials.
+    Returns the audio file as a streaming response.
+
+    RBAC:
+    - Admin: Can access any recording
+    - Merchant/Shop: Can only access recordings for authorized merchants/shops
+
+    Path Parameters:
+    - call_sid: The call SID to fetch recording for
+
+    Returns:
+        Audio file stream (MP3)
+        404 if not found or access denied
+    """
+    try:
+        audio_file = await get_call_recording_handler(call_sid, current_user)
+
+        return StreamingResponse(
+            audio_file,
+            media_type="audio/mpeg",
+            headers={
+                "Content-Disposition": f'inline; filename="recording_{call_sid}.mp3"'
+            },
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching call recording: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Internal server error while fetching recording: {str(e)}",
+        ) from e
