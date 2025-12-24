@@ -4,11 +4,18 @@ All handlers perform database operations and enforce business rules.
 """
 
 from datetime import datetime, timedelta, timezone
+from io import BytesIO
 from typing import Dict
 from uuid import uuid4
 
 from fastapi import HTTPException, status
 
+from app.ai.voice.agents.breeze_buddy.services.telephony.exotel.recording import (
+    download_call_recording as download_call_recording_exotel,
+)
+from app.ai.voice.agents.breeze_buddy.services.telephony.twilio.recording import (
+    download_call_recording as download_call_recording_twilio,
+)
 from app.ai.voice.agents.breeze_buddy.types.models import PushLeadRequest
 from app.ai.voice.agents.breeze_buddy.utils.common import (
     get_validation_error_message,
@@ -18,10 +25,14 @@ from app.core.logger import logger
 from app.database.accessor import (
     create_lead_call_tracker,
     get_call_execution_config_by_merchant_id,
+    get_lead_by_call_id,
     get_lead_by_id,
+    get_outbound_number_by_id,
     get_template_by_merchant,
 )
 from app.schemas import UserInfo
+
+from .rbac import validate_recording_access
 
 
 async def get_lead_handler(lead_id: str, current_user: UserInfo) -> Dict:
@@ -190,3 +201,92 @@ async def push_lead_handler(req: PushLeadRequest, current_user: UserInfo) -> Dic
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error processing lead push request: {str(e)}",
         )
+
+
+async def get_call_recording_handler(call_sid: str, current_user: UserInfo) -> BytesIO:
+    """
+    Get call recording audio file for a given call SID.
+
+    This handler:
+    1. Fetches lead by call_id to get merchant_id and shop_identifier
+    2. Validates RBAC access (fails fast before fetching recording)
+    3. Gets provider from outbound number
+    4. Downloads audio from the appropriate provider (Twilio/Exotel)
+
+    Args:
+        call_sid: The call SID to fetch recording for
+        current_user: Current authenticated user
+
+    Returns:
+        BytesIO audio file
+
+    Raises:
+        HTTPException: 404 if not found, 400 if unsupported provider, 502 if download fails
+    """
+    logger.info(
+        f"User {current_user.id} requesting call recording for call_sid: {call_sid}"
+    )
+
+    # Step 1: Get lead by call_id for RBAC validation
+    lead = await get_lead_by_call_id(call_sid)
+
+    if not lead:
+        logger.warning(f"No lead found for call_sid: {call_sid}")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Recording not found for call_sid: {call_sid}",
+        )
+
+    # Step 2: RBAC validation (fails fast before fetching recording)
+    validate_recording_access(
+        current_user, call_sid, lead.merchant_id, lead.shop_identifier
+    )
+
+    # Step 3: Check if recording URL exists
+    if not lead.recording_url:
+        logger.warning(f"No recording URL for call_sid: {call_sid}")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Recording not found for call_sid: {call_sid}",
+        )
+
+    # Step 4: Get provider from outbound number
+    if not lead.outbound_number_id:
+        logger.error(f"No outbound number ID for call_sid: {call_sid}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unable to determine call provider for call_sid: {call_sid}",
+        )
+
+    outbound_number = await get_outbound_number_by_id(lead.outbound_number_id)
+    if not outbound_number:
+        logger.error(f"Outbound number not found: {lead.outbound_number_id}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unable to determine call provider for call_sid: {call_sid}",
+        )
+
+    call_provider = outbound_number.provider.value
+
+    # Step 5: Fetch audio with provider-specific credentials
+    logger.info(f"Fetching recording from URL: {lead.recording_url}")
+
+    if call_provider.upper() == "TWILIO":
+        audio_file = await download_call_recording_twilio(lead.recording_url, call_sid)
+    elif call_provider.upper() == "EXOTEL":
+        audio_file = await download_call_recording_exotel(lead.recording_url, call_sid)
+    else:
+        logger.error(f"Unsupported provider: {call_provider}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unsupported provider: {call_provider}",
+        )
+
+    if not audio_file:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Failed to download recording from provider: {call_provider}",
+        )
+
+    audio_file.seek(0)
+    return audio_file
