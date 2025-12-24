@@ -33,7 +33,10 @@ def get_row_count(result: Optional[list[asyncpg.Record]]) -> int:
 
 
 async def get_template_by_merchant(
-    merchant_id: str, shop_identifier: str = None, name: str = None
+    merchant_id: str,
+    shop_identifier: Optional[str] = None,
+    name: Optional[str] = None,
+    should_prioritize_merchant_specific: bool = True,
 ) -> Optional[TemplateModel]:
     """Get a template by merchant ID and optional filters."""
     logger.info(f"Getting template by merchant: {merchant_id}")
@@ -51,7 +54,7 @@ async def get_template_by_merchant(
             return decoded_result
 
         # If no template found with shop_identifier, retry with shop_identifier=None
-        if shop_identifier is not None:
+        if shop_identifier is not None and should_prioritize_merchant_specific:
             logger.info(
                 f"No template found with shop_identifier: {shop_identifier}, retrying with shop_identifier=None"
             )
@@ -84,6 +87,7 @@ async def create_template(
     expected_callback_response_schema: Optional[dict],
     now,
     configurations: Optional[dict] = None,
+    outbound_number_id: Optional[str] = None,
     is_active: bool = True,
 ) -> Optional[TemplateModel]:
     """Create a new template with flow stored as JSON."""
@@ -116,6 +120,7 @@ async def create_template(
             is_active,
             now,
             now,
+            outbound_number_id,
         )
 
         result = await run_parameterized_query(query, values)

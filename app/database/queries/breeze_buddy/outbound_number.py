@@ -20,6 +20,8 @@ def insert_outbound_number_query(
     status: OutboundNumberStatus,
     channels: Optional[int] = None,
     maximum_channels: Optional[int] = None,
+    merchant_id: Optional[str] = None,
+    shop_identifier: Optional[str] = None,
 ) -> Tuple[str, List[Any]]:
     """
     Generate query to insert outbound number record.
@@ -33,10 +35,12 @@ def insert_outbound_number_query(
             "status",
             "channels",
             "maximum_channels",
+            "merchant_id",
+            "shop_identifier",
             "created_at",
             "updated_at"
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *;
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *;
     """
 
     values = [
@@ -46,6 +50,8 @@ def insert_outbound_number_query(
         status.value,
         channels,
         maximum_channels,
+        merchant_id,
+        shop_identifier,
         datetime.now(),
         datetime.now(),
     ]

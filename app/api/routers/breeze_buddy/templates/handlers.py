@@ -11,7 +11,7 @@ from fastapi import HTTPException, status
 
 from app.ai.voice.agents.breeze_buddy.template.types import CreateTemplateRequest
 from app.core.logger import logger
-from app.database.accessor import get_template_by_merchant
+from app.database.accessor import get_outbound_number_by_id, get_template_by_merchant
 from app.database.accessor.breeze_buddy.template import (
     create_template,
     get_template_by_id,
@@ -61,6 +61,7 @@ async def create_template_handler(
             template_data.merchant,
             template_data.identifier,
             template_data.template_name,
+            should_prioritize_merchant_specific=False,
         )
 
         if existing:
@@ -69,6 +70,17 @@ async def create_template_handler(
                 detail=f"Template already exists for merchant {template_data.merchant} "
                 f"and template name: {template_data.template_name}",
             )
+
+        # Validate outbound_number_id if provided
+        if template_data.outbound_number_id:
+            outbound_number = await get_outbound_number_by_id(
+                template_data.outbound_number_id
+            )
+            if not outbound_number:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Outbound number with ID {template_data.outbound_number_id} does not exist",
+                )
 
         # Create the template
         now = datetime.now(timezone.utc)
@@ -87,6 +99,7 @@ async def create_template_handler(
             expected_payload_schema=template_data.expected_payload_schema,
             expected_callback_response_schema=template_data.expected_callback_response_schema,
             configurations=configurations,
+            outbound_number_id=template_data.outbound_number_id,
             is_active=template_data.is_active,
             now=now,
         )
