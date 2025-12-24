@@ -82,6 +82,7 @@ class TemplateModel(BaseModel):
     expected_payload_schema: Optional[Dict[str, Any]] = None
     expected_callback_response_schema: Optional[Dict[str, Any]] = None
     configurations: Optional[ConfigurationModel] = None
+    outbound_number_id: Optional[str] = None
     is_active: bool = True
     rendered_system_prompt: str = ""
     created_at: Optional[Any] = None
@@ -111,6 +112,7 @@ class CreateTemplateRequest(BaseModel):
     merchant: str
     template_name: str
     identifier: Optional[str] = None
+    outbound_number_id: Optional[str] = None
     is_active: bool = True
     description: Optional[str] = None
     flow: Dict[str, Any]

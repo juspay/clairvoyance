@@ -2,7 +2,7 @@
 SQL queries for template operations.
 """
 
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 # Table name constants
 TEMPLATE_TABLE = "template"
@@ -18,16 +18,17 @@ def get_template_by_merchant_query(
     if shop_identifier:
         conditions.append(f"shop_identifier = ${len(values) + 1}")
         values.append(shop_identifier)
+    else:
+        conditions.append("shop_identifier IS NULL")
 
     if name:
         conditions.append(f"name = ${len(values) + 1}")
         values.append(name)
 
     query = f"""
-        SELECT id, merchant_id, shop_identifier, name, flow, expected_payload_schema, expected_callback_response_schema, configurations, is_active, created_at, updated_at
+        SELECT id, merchant_id, shop_identifier, name, flow, expected_payload_schema, expected_callback_response_schema, configurations, outbound_number_id, is_active, created_at, updated_at
         FROM {TEMPLATE_TABLE}
         WHERE {' AND '.join(conditions)}
-        LIMIT 1
     """
 
     return query, values
@@ -45,12 +46,13 @@ def create_template_query(
     is_active: bool,
     created_at,
     updated_at,
+    outbound_number_id: Optional[str] = None,
 ) -> Tuple[str, List[Any]]:
     """Generate query to create a new template."""
     query = f"""
-        INSERT INTO {TEMPLATE_TABLE} (id, merchant_id, shop_identifier, name, flow, expected_payload_schema, expected_callback_response_schema, configurations, is_active, created_at, updated_at)
-        VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7::jsonb, $8::jsonb, $9, $10, $11)
-        RETURNING id, merchant_id, shop_identifier, name, flow, expected_payload_schema, expected_callback_response_schema, configurations, is_active, created_at, updated_at
+        INSERT INTO {TEMPLATE_TABLE} (id, merchant_id, shop_identifier, name, flow, expected_payload_schema, expected_callback_response_schema, configurations, outbound_number_id, is_active, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7::jsonb, $8::jsonb, $9, $10, $11, $12)
+        RETURNING id, merchant_id, shop_identifier, name, flow, expected_payload_schema, expected_callback_response_schema, configurations, outbound_number_id, is_active, created_at, updated_at
     """
 
     return query, [
@@ -62,6 +64,7 @@ def create_template_query(
         expected_payload_schema,
         expected_callback_response_schema,
         configurations,
+        outbound_number_id,
         is_active,
         created_at,
         updated_at,

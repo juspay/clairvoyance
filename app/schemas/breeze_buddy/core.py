@@ -63,6 +63,8 @@ class CreateOutboundNumberRequest(BaseModel):
     provider: CallProvider
     status: OutboundNumberStatus = OutboundNumberStatus.AVAILABLE
     maximum_channels: Optional[int] = None
+    merchant_id: Optional[str] = None
+    shop_identifier: Optional[str] = None
 
 
 class OutboundNumber(BaseModel):
@@ -74,6 +76,8 @@ class OutboundNumber(BaseModel):
     status: OutboundNumberStatus
     channels: Optional[int] = None
     maximum_channels: Optional[int] = None
+    merchant_id: Optional[str] = None
+    shop_identifier: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 

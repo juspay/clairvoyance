@@ -68,6 +68,11 @@ def decode_template(result: asyncpg.Record) -> Optional[TemplateModel]:
         expected_payload_schema=expected_payload_schema_data,
         expected_callback_response_schema=expected_callback_response_schema_data,
         configurations=configurations,
+        outbound_number_id=(
+            str(result["outbound_number_id"])
+            if result.get("outbound_number_id")
+            else None
+        ),
         is_active=result["is_active"],
         created_at=result["created_at"],
         updated_at=result["updated_at"],

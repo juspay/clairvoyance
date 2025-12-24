@@ -228,6 +228,7 @@ class Agent:
             merchant_id=merchant_id,
             template=self.lead.template,
             template_vars=self.template_vars,
+            shop_identifier=self.lead.shop_identifier,
         )
 
         # Create VAD analyzer and store reference for muting

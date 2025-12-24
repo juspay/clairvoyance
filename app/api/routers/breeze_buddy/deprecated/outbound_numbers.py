@@ -40,6 +40,8 @@ async def add_outbound_number(
             number=number.number,
             provider=number.provider,
             status=number.status,
+            merchant_id=number.merchant_id,
+            shop_identifier=number.shop_identifier,
             channels=0,
             maximum_channels=number.maximum_channels,
         )

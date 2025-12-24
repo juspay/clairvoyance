@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from app.ai.voice.agents.breeze_buddy.services.telephony.utils import get_voice_provider
+from app.ai.voice.agents.breeze_buddy.template.types import TemplateModel
 from app.ai.voice.agents.breeze_buddy.utils.common import send_webhook_with_retry
 from app.core.config.static import UPLOAD_BREEZE_BUDDY_CALL_RECORDINGS_TO_CLOUD
 from app.core.logger import logger
@@ -20,6 +21,7 @@ from app.database.accessor import (
     get_leads_by_status_and_time_before,
     get_outbound_number_based_on_status_and_provider,
     get_outbound_number_by_id,
+    get_template_by_merchant,
     release_lock_on_lead_by_id,
     update_lead_call_completion_details,
     update_lead_call_details,
@@ -75,25 +77,80 @@ def _is_within_calling_hours(config: CallExecutionConfig) -> bool:
         )
 
 
-async def _get_available_number(provider: CallProvider) -> Optional[OutboundNumber]:
+async def _get_available_number(
+    config: CallExecutionConfig,
+    template: Optional[TemplateModel],
+) -> Optional[OutboundNumber]:
     """
-    Finds an available outbound number for a given provider.
+    Finds an available outbound number for a given configuration.
+
+    First tries the new approach (template with outbound_number_id).
+    Falls back to backward compatible approach (matching by merchant/shop).
     """
-    numbers = await get_outbound_number_based_on_status_and_provider(
-        OutboundNumberStatus.AVAILABLE, provider
-    )
-    if not numbers:
-        logger.warning(f"No available outbound numbers found for provider: {provider}")
+
+    number = None
+
+    if template and template.outbound_number_id:
+        logger.info(
+            f"Using new approach: template {config.template} has outbound_number_id {template.outbound_number_id}"
+        )
+        outbound_number = await get_outbound_number_by_id(template.outbound_number_id)
+
+        if outbound_number and outbound_number.status == OutboundNumberStatus.AVAILABLE:
+            if outbound_number.provider == CallProvider.EXOTEL:
+                if (
+                    outbound_number.channels is not None
+                    and outbound_number.maximum_channels is not None
+                    and outbound_number.channels < outbound_number.maximum_channels
+                ):
+                    number = outbound_number
+            elif outbound_number.provider == CallProvider.TWILIO:
+                number = outbound_number
+
+    else:
+        logger.info(
+            f"Using backward compatible approach: looking for outbound number "
+            f"matching merchant {config.merchant_id}, shop {config.shop_identifier}"
+        )
+
+        # Get all available numbers
+        all_available_numbers = await get_outbound_number_based_on_status_and_provider(
+            OutboundNumberStatus.AVAILABLE, config.calling_provider
+        )
+
+        # Filter by merchant_id and shop_identifier as none for fallback
+        matching_numbers = [
+            n
+            for n in all_available_numbers
+            if n.merchant_id is None and n.shop_identifier is None
+        ]
+
+        if matching_numbers:
+            for num in matching_numbers:
+                if num.provider == CallProvider.EXOTEL:
+                    if (
+                        num.channels is not None
+                        and num.maximum_channels is not None
+                        and num.channels < num.maximum_channels
+                    ):
+                        number = num
+                        break
+                else:
+                    number = num
+                    break
+
+    if not number:
+        logger.warning(
+            f"No outbound number found for merchant {config.merchant_id}, "
+            f"template {config.template}, shop {config.shop_identifier}"
+        )
         return None
 
-    if provider == CallProvider.EXOTEL:
-        for number in numbers:
-            if number.channels < number.maximum_channels:
-                return number
-        logger.warning(f"No available channels for provider: {provider}")
-        return None
-    else:
-        return numbers[0]
+    logger.info(
+        f"Using outbound number {number.number} (provider: {number.provider}) "
+        f"for template {config.template}, merchant {config.merchant_id}, shop {config.shop_identifier}"
+    )
+    return number
 
 
 async def _acquire_number(number: OutboundNumber):
@@ -246,7 +303,27 @@ async def process_backlog_leads():
                     await release_lock_on_lead_by_id(locked_lead.id)
                     continue
 
-                number_to_use = await _get_available_number(config.calling_provider)
+                use_template_flow = (
+                    lead.metaData.get("use_template_flow", False)
+                    if lead.metaData
+                    else False
+                )
+
+                template = (
+                    await get_template_by_merchant(
+                        merchant_id=config.merchant_id,
+                        shop_identifier=config.shop_identifier,
+                        name=config.template,
+                    )
+                    if use_template_flow
+                    else None
+                )
+
+                logger.info(
+                    f"Lead {locked_lead.id} - use_template_flow: {use_template_flow}, template found: {template is not None}"
+                )
+
+                number_to_use = await _get_available_number(config, template)
                 if not number_to_use:
                     await release_lock_on_lead_by_id(locked_lead.id)
                     continue
@@ -256,11 +333,7 @@ async def process_backlog_leads():
                 call_provider = get_voice_provider(
                     config.calling_provider.value,
                     session,
-                    (
-                        lead.metaData.get("use_template_flow", False)
-                        if lead.metaData
-                        else False
-                    ),
+                    use_template_flow,
                 )
                 call = call_provider.make_call(
                     locked_lead.payload.get("customer_mobile_number"),
@@ -279,13 +352,56 @@ async def process_backlog_leads():
                     logger.error(
                         f"Failed to initiate call for lead {locked_lead.id}. Call response: {call}"
                     )
-                    await _release_number(number_to_use.id, config.calling_provider)
+                    await _release_number(number_to_use.id, number_to_use.provider)
+
+                    if template and template.outbound_number_id:
+                        logger.info(
+                            f"Not retrying call for lead {locked_lead.id} as outbound_number_id is set in template."
+                        )
+                        await update_lead_call_completion_details(
+                            id=locked_lead.id,
+                            status=LeadCallStatus.FINISHED,
+                            outcome="UNKNOWN",
+                            meta_data={
+                                "failure_reason": "Failed to initiate call, no retry due to fixed outbound number."
+                            },
+                            call_end_time=datetime.now(timezone.utc),
+                        )
+
+                        # Send webhook for failed call
+                        reporting_webhook_url = (
+                            locked_lead.payload.get("reporting_webhook_url")
+                            if locked_lead.payload
+                            else None
+                        )
+                        if reporting_webhook_url:
+                            webhook_data = {
+                                "outcome": "FAILED",
+                                "attemptCount": locked_lead.attempt_count + 1,
+                                "failureReason": "Failed to initiate call, no retry due to fixed outbound number.",
+                                "orderId": locked_lead.request_id,
+                            }
+                            logger.info(
+                                f"Sending failure webhook for lead {locked_lead.id} to {reporting_webhook_url}"
+                            )
+                            try:
+                                await send_webhook_with_retry(
+                                    session, reporting_webhook_url, webhook_data
+                                )
+                            except Exception as e:
+                                logger.error(
+                                    f"Error sending failure webhook for lead {locked_lead.id}: {e}"
+                                )
+
+                        await release_lock_on_lead_by_id(locked_lead.id)
+
+                        continue
 
                     retry_calling_provider = None
 
-                    if config.calling_provider == CallProvider.TWILIO:
+                    if number_to_use.provider == CallProvider.TWILIO:
                         retry_calling_provider = CallProvider.EXOTEL
-                    elif config.calling_provider == CallProvider.EXOTEL:
+                    elif number_to_use.provider == CallProvider.EXOTEL:
                         if not config.enable_international_call:
                             logger.warning(
                                 f"International calls disabled for merchant {locked_lead.merchant_id}. Skipping retry with Twilio."
@@ -330,9 +446,33 @@ async def process_backlog_leads():
                             continue
                         retry_calling_provider = CallProvider.TWILIO
 
-                    retry_number_to_use = await _get_available_number(
-                        retry_calling_provider
+                    retry_number_to_use = None
+
+                    # First, get all available numbers with the retry provider
+                    retry_numbers = (
+                        await get_outbound_number_based_on_status_and_provider(
+                            OutboundNumberStatus.AVAILABLE, retry_calling_provider
+                        )
                     )
+
+                    if retry_numbers:
+                        for number in retry_numbers:
+                            if (
+                                number.merchant_id is None
+                                and number.shop_identifier is None
+                            ):
+                                if retry_calling_provider == CallProvider.EXOTEL:
+                                    if (
+                                        number.channels is not None
+                                        and number.maximum_channels is not None
+                                        and number.channels < number.maximum_channels
+                                    ):
+                                        retry_number_to_use = number
+                                        break
+                                else:
+                                    retry_number_to_use = number
+                                    break
+
                     if not retry_number_to_use:
                         await release_lock_on_lead_by_id(locked_lead.id)
                         continue
@@ -340,8 +480,11 @@ async def process_backlog_leads():
                     await _acquire_number(retry_number_to_use)
 
                     retry_call_provider = get_voice_provider(
-                        retry_calling_provider.value, session
+                        retry_calling_provider.value,
+                        session,
+                        use_template_flow,
                     )
+
                     retry_call = retry_call_provider.make_call(
                         locked_lead.payload.get("customer_mobile_number"),
                         retry_number_to_use.number,
@@ -369,7 +512,7 @@ async def process_backlog_leads():
                             call_end_time=datetime.now(timezone.utc),
                         )
                         await _release_number(
-                            retry_number_to_use.id, retry_calling_provider
+                            retry_number_to_use.id, retry_number_to_use.provider
                         )
 
                         # Send webhook for failed call
