@@ -26,14 +26,14 @@ from app.schemas import UserInfo
 
 async def get_lead_handler(lead_id: str, current_user: UserInfo) -> Dict:
     """
-    Get a lead by ID (excluding sensitive fields).
+    Get a lead by ID with all fields.
 
     Args:
         lead_id: Lead UUID
         current_user: Current authenticated user
 
     Returns:
-        Lead object without metadata, cost, is_locked, timestamps, outbound_number_id
+        Complete lead object with all fields including metaData (contains transcription)
 
     Raises:
         HTTPException: 404 if not found
@@ -51,16 +51,7 @@ async def get_lead_handler(lead_id: str, current_user: UserInfo) -> Dict:
                 detail=f"Lead not found for ID: {lead_id}",
             )
 
-        # Remove sensitive/internal fields
-        lead_dict = lead.model_dump()
-        lead_dict.pop("metaData", None)
-        lead_dict.pop("cost", None)
-        lead_dict.pop("is_locked", None)
-        lead_dict.pop("created_at", None)
-        lead_dict.pop("updated_at", None)
-        lead_dict.pop("outbound_number_id", None)
-
-        return lead_dict
+        return lead.model_dump()
 
     except HTTPException:
         raise
