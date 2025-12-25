@@ -22,6 +22,7 @@ class TTSVoiceName(str, Enum):
 class ConfigurationModel(BaseModel):
     tts_voice_name: Optional[TTSVoiceName] = None
     stt_language: Optional[str] = None
+    payload_based_language_selection: bool = False
 
 
 class FlowAction(BaseModel):

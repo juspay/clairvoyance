@@ -132,6 +132,11 @@ async def BB_SARVAM_TTS_PACE() -> float:
     return await get_config("BB_SARVAM_TTS_PACE", 0.9, float)
 
 
+async def BB_SARVAM_TTS_ENABLE_PREPROCESSING() -> bool:
+    """Returns BB_SARVAM_TTS_ENABLE_PREPROCESSING from Redis"""
+    return await get_config("BB_SARVAM_TTS_ENABLE_PREPROCESSING", True, bool)
+
+
 async def BB_TTS_SERVICE() -> str:
     """Returns BREEZE_BUDDY_TTS_SERVICE from Redis"""
     return await get_config("BREEZE_BUDDY_TTS_SERVICE", "elevenlabs", str)

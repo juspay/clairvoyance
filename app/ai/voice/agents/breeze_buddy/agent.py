@@ -35,6 +35,9 @@ from app.ai.voice.agents.breeze_buddy.template import (
 )
 from app.ai.voice.agents.breeze_buddy.template.loader import FlowConfigLoader
 from app.ai.voice.agents.breeze_buddy.tts import get_tts_service
+from app.ai.voice.agents.breeze_buddy.utils.language_utils.prompt_injections import (
+    inject_language_rules,
+)
 from app.core.config.static import (
     AZURE_BREEZE_BUDDY_OPENAI_MODEL,
     AZURE_OPENAI_API_KEY,
@@ -88,6 +91,12 @@ class Agent:
         self.flow_config = None
         self.end_conversation_callbacks = []
         self.expected_callback_response_schema = None
+
+        # Language config (initialized during run)
+        self.language_name = "English"
+        self.language_prompt_enabled = (
+            False  # Whether to inject language instruction into prompts
+        )
 
     async def run(self):
         logger.info("Starting WebSocket bot")
@@ -220,6 +229,12 @@ class Agent:
                 logger.warning(f"Field '{field_name}' from schema not found in payload")
                 self.template_vars[field_name] = ""
 
+        # Add language_name to template_vars for prompt customization
+        # Language name is pre-computed in handlers.py and sent directly in payload
+        self.language_name = call_payload.get("language_name", "English")
+        logger.info(f"Using language from payload: {self.language_name}")
+        self.template_vars["primary_language"] = self.language_name
+
         logger.info(
             f"Dynamically built template_vars from schema: {list(self.template_vars.keys())}"
         )
@@ -267,6 +282,20 @@ class Agent:
         )
         if stt_language:
             logger.info(f"Using STT language from template: {stt_language}")
+
+        # Check if language-aware prompting is enabled
+        # Enable if stt_language is set OR payload_based_language_selection is enabled
+        payload_based_language_selection = (
+            template.configurations.payload_based_language_selection
+            if template and template.configurations
+            else False
+        )
+        if stt_language or payload_based_language_selection:
+            self.language_prompt_enabled = True
+            logger.info(
+                f"Language prompt enabled: will instruct LLM to speak in {self.language_name}"
+            )
+
         stt = await get_stt_service(language_hints=stt_language)
         llm = AzureLLMService(
             api_key=AZURE_OPENAI_API_KEY,
@@ -352,10 +381,18 @@ class Agent:
             initial_node_name = self.flow_config["initial_node"]
             initial_node_config = self.flow_config["nodes"][initial_node_name]
 
+            # Get role_messages and inject language instruction if enabled
+            role_messages = initial_node_config.get("role_messages", [])
+            role_messages = inject_language_rules(
+                role_messages,
+                self.template_vars.get("primary_language", self.language_name),
+                self.language_prompt_enabled,
+            )
+
             initial_node_config = NodeConfig(
                 name=initial_node_config["name"],
                 task_messages=initial_node_config["task_messages"],
-                role_messages=initial_node_config.get("role_messages", []),
+                role_messages=role_messages,
                 functions=initial_node_config["functions"],
                 pre_actions=initial_node_config["pre_actions"],
                 post_actions=initial_node_config["post_actions"],
