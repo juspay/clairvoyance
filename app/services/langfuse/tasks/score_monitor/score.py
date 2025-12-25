@@ -20,6 +20,7 @@ from app.database.accessor.breeze_buddy.lead_call_tracker import (
     get_all_lead_call_trackers,
     get_lead_based_analytics,
     get_lead_by_call_id,
+    update_langfuse_scores,
 )
 from app.services.langfuse.client import langfuse_readonly_client
 from app.services.langfuse.trace import fetch_trace
@@ -781,7 +782,8 @@ class ScoreMonitor:
             logger.warning("No evaluators configured")
             return
 
-        # Fetch zero scores for all configured evaluators
+        # Fetch ALL scores for all configured evaluators and group by traceId
+        all_scores = []
         zero_scores_by_evaluator = {}
         total_zero_scores = 0
 
@@ -794,7 +796,10 @@ class ScoreMonitor:
                     to_timestamp=to_time,
                 )
 
-                # Filter for zero scores (failures)
+                # Collect all scores for DB storage
+                all_scores.extend(scores)
+
+                # Filter for zero scores (failures) for alerting
                 zero_scores = [s for s in scores if self._is_zero_score(s)]
                 zero_scores_by_evaluator[evaluator_name] = zero_scores
                 total_zero_scores += len(zero_scores)
@@ -810,6 +815,55 @@ class ScoreMonitor:
                     f"Error fetching scores for evaluator '{evaluator_name}': {e}"
                 )
                 zero_scores_by_evaluator[evaluator_name] = []
+
+        # ====================================================================
+        # Step 1: Group all scores by traceId
+        # ====================================================================
+        scores_by_trace: Dict[str, List[Dict[str, Any]]] = {}
+        for score in all_scores:
+            trace_id = score.get("trace_id")
+            if trace_id:
+                if trace_id not in scores_by_trace:
+                    scores_by_trace[trace_id] = []
+                scores_by_trace[trace_id].append(score)
+
+        logger.info(
+            f"Grouped {len(all_scores)} scores into {len(scores_by_trace)} unique traces"
+        )
+
+        # ====================================================================
+        # Step 2: Fetch trace details ONCE per unique trace and build mapping
+        # ====================================================================
+        trace_details_cache: Dict[str, Dict[str, Any]] = {}
+        trace_to_call_sid: Dict[str, str] = {}
+
+        for trace_id in scores_by_trace.keys():
+            try:
+                trace_details = await self.get_trace_details(trace_id)
+                if trace_details:
+                    trace_details_cache[trace_id] = trace_details
+                    # Extract call_sid from trace metadata
+                    metadata = trace_details.get("metadata", {})
+                    attributes = (
+                        metadata.get("attributes", {})
+                        if isinstance(metadata, dict)
+                        else {}
+                    )
+                    call_sid = attributes.get("call_sid")
+                    if call_sid:
+                        trace_to_call_sid[trace_id] = call_sid
+            except Exception as e:
+                logger.error(f"Error fetching trace details for {trace_id}: {e}")
+
+        logger.info(
+            f"Fetched trace details for {len(trace_details_cache)} traces, "
+            f"found call_sid for {len(trace_to_call_sid)} traces"
+        )
+
+        # ====================================================================
+        # Step 3: Store scores in database using cached trace_id -> call_sid mapping
+        # ====================================================================
+        await self._store_scores(scores_by_trace, trace_to_call_sid)
 
         # Update last check time BEFORE processing alerts
         # This ensures timestamp is saved even if alert sending fails/crashes
@@ -834,16 +888,15 @@ class ScoreMonitor:
             f"{len(zero_scores_by_evaluator)} evaluators, sending Slack alerts..."
         )
 
-        # Send individual alerts for each zero score
+        # Send individual alerts for each zero score using cached trace details
         for evaluator_name, zero_scores in zero_scores_by_evaluator.items():
             for score in zero_scores:
                 try:
-                    # Get trace details for additional context
                     trace_id = score.get("trace_id")
-                    trace_details = None
-
-                    if trace_id:
-                        trace_details = await self.get_trace_details(trace_id)
+                    # Use cached trace details instead of fetching again
+                    trace_details = (
+                        trace_details_cache.get(trace_id) if trace_id else None
+                    )
 
                     # Send Slack alert
                     await self.send_score_alert(
@@ -857,6 +910,69 @@ class ScoreMonitor:
                         f"Error sending Slack alert for trace {score.get('trace_id')}: "
                         f"{alert_error}"
                     )
+
+    async def _store_scores(
+        self,
+        scores_by_trace: Dict[str, List[Dict[str, Any]]],
+        trace_to_call_sid: Dict[str, str],
+    ) -> None:
+        """
+        Store scores in database using pre-computed trace_id -> call_sid mapping.
+
+        Args:
+            scores_by_trace: Dictionary mapping trace_id to list of scores
+            trace_to_call_sid: Dictionary mapping trace_id to call_sid
+        """
+        if not scores_by_trace:
+            logger.info("No scores to store in database")
+            return
+
+        # Process each trace and store scores
+        stored_count = 0
+        for trace_id, scores in scores_by_trace.items():
+            try:
+                # Get call_sid from pre-computed mapping
+                call_sid = trace_to_call_sid.get(trace_id)
+                if not call_sid:
+                    logger.info(f"No call_sid mapping found for trace {trace_id}")
+                    continue
+
+                # Build langfuse_scores object
+                langfuse_data = {
+                    "trace_id": trace_id,
+                    "trace_url": f"{LANGFUSE_BASEURL}/trace/{trace_id}",
+                    "scores": scores,
+                    "fetched_at": datetime.now(timezone.utc).isoformat(),
+                }
+
+                # Log what we're trying to store
+                scores_summary = ", ".join(
+                    f"{s.get('name')}={s.get('value')}" for s in scores
+                )
+                logger.info(
+                    f"Storing langfuse_scores for call_sid: {call_sid}, "
+                    f"trace_id: {trace_id}, scores_count: {len(scores)}, "
+                    f"scores: [{scores_summary}]"
+                )
+
+                # Store in database
+                result = await update_langfuse_scores(call_sid, langfuse_data)
+                if result:
+                    stored_count += 1
+                    logger.info(
+                        f"Langfuse scores updated successfully for call_sid: {call_sid}"
+                    )
+                else:
+                    logger.warning(
+                        f"Failed to store scores for call_sid: {call_sid} (not found in DB)"
+                    )
+
+            except Exception as e:
+                logger.error(f"Error storing scores for trace {trace_id}: {e}")
+
+        logger.info(
+            f"Stored Langfuse scores for {stored_count}/{len(scores_by_trace)} traces"
+        )
 
 
 # Global instance

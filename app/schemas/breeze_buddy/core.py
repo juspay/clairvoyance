@@ -52,6 +52,7 @@ class LeadCallTracker(BaseModel):
     call_end_time: Optional[datetime] = None
     cost: Optional[float] = None
     is_locked: bool = False
+    langfuse_scores: Optional[Dict[str, Any]] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 

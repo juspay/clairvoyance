@@ -407,3 +407,26 @@ def get_lead_based_analytics_query(
         GROUP BY request_id;
     """
     return text, values
+
+
+def update_langfuse_scores_query(
+    call_id: str, langfuse_scores: Dict[str, Any]
+) -> Tuple[str, List[Any]]:
+    """
+    Update the langfuse_scores column for a specific call_id.
+
+    Args:
+        call_id: The call identifier (call_sid)
+        langfuse_scores: JSON object containing Langfuse evaluation scores
+
+    Returns:
+        Tuple of (query_text, values)
+    """
+    text = f"""
+        UPDATE "{LEAD_CALL_TRACKER_TABLE}"
+        SET langfuse_scores = $1::jsonb, updated_at = NOW()
+        WHERE call_id = $2
+        RETURNING *;
+    """
+    values = [json.dumps(langfuse_scores), call_id]
+    return text, values

@@ -21,6 +21,7 @@ from app.database.queries.breeze_buddy.lead_call_tracker import (
     get_leads_by_status_and_time_before_query,
     insert_lead_call_tracker_query,
     release_lock_on_lead_by_id_query,
+    update_langfuse_scores_query,
     update_lead_call_completion_details_query,
     update_lead_call_details_query,
     update_lead_call_initiated_time_query,
@@ -425,3 +426,30 @@ async def get_lead_based_analytics(
     except Exception as e:
         logger.error(f"Error getting lead-based analytics: {e}", exc_info=True)
         return []
+
+
+async def update_langfuse_scores(
+    call_id: str, langfuse_scores: Dict[str, Any]
+) -> Optional[LeadCallTracker]:
+    """
+    Update the langfuse_scores column for a specific call_id.
+
+    Args:
+        call_id: The call identifier (call_sid)
+        langfuse_scores: JSON object containing Langfuse evaluation scores
+
+    Returns:
+        Updated LeadCallTracker record if successful, None otherwise
+    """
+    logger.debug(f"Updating langfuse_scores for call_id: {call_id}")
+
+    try:
+        query_text, values = update_langfuse_scores_query(call_id, langfuse_scores)
+        result = await run_parameterized_query(query_text, values)
+        if result and get_row_count(result) > 0:
+            decoded_result = decode_lead_call_tracker(result[0])
+            return decoded_result
+        return None
+    except Exception as e:
+        logger.error(f"Error updating langfuse_scores for call_id {call_id}: {e}")
+        return None
