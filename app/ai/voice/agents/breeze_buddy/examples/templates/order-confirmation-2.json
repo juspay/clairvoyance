@@ -37,7 +37,8 @@
   },
   "configurations": {
     "tts_voice_name": "rhea",
-    "stt_language": "en"
+    "stt_language": "en",
+    "payload_based_language_selection": true
   },
   "expected_callback_response_schema": {
     "cancellationReason": {

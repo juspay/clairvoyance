@@ -21,6 +21,9 @@ from app.ai.voice.agents.breeze_buddy.utils.common import (
     get_validation_error_message,
     validate_payload,
 )
+from app.ai.voice.agents.breeze_buddy.utils.language_utils.language_detector import (
+    determine_language_for_call,
+)
 from app.core.logger import logger
 from app.database.accessor import (
     create_lead_call_tracker,
@@ -161,6 +164,16 @@ async def push_lead_handler(req: PushLeadRequest, current_user: UserInfo) -> Dic
         lead_payload = {**req.payload}
         if req.reporting_webhook_url:
             lead_payload["reporting_webhook_url"] = req.reporting_webhook_url
+
+        # Determine language using unified helper function
+        _, language_name = await determine_language_for_call(
+            template.configurations if template else None,
+            lead_payload,
+            req.request_id,
+        )
+
+        # Add language name to payload for use during call (agent.py uses this)
+        lead_payload["language_name"] = language_name
 
         # Insert lead call tracker record with both template name and template_id
         lead_call_tracker = await create_lead_call_tracker(

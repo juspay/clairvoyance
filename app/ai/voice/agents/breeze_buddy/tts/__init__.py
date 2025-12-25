@@ -7,6 +7,7 @@ from app.ai.voice.tts import (
     build_sarvam_tts,
 )
 from app.core.config.dynamic import (
+    BB_SARVAM_TTS_ENABLE_PREPROCESSING,
     BB_SARVAM_TTS_LANGUAGE_CODE,
     BB_SARVAM_TTS_MODEL,
     BB_SARVAM_TTS_PACE,
@@ -33,6 +34,7 @@ async def get_sarvam_tts_service():
     bb_sarvam_tts_language_code = await BB_SARVAM_TTS_LANGUAGE_CODE()
     bb_sarvam_tts_pitch = await BB_SARVAM_TTS_PITCH()
     bb_sarvam_tts_pace = await BB_SARVAM_TTS_PACE()
+    bb_sarvam_tts_enable_preprocessing = await BB_SARVAM_TTS_ENABLE_PREPROCESSING()
 
     return build_sarvam_tts(
         SarvamTTSConfig(
@@ -42,6 +44,7 @@ async def get_sarvam_tts_service():
             language_code=bb_sarvam_tts_language_code,
             pitch=bb_sarvam_tts_pitch,
             pace=bb_sarvam_tts_pace,
+            enable_preprocessing=bb_sarvam_tts_enable_preprocessing,
         )
     )
 

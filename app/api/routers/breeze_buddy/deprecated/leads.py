@@ -9,6 +9,9 @@ from app.ai.voice.agents.breeze_buddy.utils.common import (
     get_validation_error_message,
     validate_payload,
 )
+from app.ai.voice.agents.breeze_buddy.utils.language_utils.language_detector import (
+    determine_language_for_call,
+)
 from app.core.config.dynamic import SHOPS_FOR_TEMPLATE_FLOW
 from app.core.logger import logger
 from app.core.security.jwt import get_current_user
@@ -83,7 +86,20 @@ async def trigger_order_confirmation(
                 f"Shop {order.shop_identifier} is in template flow enabled list, routing to push_lead_v2"
             )
 
-            # Transform LeadData to PushLeadRequest format
+            # Fetch template to detect language for agent.py flow
+            template_obj = await get_template_by_merchant(
+                merchant, order.shop_identifier, template
+            )
+
+            # Detect language for agent.py flow (only for template flow enabled shops)
+            order_payload = order.model_dump()
+            _, language_name = await determine_language_for_call(
+                template_obj.configurations if template_obj else None,
+                order_payload,
+                order.order_id,
+            )
+
+            # Transform LeadData to PushLeadRequest format with language
             push_request = PushLeadRequest(
                 merchant=merchant,
                 template=template,
@@ -97,6 +113,7 @@ async def trigger_order_confirmation(
                     "customer_address": order.customer_address,
                     "customer_mobile_number": order.customer_mobile_number,
                     "items": [item.model_dump() for item in order.order_data.items],
+                    "language_name": language_name,
                 },
             )
 
