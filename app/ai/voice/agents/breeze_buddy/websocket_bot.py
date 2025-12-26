@@ -627,7 +627,7 @@ class OrderConfirmationBot:
 
             # Send webhook - skip BUSY/NO_ANSWER unless it's the last attempt
             should_send_webhook = self.reporting_webhook_url and (
-                self.outcome not in ["BUSY", "NO_ANSWER"] or is_last_attempt
+                self.outcome != "BUSY" or is_last_attempt
             )
 
             if should_send_webhook:
