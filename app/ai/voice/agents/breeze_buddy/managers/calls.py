@@ -183,7 +183,9 @@ async def _release_number(number_id: str, provider: CallProvider):
             )
 
 
-async def _retry_call(lead: LeadCallTracker, config: CallExecutionConfig):
+async def _retry_call(
+    lead: LeadCallTracker, config: CallExecutionConfig, outcome: Optional[str] = None
+):
     """
     Schedules a retry for a call.
     """
@@ -208,6 +210,42 @@ async def _retry_call(lead: LeadCallTracker, config: CallExecutionConfig):
                 )
             },
         )
+    else:
+        if outcome == "NO_ANSWER":
+            reporting_webhook_url = lead.payload.get("reporting_webhook_url")
+            if reporting_webhook_url:
+                call_duration = None
+                if lead.call_initiated_time:
+                    call_initiated_time_utc = lead.call_initiated_time.astimezone(
+                        timezone.utc
+                    )
+                    call_duration = (
+                        datetime.now(timezone.utc) - call_initiated_time_utc
+                    ).total_seconds()
+
+                summary_data = {
+                    "callSid": lead.call_id,
+                    "outcome": outcome,
+                    "attemptCount": lead.attempt_count + 1,
+                    "callDuration": call_duration,
+                    "orderId": lead.payload.get("order_id"),
+                }
+
+                try:
+                    async with create_aiohttp_session() as session:
+                        success = await send_webhook_with_retry(
+                            session, reporting_webhook_url, summary_data, max_retries=3
+                        )
+                        if success:
+                            logger.info(
+                                "Successfully sent call summary webhook on no_answer."
+                            )
+                        else:
+                            logger.error(
+                                "Failed to send call summary webhook on no_answer after all retries."
+                            )
+                except Exception as e:
+                    logger.error(f"Error sending webhook on no_answer: {e}")
 
 
 async def _cleanup_stuck_leads():
@@ -623,7 +661,7 @@ async def handle_unanswered_calls(call_id: str):
         call_end_time=datetime.now(timezone.utc),
     )
 
-    await _retry_call(lead, config)
+    await _retry_call(lead, config, "NO_ANSWER")
 
 
 async def update_call_recording(
