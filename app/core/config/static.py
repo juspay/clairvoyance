@@ -131,6 +131,19 @@ OPEN_OBSERVE_BASE_URL = os.environ.get(
     "OPEN_OBSERVE_BASE_URL", "https://periscope.breeze.in"
 )
 
+# Latency Tracking Configuration (Phase 2)
+ENABLE_BREEZE_BUDDY_LATENCY_TRACKING = (
+    os.environ.get("ENABLE_BREEZE_BUDDY_LATENCY_TRACKING", "true").lower() == "true"
+)
+
+# LLM Buffer Streaming Configuration (Phase 3)
+ENABLE_BREEZE_BUDDY_LLM_BUFFER_STREAMING = (
+    os.environ.get("ENABLE_BREEZE_BUDDY_LLM_BUFFER_STREAMING", "false").lower() == "true"
+)
+BREEZE_BUDDY_LLM_BUFFER_SIZE = int(
+    os.environ.get("BREEZE_BUDDY_LLM_BUFFER_SIZE", "40")
+)
+
 # Text sanitization
 SANITIZE_TEXT_FOR_TTS = (
     os.environ.get("SANITIZE_TEXT_FOR_TTS", "false").lower() == "true"
