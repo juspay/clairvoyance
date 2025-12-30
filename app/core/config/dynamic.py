@@ -146,3 +146,54 @@ async def SHOPS_FOR_TEMPLATE_FLOW() -> list[str]:
     """Returns SHOPS_FOR_TEMPLATE_FLOW from Redis as a list of shop identifiers"""
     config_value = await get_config("SHOPS_FOR_TEMPLATE_FLOW", "", str)
     return [shop.strip() for shop in config_value.split(",") if shop.strip()]
+
+
+# --- Breeze Buddy Text Aggregation Configuration ---
+async def BB_TEXT_AGGREGATION_TYPE() -> str:
+    """
+    Returns BB_TEXT_AGGREGATION_TYPE from Redis.
+
+    Options:
+    - "none": Use default Pipecat SimpleTextAggregator (sentence-only)
+    - "hybrid": Use HybridTextAggregator (40-char + sentence boundaries)
+    - "character_count": Use CharacterCountOnlyAggregator (pure 40-char buffering)
+
+    Default: "hybrid" (recommended for balanced latency and quality)
+    """
+    return await get_config("BB_TEXT_AGGREGATION_TYPE", "hybrid", str)
+
+
+async def BB_TEXT_AGGREGATION_MIN_CHARS() -> int:
+    """
+    Returns BB_TEXT_AGGREGATION_MIN_CHARS from Redis.
+    Minimum characters before considering a split (used in hybrid and character_count modes).
+    Default: 40 (matching Bolna's buffering)
+    """
+    return await get_config("BB_TEXT_AGGREGATION_MIN_CHARS", 40, int)
+
+
+async def BB_TEXT_AGGREGATION_MAX_CHARS() -> int:
+    """
+    Returns BB_TEXT_AGGREGATION_MAX_CHARS from Redis.
+    Maximum characters before forcing a split (safety net).
+    Default: 200
+    """
+    return await get_config("BB_TEXT_AGGREGATION_MAX_CHARS", 200, int)
+
+
+async def BB_TEXT_AGGREGATION_ENABLE_SENTENCE_DETECTION() -> bool:
+    """
+    Returns BB_TEXT_AGGREGATION_ENABLE_SENTENCE_DETECTION from Redis.
+    Whether to split on sentence boundaries in hybrid mode.
+    Default: True (recommended for natural audio)
+    """
+    return await get_config("BB_TEXT_AGGREGATION_ENABLE_SENTENCE_DETECTION", True, bool)
+
+
+async def BB_TEXT_AGGREGATION_FIRST_CHUNK_MIN_CHARS() -> int:
+    """
+    Returns BB_TEXT_AGGREGATION_FIRST_CHUNK_MIN_CHARS from Redis.
+    Minimum characters for the first chunk only (ultra-low initial latency).
+    Default: 20 (faster initial response, then uses min_chars for subsequent chunks)
+    """
+    return await get_config("BB_TEXT_AGGREGATION_FIRST_CHUNK_MIN_CHARS", 20, int)

@@ -316,6 +316,7 @@ class Agent:
 
         self.context = OpenAILLMContext()
         user_params = LLMUserAggregatorParams(
+            aggregation_timeout=0.0,  # Send transcription immediately without waiting
             enable_emulated_vad_interruptions=ENABLE_BREEZE_BUDDY_USER_INTERRUPTION
         )
         context_aggregator = llm.create_context_aggregator(

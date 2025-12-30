@@ -13,6 +13,11 @@ from app.core.config.dynamic import (
     BB_SARVAM_TTS_PACE,
     BB_SARVAM_TTS_PITCH,
     BB_SARVAM_TTS_VOICE_ID,
+    BB_TEXT_AGGREGATION_ENABLE_SENTENCE_DETECTION,
+    BB_TEXT_AGGREGATION_FIRST_CHUNK_MIN_CHARS,
+    BB_TEXT_AGGREGATION_MAX_CHARS,
+    BB_TEXT_AGGREGATION_MIN_CHARS,
+    BB_TEXT_AGGREGATION_TYPE,
     BB_TTS_SERVICE,
 )
 from app.core.config.static import (
@@ -36,6 +41,20 @@ async def get_sarvam_tts_service():
     bb_sarvam_tts_pace = await BB_SARVAM_TTS_PACE()
     bb_sarvam_tts_enable_preprocessing = await BB_SARVAM_TTS_ENABLE_PREPROCESSING()
 
+    # Load text aggregation configuration
+    aggregation_type = await BB_TEXT_AGGREGATION_TYPE()
+    min_chars = await BB_TEXT_AGGREGATION_MIN_CHARS()
+    max_chars = await BB_TEXT_AGGREGATION_MAX_CHARS()
+    enable_sentence_detection = await BB_TEXT_AGGREGATION_ENABLE_SENTENCE_DETECTION()
+    first_chunk_min_chars = await BB_TEXT_AGGREGATION_FIRST_CHUNK_MIN_CHARS()
+
+    # Determine use_hybrid_aggregator based on aggregation_type
+    use_hybrid_aggregator = aggregation_type != "none"
+
+    # For character_count mode, disable sentence detection
+    if aggregation_type == "character_count":
+        enable_sentence_detection = False
+
     return build_sarvam_tts(
         SarvamTTSConfig(
             api_key=SARVAM_API_KEY,
@@ -45,6 +64,12 @@ async def get_sarvam_tts_service():
             pitch=bb_sarvam_tts_pitch,
             pace=bb_sarvam_tts_pace,
             enable_preprocessing=bb_sarvam_tts_enable_preprocessing,
+            # Text aggregation configuration
+            use_hybrid_aggregator=use_hybrid_aggregator,
+            first_chunk_min_chars=first_chunk_min_chars,
+            min_chars=min_chars,
+            max_chars=max_chars,
+            enable_sentence_detection=enable_sentence_detection,
         )
     )
 
@@ -53,6 +78,20 @@ async def get_elevenlabs_tts_service():
     """
     Returns an ElevenLabs TTS service instance based on the Breeze Buddy configuration.
     """
+    # Load text aggregation configuration
+    aggregation_type = await BB_TEXT_AGGREGATION_TYPE()
+    min_chars = await BB_TEXT_AGGREGATION_MIN_CHARS()
+    max_chars = await BB_TEXT_AGGREGATION_MAX_CHARS()
+    enable_sentence_detection = await BB_TEXT_AGGREGATION_ENABLE_SENTENCE_DETECTION()
+    first_chunk_min_chars = await BB_TEXT_AGGREGATION_FIRST_CHUNK_MIN_CHARS()
+
+    # Determine use_hybrid_aggregator based on aggregation_type
+    use_hybrid_aggregator = aggregation_type != "none"
+
+    # For character_count mode, disable sentence detection
+    if aggregation_type == "character_count":
+        enable_sentence_detection = False
+
     return build_elevenlabs_tts(
         ElevenLabsConfig(
             api_key=ELEVENLABS_API_KEY,
@@ -60,6 +99,12 @@ async def get_elevenlabs_tts_service():
             model_id=ELEVENLABS_MODEL_ID,
             speed=ELEVENLABS_VOICE_SPEED,
             language=Language.EN_IN,
+            # Text aggregation configuration
+            use_hybrid_aggregator=use_hybrid_aggregator,
+            first_chunk_min_chars=first_chunk_min_chars,
+            min_chars=min_chars,
+            max_chars=max_chars,
+            enable_sentence_detection=enable_sentence_detection,
         )
     )
 
