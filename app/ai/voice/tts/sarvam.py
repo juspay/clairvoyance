@@ -51,7 +51,12 @@ SCRIPT_TO_SARVAM_LANG = {
 def detect_script(text: str) -> str:
     """Detect the dominant script in the text.
 
-    Returns 'english' as the default fallback if any error occurs.
+    Prioritizes regional Indian languages over English. If any regional language
+    script is detected mixed with English, the regional language is returned.
+    This handles common Indian speech patterns where English words are mixed
+    with regional languages (e.g., "హలో Manas sir!" should be detected as Telugu).
+
+    Returns 'english' only if no regional language characters are found.
     """
     try:
         script_counts = {script: 0 for script in SCRIPT_RANGES}
@@ -67,14 +72,25 @@ def detect_script(text: str) -> str:
                 if 0x0041 <= code_point <= 0x005A or 0x0061 <= code_point <= 0x007A:
                     script_counts["english"] += 1
 
-        main_script = "english"
-        max_count = 0
+        # Find the dominant regional language (excluding English)
+        regional_script = None
+        max_regional_count = 0
         for script, count in script_counts.items():
-            if count > max_count:
-                max_count = count
-                main_script = script
+            if script != "english" and count > max_regional_count:
+                max_regional_count = count
+                regional_script = script
 
-        return main_script
+        # If ANY regional language is detected, use it (prioritize over English)
+        # This handles mixed text like "హలో Manas sir!" → Telugu
+        if regional_script and max_regional_count > 0:
+            return regional_script
+
+        # Only return English if no regional language characters found
+        if script_counts["english"] > 0:
+            return "english"
+
+        # Fallback to english if no script detected
+        return "english"
     except Exception as e:
         logger.warning(f"[SARVAM] Error detecting script: {e}, defaulting to english")
         return "english"

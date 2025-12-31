@@ -78,6 +78,8 @@ def _setup_logger_sinks(
             or logger_name.startswith("daily_core")
             or logger_name.startswith("openai._base_client")
             or (logger_name.startswith("logging") and 'TEXT \'{"audio":' in message)
+            or (logger_name.startswith("logging") and message.startswith("> BINARY"))
+            or (logger_name.startswith("logging") and message.startswith("< BINARY"))
         )
 
     if ENVIRONMENT == "dev":
