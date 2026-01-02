@@ -49,6 +49,7 @@ bcrypt>=4.0.0
 
 # Audio processing
 pydub
+soundfile
 
 # Redis cluster support
 redis[hiredis]>=5.0.0

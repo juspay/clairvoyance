@@ -37,7 +37,10 @@
   },
   "configurations": {
     "tts_voice_name": "rhea",
-    "stt_language": "en"
+    "stt_language": "en",
+    "enable_background_sound": false,
+    "background_sound_file": "office-ambience",
+    "background_sound_volume": 2.0
   },
   "expected_callback_response_schema": {
     "cancellation_reason": {

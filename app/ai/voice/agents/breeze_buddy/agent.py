@@ -8,6 +8,15 @@ from fastapi import WebSocket
 from opentelemetry import trace
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.vad.vad_analyzer import VADParams
+from pipecat.observers.loggers.llm_log_observer import LLMLogObserver
+from pipecat.observers.loggers.metrics_log_observer import MetricsLogObserver
+from pipecat.observers.loggers.transcription_log_observer import (
+    TranscriptionLogObserver,
+)
+from pipecat.observers.loggers.user_bot_latency_log_observer import (
+    UserBotLatencyLogObserver,
+)
+from pipecat.observers.turn_tracking_observer import TurnTrackingObserver
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
@@ -35,8 +44,14 @@ from app.ai.voice.agents.breeze_buddy.template import (
 )
 from app.ai.voice.agents.breeze_buddy.template.loader import FlowConfigLoader
 from app.ai.voice.agents.breeze_buddy.tts import get_tts_service
+from app.ai.voice.agents.breeze_buddy.utils.common import create_background_sound_mixer
 from app.ai.voice.agents.breeze_buddy.utils.language_utils.prompt_injections import (
     inject_language_rules,
+)
+from app.core.config.dynamic import (
+    BREEZE_BUDDY_AZURE_MAX_COMPLETION_TOKENS,
+    BREEZE_BUDDY_AZURE_TEMPERATURE,
+    BREEZE_BUDDY_LLM_AGGREGATION_TIMEOUT,
 )
 from app.core.config.static import (
     AZURE_BREEZE_BUDDY_OPENAI_MODEL,
@@ -48,6 +63,7 @@ from app.core.config.static import (
     BREEZE_BUDDY_VAD_STOP_SECS,
     ENABLE_BREEZE_BUDDY_TRACING,
     ENABLE_BREEZE_BUDDY_USER_INTERRUPTION,
+    ENVIRONMENT,
 )
 from app.core.logger import logger
 from app.database.accessor import get_lead_by_call_id, update_lead_call_initiated_time
@@ -257,6 +273,9 @@ class Agent:
             ),
         )
 
+        # Create audio mixer for background sound from template configuration
+        audio_out_mixer = create_background_sound_mixer(template)
+
         self.transport = FastAPIWebsocketTransport(
             websocket=self.ws,
             params=FastAPIWebsocketParams(
@@ -264,8 +283,7 @@ class Agent:
                 audio_out_enabled=True,
                 add_wav_header=False,
                 vad_analyzer=self.vad_analyzer,
-                audio_in_sample_rate=8000,  # Move audio config to transport level
-                audio_out_sample_rate=8000,  # Move audio config to transport level
+                audio_out_mixer=audio_out_mixer,
                 serializer=(
                     self.serializer(stream_sid, self.call_sid)
                     if self.serializer
@@ -301,6 +319,8 @@ class Agent:
             api_key=AZURE_OPENAI_API_KEY,
             endpoint=AZURE_OPENAI_ENDPOINT,
             model=AZURE_BREEZE_BUDDY_OPENAI_MODEL,
+            max_completion_tokens=await BREEZE_BUDDY_AZURE_MAX_COMPLETION_TOKENS(),
+            temperature=await BREEZE_BUDDY_AZURE_TEMPERATURE(),
         )
 
         # Create TTS with event handlers for VAD muting
@@ -316,7 +336,8 @@ class Agent:
 
         self.context = OpenAILLMContext()
         user_params = LLMUserAggregatorParams(
-            enable_emulated_vad_interruptions=ENABLE_BREEZE_BUDDY_USER_INTERRUPTION
+            aggregation_timeout=await BREEZE_BUDDY_LLM_AGGREGATION_TIMEOUT(),
+            enable_emulated_vad_interruptions=ENABLE_BREEZE_BUDDY_USER_INTERRUPTION,
         )
         context_aggregator = llm.create_context_aggregator(
             self.context, user_params=user_params
@@ -338,12 +359,29 @@ class Agent:
         shop_name = self.template_vars.get("shop_name", "unknown")
         conversation_id = f"{customer_name}-{shop_name}-{timestamp}"
 
-        # Create task parameters and initialize task (audio config moved to transport level)
+        # Only add observers in dev environment
+        observers = []
+        if ENVIRONMENT.lower() in ["dev", "development"]:
+            observers = [
+                MetricsLogObserver(),  # All metrics (STT, LLM, TTS, TTFB, etc.)
+                LLMLogObserver(),  # LLM activity details
+                TranscriptionLogObserver(),  # STT transcriptions
+                UserBotLatencyLogObserver(),  # Response timing
+                TurnTrackingObserver(),  # Conversation flow
+            ]
+            logger.info(
+                "Development environment detected - enabling pipeline observers"
+            )
+        else:
+            logger.info(f"Environment: {ENVIRONMENT} - pipeline observers disabled")
+
+        # Create task parameters and initialize task
         task_params = {
             "params": PipelineParams(
                 allow_interruptions=True,
                 enable_metrics=True,
                 enable_usage_metrics=True,
+                observers=observers,
             ),
         }
 

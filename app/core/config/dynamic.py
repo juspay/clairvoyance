@@ -146,3 +146,19 @@ async def SHOPS_FOR_TEMPLATE_FLOW() -> list[str]:
     """Returns SHOPS_FOR_TEMPLATE_FLOW from Redis as a list of shop identifiers"""
     config_value = await get_config("SHOPS_FOR_TEMPLATE_FLOW", "", str)
     return [shop.strip() for shop in config_value.split(",") if shop.strip()]
+
+
+# --- Breeze Buddy Azure LLM Configuration ---
+async def BREEZE_BUDDY_AZURE_MAX_COMPLETION_TOKENS() -> int:
+    """Returns BREEZE_BUDDY_AZURE_MAX_COMPLETION_TOKENS from Redis"""
+    return await get_config("BREEZE_BUDDY_AZURE_MAX_COMPLETION_TOKENS", 50, int)
+
+
+async def BREEZE_BUDDY_AZURE_TEMPERATURE() -> float:
+    """Returns BREEZE_BUDDY_AZURE_TEMPERATURE from Redis"""
+    return await get_config("BREEZE_BUDDY_AZURE_TEMPERATURE", 0.7, float)
+
+
+async def BREEZE_BUDDY_LLM_AGGREGATION_TIMEOUT() -> float:
+    """Returns BREEZE_BUDDY_LLM_AGGREGATION_TIMEOUT from Redis (0.0 = send immediately)"""
+    return await get_config("BREEZE_BUDDY_LLM_AGGREGATION_TIMEOUT", 0.0, float)
