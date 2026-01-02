@@ -142,6 +142,44 @@ async def BB_TTS_SERVICE() -> str:
     return await get_config("BREEZE_BUDDY_TTS_SERVICE", "elevenlabs", str)
 
 
+# --- Breeze Buddy Cartesia TTS Configuration ---
+async def BB_CARTESIA_VOICE_ID() -> str:
+    """Returns BB_CARTESIA_VOICE_ID from Redis"""
+    return await get_config(
+        "BB_CARTESIA_VOICE_ID", "cbaf8084-f009-4838-a096-07ee2e6612b1", str
+    )
+
+
+async def BB_CARTESIA_MODEL() -> str:
+    """Returns BB_CARTESIA_MODEL from Redis"""
+    return await get_config("BB_CARTESIA_MODEL", "sonic-3", str)
+
+
+async def BB_CARTESIA_LANGUAGE() -> str:
+    """Returns BB_CARTESIA_LANGUAGE from Redis (language code like 'en', 'es', 'hi')"""
+    return await get_config("BB_CARTESIA_LANGUAGE", None, str)
+
+
+async def BB_CARTESIA_GENERATION_VOLUME() -> float:
+    """Returns BB_CARTESIA_GENERATION_VOLUME from Redis (range: 0.5-2.0)"""
+    return await get_config("BB_CARTESIA_GENERATION_VOLUME", 1.5, float)
+
+
+async def BB_CARTESIA_GENERATION_SPEED() -> float:
+    """Returns BB_CARTESIA_GENERATION_SPEED from Redis (range: 0.6-1.5)"""
+    return await get_config("BB_CARTESIA_GENERATION_SPEED", 1.1, float)
+
+
+async def BB_CARTESIA_GENERATION_EMOTION() -> str:
+    """Returns BB_CARTESIA_GENERATION_EMOTION from Redis"""
+    return await get_config("BB_CARTESIA_GENERATION_EMOTION", "happy", str)
+
+
+async def BB_CARTESIA_AGGREGATE_SENTENCES() -> bool:
+    """Returns BB_CARTESIA_AGGREGATE_SENTENCES from Redis"""
+    return await get_config("BB_CARTESIA_AGGREGATE_SENTENCES", True, bool)
+
+
 async def SHOPS_FOR_TEMPLATE_FLOW() -> list[str]:
     """Returns SHOPS_FOR_TEMPLATE_FLOW from Redis as a list of shop identifiers"""
     config_value = await get_config("SHOPS_FOR_TEMPLATE_FLOW", "", str)
