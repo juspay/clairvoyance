@@ -17,6 +17,7 @@ class ActionType(str, Enum):
 class TTSVoiceName(str, Enum):
     RHEA = "rhea"
     SARA = "sara"
+    MIRA = "mira"
 
 
 class BackgroundSoundFile(str, Enum):
