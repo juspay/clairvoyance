@@ -19,10 +19,19 @@ class TTSVoiceName(str, Enum):
     SARA = "sara"
 
 
+class BackgroundSoundFile(str, Enum):
+    """Enum for available background sound files"""
+
+    OFFICE_AMBIENCE = "office-ambience"
+
+
 class ConfigurationModel(BaseModel):
     tts_voice_name: Optional[TTSVoiceName] = None
     stt_language: Optional[str] = None
     payload_based_language_selection: bool = False
+    enable_background_sound: bool = False
+    background_sound_file: Optional[BackgroundSoundFile] = None
+    background_sound_volume: float = 2.0
 
 
 class FlowAction(BaseModel):
