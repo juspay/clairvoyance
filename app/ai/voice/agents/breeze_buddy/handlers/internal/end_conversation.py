@@ -1,9 +1,13 @@
-from datetime import datetime
+import json
+from datetime import datetime, timezone
 
 from pipecat.frames.frames import EndFrame
 
 from app.ai.voice.agents.breeze_buddy.callbacks import (
     service_callback,
+)
+from app.ai.voice.agents.breeze_buddy.observability.tracing_setup import (
+    update_span_with_evaluation_data,
 )
 from app.ai.voice.agents.breeze_buddy.template.context import TemplateContext
 from app.core.logger import logger
@@ -74,6 +78,9 @@ async def end_conversation(context: TemplateContext, args, transition_to=None):
             logger.warning(
                 f"No context found for transcription collection in call {context.call_sid}"
             )
+
+        # Update OpenTelemetry span with comprehensive evaluation data for LLM-as-a-Judge
+        update_span_with_evaluation_data(context)
 
         # Hangup call
         if context.hangup_function:
