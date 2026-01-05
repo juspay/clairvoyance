@@ -29,7 +29,7 @@ from pipecat_flows import FlowManager, FlowsFunctionSchema, NodeConfig
 from pydantic import ValidationError
 from pydub import AudioSegment
 
-from app.ai.voice.agents.breeze_buddy.analytics.tracing_setup import (
+from app.ai.voice.agents.breeze_buddy.observability.tracing_setup import (
     auto_trace,
     setup_tracing,
 )

@@ -9,7 +9,7 @@ This handler replaces all individual handlers. It:
 import asyncio
 from typing import Any, Dict, List, Optional
 
-from app.ai.voice.agents.breeze_buddy.analytics.tracing_setup import auto_trace
+from app.ai.voice.agents.breeze_buddy.observability.tracing_setup import auto_trace
 from app.ai.voice.agents.breeze_buddy.template.context import TemplateContext
 from app.ai.voice.agents.breeze_buddy.template.hooks import HookRegistry
 from app.ai.voice.agents.breeze_buddy.template.types import HookConfig

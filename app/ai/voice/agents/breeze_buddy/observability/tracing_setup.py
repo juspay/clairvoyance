@@ -1,4 +1,5 @@
 import json
+from datetime import datetime, timezone
 from functools import wraps
 
 from opentelemetry import trace
@@ -8,6 +9,7 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from pipecat.utils.tracing.turn_context_provider import get_current_turn_context
 
+from app.ai.voice.agents.breeze_buddy.template.context import TemplateContext
 from app.core.config.static import (
     BUDDY_OTEL_EXPORTER_OTLP_TRACES_ENDPOINT,
     BUDDY_OTEL_EXPORTER_OTLP_TRACES_HEADERS,
@@ -104,3 +106,61 @@ def auto_trace(tool_name: str):
         return wrapper
 
     return decorator
+
+
+def update_span_with_evaluation_data(context: TemplateContext) -> None:
+    """
+    Update the OpenTelemetry span with comprehensive evaluation data for LLM-as-a-Judge.
+
+    This function extracts relevant data from the TemplateContext and sets them as
+    span attributes for Langfuse evaluation.
+
+    Args:
+        context: The TemplateContext containing call data and root span
+    """
+    if not context.root_span or not ENABLE_BREEZE_BUDDY_TRACING or not context.lead:
+        return
+
+    try:
+        lead = context.lead
+
+        # Core evaluation data
+        context.root_span.set_attribute("call_outcome", lead.outcome or "UNKNOWN")
+
+        # Calculate call duration
+        call_duration = None
+        if lead.call_initiated_time:
+            call_initiated_time_utc = lead.call_initiated_time.astimezone(timezone.utc)
+            call_duration = (
+                datetime.now(timezone.utc) - call_initiated_time_utc
+            ).total_seconds()
+
+        # Send entire payload as JSON string
+        if lead.payload:
+            context.root_span.set_attribute(
+                "payload", json.dumps(lead.payload, ensure_ascii=False, default=str)
+            )
+
+        # Merchant ID
+        if lead.merchant_id:
+            context.root_span.set_attribute("merchant_id", lead.merchant_id)
+
+        # Send entire metaData as JSON string (contains transcription, and template-specific data)
+        if lead.metaData:
+            context.root_span.set_attribute(
+                "meta_data",
+                json.dumps(lead.metaData, ensure_ascii=False, default=str),
+            )
+
+        # Performance metrics
+        if call_duration:
+            context.root_span.set_attribute("call_duration_seconds", call_duration)
+
+        context.root_span.set_attribute("attempt_count", lead.attempt_count + 1)
+
+        logger.info(
+            "Updated OpenTelemetry span with comprehensive evaluation data for LLM-as-a-Judge"
+        )
+
+    except Exception as e:
+        logger.error(f"Error updating span with evaluation data: {e}")

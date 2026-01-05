@@ -30,11 +30,11 @@ from pipecat.transports.websocket.fastapi import (
 from pipecat_flows import FlowManager, NodeConfig
 from pydub import AudioSegment
 
-from app.ai.voice.agents.breeze_buddy.analytics.tracing_setup import (
-    setup_tracing,
-)
 from app.ai.voice.agents.breeze_buddy.handlers.internal.end_conversation import (
     end_conversation,
+)
+from app.ai.voice.agents.breeze_buddy.observability.tracing_setup import (
+    setup_tracing,
 )
 from app.ai.voice.agents.breeze_buddy.stt import get_stt_service
 from app.ai.voice.agents.breeze_buddy.template import (
