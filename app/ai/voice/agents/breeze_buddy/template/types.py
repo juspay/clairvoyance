@@ -52,6 +52,49 @@ class HookFieldConfigSource(str, Enum):
     LLM = "llm"
 
 
+class HttpMethod(str, Enum):
+    """HTTP methods supported for external API calls"""
+
+    GET = "GET"
+    POST = "POST"
+    PUT = "PUT"
+    PATCH = "PATCH"
+    DELETE = "DELETE"
+
+
+class HttpAuthType(str, Enum):
+    """Authentication types for HTTP requests"""
+
+    NONE = "none"
+    BEARER = "bearer"
+    BASIC = "basic"
+    API_KEY = "api_key"
+
+
+class HttpAuthConfig(BaseModel):
+    """Authentication configuration for HTTP requests"""
+
+    type: HttpAuthType = HttpAuthType.NONE
+    token: Optional[str] = None  # For bearer auth
+    username: Optional[str] = None  # For basic auth
+    password: Optional[str] = None  # For basic auth
+    api_key_name: Optional[str] = None  # Header name for API key
+    api_key_value: Optional[str] = None  # API key value
+
+
+class HttpRequestConfig(BaseModel):
+    """Complete HTTP request configuration for hooks"""
+
+    url: str
+    method: HttpMethod = HttpMethod.POST
+    headers: Dict[str, str] = {}
+    query_params: Dict[str, str] = {}
+    body: Optional[Dict[str, Any]] = None
+    auth: Optional[HttpAuthConfig] = None
+    timeout: int = 10
+    max_retries: int = 3
+
+
 class HookFieldConfig(BaseModel):
     """Configuration for a single field in a hook"""
 
@@ -64,6 +107,7 @@ class HookConfig(BaseModel):
 
     name: str
     expected_fields: Dict[str, HookFieldConfig] = {}
+    http_request: Optional[HttpRequestConfig] = None  # For send_http_request hook
 
 
 class FlowFunction(BaseModel):
