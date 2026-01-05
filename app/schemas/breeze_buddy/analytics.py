@@ -45,7 +45,7 @@ class AnalyticsFilters(BaseModel):
     status: Optional[str] = Field(
         None, description="Filter by call status (completed, failed, etc.)"
     )
-    outcome: Optional[str] = Field(None, description="Filter by call outcome")
+    outcome: Optional[List[str]] = Field(None, description="Filter by call outcome")
     request_id: Optional[str] = Field(None, description="Filter by request ID")
     date_from: Optional[date] = Field(
         None, description="Filter from date (ISO format: YYYY-MM-DD)"

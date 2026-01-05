@@ -131,7 +131,7 @@ def build_analytics_where_clause(
 
     if "outcome" in filters and filters["outcome"]:
         values.append(filters["outcome"])
-        conditions.append(f"lct.outcome = ${len(values) + value_offset}")
+        conditions.append(f"lct.outcome = ANY(${len(values) + value_offset})")
 
     if "request_id" in filters and filters["request_id"]:
         values.append(filters["request_id"])

@@ -229,7 +229,7 @@ async def get_call_details_analytics(
     return {
         "type": "call-details",
         "filters_applied": filters,
-        "results": [r.dict() for r in results],
+        "results": [r.model_dump() for r in results],
         "pagination": {
             "page": page,
             "limit": limit,
