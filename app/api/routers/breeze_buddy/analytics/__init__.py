@@ -65,8 +65,8 @@ async def get_analytics(
     """
     try:
         # Convert filters to dict (exclude None values)
-        filters = request.filters.dict(exclude_none=True)
-        options = request.options.dict()
+        filters = request.filters.model_dump(exclude_none=True)
+        options = request.options.model_dump()
 
         # Apply hierarchical RBAC filtering
         filters = apply_hierarchical_filters(filters, current_user)
