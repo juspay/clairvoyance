@@ -6,6 +6,9 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
+from app.ai.voice.agents.breeze_buddy.managers.utils import (
+    prepare_and_store_initial_greeting,
+)
 from app.ai.voice.agents.breeze_buddy.services.telephony.exotel.recording import (
     download_call_recording as download_call_recording_exotel,
 )
@@ -44,6 +47,7 @@ from app.schemas import (
     OutboundNumberStatus,
 )
 from app.services.gcp.storage.storage import upload_file_to_gcs
+from app.services.redis.client import get_redis_service
 
 
 async def _get_lead_config(lead: LeadCallTracker) -> Optional[CallExecutionConfig]:
@@ -367,6 +371,14 @@ async def process_backlog_leads():
                     f"Lead {locked_lead.id} - use_template_flow: {use_template_flow}, template found: {template is not None}"
                 )
 
+                # Synthesize initial greeting audio and store in Redis
+                if use_template_flow and template:
+                    await prepare_and_store_initial_greeting(
+                        lead_id=locked_lead.id,
+                        payload=locked_lead.payload,
+                        template=template,
+                    )
+
                 number_to_use = await _get_available_number(config, template)
                 if not number_to_use:
                     await release_lock_on_lead_by_id(locked_lead.id)
@@ -640,6 +652,17 @@ async def handle_unanswered_calls(call_id: str):
     if not lead:
         logger.error(f"Could not find lead for call_id: {call_id}")
         return
+
+    # Clean up greeting audio from Redis if it exists for unanswered calls
+    try:
+        redis = await get_redis_service()
+        greeting_key = f"greeting:{lead.id}"
+        await redis.delete(greeting_key)
+        logger.info(f"Deleted greeting audio from Redis for lead {lead.id}")
+    except Exception as e:
+        logger.warning(
+            f"Failed to delete greeting audio from Redis for lead {lead.id}: {e}"
+        )
 
     outbound_number = await get_outbound_number_by_id(lead.outbound_number_id)
     if outbound_number:

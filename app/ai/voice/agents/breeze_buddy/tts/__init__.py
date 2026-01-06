@@ -1,6 +1,9 @@
+"""TTS service utilities for Breeze Buddy voice agent."""
+
 from pipecat.services.cartesia.tts import GenerationConfig
 from pipecat.transcriptions.language import Language
 
+from app.ai.voice.agents.breeze_buddy.utils.common import convert_to_mulaw
 from app.ai.voice.tts import (
     CartesiaConfig,
     ElevenLabsConfig,
@@ -9,6 +12,9 @@ from app.ai.voice.tts import (
     build_elevenlabs_tts,
     build_sarvam_tts,
 )
+from app.ai.voice.tts.cartesia import _generate_cartesia_audio
+from app.ai.voice.tts.elevenlabs import _generate_elevenlabs_audio
+from app.ai.voice.tts.sarvam import _generate_sarvam_audio
 from app.core.config.dynamic import (
     BB_CARTESIA_AGGREGATE_SENTENCES,
     BB_CARTESIA_GENERATION_EMOTION,
@@ -17,12 +23,6 @@ from app.core.config.dynamic import (
     BB_CARTESIA_LANGUAGE,
     BB_CARTESIA_MODEL,
     BB_CARTESIA_VOICE_ID,
-    BB_SARVAM_TTS_ENABLE_PREPROCESSING,
-    BB_SARVAM_TTS_LANGUAGE_CODE,
-    BB_SARVAM_TTS_MODEL,
-    BB_SARVAM_TTS_PACE,
-    BB_SARVAM_TTS_PITCH,
-    BB_SARVAM_TTS_VOICE_ID,
     BB_TTS_SERVICE,
 )
 from app.core.config.static import (
@@ -183,3 +183,39 @@ async def get_tts_service(voice_name: str | None = None):
 
     else:
         raise ValueError(f"Unsupported BREEZE_BUDDY_TTS_SERVICE: {tts_service}")
+
+
+async def generate_audio(text: str, voice_name: str) -> bytes:
+    """
+    Synthesize text to audio bytes using the specified TTS voice.
+
+    Args:
+        text: The text to synthesize
+        voice_name: The TTS voice to use ("sara", "rhea", or "mira")
+
+    Returns:
+        Audio bytes in mulaw format (8kHz, mono) ready to send via Twilio
+
+    Raises:
+        ValueError: If voice_name is invalid or required API keys are missing
+        Exception: If synthesis fails
+    """
+    voice_name_lower = voice_name.lower()
+
+    if voice_name_lower == "sara":
+        audio_data = await _generate_sarvam_audio(text)
+        input_format = "raw"
+    elif voice_name_lower == "rhea":
+        audio_data = await _generate_elevenlabs_audio(text)
+        input_format = "ulaw"
+    elif voice_name_lower == "mira":
+        audio_data = await _generate_cartesia_audio(text)
+        input_format = "raw"
+    else:
+        raise ValueError(
+            f"Invalid voice_name: {voice_name}. Must be 'sara', 'rhea', or 'mira'"
+        )
+
+    # Convert to Twilio-compatible format (8kHz, mono, mulaw)
+    mulaw_audio = convert_to_mulaw(audio_data, input_format=input_format)
+    return mulaw_audio

@@ -1,5 +1,9 @@
+import audioop
+import base64
 import json
 import os
+import re
+from io import BytesIO
 from typing import Any, Dict, List, Optional, Tuple
 
 import soundfile
@@ -10,6 +14,65 @@ from pydub import AudioSegment
 from app.core.config.static import ORDER_CONFIRMATION_WEBHOOK_SECRET_KEY
 from app.core.logger import logger
 from app.core.security.sha import calculate_hmac_sha256
+from app.services.redis.client import get_redis_service
+
+
+def greeting_has_variables(greeting_text: str) -> bool:
+    """
+    Check if greeting text contains variable placeholders like {customer_name}.
+
+    Args:
+        greeting_text: The greeting text to check
+
+    Returns:
+        True if greeting contains variable placeholders, False otherwise
+    """
+    # Match patterns like {variable_name} or {customer_name}
+    pattern = r"\{([^}]+)\}"
+    return bool(re.search(pattern, greeting_text))
+
+
+def convert_to_mulaw(audio_data: bytes, input_format: str = "raw") -> bytes:
+    """
+    Convert audio data to mulaw format compatible with Twilio (8kHz, mono).
+
+    Args:
+        audio_data: Raw audio bytes
+        input_format: Input audio format ("raw", "mp3", "ulaw", etc.)
+
+    Returns:
+        Audio bytes in mulaw format
+    """
+    try:
+        # ElevenLabs ulaw_8000 format - already in the correct format!
+        if input_format == "ulaw":
+            return audio_data
+
+        # For raw PCM, use audioop directly for resampling and conversion
+        if input_format != "mp3":
+            # Pad audio data to ensure whole number of frames (2 bytes per frame for 16-bit mono)
+            frame_size = 2  # 16-bit = 2 bytes
+            if len(audio_data) % frame_size != 0:
+                padding_needed = frame_size - (len(audio_data) % frame_size)
+                audio_data = audio_data + b"\x00" * padding_needed
+
+            downsampled, _ = audioop.ratecv(audio_data, 2, 1, 16000, 8000, None)
+            # Convert to mulaw (sample_width=2 for 16-bit PCM)
+            mulaw_data = audioop.lin2ulaw(downsampled, 2)
+            return mulaw_data
+
+        # For MP3 format from ElevenLabs
+        audio_segment = AudioSegment.from_file(BytesIO(audio_data), format="mp3")
+        audio_segment = (
+            audio_segment.set_frame_rate(8000).set_channels(1).set_sample_width(2)
+        )
+        pcm_data = audio_segment.raw_data
+        mulaw_data = audioop.lin2ulaw(pcm_data, 2)
+        return mulaw_data
+
+    except Exception as e:
+        logger.error(f"Error converting audio to mulaw: {e}")
+        raise
 
 
 def indian_number_to_speech(number: int) -> str:
@@ -429,4 +492,104 @@ def create_background_sound_mixer(template) -> Optional[SoundfileMixer]:
         logger.warning(
             f"Failed to read audio file info for {background_sound_filename}: {e}"
         )
+        return None
+
+
+async def prepare_initial_greeting_payload(
+    lead,
+    template,
+    provider,
+) -> Optional[Dict[str, any]]:
+    """
+    Prepare initial greeting audio payload for calls.
+
+    Checks for greeting audio in Redis (template static or lead dynamic),
+    falls back to dial tone if none found, and returns the media payload.
+
+    Args:
+        lead: Lead object containing lead information
+        template: Template object containing template configuration
+        provider: Call provider (enum or string "twilio" or "exotel")
+
+    Returns:
+        Dictionary with "payload" (base64 encoded audio) and "greeting_source",
+        or None if preparation failed
+    """
+    try:
+        logger.info("Preparing initial greeting audio payload.")
+
+        # Convert provider to lowercase string for comparison
+        provider_str = (
+            provider.lower() if hasattr(provider, "lower") else str(provider).lower()
+        )
+
+        mulaw_data = None
+        greeting_source = None
+
+        if lead:
+            redis = await get_redis_service()
+
+            # 1. First check for template audio (static greeting - persistent)
+            if template:
+                template_audio_key = f"greeting:template:{template.id}"
+                template_greeting = await redis.get(template_audio_key)
+                if template_greeting:
+                    logger.info("Using static greeting audio from template")
+                    mulaw_data = base64.b64decode(template_greeting)
+                    greeting_source = "template_static"
+                    # Don't delete template audio - it's persistent
+
+            # 2. Then check for lead audio (dynamic greeting - temporary)
+            if not mulaw_data:
+                lead_audio_key = f"greeting:{lead.id}"
+                lead_greeting = await redis.get(lead_audio_key)
+                if lead_greeting:
+                    logger.info("Using dynamic greeting audio for lead")
+                    mulaw_data = base64.b64decode(lead_greeting)
+                    greeting_source = "lead_dynamic"
+
+                    # Delete from Redis after retrieving (cleanup)
+                    await redis.delete(lead_audio_key)
+                    logger.info(
+                        f"Deleted dynamic greeting from Redis for lead {lead.id}"
+                    )
+
+        # 3. Fall back to dial tone if no greeting audio found
+        if not mulaw_data:
+            logger.info("No greeting audio found, using dial tone")
+            wav_file_path = (
+                "app/ai/voice/agents/breeze_buddy/static/audio/dial-tone.wav"
+            )
+
+            # Load and convert audio
+            audio = AudioSegment.from_wav(wav_file_path)
+            audio = audio.set_frame_rate(8000).set_channels(1).set_sample_width(2)
+            pcm_data = audio.raw_data
+            mulaw_data = audioop.lin2ulaw(pcm_data, 2)
+
+        logger.info(f"Prepared initial greeting audio from source: {greeting_source}")
+
+        # Convert audio format based on provider
+        # Twilio expects mulaw, Exotel expects raw PCM (16-bit, 8kHz, mono)
+        if provider_str == "twilio":
+            # mulaw_data is already in correct format for Twilio
+            audio_to_send = mulaw_data
+            logger.info("Audio prepared as mulaw for Twilio")
+        else:
+            try:
+                # Convert mulaw to 16-bit linear PCM
+                pcm_data = audioop.ulaw2lin(mulaw_data, 2)
+                audio_to_send = pcm_data
+                logger.info("Converted audio to raw PCM for Exotel")
+            except Exception as e:
+                logger.error(f"Failed to convert mulaw to PCM for Exotel: {e}")
+                return None
+
+        # Encode payload
+        payload = base64.b64encode(audio_to_send).decode("utf-8")
+
+        return {"payload": payload, "greeting_source": greeting_source}
+
+    except Exception as e:
+        logger.error(f"Failed to prepare initial greeting payload: {e}")
         return None
