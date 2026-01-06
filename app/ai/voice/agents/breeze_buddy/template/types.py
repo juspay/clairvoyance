@@ -33,6 +33,9 @@ class ConfigurationModel(BaseModel):
     enable_background_sound: bool = False
     background_sound_file: Optional[BackgroundSoundFile] = None
     background_sound_volume: float = 2.0
+    initial_greeting: Optional[str] = (
+        None  # Initial greeting text template with variables (e.g., "Hi {customer_name}")
+    )
 
 
 class FlowAction(BaseModel):

@@ -3,10 +3,19 @@
 from dataclasses import dataclass
 from typing import Literal, Optional
 
+import httpx
 from pipecat.services.cartesia.tts import CartesiaTTSService, GenerationConfig
 from pipecat.transcriptions.language import Language
 
-__all__ = ["CartesiaConfig", "build_cartesia_tts"]
+from app.core.config.dynamic import (
+    BB_CARTESIA_LANGUAGE,
+    BB_CARTESIA_MODEL,
+    BB_CARTESIA_VOICE_ID,
+)
+from app.core.config.static import CARTESIA_API_KEY
+from app.core.logger import logger
+
+__all__ = ["CartesiaConfig", "build_cartesia_tts", "_generate_cartesia_audio"]
 
 
 @dataclass
@@ -59,3 +68,39 @@ def build_cartesia_tts(config: CartesiaConfig) -> CartesiaTTSService:
         params=params,
         aggregate_sentences=config.aggregate_sentences,
     )
+
+
+async def _generate_cartesia_audio(text: str) -> bytes:
+    """Synthesize audio using Cartesia TTS API."""
+    if not CARTESIA_API_KEY:
+        raise ValueError("CARTESIA_API_KEY is required for Mira voice")
+
+    voice_id = await BB_CARTESIA_VOICE_ID()
+    model = await BB_CARTESIA_MODEL()
+    language = await BB_CARTESIA_LANGUAGE()
+
+    url = "https://api.cartesia.ai/tts/bytes"
+    headers = {
+        "X-API-Key": CARTESIA_API_KEY,
+        "Cartesia-Version": "2024-06-10",
+        "Content-Type": "application/json",
+    }
+
+    payload = {
+        "model_id": model,
+        "transcript": text,
+        "voice": {"mode": "id", "id": voice_id},
+        "language": language or "en",
+        "output_format": {
+            "container": "raw",
+            "encoding": "pcm_s16le",
+            "sample_rate": 16000,
+        },
+    }
+
+    logger.info(f"Synthesizing greeting with Cartesia: {text[:50]}...")
+
+    async with httpx.AsyncClient() as client:
+        response = await client.post(url, json=payload, headers=headers, timeout=30.0)
+        response.raise_for_status()
+        return response.content

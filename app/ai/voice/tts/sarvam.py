@@ -2,14 +2,25 @@
 
 from __future__ import annotations
 
+import base64
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass
 from typing import Optional
 
+import httpx
 from pipecat.frames.frames import Frame
 from pipecat.services.sarvam.tts import SarvamTTSService
 from pipecat.transcriptions.language import Language
 
+from app.core.config.dynamic import (
+    BB_SARVAM_TTS_ENABLE_PREPROCESSING,
+    BB_SARVAM_TTS_LANGUAGE_CODE,
+    BB_SARVAM_TTS_MODEL,
+    BB_SARVAM_TTS_PACE,
+    BB_SARVAM_TTS_PITCH,
+    BB_SARVAM_TTS_VOICE_ID,
+)
+from app.core.config.static import SARVAM_API_KEY
 from app.core.logger import logger
 
 __all__ = [
@@ -17,6 +28,7 @@ __all__ = [
     "get_sarvam_language",
     "build_sarvam_tts",
     "LanguageAwareSarvamTTS",
+    "_generate_sarvam_audio",
 ]
 
 
@@ -188,3 +200,47 @@ class LanguageAwareSarvamTTS(SarvamTTSService):
 
         async for frame in super().run_tts(text):
             yield frame
+
+
+async def _generate_sarvam_audio(text: str) -> bytes:
+    """Synthesize audio using Sarvam TTS API."""
+    if not SARVAM_API_KEY:
+        raise ValueError("SARVAM_API_KEY is required for Sara voice")
+
+    model = await BB_SARVAM_TTS_MODEL()
+    voice_id = await BB_SARVAM_TTS_VOICE_ID()
+    language_code = await BB_SARVAM_TTS_LANGUAGE_CODE()
+    pitch = await BB_SARVAM_TTS_PITCH()
+    pace = await BB_SARVAM_TTS_PACE()
+    enable_preprocessing = await BB_SARVAM_TTS_ENABLE_PREPROCESSING()
+
+    url = "https://api.sarvam.ai/text-to-speech"
+    headers = {
+        "api-subscription-key": SARVAM_API_KEY,
+        "Content-Type": "application/json",
+    }
+
+    payload = {
+        "inputs": [text],
+        "target_language_code": language_code,
+        "speaker": voice_id,
+        "pitch": pitch,
+        "pace": pace,
+        "loudness": 1.5,
+        "speech_sample_rate": 16000,
+        "enable_preprocessing": enable_preprocessing,
+        "model": model,
+    }
+
+    logger.info(f"Synthesizing greeting with Sarvam: {text[:50]}...")
+
+    async with httpx.AsyncClient() as client:
+        response = await client.post(url, json=payload, headers=headers, timeout=30.0)
+        response.raise_for_status()
+        result = response.json()
+
+        audio_base64 = result.get("audios", [None])[0]
+        if not audio_base64:
+            raise Exception("No audio returned from Sarvam API")
+
+        return base64.b64decode(audio_base64)

@@ -1,6 +1,4 @@
 import asyncio
-import audioop
-import base64
 import json
 from datetime import datetime, timezone
 from typing import Optional
@@ -32,7 +30,6 @@ from pipecat.transports.websocket.fastapi import (
     FastAPIWebsocketTransport,
 )
 from pipecat_flows import FlowManager, NodeConfig
-from pydub import AudioSegment
 
 from app.ai.voice.agents.breeze_buddy.handlers.internal.end_conversation import (
     end_conversation,
@@ -48,6 +45,9 @@ from app.ai.voice.agents.breeze_buddy.template import (
 )
 from app.ai.voice.agents.breeze_buddy.template.loader import FlowConfigLoader
 from app.ai.voice.agents.breeze_buddy.tts import get_tts_service
+from app.ai.voice.agents.breeze_buddy.utils.common import (
+    prepare_initial_greeting_payload,
+)
 from app.ai.voice.agents.breeze_buddy.utils.language_utils.prompt_injections import (
     inject_language_rules,
 )
@@ -114,6 +114,7 @@ class Agent:
         # Dynamic template components (initialized later)
         self.flow_loader = None
         self.flow_builder = None
+        self.template = None
         self.template_config = None
         self.system_prompt = None
         self.flow_config = None
@@ -125,6 +126,8 @@ class Agent:
         self.language_prompt_enabled = (
             False  # Whether to inject language instruction into prompts
         )
+
+        self.greeting_source = None
 
     async def _load_template_config(self):
         """Load template configuration from database (shared across all transport types)."""
@@ -145,6 +148,7 @@ class Agent:
             shop_identifier=self.lead.shop_identifier if self.lead else None,
             name=self.lead.template,
         )
+        self.template = template
 
         if not template:
             error_msg = f"Template not found for merchant={merchant_id}, template={self.lead.template}"
@@ -282,35 +286,6 @@ class Agent:
                 stream_sid = call_data["start"]["streamSid"]
                 self.call_sid = call_data["start"]["callSid"]
 
-                try:
-                    logger.info("Preparing to send initial audio message.")
-                    wav_file_path = (
-                        "app/ai/voice/agents/breeze_buddy/static/audio/dial-tone.wav"
-                    )
-
-                    # Load and convert audio
-                    audio = AudioSegment.from_wav(wav_file_path)
-                    audio = (
-                        audio.set_frame_rate(8000).set_channels(1).set_sample_width(2)
-                    )
-                    pcm_data = audio.raw_data
-                    mulaw_data = audioop.lin2ulaw(pcm_data, 2)
-                    payload = base64.b64encode(mulaw_data).decode("utf-8")
-
-                    # Create and send media message
-                    media_message = {
-                        "event": "media",
-                        "streamSid": stream_sid,
-                        "media": {"payload": payload},
-                    }
-                    await self.ws.send_text(json.dumps(media_message))
-                    logger.info(
-                        f"Successfully sent initial media message for streamSid: {stream_sid}"
-                    )
-
-                except Exception as e:
-                    logger.error(f"Failed to send initial media message: {e}")
-
             else:  # Exotel
                 stream_sid = call_data.get("stream_sid")
                 start_data = call_data.get("start", {})
@@ -343,6 +318,36 @@ class Agent:
                         f"Could not close websocket (likely already closed): {close_error}"
                     )
                 return
+
+            # Send initial greeting audio for calls
+            try:
+                greeting_result = await prepare_initial_greeting_payload(
+                    lead=self.lead,
+                    template=self.template,
+                    provider=self.provider,
+                )
+
+                if greeting_result:
+                    self.greeting_source = greeting_result["greeting_source"]
+                    payload = greeting_result["payload"]
+
+                    media_message = {
+                        "event": "media",
+                        "streamSid": stream_sid,
+                        "media": {"payload": payload},
+                    }
+
+                    await self.ws.send_text(json.dumps(media_message))
+                    logger.info(
+                        f"Successfully sent initial media message for streamSid: {stream_sid}"
+                    )
+                else:
+                    logger.warning(
+                        "Failed to prepare greeting payload, skipping initial audio"
+                    )
+
+            except Exception as e:
+                logger.error(f"Failed to send initial media message: {e}")
 
             # Create telephony transport
             self.vad_analyzer = SileroVADAnalyzer(
@@ -523,6 +528,7 @@ class Agent:
                 functions=initial_node_config["functions"],
                 pre_actions=initial_node_config["pre_actions"],
                 post_actions=initial_node_config["post_actions"],
+                respond_immediately=False if self.greeting_source else True,
             )
 
             # Initialize the flow with the prepared initial node

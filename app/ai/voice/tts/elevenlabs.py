@@ -5,10 +5,17 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional, Sequence
 
+import httpx
 from pipecat.services.elevenlabs.tts import ElevenLabsTTSService
 from pipecat.transcriptions.language import Language
 
-__all__ = ["ElevenLabsConfig", "build_elevenlabs_tts"]
+from app.core.config.static import (
+    ELEVENLABS_API_KEY,
+    ELEVENLABS_BB_VOICE_ID,
+    ELEVENLABS_MODEL_ID,
+)
+
+__all__ = ["ElevenLabsConfig", "build_elevenlabs_tts", "_generate_elevenlabs_audio"]
 
 
 @dataclass
@@ -38,3 +45,32 @@ def build_elevenlabs_tts(config: ElevenLabsConfig):
         ),
         text_filters=text_filters,
     )
+
+
+async def _generate_elevenlabs_audio(text: str) -> bytes:
+    """Synthesize audio using ElevenLabs TTS API."""
+    if not ELEVENLABS_API_KEY:
+        raise ValueError("ELEVENLABS_API_KEY is required for Rhea voice")
+
+    voice_id = ELEVENLABS_BB_VOICE_ID
+    model_id = ELEVENLABS_MODEL_ID
+
+    url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}?output_format=ulaw_8000"
+    headers = {
+        "xi-api-key": ELEVENLABS_API_KEY,
+        "Content-Type": "application/json",
+        "Accept": "audio/basic",
+    }
+
+    payload = {
+        "text": text,
+        "model_id": model_id,
+        "voice_settings": {"stability": 0.5, "similarity_boost": 0.75},
+    }
+
+    logger.info(f"Synthesizing greeting with ElevenLabs (ulaw_8000): {text[:50]}...")
+
+    async with httpx.AsyncClient() as client:
+        response = await client.post(url, json=payload, headers=headers, timeout=30.0)
+        response.raise_for_status()
+        return response.content

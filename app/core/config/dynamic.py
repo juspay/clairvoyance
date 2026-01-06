@@ -146,7 +146,7 @@ async def BB_TTS_SERVICE() -> str:
 async def BB_CARTESIA_VOICE_ID() -> str:
     """Returns BB_CARTESIA_VOICE_ID from Redis"""
     return await get_config(
-        "BB_CARTESIA_VOICE_ID", "cbaf8084-f009-4838-a096-07ee2e6612b1", str
+        "BB_CARTESIA_VOICE_ID", "bec003e2-3cb3-429c-8468-206a393c67ad", str
     )
 
 
@@ -167,12 +167,12 @@ async def BB_CARTESIA_GENERATION_VOLUME() -> float:
 
 async def BB_CARTESIA_GENERATION_SPEED() -> float:
     """Returns BB_CARTESIA_GENERATION_SPEED from Redis (range: 0.6-1.5)"""
-    return await get_config("BB_CARTESIA_GENERATION_SPEED", 1.1, float)
+    return await get_config("BB_CARTESIA_GENERATION_SPEED", 1.0, float)
 
 
 async def BB_CARTESIA_GENERATION_EMOTION() -> str:
     """Returns BB_CARTESIA_GENERATION_EMOTION from Redis"""
-    return await get_config("BB_CARTESIA_GENERATION_EMOTION", "happy", str)
+    return await get_config("BB_CARTESIA_GENERATION_EMOTION", "neutral", str)
 
 
 async def BB_CARTESIA_AGGREGATE_SENTENCES() -> bool:
