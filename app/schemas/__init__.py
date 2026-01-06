@@ -45,6 +45,7 @@ from app.schemas.breeze_buddy.auth import (
     UserRole,
     UserUpdate,
 )
+from app.schemas.breeze_buddy.connection import BreezeBuddyDailyConnectRequest
 from app.schemas.breeze_buddy.core import (
     CallExecutionConfig,
     CallProvider,
@@ -97,6 +98,8 @@ __all__ = [
     "OutboundNumber",
     "OutboundNumberStatus",
     "UpdateCallExecutionConfigRequest",
+    # Connection
+    "BreezeBuddyDailyConnectRequest",
     # Automatic Voice
     "AutomaticVoiceTTSServiceConfig",
     "AutomaticVoiceUserConnectRequest",

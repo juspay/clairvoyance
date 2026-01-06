@@ -77,7 +77,12 @@ def _setup_logger_sinks(
             logger_name.startswith("websockets")
             or logger_name.startswith("daily_core")
             or logger_name.startswith("openai._base_client")
+            or logger_name.startswith("chunk")
             or (logger_name.startswith("logging") and 'TEXT \'{"audio":' in message)
+            or (logger_name.startswith("logging") and message.startswith("> BINARY"))
+            or (logger_name.startswith("logging") and message.startswith("< BINARY"))
+            or (logger_name.startswith("logging") and message.startswith("< TEXT"))
+            or (logger_name.startswith("logging") and message.startswith("> TEXT"))
         )
 
     if ENVIRONMENT == "dev":

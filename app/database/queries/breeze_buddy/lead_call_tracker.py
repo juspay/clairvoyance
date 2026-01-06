@@ -29,6 +29,7 @@ def insert_lead_call_tracker_query(
     request_id: Optional[str] = None,
     template_id: Optional[str] = None,
     execution_mode: ExecutionMode = ExecutionMode.TELEPHONY,
+    status: LeadCallStatus = LeadCallStatus.BACKLOG,  # Status with default for backward compatibility
 ) -> Tuple[str, List[Any]]:
     """
     Generate query to insert lead call tracker record.
@@ -72,7 +73,7 @@ def insert_lead_call_tracker_query(
         next_attempt_at,
         json.dumps(payload) if payload else None,
         json.dumps(meta_data) if meta_data else None,
-        LeadCallStatus.BACKLOG.value,
+        status.value,  # Use parameter (defaults to BACKLOG for backward compatibility)
         call_initiated_time,
         call_end_time,
         attempt_count,
@@ -197,7 +198,7 @@ def update_lead_call_initiated_time_query(
     call_id: str, call_initiated_time: datetime
 ) -> Tuple[str, List[Any]]:
     """
-    Generate query to update lead call initiated time.
+    Generate query to update lead call initiated time by call_id.
     """
     text = f"""
         UPDATE "{LEAD_CALL_TRACKER_TABLE}"
@@ -206,6 +207,23 @@ def update_lead_call_initiated_time_query(
         RETURNING *;
     """
     values = [call_initiated_time, call_id]
+    return text, values
+
+
+def update_lead_call_initiated_time_by_id_query(
+    lead_id: str, call_initiated_time: datetime
+) -> Tuple[str, List[Any]]:
+    """
+    Generate query to update lead call initiated time by lead id.
+    Used for Daily mode where there's no telephony call_id.
+    """
+    text = f"""
+        UPDATE "{LEAD_CALL_TRACKER_TABLE}"
+        SET "call_initiated_time" = $1, "updated_at" = NOW()
+        WHERE "id" = $2
+        RETURNING *;
+    """
+    values = [call_initiated_time, lead_id]
     return text, values
 
 
