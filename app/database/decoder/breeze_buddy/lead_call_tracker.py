@@ -7,6 +7,7 @@ from typing import Optional
 import asyncpg
 
 from app.schemas import (
+    ExecutionMode,
     LeadCallStatus,
     LeadCallTracker,
 )
@@ -40,6 +41,7 @@ def decode_lead_call_tracker(row: asyncpg.Record) -> Optional[LeadCallTracker]:
         cost=row["cost"],
         is_locked=row.get("is_locked", False),
         langfuse_scores=parse_json(row, "langfuse_scores"),
+        execution_mode=ExecutionMode(row.get("execution_mode", "TELEPHONY")),
         created_at=row["created_at"],
         updated_at=row["updated_at"],
     )

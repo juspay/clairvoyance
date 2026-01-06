@@ -6,7 +6,7 @@ import json
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
-from app.schemas import LeadCallStatus
+from app.schemas import ExecutionMode, LeadCallStatus
 
 # Table names
 LEAD_CALL_TRACKER_TABLE = "lead_call_tracker"
@@ -27,7 +27,8 @@ def insert_lead_call_tracker_query(
     call_initiated_time: Optional[datetime] = None,
     cost: Optional[float] = None,
     request_id: Optional[str] = None,
-    template_id: Optional[str] = None,  # NEW: Add template_id parameter
+    template_id: Optional[str] = None,
+    execution_mode: ExecutionMode = ExecutionMode.TELEPHONY,
 ) -> Tuple[str, List[Any]]:
     """
     Generate query to insert lead call tracker record.
@@ -35,6 +36,7 @@ def insert_lead_call_tracker_query(
     Args:
         template_id: UUID of the template (preferred, for referential integrity)
         template: Name of the template (kept for backward compatibility)
+        execution_mode: Execution mode (TELEPHONY, TELEPHONY_TEST, DAILY, DAILY_TEST)
     """
     text = f"""
         INSERT INTO "{LEAD_CALL_TRACKER_TABLE}"
@@ -53,17 +55,18 @@ def insert_lead_call_tracker_query(
             "call_end_time",
             "attempt_count",
             "cost",
+            "execution_mode",
             "created_at",
             "updated_at"
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) RETURNING *;
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17) RETURNING *;
     """
 
     values = [
         id,
         merchant_id,
         template,
-        template_id,  # NEW
+        template_id,
         shop_identifier,
         request_id,
         next_attempt_at,
@@ -74,6 +77,7 @@ def insert_lead_call_tracker_query(
         call_end_time,
         attempt_count,
         cost,
+        execution_mode.value,
         datetime.now(),
         datetime.now(),
     ]
@@ -86,12 +90,14 @@ def get_leads_based_on_status_and_next_attempt_query(
 ) -> Tuple[str, List[Any]]:
     """
     Generate query to select leads based on status and next attempt time.
+    Only selects TELEPHONY execution_mode leads for cron processing.
     """
     text = f"""
         SELECT * FROM "{LEAD_CALL_TRACKER_TABLE}"
         WHERE "status" = $1
         AND "next_attempt_at" <= $2
-        AND "is_locked" = FALSE;
+        AND "is_locked" = FALSE
+        AND "execution_mode" = 'TELEPHONY';
     """
     values = [status.value, time]
     return text, values

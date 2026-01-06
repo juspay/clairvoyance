@@ -2,6 +2,8 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel
 
+from app.schemas.breeze_buddy.core import ExecutionMode
+
 
 class OrderItem(BaseModel):
     product_name: str
@@ -19,6 +21,9 @@ class PushLeadRequest(BaseModel):
     merchant: str
     identifier: Optional[str] = None
     reporting_webhook_url: str | None = None
+    execution_mode: Optional[ExecutionMode] = (
+        None  # Defaults to TELEPHONY if not provided
+    )
 
 
 class LeadData(BaseModel):
