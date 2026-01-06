@@ -33,7 +33,7 @@ from app.database.accessor import (
     get_outbound_number_by_id,
     get_template_by_merchant,
 )
-from app.schemas import UserInfo
+from app.schemas import ExecutionMode, UserInfo
 
 from .rbac import validate_recording_access
 
@@ -180,15 +180,14 @@ async def push_lead_handler(req: PushLeadRequest, current_user: UserInfo) -> Dic
             id=uuid,
             merchant_id=req.merchant,
             template=req.template,
-            template_id=str(
-                template.id
-            ),  # NEW: Pass template UUID for referential integrity
+            template_id=str(template.id),
             shop_identifier=req.identifier,
             next_attempt_at=next_attempt_at,
             payload=lead_payload,
             attempt_count=0,
             meta_data={"use_template_flow": True},
             request_id=req.request_id,
+            execution_mode=req.execution_mode or ExecutionMode.TELEPHONY,
         )
 
         if not lead_call_tracker:

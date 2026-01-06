@@ -31,6 +31,15 @@ class LeadCallStatus(str, Enum):
     RETRY = "RETRY"
 
 
+class ExecutionMode(str, Enum):
+    """Execution mode for lead calls - separates production from test calls"""
+
+    TELEPHONY = "TELEPHONY"  # Production telephony calls
+    TELEPHONY_TEST = "TELEPHONY_TEST"  # Test telephony calls
+    DAILY = "DAILY"  # Production Daily (web) calls
+    DAILY_TEST = "DAILY_TEST"  # Test Daily (web) calls
+
+
 class LeadCallTracker(BaseModel):
     """Lead call tracking model"""
 
@@ -53,6 +62,7 @@ class LeadCallTracker(BaseModel):
     cost: Optional[float] = None
     is_locked: bool = False
     langfuse_scores: Optional[Dict[str, Any]] = None
+    execution_mode: ExecutionMode = ExecutionMode.TELEPHONY
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 

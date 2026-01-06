@@ -55,7 +55,9 @@ def is_valid_payload_filter_key(key: str) -> bool:
 
 
 def build_analytics_where_clause(
-    filters: Dict[str, Any], value_offset: int = 0
+    filters: Dict[str, Any],
+    value_offset: int = 0,
+    filter_execution_mode: bool = True,
 ) -> Tuple[List[str], List[Any]]:
     """
     Build WHERE clause conditions and values from generic filters.
@@ -63,12 +65,17 @@ def build_analytics_where_clause(
     Args:
         filters: Dictionary of filter key-value pairs
         value_offset: Starting index for parameterized query values
+        filter_execution_mode: If True, only include TELEPHONY execution_mode (exclude tests)
 
     Returns:
         Tuple of (conditions list, values list)
     """
     conditions = []
     values = []
+
+    # Filter by execution_mode to exclude test calls from analytics
+    if filter_execution_mode:
+        conditions.append("lct.execution_mode = 'TELEPHONY'")
 
     # Date range filters
     if "date_from" in filters and filters["date_from"]:
@@ -280,8 +287,12 @@ def get_analytics_call_details_query(
 ) -> Tuple[str, List[Any]]:
     """
     Generate query for paginated call details.
+    Shows ALL execution modes (no filter) - call records include test calls.
     """
-    conditions, values = build_analytics_where_clause(filters)
+    # filter_execution_mode=False to show ALL modes including test calls
+    conditions, values = build_analytics_where_clause(
+        filters, filter_execution_mode=False
+    )
     where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
 
     # Validate sort column to prevent SQL injection
