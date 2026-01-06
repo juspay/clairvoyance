@@ -4,7 +4,7 @@ import requests
 from fastapi import WebSocket
 from pipecat.serializers.exotel import ExotelFrameSerializer
 
-from app.ai.voice.agents.breeze_buddy.agent import main as template_based_agent
+from app.ai.voice.agents.breeze_buddy.agent import telephony_bot
 from app.ai.voice.agents.breeze_buddy.services.telephony.base_provider import (
     VoiceCallProvider,
 )
@@ -47,7 +47,7 @@ class ExotelProvider(VoiceCallProvider):
         )
         if self.use_template_flow:
             logger.info("Using template flow for Exotel WebSocket connection")
-            await template_based_agent(
+            await telephony_bot(
                 websocket,
                 self.aiohttp_session,
                 serializer,

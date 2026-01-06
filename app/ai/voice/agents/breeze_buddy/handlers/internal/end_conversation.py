@@ -84,7 +84,24 @@ async def end_conversation(context: TemplateContext, args, transition_to=None):
             logger.warning(f"No hangup_function available for call {context.call_sid}")
 
         # Update database
-        if context.call_sid:
+        # For Daily mode: use lead.id (no telephony call_sid exists)
+        # For telephony: use call_sid (how completion_function looks up the lead)
+        is_daily_mode = getattr(context.bot, "transport_type", None) == "daily"
+
+        if is_daily_mode and context.lead:
+            # Daily mode: update by lead.id
+            logger.info(
+                f"Updating database with call completion details for lead {context.lead.id}"
+            )
+            context.lead = await context.completion_function(
+                call_id=context.lead.id,
+                outcome=context.lead.outcome,
+                call_end_time=datetime.now(),
+                meta_data=context.lead.metaData,
+            )
+            logger.info(f"Successfully updated database for lead {context.lead.id}")
+        elif context.call_sid:
+            # Telephony mode: update by call_sid (original behavior)
             logger.info(
                 f"Updating database with call completion details for call {context.call_sid}"
             )
@@ -96,7 +113,7 @@ async def end_conversation(context: TemplateContext, args, transition_to=None):
             )
             logger.info(f"Successfully updated database for call {context.call_sid}")
         else:
-            logger.warning("No call_sid found, skipping database update")
+            logger.warning("No call_sid or lead found, skipping database update")
 
         # Execute end_conversation_callbacks
         if context.end_conversation_callbacks:

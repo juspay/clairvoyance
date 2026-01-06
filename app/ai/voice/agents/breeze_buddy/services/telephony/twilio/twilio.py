@@ -4,7 +4,7 @@ from twilio.http.http_client import TwilioHttpClient
 from twilio.rest import Client
 from twilio.twiml.voice_response import Connect, Stream, VoiceResponse
 
-from app.ai.voice.agents.breeze_buddy.agent import main as template_based_agent
+from app.ai.voice.agents.breeze_buddy.agent import telephony_bot
 from app.ai.voice.agents.breeze_buddy.services.telephony.base_provider import (
     VoiceCallProvider,
 )
@@ -75,7 +75,7 @@ class TwilioProvider(VoiceCallProvider):
         )
         if self.use_template_flow:
             logger.info("Using template flow for Twilio WebSocket connection")
-            await template_based_agent(
+            await telephony_bot(
                 websocket,
                 self.aiohttp_session,
                 serializer,

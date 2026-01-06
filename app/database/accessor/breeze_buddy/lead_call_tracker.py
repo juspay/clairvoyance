@@ -24,6 +24,7 @@ from app.database.queries.breeze_buddy.lead_call_tracker import (
     update_langfuse_scores_query,
     update_lead_call_completion_details_query,
     update_lead_call_details_query,
+    update_lead_call_initiated_time_by_id_query,
     update_lead_call_initiated_time_query,
     update_lead_call_recording_url_query,
 )
@@ -56,6 +57,7 @@ async def create_lead_call_tracker(
     request_id: Optional[str] = None,
     template_id: Optional[str] = None,
     execution_mode: ExecutionMode = ExecutionMode.TELEPHONY,
+    status: LeadCallStatus = LeadCallStatus.BACKLOG,  # Status with default for backward compatibility
 ) -> Optional[LeadCallTracker]:
     """
     Create a new lead call tracker record.
@@ -83,6 +85,7 @@ async def create_lead_call_tracker(
             cost=cost,
             request_id=request_id,
             execution_mode=execution_mode,
+            status=status,  # Pass status (defaults to BACKLOG for backward compatibility)
         )
 
         result = await run_parameterized_query(query_text, values)
@@ -242,13 +245,40 @@ async def update_lead_call_initiated_time(
     call_id: str, call_initiated_time: datetime
 ) -> Optional[LeadCallTracker]:
     """
-    Update lead call initiated time.
+    Update lead call initiated time by call_id (telephony mode).
     """
     logger.info(f"Updating lead with call ID {call_id} with call initiated time")
 
     try:
         query_text, values = update_lead_call_initiated_time_query(
             call_id, call_initiated_time
+        )
+        result = await run_parameterized_query(query_text, values)
+        if result and get_row_count(result) > 0:
+            decoded_result = decode_lead_call_tracker(result[0])
+            logger.info(f"Lead updated successfully: {decoded_result}")
+            return decoded_result
+
+        logger.error("Failed to update lead")
+        return None
+
+    except Exception as e:
+        logger.error(f"Error updating lead: {e}")
+        return None
+
+
+async def update_lead_call_initiated_time_by_id(
+    lead_id: str, call_initiated_time: datetime
+) -> Optional[LeadCallTracker]:
+    """
+    Update lead call initiated time by lead id (Daily mode).
+    Used when there's no telephony call_id.
+    """
+    logger.info(f"Updating lead {lead_id} with call initiated time")
+
+    try:
+        query_text, values = update_lead_call_initiated_time_by_id_query(
+            lead_id, call_initiated_time
         )
         result = await run_parameterized_query(query_text, values)
         if result and get_row_count(result) > 0:

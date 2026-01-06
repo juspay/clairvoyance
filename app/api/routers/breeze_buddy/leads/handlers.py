@@ -33,7 +33,7 @@ from app.database.accessor import (
     get_outbound_number_by_id,
     get_template_by_merchant,
 )
-from app.schemas import ExecutionMode, UserInfo
+from app.schemas import ExecutionMode, LeadCallStatus, UserInfo
 
 from .rbac import validate_recording_access
 
@@ -188,6 +188,7 @@ async def push_lead_handler(req: PushLeadRequest, current_user: UserInfo) -> Dic
             meta_data={"use_template_flow": True},
             request_id=req.request_id,
             execution_mode=req.execution_mode or ExecutionMode.TELEPHONY,
+            status=LeadCallStatus.BACKLOG,
         )
 
         if not lead_call_tracker:

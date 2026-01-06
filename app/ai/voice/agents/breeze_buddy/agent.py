@@ -3,6 +3,7 @@ import audioop
 import base64
 import json
 from datetime import datetime, timezone
+from typing import Optional
 
 from fastapi import WebSocket
 from opentelemetry import trace
@@ -22,7 +23,10 @@ from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
 from pipecat.processors.aggregators.llm_response import LLMUserAggregatorParams
 from pipecat.processors.aggregators.openai_llm_context import OpenAILLMContext
+from pipecat.runner.types import RunnerArguments
+from pipecat.runner.utils import create_transport
 from pipecat.services.azure.llm import AzureLLMService
+from pipecat.transports.daily.transport import DailyParams
 from pipecat.transports.websocket.fastapi import (
     FastAPIWebsocketParams,
     FastAPIWebsocketTransport,
@@ -44,7 +48,6 @@ from app.ai.voice.agents.breeze_buddy.template import (
 )
 from app.ai.voice.agents.breeze_buddy.template.loader import FlowConfigLoader
 from app.ai.voice.agents.breeze_buddy.tts import get_tts_service
-from app.ai.voice.agents.breeze_buddy.utils.common import create_background_sound_mixer
 from app.ai.voice.agents.breeze_buddy.utils.language_utils.prompt_injections import (
     inject_language_rules,
 )
@@ -66,7 +69,14 @@ from app.core.config.static import (
     ENVIRONMENT,
 )
 from app.core.logger import logger
-from app.database.accessor import get_lead_by_call_id, update_lead_call_initiated_time
+from app.database.accessor import (
+    get_lead_by_call_id,
+    get_lead_by_id,
+    update_lead_call_initiated_time,
+)
+from app.database.accessor.breeze_buddy.lead_call_tracker import (
+    update_lead_call_initiated_time_by_id,
+)
 from app.database.accessor.breeze_buddy.template import get_template_by_merchant
 from app.schemas import CallProvider
 
@@ -74,13 +84,15 @@ from app.schemas import CallProvider
 class Agent:
     def __init__(
         self,
-        ws: WebSocket,
-        aiohttp_session,
-        serializer,
-        hangup_function,
-        completion_function,
-        provider: str,
+        transport_type: str,  # "daily" or telephony provider (CallProvider)
+        ws: Optional[WebSocket] = None,  # Only for telephony
+        aiohttp_session=None,
+        serializer=None,  # Only for telephony
+        hangup_function=None,
+        completion_function=None,
+        provider: Optional[str] = None,  # Only for telephony
     ):
+        self.transport_type = transport_type
         self.ws = ws
         self.aiohttp_session = aiohttp_session
         self.provider = provider
@@ -114,82 +126,8 @@ class Agent:
             False  # Whether to inject language instruction into prompts
         )
 
-    async def run(self):
-        logger.info("Starting WebSocket bot")
-        await self.ws.accept()
-        call_initiated_time = datetime.now(timezone.utc)
-
-        try:
-            start_data = self.ws.iter_text()
-            await start_data.__anext__()
-            call_data_str = await start_data.__anext__()
-            call_data = json.loads(call_data_str)
-            logger.info(f"Received call data: {call_data}")
-        except StopAsyncIteration:
-            logger.warning("WebSocket connection closed before receiving call data")
-            return
-        except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse call data JSON: {e}")
-            try:
-                if self.ws.client_state.name != "DISCONNECTED":
-                    await self.ws.close(code=4000, reason="Invalid JSON data")
-            except Exception as close_error:
-                logger.warning(
-                    f"Could not close websocket (likely already closed): {close_error}"
-                )
-            return
-
-        if self.provider == CallProvider.TWILIO:
-            stream_sid = call_data["start"]["streamSid"]
-            self.call_sid = call_data["start"]["callSid"]
-
-            try:
-                logger.info("Preparing to send initial audio message.")
-                wav_file_path = (
-                    "app/ai/voice/agents/breeze_buddy/static/audio/dial-tone.wav"
-                )
-
-                # Load and convert audio
-                audio = AudioSegment.from_wav(wav_file_path)
-                audio = audio.set_frame_rate(8000).set_channels(1).set_sample_width(2)
-                pcm_data = audio.raw_data
-                mulaw_data = audioop.lin2ulaw(pcm_data, 2)
-                payload = base64.b64encode(mulaw_data).decode("utf-8")
-
-                # Create and send media message
-                media_message = {
-                    "event": "media",
-                    "streamSid": stream_sid,
-                    "media": {"payload": payload},
-                }
-                await self.ws.send_text(json.dumps(media_message))
-                logger.info(
-                    f"Successfully sent initial media message for streamSid: {stream_sid}"
-                )
-
-            except Exception as e:
-                logger.error(f"Failed to send initial media message: {e}")
-
-        else:  # Exotel
-            stream_sid = call_data.get("stream_sid")
-            start_data = call_data.get("start", {})
-            self.call_sid = start_data.get("call_sid")
-
-        await update_lead_call_initiated_time(self.call_sid, call_initiated_time)
-        lead = await get_lead_by_call_id(self.call_sid)
-        if not lead:
-            logger.error(f"Could not find lead for call_sid: {self.call_sid}")
-            return
-
-        self.lead = lead
-        call_payload = lead.payload
-        self.reporting_webhook_url = call_payload.get("reporting_webhook_url")
-
-        logger.info(
-            f"Connected to call: CallSid={self.call_sid}, StreamSid={stream_sid}"
-        )
-        logger.info(f"Call payload: {call_payload}")
-
+    async def _load_template_config(self):
+        """Load template configuration from database (shared across all transport types)."""
         self.flow_loader = FlowConfigLoader()
         self.flow_builder = FlowConfigBuilder()
 
@@ -202,8 +140,6 @@ class Agent:
         # Load template configuration from database
         merchant_id = self.lead.merchant_id if self.lead else "default"
 
-        # First, load the template to get the expected_payload_schema
-
         template = await get_template_by_merchant(
             merchant_id=merchant_id,
             shop_identifier=self.lead.shop_identifier if self.lead else None,
@@ -211,32 +147,19 @@ class Agent:
         )
 
         if not template:
-            logger.error(
-                f"Template not found for merchant={merchant_id}, template={self.lead.template}"
-            )
-            try:
-                if self.ws.client_state.name != "DISCONNECTED":
-                    await self.ws.close(code=4000, reason="Template not found")
-            except Exception as close_error:
-                logger.warning(
-                    f"Could not close websocket (likely already closed): {close_error}"
-                )
-            return
+            error_msg = f"Template not found for merchant={merchant_id}, template={self.lead.template}"
+            logger.error(error_msg)
+            raise ValueError(error_msg)
 
         if not template.expected_payload_schema:
-            logger.error(
+            error_msg = (
                 f"Template {self.lead.template} has no expected_payload_schema defined"
             )
-            try:
-                if self.ws.client_state.name != "DISCONNECTED":
-                    await self.ws.close(code=4000, reason="Template schema not defined")
-            except Exception as close_error:
-                logger.warning(
-                    f"Could not close websocket (likely already closed): {close_error}"
-                )
-            return
+            logger.error(error_msg)
+            raise ValueError(error_msg)
 
         # Build template_vars dynamically based on expected_payload_schema
+        call_payload = self.lead.payload
         self.template_vars = {}
         for field_name in template.expected_payload_schema.keys():
             if field_name in call_payload:
@@ -259,37 +182,202 @@ class Agent:
             merchant_id=merchant_id,
             template=self.lead.template,
             template_vars=self.template_vars,
-            shop_identifier=self.lead.shop_identifier,
+            shop_identifier=self.lead.shop_identifier if self.lead else None,
         )
 
-        # Create VAD analyzer and store reference for muting
-        self.vad_analyzer = SileroVADAnalyzer(
-            sample_rate=16000,
-            params=VADParams(
-                confidence=BREEZE_BUDDY_VAD_CONFIDENCE,
-                start_secs=BREEZE_BUDDY_VAD_START_SECS,
-                stop_secs=BREEZE_BUDDY_VAD_STOP_SECS,
-                min_volume=BREEZE_BUDDY_VAD_MIN_VOLUME,
-            ),
-        )
+    async def run(self, runner_args: Optional[RunnerArguments] = None):
+        """Main entry point - supports both telephony and Daily transport.
 
-        # Create audio mixer for background sound from template configuration
-        audio_out_mixer = create_background_sound_mixer(template)
+        Args:
+            runner_args: Required for Daily mode, contains room info and lead data
+        """
+        # Daily mode setup
+        if self.transport_type == "daily":
+            if not runner_args or not runner_args.body:
+                raise ValueError("runner_args with body is required for Daily mode")
 
-        self.transport = FastAPIWebsocketTransport(
-            websocket=self.ws,
-            params=FastAPIWebsocketParams(
-                audio_in_enabled=True,
-                audio_out_enabled=True,
-                add_wav_header=False,
-                vad_analyzer=self.vad_analyzer,
-                audio_out_mixer=audio_out_mixer,
-                serializer=(
-                    self.serializer(stream_sid, self.call_sid)
-                    if self.serializer
-                    else None
+            # Get lead from runner_args using lead_id
+            lead_data = runner_args.body
+            lead_id = lead_data.get("lead_id")
+            if not lead_id:
+                raise ValueError(
+                    "lead_id is required in runner_args.body for Daily mode"
+                )
+
+            lead = await get_lead_by_id(lead_id)
+            if not lead:
+                raise ValueError(f"Lead not found for lead_id: {lead_id}")
+
+            self.lead = lead
+            self.call_sid = (
+                lead.call_id or f"daily-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+            )
+            self.reporting_webhook_url = (
+                lead.payload.get("reporting_webhook_url") if lead.payload else None
+            )
+
+            # Set call_initiated_time for Daily mode (for call duration calculation)
+            call_initiated_time = datetime.now(timezone.utc)
+            updated_lead = await update_lead_call_initiated_time_by_id(
+                lead_id, call_initiated_time
+            )
+            if updated_lead:
+                self.lead = updated_lead
+
+            logger.info(
+                f"Starting Daily bot for lead_id: {lead_id}, call_sid: {self.call_sid}"
+            )
+
+            # Load template config
+            await self._load_template_config()
+
+            # Create VAD analyzer for Daily mode and store reference for handlers (mute_stt/unmute_stt)
+            self.vad_analyzer = SileroVADAnalyzer(
+                sample_rate=16000,
+                params=VADParams(
+                    confidence=0.9,
+                    start_secs=0.22,
+                    stop_secs=0.3,
+                    min_volume=0.8,
                 ),
-            ),
+            )
+
+            # Create Daily transport with the VAD analyzer we just created
+            daily_params = {
+                "daily": lambda vad=self.vad_analyzer: DailyParams(
+                    audio_in_enabled=True,
+                    audio_out_enabled=True,
+                    vad_analyzer=vad,
+                ),
+            }
+            self.transport = await create_transport(runner_args, daily_params)
+
+        # Telephony mode setup (existing logic)
+        else:
+            logger.info("Starting WebSocket bot")
+            await self.ws.accept()
+            call_initiated_time = datetime.now(timezone.utc)
+
+            try:
+                start_data = self.ws.iter_text()
+                await start_data.__anext__()
+                call_data_str = await start_data.__anext__()
+                call_data = json.loads(call_data_str)
+                logger.info(f"Received call data: {call_data}")
+            except StopAsyncIteration:
+                logger.warning("WebSocket connection closed before receiving call data")
+                return
+            except json.JSONDecodeError as e:
+                logger.error(f"Failed to parse call data JSON: {e}")
+                try:
+                    if self.ws.client_state.name != "DISCONNECTED":
+                        await self.ws.close(code=4000, reason="Invalid JSON data")
+                except Exception as close_error:
+                    logger.warning(
+                        f"Could not close websocket (likely already closed): {close_error}"
+                    )
+                return
+
+            if self.provider == CallProvider.TWILIO:
+                stream_sid = call_data["start"]["streamSid"]
+                self.call_sid = call_data["start"]["callSid"]
+
+                try:
+                    logger.info("Preparing to send initial audio message.")
+                    wav_file_path = (
+                        "app/ai/voice/agents/breeze_buddy/static/audio/dial-tone.wav"
+                    )
+
+                    # Load and convert audio
+                    audio = AudioSegment.from_wav(wav_file_path)
+                    audio = (
+                        audio.set_frame_rate(8000).set_channels(1).set_sample_width(2)
+                    )
+                    pcm_data = audio.raw_data
+                    mulaw_data = audioop.lin2ulaw(pcm_data, 2)
+                    payload = base64.b64encode(mulaw_data).decode("utf-8")
+
+                    # Create and send media message
+                    media_message = {
+                        "event": "media",
+                        "streamSid": stream_sid,
+                        "media": {"payload": payload},
+                    }
+                    await self.ws.send_text(json.dumps(media_message))
+                    logger.info(
+                        f"Successfully sent initial media message for streamSid: {stream_sid}"
+                    )
+
+                except Exception as e:
+                    logger.error(f"Failed to send initial media message: {e}")
+
+            else:  # Exotel
+                stream_sid = call_data.get("stream_sid")
+                start_data = call_data.get("start", {})
+                self.call_sid = start_data.get("call_sid")
+
+            await update_lead_call_initiated_time(self.call_sid, call_initiated_time)
+            lead = await get_lead_by_call_id(self.call_sid)
+            if not lead:
+                logger.error(f"Could not find lead for call_sid: {self.call_sid}")
+                return
+
+            self.lead = lead
+            call_payload = lead.payload
+            self.reporting_webhook_url = call_payload.get("reporting_webhook_url")
+
+            logger.info(
+                f"Connected to call: CallSid={self.call_sid}, StreamSid={stream_sid}"
+            )
+            logger.info(f"Call payload: {call_payload}")
+
+            # Load template configuration
+            try:
+                await self._load_template_config()
+            except ValueError as e:
+                try:
+                    if self.ws.client_state.name != "DISCONNECTED":
+                        await self.ws.close(code=4000, reason=str(e))
+                except Exception as close_error:
+                    logger.warning(
+                        f"Could not close websocket (likely already closed): {close_error}"
+                    )
+                return
+
+            # Create telephony transport
+            self.vad_analyzer = SileroVADAnalyzer(
+                sample_rate=16000,
+                params=VADParams(
+                    confidence=BREEZE_BUDDY_VAD_CONFIDENCE,
+                    start_secs=BREEZE_BUDDY_VAD_START_SECS,
+                    stop_secs=BREEZE_BUDDY_VAD_STOP_SECS,
+                    min_volume=BREEZE_BUDDY_VAD_MIN_VOLUME,
+                ),
+            )
+
+            self.transport = FastAPIWebsocketTransport(
+                websocket=self.ws,
+                params=FastAPIWebsocketParams(
+                    audio_in_enabled=True,
+                    audio_out_enabled=True,
+                    add_wav_header=False,
+                    vad_analyzer=self.vad_analyzer,
+                    audio_in_sample_rate=8000,
+                    audio_out_sample_rate=8000,
+                    serializer=(
+                        self.serializer(stream_sid, self.call_sid)
+                        if self.serializer
+                        else None
+                    ),
+                ),
+            )
+
+        # Get template from database accessor result (already loaded in _load_template_config)
+        merchant_id = self.lead.merchant_id if self.lead else "default"
+        template = await get_template_by_merchant(
+            merchant_id=merchant_id,
+            shop_identifier=self.lead.shop_identifier if self.lead else None,
+            name=self.lead.template,
         )
 
         # Use stt_language from template if available
@@ -314,6 +402,7 @@ class Agent:
                 f"Language prompt enabled: will instruct LLM to speak in {self.language_name}"
             )
 
+        # Common pipeline setup for both telephony and Daily
         stt = await get_stt_service(language_hints=stt_language)
         llm = AzureLLMService(
             api_key=AZURE_OPENAI_API_KEY,
@@ -472,13 +561,19 @@ class Agent:
                 )
 
                 root_span.set_attribute("conversation.id", conversation_id)
-                root_span.set_attribute("conversation.type", "phone-call")
+                root_span.set_attribute(
+                    "conversation.type",
+                    "daily-web" if self.transport_type == "daily" else "phone-call",
+                )
                 root_span.set_attribute("user.name", customer_name)
                 root_span.set_attribute("service.name", "breeze-buddy")
                 root_span.set_attribute("call_sid", self.call_sid)
                 root_span.set_attribute("order_id", self.lead.request_id or "unknown")
                 root_span.set_attribute("shop_name", shop_name)
-                root_span.set_attribute("provider", self.provider)
+                root_span.set_attribute(
+                    "provider",
+                    "daily" if self.transport_type == "daily" else self.provider,
+                )
                 root_span.set_attribute("template.type", self.lead.template)
 
                 await run_pipeline()
@@ -502,7 +597,7 @@ class Agent:
             await end_conversation(context, {})
 
 
-async def main(
+async def telephony_bot(
     ws: WebSocket,
     aiohttp_session,
     serializer,
@@ -510,7 +605,39 @@ async def main(
     completion_function,
     provider: CallProvider,
 ):
-    bot = Agent(
-        ws, aiohttp_session, serializer, hangup_function, completion_function, provider
+    """Entry point for telephony-based agents (Twilio/Exotel)."""
+    agent = Agent(
+        transport_type=provider,
+        ws=ws,
+        aiohttp_session=aiohttp_session,
+        serializer=serializer,
+        hangup_function=hangup_function,
+        completion_function=completion_function,
+        provider=provider,
     )
-    await bot.run()
+    await agent.run()
+
+
+async def daily_bot(runner_args: RunnerArguments, completion_function):
+    """Entry point for Daily-based agents - for web/mobile frontends.
+
+    This function creates a Daily transport agent that can be used with
+    web/mobile frontends. The frontend can join the Daily room directly
+    without needing telephony infrastructure.
+
+    Args:
+        runner_args: RunnerArguments containing Daily room info and lead data
+                    - For DailyRunnerArguments: room_url, token
+                    - body should contain: lead_id and session configuration
+        completion_function: Callback function to handle call completion
+    """
+    agent = Agent(
+        transport_type="daily",
+        ws=None,
+        aiohttp_session=None,
+        serializer=None,
+        hangup_function=None,
+        completion_function=completion_function,
+        provider=None,
+    )
+    await agent.run(runner_args)
