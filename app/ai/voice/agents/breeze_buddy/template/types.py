@@ -133,3 +133,21 @@ class CreateTemplateRequest(BaseModel):
     expected_payload_schema: Optional[Dict[str, Any]] = None
     expected_callback_response_schema: Optional[Dict[str, Any]] = None
     configurations: Optional[ConfigurationModel] = None
+
+
+class ReplaceTemplateRequest(BaseModel):
+    """Request model for updating a template.
+
+    Non-nullable fields (name, flow, is_active) must be provided - throws 400 if not.
+    Nullable fields (identifier, outbound_number_id, expected_payload_schema,
+    expected_callback_response_schema, configurations) - if not provided, set to NULL.
+    """
+
+    name: str
+    identifier: Optional[str] = None
+    outbound_number_id: Optional[str] = None
+    is_active: bool
+    flow: Dict[str, Any]
+    expected_payload_schema: Optional[Dict[str, Any]] = None
+    expected_callback_response_schema: Optional[Dict[str, Any]] = None
+    configurations: Optional[ConfigurationModel] = None

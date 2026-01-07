@@ -7,6 +7,7 @@ Templates define the conversational flow for automated calls.
 Endpoints:
 - POST   /templates           - Create new template
 - GET    /templates           - Get templates (filtered by merchant/shop/name)
+- PUT    /templates/{id}      - Replace existing template by ID
 
 For backward compatibility, old endpoints are available in deprecated/template.py
 """
@@ -17,6 +18,7 @@ from fastapi import APIRouter, Depends, Query, status
 
 from app.ai.voice.agents.breeze_buddy.template.types import (
     CreateTemplateRequest,
+    ReplaceTemplateRequest,
     TemplateModel,
 )
 from app.api.security.breeze_buddy.rbac_token import get_current_user_with_rbac
@@ -27,6 +29,7 @@ from .handlers import (
     create_template_handler,
     get_template_by_id_handler,
     list_templates_handler,
+    replace_template_handler,
 )
 from .rbac import require_admin_or_merchant_owner
 
@@ -160,3 +163,42 @@ async def get_template_by_id(
         Complete TemplateModel including flow, schemas, and metadata
     """
     return await get_template_by_id_handler(template_id, current_user)
+
+
+@router.put("/templates/{template_id}", response_model=TemplateModel)
+async def replace_template(
+    template_id: str,
+    template_data: ReplaceTemplateRequest,
+    current_user: UserInfo = Depends(get_current_user_with_rbac),
+):
+    """
+    replace an existing template.
+
+    replaces all fields of the template. Non-nullable fields (name, flow, is_active)
+    must be provided. Nullable fields (identifier, outbound_number_id,
+    expected_payload_schema, expected_callback_response_schema, configurations)
+    - if not provided, they will be set to NULL.
+
+    Path Parameters:
+    - template_id: Template UUID
+
+    Request Body:
+        {
+            "name": "updated-template-name",
+            "identifier": "shop_identifier",
+            "outbound_number_id": "uuid",
+            "is_active": true,
+            "flow": {...},
+            "expected_payload_schema": {...},
+            "expected_callback_response_schema": {...},
+            "configurations": {...}
+        }
+
+    Returns:
+        Updated TemplateModel including flow, schemas, and metadata
+
+    Raises:
+        - 404: Template not found
+        - 400: Validation error (missing required fields)
+    """
+    return await replace_template_handler(template_id, template_data, current_user)

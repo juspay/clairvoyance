@@ -136,10 +136,69 @@ def get_template_by_id_query(template_id: str) -> Tuple[str, List[Any]]:
         Tuple of (query string, values list)
     """
     query = f"""
-        SELECT id, merchant_id, shop_identifier, name, flow, expected_payload_schema, expected_callback_response_schema, is_active, created_at, updated_at
+        SELECT id, merchant_id, shop_identifier, name, flow, expected_payload_schema, expected_callback_response_schema, configurations, outbound_number_id, is_active, created_at, updated_at
         FROM {TEMPLATE_TABLE}
         WHERE id = $1
         LIMIT 1
     """
 
     return query, [template_id]
+
+
+def replace_template_query(
+    template_id: str,
+    name: str,
+    flow: str,
+    expected_payload_schema: Optional[str],
+    expected_callback_response_schema: Optional[str],
+    configurations: Optional[str],
+    outbound_number_id: Optional[str],
+    is_active: bool,
+    shop_identifier: Optional[str],
+    updated_at,
+) -> Tuple[str, List[Any]]:
+    """
+    Generate query to replace a template.
+
+    Args:
+        template_id: Template UUID
+        name: Template name (required)
+        flow: Flow JSON string (required)
+        expected_payload_schema: Expected payload schema JSON string or None
+        expected_callback_response_schema: Expected callback response schema JSON string or None
+        configurations: Configurations JSON string or None
+        outbound_number_id: Outbound number ID or None
+        is_active: Whether template is active
+        shop_identifier: Shop identifier or None
+        updated_at: Updated timestamp
+
+    Returns:
+        Tuple of (query string, values list)
+    """
+    query = f"""
+        UPDATE {TEMPLATE_TABLE}
+        SET name = $1,
+            flow = $2::jsonb,
+            expected_payload_schema = $3::jsonb,
+            expected_callback_response_schema = $4::jsonb,
+            configurations = $5::jsonb,
+            outbound_number_id = $6,
+            is_active = $7,
+            shop_identifier = $8,
+            updated_at = $9
+        WHERE id = $10
+        RETURNING id, merchant_id, shop_identifier, name, flow, expected_payload_schema, expected_callback_response_schema, configurations, outbound_number_id, is_active, created_at, updated_at
+    """
+
+    return query, [
+        name,
+        flow,
+        expected_payload_schema,
+        expected_callback_response_schema,
+        configurations,
+        outbound_number_id,
+        is_active,
+        shop_identifier,
+        updated_at,
+        template_id,
+    ]
