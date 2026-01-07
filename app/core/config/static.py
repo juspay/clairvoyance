@@ -36,6 +36,13 @@ AUTOMATIC_CONNECT_BLOCKED_ORIGINS = [
 ]
 DAILY_API_KEY = get_required_env("DAILY_API_KEY")
 DAILY_API_URL = os.environ.get("DAILY_API_URL", "https://api.daily.co/v1")
+# Breeze Buddy Daily API Configuration - falls back to DAILY_API_KEY and DAILY_API_URL if not set
+BREEZE_BUDDY_DAILY_API_KEY = (
+    os.environ.get("BREEZE_BUDDY_DAILY_API_KEY") or DAILY_API_KEY
+)
+BREEZE_BUDDY_DAILY_API_URL = (
+    os.environ.get("BREEZE_BUDDY_DAILY_API_URL") or DAILY_API_URL
+)
 AZURE_OPENAI_API_KEY = get_required_env("AZURE_OPENAI_API_KEY")
 AZURE_OPENAI_ENDPOINT = get_required_env("AZURE_OPENAI_ENDPOINT")
 AZURE_OPENAI_MODEL = os.environ.get("AZURE_OPENAI_MODEL", "gpt-4o-automatic")

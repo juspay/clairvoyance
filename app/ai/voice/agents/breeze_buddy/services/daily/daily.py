@@ -21,7 +21,10 @@ from pipecat.transports.daily.utils import (
 )
 
 from app.ai.voice.agents.breeze_buddy.agent import daily_bot
-from app.core.config.static import DAILY_API_KEY, DAILY_API_URL
+from app.core.config.static import (
+    BREEZE_BUDDY_DAILY_API_KEY,
+    BREEZE_BUDDY_DAILY_API_URL,
+)
 from app.core.logger import logger
 from app.core.transport.http_client import create_aiohttp_session
 from app.database.accessor.breeze_buddy.lead_call_tracker import (
@@ -72,8 +75,8 @@ async def start_daily_session(lead_id: str) -> Dict[str, Any]:
     # Create Daily room on-demand
     async with create_aiohttp_session() as aiohttp_session:
         daily_rest = DailyRESTHelper(
-            daily_api_key=DAILY_API_KEY,
-            daily_api_url=DAILY_API_URL,
+            daily_api_key=BREEZE_BUDDY_DAILY_API_KEY,
+            daily_api_url=BREEZE_BUDDY_DAILY_API_URL,
             aiohttp_session=aiohttp_session,
         )
 
