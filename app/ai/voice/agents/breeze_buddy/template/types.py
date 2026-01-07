@@ -133,3 +133,20 @@ class CreateTemplateRequest(BaseModel):
     expected_payload_schema: Optional[Dict[str, Any]] = None
     expected_callback_response_schema: Optional[Dict[str, Any]] = None
     configurations: Optional[ConfigurationModel] = None
+
+
+class UpdateTemplateRequest(BaseModel):
+    """
+    Request model for updating a template.
+    All fields are optional - only provided fields will be updated.
+    """
+
+    template_name: Optional[str] = None
+    identifier: Optional[str] = None
+    outbound_number_id: Optional[str] = None
+    is_active: Optional[bool] = None
+    description: Optional[str] = None
+    flow: Optional[Dict[str, Any]] = None
+    expected_payload_schema: Optional[Dict[str, Any]] = None
+    expected_callback_response_schema: Optional[Dict[str, Any]] = None
+    configurations: Optional[ConfigurationModel] = None

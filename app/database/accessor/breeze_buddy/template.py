@@ -21,6 +21,7 @@ from app.database.queries.breeze_buddy.template import (
     get_template_by_id_query,
     get_template_by_merchant_query,
     get_templates_list_query,
+    update_template_query,
 )
 from app.schemas.breeze_buddy.template import TemplateMetadata
 
@@ -273,4 +274,56 @@ async def get_template_by_id(template_id: str) -> Optional[TemplateModel]:
 
     except Exception as e:
         logger.error(f"Error getting template by ID: {e}", exc_info=True)
+        return None
+
+
+async def update_template(
+    template_id: str, update_fields: Dict[str, Any], updated_at
+) -> Optional[TemplateModel]:
+    """
+    Update a template with partial updates.
+
+    Args:
+        template_id: Template UUID
+        update_fields: Dictionary of fields to update (field_name -> value)
+                      Values should already be serialized to JSON strings if needed
+        updated_at: Timestamp for updated_at field
+
+    Returns:
+        Updated TemplateModel if successful, None otherwise
+    """
+    logger.info(
+        f"Updating template {template_id} with fields: {list(update_fields.keys())}"
+    )
+
+    try:
+        # Convert dict/list fields to JSON strings
+        jsonb_fields = {
+            "flow",
+            "expected_payload_schema",
+            "expected_callback_response_schema",
+            "configurations",
+        }
+
+        processed_fields = {}
+        for field_name, value in update_fields.items():
+            if field_name in jsonb_fields and value is not None:
+                # Convert to JSON string for database storage
+                processed_fields[field_name] = json.dumps(value)
+            else:
+                processed_fields[field_name] = value
+
+        query, values = update_template_query(template_id, processed_fields, updated_at)
+        result = await run_parameterized_query(query, values)
+
+        if result and get_row_count(result) > 0:
+            decoded_result = decode_template(result[0])
+            logger.info(f"Template updated successfully: {decoded_result.id}")
+            return decoded_result
+
+        logger.warning(f"Template not found or update failed: {template_id}")
+        return None
+
+    except Exception as e:
+        logger.error(f"Error updating template: {e}", exc_info=True)
         return None
