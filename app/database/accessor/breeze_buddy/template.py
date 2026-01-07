@@ -21,6 +21,7 @@ from app.database.queries.breeze_buddy.template import (
     get_template_by_id_query,
     get_template_by_merchant_query,
     get_templates_list_query,
+    replace_template_query,
 )
 from app.schemas.breeze_buddy.template import TemplateMetadata
 
@@ -273,4 +274,79 @@ async def get_template_by_id(template_id: str) -> Optional[TemplateModel]:
 
     except Exception as e:
         logger.error(f"Error getting template by ID: {e}", exc_info=True)
+        return None
+
+
+async def replace_template(
+    template_id: str,
+    name: str,
+    flow: dict,
+    expected_payload_schema: Optional[dict],
+    expected_callback_response_schema: Optional[dict],
+    configurations: Optional[dict],
+    outbound_number_id: Optional[str],
+    is_active: bool,
+    shop_identifier: Optional[str],
+    now,
+) -> Optional[TemplateModel]:
+    """
+    Update an existing template.
+
+    Args:
+        template_id: Template UUID
+        name: Template name (required)
+        flow: Flow structure (required)
+        expected_payload_schema: Expected payload schema (optional, set to NULL if not provided)
+        expected_callback_response_schema: Expected callback response schema (optional, set to NULL if not provided)
+        configurations: Template configurations (optional, set to NULL if not provided)
+        outbound_number_id: Outbound number ID (optional, set to NULL if not provided)
+        is_active: Whether template is active (required)
+        shop_identifier: Shop identifier (optional, set to NULL if not provided)
+        now: Current timestamp
+
+    Returns:
+        Updated TemplateModel if successful, None otherwise
+    """
+    logger.info(f"Updating template with ID: {template_id}")
+
+    try:
+        # Convert flow to JSON string
+        flow_json = json.dumps(flow)
+        expected_payload_schema_json = (
+            json.dumps(expected_payload_schema) if expected_payload_schema else None
+        )
+        expected_callback_response_schema_json = (
+            json.dumps(expected_callback_response_schema)
+            if expected_callback_response_schema
+            else None
+        )
+
+        # Convert configurations to JSON string
+        configurations_json = json.dumps(configurations) if configurations else None
+
+        query, values = replace_template_query(
+            template_id,
+            name,
+            flow_json,
+            expected_payload_schema_json,
+            expected_callback_response_schema_json,
+            configurations_json,
+            outbound_number_id,
+            is_active,
+            shop_identifier,
+            now,
+        )
+
+        result = await run_parameterized_query(query, values)
+
+        if result and get_row_count(result) > 0:
+            decoded_result = decode_template(result[0])
+            logger.info(f"Template updated successfully: {decoded_result.id}")
+            return decoded_result
+
+        logger.error(f"Failed to update template: {template_id}")
+        return None
+
+    except Exception as e:
+        logger.error(f"Error updating template: {e}", exc_info=True)
         return None

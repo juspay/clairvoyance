@@ -9,13 +9,17 @@ from uuid import uuid4
 
 from fastapi import HTTPException, status
 
-from app.ai.voice.agents.breeze_buddy.template.types import CreateTemplateRequest
+from app.ai.voice.agents.breeze_buddy.template.types import (
+    CreateTemplateRequest,
+    ReplaceTemplateRequest,
+)
 from app.core.logger import logger
 from app.database.accessor import get_outbound_number_by_id, get_template_by_merchant
 from app.database.accessor.breeze_buddy.template import (
     create_template,
     get_template_by_id,
     get_templates_list,
+    replace_template,
 )
 from app.schemas import UserInfo
 from app.schemas.breeze_buddy.template import TemplateListResponse
@@ -296,4 +300,115 @@ async def get_template_by_id_handler(template_id: str, current_user: UserInfo):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error getting template: {str(e)}",
+        )
+
+
+async def replace_template_handler(
+    template_id: str,
+    template_data: ReplaceTemplateRequest,
+    current_user: UserInfo,
+):
+    """
+    Update an existing template.
+
+    Args:
+        template_id: Template UUID
+        template_data: Template update request
+        current_user: Current authenticated user
+
+    Returns:
+        Updated TemplateModel
+
+    Raises:
+        HTTPException: 404 if template not found, 400/500 on error
+    """
+    logger.info(
+        f"User {current_user.username} (role: {current_user.role}) updating template "
+        f"{template_id}"
+    )
+
+    try:
+        # Check if template exists
+        existing_template = await get_template_by_id(template_id)
+        if not existing_template:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Template not found: {template_id}",
+            )
+
+        # Validate RBAC access
+        validate_template_access(
+            current_user,
+            existing_template.merchant_id,
+            existing_template.shop_identifier,
+            operation="access template",
+        )
+
+        # Validate flow structure
+        flow = template_data.flow
+        if not flow:
+            raise ValueError("Flow structure is required")
+
+        if "initial_node" not in flow:
+            raise ValueError("initial_node must be specified in flow structure")
+
+        if "nodes" not in flow or not flow["nodes"]:
+            raise ValueError("nodes must be specified in flow structure")
+
+        # Validate outbound_number_id if provided
+        if template_data.outbound_number_id:
+            outbound_number = await get_outbound_number_by_id(
+                template_data.outbound_number_id
+            )
+            if not outbound_number:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Outbound number with ID {template_data.outbound_number_id} does not exist",
+                )
+
+        # Update the template
+        now = datetime.now(timezone.utc)
+
+        # Build configurations dict from the ConfigurationModel
+        # If configurations is explicitly provided, use it; otherwise set to None (NULL)
+        configurations = None
+        if template_data.configurations:
+            configurations = template_data.configurations.model_dump(exclude_none=True)
+
+        updated_template = await replace_template(
+            template_id=template_id,
+            name=template_data.name,
+            flow=flow,
+            expected_payload_schema=template_data.expected_payload_schema,
+            expected_callback_response_schema=template_data.expected_callback_response_schema,
+            configurations=configurations,
+            outbound_number_id=template_data.outbound_number_id,
+            is_active=template_data.is_active,
+            shop_identifier=template_data.identifier,
+            now=now,
+        )
+
+        if not updated_template:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to update template",
+            )
+
+        logger.info(
+            f"Successfully updated template with id: {updated_template.id} containing flow "
+            f"with {len(flow.get('nodes', []))} nodes"
+        )
+
+        return updated_template
+
+    except HTTPException:
+        raise
+    except ValueError as e:
+        logger.error(f"Validation error updating template: {e}")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error updating template: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error updating template: {str(e)}",
         )
