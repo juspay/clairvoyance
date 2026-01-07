@@ -52,6 +52,10 @@ from app.ai.voice.agents.breeze_buddy.utils.language_utils.prompt_injections imp
     inject_language_rules,
 )
 from app.core.config.dynamic import (
+    BB_DAILY_VAD_CONFIDENCE,
+    BB_DAILY_VAD_MIN_VOLUME,
+    BB_DAILY_VAD_START_SECS,
+    BB_DAILY_VAD_STOP_SECS,
     BREEZE_BUDDY_AZURE_MAX_COMPLETION_TOKENS,
     BREEZE_BUDDY_AZURE_TEMPERATURE,
     BREEZE_BUDDY_LLM_AGGREGATION_TIMEOUT,
@@ -239,10 +243,10 @@ class Agent:
             self.vad_analyzer = SileroVADAnalyzer(
                 sample_rate=16000,
                 params=VADParams(
-                    confidence=0.9,
-                    start_secs=0.22,
-                    stop_secs=0.3,
-                    min_volume=0.8,
+                    confidence=await BB_DAILY_VAD_CONFIDENCE(),
+                    start_secs=await BB_DAILY_VAD_START_SECS(),
+                    stop_secs=await BB_DAILY_VAD_STOP_SECS(),
+                    min_volume=await BB_DAILY_VAD_MIN_VOLUME(),
                 ),
             )
 

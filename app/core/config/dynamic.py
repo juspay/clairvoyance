@@ -200,3 +200,24 @@ async def BREEZE_BUDDY_AZURE_TEMPERATURE() -> float:
 async def BREEZE_BUDDY_LLM_AGGREGATION_TIMEOUT() -> float:
     """Returns BREEZE_BUDDY_LLM_AGGREGATION_TIMEOUT from Redis (0.0 = send immediately)"""
     return await get_config("BREEZE_BUDDY_LLM_AGGREGATION_TIMEOUT", 0.0, float)
+
+
+# --- Daily Mode VAD Configuration (for web/mobile frontends) ---
+async def BB_DAILY_VAD_CONFIDENCE() -> float:
+    """Returns BB_DAILY_VAD_CONFIDENCE from Redis"""
+    return await get_config("BB_DAILY_VAD_CONFIDENCE", 0.9, float)
+
+
+async def BB_DAILY_VAD_START_SECS() -> float:
+    """Returns BB_DAILY_VAD_START_SECS from Redis"""
+    return await get_config("BB_DAILY_VAD_START_SECS", 0.25, float)
+
+
+async def BB_DAILY_VAD_STOP_SECS() -> float:
+    """Returns BB_DAILY_VAD_STOP_SECS from Redis"""
+    return await get_config("BB_DAILY_VAD_STOP_SECS", 0.95, float)
+
+
+async def BB_DAILY_VAD_MIN_VOLUME() -> float:
+    """Returns BB_DAILY_VAD_MIN_VOLUME from Redis"""
+    return await get_config("BB_DAILY_VAD_MIN_VOLUME", 0.75, float)
