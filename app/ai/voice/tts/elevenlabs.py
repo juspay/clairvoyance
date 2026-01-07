@@ -14,6 +14,7 @@ from app.core.config.static import (
     ELEVENLABS_BB_VOICE_ID,
     ELEVENLABS_MODEL_ID,
 )
+from app.core.logger import logger
 
 __all__ = ["ElevenLabsConfig", "build_elevenlabs_tts", "_generate_elevenlabs_audio"]
 
