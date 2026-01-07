@@ -5,9 +5,9 @@ This module provides functionality to initialize Langfuse background tasks,
 fetch scores from Langfuse via REST API, and monitor for failures.
 """
 
+from app.core.config.dynamic import LANGFUSE_EVALUATORS
 from app.core.config.static import (
     ENABLE_BB_LANGFUSE_MONITORING_LOOP,
-    LANGFUSE_EVALUATORS,
     SCORE_CHECK_INTERVAL_SECONDS,
     SLACK_WEBHOOK_URL,
 )
@@ -27,9 +27,9 @@ async def initialize_langfuse_tasks(scheduler) -> bool:
     """
 
     # Check if all required configuration is present
-    if not (
-        ENABLE_BB_LANGFUSE_MONITORING_LOOP and LANGFUSE_EVALUATORS and SLACK_WEBHOOK_URL
-    ):
+    # LANGFUSE_EVALUATORS is now async, so we fetch it here
+    evaluators = await LANGFUSE_EVALUATORS()
+    if not (ENABLE_BB_LANGFUSE_MONITORING_LOOP and evaluators and SLACK_WEBHOOK_URL):
         logger.debug("Langfuse tasks skipped - missing required configuration")
         return False
 
