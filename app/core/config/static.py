@@ -492,13 +492,6 @@ REDIS_TTL = int(os.getenv("REDIS_TTL", "3600"))  # Default TTL in seconds (1 hou
 DEVCYCLE_WEBHOOK_SECRET = os.getenv("DEVCYCLE_WEBHOOK_SECRET", "")
 DEVCYCLE_SERVER_KEY = os.getenv("DEVCYCLE_SERVER_KEY", "")
 
-# Langfuse Score Monitoring Configuration
-LANGFUSE_EVALUATORS = [
-    name.strip()
-    for name in os.environ.get("LANGFUSE_EVALUATORS", "").split(",")
-    if name.strip()
-]
-
 # Slack Webhook Configuration
 SLACK_WEBHOOK_URL = os.environ.get("SLACK_WEBHOOK_URL", "")
 SLACK_TAG_USERS = os.environ.get("SLACK_TAG_USERS", "narsimha.reddy")

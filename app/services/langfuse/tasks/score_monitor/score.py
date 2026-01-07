@@ -2,7 +2,7 @@
 Langfuse Score Monitoring Service
 
 This module provides functionality to poll Langfuse for LLM-as-a-judge scores
-and identify failures (score = 0) for alerting purposes.
+and identify failures (scores below configurable thresholds on a 1-10 scale) for alerting purposes.
 """
 
 from datetime import datetime, timedelta, timezone
@@ -10,11 +10,11 @@ from typing import Any, Dict, List, Optional
 
 import aiohttp
 
-from app.core.config.dynamic import DAILY_SUMMARY_HOUR
-from app.core.config.static import (
-    LANGFUSE_BASEURL,
+from app.core.config.dynamic import (
+    DAILY_SUMMARY_HOUR,
     LANGFUSE_EVALUATORS,
 )
+from app.core.config.static import LANGFUSE_BASEURL
 from app.core.logger import logger
 from app.database.accessor.breeze_buddy.lead_call_tracker import (
     get_all_lead_call_trackers,
@@ -176,23 +176,26 @@ class ScoreMonitor:
             logger.error(f"Error in _fetch_scores_for_evaluator: {e}", exc_info=True)
             return []
 
-    def _is_zero_score(self, score: Dict[str, Any]) -> bool:
+    def _is_below_threshold(self, score: Dict[str, Any], threshold: int) -> bool:
         """
-        Check if a score represents a failure (value = 0).
+        Check if a score is below the threshold (failure).
+        Scores are on a 1-10 scale.
 
         Args:
             score: Score dictionary
+            threshold: The threshold value (1-10). Scores below this trigger alerts.
 
         Returns:
-            True if score value is 0, False otherwise
+            True if score value is below threshold, False otherwise
         """
         try:
             value = score.get("value")
             if value is None:
                 return False
 
-            # Check if value is exactly 0 or 0.0
-            return float(value) == 0.0
+            score_value = float(value)
+            # Scores are 1-10, alert if below threshold
+            return score_value < threshold
 
         except (ValueError, TypeError):
             logger.warning(f"Invalid score value: {score.get('value')}")
@@ -249,7 +252,7 @@ class ScoreMonitor:
         trace_details: Optional[Dict[str, Any]] = None,
     ) -> bool:
         """
-        Send a Slack alert for a zero score (failure).
+        Send a Slack alert for a score below threshold (failure).
         Uses the generic send_slack_alert() function from slack_webhook.
 
         Args:
@@ -303,9 +306,12 @@ class ScoreMonitor:
                 except Exception as e:
                     logger.error(f"Error querying database for recording_url: {e}")
 
+        # Get actual score value
+        score_value = score.get("value", "N/A")
+
         # Build fields for the alert
         fields = [
-            {"name": "Score", "value": "0.0 (FAILURE)"},
+            {"name": "Score", "value": f"{score_value} (BELOW THRESHOLD)"},
             {"name": "Timestamp", "value": time_str},
             {"name": "Trace ID", "value": f"`{trace_id}`"},
             {"name": "Call SID", "value": f"`{call_sid or 'N/A'}`"},
@@ -331,7 +337,7 @@ class ScoreMonitor:
             fields=fields,
             sections=sections if sections else None,
             links=links,
-            fallback_text=f"LLM Judge Failure: {evaluator_name} - Score 0.0",
+            fallback_text=f"LLM Judge Failure: {evaluator_name} - Score {score_value}",
         )
 
         # Track alert count in Redis after successful Slack send
@@ -348,8 +354,9 @@ class ScoreMonitor:
         try:
             redis_service = await get_redis_service()
             counts = {}
+            evaluators_config = await LANGFUSE_EVALUATORS()
 
-            for evaluator in LANGFUSE_EVALUATORS:
+            for evaluator in evaluators_config.keys():
                 key = f"alerts:count:{evaluator}:{target_date}"
                 count = await redis_service.get(key)
                 counts[evaluator] = int(count) if count else 0
@@ -776,18 +783,20 @@ class ScoreMonitor:
             logger.error("Langfuse client not available")
             return
 
-        # Use evaluators from config
-        evaluators = LANGFUSE_EVALUATORS
-        if not evaluators:
+        # Get evaluators config (dict of evaluator_name -> threshold)
+        evaluators_config = await LANGFUSE_EVALUATORS()
+        if not evaluators_config:
             logger.warning("No evaluators configured")
             return
 
+        logger.info(f"Using evaluator thresholds: {evaluators_config}")
+
         # Fetch ALL scores for all configured evaluators and group by traceId
         all_scores = []
-        zero_scores_by_evaluator = {}
-        total_zero_scores = 0
+        failing_scores_by_evaluator = {}
+        total_failing_scores = 0
 
-        for evaluator_name in evaluators:
+        for evaluator_name, threshold in evaluators_config.items():
             try:
                 # Fetch scores for this evaluator
                 scores = await self._fetch_scores_for_evaluator(
@@ -799,22 +808,24 @@ class ScoreMonitor:
                 # Collect all scores for DB storage
                 all_scores.extend(scores)
 
-                # Filter for zero scores (failures) for alerting
-                zero_scores = [s for s in scores if self._is_zero_score(s)]
-                zero_scores_by_evaluator[evaluator_name] = zero_scores
-                total_zero_scores += len(zero_scores)
+                # Filter for scores below threshold (failures) for alerting
+                failing_scores = [
+                    s for s in scores if self._is_below_threshold(s, threshold)
+                ]
+                failing_scores_by_evaluator[evaluator_name] = failing_scores
+                total_failing_scores += len(failing_scores)
 
                 logger.info(
-                    f"Evaluator '{evaluator_name}': "
+                    f"Evaluator '{evaluator_name}' (threshold={threshold}): "
                     f"Found {len(scores)} total scores, "
-                    f"{len(zero_scores)} zero scores"
+                    f"{len(failing_scores)} failing scores"
                 )
 
             except Exception as e:
                 logger.error(
                     f"Error fetching scores for evaluator '{evaluator_name}': {e}"
                 )
-                zero_scores_by_evaluator[evaluator_name] = []
+                failing_scores_by_evaluator[evaluator_name] = []
 
         # ====================================================================
         # Step 1: Group all scores by traceId
@@ -879,18 +890,18 @@ class ScoreMonitor:
             # This ensures we don't send duplicate alerts in multi-pod scenarios
             return
 
-        if total_zero_scores == 0:
-            logger.info("No zero scores found in this check")
+        if total_failing_scores == 0:
+            logger.info("No failing scores found in this check")
             return
 
         logger.info(
-            f"Found {total_zero_scores} zero scores across "
-            f"{len(zero_scores_by_evaluator)} evaluators, sending Slack alerts..."
+            f"Found {total_failing_scores} failing scores across "
+            f"{len(failing_scores_by_evaluator)} evaluators, sending Slack alerts..."
         )
 
-        # Send individual alerts for each zero score using cached trace details
-        for evaluator_name, zero_scores in zero_scores_by_evaluator.items():
-            for score in zero_scores:
+        # Send individual alerts for each failing score using cached trace details
+        for evaluator_name, failing_scores in failing_scores_by_evaluator.items():
+            for score in failing_scores:
                 try:
                     trace_id = score.get("trace_id")
                     # Use cached trace details instead of fetching again

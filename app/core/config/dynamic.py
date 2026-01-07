@@ -221,3 +221,36 @@ async def BB_DAILY_VAD_STOP_SECS() -> float:
 async def BB_DAILY_VAD_MIN_VOLUME() -> float:
     """Returns BB_DAILY_VAD_MIN_VOLUME from Redis"""
     return await get_config("BB_DAILY_VAD_MIN_VOLUME", 0.75, float)
+
+
+# --- Langfuse Score Monitoring Configuration ---
+async def LANGFUSE_EVALUATORS() -> dict[str, int]:
+    """
+    Returns LANGFUSE_EVALUATORS from Redis as a dict mapping evaluator name to threshold.
+    Format: "evaluator_name:threshold,evaluator_name:threshold"
+    Thresholds are on a 1-10 scale. Scores below the threshold trigger alerts.
+
+    Example: "OUTCOME MISMATCH:5,HIGH LATENCY:7" -> {"OUTCOME MISMATCH": 5, "HIGH LATENCY": 7}
+
+    If threshold is not specified for an evaluator, defaults to 5.
+    """
+    config_value = await get_config("LANGFUSE_EVALUATORS", "", str)
+    evaluators = {}
+    for item in config_value.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        if ":" in item:
+            name, threshold_str = item.rsplit(":", 1)
+            name = name.strip()
+            try:
+                threshold = int(threshold_str.strip())
+            except ValueError:
+                threshold = 5  # Default threshold
+        else:
+            # No threshold specified, use default
+            name = item
+            threshold = 5
+        if name:
+            evaluators[name] = threshold
+    return evaluators
