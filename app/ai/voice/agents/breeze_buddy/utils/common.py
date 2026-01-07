@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import soundfile
 from pipecat.audio.mixers.soundfile_mixer import SoundfileMixer
-from pipecat.frames.frames import OutputAudioRawFrame
+from pipecat.frames.frames import OutputAudioRawFrame, TTSAudioRawFrame
 from pydub import AudioSegment
 
 from app.core.config.static import ORDER_CONFIRMATION_WEBHOOK_SECRET_KEY
@@ -584,4 +584,85 @@ async def prepare_initial_greeting_payload(
 
     except Exception as e:
         logger.error(f"Failed to prepare initial greeting payload: {e}")
+        return None
+
+
+async def prepare_daily_greeting_frame(
+    lead,
+    template,
+) -> Optional[Dict[str, any]]:
+    """
+    Prepare initial greeting audio frame for Daily transport.
+
+    Fetches greeting audio from Redis and converts to Daily-compatible format
+    (16kHz PCM, mono) as a TTSAudioRawFrame. Using TTSAudioRawFrame instead of
+    OutputAudioRawFrame ensures proper bot speaking signals are emitted.
+
+    Args:
+        lead: Lead object containing lead information
+        template: Template object containing template configuration
+
+    Returns:
+        Dictionary with "frame" (TTSAudioRawFrame) and "greeting_source",
+        or None if preparation failed
+    """
+    try:
+        logger.info("Preparing initial greeting audio frame for Daily.")
+
+        mulaw_data = None
+        greeting_source = None
+
+        if lead:
+            redis = await get_redis_service()
+
+            # 1. First check for template audio (static greeting - persistent)
+            if template:
+                template_audio_key = f"greeting:template:{template.id}"
+                template_greeting = await redis.get(template_audio_key)
+                if template_greeting:
+                    logger.info("Using static greeting audio from template for Daily")
+                    mulaw_data = base64.b64decode(template_greeting)
+                    greeting_source = "template_static"
+
+            # 2. Then check for lead audio (dynamic greeting - temporary)
+            if not mulaw_data:
+                lead_audio_key = f"greeting:{lead.id}"
+                lead_greeting = await redis.get(lead_audio_key)
+                if lead_greeting:
+                    logger.info("Using dynamic greeting audio for lead (Daily)")
+                    mulaw_data = base64.b64decode(lead_greeting)
+                    greeting_source = "lead_dynamic"
+
+                    # Delete from Redis after retrieving (cleanup)
+                    await redis.delete(lead_audio_key)
+                    logger.info(
+                        f"Deleted dynamic greeting from Redis for lead {lead.id}"
+                    )
+
+        if not mulaw_data:
+            logger.info("No greeting audio found for Daily")
+            return None
+
+        # Convert mulaw 8kHz to PCM 16kHz for Daily transport
+        # Step 1: Convert mulaw to 16-bit linear PCM (8kHz)
+        pcm_8k = audioop.ulaw2lin(mulaw_data, 2)
+
+        # Step 2: Upsample from 8kHz to 16kHz
+        pcm_16k, _ = audioop.ratecv(pcm_8k, 2, 1, 8000, 16000, None)
+
+        logger.info(
+            f"Prepared Daily greeting audio: {len(pcm_16k)} bytes, source: {greeting_source}"
+        )
+
+        # Create TTSAudioRawFrame for Daily transport (triggers bot speaking signals)
+        greeting_frame = TTSAudioRawFrame(
+            audio=pcm_16k,
+            sample_rate=16000,
+            num_channels=1,
+        )
+
+        return {"frame": greeting_frame, "greeting_source": greeting_source}
+
+    except Exception as e:
+        logger.error(f"Failed to prepare Daily greeting frame: {e}")
         return None

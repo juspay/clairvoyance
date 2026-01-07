@@ -21,12 +21,16 @@ from pipecat.transports.daily.utils import (
 )
 
 from app.ai.voice.agents.breeze_buddy.agent import daily_bot
+from app.ai.voice.agents.breeze_buddy.managers.utils import (
+    prepare_and_store_initial_greeting,
+)
 from app.core.config.static import (
     BREEZE_BUDDY_DAILY_API_KEY,
     BREEZE_BUDDY_DAILY_API_URL,
 )
 from app.core.logger import logger
 from app.core.transport.http_client import create_aiohttp_session
+from app.database.accessor import get_lead_by_id, get_template_by_merchant
 from app.database.accessor.breeze_buddy.lead_call_tracker import (
     update_lead_call_completion_details,
 )
@@ -58,10 +62,12 @@ async def start_daily_session(lead_id: str) -> Dict[str, Any]:
     """Create a Daily room and start the bot for a lead.
 
     This function handles the infrastructure setup for Daily sessions:
-    1. Generates a unique session ID
-    2. Creates a Daily room with appropriate settings
-    3. Generates tokens for both user and bot
-    4. Starts the bot in background
+    1. Fetches lead and template for greeting preparation
+    2. Synthesizes initial greeting audio and stores in Redis
+    3. Generates a unique session ID
+    4. Creates a Daily room with appropriate settings
+    5. Generates tokens for both user and bot
+    6. Starts the bot in background
 
     Args:
         lead_id: The ID of the lead to start the session for
@@ -69,6 +75,33 @@ async def start_daily_session(lead_id: str) -> Dict[str, Any]:
     Returns:
         Dict containing room_url, token (for user), session_id, and lead_id
     """
+    # Fetch lead to get template info and payload
+    lead = await get_lead_by_id(lead_id)
+    if not lead:
+        raise ValueError(f"Lead not found: {lead_id}")
+
+    # Fetch template for greeting configuration
+    template = None
+    if lead.template:
+        template = await get_template_by_merchant(
+            merchant_id=lead.merchant_id,
+            shop_identifier=lead.shop_identifier,
+            name=lead.template,
+        )
+
+    # Prepare and store initial greeting audio in Redis (for Daily playback)
+    if template:
+        try:
+            await prepare_and_store_initial_greeting(
+                lead_id=lead_id,
+                payload=lead.payload,
+                template=template,
+            )
+            logger.info(f"Prepared initial greeting for Daily session: {lead_id}")
+        except Exception as e:
+            logger.warning(f"Failed to prepare greeting for Daily session: {e}")
+            # Continue without greeting - not a fatal error
+
     # Generate session ID
     session_id = str(uuid.uuid4())
 

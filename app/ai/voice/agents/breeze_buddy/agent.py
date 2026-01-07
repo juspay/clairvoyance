@@ -7,6 +7,7 @@ from fastapi import WebSocket
 from opentelemetry import trace
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.vad.vad_analyzer import VADParams
+from pipecat.frames.frames import BotStartedSpeakingFrame
 from pipecat.observers.loggers.llm_log_observer import LLMLogObserver
 from pipecat.observers.loggers.metrics_log_observer import MetricsLogObserver
 from pipecat.observers.loggers.transcription_log_observer import (
@@ -48,6 +49,7 @@ from app.ai.voice.agents.breeze_buddy.template.loader import FlowConfigLoader
 from app.ai.voice.agents.breeze_buddy.template.vad import build_default_vad_params
 from app.ai.voice.agents.breeze_buddy.tts import get_tts_service
 from app.ai.voice.agents.breeze_buddy.utils.common import (
+    prepare_daily_greeting_frame,
     prepare_initial_greeting_payload,
 )
 from app.ai.voice.agents.breeze_buddy.utils.language_utils.prompt_injections import (
@@ -123,6 +125,7 @@ class Agent:
         self.flow_config = None
         self.end_conversation_callbacks = []
         self.expected_callback_response_schema = None
+        self.tts = None  # TTS service reference for pushing audio frames
 
         # Language config (initialized during run)
         self.language_name = "English"
@@ -131,6 +134,8 @@ class Agent:
         )
 
         self.greeting_source = None
+        self.daily_greeting_frame = None  # For Daily mode greeting audio
+        self._pipeline_started_event = asyncio.Event()  # For Daily greeting timing
 
         # Store default VAD params for reset when transitioning nodes
         self.default_vad_params: Optional[VADParams] = None
@@ -270,6 +275,25 @@ class Agent:
                 ),
             }
             self.transport = await create_transport(runner_args, daily_params)
+
+            # Prepare greeting audio frame for Daily mode
+            try:
+                greeting_result = await prepare_daily_greeting_frame(
+                    lead=self.lead,
+                    template=self.template,
+                )
+                if greeting_result:
+                    self.greeting_source = greeting_result["greeting_source"]
+                    self.daily_greeting_frame = greeting_result["frame"]
+                    logger.info(
+                        f"Prepared Daily greeting frame, source: {self.greeting_source}"
+                    )
+                else:
+                    self.daily_greeting_frame = None
+                    logger.info("No greeting frame prepared for Daily mode")
+            except Exception as e:
+                logger.warning(f"Failed to prepare Daily greeting frame: {e}")
+                self.daily_greeting_frame = None
 
         # Telephony mode setup (existing logic)
         else:
@@ -452,6 +476,7 @@ class Agent:
         tts = await get_tts_service(
             voice_name=tts_voice_name, mira_voice_id=mira_voice_id
         )
+        self.tts = tts  # Store reference for pushing greeting frames
 
         self.context = OpenAILLMContext()
         user_params = LLMUserAggregatorParams(
@@ -538,6 +563,12 @@ class Agent:
             global_functions=global_functions if global_functions else None,
         )
 
+        @self.task.event_handler("on_pipeline_started")
+        async def on_pipeline_started(task, frame):
+            """Called when StartFrame has propagated through the pipeline."""
+            logger.debug("Pipeline started - all processors ready")
+            self._pipeline_started_event.set()
+
         @self.transport.event_handler("on_client_connected")
         async def on_client_connected(transport, client):
             logger.info(f"Client connected: {client}")
@@ -580,6 +611,28 @@ class Agent:
             logger.info(
                 f"FlowManager initialized with initial node: {initial_node_name}"
             )
+
+            # Send greeting audio for Daily mode
+            # Wait for pipeline to be ready (TTS has received StartFrame), then push
+            if self.transport_type == "daily" and self.daily_greeting_frame:
+                try:
+                    # Wait for pipeline to be ready before pushing
+                    await self._pipeline_started_event.wait()
+
+                    # Signal bot started speaking before pushing audio
+                    # This ensures pipeline components (VAD, STT) know bot is speaking
+                    await self.task.queue_frame(BotStartedSpeakingFrame())
+
+                    # Push greeting audio (TTSAudioRawFrame triggers bot speaking in transport)
+                    await self.tts.push_frame(self.daily_greeting_frame)
+                    logger.info(
+                        "Pushed Daily greeting audio frame via TTS (bypassing STT)"
+                    )
+
+                    # Note: BotStoppedSpeakingFrame is automatically pushed by transport
+                    # after BOT_VAD_STOP_SECS (0.35s) of silence/no audio
+                except Exception as e:
+                    logger.warning(f"Failed to push Daily greeting frame: {e}")
 
         @self.transport.event_handler("on_client_disconnected")
         async def on_client_disconnected(transport, client):
