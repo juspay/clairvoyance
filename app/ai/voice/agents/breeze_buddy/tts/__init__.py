@@ -23,6 +23,12 @@ from app.core.config.dynamic import (
     BB_CARTESIA_LANGUAGE,
     BB_CARTESIA_MODEL,
     BB_CARTESIA_VOICE_ID,
+    BB_SARVAM_TTS_ENABLE_PREPROCESSING,
+    BB_SARVAM_TTS_LANGUAGE_CODE,
+    BB_SARVAM_TTS_MODEL,
+    BB_SARVAM_TTS_PACE,
+    BB_SARVAM_TTS_PITCH,
+    BB_SARVAM_TTS_VOICE_ID,
     BB_TTS_SERVICE,
 )
 from app.core.config.static import (
