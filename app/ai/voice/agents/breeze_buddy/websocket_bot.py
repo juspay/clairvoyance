@@ -56,7 +56,6 @@ from app.core.config.static import (
 )
 from app.core.logger import logger
 from app.database.accessor import (
-    get_call_execution_config_by_merchant_id,
     get_lead_by_call_id,
     update_lead_call_initiated_time,
 )
@@ -600,40 +599,12 @@ class OrderConfirmationBot:
                 except Exception as e:
                     logger.error(f"Error updating span with evaluation data: {e}")
 
-            # Check if this is the last retry attempt
-            is_last_attempt = False
-            if self.lead:
-                try:
-                    configs = await get_call_execution_config_by_merchant_id(
-                        self.lead.merchant_id, self.lead.shop_identifier
-                    )
-                    if configs:
-                        config = next(
-                            (c for c in configs if c.template == self.lead.template),
-                            None,
-                        )
-                        if config:
-                            current_attempt = self.lead.attempt_count + 1
-                            is_last_attempt = current_attempt >= config.max_retry
-                            logger.debug(
-                                f"Call {self.call_sid}: attempt {current_attempt}/{config.max_retry}, "
-                                f"is_last_attempt={is_last_attempt}"
-                            )
-                except Exception as e:
-                    logger.error(
-                        f"Error checking max retry for call {self.call_sid}: {e}",
-                        exc_info=True,
-                    )
-
-            # Send webhook - skip BUSY/NO_ANSWER unless it's the last attempt
-            should_send_webhook = self.reporting_webhook_url and (
-                self.outcome != "BUSY" or is_last_attempt
-            )
+            # Send webhook for all outcomes including BUSY/NO_ANSWER
+            should_send_webhook = self.reporting_webhook_url is not None
 
             if should_send_webhook:
                 logger.info(
                     f"Sending webhook for call {self.call_sid} with outcome {self.outcome}"
-                    + (" (last attempt)" if is_last_attempt else "")
                 )
                 try:
                     success = await send_webhook_with_retry(
