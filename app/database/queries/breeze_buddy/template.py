@@ -143,3 +143,70 @@ def get_template_by_id_query(template_id: str) -> Tuple[str, List[Any]]:
     """
 
     return query, [template_id]
+
+
+def update_template_query(
+    template_id: str, update_fields: Dict[str, Any], updated_at
+) -> Tuple[str, List[Any]]:
+    """
+    Generate query to update a template with partial updates.
+
+    Args:
+        template_id: Template UUID
+        update_fields: Dictionary of fields to update (field_name -> value)
+        updated_at: Timestamp for updated_at field
+
+    Returns:
+        Tuple of (query string, values list)
+    """
+    if not update_fields:
+        raise ValueError("No fields to update")
+
+    set_clauses = []
+    values = []
+
+    # Map field names to database column names and handle JSON serialization
+    field_mapping = {
+        "template_name": "name",
+        "identifier": "shop_identifier",
+        "outbound_number_id": "outbound_number_id",
+        "is_active": "is_active",
+        "flow": "flow",
+        "expected_payload_schema": "expected_payload_schema",
+        "expected_callback_response_schema": "expected_callback_response_schema",
+        "configurations": "configurations",
+    }
+
+    # Fields that need to be cast to jsonb
+    jsonb_fields = {
+        "flow",
+        "expected_payload_schema",
+        "expected_callback_response_schema",
+        "configurations",
+    }
+
+    for field_name, value in update_fields.items():
+        if field_name in field_mapping:
+            db_column = field_mapping[field_name]
+            values.append(value)
+
+            if db_column in jsonb_fields:
+                set_clauses.append(f"{db_column} = ${len(values)}::jsonb")
+            else:
+                set_clauses.append(f"{db_column} = ${len(values)}")
+
+    # Always update the updated_at timestamp
+    values.append(updated_at)
+    set_clauses.append(f"updated_at = ${len(values)}")
+
+    # Add template_id as last parameter for WHERE clause
+    values.append(template_id)
+
+    query = f"""
+        UPDATE {TEMPLATE_TABLE}
+        SET {', '.join(set_clauses)}
+        WHERE id = ${len(values)}
+        RETURNING id, merchant_id, shop_identifier, name, flow, expected_payload_schema, expected_callback_response_schema, configurations, outbound_number_id, is_active, created_at, updated_at
+    """
+
+    return query, values

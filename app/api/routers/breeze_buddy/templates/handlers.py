@@ -9,13 +9,17 @@ from uuid import uuid4
 
 from fastapi import HTTPException, status
 
-from app.ai.voice.agents.breeze_buddy.template.types import CreateTemplateRequest
+from app.ai.voice.agents.breeze_buddy.template.types import (
+    CreateTemplateRequest,
+    UpdateTemplateRequest,
+)
 from app.core.logger import logger
 from app.database.accessor import get_outbound_number_by_id, get_template_by_merchant
 from app.database.accessor.breeze_buddy.template import (
     create_template,
     get_template_by_id,
     get_templates_list,
+    update_template,
 )
 from app.schemas import UserInfo
 from app.schemas.breeze_buddy.template import TemplateListResponse
@@ -296,4 +300,132 @@ async def get_template_by_id_handler(template_id: str, current_user: UserInfo):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error getting template: {str(e)}",
+        )
+
+
+async def update_template_handler(
+    template_id: str, update_data: UpdateTemplateRequest, current_user: UserInfo
+):
+    """
+    Update a template with partial updates.
+
+    Args:
+        template_id: Template UUID
+        update_data: Fields to update
+        current_user: Current authenticated user
+
+    Returns:
+        Updated TemplateModel
+
+    Raises:
+        HTTPException: 404 if template not found, 403 if access denied, 400/500 on error
+    """
+    logger.info(
+        f"User {current_user.username} (role: {current_user.role}) updating template {template_id}"
+    )
+
+    try:
+        # First, get the existing template to validate access
+        existing_template = await get_template_by_id(template_id)
+
+        if not existing_template:
+            logger.warning(f"Template not found: {template_id}")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Template not found: {template_id}",
+            )
+
+        # Validate RBAC access
+        validate_template_access(
+            current_user,
+            existing_template.merchant_id,
+            existing_template.shop_identifier,
+            operation="update template",
+        )
+
+        # Build update fields dictionary (only include fields that are set)
+        update_fields = {}
+
+        if update_data.template_name is not None:
+            update_fields["template_name"] = update_data.template_name
+
+        if update_data.identifier is not None:
+            update_fields["identifier"] = update_data.identifier
+
+        if update_data.outbound_number_id is not None:
+            # Validate outbound_number_id if provided
+            outbound_number = await get_outbound_number_by_id(
+                update_data.outbound_number_id
+            )
+            if not outbound_number:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Outbound number with ID {update_data.outbound_number_id} does not exist",
+                )
+            update_fields["outbound_number_id"] = update_data.outbound_number_id
+
+        if update_data.is_active is not None:
+            update_fields["is_active"] = update_data.is_active
+
+        if update_data.flow is not None:
+            # Validate flow structure
+            if "initial_node" not in update_data.flow:
+                raise ValueError("initial_node must be specified in flow structure")
+            if "nodes" not in update_data.flow or not update_data.flow["nodes"]:
+                raise ValueError("nodes must be specified in flow structure")
+            update_fields["flow"] = update_data.flow
+
+        if update_data.expected_payload_schema is not None:
+            update_fields["expected_payload_schema"] = (
+                update_data.expected_payload_schema
+            )
+
+        if update_data.expected_callback_response_schema is not None:
+            update_fields["expected_callback_response_schema"] = (
+                update_data.expected_callback_response_schema
+            )
+
+        if update_data.configurations is not None:
+            update_fields["configurations"] = update_data.configurations.model_dump(
+                exclude_none=True
+            )
+
+        # Check if any fields to update
+        if not update_fields:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No fields to update",
+            )
+
+        # Update the template
+        now = datetime.now(timezone.utc)
+        updated_template = await update_template(template_id, update_fields, now)
+
+        if not updated_template:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to update template",
+            )
+
+        logger.info(
+            f"Successfully updated template {template_id} with fields: {list(update_fields.keys())}"
+        )
+
+        return {
+            "status": "success",
+            "template_id": updated_template.id,
+            "message": f"Template updated successfully with {len(update_fields)} field(s)",
+            "updated_fields": list(update_fields.keys()),
+        }
+
+    except HTTPException:
+        raise
+    except ValueError as e:
+        logger.error(f"Validation error updating template: {e}")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error updating template: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error updating template: {str(e)}",
         )
