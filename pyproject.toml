@@ -1,0 +1,57 @@
+[project]
+name = "clairvoyance"
+version = "0.1.0"
+description = "Clairvoyance AI voice conversation platform"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi==0.115.12",
+    "uvicorn==0.34.2",
+    "aiohttp>=3.8.4",
+    "pytz==2025.2",
+    "python-multipart>=0.0.6",
+    "websockets>=11.0.3",
+    "starlette>=0.27.0",
+    "python-dotenv>=1.0.0",
+    "pipecat-ai[daily,google,assemblyai,silero,openai,azure,elevenlabs,noisereduce,mem0,aic,anthropic,deepgram,soniox,mcp,local-smart-turn-v3,sarvam,cartesia]",
+    "pipecat-ai-flows",
+    "numpy",
+    "loguru",
+    "opentelemetry-api",
+    "opentelemetry-sdk",
+    "opentelemetry-exporter-otlp-proto-http",
+    "langfuse",
+    "asyncpg",
+    "boto3",
+    "google-cloud-storage>=2.10.0",
+    "google-auth>=2.17.0",
+    "twilio",
+    "PyJWT",
+    "bcrypt>=4.0.0",
+    "pydub",
+    "soundfile",
+    "redis[hiredis]>=5.0.0",
+    "devcycle-python-server-sdk>=3.0.0",
+    "nltk",
+]
+
+[project.optional-dependencies]
+dev = [
+    "black",
+    "isort",
+    "autoflake",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+
+[tool.black]
+line-length = 88
+target-version = ['py311']
+
+[tool.isort]
+profile = "black"
+line_length = 88

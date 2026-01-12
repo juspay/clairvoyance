@@ -29,13 +29,17 @@ RUN apt-get update && apt-get install -y \
 WORKDIR /app
 RUN mkdir -p /app/models/voice/krisp
 
-# Copy requirements first for better Docker layer caching
-COPY requirements.txt .
+# Install uv
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
-# Install Python dependencies (without Krisp first)
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt && \
-    pip show pipecat-ai
+# Copy dependency files first for better Docker layer caching
+COPY pyproject.toml uv.lock ./
+
+# Install Python dependencies (without Krisp first) using uv
+# Use --no-install-project to avoid installing the app/ package at this stage
+# This allows optimal Docker layer caching - dependencies layer is cached separately
+RUN uv sync --frozen --no-dev --no-install-project && \
+    uv pip show pipecat-ai
 
 # Start of Krisp installation process
 # Download Krisp assets from GCP Storage using authenticated context
@@ -57,7 +61,7 @@ RUN --mount=type=secret,id=gcp_token \
 
 # Install Krisp wheel package (if downloaded) - auto-detect architecture
 RUN if ls /tmp/*linux_*.whl 1> /dev/null 2>&1; then \
-        ARCH=$(python -c "import platform; print(platform.machine())") && \
+        ARCH=$(uv run python -c "import platform; print(platform.machine())") && \
         echo "=== Platform Debug Info ===" && \
         echo "Detected architecture: $ARCH" && \
         if [ "$ARCH" = "x86_64" ]; then \
@@ -70,7 +74,7 @@ RUN if ls /tmp/*linux_*.whl 1> /dev/null 2>&1; then \
         echo "Using wheel file: $WHEEL_FILE" && \
         if ls $WHEEL_FILE 1> /dev/null 2>&1; then \
             echo "=== Attempting pip install ===" && \
-            pip install -v $WHEEL_FILE && \
+            uv pip install -v $WHEEL_FILE && \
             echo "Krisp audio package installed successfully"; \
         else \
             echo "Warning: No wheel file found for architecture $ARCH"; \
@@ -82,9 +86,8 @@ RUN if ls /tmp/*linux_*.whl 1> /dev/null 2>&1; then \
 # End of Krisp installation process
 
 # Create NLTK data directory and download required data
-RUN pip install --no-cache-dir nltk && \
-    mkdir -p /usr/local/nltk_data && \
-    python -m nltk.downloader punkt punkt_tab -d /usr/local/nltk_data
+RUN mkdir -p /usr/local/nltk_data && \
+    uv run python -m nltk.downloader punkt punkt_tab -d /usr/local/nltk_data
 
 # Copy application code
 COPY . .
@@ -102,4 +105,4 @@ USER appuser
 EXPOSE ${PORT}
 
 # Run the application
-CMD ["python", "run.py"]
+CMD ["uv", "run", "python", "run.py"]

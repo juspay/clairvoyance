@@ -365,13 +365,13 @@ The Redis service provides structured logging:
 
 ```bash
 # Install dependencies
-pip install -r requirements.txt
+uv sync
 
 # Start local Redis (if not running)
 redis-server
 
 # Run Redis tests
-python test_redis.py
+uv run python test_redis.py
 ```
 
 ### Test Output
