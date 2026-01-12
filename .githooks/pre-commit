@@ -1,20 +1,19 @@
 #!/bin/sh
 echo "Running formatters before commit..."
 
-# Activate virtual environment
-source venv/bin/activate
+# Ensure dev dependencies are available (uv handles venv automatically)
+uv sync --extra dev > /dev/null 2>&1
 
-# Ensure dependencies are installed
-pip install -r requirements-dev.txt
+# Run autoflake to remove unused imports and variables
+uv run autoflake --in-place --remove-all-unused-imports --remove-unused-variables --exclude "app/__init__.py,.venv/*,venv/*" -r app/
 
-autoflake --in-place --remove-all-unused-imports --remove-unused-variables --exclude "app/__init__.py,venv/*" -r app/
+# Format all python files with isort
+uv run isort . --profile black
 
-# Format all python files
-python -m isort . --profile black
+# Format all python files with black
+uv run black .
 
-python -m black .
-
-# Stage updated files (if black changed them)
+# Stage updated files (if formatters changed them)
 git add -u
 
-echo "Black formatting complete."
+echo "Formatting complete."

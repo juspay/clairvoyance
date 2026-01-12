@@ -98,9 +98,9 @@ coverage.xml
 # Jupyter Notebook
 .ipynb_checkpoints
 
-# pyenv
-.python-version
-
 # Backup files
 *.bak
 *.backup
+
+# UV cache (keep .python-version and uv.lock - they're needed in Docker)
+.uv/

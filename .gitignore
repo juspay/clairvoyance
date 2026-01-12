@@ -5,6 +5,9 @@ ENV/
 .venv/
 virtualenv/
 
+# UV cache and state
+.uv/
+
 # Python bytecode
 __pycache__/
 *.py[cod]
