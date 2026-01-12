@@ -76,45 +76,37 @@ def convert_to_mulaw(audio_data: bytes, input_format: str = "raw") -> bytes:
 
 
 def indian_number_to_speech(number: int) -> str:
-    if number < 100:
-        return f"{number} rupees"
+    if number <= 0:
+        return "0 rupees"
 
     parts = []
-    num_str = str(number)
-    n = len(num_str)
 
-    # Process last 3 digits (hundreds)
-    if n >= 3:
-        last_three = int(num_str[-3:])
-        if last_three:
-            parts.append(f"{last_three}")
+    crore = number // 10_000_000
+    number %= 10_000_000
 
-    # Process thousands
-    if n > 3:
-        thousand = int(num_str[-5:-3]) if n >= 5 else int(num_str[-4:-3])
-        if thousand:
-            parts.insert(0, f"{thousand} thousand")
+    lakh = number // 100_000
+    number %= 100_000
 
-    # Process lakhs
-    if n > 5:
-        lakh = int(num_str[-7:-5]) if n >= 7 else int(num_str[-6:-5])
-        if lakh:
-            parts.insert(0, f"{lakh} lakh")
+    thousand = number // 1_000
+    number %= 1_000
 
-    # Process crores
-    if n > 7:
-        crore = int(num_str[:-7])
-        if crore:
-            parts.insert(0, f"{crore} crore")
+    hundred = number // 100
+    number %= 100
 
-    # Adjust hundreds format for last part
-    if parts and int(parts[-1]) >= 100:
-        h = int(parts[-1])
-        h_part = f"{h // 100} hundred"
-        rest = h % 100
-        if rest:
-            h_part += f" {rest}"
-        parts[-1] = h_part
+    if crore:
+        parts.append(f"{crore} crore")
+
+    if lakh:
+        parts.append(f"{lakh} lakh")
+
+    if thousand:
+        parts.append(f"{thousand} thousand")
+
+    if hundred:
+        parts.append(f"{hundred} hundred")
+
+    if number:
+        parts.append(str(number))
 
     return " ".join(parts) + " rupees"
 
