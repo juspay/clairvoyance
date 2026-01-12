@@ -66,6 +66,9 @@ class AnalyticsFilters(BaseModel):
         None,
         description="Filter by payload fields (e.g., {'shop_name': 'My Shop', 'customer_name': 'John'})",
     )
+    provider: Optional[List[str]] = Field(
+        None, description="Filter by calling provider (list of strings)"
+    )
 
 
 class AnalyticsOptions(BaseModel):

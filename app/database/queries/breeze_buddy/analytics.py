@@ -144,6 +144,11 @@ def build_analytics_where_clause(
         values.append(filters["request_id"])
         conditions.append(f"lct.request_id = ${len(values) + value_offset}")
 
+    # Provider filter (list of strings)
+    if "provider" in filters and filters["provider"]:
+        values.append(filters["provider"])
+        conditions.append(f"ou.provider = ANY(${len(values) + value_offset})")
+
     # Generic payload filters (JSONB queries)
     # Validate keys to prevent SQL injection
     if "payload_filters" in filters and filters["payload_filters"]:
@@ -173,6 +178,13 @@ def get_analytics_summary_query(
     conditions, values = build_analytics_where_clause(filters)
     where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
 
+    # Add LEFT JOIN only if provider filter is present
+    join_clause = (
+        f'LEFT JOIN "{OUTBOUND_NUMBER_TABLE}" ou ON lct.outbound_number_id = ou.id'
+        if "provider" in filters and filters["provider"]
+        else ""
+    )
+
     # Validate group_by to prevent SQL injection
     allowed_group_by_fields = ["shop_identifier", "template", "merchant_id"]
     if group_by and group_by not in allowed_group_by_fields:
@@ -192,6 +204,7 @@ def get_analytics_summary_query(
                     lct.merchant_id,
                     lct.payload
                 FROM "{LEAD_CALL_TRACKER_TABLE}" lct
+                {join_clause}
                 {where_clause}
             ),
             outcome_groups AS (
@@ -237,6 +250,7 @@ def get_analytics_summary_query(
                     lct.template,
                     lct.shop_identifier
                 FROM "{LEAD_CALL_TRACKER_TABLE}" lct
+                {join_clause}
                 {where_clause}
             ),
             base_stats AS (
@@ -334,9 +348,17 @@ def get_analytics_count_query(filters: Dict[str, Any]) -> Tuple[str, List[Any]]:
     conditions, values = build_analytics_where_clause(filters)
     where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
 
+    # Add LEFT JOIN only if provider filter is present
+    join_clause = (
+        f'LEFT JOIN "{OUTBOUND_NUMBER_TABLE}" ou ON lct.outbound_number_id = ou.id'
+        if "provider" in filters and filters["provider"]
+        else ""
+    )
+
     text = f"""
         SELECT COUNT(*) as count
         FROM "{LEAD_CALL_TRACKER_TABLE}" lct
+        {join_clause}
         {where_clause};
     """
 
@@ -353,6 +375,13 @@ def get_analytics_trends_query(
     """
     conditions, values = build_analytics_where_clause(filters)
     where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
+
+    # Add LEFT JOIN only if provider filter is present
+    join_clause = (
+        f'LEFT JOIN "{OUTBOUND_NUMBER_TABLE}" ou ON lct.outbound_number_id = ou.id'
+        if "provider" in filters and filters["provider"]
+        else ""
+    )
 
     # Determine date truncation based on granularity
     if time_granularity == "week":
@@ -377,6 +406,7 @@ def get_analytics_trends_query(
                 lct.status,
                 lct.outcome
             FROM "{LEAD_CALL_TRACKER_TABLE}" lct
+            {join_clause}
             {where_clause}
         ),
         base_trends AS (
@@ -440,6 +470,13 @@ def get_analytics_lead_based_query(
     conditions, values = build_analytics_where_clause(filters)
     where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
 
+    # Add LEFT JOIN only if provider filter is present
+    join_clause = (
+        f'LEFT JOIN "{OUTBOUND_NUMBER_TABLE}" ou ON lct.outbound_number_id = ou.id'
+        if "provider" in filters and filters["provider"]
+        else ""
+    )
+
     # Add request_id NOT NULL condition
     extra_condition = "lct.request_id IS NOT NULL"
     if where_clause:
@@ -463,6 +500,7 @@ def get_analytics_lead_based_query(
                     lct.outcome,
                     lct.payload
                 FROM "{LEAD_CALL_TRACKER_TABLE}" lct
+                {join_clause}
                 {where_clause}
             ),
             unique_leads AS (
@@ -504,6 +542,7 @@ def get_analytics_lead_based_query(
                     lct.status,
                     lct.outcome
                 FROM "{LEAD_CALL_TRACKER_TABLE}" lct
+                {join_clause}
                 {where_clause}
             ),
             base_leads AS (
@@ -557,6 +596,13 @@ def get_analytics_lead_based_trends_query(
     conditions, values = build_analytics_where_clause(filters)
     where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
 
+    # Add LEFT JOIN only if provider filter is present
+    join_clause = (
+        f'LEFT JOIN "{OUTBOUND_NUMBER_TABLE}" ou ON lct.outbound_number_id = ou.id'
+        if "provider" in filters and filters["provider"]
+        else ""
+    )
+
     # Determine date truncation based on granularity
     if time_granularity == "week":
         date_trunc = "week"
@@ -582,6 +628,7 @@ def get_analytics_lead_based_trends_query(
                 lct.status,
                 lct.outcome
             FROM "{LEAD_CALL_TRACKER_TABLE}" lct
+            {join_clause}
             {where_clause}
         ),
         base_lead_trends AS (
