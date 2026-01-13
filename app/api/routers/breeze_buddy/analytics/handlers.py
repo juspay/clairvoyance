@@ -4,12 +4,15 @@ All handlers use database-level filtering for optimal scalability.
 """
 
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict
+
+from fastapi import HTTPException
 
 from app.database.accessor.breeze_buddy.analytics import (
     get_analytics_count_from_db,
     get_call_details_from_db,
+    get_langfuse_scores_by_merchant,
     get_lead_based_analytics_from_db,
     get_lead_based_trends_from_db,
     get_outbound_numbers_analytics_from_db,
@@ -627,4 +630,69 @@ async def get_performance_analytics(
         "type": "performance",
         "filters_applied": filters,
         "results": performance_data,
+    }
+
+
+async def get_langfuse_scores_analytics(
+    start_date: str | None,
+    end_date: str | None,
+    merchant_id: str | None,
+) -> Dict[str, Any]:
+    """
+    Get Langfuse score analytics for all evaluators.
+
+    Args:
+        start_date: Start date in ISO format (YYYY-MM-DD)
+        end_date: End date in ISO format (YYYY-MM-DD)
+        merchant_id: Optional merchant ID to filter by
+
+    Returns:
+        Dict with evaluators data, summary, and applied filters
+    """
+
+    # Parse and validate dates
+    try:
+        start_datetime = (
+            datetime.fromisoformat(start_date).replace(tzinfo=timezone.utc)
+            if start_date
+            else None
+        )
+        end_datetime = (
+            (
+                datetime.fromisoformat(end_date).replace(tzinfo=timezone.utc)
+                + timedelta(days=1)
+            )
+            if end_date
+            else None
+        )
+    except ValueError as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid date format. Expected ISO format (YYYY-MM-DD): {str(e)}",
+        ) from e
+
+    scores_data = await get_langfuse_scores_by_merchant(
+        merchant_id=merchant_id,
+        start_date=start_datetime,
+        end_date=end_datetime,
+    )
+
+    # Transform list to dict keyed by evaluator name
+    evaluators = {}
+    for score in scores_data:
+        evaluators[score["evaluator"]] = {
+            "total_evaluated": score["total_evaluated"],
+            "passed": score["passed"],
+            "failed": score["failed"],
+            "pass_rate_percent": score["pass_rate_percent"],
+        }
+
+    total_calls = max([s["total_evaluated"] for s in scores_data], default=0)
+
+    return {
+        "evaluators": evaluators,
+        "summary": {
+            "total_calls_evaluated": total_calls,
+            "evaluator_count": len(evaluators),
+        },
     }

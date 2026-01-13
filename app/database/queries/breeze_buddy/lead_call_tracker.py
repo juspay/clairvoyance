@@ -454,3 +454,58 @@ def update_langfuse_scores_query(
     """
     values = [json.dumps(langfuse_scores), call_id]
     return text, values
+
+
+def get_langfuse_scores_by_merchant_query(
+    merchant_id: Optional[str] = None,
+    start_date: Optional[datetime] = None,
+    end_date: Optional[datetime] = None,
+) -> Tuple[str, List[Any]]:
+    """
+    Get Langfuse score analytics for all evaluators, filtered by merchant and date range.
+
+    Args:
+        merchant_id: Optional merchant ID to filter by
+        start_date: Optional start date filter
+        end_date: Optional end date filter
+
+    Returns:
+        Tuple of (query_text, values)
+    """
+    values: List[Any] = []
+    conditions = ["langfuse_scores IS NOT NULL"]
+
+    if merchant_id:
+        values.append(merchant_id)
+        conditions.append(f"merchant_id = ${len(values)}")
+
+    if start_date:
+        values.append(start_date)
+        conditions.append(f'"call_initiated_time" >= ${len(values)}')
+
+    if end_date:
+        values.append(end_date)
+        conditions.append(f'"call_initiated_time" < ${len(values)}')
+
+    where_clause = " WHERE " + " AND ".join(conditions)
+
+    text = f"""
+        WITH flattened_scores AS (
+            SELECT
+                score->>'name' as evaluator,
+                (score->>'value')::int as value
+            FROM "{LEAD_CALL_TRACKER_TABLE}",
+                 jsonb_array_elements(langfuse_scores->'scores') as score
+            {where_clause}
+        )
+        SELECT
+            evaluator,
+            COUNT(*) as total_evaluated,
+            SUM(value) as passed,
+            COUNT(*) - SUM(value) as failed,
+            ROUND(100.0 * SUM(value) / NULLIF(COUNT(*), 0), 2) as pass_rate_percent
+        FROM flattened_scores
+        GROUP BY evaluator
+        ORDER BY evaluator;
+    """
+    return text, values

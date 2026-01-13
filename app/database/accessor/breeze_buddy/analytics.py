@@ -3,7 +3,8 @@ Database accessor functions for analytics with generic filtering.
 All queries are optimized to filter at database level.
 """
 
-from typing import Any, Dict, List
+from datetime import datetime
+from typing import Any, Dict, List, Optional
 
 from app.core.logger import logger
 from app.database.queries import run_parameterized_query
@@ -15,6 +16,9 @@ from app.database.queries.breeze_buddy.analytics import (
     get_analytics_outbound_numbers_query,
     get_analytics_summary_query,
     get_analytics_trends_query,
+)
+from app.database.queries.breeze_buddy.lead_call_tracker import (
+    get_langfuse_scores_by_merchant_query,
 )
 
 
@@ -288,3 +292,52 @@ async def get_lead_based_trends_from_db(
     except Exception as e:
         logger.error(f"Error getting lead-based trends: {e}", exc_info=True)
         raise
+
+
+async def get_langfuse_scores_by_merchant(
+    merchant_id: Optional[str] = None,
+    start_date: Optional[datetime] = None,
+    end_date: Optional[datetime] = None,
+) -> List[Dict[str, Any]]:
+    """
+    Get Langfuse score analytics for all evaluators, filtered by merchant and date range.
+
+    Args:
+        merchant_id: Optional merchant ID to filter by
+        start_date: Optional start date filter
+        end_date: Optional end date filter
+
+    Returns:
+        List of score analytics per evaluator
+    """
+    logger.info(
+        f"[Analytics DB] Getting langfuse scores: merchant_id={merchant_id}, "
+        f"start_date={start_date}, end_date={end_date}"
+    )
+
+    try:
+        query_text, values = get_langfuse_scores_by_merchant_query(
+            merchant_id=merchant_id,
+            start_date=start_date,
+            end_date=end_date,
+        )
+        result = await run_parameterized_query(query_text, values)
+        if result:
+            return [
+                {
+                    "evaluator": row["evaluator"],
+                    "total_evaluated": row["total_evaluated"],
+                    "passed": row["passed"],
+                    "failed": row["failed"],
+                    "pass_rate_percent": (
+                        float(row["pass_rate_percent"])
+                        if row["pass_rate_percent"]
+                        else 0.0
+                    ),
+                }
+                for row in result
+            ]
+        return []
+    except Exception as e:
+        logger.error(f"Error getting langfuse scores: {e}")
+        return []
