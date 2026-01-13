@@ -25,6 +25,8 @@ from app.schemas import (
     UserInfo,
 )
 
+from .rbac import validate_config_access
+
 
 async def create_configuration_handler(
     config: CreateCallExecutionConfigRequest, current_user: UserInfo
@@ -187,9 +189,11 @@ async def update_configuration_handler(
         Updated configuration object
 
     Raises:
-        HTTPException: 404 if not found
+        HTTPException: 404 if not found, 403 if access denied
     """
-    logger.info(f"Admin {current_user.username} updating configuration: {config_id}")
+    logger.info(
+        f"User {current_user.username} (role: {current_user.role}) updating configuration: {config_id}"
+    )
 
     try:
         # Verify configuration exists
@@ -199,6 +203,14 @@ async def update_configuration_handler(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Configuration {config_id} not found",
             )
+
+        # RBAC: Validate access against existing configuration (not request body)
+        validate_config_access(
+            current_user,
+            existing_config.merchant_id,
+            existing_config.shop_identifier,
+            operation="update configuration for",
+        )
 
         # Validate that identity fields match the existing configuration
         # This prevents accidentally updating a different record
