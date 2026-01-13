@@ -37,6 +37,13 @@ from app.ai.voice.agents.breeze_buddy.handlers.internal.end_conversation import 
 from app.ai.voice.agents.breeze_buddy.observability.tracing_setup import (
     setup_tracing,
 )
+from app.ai.voice.agents.breeze_buddy.processors.response_gate import (
+    ResponseGateState,
+    ResponseGateTracker,
+)
+from app.ai.voice.agents.breeze_buddy.processors.tts_interrupter import (
+    AudioInterruptionProcessor,
+)
 from app.ai.voice.agents.breeze_buddy.stt import get_stt_service
 from app.ai.voice.agents.breeze_buddy.template import (
     FlowConfigBuilder,
@@ -56,6 +63,7 @@ from app.core.config.dynamic import (
     BB_DAILY_VAD_MIN_VOLUME,
     BB_DAILY_VAD_START_SECS,
     BB_DAILY_VAD_STOP_SECS,
+    BB_ENABLE_RESPONSE_GATE,
     BREEZE_BUDDY_AZURE_MAX_COMPLETION_TOKENS,
     BREEZE_BUDDY_AZURE_TEMPERATURE,
     BREEZE_BUDDY_LLM_AGGREGATION_TIMEOUT,
@@ -441,17 +449,46 @@ class Agent:
             self.context, user_params=user_params
         )
 
-        pipeline = Pipeline(
-            [
-                self.transport.input(),
-                stt,
-                context_aggregator.user(),
-                llm,
-                tts,
-                self.transport.output(),
-                context_aggregator.assistant(),
-            ]
-        )
+        # Conditionally create response gate processors for double-speaking prevention
+        enable_response_gate = await BB_ENABLE_RESPONSE_GATE()
+
+        if enable_response_gate:
+            # Create shared state for this agent instance (prevents cross-talk between concurrent agents)
+            gate_state = ResponseGateState()
+
+            # Create state tracker to track TTS state for "latest wins" interruption
+            state_tracker = ResponseGateTracker(state=gate_state)
+
+            # Create TTS interruption processor to stop currently playing TTS when new LLM response starts
+            tts_interrupter = AudioInterruptionProcessor(state=gate_state)
+
+            pipeline = Pipeline(
+                [
+                    self.transport.input(),
+                    stt,
+                    state_tracker,
+                    context_aggregator.user(),
+                    llm,
+                    tts,
+                    tts_interrupter,
+                    self.transport.output(),
+                    context_aggregator.assistant(),
+                ]
+            )
+            logger.info("Response gate enabled - double speaking prevention active")
+        else:
+            pipeline = Pipeline(
+                [
+                    self.transport.input(),
+                    stt,
+                    context_aggregator.user(),
+                    llm,
+                    tts,
+                    self.transport.output(),
+                    context_aggregator.assistant(),
+                ]
+            )
+            logger.info("Response gate disabled - double speaking prevention inactive")
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         customer_name = self.template_vars.get("customer_name", "unknown")
         shop_name = self.template_vars.get("shop_name", "unknown")
