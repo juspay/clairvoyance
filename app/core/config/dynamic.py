@@ -254,3 +254,13 @@ async def LANGFUSE_EVALUATORS() -> dict[str, int]:
         if name:
             evaluators[name] = threshold
     return evaluators
+
+
+# --- Response Gate Configuration ---
+async def BB_ENABLE_RESPONSE_GATE() -> bool:
+    """Returns BB_ENABLE_RESPONSE_GATE from Redis.
+
+    When True, enables ResponseGateTracker and AudioInterruptionProcessor
+    to prevent double speaking by interrupting old responses when new input arrives.
+    """
+    return await get_config("BB_ENABLE_RESPONSE_GATE", True, bool)
