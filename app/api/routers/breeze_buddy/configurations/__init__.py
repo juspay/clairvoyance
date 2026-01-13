@@ -193,7 +193,10 @@ async def update_configuration(
 
     Permissions:
     - Admin: Can update any configuration
-    - Merchant: Cannot update configurations (read-only)
+    - Merchant: Can update configurations for own merchants/shops
+
+    Note: RBAC validation is performed against the existing configuration,
+    not the request body values, to prevent unauthorized access.
 
     Request Body:
         {
@@ -212,13 +215,7 @@ async def update_configuration(
     Returns:
         Updated configuration object
     """
-    # RBAC: Only admins can update configurations
-    if current_user.role != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only admin users can update configurations",
-        )
-
+    # RBAC validation is performed in the handler against the existing configuration
     return await update_configuration_handler(config_id, config, current_user)
 
 
