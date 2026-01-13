@@ -7,7 +7,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONPATH=/app \
     PORT=8000 \
     NLTK_DATA=/usr/local/nltk_data\
-    KRISP_MODEL_PATH=/app/models/voice/krisp/krisp-viva-tel-v2.kef
+    KRISP_MODEL_PATH=/app/models/voice/krisp/krisp-viva-tel-v2.kef \
+    UV_CACHE_DIR=/app/.uv-cache
 
 # Install system dependencies required for audio processing and compilation + curl for GCP CLI
 # Added cmake for Krisp native component compilation, unzip for manual wheel extraction
@@ -97,7 +98,8 @@ RUN chmod +x run.py
 
 # Create non-root user for security
 RUN groupadd -r appuser && useradd -r -g appuser appuser
-RUN chown -R appuser:appuser /app && \
+RUN mkdir -p /app/.uv-cache && \
+    chown -R appuser:appuser /app && \
     chown -R appuser:appuser /usr/local/nltk_data
 USER appuser
 
