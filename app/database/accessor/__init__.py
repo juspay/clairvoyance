@@ -3,6 +3,7 @@ Main database accessor module.
 This module exports all database accessor functions.
 """
 
+from .breeze_buddy.analytics import get_langfuse_scores_by_merchant
 from .breeze_buddy.call_execution_config import (
     calling_activation_for_merchant,
     create_call_execution_config,
@@ -72,6 +73,7 @@ __all__ = [
     "update_lead_call_initiated_time",
     "update_lead_call_recording_url",
     "get_all_lead_call_trackers",
+    "get_langfuse_scores_by_merchant",
     "get_lead_based_analytics",
     "get_lead_call_trackers_count",
     "get_leads_by_status_and_time_before",

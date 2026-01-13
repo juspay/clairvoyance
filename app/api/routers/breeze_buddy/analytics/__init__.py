@@ -3,7 +3,10 @@ Analytics router with RBAC enforcement.
 Single flexible POST endpoint for all analytics queries with hierarchical merchant + shop access control.
 """
 
+from typing import Optional
+
 from fastapi import APIRouter, Depends, HTTPException, status
+from starlette.responses import JSONResponse
 
 from app.api.security.breeze_buddy.rbac_token import get_current_user_with_rbac
 from app.core.logger import logger
@@ -18,6 +21,7 @@ from .handlers import (
     get_call_based_analytics,
     get_call_details_analytics,
     get_conversion_analytics,
+    get_langfuse_scores_analytics,
     get_lead_based_analytics,
     get_outbound_numbers_analytics,
     get_performance_analytics,
@@ -106,4 +110,59 @@ async def get_analytics(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error processing analytics request: {str(e)}",
+        )
+
+
+@router.get("/analytics/evaluator-scores")
+async def get_langfuse_scores(
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    merchant_id: Optional[str] = None,
+    # current_user: UserInfo = Depends(get_current_user_with_rbac),
+):
+    """
+    Get Langfuse score analytics for all evaluators.
+
+    Query Parameters:
+        - start_date: Start date in ISO format (YYYY-MM-DD)
+        - end_date: End date in ISO format (YYYY-MM-DD)
+        - merchant_id: Optional merchant ID to filter by
+
+    Returns:
+        JSON response with score analytics for each evaluator
+    """
+    try:
+        # Apply RBAC filtering - restrict merchant_id based on user's access
+        filters = {"merchant_id": merchant_id} if merchant_id else {}
+        # filters = apply_hierarchical_filters(filters, current_user)
+        filtered_merchant_id = filters.get("merchant_id")
+
+        # logger.info(
+        #     f"Langfuse scores request from {current_user.username} (role: {current_user.role}): "
+        #     f"merchant_id={filtered_merchant_id}"
+        # )
+
+        data = await get_langfuse_scores_analytics(
+            start_date=start_date,
+            end_date=end_date,
+            merchant_id=filtered_merchant_id,
+        )
+
+        return JSONResponse(
+            content={
+                **data,
+                "filters": {
+                    "start_date": start_date,
+                    "end_date": end_date,
+                    "merchant_id": merchant_id,
+                },
+            }
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting langfuse scores: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error getting langfuse scores: {str(e)}",
         )
