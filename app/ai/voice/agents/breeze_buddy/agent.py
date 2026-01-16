@@ -34,6 +34,7 @@ from pipecat_flows import FlowManager, NodeConfig
 from app.ai.voice.agents.breeze_buddy.handlers.internal.end_conversation import (
     end_conversation,
 )
+from app.ai.voice.agents.breeze_buddy.observability.tracing import PipelineTracing
 from app.ai.voice.agents.breeze_buddy.observability.tracing_setup import (
     setup_tracing,
 )
@@ -67,6 +68,7 @@ from app.core.config.dynamic import (
     BREEZE_BUDDY_AZURE_MAX_COMPLETION_TOKENS,
     BREEZE_BUDDY_AZURE_TEMPERATURE,
     BREEZE_BUDDY_LLM_AGGREGATION_TIMEOUT,
+    ENABLE_CUSTOM_TRACING,
 )
 from app.core.config.static import (
     AZURE_BREEZE_BUDDY_OPENAI_MODEL,
@@ -122,6 +124,7 @@ class Agent:
         self.root_span = (
             None  # Store OpenTelemetry span reference for updating with evaluation data
         )
+        self._pipeline_tracing: Optional[PipelineTracing] = None
 
         # Dynamic template components (initialized later)
         self.flow_loader = None
@@ -494,23 +497,25 @@ class Agent:
         shop_name = self.template_vars.get("shop_name", "unknown")
         conversation_id = f"{customer_name}-{shop_name}-{timestamp}"
 
-        # Only add observers in dev environment
+        # Start setting up observers
         observers = []
+
+        # Only add dev observers in dev environment
         if ENVIRONMENT.lower() in ["dev", "development"]:
-            observers = [
-                MetricsLogObserver(),  # All metrics (STT, LLM, TTS, TTFB, etc.)
-                LLMLogObserver(),  # LLM activity details
-                TranscriptionLogObserver(),  # STT transcriptions
-                UserBotLatencyLogObserver(),  # Response timing
-                TurnTrackingObserver(),  # Conversation flow
-            ]
+            observers.extend(
+                [
+                    MetricsLogObserver(),  # All metrics (STT, LLM, TTS, TTFB, etc.)
+                    LLMLogObserver(),  # LLM activity details
+                    TranscriptionLogObserver(),  # STT transcriptions
+                    UserBotLatencyLogObserver(),  # Response timing
+                    TurnTrackingObserver(),  # Conversation flow
+                ]
+            )
             logger.info(
                 "Development environment detected - enabling pipeline observers"
             )
-        else:
-            logger.info(f"Environment: {ENVIRONMENT} - pipeline observers disabled")
 
-        # Create task parameters and initialize task
+        # Create task parameters
         task_params = {
             "params": PipelineParams(
                 allow_interruptions=True,
@@ -520,11 +525,89 @@ class Agent:
             ),
         }
 
-        # Only add tracing parameters when tracing is enabled
+        # Initialize tracing - switch between old and new flow based on ENABLE_CUSTOM_TRACING
         if ENABLE_BREEZE_BUDDY_TRACING:
             setup_tracing("breeze-buddy")
-            task_params["conversation_id"] = conversation_id
-            task_params["enable_tracing"] = True
+
+            use_custom_tracing = await ENABLE_CUSTOM_TRACING()
+
+            if use_custom_tracing:
+                # NEW FLOW: Use custom PipelineTracing observers (fixes trace mixing bug)
+                # IMPORTANT: Disable Pipecat's built-in tracing to avoid conflicts
+                logger.info("Using custom PipelineTracing (ENABLE_CUSTOM_TRACING=True)")
+
+                # Explicitly disable Pipecat's built-in tracing
+                task_params["enable_tracing"] = False
+
+                self._pipeline_tracing = PipelineTracing(
+                    conversation_id=conversation_id,
+                    trace_llm=True,
+                    trace_tts=True,
+                    trace_stt=True,
+                )
+
+                # Set span attributes on the parent span
+                self._pipeline_tracing.set_span_attributes(
+                    {
+                        "conversation.id": conversation_id,
+                        "conversation.type": (
+                            "daily-web"
+                            if self.transport_type == "daily"
+                            else "phone-call"
+                        ),
+                        "user.name": customer_name,
+                        "service.name": "breeze-buddy",
+                        "call_sid": self.call_sid,
+                        "order_id": self.lead.request_id or "unknown",
+                        "shop_name": shop_name,
+                        "provider": (
+                            "daily" if self.transport_type == "daily" else self.provider
+                        ),
+                        "template.type": self.lead.template,
+                    }
+                )
+
+                # Store root span reference for updating with evaluation data later
+                self.root_span = self._pipeline_tracing.span
+
+                # Add custom tracing observers to the PipelineParams observers list
+                # This extends the existing observers (dev observers) with tracing observers
+                task_params["params"].observers.extend(self._pipeline_tracing.observers)
+
+                logger.info(
+                    f"Starting custom tracing for conversation: {conversation_id}"
+                )
+            else:
+                # OLD FLOW: Use Pipecat's built-in tracing (may have trace mixing with concurrent calls)
+                logger.info(
+                    "Using Pipecat's built-in tracing (ENABLE_CUSTOM_TRACING=False)"
+                )
+
+                task_params["conversation_id"] = conversation_id
+                task_params["enable_tracing"] = True
+
+                # Create a parent span for evaluation data
+                tracer = trace.get_tracer(__name__)
+                self.root_span = tracer.start_span(conversation_id)
+
+                # Set attributes on the span
+                self.root_span.set_attribute("conversation.id", conversation_id)
+                self.root_span.set_attribute(
+                    "conversation.type",
+                    "daily-web" if self.transport_type == "daily" else "phone-call",
+                )
+                self.root_span.set_attribute("user.name", customer_name)
+                self.root_span.set_attribute("service.name", "breeze-buddy")
+                self.root_span.set_attribute("call_sid", self.call_sid)
+                self.root_span.set_attribute(
+                    "order_id", self.lead.request_id or "unknown"
+                )
+                self.root_span.set_attribute("shop_name", shop_name)
+                self.root_span.set_attribute(
+                    "provider",
+                    "daily" if self.transport_type == "daily" else self.provider,
+                )
+                self.root_span.set_attribute("template.type", self.lead.template)
 
         self.task = PipelineTask(pipeline, **task_params)
 
@@ -595,41 +678,15 @@ class Agent:
                 await runner.run(self.task)
             except asyncio.CancelledError:
                 logger.info("Main task cancelled. Exiting gracefully.")
+            finally:
+                # End the manual span in old flow (custom tracing handles this via PipelineObserver)
+                if self._pipeline_tracing is None and self.root_span is not None:
+                    self.root_span.end()
+                    logger.debug("Ended manual root span for old tracing flow")
 
-        if ENABLE_BREEZE_BUDDY_TRACING:
-            tracer = trace.get_tracer(__name__)
-
-            with tracer.start_as_current_span(conversation_id) as root_span:
-                # Store root span reference for updating with evaluation data later
-                self.root_span = root_span
-
-                logger.info(
-                    f"Starting Langfuse trace for Breeze Buddy conversation: {conversation_id}"
-                )
-
-                root_span.set_attribute("conversation.id", conversation_id)
-                root_span.set_attribute(
-                    "conversation.type",
-                    "daily-web" if self.transport_type == "daily" else "phone-call",
-                )
-                root_span.set_attribute("user.name", customer_name)
-                root_span.set_attribute("service.name", "breeze-buddy")
-                root_span.set_attribute("call_sid", self.call_sid)
-                root_span.set_attribute("order_id", self.lead.request_id or "unknown")
-                root_span.set_attribute("shop_name", shop_name)
-                root_span.set_attribute(
-                    "provider",
-                    "daily" if self.transport_type == "daily" else self.provider,
-                )
-                root_span.set_attribute("template.type", self.lead.template)
-
-                await run_pipeline()
-        else:
-            # Run pipeline without tracing when tracing is disabled
-            logger.info(
-                f"Running pipeline without tracing for the conversation: {conversation_id}"
-            )
-            await run_pipeline()
+        # Run pipeline - tracing is already configured above via PipelineTracing observers
+        # or Pipecat's built-in tracing based on ENABLE_CUSTOM_TRACING flag
+        await run_pipeline()
 
     async def _handle_unexpected_disconnect(self, reason: str):
         if not self.conversation_ended:

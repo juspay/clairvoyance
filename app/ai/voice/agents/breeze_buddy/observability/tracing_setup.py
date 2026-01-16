@@ -7,7 +7,6 @@ from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExport
 from opentelemetry.sdk.resources import SERVICE_NAME, Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
-from pipecat.utils.tracing.turn_context_provider import get_current_turn_context
 
 from app.ai.voice.agents.breeze_buddy.template.context import TemplateContext
 from app.core.config.static import (
@@ -58,7 +57,10 @@ def setup_tracing(service_name: str):
 
 def auto_trace(tool_name: str):
     """
-    Decorator to automatically trace tool calls with turn context nesting.
+    Decorator to automatically trace tool calls under the conversation's root span.
+
+    This decorator expects the first argument to be a TemplateContext (or have a root_span attribute).
+    It creates child spans under context.root_span to maintain proper trace hierarchy.
 
     Args:
         tool_name: The name of the tool being traced
@@ -66,6 +68,7 @@ def auto_trace(tool_name: str):
     Returns:
         Decorated function that creates proper tracing spans
     """
+    tracer = trace.get_tracer("breeze-buddy")
 
     def decorator(func):
         @wraps(func)
@@ -74,34 +77,51 @@ def auto_trace(tool_name: str):
                 logger.debug(f"Tracing disabled, executing {tool_name} without tracing")
                 return await func(*args, **kwargs)
 
-            tracer = trace.get_tracer(__name__)
-            turn_context = get_current_turn_context()
+            # Get root_span from the first argument (TemplateContext)
+            parent_span = None
+            if args and hasattr(args[0], "root_span"):
+                parent_span = args[0].root_span
 
-            # Create span with turn context for proper nesting
-            span_name = f"Tool: {tool_name}"
-            with tracer.start_span(
-                span_name,
-                kind=trace.SpanKind.CLIENT,
-                context=turn_context,
-            ) as span:
-                span.set_attribute("tool.name", tool_name)
-                span.set_attribute("tool.service", "breeze-buddy")
+            if not parent_span:
+                # No parent span available, execute without tracing
+                logger.debug(
+                    f"No root_span available for {tool_name}, executing without tracing"
+                )
+                return await func(*args, **kwargs)
 
-                # Add function arguments as attributes if present
-                if kwargs:
-                    span.set_attribute("tool.args", json.dumps(kwargs))
+            # Create context from parent span to establish proper parent-child relationship
+            # This is required for async functions where trace.use_span() context may not
+            # propagate correctly across await boundaries
+            ctx = trace.set_span_in_context(parent_span)
 
-                logger.info(f"Auto-tracing tool call: {tool_name}")
+            # Create span as child of the root span by passing context explicitly
+            span = tracer.start_span(f"Tool: {tool_name}", context=ctx)
+            span.set_attribute("tool.name", tool_name)
+            span.set_attribute("tool.service", "breeze-buddy")
 
+            # Add function arguments as attributes if present
+            if kwargs:
                 try:
-                    result = await func(*args, **kwargs)
-                    span.set_attribute("tool.status", "success")
-                    return result
-                except Exception as e:
-                    span.set_attribute("tool.status", "error")
-                    span.set_attribute("tool.error", str(e))
-                    logger.error(f"Error in {tool_name}: {e}")
-                    raise
+                    span.set_attribute(
+                        "tool.args",
+                        json.dumps(kwargs, default=str, ensure_ascii=False),
+                    )
+                except Exception:
+                    pass
+
+            logger.debug(f"Auto-tracing tool call: {tool_name}")
+
+            try:
+                result = await func(*args, **kwargs)
+                span.set_attribute("tool.status", "success")
+                return result
+            except Exception as e:
+                span.set_attribute("tool.status", "error")
+                span.set_attribute("tool.error", str(e))
+                logger.error(f"Error in {tool_name}: {e}")
+                raise
+            finally:
+                span.end()
 
         return wrapper
 

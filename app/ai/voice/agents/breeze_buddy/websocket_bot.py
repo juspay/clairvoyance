@@ -29,6 +29,7 @@ from pipecat_flows import FlowManager, FlowsFunctionSchema, NodeConfig
 from pydantic import ValidationError
 from pydub import AudioSegment
 
+from app.ai.voice.agents.breeze_buddy.observability.tracing import PipelineTracing
 from app.ai.voice.agents.breeze_buddy.observability.tracing_setup import (
     auto_trace,
     setup_tracing,
@@ -43,6 +44,7 @@ from app.ai.voice.agents.breeze_buddy.utils.common import (
     load_audio,
     send_webhook_with_retry,
 )
+from app.core.config.dynamic import ENABLE_CUSTOM_TRACING
 from app.core.config.static import (
     AZURE_BREEZE_BUDDY_OPENAI_MODEL,
     AZURE_OPENAI_API_KEY,
@@ -99,6 +101,7 @@ class OrderConfirmationBot:
         self.root_span = (
             None  # Store OpenTelemetry span reference for updating with evaluation data
         )
+        self._pipeline_tracing = None
 
     async def run(self):
         logger.info("Starting WebSocket bot")
@@ -310,11 +313,74 @@ class OrderConfirmationBot:
             ),
         }
 
-        # Only add tracing parameters when tracing is enabled
+        # Initialize tracing - use custom PipelineTracing to fix trace mixing bug
         if ENABLE_BREEZE_BUDDY_TRACING:
             setup_tracing("breeze-buddy")
-            task_params["conversation_id"] = conversation_id
-            task_params["enable_tracing"] = True
+
+            use_custom_tracing = await ENABLE_CUSTOM_TRACING()
+
+            if use_custom_tracing:
+                # NEW FLOW: Use custom PipelineTracing observers (fixes trace mixing bug)
+                # IMPORTANT: Disable Pipecat's built-in tracing to avoid conflicts
+                logger.info("Using custom PipelineTracing (ENABLE_CUSTOM_TRACING=True)")
+
+                # Explicitly disable Pipecat's built-in tracing
+                task_params["enable_tracing"] = False
+
+                self._pipeline_tracing = PipelineTracing(
+                    conversation_id=conversation_id,
+                    trace_llm=True,
+                    trace_tts=True,
+                    trace_stt=True,
+                )
+
+                # Add custom tracing observers to the pipeline
+                task_params["params"].observers = self._pipeline_tracing.observers
+
+                # Set span attributes on the parent span
+                self._pipeline_tracing.set_span_attributes(
+                    {
+                        "conversation.id": conversation_id,
+                        "conversation.type": "phone-call",
+                        "user.name": customer_name,
+                        "service.name": "breeze-buddy",
+                        "call_sid": self.call_sid,
+                        "order_id": self.order_id,
+                        "shop_name": self.shop_name,
+                        "provider": self.provider,
+                        "workflow.type": "order-confirmation",
+                    }
+                )
+
+                # Store root span reference for updating with evaluation data later
+                self.root_span = self._pipeline_tracing.span
+
+                logger.info(
+                    f"Starting custom tracing for conversation: {conversation_id}"
+                )
+            else:
+                # OLD FLOW: Use Pipecat's built-in tracing (may have trace mixing with concurrent calls)
+                logger.info(
+                    "Using Pipecat's built-in tracing (ENABLE_CUSTOM_TRACING=False)"
+                )
+
+                task_params["conversation_id"] = conversation_id
+                task_params["enable_tracing"] = True
+
+                # Create a parent span for evaluation data
+                tracer = trace.get_tracer(__name__)
+                self.root_span = tracer.start_span(conversation_id)
+
+                # Set attributes on the span
+                self.root_span.set_attribute("conversation.id", conversation_id)
+                self.root_span.set_attribute("conversation.type", "phone-call")
+                self.root_span.set_attribute("user.name", customer_name)
+                self.root_span.set_attribute("service.name", "breeze-buddy")
+                self.root_span.set_attribute("call_sid", self.call_sid)
+                self.root_span.set_attribute("order_id", self.order_id)
+                self.root_span.set_attribute("shop_name", self.shop_name)
+                self.root_span.set_attribute("provider", self.provider)
+                self.root_span.set_attribute("workflow.type", "order-confirmation")
 
         self.task = PipelineTask(pipeline, **task_params)
 
@@ -347,35 +413,15 @@ class OrderConfirmationBot:
                 await runner.run(self.task)
             except asyncio.CancelledError:
                 logger.info("Main task cancelled. Exiting gracefully.")
+            finally:
+                # End the manual span in old flow (custom tracing handles this via PipelineObserver)
+                if self._pipeline_tracing is None and self.root_span is not None:
+                    self.root_span.end()
+                    logger.debug("Ended manual root span for old tracing flow")
 
-        if ENABLE_BREEZE_BUDDY_TRACING:
-            tracer = trace.get_tracer(__name__)
-
-            with tracer.start_as_current_span(conversation_id) as root_span:
-                # Store root span reference for updating with evaluation data later
-                self.root_span = root_span
-
-                logger.info(
-                    f"Starting Langfuse trace for Breeze Buddy conversation: {conversation_id}"
-                )
-
-                root_span.set_attribute("conversation.id", conversation_id)
-                root_span.set_attribute("conversation.type", "phone-call")
-                root_span.set_attribute("user.name", customer_name)
-                root_span.set_attribute("service.name", "breeze-buddy")
-                root_span.set_attribute("call_sid", self.call_sid)
-                root_span.set_attribute("order_id", self.order_id)
-                root_span.set_attribute("shop_name", self.shop_name)
-                root_span.set_attribute("provider", self.provider)
-                root_span.set_attribute("workflow.type", "order-confirmation")
-
-                await run_pipeline()
-        else:
-            # Run pipeline without tracing when tracing is disabled
-            logger.info(
-                f"Running pipeline without tracing for the conversation: {conversation_id}"
-            )
-            await run_pipeline()
+        # Run pipeline - tracing is already configured above via PipelineTracing observers
+        # or Pipecat's built-in tracing based on ENABLE_CUSTOM_TRACING flag
+        await run_pipeline()
 
     def _get_system_prompt(
         self,

@@ -5,6 +5,16 @@ from app.services.live_config.store import get_config
 # -----------------------
 
 
+async def ENABLE_CUSTOM_TRACING() -> bool:
+    """Returns ENABLE_CUSTOM_TRACING from Redis.
+
+    When True: Uses custom PipelineTracing observers (fixes trace mixing bug).
+    When False: Uses Pipecat's built-in tracing (may have trace mixing with concurrent calls).
+    Default: True
+    """
+    return await get_config("ENABLE_CUSTOM_TRACING", True, bool)
+
+
 async def ENABLE_FAL_SMART_TURN() -> bool:
     """Returns ENABLE_FAL_SMART_TURN from Redis"""
     return await get_config("ENABLE_FAL_SMART_TURN", False, bool)
