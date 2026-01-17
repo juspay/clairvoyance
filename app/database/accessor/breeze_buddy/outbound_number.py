@@ -14,13 +14,14 @@ from app.database.decoder.breeze_buddy.outbound_number import (
 )
 from app.database.queries import run_parameterized_query
 from app.database.queries.breeze_buddy.outbound_number import (
+    decrement_outbound_number_channels_query,
     disable_outbound_number_query,
     get_all_outbound_numbers_query,
     get_all_outbound_numbers_with_call_count_query,
     get_outbound_number_based_on_status_and_provider_query,
     get_outbound_number_by_id_query,
+    increment_outbound_number_channels_query,
     insert_outbound_number_query,
-    update_outbound_number_channels_query,
     update_outbound_number_status_query,
 )
 from app.schemas import CallProvider, OutboundNumber, OutboundNumberStatus
@@ -130,38 +131,68 @@ async def update_outbound_number_status(
         return None
 
 
-async def update_outbound_number_channels(
-    outbound_number_id: str, channels: int
+async def increment_outbound_number_channels(
+    outbound_number_id: str,
 ) -> Optional[OutboundNumber]:
     """
-    Update outbound number channels.
+    Atomically increment outbound number channels by 1.
+    Only succeeds if channels < maximum_channels (enforces capacity limit).
+    Returns None if the number is at capacity or doesn't exist.
+    This avoids race conditions by using database-level atomic increment with constraint.
     """
-    logger.info(
-        f"Updating outbound number channels for ID: {outbound_number_id}, new channels: {channels}"
-    )
-
-    if channels < 0:
-        logger.error(f"Invalid channels value: {channels}")
-        return None
+    logger.info(f"Incrementing outbound number channels for ID: {outbound_number_id}")
 
     try:
-        query_text, values = update_outbound_number_channels_query(
-            outbound_number_id, channels
+        query_text, values = increment_outbound_number_channels_query(
+            outbound_number_id
         )
         result = await run_parameterized_query(query_text, values)
 
         if result and get_row_count(result) > 0:
             decoded_result = decode_outbound_number(result)
-            logger.info(f"Outbound number channels updated: {decoded_result}")
+            logger.info(f"Outbound number channels incremented: {decoded_result}")
             return decoded_result
 
-        logger.error(
-            f"Failed to update outbound number channels for ID: {outbound_number_id}"
+        # No rows updated means either the number doesn't exist or it's at capacity
+        logger.warning(
+            f"Could not increment channels for ID: {outbound_number_id} - "
+            "number may be at maximum capacity or does not exist"
         )
         return None
 
     except Exception as e:
-        logger.error(f"Error updating outbound number channels: {e}")
+        logger.error(f"Error incrementing outbound number channels: {e}")
+        return None
+
+
+async def decrement_outbound_number_channels(
+    outbound_number_id: str,
+) -> Optional[OutboundNumber]:
+    """
+    Atomically decrement outbound number channels by 1.
+    Uses GREATEST to ensure channels never goes below 0.
+    This avoids race conditions by using database-level atomic decrement.
+    """
+    logger.info(f"Decrementing outbound number channels for ID: {outbound_number_id}")
+
+    try:
+        query_text, values = decrement_outbound_number_channels_query(
+            outbound_number_id
+        )
+        result = await run_parameterized_query(query_text, values)
+
+        if result and get_row_count(result) > 0:
+            decoded_result = decode_outbound_number(result)
+            logger.info(f"Outbound number channels decremented: {decoded_result}")
+            return decoded_result
+
+        logger.warning(
+            f"Failed to decrement outbound number channels for ID: {outbound_number_id}"
+        )
+        return None
+
+    except Exception as e:
+        logger.error(f"Error decrementing outbound number channels: {e}")
         return None
 
 

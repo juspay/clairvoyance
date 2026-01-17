@@ -24,6 +24,7 @@ from app.core.transport.http_client import create_aiohttp_session
 from app.database.accessor import (
     acquire_lock_on_lead_by_id,
     create_lead_call_tracker,
+    decrement_outbound_number_channels,
     get_call_execution_config_by_merchant_id,
     get_lead_by_call_id,
     get_leads_based_on_status_and_next_attempt,
@@ -31,11 +32,11 @@ from app.database.accessor import (
     get_outbound_number_based_on_status_and_provider,
     get_outbound_number_by_id,
     get_template_by_merchant,
+    increment_outbound_number_channels,
     release_lock_on_lead_by_id,
     update_lead_call_completion_details,
     update_lead_call_details,
     update_lead_call_recording_url,
-    update_outbound_number_channels,
     update_outbound_number_status,
 )
 from app.schemas import (
@@ -163,28 +164,33 @@ async def _get_available_number(
     return number
 
 
-async def _acquire_number(number: OutboundNumber):
+async def _acquire_number(number: OutboundNumber) -> bool:
     """
     Marks an outbound number as in use.
+    Uses atomic increment to avoid race conditions.
+    For Exotel, only succeeds if channels < maximum_channels.
+    Returns True if acquisition succeeded, False if at capacity.
     """
     if number.provider == CallProvider.TWILIO:
-        await update_outbound_number_status(number.id, OutboundNumberStatus.IN_USE)
+        result = await update_outbound_number_status(
+            number.id, OutboundNumberStatus.IN_USE
+        )
+        return result is not None
     elif number.provider == CallProvider.EXOTEL:
-        await update_outbound_number_channels(number.id, number.channels + 1)
+        result = await increment_outbound_number_channels(number.id)
+        return result is not None
+    return False
 
 
 async def _release_number(number_id: str, provider: CallProvider):
     """
     Releases an outbound number, making it available for other calls.
+    Uses atomic decrement to avoid race conditions.
     """
     if provider == CallProvider.TWILIO:
         await update_outbound_number_status(number_id, OutboundNumberStatus.AVAILABLE)
     elif provider == CallProvider.EXOTEL:
-        outbound_number = await get_outbound_number_by_id(number_id)
-        if outbound_number:
-            await update_outbound_number_channels(
-                number_id, outbound_number.channels - 1
-            )
+        await decrement_outbound_number_channels(number_id)
 
 
 async def _retry_call(
@@ -389,7 +395,16 @@ async def process_backlog_leads():
                     await release_lock_on_lead_by_id(locked_lead.id)
                     continue
 
-                await _acquire_number(number_to_use)
+                acquired = await _acquire_number(number_to_use)
+                if not acquired:
+                    logger.warning(
+                        f"Failed to acquire number {number_to_use.id} for lead {locked_lead.id} - "
+                        "number may be at maximum capacity"
+                    )
+                    # Reset number_to_use as the number was not acquired and must not be used
+                    number_to_use = None
+                    await release_lock_on_lead_by_id(locked_lead.id)
+                    continue
 
                 call_provider = get_voice_provider(
                     config.calling_provider.value,
@@ -538,7 +553,15 @@ async def process_backlog_leads():
                         await release_lock_on_lead_by_id(locked_lead.id)
                         continue
 
-                    await _acquire_number(retry_number_to_use)
+                    retry_acquired = await _acquire_number(retry_number_to_use)
+                    if not retry_acquired:
+                        logger.warning(
+                            f"Failed to acquire retry number {retry_number_to_use.id} for lead {locked_lead.id} - "
+                            "number may be at maximum capacity"
+                        )
+                        retry_number_to_use = None
+                        await release_lock_on_lead_by_id(locked_lead.id)
+                        continue
 
                     retry_call_provider = get_voice_provider(
                         retry_calling_provider.value,

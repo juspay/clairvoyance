@@ -84,19 +84,41 @@ def update_outbound_number_status_query(
     return text, values
 
 
-def update_outbound_number_channels_query(
-    outbound_number_id: str, channels: int
+def increment_outbound_number_channels_query(
+    outbound_number_id: str,
 ) -> Tuple[str, List[Any]]:
     """
-    Generate query to update outbound number channels.
+    Generate query to atomically increment outbound number channels by 1.
+    Only increments if channels < maximum_channels to enforce the capacity limit.
+    Returns no rows if the number is at capacity, allowing the caller to detect this.
+    This avoids race conditions by using database-level atomic increment with constraint.
     """
     text = f"""
         UPDATE "{OUTBOUND_NUMBER_TABLE}"
-        SET "channels" = $2, "updated_at" = NOW()
+        SET "channels" = COALESCE("channels", 0) + 1, "updated_at" = NOW()
+        WHERE "id" = $1
+          AND COALESCE("channels", 0) < COALESCE("maximum_channels", 0)
+        RETURNING *;
+    """
+    values = [outbound_number_id]
+    return text, values
+
+
+def decrement_outbound_number_channels_query(
+    outbound_number_id: str,
+) -> Tuple[str, List[Any]]:
+    """
+    Generate query to atomically decrement outbound number channels by 1.
+    Uses GREATEST to ensure channels never goes below 0.
+    This avoids race conditions by using database-level atomic decrement.
+    """
+    text = f"""
+        UPDATE "{OUTBOUND_NUMBER_TABLE}"
+        SET "channels" = GREATEST(0, COALESCE("channels", 0) - 1), "updated_at" = NOW()
         WHERE "id" = $1
         RETURNING *;
     """
-    values = [outbound_number_id, channels]
+    values = [outbound_number_id]
     return text, values
 
 
