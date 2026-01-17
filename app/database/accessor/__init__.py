@@ -30,12 +30,13 @@ from .breeze_buddy.lead_call_tracker import (
 )
 from .breeze_buddy.outbound_number import (
     create_outbound_number,
+    decrement_outbound_number_channels,
     disable_outbound_number,
     get_all_outbound_numbers,
     get_all_outbound_numbers_with_call_count,
     get_outbound_number_based_on_status_and_provider,
     get_outbound_number_by_id,
-    update_outbound_number_channels,
+    increment_outbound_number_channels,
     update_outbound_number_status,
 )
 from .breeze_buddy.template import (
@@ -49,7 +50,8 @@ __all__ = [
     "create_outbound_number",
     "get_outbound_number_by_id",
     "update_outbound_number_status",
-    "update_outbound_number_channels",
+    "increment_outbound_number_channels",
+    "decrement_outbound_number_channels",
     "disable_outbound_number",
     "get_all_outbound_numbers",
     "get_all_outbound_numbers_with_call_count",
