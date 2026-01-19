@@ -436,9 +436,21 @@ class Agent:
             if template and template.configurations
             else None
         )
+        # Use mira_voice_id from template if available (for custom Cartesia voice per template)
+        mira_voice_id = (
+            template.configurations.mira_voice_id
+            if template and template.configurations
+            else None
+        )
         if tts_voice_name:
             logger.info(f"Using TTS voice from template: {tts_voice_name}")
-        tts = await get_tts_service(voice_name=tts_voice_name)
+        if mira_voice_id:
+            logger.info(
+                f"Using custom Cartesia voice_id from template: {mira_voice_id}"
+            )
+        tts = await get_tts_service(
+            voice_name=tts_voice_name, mira_voice_id=mira_voice_id
+        )
 
         self.context = OpenAILLMContext()
         user_params = LLMUserAggregatorParams(

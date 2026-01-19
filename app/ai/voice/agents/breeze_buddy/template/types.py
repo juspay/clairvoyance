@@ -28,6 +28,7 @@ class BackgroundSoundFile(str, Enum):
 
 class ConfigurationModel(BaseModel):
     tts_voice_name: Optional[TTSVoiceName] = None
+    mira_voice_id: Optional[str] = None  # Custom Cartesia voice ID per template
     stt_language: Optional[str] = None
     payload_based_language_selection: bool = False
     enable_background_sound: bool = False
