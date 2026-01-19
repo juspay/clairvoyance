@@ -42,11 +42,15 @@ from app.core.config.static import (
 from app.core.logger import logger
 
 
-async def get_cartesia_tts_service():
+async def get_cartesia_tts_service(voice_id: str | None = None):
     """
     Returns a Cartesia TTS service instance based on the Breeze Buddy configuration.
+
+    Args:
+        voice_id: Optional custom voice ID from template configuration.
+                          If provided, overrides the default BB_CARTESIA_VOICE_ID.
     """
-    bb_cartesia_voice_id = await BB_CARTESIA_VOICE_ID()
+    bb_cartesia_voice_id = voice_id or await BB_CARTESIA_VOICE_ID()
     bb_cartesia_model = await BB_CARTESIA_MODEL()
     bb_cartesia_language = await BB_CARTESIA_LANGUAGE()
     bb_cartesia_generation_volume = await BB_CARTESIA_GENERATION_VOLUME()
@@ -124,7 +128,9 @@ async def get_elevenlabs_tts_service():
     )
 
 
-async def get_tts_service(voice_name: str | None = None):
+async def get_tts_service(
+    voice_name: str | None = None, mira_voice_id: str | None = None
+):
     """
     Returns a TTS service instance based on the environment configuration.
 
@@ -132,6 +138,11 @@ async def get_tts_service(voice_name: str | None = None):
     - "sara": Sarvam TTS (multilingual Indian voices)
     - "rhea": ElevenLabs TTS (high-quality English)
     - "mira": Cartesia TTS (customizable with emotions and speed)
+
+    Args:
+        voice_name: The TTS voice to use ("sara", "rhea", or "mira")
+        mira_voice_id: Optional custom Cartesia voice ID from template configuration.
+                          Only used when voice_name is "mira" or tts_service is "cartesia".
     """
 
     if voice_name is not None:
@@ -154,8 +165,13 @@ async def get_tts_service(voice_name: str | None = None):
             if not CARTESIA_API_KEY:
                 raise ValueError("CARTESIA_API_KEY is required for Mira voice")
 
-            logger.info("Using Cartesia TTS service for Mira voice")
-            return await get_cartesia_tts_service()
+            if mira_voice_id:
+                logger.info(
+                    f"Using Cartesia TTS service for Mira voice with custom voice_id: {mira_voice_id}"
+                )
+            else:
+                logger.info("Using Cartesia TTS service for Mira voice")
+            return await get_cartesia_tts_service(voice_id=mira_voice_id)
     else:
         logger.info("No TTS voice specified, using default from config")
 
@@ -184,8 +200,13 @@ async def get_tts_service(voice_name: str | None = None):
                 "CARTESIA_API_KEY is required when BREEZE_BUDDY_TTS_SERVICE=cartesia"
             )
 
-        logger.info("Using Cartesia TTS service for Breeze Buddy voice")
-        return await get_cartesia_tts_service()
+        if mira_voice_id:
+            logger.info(
+                f"Using Cartesia TTS service for Breeze Buddy voice with custom voice_id: {mira_voice_id}"
+            )
+        else:
+            logger.info("Using Cartesia TTS service for Breeze Buddy voice")
+        return await get_cartesia_tts_service(voice_id=mira_voice_id)
 
     else:
         raise ValueError(f"Unsupported BREEZE_BUDDY_TTS_SERVICE: {tts_service}")
