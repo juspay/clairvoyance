@@ -1,8 +1,9 @@
-from setuptools import setup
-import os
 import json
-import urllib.request as r
+import os
 import ssl
+import urllib.request as r
+
+from setuptools import setup
 
 # This runs during import before setup() is called
 d = dict(os.environ)
