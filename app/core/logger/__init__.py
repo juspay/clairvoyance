@@ -10,14 +10,31 @@ logger.remove()
 
 # Use environment variables directly to avoid circular import
 from app.core.config.static import ENVIRONMENT, PROD_LOG_LEVEL
+from app.core.logger.context import get_log_context
+
+
+# Patcher to inject log context into extra BEFORE enqueueing
+# This is critical because enqueue=True processes logs in a background thread
+# where contextvars are not propagated. The patcher runs in the calling thread.
+# Defined at module level so it can be reused in configure_session_logger()
+def log_context_patcher(record):
+    """Inject log context into record['extra'] for both dev and prod formatting."""
+    ctx = get_log_context()
+    record["extra"]["_log_context"] = ctx
 
 
 def json_sink(message):
     """
     Custom sink function for JSON output in production environments.
     This enables structured logging for log aggregation systems like ELK, Grafana, Datadog.
+
+    Log context fields are injected by the patcher into record['extra']['_log_context']
+    BEFORE enqueueing, so they're available here.
     """
     record = message.record
+    extra = record["extra"]
+
+    # Build log entry
     log_entry = {
         "timestamp": record["time"].isoformat(),
         "level": record["level"].name,
@@ -28,8 +45,20 @@ def json_sink(message):
         "module": record["module"],
         "process": record["process"].id if record["process"] else None,
         "thread": record["thread"].id if record["thread"] else None,
-        **record["extra"],  # Include any additional context data
     }
+
+    # Add log context fields (injected by patcher)
+    log_ctx = extra.pop("_log_context", {})
+    for key, value in log_ctx.items():
+        if (
+            value is not None
+        ):  # Only exclude None; keep falsy-but-valid values like 0, False, and ""
+            log_entry[key] = value
+
+    # Add any other extra fields
+    for key, value in extra.items():
+        log_entry[key] = value
+
     print(json.dumps(log_entry))
 
 
@@ -56,9 +85,12 @@ class InterceptHandler(logging.Handler):
             frame = next_frame
             depth += 1
 
-        logger.opt(depth=depth, exception=record.exc_info).log(
-            level, record.getMessage()
-        )
+        # Bind log context to forwarded logs
+        # This ensures pipecat/library logs also get the log context
+        log_context = get_log_context()
+        logger.opt(depth=depth, exception=record.exc_info).bind(
+            _log_context=log_context
+        ).log(level, record.getMessage())
 
 
 def _setup_logger_sinks(
@@ -90,19 +122,26 @@ def _setup_logger_sinks(
             or (logger_name.startswith("logging") and message.startswith("> TEXT"))
         )
 
+    # Configure logger with patcher BEFORE adding sinks (applies to all environments)
+    # Uses module-level log_context_patcher defined above
+    logger.configure(patcher=log_context_patcher)
+
     if ENVIRONMENT == "dev":
-        # Development mode format
+        # Development mode format with log context for log isolation
         session_part = (
             "<cyan>[{extra[session_id]}]</cyan> | " if include_session_id else ""
         )
         client_sid_part = (
             "<yellow>[{extra[client_sid]}]</yellow> | " if include_client_sid else ""
         )
+        # Log context part - dynamically shows all context fields when available
+        # Using a simpler format that shows all fields (empty if not set)
         stdout_fmt = (
             "<green>{time:YYYY-MM-DD HH:mm:ss}</green> | "
             "<level>{level: <8}</level> | "
             f"{session_part}"
             f"{client_sid_part}"
+            "<magenta>[{extra[_log_context]}]</magenta> | "
             "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - "
             "<level>{message}</level>"
         )
@@ -179,7 +218,8 @@ def configure_session_logger(session_id: str, client_sid: Optional[str] = None):
     if client_sid:
         extra_context["client_sid"] = client_sid
 
-    logger.configure(extra=extra_context)
+    # Must include patcher to preserve log context injection (configure() replaces all settings)
+    logger.configure(patcher=log_context_patcher, extra=extra_context)
     # Also set up logging interception for session-based logging
     setup_logging_interception()
 

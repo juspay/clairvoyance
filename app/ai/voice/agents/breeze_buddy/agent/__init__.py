@@ -68,6 +68,11 @@ from app.ai.voice.agents.breeze_buddy.utils.common import (
 )
 from app.core.config.static import ENABLE_BREEZE_BUDDY_TRACING
 from app.core.logger import logger
+from app.core.logger.context import (
+    clear_log_context,
+    set_log_context,
+    update_log_context,
+)
 from app.database.accessor import update_lead_call_initiated_time
 from app.database.accessor.breeze_buddy.lead_call_tracker import (
     update_lead_call_initiated_time_by_id,
@@ -140,6 +145,9 @@ class Agent:
         if not lead_id:
             raise ValueError("lead_id is required in runner_args.body for Daily mode")
 
+        # Set lead_id context immediately - all subsequent logs will include it
+        set_log_context(lead_id=str(lead_id))
+
         call_initiated_time = datetime.now(timezone.utc)
         self.lead = await update_lead_call_initiated_time_by_id(
             lead_id, call_initiated_time
@@ -147,7 +155,15 @@ class Agent:
         if not self.lead:
             raise ValueError(f"Lead not found for lead_id: {lead_id}")
 
-        logger.info(f"Starting Daily bot for lead_id: {lead_id}")
+        # Update context with call_sid (lead_id already set above)
+        self.call_sid = (
+            self.lead.call_id or f"daily-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+        )
+        update_log_context(call_sid=self.call_sid)
+
+        logger.info(
+            f"Starting Daily bot for lead_id: {lead_id}, call_sid: {self.call_sid}"
+        )
 
         self.flow_builder = FlowConfigBuilder()
 
@@ -156,11 +172,15 @@ class Agent:
                 handler_func
             )
 
-        (
-            self.template,
-            self.configurations,
-            self.template_vars,
-        ) = await load_template_config(self.lead)
+        try:
+            (
+                self.template,
+                self.configurations,
+                self.template_vars,
+            ) = await load_template_config(self.lead)
+        except ValueError as e:
+            logger.error(f"Failed to load template config for Daily mode: {e}")
+            raise
 
         self.vad_analyzer, self.default_vad_params = await create_vad_analyzer(
             is_daily_mode=True
@@ -192,6 +212,9 @@ class Agent:
             )
             return False
 
+        # Set call_sid context early for log isolation
+        set_log_context(call_sid=self.call_sid)
+
         logger.info(
             f"Parsed WebSocket: transport_type={transport_type}, "
             f"call_sid: {self.call_sid}, stream_sid: {self.stream_sid}"
@@ -213,6 +236,7 @@ class Agent:
             # Check if there was an error (IVR failed or invalid template_id)
             if error_reason:
                 # WebSocket already closed by get_template_id_from_call
+                clear_log_context()
                 return False
 
             # Extract URL query params for Plivo inbound (contains from_number, to_number)
@@ -237,6 +261,7 @@ class Agent:
                         code=4000,
                         reason=error_reason or "Failed to create lead from template",
                     )
+                    clear_log_context()
                     return False
             else:
                 # Standard inbound handling (no IVR, no template_id in params)
@@ -256,7 +281,11 @@ class Agent:
                         code=4000,
                         reason=error_reason or "Failed to handle inbound call",
                     )
+                    clear_log_context()
                     return False
+
+        # Update context with lead_id (call_sid already set above)
+        update_log_context(lead_id=str(self.lead.id))
 
         try:
             (
@@ -277,6 +306,7 @@ class Agent:
                     call_sid=self.call_sid,
                 )
             await close_websocket_safely(self.ws, code=4000, reason=str(e))
+            clear_log_context()
             return False
         except Exception as e:
             error_msg = f"Unexpected error loading template: {str(e)}"
@@ -293,6 +323,7 @@ class Agent:
             await close_websocket_safely(
                 self.ws, code=4000, reason="Template load error"
             )
+            clear_log_context()
             return False
 
         self.flow_builder = FlowConfigBuilder()
@@ -304,6 +335,7 @@ class Agent:
         # Safe access for required attributes after lead check above
         if not self.ws or not self.stream_sid or not self.lead or not self.template:
             logger.error("Missing required attributes after setup")
+            clear_log_context()
             return False
 
         greeting_result = await send_initial_greeting(
@@ -431,73 +463,81 @@ class Agent:
         Args:
             runner_args: Required for Daily mode, contains room info and lead data
         """
-        # Setup transport based on mode
-        if self.is_daily_mode:
-            if not runner_args:
-                logger.error("runner_args is required for Daily mode")
-                return
-            await self._setup_daily_transport(runner_args)
-        else:
-            if not await self._setup_telephony_transport():
-                return
-
-        # Override TTS voice name if LLM-based selection was done at lead push time
-        if self.lead and self.lead.payload:
-            payload_voice = self.lead.payload.get("tts_voice_name")
-            if payload_voice and self.configurations:
-                try:
-                    voice_enum = TTSVoiceName(payload_voice)
-                    logger.info(
-                        f"Overriding TTS voice from payload: {voice_enum.value}"
-                    )
-                    self.configurations.tts_voice_name = voice_enum
-                except ValueError:
-                    logger.warning(
-                        f"Invalid TTS voice '{payload_voice}' in payload, keeping existing config"
-                    )
-
-        # Create services and pipeline
-        # VAD analyzer is passed to build_pipeline where it's configured inside the
-        # LLMUserAggregator. This enables UserTurnStrategies (VAD + Transcription fallback).
-        stt, llm, tts = await create_services(self.configurations)
-        pipeline, self.context, context_aggregator = await build_pipeline(
-            self.transport, stt, llm, tts, self.vad_analyzer, self.configurations
-        )
-
-        # Generate conversation ID and create task
-        lead_payload = self.lead.payload if self.lead else None
-        self.conversation_id = generate_conversation_id(lead_payload)
-        self.task = await create_pipeline_task(pipeline, self.conversation_id)
-
-        # Validate required attributes for flow setup
-        if not self.template:
-            logger.error("Template is not set, cannot setup flow manager")
-            return
-
-        # Setup flow management
-        self.flow_manager = setup_flow_manager(
-            task=self.task,
-            llm=llm,
-            context_aggregator=context_aggregator,
-            transport=self.transport,
-            flow_builder=self.flow_builder,
-            template=self.template,
-        )
-        self._register_event_handlers()
-
-        # Run the pipeline
-        runner = PipelineRunner(handle_sigint=False, force_gc=True)
-
         try:
-            if ENABLE_BREEZE_BUDDY_TRACING:
-                await self._run_with_tracing(runner)
+            # Setup transport based on mode
+            if self.is_daily_mode:
+                if not runner_args:
+                    logger.error("runner_args is required for Daily mode")
+                    return
+                await self._setup_daily_transport(runner_args)
             else:
-                logger.info(
-                    f"Running pipeline without tracing for conversation: {self.conversation_id}"
-                )
-                await runner.run(self.task)
-        except asyncio.CancelledError:
-            logger.info("Pipeline task cancelled. Exiting gracefully.")
+                if not await self._setup_telephony_transport():
+                    return
+
+            # Override TTS voice name if LLM-based selection was done at lead push time
+            if self.lead and self.lead.payload:
+                payload_voice = self.lead.payload.get("tts_voice_name")
+                if payload_voice and self.configurations:
+                    try:
+                        voice_enum = TTSVoiceName(payload_voice)
+                        logger.info(
+                            f"Overriding TTS voice from payload: {voice_enum.value}"
+                        )
+                        self.configurations.tts_voice_name = voice_enum
+                    except ValueError:
+                        logger.warning(
+                            f"Invalid TTS voice '{payload_voice}' in payload, keeping existing config"
+                        )
+
+            # Create services and pipeline
+            # VAD analyzer is passed to build_pipeline where it's configured inside the
+            # LLMUserAggregator. This enables UserTurnStrategies (VAD + Transcription fallback).
+            stt, llm, tts = await create_services(self.configurations)
+            pipeline, self.context, context_aggregator = await build_pipeline(
+                self.transport, stt, llm, tts, self.vad_analyzer, self.configurations
+            )
+
+            # Generate conversation ID and update context
+            lead_payload = self.lead.payload if self.lead else None
+            self.conversation_id = generate_conversation_id(lead_payload)
+            update_log_context(conversation_id=self.conversation_id)
+
+            self.task = await create_pipeline_task(pipeline, self.conversation_id)
+
+            # Validate required attributes for flow setup
+            if not self.template:
+                logger.error("Template is not set, cannot setup flow manager")
+                return
+
+            # Setup flow management
+            self.flow_manager = setup_flow_manager(
+                task=self.task,
+                llm=llm,
+                context_aggregator=context_aggregator,
+                transport=self.transport,
+                flow_builder=self.flow_builder,
+                template=self.template,
+            )
+            self._register_event_handlers()
+
+            # Run the pipeline
+            runner = PipelineRunner(handle_sigint=False, force_gc=True)
+
+            try:
+                if ENABLE_BREEZE_BUDDY_TRACING:
+                    await self._run_with_tracing(runner)
+                else:
+                    logger.info(
+                        f"Running pipeline without tracing for conversation: {self.conversation_id}"
+                    )
+                    await runner.run(self.task)
+            except asyncio.CancelledError:
+                logger.info("Pipeline task cancelled. Exiting gracefully.")
+        finally:
+            # Safety net: always clear log context when run() exits, regardless of how.
+            # This handles crashes, cancellations, and any exit path missed above.
+            # Double-clearing (if end_conversation already cleared) is harmless.
+            clear_log_context()
 
     async def _handle_unexpected_disconnect(self, reason: str) -> None:
         """Handle unexpected disconnection and cleanup."""
