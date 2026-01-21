@@ -85,7 +85,7 @@ class S2STokenRequest(BaseModel):
     username: str
     password: str
     token_lifetime_days: int = Field(
-        default=365, ge=1, le=365, description="Token lifetime in days (1-365)"
+        default=365, ge=1, le=365000, description="Token lifetime in days (1-365000)"
     )
 
 
