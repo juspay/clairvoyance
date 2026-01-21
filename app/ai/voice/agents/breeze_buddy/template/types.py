@@ -57,6 +57,7 @@ class ConfigurationModel(BaseModel):
     vad_config: Optional[VadConfig] = Field(
         None, description="Default VAD configuration for the template"
     )
+    enable_inbound: bool = False  # Whether this template can handle inbound calls
 
 
 class FlowAction(BaseModel):

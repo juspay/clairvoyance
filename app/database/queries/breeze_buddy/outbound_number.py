@@ -197,3 +197,12 @@ def get_outbound_number_based_on_status_and_provider_query(
     """
     values = [status.value, provider.value]
     return text, values
+
+
+def get_outbound_number_by_number_query(number: str) -> Tuple[str, List[Any]]:
+    """
+    Generate query to get outbound number by phone number.
+    """
+    text = f'SELECT * FROM "{OUTBOUND_NUMBER_TABLE}" WHERE "number" = $1;'
+    values = [number]
+    return text, values

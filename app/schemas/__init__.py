@@ -47,6 +47,7 @@ from app.schemas.breeze_buddy.auth import (
 )
 from app.schemas.breeze_buddy.connection import BreezeBuddyDailyConnectRequest
 from app.schemas.breeze_buddy.core import (
+    CallDirection,
     CallExecutionConfig,
     CallProvider,
     CreateCallExecutionConfigRequest,
@@ -88,6 +89,7 @@ __all__ = [
     "TimeGranularity",
     "TrendDataPoint",
     # Core
+    "CallDirection",
     "CallExecutionConfig",
     "CallProvider",
     "CreateCallExecutionConfigRequest",

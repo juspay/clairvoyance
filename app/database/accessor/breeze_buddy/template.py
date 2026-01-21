@@ -20,6 +20,7 @@ from app.database.queries.breeze_buddy.template import (
     create_template_query,
     get_template_by_id_query,
     get_template_by_merchant_query,
+    get_template_by_outbound_number_id_query,
     get_templates_list_query,
     replace_template_query,
 )
@@ -360,4 +361,42 @@ async def replace_template(
 
     except Exception as e:
         logger.error(f"Error updating template: {e}", exc_info=True)
+        return None
+
+
+async def get_template_by_outbound_number_id(
+    outbound_number_id: str,
+    enable_inbound_only: bool = False,
+) -> Optional[TemplateModel]:
+    """
+    Get a template by outbound_number_id.
+
+    Args:
+        outbound_number_id: Outbound number UUID
+        enable_inbound_only: If True, only return templates with
+                             configurations.enable_inbound = true
+
+    Returns:
+        TemplateModel if found, None otherwise
+    """
+    logger.info(f"Getting template by outbound_number_id: {outbound_number_id}")
+
+    try:
+        query, values = get_template_by_outbound_number_id_query(
+            outbound_number_id, enable_inbound_only
+        )
+        result = await run_parameterized_query(query, values)
+
+        if result and get_row_count(result) > 0:
+            decoded_result = decode_template(result[0])
+            logger.info(f"Template found: {decoded_result.id}")
+            return decoded_result
+
+        logger.info(f"No template found with outbound_number_id: {outbound_number_id}")
+        return None
+
+    except Exception as e:
+        logger.error(
+            f"Error getting template by outbound_number_id: {e}", exc_info=True
+        )
         return None

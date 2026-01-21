@@ -40,6 +40,13 @@ class ExecutionMode(str, Enum):
     DAILY_TEST = "DAILY_TEST"  # Test Daily (web) calls
 
 
+class CallDirection(str, Enum):
+    """Direction of the call - inbound or outbound"""
+
+    INBOUND = "INBOUND"  # Customer called us
+    OUTBOUND = "OUTBOUND"  # We called customer
+
+
 class LeadCallTracker(BaseModel):
     """Lead call tracking model"""
 
@@ -63,6 +70,7 @@ class LeadCallTracker(BaseModel):
     is_locked: bool = False
     langfuse_scores: Optional[Dict[str, Any]] = None
     execution_mode: ExecutionMode = ExecutionMode.TELEPHONY
+    call_direction: CallDirection = CallDirection.OUTBOUND
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 

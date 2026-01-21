@@ -29,6 +29,7 @@ from app.database.queries.breeze_buddy.lead_call_tracker import (
     update_lead_call_recording_url_query,
 )
 from app.schemas import (
+    CallDirection,
     ExecutionMode,
     LeadCallStatus,
     LeadCallTracker,
@@ -58,6 +59,9 @@ async def create_lead_call_tracker(
     template_id: Optional[str] = None,
     execution_mode: ExecutionMode = ExecutionMode.TELEPHONY,
     status: LeadCallStatus = LeadCallStatus.BACKLOG,  # Status with default for backward compatibility
+    call_id: Optional[str] = None,  # For inbound calls where call_sid is known upfront
+    outbound_number_id: Optional[str] = None,  # For inbound calls
+    call_direction: CallDirection = CallDirection.OUTBOUND,  # Direction of call
 ) -> Optional[LeadCallTracker]:
     """
     Create a new lead call tracker record.
@@ -66,6 +70,9 @@ async def create_lead_call_tracker(
         template_id: UUID of the template (preferred, for referential integrity)
         template: Name of the template (kept for backward compatibility)
         execution_mode: Execution mode (TELEPHONY, TELEPHONY_TEST, DAILY, DAILY_TEST)
+        call_id: Call SID (optional, used for inbound calls where call_sid is known upfront)
+        outbound_number_id: Outbound number ID (optional, used for inbound calls)
+        call_direction: Direction of call (INBOUND or OUTBOUND, defaults to OUTBOUND)
     """
     logger.info(f"Creating lead call tracker for merchant ID: {merchant_id}")
 
@@ -86,6 +93,9 @@ async def create_lead_call_tracker(
             request_id=request_id,
             execution_mode=execution_mode,
             status=status,  # Pass status (defaults to BACKLOG for backward compatibility)
+            call_id=call_id,
+            outbound_number_id=outbound_number_id,
+            call_direction=call_direction,
         )
 
         result = await run_parameterized_query(query_text, values)
