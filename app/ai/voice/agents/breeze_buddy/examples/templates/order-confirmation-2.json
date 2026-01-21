@@ -157,7 +157,7 @@
         "task_messages": [
           {
             "role": "system",
-            "content": "Say user as \"Sure, I can help you with that. Can you please provide me with the updated address details?\"  Also update the address provided by the user and keep remaing details same. Dont ask for complete address again."
+            "content": "Say user as \"Sure, I can help you with that. Can you please provide me with the updated address details?\"  Also update the address provided by the user and keep remaining details same. Dont ask for complete address again."
           }
         ],
         "pre_actions": [

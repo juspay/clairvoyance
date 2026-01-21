@@ -51,6 +51,7 @@ from app.ai.voice.agents.breeze_buddy.template import (
     with_context,
 )
 from app.ai.voice.agents.breeze_buddy.template.loader import FlowConfigLoader
+from app.ai.voice.agents.breeze_buddy.template.vad import build_default_vad_params
 from app.ai.voice.agents.breeze_buddy.tts import get_tts_service
 from app.ai.voice.agents.breeze_buddy.utils.common import (
     prepare_initial_greeting_payload,
@@ -72,10 +73,6 @@ from app.core.config.static import (
     AZURE_BREEZE_BUDDY_OPENAI_MODEL,
     AZURE_OPENAI_API_KEY,
     AZURE_OPENAI_ENDPOINT,
-    BREEZE_BUDDY_VAD_CONFIDENCE,
-    BREEZE_BUDDY_VAD_MIN_VOLUME,
-    BREEZE_BUDDY_VAD_START_SECS,
-    BREEZE_BUDDY_VAD_STOP_SECS,
     ENABLE_BREEZE_BUDDY_TRACING,
     ENABLE_BREEZE_BUDDY_USER_INTERRUPTION,
     ENVIRONMENT,
@@ -140,6 +137,9 @@ class Agent:
         )
 
         self.greeting_source = None
+
+        # Store default VAD params for reset when transitioning nodes
+        self.default_vad_params: Optional[VADParams] = None
 
     async def _load_template_config(self):
         """Load template configuration from database (shared across all transport types)."""
@@ -361,15 +361,13 @@ class Agent:
             except Exception as e:
                 logger.error(f"Failed to send initial media message: {e}")
 
-            # Create telephony transport
+            # Build default VAD params from template config
+            self.default_vad_params = build_default_vad_params(self.template)
+
+            # Create VAD analyzer with default params
             self.vad_analyzer = SileroVADAnalyzer(
                 sample_rate=16000,
-                params=VADParams(
-                    confidence=BREEZE_BUDDY_VAD_CONFIDENCE,
-                    start_secs=BREEZE_BUDDY_VAD_START_SECS,
-                    stop_secs=BREEZE_BUDDY_VAD_STOP_SECS,
-                    min_volume=BREEZE_BUDDY_VAD_MIN_VOLUME,
-                ),
+                params=self.default_vad_params,
             )
 
             self.transport = FastAPIWebsocketTransport(

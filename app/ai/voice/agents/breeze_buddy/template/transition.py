@@ -13,6 +13,10 @@ from app.ai.voice.agents.breeze_buddy.observability.tracing_setup import auto_tr
 from app.ai.voice.agents.breeze_buddy.template.context import TemplateContext
 from app.ai.voice.agents.breeze_buddy.template.hooks import HookRegistry
 from app.ai.voice.agents.breeze_buddy.template.types import HookConfig
+from app.ai.voice.agents.breeze_buddy.template.vad import (
+    apply_node_vad_config,
+    reset_vad_to_default,
+)
 from app.core.logger import logger
 
 
@@ -30,6 +34,7 @@ async def transition_handler(
     This handler:
     1. Immediately transitions to the next node (if specified)
     2. Executes hooks asynchronously without blocking
+    3. Handles VAD parameter reset and node-specific VAD configuration
 
     Args:
         context: Handler context with bot state access
@@ -62,6 +67,13 @@ async def transition_handler(
         logger.info(
             f"Transitioning from current node to '{transition_to}' for function '{function_name}'"
         )
+
+        # Reset VAD params to default before applying node-specific config
+        reset_vad_to_default(context)
+
+        # Get node-specific VAD config and apply it
+        apply_node_vad_config(context, transition_to)
+
         next_node = context.create_node_from_template(transition_to)
         return {}, next_node
     else:

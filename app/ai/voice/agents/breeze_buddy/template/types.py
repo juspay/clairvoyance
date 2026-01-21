@@ -5,13 +5,30 @@ Pydantic models for the dynamic workflow engine.
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class ActionType(str, Enum):
     TTS_SAY = "tts_say"
     END_CONVERSATION = "end_conversation"
     FUNCTION = "function"
+
+
+class VadConfig(BaseModel):
+    """VAD configuration for template or node-level customization."""
+
+    confidence: Optional[float] = Field(
+        None, ge=0.0, le=1.0, description="VAD confidence threshold (0.0-1.0)"
+    )
+    start_secs: Optional[float] = Field(
+        None, ge=0.0, description="Seconds of speech before starting transcription"
+    )
+    stop_secs: Optional[float] = Field(
+        None, ge=0.0, description="Seconds of silence before stopping transcription"
+    )
+    min_volume: Optional[float] = Field(
+        None, ge=0.0, description="Minimum volume threshold for VAD"
+    )
 
 
 class TTSVoiceName(str, Enum):
@@ -36,6 +53,9 @@ class ConfigurationModel(BaseModel):
     background_sound_volume: float = 2.0
     initial_greeting: Optional[str] = (
         None  # Initial greeting text template with variables (e.g., "Hi {customer_name}")
+    )
+    vad_config: Optional[VadConfig] = Field(
+        None, description="Default VAD configuration for the template"
     )
 
 
@@ -86,6 +106,9 @@ class FlowNodeModel(BaseModel):
     pre_actions: List[FlowAction] = []
     post_actions: List[FlowAction] = []
     functions: List[FlowFunction] = []
+    vad_config: Optional[VadConfig] = Field(
+        None, description="Node-specific VAD configuration (overrides template VAD)"
+    )
 
 
 class TemplateModel(BaseModel):
