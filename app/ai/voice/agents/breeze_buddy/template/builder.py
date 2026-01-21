@@ -180,7 +180,8 @@ class FlowConfigBuilder:
             f"{len(task_messages)} task_messages, {len(role_messages)} role_messages"
         )
 
-        return NodeConfig(
+        # Build NodeConfig dictionary
+        node_config = NodeConfig(
             name=node.node_name,
             task_messages=task_messages,
             role_messages=role_messages,
@@ -188,6 +189,14 @@ class FlowConfigBuilder:
             pre_actions=pre_actions,
             post_actions=post_actions,
         )
+
+        # Attach node-specific VAD config for transition handler to use
+        # NodeConfig is a TypedDict, so we store vad_config as a dict key
+        if node.vad_config:
+            node_config["vad_config"] = node.vad_config
+            logger.info(f"Attached VAD config to node {node.node_name}")
+
+        return node_config
 
     def _build_function_schema(self, func: FlowFunction) -> FlowsFunctionSchema:
         """
