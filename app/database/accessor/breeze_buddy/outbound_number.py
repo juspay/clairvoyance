@@ -20,6 +20,7 @@ from app.database.queries.breeze_buddy.outbound_number import (
     get_all_outbound_numbers_with_call_count_query,
     get_outbound_number_based_on_status_and_provider_query,
     get_outbound_number_by_id_query,
+    get_outbound_number_by_number_query,
     increment_outbound_number_channels_query,
     insert_outbound_number_query,
     update_outbound_number_status_query,
@@ -294,3 +295,26 @@ async def get_outbound_number_based_on_status_and_provider(
     except Exception as e:
         logger.error(f"Error getting outbound numbers: {e}")
         return []
+
+
+async def get_outbound_number_by_number(number: str) -> Optional[OutboundNumber]:
+    """
+    Get outbound number by phone number.
+    """
+    logger.info(f"Getting outbound number by phone number: {number}")
+
+    try:
+        query_text, values = get_outbound_number_by_number_query(number)
+        result = await run_parameterized_query(query_text, values)
+
+        if result and get_row_count(result) > 0:
+            decoded_result = decode_outbound_number(result)
+            logger.info(f"Outbound number found: {decoded_result}")
+            return decoded_result
+
+        logger.info(f"No outbound number found with number: {number}")
+        return None
+
+    except Exception as e:
+        logger.error(f"Error getting outbound number by number: {e}")
+        return None

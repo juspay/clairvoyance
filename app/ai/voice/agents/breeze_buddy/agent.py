@@ -1,5 +1,6 @@
 import asyncio
 import json
+import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -78,10 +79,17 @@ from app.database.accessor import (
     update_lead_call_initiated_time,
 )
 from app.database.accessor.breeze_buddy.lead_call_tracker import (
+    create_lead_call_tracker,
     update_lead_call_initiated_time_by_id,
 )
-from app.database.accessor.breeze_buddy.template import get_template_by_merchant
-from app.schemas import CallProvider
+from app.database.accessor.breeze_buddy.outbound_number import (
+    get_outbound_number_by_number,
+)
+from app.database.accessor.breeze_buddy.template import (
+    get_template_by_merchant,
+    get_template_by_outbound_number_id,
+)
+from app.schemas import CallDirection, CallProvider, LeadCallStatus
 
 
 class Agent:
@@ -306,14 +314,80 @@ class Agent:
                 start_data = call_data.get("start", {})
                 self.call_sid = start_data.get("call_sid")
 
-            await update_lead_call_initiated_time(self.call_sid, call_initiated_time)
             lead = await get_lead_by_call_id(self.call_sid)
+
             if not lead:
-                logger.error(f"Could not find lead for call_sid: {self.call_sid}")
-                return
+                # This is an inbound call - only supported for Exotel
+                if self.provider == CallProvider.TWILIO:
+                    logger.warning(
+                        f"Inbound calls not supported for Twilio. call_sid: {self.call_sid}"
+                    )
+                    return
+
+                logger.info(
+                    f"No lead found for call_sid: {self.call_sid} - treating as inbound call"
+                )
+
+                # Get the "to" and "from" numbers from Exotel call data
+                to_number = start_data.get("to") or call_data.get("to")
+                from_number = start_data.get("from") or call_data.get("from", "unknown")
+
+                if not to_number:
+                    logger.error(
+                        "Could not determine 'to' number from call data for inbound call"
+                    )
+                    return
+
+                logger.info(f"Inbound call to: {to_number}, from: {from_number}")
+
+                # Look up outbound number by phone number
+                outbound_number = await get_outbound_number_by_number(to_number)
+                if not outbound_number:
+                    logger.error(f"No outbound number found for to_number: {to_number}")
+                    return
+
+                # Look up template by outbound_number_id (only inbound-enabled templates)
+                template = await get_template_by_outbound_number_id(
+                    outbound_number.id, enable_inbound_only=True
+                )
+                if not template:
+                    logger.error(
+                        f"No inbound-enabled template found for outbound_number_id: {outbound_number.id}"
+                    )
+                    return
+
+                # Create lead on-the-fly for inbound call (with call_id set upfront)
+                lead_id = str(uuid.uuid4())
+                lead = await create_lead_call_tracker(
+                    id=lead_id,
+                    merchant_id=template.merchant_id,
+                    template=template.name,
+                    template_id=str(template.id),
+                    shop_identifier=template.shop_identifier,
+                    next_attempt_at=None,
+                    payload={"caller_number": from_number},
+                    call_initiated_time=call_initiated_time,
+                    status=LeadCallStatus.PROCESSING,
+                    call_id=self.call_sid,
+                    outbound_number_id=outbound_number.id,
+                    call_direction=CallDirection.INBOUND,
+                )
+
+                if not lead:
+                    logger.error("Failed to create lead for inbound call")
+                    return
+
+                logger.info(
+                    f"Created lead for inbound call: {lead.id}, call_sid: {self.call_sid}"
+                )
+            else:
+                # Outbound call - update call initiated time
+                await update_lead_call_initiated_time(
+                    self.call_sid, call_initiated_time
+                )
 
             self.lead = lead
-            call_payload = lead.payload
+            call_payload = lead.payload or {}
             self.reporting_webhook_url = call_payload.get("reporting_webhook_url")
 
             logger.info(

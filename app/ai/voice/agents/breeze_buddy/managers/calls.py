@@ -40,6 +40,7 @@ from app.database.accessor import (
     update_outbound_number_status,
 )
 from app.schemas import (
+    CallDirection,
     CallExecutionConfig,
     CallProvider,
     LeadCallStatus,
@@ -260,6 +261,7 @@ async def _retry_call(
                     else False
                 )
             },
+            call_direction=lead.call_direction,  # Inherit call direction from parent lead
         )
 
 
@@ -303,8 +305,9 @@ async def _cleanup_stuck_leads():
             if outbound_number:
                 await _release_number(outbound_number.id, outbound_number.provider)
 
+            # Only retry outbound calls - inbound calls should not be retried
             config = await _get_lead_config(locked_lead)
-            if config:
+            if config and locked_lead.call_direction == CallDirection.OUTBOUND:
                 await _retry_call(locked_lead, config)
 
         except Exception as e:
@@ -665,7 +668,11 @@ async def handle_call_completion(
         call_end_time=call_end_time,
     )
 
-    if outcome in ["BUSY", "NO_ANSWER"]:
+    # Only retry outbound calls - inbound calls should not be retried
+    if (
+        outcome in ["BUSY", "NO_ANSWER"]
+        and lead.call_direction == CallDirection.OUTBOUND
+    ):
         await _retry_call(lead, config, outcome)
 
     return updated_lead

@@ -6,7 +6,7 @@ import json
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
-from app.schemas import ExecutionMode, LeadCallStatus
+from app.schemas import CallDirection, ExecutionMode, LeadCallStatus
 
 # Table names
 LEAD_CALL_TRACKER_TABLE = "lead_call_tracker"
@@ -30,6 +30,9 @@ def insert_lead_call_tracker_query(
     template_id: Optional[str] = None,
     execution_mode: ExecutionMode = ExecutionMode.TELEPHONY,
     status: LeadCallStatus = LeadCallStatus.BACKLOG,  # Status with default for backward compatibility
+    call_id: Optional[str] = None,  # For inbound calls where call_sid is known upfront
+    outbound_number_id: Optional[str] = None,  # For inbound calls
+    call_direction: CallDirection = CallDirection.OUTBOUND,  # Direction of call
 ) -> Tuple[str, List[Any]]:
     """
     Generate query to insert lead call tracker record.
@@ -38,6 +41,9 @@ def insert_lead_call_tracker_query(
         template_id: UUID of the template (preferred, for referential integrity)
         template: Name of the template (kept for backward compatibility)
         execution_mode: Execution mode (TELEPHONY, TELEPHONY_TEST, DAILY, DAILY_TEST)
+        call_id: Call SID (optional, used for inbound calls where call_sid is known upfront)
+        outbound_number_id: Outbound number ID (optional, used for inbound calls)
+        call_direction: Direction of call (INBOUND or OUTBOUND)
     """
     text = f"""
         INSERT INTO "{LEAD_CALL_TRACKER_TABLE}"
@@ -57,10 +63,13 @@ def insert_lead_call_tracker_query(
             "attempt_count",
             "cost",
             "execution_mode",
+            "call_id",
+            "outbound_number_id",
+            "call_direction",
             "created_at",
             "updated_at"
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17) RETURNING *;
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20) RETURNING *;
     """
 
     values = [
@@ -79,6 +88,9 @@ def insert_lead_call_tracker_query(
         attempt_count,
         cost,
         execution_mode.value,
+        call_id,
+        outbound_number_id,
+        call_direction.value,
         datetime.now(),
         datetime.now(),
     ]

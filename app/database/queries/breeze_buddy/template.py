@@ -149,6 +149,36 @@ def get_template_by_id_query(template_id: str) -> Tuple[str, List[Any]]:
     return query, [template_id]
 
 
+def get_template_by_outbound_number_id_query(
+    outbound_number_id: str,
+    enable_inbound_only: bool = False,
+) -> Tuple[str, List[Any]]:
+    """
+    Generate query to get a template by outbound_number_id.
+
+    Args:
+        outbound_number_id: Outbound number UUID
+        enable_inbound_only: If True, only return templates with
+                             configurations.enable_inbound = true
+    """
+    conditions = ["outbound_number_id = $1"]
+
+    if enable_inbound_only:
+        # Filter by enable_inbound in configurations JSON
+        # COALESCE ensures missing key defaults to FALSE
+        conditions.append(
+            "COALESCE((configurations->>'enable_inbound')::boolean, FALSE) = TRUE"
+        )
+
+    query = f"""
+        SELECT id, merchant_id, shop_identifier, name, flow, expected_payload_schema, expected_callback_response_schema, configurations, secrets, outbound_number_id, is_active, created_at, updated_at
+        FROM {TEMPLATE_TABLE}
+        WHERE {' AND '.join(conditions)}
+        LIMIT 1
+    """
+    return query, [outbound_number_id]
+
+
 def replace_template_query(
     template_id: str,
     name: str,
