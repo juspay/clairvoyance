@@ -180,12 +180,16 @@ class UpdateOutcomeInDatabaseHook(Hook):
             # Initialize metadata with existing data
             meta_data = context.lead.metaData or {}
 
-            # Add all fields except outcome to metadata
+            # Initialize outcome object inside metadata if it doesn't exist
+            if "outcome" not in meta_data:
+                meta_data["outcome"] = {}
+
+            # Add all other fields except outcome to the outcome object
             for key, value in final_data.items():
                 if key != "outcome" and value is not None:
-                    meta_data[key] = value
+                    meta_data["outcome"][key] = value
                     logger.debug(
-                        f"Added '{key}': '{value}' to metadata for lead {context.lead.id}"
+                        f"Added '{key}': '{value}' to outcome in metadata for lead {context.lead.id}"
                     )
 
             # Log all metadata properties that were added
