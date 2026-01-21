@@ -10,6 +10,7 @@ from app.ai.voice.agents.breeze_buddy.observability.tracing_setup import (
 )
 from app.ai.voice.agents.breeze_buddy.template.context import TemplateContext
 from app.core.logger import logger
+from app.core.logger.context import clear_log_context
 
 callback_map = {
     "service_callback": service_callback,
@@ -180,5 +181,8 @@ async def end_conversation(context: TemplateContext, args, transition_to=None):
         )
         await context.task.queue_frame(EndFrame())
         logger.info(f"EndFrame queued for call {context.call_sid}")
+
+        # Clear log context AFTER all logs to prevent leakage between calls
+        clear_log_context()
 
     return {}
