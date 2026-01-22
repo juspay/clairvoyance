@@ -88,6 +88,7 @@ async def create_template(
     expected_callback_response_schema: Optional[dict],
     now,
     configurations: Optional[dict] = None,
+    secrets: Optional[dict] = None,
     outbound_number_id: Optional[str] = None,
     is_active: bool = True,
 ) -> Optional[TemplateModel]:
@@ -109,6 +110,9 @@ async def create_template(
         # Convert configurations to JSON string
         configurations_json = json.dumps(configurations) if configurations else None
 
+        # Convert secrets to JSON string
+        secrets_json = json.dumps(secrets) if secrets else None
+
         query, values = create_template_query(
             template_id,
             merchant,
@@ -118,10 +122,11 @@ async def create_template(
             expected_payload_schema_json,
             expected_callback_response_schema_json,
             configurations_json,
+            secrets_json,
+            outbound_number_id,  # Moved: now matches SQL column order
             is_active,
             now,
             now,
-            outbound_number_id,
         )
 
         result = await run_parameterized_query(query, values)
@@ -284,6 +289,7 @@ async def replace_template(
     expected_payload_schema: Optional[dict],
     expected_callback_response_schema: Optional[dict],
     configurations: Optional[dict],
+    secrets: Optional[dict],
     outbound_number_id: Optional[str],
     is_active: bool,
     shop_identifier: Optional[str],
@@ -299,6 +305,7 @@ async def replace_template(
         expected_payload_schema: Expected payload schema (optional, set to NULL if not provided)
         expected_callback_response_schema: Expected callback response schema (optional, set to NULL if not provided)
         configurations: Template configurations (optional, set to NULL if not provided)
+        secrets: Secrets and variables for HTTP functions (optional, set to NULL if not provided)
         outbound_number_id: Outbound number ID (optional, set to NULL if not provided)
         is_active: Whether template is active (required)
         shop_identifier: Shop identifier (optional, set to NULL if not provided)
@@ -324,6 +331,9 @@ async def replace_template(
         # Convert configurations to JSON string
         configurations_json = json.dumps(configurations) if configurations else None
 
+        # Convert secrets to JSON string
+        secrets_json = json.dumps(secrets) if secrets else None
+
         query, values = replace_template_query(
             template_id,
             name,
@@ -331,6 +341,7 @@ async def replace_template(
             expected_payload_schema_json,
             expected_callback_response_schema_json,
             configurations_json,
+            secrets_json,
             outbound_number_id,
             is_active,
             shop_identifier,

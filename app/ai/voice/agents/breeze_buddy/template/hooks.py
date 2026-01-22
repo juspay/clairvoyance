@@ -12,10 +12,16 @@ Example:
 from abc import ABC, abstractmethod
 from typing import Any, Dict, Optional
 
+from app.ai.voice.agents.breeze_buddy.handlers.transport.http_requester import (
+    HttpRequestExecutor,
+)
+from app.ai.voice.agents.breeze_buddy.handlers.transport.utils.field_resolver import (
+    FieldResolver,
+)
 from app.ai.voice.agents.breeze_buddy.template.context import TemplateContext
 from app.ai.voice.agents.breeze_buddy.template.types import (
-    HookFieldConfig,
-    HookFieldConfigSource,
+    FieldSource,
+    HookConfig,
 )
 from app.core.logger import logger
 from app.database.accessor.breeze_buddy.lead_call_tracker import (
@@ -40,7 +46,7 @@ class Hook(ABC):
         context: TemplateContext,
         args: Dict[str, Any],
         function_name: str,
-        expected_fields: Optional[Dict[str, HookFieldConfig]] = None,
+        hook_config: HookConfig,
     ) -> None:
         """
         Execute the hook logic.
@@ -49,7 +55,7 @@ class Hook(ABC):
             context: Handler context with bot state access
             args: Function arguments from LLM
             function_name: Name of the function that triggered this hook
-            expected_fields: Dictionary mapping field names to their HookFieldConfig
+            hook_config: Complete hook configuration - each hook extracts what it needs
         """
 
     async def safe_execute(
@@ -57,7 +63,7 @@ class Hook(ABC):
         context: TemplateContext,
         args: Dict[str, Any],
         function_name: str,
-        expected_fields: Optional[Dict[str, HookFieldConfig]] = None,
+        hook_config: HookConfig,
     ) -> None:
         """
         Safely execute the hook with error handling.
@@ -66,13 +72,13 @@ class Hook(ABC):
             context: Handler context with bot state access
             args: Function arguments from LLM
             function_name: Name of the function that triggered this hook
-            expected_fields: Dictionary mapping field names to their HookFieldConfig
+            hook_config: Complete hook configuration - each hook extracts what it needs
         """
         logger.info(
             f"Starting hook '{self.name}' execution for function '{function_name}'"
         )
         try:
-            await self.execute(context, args, function_name, expected_fields)
+            await self.execute(context, args, function_name, hook_config)
             logger.info(
                 f"Successfully completed hook '{self.name}' for function '{function_name}'"
             )
@@ -98,7 +104,7 @@ class UpdateOutcomeInDatabaseHook(Hook):
         context: TemplateContext,
         args: Dict[str, Any],
         function_name: str,
-        expected_fields: Optional[Dict[str, HookFieldConfig]] = None,
+        hook_config: HookConfig,
     ) -> None:
         """
         Update the outcome in database.
@@ -107,8 +113,11 @@ class UpdateOutcomeInDatabaseHook(Hook):
             context: Handler context with bot state access
             args: Function arguments containing outcome and other data from LLM
             function_name: Name of the function that triggered this hook
-            expected_fields: Dictionary mapping field names to their HookFieldConfig
+            hook_config: Complete hook configuration - this hook extracts expected_fields
         """
+        # Extract what this hook needs from hook_config
+        expected_fields = hook_config.expected_fields
+
         logger.debug(
             f"UpdateOutcomeInDatabaseHook execute called with args: {args}, "
             f"expected_fields: {expected_fields}, for function '{function_name}'"
@@ -119,14 +128,14 @@ class UpdateOutcomeInDatabaseHook(Hook):
 
         if expected_fields:
             for field_name, field_config in expected_fields.items():
-                if field_config.source == HookFieldConfigSource.STATIC:
+                if field_config.source == FieldSource.STATIC:
                     # Use the enforced value from configuration
                     final_data[field_name] = field_config.value
                     logger.debug(
                         f"Field '{field_name}': using enforced value '{field_config.value}' "
                         f"for function '{function_name}'"
                     )
-                elif field_config.source == HookFieldConfigSource.LLM:
+                elif field_config.source == FieldSource.LLM:
                     # Use the value from LLM arguments
                     value = args.get(field_name)
                     if value is not None:
@@ -243,6 +252,94 @@ class UpdateOutcomeInDatabaseHook(Hook):
             )
 
 
+class ExternalHTTPHook(Hook):
+    """
+    Hook to send HTTP requests to external APIs.
+
+    This hook executes HTTP requests asynchronously without blocking the conversation.
+    Supports all HTTP methods, authentication, headers, query params, and body.
+
+    Example use cases:
+        - Send webhook to merchant CRM
+        - Update external order management system
+        - Send analytics events
+        - Trigger third-party integrations
+    """
+
+    def __init__(self):
+        super().__init__("send_http_request")
+
+    async def execute(
+        self,
+        context: TemplateContext,
+        args: Dict[str, Any],
+        function_name: str,
+        hook_config: HookConfig,
+    ) -> None:
+        """
+        Execute HTTP request with simple value resolution.
+
+        Args:
+            context: Handler context with bot state access (includes aiohttp_session)
+            args: Function arguments from LLM
+            function_name: Name of the function that triggered this hook
+            hook_config: Complete hook configuration - this hook extracts http_request
+        """
+        logger.debug(f"ExternalHTTPHook execute called for function '{function_name}'")
+
+        # Extract what THIS hook needs
+        http_request = hook_config.http_request
+
+        if not http_request:
+            logger.error(
+                f"ExternalHTTPHook requires http_request config for function '{function_name}'"
+            )
+            return
+
+        if not context.aiohttp_session:
+            logger.error(
+                f"No aiohttp_session available in context for function '{function_name}'"
+            )
+            return
+
+        # Resolve expected_fields to get dynamic values
+        resolver = FieldResolver(context=context, args=args)
+        resolved_fields: Dict[str, Any] = {}
+
+        if hook_config.expected_fields:
+            logger.debug(
+                f"Resolving {len(hook_config.expected_fields)} expected_fields "
+                f"for function '{function_name}'"
+            )
+            for field_name, field_config in hook_config.expected_fields.items():
+                resolved_value = resolver.resolve_value(
+                    field_config, field_name=field_name
+                )
+                if resolved_value is not None:
+                    resolved_fields[field_name] = resolved_value
+                    logger.debug(
+                        f"Resolved field '{field_name}' = '{resolved_value}' "
+                        f"from source '{field_config.source}'"
+                    )
+
+        logger.debug(
+            f"Resolved fields for HTTP request: {resolved_fields} "
+            f"for function '{function_name}'"
+        )
+
+        # Create executor
+        executor = HttpRequestExecutor(session=context.aiohttp_session)
+
+        logger.info(
+            f"Executing HTTP {http_request.method.value} request to {http_request.url} "
+            f"for function '{function_name}'"
+        )
+
+        await executor.execute(config=http_request, resolved_fields=resolved_fields)
+
+        logger.info(f"HTTP request completed for function '{function_name}'")
+
+
 class HookRegistry:
     """
     Registry for all available hooks.
@@ -289,3 +386,4 @@ class HookRegistry:
 
 # Register hooks
 HookRegistry.register("update_outcome_in_database", UpdateOutcomeInDatabaseHook())
+HookRegistry.register("send_http_request", ExternalHTTPHook())

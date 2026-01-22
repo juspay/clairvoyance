@@ -4,7 +4,7 @@ Flow Configuration Builder
 This module builds Pipecat flow configurations from database models.
 """
 
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 from pipecat_flows import FlowsFunctionSchema, NodeConfig
 
@@ -13,6 +13,12 @@ from app.ai.voice.agents.breeze_buddy.handlers.internal import (
     mute_stt,
     play_audio_sound,
     unmute_stt,
+)
+from app.ai.voice.agents.breeze_buddy.handlers.transport.http_handler import (
+    http_function_handler,
+)
+from app.ai.voice.agents.breeze_buddy.template.global_function import (
+    GlobalFunctionRegistry,
 )
 from app.ai.voice.agents.breeze_buddy.template.transition import (
     transition_handler,
@@ -33,6 +39,12 @@ class FlowConfigBuilder:
     def __init__(self):
         """
         Initialize builder with a static handler map.
+
+        The handler_map contains raw handlers that will be wrapped with
+        with_context(bot_instance) in agent.py before use.
+
+        Note: Global function adapters are registered at module level in
+        global_function_handler.py (same pattern as HookRegistry).
         """
         self.handler_map = {
             "mute_stt": mute_stt,
@@ -40,6 +52,7 @@ class FlowConfigBuilder:
             "play_audio_sound": play_audio_sound,
             "end_conversation": end_conversation,
             "transition_handler": transition_handler,
+            "http_function_handler": http_function_handler,
         }
 
     def build_flow_config(self, template: TemplateModel) -> Dict[str, Any]:
@@ -126,6 +139,28 @@ class FlowConfigBuilder:
             "end_conversation_callbacks": end_conversation_callbacks,
             "expected_callback_response_schema": template.expected_callback_response_schema,
         }
+
+    def build_global_functions(self, flow: Dict[str, Any]) -> List[FlowsFunctionSchema]:
+        """
+        Build global functions from template flow config using registered adapters.
+
+        Global functions are available to the LLM from any node in the conversation.
+        They can make HTTP requests, database queries, or execute custom logic and
+        return the response to the LLM for decision-making.
+
+        Each adapter declares which handler it needs via the handler_name property.
+        The handler_map (with all handlers wrapped with with_context in agent.py)
+        is passed to the registry, which resolves the correct handler for each adapter.
+
+        Args:
+            flow: Flow configuration dict containing optional 'global_functions' array
+
+        Returns:
+            List of FlowsFunctionSchema objects to pass to FlowManager(global_functions=[...])
+        """
+        # Pass entire handler_map - each adapter will pick the handler it needs
+        # All handlers are already wrapped with with_context(bot_instance) in agent.py
+        return GlobalFunctionRegistry.build(flow, handler_map=self.handler_map)
 
     def _build_node(self, node: FlowNodeModel) -> NodeConfig:
         """
@@ -269,6 +304,9 @@ class FlowConfigBuilder:
             )
             return {"type": "tts_say", "text": action.text or ""}
         elif action_type == ActionType.FUNCTION:
+            if not action.handler:
+                logger.error("FUNCTION action requires a handler name")
+                raise ValueError("FUNCTION action requires a handler name")
             handler = self.handler_map.get(action.handler)
             if not handler:
                 logger.error(f"Handler not found for name: {action.handler}")

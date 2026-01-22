@@ -517,3 +517,41 @@ CORS_ALLOWED_ORIGINS = [
     ).split(",")
     if origin.strip()
 ]
+
+GLOBAL_FUNCTION_DESCRIPTION_SUFFIX = os.environ.get(
+    "GLOBAL_FUNCTION_DESCRIPTION_SUFFIX",
+    "After providing the answer, continue the conversation from where it was interrupted, reminding the user of the current step or asking the next relevant question.",
+)
+
+# HTTP Request Security Configuration (for hooks and global functions)
+# Maximum response size in bytes to prevent downloading huge files
+HTTP_REQUEST_MAX_RESPONSE_BYTES = int(
+    os.environ.get("HTTP_REQUEST_MAX_RESPONSE_BYTES", str(100 * 1024))  # 100KB default
+)
+
+# Content types that are blocked to prevent downloading executables/scripts
+# Comma-separated list, can be customized via environment variable
+_default_blocked_content_types = (
+    "application/x-executable,"
+    "application/x-sh,"
+    "application/x-bash,"
+    "application/octet-stream,"
+    "application/x-msdownload,"
+    "application/x-msdos-program,"
+    "application/x-binary,"
+    "application/zip,"
+    "application/x-tar,"
+    "application/x-gzip,"
+    "application/x-rar-compressed,"
+    "application/x-7z-compressed"
+)
+HTTP_REQUEST_BLOCKED_CONTENT_TYPES = [
+    ct.strip().lower()
+    for ct in os.environ.get(
+        "HTTP_REQUEST_BLOCKED_CONTENT_TYPES", _default_blocked_content_types
+    ).split(",")
+    if ct.strip()
+]
+
+# Maximum number of redirects to follow (0 to disable redirects)
+HTTP_REQUEST_MAX_REDIRECTS = int(os.environ.get("HTTP_REQUEST_MAX_REDIRECTS", "3"))

@@ -13,6 +13,10 @@ from app.ai.voice.agents.breeze_buddy.template.types import (
     CreateTemplateRequest,
     ReplaceTemplateRequest,
 )
+from app.ai.voice.agents.breeze_buddy.utils.secrets import (
+    mask_template_secrets,
+    merge_secrets,
+)
 from app.core.logger import logger
 from app.database.accessor import get_outbound_number_by_id, get_template_by_merchant
 from app.database.accessor.breeze_buddy.template import (
@@ -103,6 +107,7 @@ async def create_template_handler(
             expected_payload_schema=template_data.expected_payload_schema,
             expected_callback_response_schema=template_data.expected_callback_response_schema,
             configurations=configurations,
+            secrets=template_data.secrets,
             outbound_number_id=template_data.outbound_number_id,
             is_active=template_data.is_active,
             now=now,
@@ -171,7 +176,7 @@ async def get_template_handler(
 
         if template:
             logger.info(f"Template found: {template.id}")
-            return template
+            return mask_template_secrets(template)
         else:
             logger.info(
                 f"No template found for merchant: {merchant_id}, "
@@ -291,7 +296,7 @@ async def get_template_by_id_handler(template_id: str, current_user: UserInfo):
 
         logger.info(f"Returning template {template_id} to user {current_user.username}")
 
-        return template
+        return mask_template_secrets(template)
 
     except HTTPException:
         raise
@@ -375,6 +380,12 @@ async def replace_template_handler(
         if template_data.configurations:
             configurations = template_data.configurations.model_dump(exclude_none=True)
 
+        # Merge secrets: preserve **** values from existing, update real values
+        merged_secrets = merge_secrets(
+            incoming_secrets=template_data.secrets,
+            existing_secrets=existing_template.secrets,
+        )
+
         updated_template = await replace_template(
             template_id=template_id,
             name=template_data.name,
@@ -382,6 +393,7 @@ async def replace_template_handler(
             expected_payload_schema=template_data.expected_payload_schema,
             expected_callback_response_schema=template_data.expected_callback_response_schema,
             configurations=configurations,
+            secrets=merged_secrets,
             outbound_number_id=template_data.outbound_number_id,
             is_active=template_data.is_active,
             shop_identifier=template_data.identifier,
@@ -399,7 +411,7 @@ async def replace_template_handler(
             f"with {len(flow.get('nodes', []))} nodes"
         )
 
-        return updated_template
+        return mask_template_secrets(updated_template)
 
     except HTTPException:
         raise

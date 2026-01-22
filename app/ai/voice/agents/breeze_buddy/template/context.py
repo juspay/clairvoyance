@@ -166,6 +166,11 @@ def with_context(bot_instance):
     """
     Decorator factory that injects TemplateContext into handler functions.
 
+    Supports three types of handlers:
+    1. Transition handlers: receive (context, args, transition_to, hooks, function_name)
+    2. Action handlers: receive (context, args, transition_to)
+    3. Global function handlers: receive (context, args, function_config)
+
     Usage:
         @with_context(bot)
         async def my_handler(context, flow_manager, args):
@@ -197,18 +202,32 @@ def with_context(bot_instance):
             transition_to = kwargs.pop("transition_to", None)
             hooks = kwargs.pop("hooks", None)
             function_name = kwargs.pop("function_name", None)
+            function_config = kwargs.pop("function_config", None)
 
             is_transition_handler = hooks is not None or function_name is not None
+            is_global_function_handler = function_config is not None
 
             llm_args = args[0] if len(args) > 0 else {}
 
             logger.debug(
                 f"with_context wrapper called - handler: {handler_func.__name__}, "
                 f"is_transition_handler: {is_transition_handler}, "
+                f"is_global_function_handler: {is_global_function_handler}, "
                 f"transition_to: {transition_to}, hooks: {hooks}, function_name: {function_name}"
             )
 
-            if is_transition_handler:
+            if is_global_function_handler:
+                # Global function handlers receive (context, args, function_config)
+                logger.debug(
+                    f"Calling global function handler '{handler_func.__name__}' "
+                    f"for function '{function_config.name if hasattr(function_config, 'name') else 'unknown'}'"
+                )
+                return await handler_func(
+                    context,
+                    llm_args,
+                    function_config=function_config,
+                )
+            elif is_transition_handler:
                 logger.debug(
                     f"Calling transition handler '{handler_func.__name__}' "
                     f"for function '{function_name}'"

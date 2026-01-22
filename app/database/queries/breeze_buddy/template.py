@@ -26,9 +26,9 @@ def get_template_by_merchant_query(
         values.append(name)
 
     query = f"""
-        SELECT id, merchant_id, shop_identifier, name, flow, expected_payload_schema, expected_callback_response_schema, configurations, outbound_number_id, is_active, created_at, updated_at
+        SELECT id, merchant_id, shop_identifier, name, flow, expected_payload_schema, expected_callback_response_schema, configurations, secrets, outbound_number_id, is_active, created_at, updated_at
         FROM {TEMPLATE_TABLE}
-        WHERE {' AND '.join(conditions)}
+        WHERE {" AND ".join(conditions)}
     """
 
     return query, values
@@ -43,16 +43,19 @@ def create_template_query(
     expected_payload_schema: str,  # JSON string containing expected payload schema
     expected_callback_response_schema: str,  # JSON string containing expected callback response schema
     configurations: str,  # JSON string containing configurations (tts_voice_name, stt_language, etc.)
+    secrets: str,  # JSON string containing secrets and variables for HTTP functions
+    outbound_number_id: Optional[
+        str
+    ],  # Changed: moved before is_active to match SQL column order
     is_active: bool,
     created_at,
     updated_at,
-    outbound_number_id: Optional[str] = None,
 ) -> Tuple[str, List[Any]]:
     """Generate query to create a new template."""
     query = f"""
-        INSERT INTO {TEMPLATE_TABLE} (id, merchant_id, shop_identifier, name, flow, expected_payload_schema, expected_callback_response_schema, configurations, outbound_number_id, is_active, created_at, updated_at)
-        VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7::jsonb, $8::jsonb, $9, $10, $11, $12)
-        RETURNING id, merchant_id, shop_identifier, name, flow, expected_payload_schema, expected_callback_response_schema, configurations, outbound_number_id, is_active, created_at, updated_at
+        INSERT INTO {TEMPLATE_TABLE} (id, merchant_id, shop_identifier, name, flow, expected_payload_schema, expected_callback_response_schema, configurations, secrets, outbound_number_id, is_active, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7::jsonb, $8::jsonb, $9::jsonb, $10, $11, $12, $13)
+        RETURNING id, merchant_id, shop_identifier, name, flow, expected_payload_schema, expected_callback_response_schema, configurations, secrets, outbound_number_id, is_active, created_at, updated_at
     """
 
     return query, [
@@ -64,6 +67,7 @@ def create_template_query(
         expected_payload_schema,
         expected_callback_response_schema,
         configurations,
+        secrets,
         outbound_number_id,
         is_active,
         created_at,
@@ -136,7 +140,7 @@ def get_template_by_id_query(template_id: str) -> Tuple[str, List[Any]]:
         Tuple of (query string, values list)
     """
     query = f"""
-        SELECT id, merchant_id, shop_identifier, name, flow, expected_payload_schema, expected_callback_response_schema, configurations, outbound_number_id, is_active, created_at, updated_at
+        SELECT id, merchant_id, shop_identifier, name, flow, expected_payload_schema, expected_callback_response_schema, configurations, secrets, outbound_number_id, is_active, created_at, updated_at
         FROM {TEMPLATE_TABLE}
         WHERE id = $1
         LIMIT 1
@@ -152,6 +156,7 @@ def replace_template_query(
     expected_payload_schema: Optional[str],
     expected_callback_response_schema: Optional[str],
     configurations: Optional[str],
+    secrets: Optional[str],
     outbound_number_id: Optional[str],
     is_active: bool,
     shop_identifier: Optional[str],
@@ -167,6 +172,7 @@ def replace_template_query(
         expected_payload_schema: Expected payload schema JSON string or None
         expected_callback_response_schema: Expected callback response schema JSON string or None
         configurations: Configurations JSON string or None
+        secrets: Secrets and variables JSON string or None
         outbound_number_id: Outbound number ID or None
         is_active: Whether template is active
         shop_identifier: Shop identifier or None
@@ -182,12 +188,13 @@ def replace_template_query(
             expected_payload_schema = $3::jsonb,
             expected_callback_response_schema = $4::jsonb,
             configurations = $5::jsonb,
-            outbound_number_id = $6,
-            is_active = $7,
-            shop_identifier = $8,
-            updated_at = $9
-        WHERE id = $10
-        RETURNING id, merchant_id, shop_identifier, name, flow, expected_payload_schema, expected_callback_response_schema, configurations, outbound_number_id, is_active, created_at, updated_at
+            secrets = $6::jsonb,
+            outbound_number_id = $7,
+            is_active = $8,
+            shop_identifier = $9,
+            updated_at = $10
+        WHERE id = $11
+        RETURNING id, merchant_id, shop_identifier, name, flow, expected_payload_schema, expected_callback_response_schema, configurations, secrets, outbound_number_id, is_active, created_at, updated_at
     """
 
     return query, [
@@ -196,6 +203,7 @@ def replace_template_query(
         expected_payload_schema,
         expected_callback_response_schema,
         configurations,
+        secrets,
         outbound_number_id,
         is_active,
         shop_identifier,

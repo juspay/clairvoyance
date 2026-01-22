@@ -59,6 +59,13 @@ def decode_template(result: asyncpg.Record) -> Optional[TemplateModel]:
         # Create ConfigurationModel from the parsed data
         configurations = ConfigurationModel(**configurations_data)
 
+    # Parse secrets from JSONB (can be str, dict, or None)
+    secrets_data = result.get("secrets")
+    if secrets_data:
+        if isinstance(secrets_data, str):
+            secrets_data = json.loads(secrets_data)
+        # If it's already a dict (from JSONB), use it directly
+
     return TemplateModel(
         id=str(result["id"]),
         merchant_id=result["merchant_id"],
@@ -68,6 +75,7 @@ def decode_template(result: asyncpg.Record) -> Optional[TemplateModel]:
         expected_payload_schema=expected_payload_schema_data,
         expected_callback_response_schema=expected_callback_response_schema_data,
         configurations=configurations,
+        secrets=secrets_data,
         outbound_number_id=(
             str(result["outbound_number_id"])
             if result.get("outbound_number_id")
