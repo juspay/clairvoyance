@@ -122,9 +122,7 @@ async def _execute_hooks_async(
             logger.info(
                 f"Executing hook '{hook_config.name}' for function '{function_name}'"
             )
-            await hook.safe_execute(
-                context, args, function_name, hook_config.expected_fields
-            )
+            await hook.safe_execute(context, args, function_name, hook_config)
         else:
             logger.warning(
                 f"Hook '{hook_config.name}' not found in registry for function '{function_name}'"

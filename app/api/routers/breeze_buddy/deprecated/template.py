@@ -1,10 +1,14 @@
 from datetime import datetime, timezone
+from typing import Any, Dict, Optional
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException
 from starlette.responses import JSONResponse
 
-from app.ai.voice.agents.breeze_buddy.template.types import CreateTemplateRequest
+from app.ai.voice.agents.breeze_buddy.template.types import (
+    CreateTemplateRequest,
+    TemplateModel,
+)
 from app.core.logger import logger
 from app.core.security.jwt import get_current_user
 from app.database.accessor import get_outbound_number_by_id, get_template_by_merchant
@@ -12,6 +16,36 @@ from app.database.accessor.breeze_buddy.template import create_template
 from app.schemas import TokenData
 
 router = APIRouter()
+
+# Mask value for secrets in API responses
+SECRETS_MASK = "****"
+
+
+def mask_secrets(secrets: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Mask all secret values with **** for API responses."""
+    if not secrets:
+        return None
+    return {key: SECRETS_MASK for key in secrets.keys()}
+
+
+def mask_template_secrets(template: TemplateModel) -> TemplateModel:
+    """Return a copy of the template with secrets masked for API responses."""
+    return TemplateModel(
+        id=template.id,
+        merchant_id=template.merchant_id,
+        shop_identifier=template.shop_identifier,
+        name=template.name,
+        flow=template.flow,
+        expected_payload_schema=template.expected_payload_schema,
+        expected_callback_response_schema=template.expected_callback_response_schema,
+        configurations=template.configurations,
+        secrets=mask_secrets(template.secrets),
+        outbound_number_id=template.outbound_number_id,
+        is_active=template.is_active,
+        rendered_system_prompt=template.rendered_system_prompt,
+        created_at=template.created_at,
+        updated_at=template.updated_at,
+    )
 
 
 @router.get("/template")
@@ -38,7 +72,7 @@ async def get_template(
 
         if template:
             logger.info(f"Template found: {template}")
-            return template
+            return mask_template_secrets(template)
         else:
             logger.info(
                 f"No template found for merchant: {merchant_id}, shop_identifier: {shop_identifier}, name: {name}"
@@ -116,6 +150,7 @@ async def create_template_from_json(
             expected_payload_schema=template_data.expected_payload_schema,
             expected_callback_response_schema=template_data.expected_callback_response_schema,
             configurations=configurations,
+            secrets=template_data.secrets,
             outbound_number_id=template_data.outbound_number_id,
             is_active=template_data.is_active,
             now=now,

@@ -106,8 +106,14 @@ async def start_daily_session(lead_id: str) -> Dict[str, Any]:
         },
     )
 
-    # Start the bot in background with the completion function
-    asyncio.create_task(daily_bot(runner_args, daily_completion_function))
+    # Create aiohttp session for the bot's lifecycle (for global HTTP functions)
+    # Not using async with here because bot runs in background task
+    bot_aiohttp_session = create_aiohttp_session()
+
+    # Start the bot in background with the completion function and aiohttp session
+    asyncio.create_task(
+        daily_bot(runner_args, daily_completion_function, bot_aiohttp_session)
+    )
 
     logger.info(
         f"Successfully started Breeze Buddy Daily bot for lead_id: {lead_id}, session: {session_id}"

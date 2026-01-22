@@ -5,7 +5,7 @@ Pydantic models for the dynamic workflow engine.
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, SecretStr
 
 
 class ActionType(str, Enum):
@@ -71,23 +71,85 @@ class TaskMessage(BaseModel):
     content: str
 
 
-class HookFieldConfigSource(str, Enum):
+class FieldSource(str, Enum):
+    """Source types for field value resolution.
+
+    Used by both hooks (fire-and-forget) and global HTTP functions (wait for response).
+    - STATIC: Value is a literal or contains {template_var} placeholders
+    - LLM: Value comes from LLM function arguments
+    """
+
     STATIC = "static"
     LLM = "llm"
 
 
-class HookFieldConfig(BaseModel):
-    """Configuration for a single field in a hook"""
+class HttpMethod(str, Enum):
+    """HTTP methods supported for external API calls"""
 
-    source: HookFieldConfigSource  # "static" or "llm"
-    value: Optional[Any] = None  # Used when source is "static"
+    GET = "GET"
+    POST = "POST"
+    PUT = "PUT"
+    PATCH = "PATCH"
+    DELETE = "DELETE"
+
+
+class HttpAuthType(str, Enum):
+    """Authentication types for HTTP requests"""
+
+    NONE = "none"
+    BEARER = "bearer"
+    BASIC = "basic"
+    API_KEY = "api_key"
+
+
+class HttpAuthConfig(BaseModel):
+    """Authentication configuration for HTTP requests"""
+
+    type: HttpAuthType = HttpAuthType.NONE
+    token: Optional[SecretStr] = None  # For bearer auth
+    username: Optional[str] = None  # For basic auth
+    password: Optional[SecretStr] = None  # For basic auth
+    api_key_name: Optional[str] = None  # Header name for API key
+    api_key_value: Optional[SecretStr] = None  # API key value
+
+
+class HttpRequestConfig(BaseModel):
+    """Complete HTTP request configuration for hooks and global functions.
+
+    The body field can be:
+    - A Dict that will be serialized to JSON
+    - A JSON string that will be parsed and have placeholders resolved
+    """
+
+    url: str
+    method: HttpMethod = HttpMethod.POST
+    headers: Dict[str, str] = {}
+    query_params: Dict[str, str] = {}
+    body: Optional[Dict[str, Any] | str] = None
+    auth: Optional[HttpAuthConfig] = None
+    timeout: int = 10
+    max_retries: int = 3
+
+
+class FieldConfig(BaseModel):
+    """Configuration for a single field in hooks or global HTTP functions.
+
+    Defines how to resolve a field value:
+    - source: Where the value comes from (STATIC or LLM)
+    - value: For STATIC, the literal value or {template_var} placeholder.
+             For LLM, the name of the argument from LLM function call.
+    """
+
+    source: FieldSource  # "static" or "llm"
+    value: Optional[Any] = None
 
 
 class HookConfig(BaseModel):
     """Configuration for a hook with expected fields"""
 
     name: str
-    expected_fields: Dict[str, HookFieldConfig] = {}
+    expected_fields: Dict[str, FieldConfig] = {}
+    http_request: Optional[HttpRequestConfig] = None  # For send_http_request hook
 
 
 class FlowFunction(BaseModel):
@@ -97,6 +159,57 @@ class FlowFunction(BaseModel):
     required: List[str] = []
     transition_to: Optional[str] = None
     hooks: List[HookConfig] = []
+
+
+class GlobalFunctionType(str, Enum):
+    """Types of global functions supported by the system."""
+
+    HTTP = "http"
+    CUSTOM = "custom"  # Future: custom Python function handlers
+
+
+class BaseGlobalFunction(BaseModel):
+    """Base model for all global function types.
+
+    Subclasses should define their specific configuration fields.
+    """
+
+    type: GlobalFunctionType
+    name: str
+    description: str
+    properties: Dict[str, Any] = {}
+    required: List[str] = []
+
+
+class GlobalHttpFunction(BaseGlobalFunction):
+    """
+    Configuration for a global HTTP function available across all nodes.
+
+    Global functions are registered with FlowManager and can be called by the LLM
+    from any node in the conversation. Unlike hooks (fire-and-forget), global
+    functions wait for the HTTP response and return data to the LLM.
+
+    Example:
+        {
+            "name": "check_order_status",
+            "description": "Check the status of a customer order",
+            "properties": {"order_id": {"type": "string"}},
+            "required": ["order_id"],
+            "expected_fields": {
+                "order_id": {"source": "llm", "value": "order_id"},
+                "api_key": {"source": "static", "value": "sk-123"}
+            },
+            "http_request": {
+                "method": "GET",
+                "url": "https://api.example.com/orders/{order_id}",
+                "auth": {"type": "bearer", "token": "{api_key}"}
+            }
+        }
+    """
+
+    type: GlobalFunctionType = GlobalFunctionType.HTTP
+    expected_fields: Dict[str, FieldConfig] = {}
+    http_request: HttpRequestConfig
 
 
 class FlowNodeModel(BaseModel):
@@ -120,6 +233,7 @@ class TemplateModel(BaseModel):
     expected_payload_schema: Optional[Dict[str, Any]] = None
     expected_callback_response_schema: Optional[Dict[str, Any]] = None
     configurations: Optional[ConfigurationModel] = None
+    secrets: Optional[Dict[str, Any]] = None
     outbound_number_id: Optional[str] = None
     is_active: bool = True
     rendered_system_prompt: str = ""
@@ -157,6 +271,7 @@ class CreateTemplateRequest(BaseModel):
     expected_payload_schema: Optional[Dict[str, Any]] = None
     expected_callback_response_schema: Optional[Dict[str, Any]] = None
     configurations: Optional[ConfigurationModel] = None
+    secrets: Optional[Dict[str, Any]] = None
 
 
 class ReplaceTemplateRequest(BaseModel):
@@ -175,3 +290,4 @@ class ReplaceTemplateRequest(BaseModel):
     expected_payload_schema: Optional[Dict[str, Any]] = None
     expected_callback_response_schema: Optional[Dict[str, Any]] = None
     configurations: Optional[ConfigurationModel] = None
+    secrets: Optional[Dict[str, Any]] = None

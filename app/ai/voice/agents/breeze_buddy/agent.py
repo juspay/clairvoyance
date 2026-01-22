@@ -105,8 +105,8 @@ class Agent:
         self.ws = ws
         self.aiohttp_session = aiohttp_session
         self.provider = provider
-        self.task: PipelineTask = None
-        self.context: OpenAILLMContext = None
+        self.task: Optional[PipelineTask] = None
+        self.context: Optional[OpenAILLMContext] = None
         self.conversation_ended = False
         self.reporting_webhook_url = None
         self.call_sid = None
@@ -121,8 +121,8 @@ class Agent:
         )
 
         # Dynamic template components (initialized later)
-        self.flow_loader = None
-        self.flow_builder = None
+        self.flow_loader: Optional[FlowConfigLoader] = None
+        self.flow_builder: Optional[FlowConfigBuilder] = None
         self.template = None
         self.template_config = None
         self.system_prompt = None
@@ -177,6 +177,15 @@ class Agent:
         # Build template_vars dynamically based on expected_payload_schema
         call_payload = self.lead.payload
         self.template_vars = {}
+
+        # First, load secrets from template (merchant-level secrets)
+        # These are base values that can be overridden by payload
+        if template.secrets:
+            self.template_vars.update(template.secrets)
+            logger.info(f"Loaded {len(template.secrets)} secrets from template")
+
+        # Then, load from payload based on expected_payload_schema (per-call values)
+        # Payload values override template secrets if same key exists
         for field_name in template.expected_payload_schema.keys():
             if field_name in call_payload:
                 self.template_vars[field_name] = call_payload[field_name]
@@ -538,11 +547,21 @@ class Agent:
 
         self.task = PipelineTask(pipeline, **task_params)
 
+        # Build global HTTP functions from template config
+        global_functions = self.flow_builder.build_global_functions(
+            flow=self.template_config.flow
+        )
+        if global_functions:
+            logger.info(
+                f"Registering {len(global_functions)} global HTTP functions with FlowManager"
+            )
+
         self.flow_manager = FlowManager(
             task=self.task,
             llm=llm,
             context_aggregator=context_aggregator,
             transport=self.transport,
+            global_functions=global_functions if global_functions else None,
         )
 
         @self.transport.event_handler("on_client_connected")
@@ -675,7 +694,7 @@ async def telephony_bot(
     await agent.run()
 
 
-async def daily_bot(runner_args: RunnerArguments, completion_function):
+async def daily_bot(runner_args: RunnerArguments, completion_function, aiohttp_session):
     """Entry point for Daily-based agents - for web/mobile frontends.
 
     This function creates a Daily transport agent that can be used with
@@ -687,14 +706,21 @@ async def daily_bot(runner_args: RunnerArguments, completion_function):
                     - For DailyRunnerArguments: room_url, token
                     - body should contain: lead_id and session configuration
         completion_function: Callback function to handle call completion
+        aiohttp_session: aiohttp session for HTTP requests (will be closed after bot completes)
     """
     agent = Agent(
         transport_type="daily",
         ws=None,
-        aiohttp_session=None,
+        aiohttp_session=aiohttp_session,
         serializer=None,
         hangup_function=None,
         completion_function=completion_function,
         provider=None,
     )
-    await agent.run(runner_args)
+    try:
+        await agent.run(runner_args)
+    finally:
+        # Cleanup: Close aiohttp session (matches telephony pattern where async with closes it)
+        if aiohttp_session:
+            await aiohttp_session.close()
+            logger.info("[DAILY_MODE] Closed aiohttp session")
