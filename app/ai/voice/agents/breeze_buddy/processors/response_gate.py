@@ -1,24 +1,27 @@
 """
-Response Gate State Tracker
+Response State Gate Processor - V2
 
-This module tracks state for preventing double-speaking:
-- ALL transcriptions are allowed through to LLM (no blocking)
-- When a NEW LLM response starts while a previous one is pending/playing,
-  the AudioInterruptionProcessor will interrupt the old response
+Handles ALL interruption scenarios to prevent double-speaking:
 
-PLACEMENT: BEFORE the LLM (upstream in the pipeline)
+1. STT arrives → LLM processing → New STT arrives
+   → Cancel LLM, buffer new STT, process new STT
 
-The processor uses ResponseGateState which should be shared with AudioInterruptionProcessor
-(located in tts_interrupter.py) to coordinate interruptions.
+2. LLM + TTS both processing → New STT arrives
+   → Cancel both, buffer new STT, process new STT
 
-Each Agent instance should create its own ResponseGateState to avoid cross-talk.
+3. TTS is speaking → New STT arrives
+   → Stop TTS, buffer new STT, process new STT
+
+4. LLM processing (no TTS yet) → New STT arrives
+   → Cancel LLM, buffer new STT, process new STT
 """
+
+from enum import Enum, auto
 
 from pipecat.frames.frames import (
     BotStartedSpeakingFrame,
     BotStoppedSpeakingFrame,
     Frame,
-    InterruptionFrame,
     LLMFullResponseEndFrame,
     LLMFullResponseStartFrame,
     TranscriptionFrame,
@@ -28,114 +31,127 @@ from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from app.core.logger import logger
 
 
-class ResponseGateState:
+class ResponseState(Enum):
+    """States for the response state machine."""
+
+    IDLE = auto()  # No pending response
+    LLM_PROCESSING = auto()  # LLM has context, generating response
+    TTS_SPEAKING = auto()  # TTS is generating/playing audio
+    BOTH = auto()  # Both LLM and TTS are active
+
+
+class ResponseStateGate(FrameProcessor):
     """
-    Holds the shared state for response gate processors.
+    State machine that tracks LLM/TTS state and handles ALL interruptions.
 
-    Each Agent instance should create its own ResponseGateState to avoid
-    cross-talk between concurrent agents.
-
-    Usage:
-        state = ResponseGateState()
-        response_gate = ResponseGateTracker(state=state)
-        audio_interrupter = AudioInterruptionProcessor(state=state)
-    """
-
-    def __init__(self):
-        self.tts_playing: bool = False  # True when TTS audio is playing
-        # True from LLMFullResponseStart until BotStoppedSpeaking
-        # Covers the gap between LLM finishing and TTS starting
-        self.response_pending: bool = False
-
-    def reset(self):
-        """Reset all state when bot stops responding."""
-        self.tts_playing = False
-        self.response_pending = False
-
-    def __repr__(self) -> str:
-        return (
-            f"ResponseGateState(tts_playing={self.tts_playing}, "
-            f"response_pending={self.response_pending})"
-        )
-
-
-class ResponseGateTracker(FrameProcessor):
-    """
-    Tracks state for response gate strategy - ALLOWS ALL transcriptions through.
-
-    PLACEMENT: BEFORE the LLM (upstream in the pipeline)
-
-    This processor does NOT block any transcriptions. It only tracks state
-    so that AudioInterruptionProcessor knows when to interrupt old responses.
-
-    The actual interruption happens in AudioInterruptionProcessor when it sees
-    a new LLMFullResponseStartFrame while a previous response is still pending.
-
-    Args:
-        state: ResponseGateState instance shared with AudioInterruptionProcessor.
-               Each Agent should create its own state instance.
-        name: Optional processor name for logging.
+    Key insight: When interrupting, we must BUFFER the new transcription
+    until the interruption completes, then process ONLY the buffered frame.
     """
 
-    def __init__(
-        self,
-        state: ResponseGateState,
-        name: str = "ResponseGateTracker",
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self._state = ResponseState.IDLE
+        self._buffered_transcription = None  # Hold transcription during interruption
+        self._interruption_in_progress = False
+
+    @property
+    def state(self) -> ResponseState:
+        """Get current state."""
+        return self._state
+
+    async def _handle_transcription_frame(
+        self, frame: TranscriptionFrame, direction: FrameDirection
     ):
-        super().__init__(name=name)
-        self._state = state
+        """Process a transcription frame, either buffered or new.
+
+        This method handles transcription frames consistently whether they're
+        fresh frames or buffered frames being flushed after an interruption.
+        """
+        logger.debug("ResponseGate: Processing transcription frame")
+        self._state = ResponseState.LLM_PROCESSING
+        await self.push_frame(frame, direction)
+
+    async def _flush_buffered_transcription(self, direction: FrameDirection):
+        """Process any buffered transcription immediately."""
+        if self._buffered_transcription:
+            buffered = self._buffered_transcription
+            self._buffered_transcription = None
+            await self._handle_transcription_frame(buffered, direction)
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
-        """Process frames - track state and interrupt when new transcription arrives."""
         await super().process_frame(frame, direction)
 
-        # Track LLM generation state
+        # If interruption is in progress, buffer transcription frames.
+        # Later frames will overwrite earlier ones, so only the latest
+        # transcription is kept for processing after interruption completes.
+        if self._interruption_in_progress and isinstance(frame, TranscriptionFrame):
+            self._buffered_transcription = frame
+            logger.debug(
+                f"ResponseGate: Buffering new transcription during interruption "
+                f"(id={id(frame)})"
+            )
+            return  # Don't push, wait for interruption to finish
+
+        # Track LLM state (only when NOT buffering)
         if isinstance(frame, LLMFullResponseStartFrame):
-            self._state.response_pending = True
-            logger.debug("ResponseGate: LLM response started (response_pending=True)")
-            await self.push_frame(frame, direction)
+            if self._state == ResponseState.IDLE:
+                self._state = ResponseState.LLM_PROCESSING
+                logger.debug("ResponseGate: LLM_PROCESSING")
+            elif self._state == ResponseState.TTS_SPEAKING:
+                self._state = ResponseState.BOTH
+                logger.debug("ResponseGate: BOTH")
 
         elif isinstance(frame, LLMFullResponseEndFrame):
-            logger.debug("ResponseGate: LLM response ended")
-            await self.push_frame(frame, direction)
+            if self._state == ResponseState.BOTH:
+                self._state = ResponseState.TTS_SPEAKING
+                logger.debug("ResponseGate: TTS_SPEAKING (LLM finished)")
 
-        # Track TTS state
+        # Track TTS/Output state
         elif isinstance(frame, BotStartedSpeakingFrame):
-            self._state.tts_playing = True
-            logger.debug("ResponseGate: TTS started playing")
-            await self.push_frame(frame, direction)
+            if self._state == ResponseState.IDLE:
+                self._state = ResponseState.TTS_SPEAKING
+                logger.debug("ResponseGate: TTS_SPEAKING (initial)")
+            elif self._state == ResponseState.LLM_PROCESSING:
+                self._state = ResponseState.BOTH
+                logger.debug("ResponseGate: BOTH")
 
         elif isinstance(frame, BotStoppedSpeakingFrame):
-            self._state.tts_playing = False
-            self._state.response_pending = False
-            logger.debug("ResponseGate: TTS stopped, response complete")
-            await self.push_frame(frame, direction)
+            if self._state == ResponseState.TTS_SPEAKING:
+                self._state = ResponseState.IDLE
+                logger.debug("ResponseGate: IDLE")
+            elif self._state == ResponseState.BOTH:
+                self._state = ResponseState.LLM_PROCESSING
+                logger.debug("ResponseGate: LLM_PROCESSING (TTS stopped)")
 
-        # Handle new transcriptions - interrupt if previous response is still active
+        # Handle new transcription - THE KEY INTERRUPTION LOGIC
         elif isinstance(frame, TranscriptionFrame):
-            # If a previous response is still pending or TTS is playing,
-            # interrupt it BEFORE allowing the new transcription through.
-            # This is the "latest wins" strategy - new user input takes priority.
-            if self._state.tts_playing or self._state.response_pending:
+            if self._state != ResponseState.IDLE:
+                # We have an active response, need to interrupt
                 logger.debug(
-                    f"ResponseGate: New transcription while response active - INTERRUPTING "
-                    f"(tts_playing={self._state.tts_playing}, "
-                    f"response_pending={self._state.response_pending})"
+                    f"ResponseGate: Interrupting state={self._state.name} "
+                    f"for new transcription (id={id(frame)})"
                 )
-                # Push InterruptionFrame DOWNSTREAM - this triggers pipecat's
-                # interruption mechanism which stops TTS playback and clears queues
-                # Note: Don't use CancelFrame as it's too aggressive and cancels new requests too
-                await self.push_frame(InterruptionFrame(), FrameDirection.DOWNSTREAM)
-                self._state.tts_playing = False
-                self._state.response_pending = False
+                # Push interruption to cancel current LLM/TTS
+                self._interruption_in_progress = True
+                # Buffer this frame BEFORE starting interruption
+                # Any later frames will overwrite this buffer during the await
+                self._buffered_transcription = frame
+                await self.push_interruption_task_frame_and_wait()
 
-            logger.debug(
-                f"ResponseGate: Allowing transcription: '{frame.text}' "
-                f"(tts_playing={self._state.tts_playing}, "
-                f"response_pending={self._state.response_pending})"
-            )
-            await self.push_frame(frame, direction)
+                # Interruption complete - DON'T overwrite buffer!
+                # The buffer already contains the latest transcription (if any
+                # arrived during the await, it would have overwritten the buffer)
+                self._interruption_in_progress = False
+                self._state = ResponseState.IDLE
 
-        else:
-            # Pass through all other frames
-            await self.push_frame(frame, direction)
+                # Flush whatever is currently buffered (may be the original
+                # frame or a newer one that arrived during the await)
+                await self._flush_buffered_transcription(direction)
+                return
+
+            # No active response, just process normally
+            await self._handle_transcription_frame(frame, direction)
+            return
+
+        # Pass all other frames through
+        await self.push_frame(frame, direction)
