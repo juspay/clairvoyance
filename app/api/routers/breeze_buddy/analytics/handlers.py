@@ -345,25 +345,22 @@ async def get_lead_based_analytics(
 
             # Dynamic outcome counting (template-agnostic)
             outcome_counts = {}
-            no_answer_count = 0
+            picked_calls = 0
             for lead in lead_data:
+                # Get finished_calls and no_answer_calls from the query result
+                finished_calls = lead.get("finished_calls", 0) or 0
+                no_answer_calls = lead.get("no_answer_calls", 0) or 0
+
+                # A lead is "picked" if finished_calls > no_answer_calls
+                if finished_calls > no_answer_calls:
+                    picked_calls += 1
+
                 outcome_breakdown = parse_outcome_breakdown(
                     lead.get("outcome_breakdown")
                 )
                 for outcome, count in outcome_breakdown.items():
                     if count > 0:
                         outcome_counts[outcome] = outcome_counts.get(outcome, 0) + 1
-                        # Track NO_ANSWER leads (case-insensitive)
-                        outcome_lower = str(outcome).lower()
-                        if (
-                            "no_answer" in outcome_lower
-                            or "no answer" in outcome_lower
-                            or outcome_lower == "noanswer"
-                        ):
-                            no_answer_count += 1
-
-            # picked_calls = total_leads - NO_ANSWER
-            picked_calls = total_leads - no_answer_count
 
             lead_based = {
                 "total_leads": total_leads,

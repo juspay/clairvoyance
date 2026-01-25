@@ -550,6 +550,7 @@ def get_analytics_lead_based_query(
                     request_id,
                     COUNT(*) as total_calls,
                     COUNT(*) FILTER (WHERE status = 'FINISHED') as finished_calls,
+                    COUNT(*) FILTER (WHERE outcome = 'NO_ANSWER') as no_answer_calls,
                     COUNT(*) FILTER (WHERE outcome IS NOT NULL) as calls_with_outcome
                 FROM filtered_data
                 GROUP BY request_id
@@ -575,6 +576,7 @@ def get_analytics_lead_based_query(
                 base_leads.request_id,
                 base_leads.total_calls,
                 base_leads.finished_calls,
+                base_leads.no_answer_calls,
                 base_leads.calls_with_outcome,
                 COALESCE(outcome_leads.outcome_breakdown, '{{}}'::jsonb) as outcome_breakdown
             FROM base_leads
