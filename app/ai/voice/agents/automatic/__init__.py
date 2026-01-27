@@ -447,7 +447,7 @@ async def run_normal_mode(args):
             "shopType": getattr(args, "shop_type", None),
             "userId": getattr(args, "user_name", None),
             "userEmail": getattr(args, "user_email", None),
-            "enableDemoMode": mode != Mode.LIVE,
+            "demoMode": mode != Mode.LIVE,
             "merchantId": getattr(args, "merchant_id", None),
             "platformIntegrations": getattr(args, "platform_integrations", None),
             "customerId": getattr(args, "customer_id", None),
