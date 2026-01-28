@@ -421,6 +421,10 @@ EXOTEL_SUBDOMAIN = os.getenv("EXOTEL_SUBDOMAIN", "api.exotel.com")
 EXOTEL_APPLET_APP_ID = os.getenv("EXOTEL_APPLET_APP_ID", "1044183")
 EXOTEL_TEMPLATE_APPLET_APP_ID = os.getenv("EXOTEL_TEMPLATE_APPLET_APP_ID", "")
 
+# Plivo Configuration
+PLIVO_AUTH_ID = os.getenv("PLIVO_AUTH_ID", "")
+PLIVO_AUTH_TOKEN = os.getenv("PLIVO_AUTH_TOKEN", "")
+
 # Proxy Configuration
 AWS_PROXY_HOST = os.environ.get("AWS_PROXY_HOST")
 AWS_PROXY_PORT = os.environ.get("AWS_PROXY_PORT")

@@ -4,6 +4,9 @@ from app.ai.voice.agents.breeze_buddy.services.telephony.base_provider import (
 from app.ai.voice.agents.breeze_buddy.services.telephony.exotel.exotel import (
     ExotelProvider,
 )
+from app.ai.voice.agents.breeze_buddy.services.telephony.plivo.plivo import (
+    PlivoProvider,
+)
 from app.ai.voice.agents.breeze_buddy.services.telephony.twilio.twilio import (
     TwilioProvider,
 )
@@ -17,4 +20,6 @@ def get_voice_provider(
         return ExotelProvider(aiohttp_session, use_template_flow)
     if provider_name == CallProvider.TWILIO:
         return TwilioProvider(aiohttp_session, use_template_flow)
+    if provider_name == CallProvider.PLIVO:
+        return PlivoProvider(aiohttp_session, use_template_flow)
     raise ValueError(f"Unsupported voice provider: {provider_name}")

@@ -1,14 +1,14 @@
 """
 Telephony provider callback endpoints.
 
-This module provides webhook endpoints for telephony providers (Twilio, Exotel)
+This module provides webhook endpoints for telephony providers (Twilio, Exotel, Plivo)
 to send call status updates and recording URLs.
 
 Current Endpoints (maintained for backward compatibility):
 - GET    /{provider}/callback/details  - Receive call details (Exotel)
 - POST   /{provider}/callback/details  - Receive call details (Twilio)
 - POST   /{provider}/callback/status   - Receive call status updates
-
+- POST   /plivo/answer                 - Plivo answer webhook (returns XML)
 Ideal RESTful Structure (for future migration):
 The current endpoints are provider-agnostic and follow a good pattern.
 However, for better RESTful design, consider:
@@ -41,6 +41,7 @@ from .handlers import (
     handle_callback_details_get,
     handle_callback_details_post,
     handle_callback_status,
+    handle_plivo_answer,
 )
 
 router = APIRouter()
@@ -137,3 +138,23 @@ async def callback_status(request: Request, provider: str):
         Form data: CallSid=abc123&CallStatus=no-answer
     """
     return await handle_callback_status(request, provider)
+
+
+# Plivo-specific endpoints
+@router.post("/plivo/answer")
+async def plivo_answer(request: Request):
+    """
+    Webhook endpoint for Plivo to initiate audio streaming.
+
+    Plivo calls this endpoint when an outbound call is answered.
+    Returns XML with Stream element that tells Plivo to connect
+    the call to a WebSocket for real-time audio streaming.
+
+    Returns:
+        XML Response with Stream element for WebSocket connection
+
+    Example:
+        POST /agent/voice/breeze-buddy/plivo/answer
+        Response: <Response>...<Stream websocketUrl="wss://..." bidirectional="true"/>...</Response>
+    """
+    return await handle_plivo_answer(request)
