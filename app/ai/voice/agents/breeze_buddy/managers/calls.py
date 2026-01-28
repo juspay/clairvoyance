@@ -118,6 +118,8 @@ async def _get_available_number(
                     number = outbound_number
             elif outbound_number.provider == CallProvider.TWILIO:
                 number = outbound_number
+            elif outbound_number.provider == CallProvider.PLIVO:
+                number = outbound_number
 
     else:
         logger.info(
@@ -180,6 +182,9 @@ async def _acquire_number(number: OutboundNumber) -> bool:
     elif number.provider == CallProvider.EXOTEL:
         result = await increment_outbound_number_channels(number.id)
         return result is not None
+    elif number.provider == CallProvider.PLIVO:
+        result = await increment_outbound_number_channels(number.id)
+        return result is not None
     return False
 
 
@@ -191,6 +196,8 @@ async def _release_number(number_id: str, provider: CallProvider):
     if provider == CallProvider.TWILIO:
         await update_outbound_number_status(number_id, OutboundNumberStatus.AVAILABLE)
     elif provider == CallProvider.EXOTEL:
+        await decrement_outbound_number_channels(number_id)
+    elif provider == CallProvider.PLIVO:
         await decrement_outbound_number_channels(number_id)
 
 

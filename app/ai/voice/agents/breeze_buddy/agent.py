@@ -23,7 +23,7 @@ from pipecat.pipeline.task import PipelineParams, PipelineTask
 from pipecat.processors.aggregators.llm_response import LLMUserAggregatorParams
 from pipecat.processors.aggregators.openai_llm_context import OpenAILLMContext
 from pipecat.runner.types import RunnerArguments
-from pipecat.runner.utils import create_transport
+from pipecat.runner.utils import create_transport, parse_telephony_websocket
 from pipecat.services.azure.llm import AzureLLMService
 from pipecat.transports.daily.transport import DailyParams
 from pipecat.transports.websocket.fastapi import (
@@ -286,33 +286,23 @@ class Agent:
             call_initiated_time = datetime.now(timezone.utc)
 
             try:
-                start_data = self.ws.iter_text()
-                await start_data.__anext__()
-                call_data_str = await start_data.__anext__()
-                call_data = json.loads(call_data_str)
-                logger.info(f"Received call data: {call_data}")
-            except StopAsyncIteration:
-                logger.warning("WebSocket connection closed before receiving call data")
-                return
-            except json.JSONDecodeError as e:
-                logger.error(f"Failed to parse call data JSON: {e}")
-                try:
-                    if self.ws.client_state.name != "DISCONNECTED":
-                        await self.ws.close(code=4000, reason="Invalid JSON data")
-                except Exception as close_error:
-                    logger.warning(
-                        f"Could not close websocket (likely already closed): {close_error}"
-                    )
+                _transport_type, call_data = await parse_telephony_websocket(self.ws)
+            except Exception as e:
+                logger.error(f"Failed to parse telephony WebSocket: {e}")
                 return
 
-            if self.provider == CallProvider.TWILIO:
-                stream_sid = call_data["start"]["streamSid"]
-                self.call_sid = call_data["start"]["callSid"]
+            stream_sid = call_data.get("stream_id")
+            self.call_sid = call_data.get("call_id")
 
-            else:  # Exotel
-                stream_sid = call_data.get("stream_sid")
-                start_data = call_data.get("start", {})
-                self.call_sid = start_data.get("call_sid")
+            if not stream_sid or not self.call_sid:
+                logger.error(
+                    f"Missing required call identifiers: stream_sid={stream_sid}, call_id={self.call_sid}"
+                )
+                return
+
+            logger.info(
+                f"Parsed transport_type: {_transport_type}, call_sid: {self.call_sid}, stream_sid: {stream_sid}"
+            )
 
             lead = await get_lead_by_call_id(self.call_sid)
 
@@ -390,9 +380,6 @@ class Agent:
             call_payload = lead.payload or {}
             self.reporting_webhook_url = call_payload.get("reporting_webhook_url")
 
-            logger.info(
-                f"Connected to call: CallSid={self.call_sid}, StreamSid={stream_sid}"
-            )
             logger.info(f"Call payload: {call_payload}")
 
             # Load template configuration
