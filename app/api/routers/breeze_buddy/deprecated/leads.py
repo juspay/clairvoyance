@@ -18,45 +18,11 @@ from app.core.security.jwt import get_current_user
 from app.database.accessor import (
     create_lead_call_tracker,
     get_call_execution_config_by_merchant_id,
-    get_lead_by_id,
     get_template_by_merchant,
 )
 from app.schemas import TokenData
 
 router = APIRouter()
-
-
-@router.get("/lead/{lead_id}")
-async def get_lead(lead_id: str, current_user: TokenData = Depends(get_current_user)):
-    """
-    Gets a lead by ID from the database (excluding metadata, cost, is_locked, created_at, updated_at, outbound_number_id).
-    Requires JWT authentication.
-    """
-    logger.info(f"Authenticated user {current_user.user_id} requesting lead: {lead_id}")
-
-    try:
-        lead = await get_lead_by_id(lead_id)
-        if lead:
-            lead_dict = lead.model_dump()
-            lead_dict.pop("metaData", None)
-            lead_dict.pop("cost", None)
-            lead_dict.pop("is_locked", None)
-            lead_dict.pop("created_at", None)
-            lead_dict.pop("updated_at", None)
-            lead_dict.pop("outbound_number_id", None)
-            return lead_dict
-        else:
-            logger.info(f"No lead found for ID: {lead_id}")
-            return JSONResponse(
-                status_code=404,
-                content={"detail": f"Lead not found for ID: {lead_id}"},
-            )
-
-    except Exception as e:
-        logger.error("Error getting lead", exc_info=True)
-        return JSONResponse(
-            status_code=400, content={"detail": f"Unexpected error: {str(e)}"}
-        )
 
 
 @router.post("/{merchant}/{template}")

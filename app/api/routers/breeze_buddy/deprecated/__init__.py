@@ -20,20 +20,12 @@ For new implementations, please use the modern RESTful endpoints in the parent r
 
 from fastapi import APIRouter
 
-from .analytics import router as deprecated_analytics_router
-from .call_execution_config import router as deprecated_config_router
-from .dashboard import router as deprecated_dashboard_router
 from .leads import router as deprecated_leads_router
 from .outbound_numbers import router as deprecated_numbers_router
-from .template import router as deprecated_template_router
 
 # Create main deprecated router
 router = APIRouter(tags=["deprecated"])
 
 # Include all deprecated sub-routers
-router.include_router(deprecated_analytics_router, prefix="")
-router.include_router(deprecated_dashboard_router, prefix="")
-router.include_router(deprecated_config_router, prefix="")
-router.include_router(deprecated_template_router, prefix="")
 router.include_router(deprecated_leads_router, prefix="")
 router.include_router(deprecated_numbers_router, prefix="")
