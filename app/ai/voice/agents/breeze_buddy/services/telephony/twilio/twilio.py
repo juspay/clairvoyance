@@ -78,7 +78,6 @@ class TwilioProvider(VoiceCallProvider):
             await telephony_bot(
                 websocket,
                 self.aiohttp_session,
-                serializer,
                 self.hangup_call,
                 self.completion_callback,
                 provider,

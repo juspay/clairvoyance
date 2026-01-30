@@ -4,7 +4,7 @@ Flow Configuration Loader
 This module provides functionality to load templates from the database.
 """
 
-from typing import Dict, Optional
+from typing import Dict, Optional, Tuple
 
 from app.ai.voice.agents.breeze_buddy.template.types import (
     TemplateModel,
@@ -85,9 +85,9 @@ class FlowConfigLoader:
         self,
         merchant_id: str,
         template: str,
-        template_vars: Dict[str, str],
         shop_identifier: Optional[str] = None,
-    ) -> TemplateModel:
+        call_payload: Optional[Dict[str, str]] = None,
+    ) -> Tuple[TemplateModel, Dict[str, str]]:
         """
         Load template and render task messages with variables.
 
@@ -98,7 +98,7 @@ class FlowConfigLoader:
             shop_identifier: Optional shop-specific identifier
 
         Returns:
-            TemplateModel with rendered task messages
+            TemplateModel with rendered task messages, and dictionary of template variables
 
         Raises:
             ValueError: If template not found
@@ -113,6 +113,23 @@ class FlowConfigLoader:
             raise ValueError(
                 f"No template found for merchant={merchant_id}, template={template}"
             )
+
+        template_vars = {}
+
+        if template_obj.secrets:
+            template_vars.update(template_obj.secrets)
+            logger.info(f"Loaded {len(template_obj.secrets)} secrets from template")
+
+        for field_name in template_obj.expected_payload_schema.keys():
+            if call_payload and field_name in call_payload:
+                template_vars[field_name] = call_payload[field_name]
+            else:
+                logger.warning(f"Field '{field_name}' from schema not found in payload")
+                template_vars[field_name] = ""
+
+        logger.info(
+            f"Dynamically built template_vars from schema: {list(template_vars.keys())}"
+        )
 
         # Get nodes from flow structure
         nodes = template_obj.flow.get("nodes", [])
@@ -175,4 +192,4 @@ class FlowConfigLoader:
             node["role_messages"] = rendered_role_dicts
 
         logger.info(f"Rendered task messages for template {template_obj.name}")
-        return template_obj
+        return template_obj, template_vars

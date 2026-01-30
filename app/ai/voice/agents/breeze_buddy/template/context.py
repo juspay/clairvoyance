@@ -89,26 +89,6 @@ class TemplateContext:
         return self.bot.call_sid
 
     @property
-    def order_id(self):
-        """Get order ID"""
-        return self.bot.order_id
-
-    @property
-    def reporting_webhook_url(self):
-        """Get reporting webhook URL"""
-        return self.bot.reporting_webhook_url
-
-    @property
-    def order_summary(self):
-        """Get order summary"""
-        return self.bot.order_summary
-
-    @property
-    def address(self):
-        """Get delivery address"""
-        return self.bot.address
-
-    @property
     def root_span(self):
         """Get OpenTelemetry root span"""
         return self.bot.root_span

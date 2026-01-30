@@ -126,27 +126,33 @@ async def service_callback(context: TemplateContext, args):
                     exc_info=True,
                 )
 
+        webhook_url = (
+            context.lead.payload.get("reporting_webhook_url")
+            if context.lead and context.lead.payload
+            else None
+        )
+
         # Send webhook - skip BUSY/NO_ANSWER unless it's the last attempt
-        should_send_webhook = context.reporting_webhook_url and (
+        should_send_webhook = webhook_url and (
             outcome not in ["BUSY", "NO_ANSWER"] or is_last_attempt
         )
 
         if should_send_webhook:
             logger.info(
-                f"Sending webhook to {context.reporting_webhook_url} for call {context.call_sid} "
+                f"Sending webhook to {webhook_url} for call {context.call_sid} "
                 f"with outcome {outcome}"
                 + (" (last attempt)" if is_last_attempt else "")
             )
             try:
                 success = await send_webhook_with_retry(
                     context.aiohttp_session,
-                    context.reporting_webhook_url,
+                    webhook_url,
                     summary_data,
                 )
                 if not success:
                     logger.error(
                         f"Failed to send call summary webhook after all retries for call {context.call_sid}. "
-                        f"URL: {context.reporting_webhook_url}"
+                        f"URL: {webhook_url}"
                     )
                 else:
                     logger.info(
@@ -161,7 +167,7 @@ async def service_callback(context: TemplateContext, args):
         else:
             logger.info(
                 f"Skipping webhook send for call {context.call_sid} "
-                f"(url={'present' if context.reporting_webhook_url else 'missing'}, "
+                f"(url={'present' if webhook_url else 'missing'}, "
                 f"outcome={outcome})"
             )
 
