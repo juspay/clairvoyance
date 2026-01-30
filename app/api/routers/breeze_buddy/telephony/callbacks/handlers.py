@@ -18,6 +18,10 @@ from app.ai.voice.agents.breeze_buddy.managers.calls import (
     handle_unanswered_calls,
     update_call_recording,
 )
+from app.core.config.dynamic import (
+    BB_NOISE_CANCELLATION_ENABLED,
+    BB_NOISE_CANCELLATION_LEVEL,
+)
 from app.core.config.static import APP_BASE_URL
 from app.core.logger import logger
 
@@ -178,9 +182,19 @@ async def handle_plivo_answer(request: Request) -> HTMLResponse:
         ws_url = "wss://" + APP_BASE_URL.rstrip("/") + ws_path
 
     # Generate XML response for Plivo
+    noise_cancellation_enabled = await BB_NOISE_CANCELLATION_ENABLED()
+    noise_cancellation_level = await BB_NOISE_CANCELLATION_LEVEL()
+    noise_cancellation_attr = (
+        f'noiseCancellation="{str(noise_cancellation_enabled).lower()}" '
+        f'noiseCancellationLevel="{noise_cancellation_level}"'
+        if noise_cancellation_enabled
+        else ""
+    )
+    logger.info(f"Plivo Noise Cancellation Attributes: {noise_cancellation_attr}")
+
     xml_content = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Stream bidirectional="true" keepCallAlive="true" contentType="audio/x-mulaw;rate=8000">
+    <Stream {noise_cancellation_attr} bidirectional="true" keepCallAlive="true" contentType="audio/x-mulaw;rate=8000">
         {ws_url}
     </Stream>
 </Response>"""

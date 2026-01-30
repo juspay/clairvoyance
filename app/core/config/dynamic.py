@@ -264,3 +264,14 @@ async def BB_ENABLE_RESPONSE_GATE() -> bool:
     to prevent double speaking by interrupting old responses when new input arrives.
     """
     return await get_config("BB_ENABLE_RESPONSE_GATE", True, bool)
+
+
+# --- Noise Cancellation Configuration ---
+async def BB_NOISE_CANCELLATION_ENABLED() -> bool:
+    """Returns BB_NOISE_CANCELLATION_ENABLED from Redis"""
+    return await get_config("BB_NOISE_CANCELLATION_ENABLED", True, bool)
+
+
+async def BB_NOISE_CANCELLATION_LEVEL() -> int:
+    """Returns BB_NOISE_CANCELLATION_LEVEL from Redis (0-100)"""
+    return await get_config("BB_NOISE_CANCELLATION_LEVEL", 100, int)
