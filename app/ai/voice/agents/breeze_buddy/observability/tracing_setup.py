@@ -17,8 +17,18 @@ from app.core.config.static import (
 )
 from app.core.logger import logger
 
+# Module-level idempotency guard to prevent multiple tracing initializations
+_tracing_initialized = False
+
 
 def setup_tracing(service_name: str):
+    global _tracing_initialized
+
+    # Check idempotency guard first - skip if already initialized
+    if _tracing_initialized:
+        logger.debug("Tracing already initialized. Skipping setup.")
+        return
+
     if not ENABLE_BREEZE_BUDDY_TRACING:
         logger.info("Tracing is disabled. Skipping setup.")
         return
@@ -53,7 +63,62 @@ def setup_tracing(service_name: str):
     provider.add_span_processor(processor)
     trace.set_tracer_provider(provider)
 
+    # Mark as initialized to prevent repeated setup
+    _tracing_initialized = True
+
     logger.info(f"Tracing successfully set up for service: {service_name}")
+
+
+def create_root_span(
+    conversation_id: str,
+    transport_type: str,
+    customer_name: str,
+    shop_name: str,
+    call_sid: str,
+    order_id: str,
+    provider: str,
+    template_type: str,
+):
+    """
+    Create and configure the root tracing span with all conversation attributes.
+
+    Args:
+        conversation_id: Unique identifier for the conversation
+        transport_type: Type of transport ("daily" or telephony provider)
+        customer_name: Name of the customer
+        shop_name: Name of the shop
+        call_sid: Call session ID
+        order_id: Order/request ID
+        provider: Provider name (daily or telephony provider)
+        template_type: Template type being used
+
+    Returns:
+        A context manager span that can be used with 'with' statement
+    """
+    tracer = trace.get_tracer(__name__)
+    span = tracer.start_as_current_span(conversation_id)
+
+    logger.info(
+        f"Starting Langfuse trace for Breeze Buddy conversation: {conversation_id}"
+    )
+
+    span.set_attribute("conversation.id", conversation_id)
+    span.set_attribute(
+        "conversation.type",
+        "daily-web" if transport_type == "daily" else "phone-call",
+    )
+    span.set_attribute("user.name", customer_name)
+    span.set_attribute("service.name", "breeze-buddy")
+    span.set_attribute("call_sid", call_sid)
+    span.set_attribute("order_id", order_id)
+    span.set_attribute("shop_name", shop_name)
+    span.set_attribute(
+        "provider",
+        "daily" if transport_type == "daily" else provider,
+    )
+    span.set_attribute("template.type", template_type)
+
+    return span
 
 
 def auto_trace(tool_name: str):

@@ -1,0 +1,167 @@
+"""Pipeline creation and service initialization for voice agents."""
+
+from datetime import datetime
+from typing import Any, Optional
+
+from pipecat.observers.loggers.llm_log_observer import LLMLogObserver
+from pipecat.observers.loggers.metrics_log_observer import MetricsLogObserver
+from pipecat.observers.loggers.transcription_log_observer import (
+    TranscriptionLogObserver,
+)
+from pipecat.observers.loggers.user_bot_latency_log_observer import (
+    UserBotLatencyLogObserver,
+)
+from pipecat.observers.turn_tracking_observer import TurnTrackingObserver
+from pipecat.pipeline.pipeline import Pipeline
+from pipecat.pipeline.task import PipelineParams, PipelineTask
+from pipecat.processors.aggregators.llm_response import LLMUserAggregatorParams
+from pipecat.processors.aggregators.openai_llm_context import OpenAILLMContext
+from pipecat.services.azure.llm import AzureLLMService
+
+from app.ai.voice.agents.breeze_buddy.observability.tracing_setup import setup_tracing
+from app.ai.voice.agents.breeze_buddy.processors import ResponseStateGate
+from app.ai.voice.agents.breeze_buddy.stt import get_stt_service
+from app.ai.voice.agents.breeze_buddy.template.types import ConfigurationModel
+from app.ai.voice.agents.breeze_buddy.tts import get_tts_service
+from app.core.config.dynamic import (
+    BB_ENABLE_RESPONSE_GATE,
+    BREEZE_BUDDY_AZURE_MAX_COMPLETION_TOKENS,
+    BREEZE_BUDDY_AZURE_TEMPERATURE,
+    BREEZE_BUDDY_LLM_AGGREGATION_TIMEOUT,
+)
+from app.core.config.static import (
+    AZURE_BREEZE_BUDDY_OPENAI_MODEL,
+    AZURE_OPENAI_API_KEY,
+    AZURE_OPENAI_ENDPOINT,
+    ENABLE_BREEZE_BUDDY_TRACING,
+    ENABLE_BREEZE_BUDDY_USER_INTERRUPTION,
+    ENVIRONMENT,
+)
+from app.core.logger import logger
+
+
+def get_observers() -> Optional[list]:
+    """Get pipeline observers for dev environment."""
+    if ENVIRONMENT.lower() != "dev":
+        return None
+    return [
+        MetricsLogObserver(),
+        LLMLogObserver(),
+        TranscriptionLogObserver(),
+        UserBotLatencyLogObserver(),
+        TurnTrackingObserver(),
+    ]
+
+
+def generate_conversation_id(payload: dict) -> str:
+    """Generate a unique conversation ID from lead payload."""
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    customer_name = payload.get("customer_name", "unknown")
+    shop_name = payload.get("shop_name", "unknown")
+    return f"{customer_name}-{shop_name}-{timestamp}"
+
+
+async def create_services(
+    configurations: Optional[ConfigurationModel],
+) -> tuple[Any, AzureLLMService, Any]:
+    """Create STT, LLM, and TTS services.
+
+    Args:
+        configurations: Template configuration model
+
+    Returns:
+        Tuple of (stt_service, llm_service, tts_service)
+    """
+    stt_language = getattr(configurations, "stt_language", None)
+    if stt_language:
+        logger.info(f"Using STT language from template: {stt_language}")
+
+    stt = await get_stt_service(language_hints=stt_language)
+
+    llm = AzureLLMService(
+        api_key=AZURE_OPENAI_API_KEY,
+        endpoint=AZURE_OPENAI_ENDPOINT,
+        model=AZURE_BREEZE_BUDDY_OPENAI_MODEL,
+        max_completion_tokens=await BREEZE_BUDDY_AZURE_MAX_COMPLETION_TOKENS(),
+        temperature=await BREEZE_BUDDY_AZURE_TEMPERATURE(),
+    )
+
+    tts = await get_tts_service(
+        voice_name=getattr(configurations, "tts_voice_name", None),
+        mira_voice_id=getattr(configurations, "mira_voice_id", None),
+    )
+
+    return stt, llm, tts
+
+
+async def build_pipeline(
+    transport: Any,
+    stt: Any,
+    llm: AzureLLMService,
+    tts: Any,
+) -> tuple[Pipeline, OpenAILLMContext, Any]:
+    """Build the processing pipeline.
+
+    Args:
+        transport: The transport instance
+        stt: Speech-to-text service
+        llm: LLM service
+        tts: Text-to-speech service
+
+    Returns:
+        Tuple of (pipeline, context, context_aggregator)
+    """
+    context = OpenAILLMContext()
+    context_aggregator = llm.create_context_aggregator(
+        context,
+        user_params=LLMUserAggregatorParams(
+            aggregation_timeout=await BREEZE_BUDDY_LLM_AGGREGATION_TIMEOUT(),
+            enable_emulated_vad_interruptions=ENABLE_BREEZE_BUDDY_USER_INTERRUPTION,
+        ),
+    )
+
+    response_gate = ResponseStateGate() if await BB_ENABLE_RESPONSE_GATE() else None
+
+    pipeline_parts = [
+        transport.input(),
+        stt,
+        context_aggregator.user(),
+        llm,
+        tts,
+        transport.output(),
+        context_aggregator.assistant(),
+    ]
+
+    if response_gate:
+        pipeline_parts.insert(2, response_gate)
+
+    return Pipeline(pipeline_parts), context, context_aggregator
+
+
+async def create_pipeline_task(
+    pipeline: Pipeline,
+    conversation_id: str,
+) -> PipelineTask:
+    """Create and configure the pipeline task.
+
+    Args:
+        pipeline: The built pipeline
+        conversation_id: Unique conversation identifier
+
+    Returns:
+        Configured PipelineTask
+    """
+    task_params = {
+        "params": PipelineParams(
+            enable_metrics=True,
+            enable_usage_metrics=True,
+            observers=get_observers(),
+        ),
+    }
+
+    if ENABLE_BREEZE_BUDDY_TRACING:
+        setup_tracing("breeze-buddy")
+        task_params["conversation_id"] = conversation_id
+        task_params["enable_tracing"] = True
+
+    return PipelineTask(pipeline, **task_params)
