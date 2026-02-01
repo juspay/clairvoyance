@@ -213,20 +213,11 @@ async def _retry_call(
     if outcome == "NO_ANSWER":
         reporting_webhook_url = (lead.payload or {}).get("reporting_webhook_url")
         if reporting_webhook_url:
-            call_duration = None
-            if lead.call_initiated_time:
-                call_initiated_time_utc = lead.call_initiated_time.astimezone(
-                    timezone.utc
-                )
-                call_duration = (
-                    datetime.now(timezone.utc) - call_initiated_time_utc
-                ).total_seconds()
-
             summary_data = {
                 "callSid": lead.call_id,
                 "outcome": outcome,
                 "attemptCount": lead.attempt_count + 1,
-                "callDuration": call_duration,
+                "callDuration": 0.0,
                 "orderId": lead.request_id,
                 "isLastAttempt": is_last_attempt,
             }
