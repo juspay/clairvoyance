@@ -97,7 +97,7 @@ async def service_callback(context: TemplateContext, args):
 
         logger.info(
             f"Prepared webhook summary data for call {context.call_sid}: "
-            f"outcome={outcome}, order_id={context.lead.payload.get('order_id') if context.lead and context.lead.payload else None}, "
+            f"outcome={outcome}, order_id={context.lead.request_id if context.lead else None}, "
             f"call_duration={call_duration}s"
         )
 
