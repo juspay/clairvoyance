@@ -227,7 +227,7 @@ async def _retry_call(
                 "outcome": outcome,
                 "attemptCount": lead.attempt_count + 1,
                 "callDuration": call_duration,
-                "orderId": lead.payload.get("order_id"),
+                "orderId": lead.request_id,
                 "isLastAttempt": is_last_attempt,
             }
 
