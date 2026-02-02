@@ -80,6 +80,7 @@ async def trigger_order_confirmation(
                     "customer_mobile_number": order.customer_mobile_number,
                     "items": [item.model_dump() for item in order.order_data.items],
                     "language_name": language_name,
+                    "shopify_order_id": order.shopify_order_id,
                 },
             )
 
@@ -120,6 +121,7 @@ async def trigger_order_confirmation(
             "customer_mobile_number": order.customer_mobile_number,
             "order_data": order.order_data.model_dump(),
             "reporting_webhook_url": order.reporting_webhook_url,
+            "shopify_order_id": order.shopify_order_id,
         }
 
         # Calculate next attempt time
