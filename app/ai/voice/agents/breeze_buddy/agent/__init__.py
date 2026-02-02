@@ -40,7 +40,10 @@ from app.ai.voice.agents.breeze_buddy.agent.transport import (
     TRANSPORT_TYPE_DAILY,
     get_transport_params,
 )
-from app.ai.voice.agents.breeze_buddy.agent.utils import send_initial_greeting
+from app.ai.voice.agents.breeze_buddy.agent.utils import (
+    end_call_with_errors,
+    send_initial_greeting,
+)
 from app.ai.voice.agents.breeze_buddy.agent.vad import create_vad_analyzer
 from app.ai.voice.agents.breeze_buddy.agent.websocket import (
     close_websocket_safely,
@@ -58,6 +61,7 @@ from app.ai.voice.agents.breeze_buddy.template.types import (
     ConfigurationModel,
     TemplateModel,
 )
+from app.ai.voice.agents.breeze_buddy.utils.common import track_error
 from app.core.config.static import ENABLE_BREEZE_BUDDY_TRACING
 from app.core.logger import logger
 from app.database.accessor import update_lead_call_initiated_time
@@ -112,6 +116,9 @@ class Agent:
         self.expected_callback_response_schema: Any = None
         self.greeting_source: Optional[str] = None
         self.default_vad_params: Optional[VADParams] = None
+
+        # Error tracking
+        self.errors: List[Dict[str, Any]] = []
 
     @property
     def is_daily_mode(self) -> bool:
@@ -207,6 +214,9 @@ class Agent:
                     call_initiated_time=call_initiated_time,
                 )
                 if not self.lead:
+                    error_msg = f"Inbound call handling failed (IVR): {error_reason}"
+                    logger.info(error_msg)
+                    track_error(self.errors, error_msg)
                     await close_websocket_safely(
                         self.ws,
                         code=4000,
@@ -222,6 +232,9 @@ class Agent:
                     provider=self.provider or "",
                 )
                 if not self.lead:
+                    error_msg = f"Inbound call handling failed: {error_reason}"
+                    logger.info(error_msg)
+                    track_error(self.errors, error_msg)
                     await close_websocket_safely(
                         self.ws,
                         code=4000,
@@ -234,7 +247,34 @@ class Agent:
                 await load_template_config(self.lead)
             )
         except ValueError as e:
+            error_msg = f"Template loading failed: {str(e)}"
+            logger.error(error_msg)
+            track_error(self.errors, error_msg)
+            if self.completion_function:
+                await end_call_with_errors(
+                    lead=self.lead,
+                    errors=self.errors,
+                    completion_function=self.completion_function,
+                    transport_type=self.transport_type,
+                    call_sid=self.call_sid,
+                )
             await close_websocket_safely(self.ws, code=4000, reason=str(e))
+            return False
+        except Exception as e:
+            error_msg = f"Unexpected error loading template: {str(e)}"
+            logger.error(error_msg)
+            track_error(self.errors, error_msg)
+            if self.completion_function:
+                await end_call_with_errors(
+                    lead=self.lead,
+                    errors=self.errors,
+                    completion_function=self.completion_function,
+                    transport_type=self.transport_type,
+                    call_sid=self.call_sid,
+                )
+            await close_websocket_safely(
+                self.ws, code=4000, reason="Template load error"
+            )
             return False
 
         self.flow_builder = FlowConfigBuilder()
@@ -254,6 +294,7 @@ class Agent:
             lead=self.lead,
             template=self.template,
             provider=self.provider or "",
+            errors=self.errors,
         )
 
         self.vad_analyzer, self.default_vad_params = await create_vad_analyzer(
@@ -279,6 +320,15 @@ class Agent:
             logger.error("Transport or task not initialized")
             return
 
+        @self.task.event_handler("on_pipeline_error")
+        async def on_pipeline_error(task, error):
+            """Capture TTS/STT/LLM pipeline failures."""
+            processor = getattr(error, "processor", "unknown")
+            error_msg = getattr(error, "error", str(error))
+            detailed_msg = f"[PIPELINE] {processor}: {error_msg}"
+            logger.info(f"[PIPELINE_ERROR] {detailed_msg}")
+            track_error(self.errors, detailed_msg)
+
         @self.transport.event_handler("on_client_connected")
         async def on_client_connected(transport, client):
             logger.info(f"Client connected: {client}")
@@ -287,12 +337,12 @@ class Agent:
         @self.transport.event_handler("on_client_disconnected")
         async def on_client_disconnected(transport, client):
             logger.info(f"Client disconnected: {client}")
-            await self._handle_unexpected_disconnect("Client disconnected unexpectedly")
+            await self._handle_unexpected_disconnect("client_disconnected")
 
         @self.task.event_handler("on_idle_timeout")
         async def on_idle_timeout(task):
             logger.info("Idle timeout detected.")
-            await self._handle_unexpected_disconnect("Idle timeout")
+            await self._handle_unexpected_disconnect("idle_timeout")
 
     async def _handle_client_connected(self) -> None:
         """Handle client connection and initialize flow."""
@@ -345,7 +395,9 @@ class Agent:
             with trace.use_span(self.root_span, end_on_exit=True):
                 await runner.run(self.task)
         except Exception as e:
-            logger.error(f"Error during traced pipeline execution: {e}")
+            error_msg = f"Error during traced pipeline execution: {e}"
+            logger.error(error_msg)
+            track_error(self.errors, error_msg)
             self.root_span.end()
 
     async def run(self, runner_args: Optional[RunnerArguments] = None) -> None:
@@ -411,6 +463,7 @@ class Agent:
             return
 
         logger.info(f"{reason}. Updating call status.")
+        track_error(self.errors, reason)
 
         if self.lead:
             if self.lead.outcome is None:
@@ -418,6 +471,16 @@ class Agent:
 
             if self.lead.metaData is None:
                 self.lead.metaData = {}
+
+            # Simple mapping - we control these exact strings from our event handlers
+            if reason == "idle_timeout":
+                self.lead.metaData["call_ended_by"] = "system"
+            elif reason == "client_disconnected":
+                self.lead.metaData["call_ended_by"] = "customer"
+            else:
+                # Shouldn't happen, but safe fallback
+                self.lead.metaData["call_ended_by"] = "agent"
+                logger.warning(f"Unexpected disconnect reason: {reason}")
 
         context = TemplateContext(self)
         await end_conversation(context, {})
