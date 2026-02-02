@@ -3,6 +3,7 @@ import base64
 import json
 import os
 import re
+from datetime import datetime, timezone
 from io import BytesIO
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -15,6 +16,42 @@ from app.core.config.static import ORDER_CONFIRMATION_WEBHOOK_SECRET_KEY
 from app.core.logger import logger
 from app.core.security.sha import calculate_hmac_sha256
 from app.services.redis.client import get_redis_service
+
+
+def track_error(
+    errors: Optional[List[Dict[str, Any]]],
+    error_msg: str,
+) -> None:
+    """Track error with timestamp. Does NOT log - caller is responsible for logging.
+
+    Args:
+        errors: Error list to append to (None is safely ignored)
+        error_msg: Error message to track in database (truncated to 2000 chars)
+
+    Example:
+        logger.error(f"Template loading failed: {str(e)}")
+        track_error(self.errors, f"Template loading failed: {str(e)}")
+    """
+    try:
+        # Defensive: if errors list is None, just return
+        if errors is None:
+            return
+
+        MAX_ERROR_LENGTH = 2000
+
+        # Truncate long error messages to prevent DB overload
+        if len(error_msg) > MAX_ERROR_LENGTH:
+            error_msg = error_msg[:MAX_ERROR_LENGTH] + "... [truncated]"
+
+        errors.append(
+            {
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "message": error_msg,
+            }
+        )
+    except Exception as e:
+        # Never let error tracking crash the call
+        logger.warning(f"Failed to track error: {e}")
 
 
 def greeting_has_variables(greeting_text: str) -> bool:

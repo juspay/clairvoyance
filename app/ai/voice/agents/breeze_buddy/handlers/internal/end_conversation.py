@@ -43,6 +43,12 @@ async def end_conversation(context: TemplateContext, args, transition_to=None):
     context.conversation_ended = True
     logger.debug(f"Set conversation_ended flag to True for call {context.call_sid}")
 
+    # Initialize metaData if None to prevent crashes on metaData[...] writes
+    # This handles cases where lead comes from DB with NULL meta_data column
+    if context.lead and context.lead.metaData is None:
+        context.lead.metaData = {}
+        logger.debug(f"Initialized empty metaData for call {context.call_sid}")
+
     try:
         # Collect transcription
         transcription = []
@@ -77,6 +83,17 @@ async def end_conversation(context: TemplateContext, args, transition_to=None):
             logger.warning(
                 f"No context found for transcription collection in call {context.call_sid}"
             )
+
+        # Set call_ended_by if not already set (e.g., by _handle_unexpected_disconnect)
+        if "call_ended_by" not in context.lead.metaData:
+            # Default to "agent" for normal conversation flow completion
+            context.lead.metaData["call_ended_by"] = "agent"
+            logger.debug(
+                f"Set call_ended_by to 'agent' for normal flow completion in call {context.call_sid}"
+            )
+
+        # Store errors collected during the call
+        context.lead.metaData["errors"] = context.bot.errors
 
         # Update OpenTelemetry span with comprehensive evaluation data for LLM-as-a-Judge
         update_span_with_evaluation_data(context)
