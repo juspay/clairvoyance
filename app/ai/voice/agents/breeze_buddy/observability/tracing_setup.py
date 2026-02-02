@@ -93,10 +93,10 @@ def create_root_span(
         template_type: Template type being used
 
     Returns:
-        A context manager span that can be used with 'with' statement
+        A span object that can be used with trace.use_span() context manager
     """
     tracer = trace.get_tracer(__name__)
-    span = tracer.start_as_current_span(conversation_id)
+    span = tracer.start_span(conversation_id)
 
     logger.info(
         f"Starting Langfuse trace for Breeze Buddy conversation: {conversation_id}"

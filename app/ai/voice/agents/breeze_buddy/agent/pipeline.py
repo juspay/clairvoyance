@@ -40,10 +40,10 @@ from app.core.config.static import (
 from app.core.logger import logger
 
 
-def get_observers() -> Optional[list]:
+def get_observers() -> list:
     """Get pipeline observers for dev environment."""
     if ENVIRONMENT.lower() != "dev":
-        return None
+        return []
     return [
         MetricsLogObserver(),
         LLMLogObserver(),

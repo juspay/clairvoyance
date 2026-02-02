@@ -138,7 +138,9 @@ class Agent:
                 handler_func
             )
 
-        self.template, self.configurations = await load_template_config(self.lead)
+        self.template, self.configurations, self.template_vars = (
+            await load_template_config(self.lead)
+        )
 
         self.vad_analyzer, self.default_vad_params = await create_vad_analyzer(
             is_daily_mode=True
@@ -274,8 +276,12 @@ class Agent:
             provider=self.provider,
             template_type=self.lead.template,
         )
-        with trace.use_span(self.root_span):
-            await runner.run(self.task)
+        try:
+            with trace.use_span(self.root_span):
+                await runner.run(self.task)
+        except Exception as e:
+            logger.error(f"Error during traced pipeline execution: {e}")
+            self.root_span.end()
 
     async def run(self, runner_args: Optional[RunnerArguments] = None) -> None:
         """Main entry point for running the agent.
