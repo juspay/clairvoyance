@@ -52,8 +52,10 @@ async def get_template_by_merchant(
 
         if result and get_row_count(result) > 0:
             decoded_result = decode_template(result[0])
-
-            logger.info(f"Template found: {decoded_result.id} with flow structure")
+            if decoded_result:
+                logger.info(f"Template found: {decoded_result.id} with flow structure")
+            else:
+                logger.info(f"Template decoding failed for merchant: {merchant_id}")
             return decoded_result
 
         # If no template found with shop_identifier, retry with shop_identifier=None
@@ -66,10 +68,12 @@ async def get_template_by_merchant(
 
             if result and get_row_count(result) > 0:
                 decoded_result = decode_template(result[0])
-
-                logger.info(
-                    f"Template found: {decoded_result.id} with flow structure (shop_identifier=None)"
-                )
+                if decoded_result:
+                    logger.info(
+                        f"Template found: {decoded_result.id} with flow structure (shop_identifier=None)"
+                    )
+                else:
+                    logger.info(f"Template decoding failed for merchant: {merchant_id}")
                 return decoded_result
 
         logger.info(f"No template found for merchant: {merchant_id}")
@@ -83,7 +87,7 @@ async def get_template_by_merchant(
 async def create_template(
     template_id: str,
     merchant: str,
-    identifier: str,
+    identifier: Optional[str],
     name: str,
     flow: dict,
     expected_payload_schema: Optional[dict],
@@ -134,7 +138,10 @@ async def create_template(
         result = await run_parameterized_query(query, values)
         if result and get_row_count(result) > 0:
             decoded_result = decode_template(result[0])
-            logger.info(f"Template created successfully: {decoded_result.id}")
+            if decoded_result:
+                logger.info(f"Template created successfully: {decoded_result.id}")
+            else:
+                logger.error("Template decoding failed after creation")
             return decoded_result
 
         logger.error("Failed to create template")
@@ -273,7 +280,10 @@ async def get_template_by_id(template_id: str) -> Optional[TemplateModel]:
 
         if result and get_row_count(result) > 0:
             decoded_result = decode_template(result[0])
-            logger.info(f"Template found: {decoded_result.id}")
+            if decoded_result:
+                logger.info(f"Template found: {decoded_result.id}")
+            else:
+                logger.info(f"Template decoding failed for ID: {template_id}")
             return decoded_result
 
         logger.info(f"No template found with ID: {template_id}")
@@ -354,7 +364,10 @@ async def replace_template(
 
         if result and get_row_count(result) > 0:
             decoded_result = decode_template(result[0])
-            logger.info(f"Template updated successfully: {decoded_result.id}")
+            if decoded_result:
+                logger.info(f"Template updated successfully: {decoded_result.id}")
+            else:
+                logger.error("Template decoding failed after update")
             return decoded_result
 
         logger.error(f"Failed to update template: {template_id}")
@@ -390,7 +403,12 @@ async def get_template_by_outbound_number_id(
 
         if result and get_row_count(result) > 0:
             decoded_result = decode_template(result[0])
-            logger.info(f"Template found: {decoded_result.id}")
+            if decoded_result:
+                logger.info(f"Template found: {decoded_result.id}")
+            else:
+                logger.info(
+                    f"Template decoding failed for outbound_number_id: {outbound_number_id}"
+                )
             return decoded_result
 
         logger.info(f"No template found with outbound_number_id: {outbound_number_id}")
@@ -425,7 +443,9 @@ async def get_all_templates_by_outbound_number_id(
         result = await run_parameterized_query(query, values)
 
         if result and get_row_count(result) > 0:
-            templates = [decode_template(row) for row in result]
+            templates = [
+                t for t in (decode_template(row) for row in result) if t is not None
+            ]
             logger.info(
                 f"Found {len(templates)} templates for outbound_number_id: {outbound_number_id}"
             )

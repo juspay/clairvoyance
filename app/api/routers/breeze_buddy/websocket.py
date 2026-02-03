@@ -5,6 +5,7 @@ from app.ai.voice.agents.breeze_buddy.managers.calls import handle_call_completi
 from app.ai.voice.agents.breeze_buddy.services.telephony.utils import get_voice_provider
 from app.core.logger import logger
 from app.core.transport.http_client import create_aiohttp_session
+from app.schemas import CallProvider
 
 router = APIRouter()
 
@@ -22,9 +23,10 @@ async def telephony_websocket_handler(
 
     async with create_aiohttp_session() as session:
         try:
-            provider = get_voice_provider(service_provider.upper(), session)
+            provider_enum = CallProvider(service_provider.upper())
+            provider = get_voice_provider(provider_enum, session)
             provider.set_completion_callback(handle_call_completion)
-            await provider.handle_websocket(websocket, service_provider.upper())
+            await provider.handle_websocket(websocket, provider_enum)
         except WebSocketDisconnect:
             logger.warning("WebSocket client disconnected.")
         except Exception as e:
@@ -58,9 +60,10 @@ async def telephony_websocket_handler_v2(
 
     async with create_aiohttp_session() as session:
         try:
-            provider = get_voice_provider(service_provider.upper(), session, True)
+            provider_enum = CallProvider(service_provider.upper())
+            provider = get_voice_provider(provider_enum, session, True)
             provider.set_completion_callback(handle_call_completion)
-            await provider.handle_websocket(websocket, service_provider.upper())
+            await provider.handle_websocket(websocket, provider_enum)
         except WebSocketDisconnect:
             logger.warning("WebSocket v2 client disconnected.")
         except Exception as e:

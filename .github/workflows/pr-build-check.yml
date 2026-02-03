@@ -59,7 +59,14 @@ jobs:
           uv run autoflake --check --remove-all-unused-imports --remove-unused-variables --exclude "app/__init__.py,.venv/*,venv/*" -r app/
         continue-on-error: false
 
-      # Step 8: Check commit count (must be exactly 1)
+      # Step 8: Run pyrefly type check
+      - name: Check pyrefly
+        run: |
+          export PATH="$HOME/.cargo/bin:$PATH"
+          uv run pyrefly check
+        continue-on-error: false
+
+      # Step 9: Check commit count (must be exactly 1)
       - name: Check commit count
         run: |
           COMMIT_COUNT=${{ github.event.pull_request.commits }}

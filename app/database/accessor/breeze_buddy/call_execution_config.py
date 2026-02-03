@@ -43,7 +43,7 @@ async def create_call_execution_config(
     calling_provider: CallProvider,
     merchant_id: str,
     template: str,
-    shop_identifier: str,
+    shop_identifier: Optional[str],
     enable_international_call: bool,
     enable_calling: bool = True,
     template_id: Optional[str] = None,  # NEW: Add template_id parameter

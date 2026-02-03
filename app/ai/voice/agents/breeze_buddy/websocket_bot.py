@@ -3,10 +3,11 @@ import audioop
 import base64
 import json
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Any, Optional, cast
 
 from dotenv import load_dotenv
 from fastapi import WebSocket
+from openai.types.chat import ChatCompletionMessageParam
 from opentelemetry import trace
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.vad.vad_analyzer import VADParams
@@ -77,17 +78,17 @@ class OrderConfirmationBot:
         self.ws = ws
         self.aiohttp_session = aiohttp_session
         self.provider = provider
-        self.task: PipelineTask = None
+        self.task: Optional[PipelineTask] = None
         self.outcome = "UNKNOWN"
-        self.context: OpenAILLMContext = None
+        self.context: Optional[OpenAILLMContext] = None
         self.conversation_ended = False
-        self.reporting_webhook_url = None
-        self.call_sid = None
-        self.order_id = None
-        self.shop_name = None
-        self.address = None
-        self.updated_address = None
-        self.cancellation_reason = None
+        self.reporting_webhook_url: Optional[str] = None
+        self.call_sid: Optional[str] = None
+        self.order_id: Optional[str] = None
+        self.shop_name: Optional[str] = None
+        self.address: Optional[str] = None
+        self.updated_address: Optional[str] = None
+        self.cancellation_reason: Optional[str] = None
         self.updated_fields = {}  # Track only updated fields for webhook
         self.updated_phone_number = None
         self.serializer = serializer
@@ -138,7 +139,7 @@ class OrderConfirmationBot:
                 # Load and convert audio
                 audio = AudioSegment.from_wav(wav_file_path)
                 audio = audio.set_frame_rate(8000).set_channels(1).set_sample_width(2)
-                pcm_data = audio.raw_data
+                pcm_data: bytes = audio.raw_data  # type: ignore[assignment]
                 mulaw_data = audioop.lin2ulaw(pcm_data, 2)
                 payload = base64.b64encode(mulaw_data).decode("utf-8")
 
@@ -167,8 +168,8 @@ class OrderConfirmationBot:
             return
 
         self.lead = lead
-        call_payload = lead.payload
-        self.order_id = lead.request_id or lead.payload.get("order_id")
+        call_payload = lead.payload or {}
+        self.order_id = lead.request_id or call_payload.get("order_id")
         customer_name = call_payload.get("customer_name", "Valued Customer")
         self.shop_name = call_payload.get("shop_name", "the shop")
         customer_address = call_payload.get("customer_address", "your address")
@@ -270,7 +271,9 @@ class OrderConfirmationBot:
             price_words,
             self.address,
         )
-        messages = [{"role": "system", "content": self.system_prompt}]
+        messages: list[dict[str, Any]] = [
+            {"role": "system", "content": self.system_prompt}
+        ]
 
         stt_mute_filter = STTMuteFilter(
             config=STTMuteConfig(
@@ -278,7 +281,9 @@ class OrderConfirmationBot:
             )
         )
 
-        self.context = OpenAILLMContext(messages)
+        self.context = OpenAILLMContext(
+            cast(list[ChatCompletionMessageParam], messages)
+        )
         user_params = LLMUserAggregatorParams(
             enable_emulated_vad_interruptions=ENABLE_BREEZE_BUDDY_USER_INTERRUPTION
         )
@@ -302,7 +307,7 @@ class OrderConfirmationBot:
         conversation_id = f"{customer_name}-{self.shop_name}-{timestamp}"
 
         # Create task parameters and initialize task (audio config moved to transport level)
-        task_params = {
+        task_params: dict[str, Any] = {
             "params": PipelineParams(
                 allow_interruptions=True,
                 enable_metrics=True,
@@ -344,7 +349,10 @@ class OrderConfirmationBot:
 
         async def run_pipeline():
             try:
-                await runner.run(self.task)
+                if self.task:
+                    await runner.run(self.task)
+                else:
+                    logger.error("Pipeline task is not set, cannot run pipeline")
             except asyncio.CancelledError:
                 logger.info("Main task cancelled. Exiting gracefully.")
 
@@ -363,10 +371,10 @@ class OrderConfirmationBot:
                 root_span.set_attribute("conversation.type", "phone-call")
                 root_span.set_attribute("user.name", customer_name)
                 root_span.set_attribute("service.name", "breeze-buddy")
-                root_span.set_attribute("call_sid", self.call_sid)
-                root_span.set_attribute("order_id", self.order_id)
-                root_span.set_attribute("shop_name", self.shop_name)
-                root_span.set_attribute("provider", self.provider)
+                root_span.set_attribute("call_sid", self.call_sid or "")
+                root_span.set_attribute("order_id", self.order_id or "")
+                root_span.set_attribute("shop_name", self.shop_name or "")
+                root_span.set_attribute("provider", self.provider or "")
                 root_span.set_attribute("workflow.type", "order-confirmation")
 
                 await run_pipeline()
@@ -451,14 +459,16 @@ class OrderConfirmationBot:
         audio = load_audio(
             audio_path="app/ai/voice/agents/breeze_buddy/static/audio/cough.wav"
         )
-        if audio:
+        if audio and self.transport:
             try:
-                await self.transport.output().write_audio_frame(audio)
-                logger.info("Played audio")
+                transport_output = self.transport.output()
+                if transport_output:
+                    await transport_output.write_audio_frame(audio)
+                    logger.info("Played audio")
             except Exception as e:
                 logger.error(f"Failed to play audio: {e}")
         else:
-            logger.warning("audio not loaded, skipping")
+            logger.warning("audio not loaded or transport not available, skipping")
 
     async def _end_conversation_handler(self, flow_manager, args):
         if not self.conversation_ended:
@@ -505,12 +515,13 @@ class OrderConfirmationBot:
                     datetime.now(timezone.utc) - call_initiated_time_utc
                 ).total_seconds()
 
+            attempt_count = (self.lead.attempt_count if self.lead else 0) or 0
             summary_data = {
                 "callSid": self.call_sid,
                 "cancellationReason": self.cancellation_reason,
                 "outcome": self.outcome,
                 "updatedAddress": self.updated_address,
-                "attemptCount": self.lead.attempt_count + 1,
+                "attemptCount": attempt_count + 1,
                 "transcription": json.dumps(filtered_transcript, ensure_ascii=False),
                 "callDuration": call_duration,
                 "orderId": self.order_id,
@@ -602,7 +613,7 @@ class OrderConfirmationBot:
             # Send webhook for all outcomes including BUSY/NO_ANSWER
             should_send_webhook = self.reporting_webhook_url is not None
 
-            if should_send_webhook:
+            if should_send_webhook and self.reporting_webhook_url:
                 logger.info(
                     f"Sending webhook for call {self.call_sid} with outcome {self.outcome}"
                 )
@@ -650,7 +661,8 @@ class OrderConfirmationBot:
         except Exception as e:
             logger.error(f"Failed to hang up call {self.call_sid}: {str(e)}")
         finally:
-            await self.task.cancel()
+            if self.task:
+                await self.task.cancel()
 
     def _get_flow_config(self):
         # Initial stage functions - only greeting and availability
@@ -658,21 +670,21 @@ class OrderConfirmationBot:
             FlowsFunctionSchema(
                 name="user_available",
                 description="Call this function when the user confirms that they are available to talk with clear affirmative responses.",
-                handler=self._user_available_handler,
+                handler=self._user_available_handler,  # type: ignore[bad-argument-type]
                 properties={},
                 required=[],
             ),
             FlowsFunctionSchema(
                 name="user_busy",
                 description="Call this function when the user says they are busy or it's not a good time to talk.",
-                handler=self._user_busy_handler,
+                handler=self._user_busy_handler,  # type: ignore[bad-argument-type]
                 properties={},
                 required=[],
             ),
             FlowsFunctionSchema(
                 name="cancel_order",
                 description="Call this function if the customer explicitly asks to cancel the order. If the user gives a reason for cancellation, pass it.",
-                handler=self._deny_order_handler,
+                handler=self._deny_order_handler,  # type: ignore[bad-argument-type]
                 properties={
                     "reason": {
                         "type": "string",
@@ -684,7 +696,7 @@ class OrderConfirmationBot:
             FlowsFunctionSchema(
                 name="handle_unrelated_question",
                 description="Call this function if the user asks a question about anything other than confirming or cancelling the order, without confirming the order.",
-                handler=self._handle_unrelated_question_handler,
+                handler=self._handle_unrelated_question_handler,  # type: ignore[bad-argument-type]
                 properties={},
                 required=[],
             ),
@@ -695,21 +707,21 @@ class OrderConfirmationBot:
             FlowsFunctionSchema(
                 name="confirm_order",
                 description="Call this function if the customer agrees/confirms the order details (items, price, and address) and asks no other questions.",
-                handler=self._confirm_order_handler,
+                handler=self._confirm_order_handler,  # type: ignore[bad-argument-type]
                 properties={},
                 required=[],
             ),
             FlowsFunctionSchema(
                 name="confirm_order_with_question",
                 description="Call this function if the customer agrees/confirms the order but also asks an unrelated question about delivery time, product details, or other topics.",
-                handler=self._confirm_order_with_question_handler,
+                handler=self._confirm_order_with_question_handler,  # type: ignore[bad-argument-type]
                 properties={},
                 required=[],
             ),
             FlowsFunctionSchema(
                 name="cancel_order",
                 description="Call this function if the customer explicitly asks to cancel the order. If the user gives a reason for cancellation, pass it.",
-                handler=self._deny_order_handler,
+                handler=self._deny_order_handler,  # type: ignore[bad-argument-type]
                 properties={
                     "reason": {
                         "type": "string",
@@ -721,14 +733,14 @@ class OrderConfirmationBot:
             FlowsFunctionSchema(
                 name="handle_unrelated_question",
                 description="Call this function if the user asks a question about anything other than confirming or cancelling the order, without confirming the order.",
-                handler=self._handle_unrelated_question_handler,
+                handler=self._handle_unrelated_question_handler,  # type: ignore[bad-argument-type]
                 properties={},
                 required=[],
             ),
             FlowsFunctionSchema(
                 name="address_incorrect",
                 description="User says the address or phone number is wrong or wants to update it. Only landmark, pincode, locality, or city or phone number can be updated.",
-                handler=self._handle_address_incorrect,
+                handler=self._handle_address_incorrect,  # type: ignore[bad-argument-type]
                 properties={},
                 required=[],
             ),
@@ -739,42 +751,42 @@ class OrderConfirmationBot:
             FlowsFunctionSchema(
                 name="update_landmark",
                 description="User wants to update the landmark of the address.",
-                handler=self._handle_landmark,
+                handler=self._handle_landmark,  # type: ignore[bad-argument-type]
                 properties={"landmark": {"type": "string"}},
                 required=["landmark"],
             ),
             FlowsFunctionSchema(
                 name="update_pincode",
                 description="User provides the pincode.",
-                handler=self._handle_pincode,
+                handler=self._handle_pincode,  # type: ignore[bad-argument-type]
                 properties={"pincode": {"type": "string"}},
                 required=["pincode"],
             ),
             FlowsFunctionSchema(
                 name="update_city",
                 description="User provides the city.",
-                handler=self._handle_city,
+                handler=self._handle_city,  # type: ignore[bad-argument-type]
                 properties={"city": {"type": "string"}},
                 required=["city"],
             ),
             FlowsFunctionSchema(
                 name="update_locality",
                 description="User provides the locality.",
-                handler=self._handle_locality,
+                handler=self._handle_locality,  # type: ignore[bad-argument-type]
                 properties={"locality": {"type": "string"}},
                 required=["locality"],
             ),
             FlowsFunctionSchema(
                 name="handle_unrelated_question",
                 description="Call this function if the user asks a question about anything other than confirming or cancelling the order, without confirming the order.",
-                handler=self._handle_unrelated_question_handler,
+                handler=self._handle_unrelated_question_handler,  # type: ignore[bad-argument-type]
                 properties={},
                 required=[],
             ),
             FlowsFunctionSchema(
                 name="update_phone_number",
                 description="User provides the new phone number. Must be a 10-digit Indian mobile number.",
-                handler=self._handle_phone_number,
+                handler=self._handle_phone_number,  # type: ignore[bad-argument-type]
                 properties={"phone_number": {"type": "string"}},
                 required=["phone_number"],
             ),
@@ -911,7 +923,7 @@ class OrderConfirmationBot:
 
         node_data = self.flow_config["nodes"][node_name]
 
-        return NodeConfig(
+        return NodeConfig(  # type: ignore[no-matching-overload]
             name=node_data["name"],
             task_messages=node_data.get("task_messages", []),
             functions=node_data.get("functions", []),

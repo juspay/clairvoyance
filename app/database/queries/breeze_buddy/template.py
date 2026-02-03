@@ -9,7 +9,7 @@ TEMPLATE_TABLE = "template"
 
 
 def get_template_by_merchant_query(
-    merchant_id: str, shop_identifier: str = None, name: str = None
+    merchant_id: str, shop_identifier: Optional[str] = None, name: Optional[str] = None
 ) -> Tuple[str, List[Any]]:
     """Generate query to get a template by merchant ID and optional filters."""
     conditions = ["merchant_id = $1"]
@@ -37,13 +37,21 @@ def get_template_by_merchant_query(
 def create_template_query(
     template_id: str,
     merchant_id: str,
-    shop_identifier: str,
+    shop_identifier: Optional[str],
     name: str,
     flow: str,  # JSON string containing flow structure
-    expected_payload_schema: str,  # JSON string containing expected payload schema
-    expected_callback_response_schema: str,  # JSON string containing expected callback response schema
-    configurations: str,  # JSON string containing configurations (tts_voice_name, stt_language, etc.)
-    secrets: str,  # JSON string containing secrets and variables for HTTP functions
+    expected_payload_schema: Optional[
+        str
+    ],  # JSON string containing expected payload schema
+    expected_callback_response_schema: Optional[
+        str
+    ],  # JSON string containing expected callback response schema
+    configurations: Optional[
+        str
+    ],  # JSON string containing configurations (tts_voice_name, stt_language, etc.)
+    secrets: Optional[
+        str
+    ],  # JSON string containing secrets and variables for HTTP functions
     outbound_number_id: Optional[
         str
     ],  # Changed: moved before is_active to match SQL column order

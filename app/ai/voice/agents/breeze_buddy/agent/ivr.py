@@ -177,7 +177,7 @@ async def _run_ivr_menu(
 async def handle_ivr_menu(
     ws: WebSocket,
     stream_sid: str,
-    ivr_options: List[Dict[str, str]],
+    ivr_options: List[Dict[str, Optional[str]]],
     provider: str,
     voice_name: str = "sara",
     ivr_greeting: Optional[str] = None,
@@ -248,7 +248,7 @@ async def handle_ivr_menu(
 
 
 async def prepare_ivr_menu_audio(
-    templates: List[Dict[str, str]],
+    templates: List[Dict[str, Optional[str]]],
     provider: str,
     voice_name: str = "sara",
     ivr_greeting: Optional[str] = None,
@@ -273,7 +273,7 @@ async def prepare_ivr_menu_audio(
 
         # Generate cache key from template names, voice, and greeting
         # MD5 hash ensures constant key size regardless of input length
-        cache_components = "|".join(sorted([t["name"] for t in templates]))
+        cache_components = "|".join(sorted([t["name"] or "" for t in templates]))
         cache_components += f"|voice:{voice_name}|greeting:{ivr_greeting or 'default'}"
         cache_key = f"{IVR_AUDIO_CACHE_PREFIX}{hashlib.md5(cache_components.encode()).hexdigest()}"
 
@@ -319,7 +319,7 @@ async def prepare_ivr_menu_audio(
 
 
 async def prepare_goodbye_audio(
-    templates: List[Dict[str, str]],
+    templates: List[Dict[str, Optional[str]]],
     provider: str,
     voice_name: str = "sara",
 ) -> Optional[bytes]:
@@ -339,7 +339,7 @@ async def prepare_goodbye_audio(
 
         # Generate cache key including voice name
         # MD5 hash ensures constant key size regardless of input length
-        cache_components = "|".join(sorted([t["name"] for t in templates]))
+        cache_components = "|".join(sorted([t["name"] or "" for t in templates]))
         cache_components += f"|voice:{voice_name}"
         cache_key = f"{IVR_GOODBYE_CACHE_PREFIX}{hashlib.md5(cache_components.encode()).hexdigest()}"
 
@@ -440,7 +440,7 @@ async def _send_audio(ws: WebSocket, stream_sid: str, audio_bytes: bytes):
 
 
 async def _wait_for_valid_dtmf(
-    ws: WebSocket, ivr_options: List[Dict[str, str]]
+    ws: WebSocket, ivr_options: List[Dict[str, Optional[str]]]
 ) -> Optional[str]:
     """
     Wait for a valid DTMF digit.

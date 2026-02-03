@@ -1,3 +1,5 @@
+from typing import Any, Dict, Optional
+
 import plivo
 from fastapi import WebSocket
 from pipecat.serializers.plivo import PlivoFrameSerializer
@@ -59,7 +61,9 @@ class PlivoProvider(VoiceCallProvider):
                 provider,
             )
 
-    def make_call(self, customer_mobile_number: str, outbound_number: str):
+    def make_call(
+        self, customer_mobile_number: str, outbound_number: str
+    ) -> Optional[Dict[str, Any]]:
         """Initiate an outbound call via Plivo."""
         try:
             # Create the call using Plivo's API

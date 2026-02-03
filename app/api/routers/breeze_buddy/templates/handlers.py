@@ -4,7 +4,7 @@ All handlers perform database operations and enforce business rules.
 """
 
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Any, Dict, Optional
 from uuid import uuid4
 
 from fastapi import HTTPException, status
@@ -225,7 +225,7 @@ async def list_templates_handler(
 
     try:
         # Build filters from query params
-        filters = {}
+        filters: Dict[str, Any] = {}
         if merchant_id:
             filters["merchant_id"] = merchant_id
         if shop_identifier:

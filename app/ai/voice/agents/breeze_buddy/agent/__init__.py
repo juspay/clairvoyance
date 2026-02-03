@@ -156,6 +156,9 @@ class Agent:
     async def _setup_telephony_transport(self) -> bool:
         """Initialize transport for telephony mode. Returns False if setup fails."""
         logger.info("Starting WebSocket bot")
+        if not self.ws:
+            logger.error("WebSocket not initialized")
+            return False
         await self.ws.accept()
         call_initiated_time = datetime.now(timezone.utc)
 
@@ -186,7 +189,7 @@ class Agent:
                 stream_sid=self.stream_sid,
                 call_sid=self.call_sid,
                 call_data=call_data,
-                provider=self.provider,
+                provider=self.provider or "",
             )
 
             # Check if there was an error (IVR failed or invalid template_id)
@@ -205,7 +208,9 @@ class Agent:
                 )
                 if not self.lead:
                     await close_websocket_safely(
-                        self.ws, code=4000, reason=error_reason
+                        self.ws,
+                        code=4000,
+                        reason=error_reason or "Failed to create lead from template",
                     )
                     return False
             else:
@@ -214,11 +219,13 @@ class Agent:
                     call_sid=self.call_sid,
                     call_data=call_data,
                     call_initiated_time=call_initiated_time,
-                    provider=self.provider,
+                    provider=self.provider or "",
                 )
                 if not self.lead:
                     await close_websocket_safely(
-                        self.ws, code=4000, reason=error_reason
+                        self.ws,
+                        code=4000,
+                        reason=error_reason or "Failed to handle inbound call",
                     )
                     return False
 
@@ -236,12 +243,17 @@ class Agent:
                 handler_func
             )
 
+        # Safe access for required attributes after lead check above
+        if not self.ws or not self.stream_sid or not self.lead or not self.template:
+            logger.error("Missing required attributes after setup")
+            return False
+
         self.greeting_source = await send_initial_greeting(
             ws=self.ws,
             stream_sid=self.stream_sid,
             lead=self.lead,
             template=self.template,
-            provider=self.provider,
+            provider=self.provider or "",
         )
 
         self.vad_analyzer, self.default_vad_params = await create_vad_analyzer(
@@ -263,6 +275,9 @@ class Agent:
 
     def _register_event_handlers(self) -> None:
         """Register transport and task event handlers."""
+        if not self.transport or not self.task:
+            logger.error("Transport or task not initialized")
+            return
 
         @self.transport.event_handler("on_client_connected")
         async def on_client_connected(transport, client):
@@ -281,15 +296,25 @@ class Agent:
 
     async def _handle_client_connected(self) -> None:
         """Handle client connection and initialize flow."""
+        if (
+            not self.flow_builder
+            or not self.template
+            or not self.lead
+            or not self.flow_manager
+        ):
+            logger.error("Required attributes not initialized for client connection")
+            return
+
         (
             self.flow_config,
             self.end_conversation_callbacks,
             self.expected_callback_response_schema,
         ) = build_flow_config(self.flow_builder, self.template)
 
+        lead_payload = self.lead.payload or {}
         initial_node_config = prepare_initial_node(
             flow_config=self.flow_config,
-            lead_payload=self.lead.payload,
+            lead_payload=lead_payload,
             configurations=self.configurations,
             has_greeting_source=bool(self.greeting_source),
         )
@@ -301,14 +326,19 @@ class Agent:
 
     async def _run_with_tracing(self, runner: PipelineRunner) -> None:
         """Run the pipeline with OpenTelemetry tracing."""
+        if not self.lead or not self.task:
+            logger.error("Lead or task not initialized for tracing")
+            return
+
+        lead_payload = self.lead.payload or {}
         self.root_span = create_root_span(
-            conversation_id=self.conversation_id,
+            conversation_id=self.conversation_id or "unknown",
             transport_type=self.transport_type,
-            customer_name=self.lead.payload.get("customer_name", "unknown"),
-            shop_name=self.lead.payload.get("shop_name", "unknown"),
-            call_sid=self.call_sid,
+            customer_name=lead_payload.get("customer_name", "unknown"),
+            shop_name=lead_payload.get("shop_name", "unknown"),
+            call_sid=self.call_sid or "unknown",
             order_id=self.lead.request_id or "unknown",
-            provider=self.provider,
+            provider=self.provider or "",
             template_type=self.lead.template,
         )
         try:
@@ -326,6 +356,9 @@ class Agent:
         """
         # Setup transport based on mode
         if self.is_daily_mode:
+            if not runner_args:
+                logger.error("runner_args is required for Daily mode")
+                return
             await self._setup_daily_transport(runner_args)
         else:
             if not await self._setup_telephony_transport():
@@ -338,8 +371,14 @@ class Agent:
         )
 
         # Generate conversation ID and create task
-        self.conversation_id = generate_conversation_id(self.lead.payload)
+        lead_payload = self.lead.payload if self.lead else None
+        self.conversation_id = generate_conversation_id(lead_payload)
         self.task = await create_pipeline_task(pipeline, self.conversation_id)
+
+        # Validate required attributes for flow setup
+        if not self.template:
+            logger.error("Template is not set, cannot setup flow manager")
+            return
 
         # Setup flow management
         self.flow_manager = setup_flow_manager(
@@ -373,11 +412,12 @@ class Agent:
 
         logger.info(f"{reason}. Updating call status.")
 
-        if self.lead.outcome is None:
-            self.lead.outcome = DEFAULT_OUTCOME
+        if self.lead:
+            if self.lead.outcome is None:
+                self.lead.outcome = DEFAULT_OUTCOME
 
-        if self.lead.metaData is None:
-            self.lead.metaData = {}
+            if self.lead.metaData is None:
+                self.lead.metaData = {}
 
         context = TemplateContext(self)
         await end_conversation(context, {})
@@ -386,8 +426,8 @@ class Agent:
 async def telephony_bot(
     ws: WebSocket,
     aiohttp_session: Any,
-    hangup_function: Callable,
-    completion_function: Callable,
+    hangup_function: Optional[Callable],
+    completion_function: Optional[Callable],
     provider: CallProvider,
 ) -> None:
     """Entry point for telephony-based agents (Twilio/Exotel)."""

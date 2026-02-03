@@ -211,7 +211,7 @@ async def _retry_call(
 
     # Send webhook for NO_ANSWER on every attempt
     if outcome == "NO_ANSWER":
-        reporting_webhook_url = lead.payload.get("reporting_webhook_url")
+        reporting_webhook_url = (lead.payload or {}).get("reporting_webhook_url")
         if reporting_webhook_url:
             call_duration = None
             if lead.call_initiated_time:
@@ -306,11 +306,12 @@ async def _cleanup_stuck_leads():
                 call_end_time=datetime.now(timezone.utc),
             )
 
-            outbound_number = await get_outbound_number_by_id(
-                locked_lead.outbound_number_id
-            )
-            if outbound_number:
-                await _release_number(outbound_number.id, outbound_number.provider)
+            if locked_lead.outbound_number_id:
+                outbound_number = await get_outbound_number_by_id(
+                    locked_lead.outbound_number_id
+                )
+                if outbound_number:
+                    await _release_number(outbound_number.id, outbound_number.provider)
 
             # Only retry outbound calls - inbound calls should not be retried
             config = await _get_lead_config(locked_lead)
@@ -396,7 +397,7 @@ async def process_backlog_leads():
                 if use_template_flow and template:
                     await prepare_and_store_initial_greeting(
                         lead_id=locked_lead.id,
-                        payload=locked_lead.payload,
+                        payload=locked_lead.payload or {},
                         template=template,
                     )
 
@@ -417,12 +418,22 @@ async def process_backlog_leads():
                     continue
 
                 call_provider = get_voice_provider(
-                    config.calling_provider.value,
+                    config.calling_provider,
                     session,
                     use_template_flow,
                 )
+                customer_mobile = (locked_lead.payload or {}).get(
+                    "customer_mobile_number"
+                )
+                if not customer_mobile or not isinstance(customer_mobile, str):
+                    logger.error(
+                        f"Invalid customer_mobile_number for lead {locked_lead.id}"
+                    )
+                    await _release_number(number_to_use.id, number_to_use.provider)
+                    await release_lock_on_lead_by_id(locked_lead.id)
+                    continue
                 call = call_provider.make_call(
-                    locked_lead.payload.get("customer_mobile_number"),
+                    customer_mobile,
                     number_to_use.number,
                 )
 
@@ -532,6 +543,11 @@ async def process_backlog_leads():
                             continue
                         retry_calling_provider = CallProvider.TWILIO
 
+                    if not retry_calling_provider:
+                        # No retry provider available, skip retry
+                        await release_lock_on_lead_by_id(locked_lead.id)
+                        continue
+
                     retry_number_to_use = None
 
                     # First, get all available numbers with the retry provider
@@ -574,13 +590,27 @@ async def process_backlog_leads():
                         continue
 
                     retry_call_provider = get_voice_provider(
-                        retry_calling_provider.value,
+                        retry_calling_provider,
                         session,
                         use_template_flow,
                     )
 
+                    retry_customer_mobile = (locked_lead.payload or {}).get(
+                        "customer_mobile_number"
+                    )
+                    if not retry_customer_mobile or not isinstance(
+                        retry_customer_mobile, str
+                    ):
+                        logger.error(
+                            f"Invalid customer_mobile_number for retry lead {locked_lead.id}"
+                        )
+                        await _release_number(
+                            retry_number_to_use.id, retry_number_to_use.provider
+                        )
+                        await release_lock_on_lead_by_id(locked_lead.id)
+                        continue
                     retry_call = retry_call_provider.make_call(
-                        locked_lead.payload.get("customer_mobile_number"),
+                        retry_customer_mobile,
                         retry_number_to_use.number,
                     )
 
@@ -655,13 +685,16 @@ async def handle_call_completion(
         logger.error(f"Could not find lead for call_id: {call_id}")
         return
 
-    outbound_number = await get_outbound_number_by_id(lead.outbound_number_id)
-    if outbound_number:
-        await _release_number(outbound_number.id, outbound_number.provider)
+    if lead.outbound_number_id:
+        outbound_number = await get_outbound_number_by_id(lead.outbound_number_id)
+        if outbound_number:
+            await _release_number(outbound_number.id, outbound_number.provider)
+        else:
+            logger.error(
+                f"Could not find outbound number with id: {lead.outbound_number_id} to release."
+            )
     else:
-        logger.error(
-            f"Could not find outbound number with id: {lead.outbound_number_id} to release."
-        )
+        logger.info(f"No outbound number id for lead: {lead.id}")
 
     config = await _get_lead_config(lead)
     if not config:
@@ -706,13 +739,16 @@ async def handle_unanswered_calls(call_id: str):
             f"Failed to delete greeting audio from Redis for lead {lead.id}: {e}"
         )
 
-    outbound_number = await get_outbound_number_by_id(lead.outbound_number_id)
-    if outbound_number:
-        await _release_number(outbound_number.id, outbound_number.provider)
+    if lead.outbound_number_id:
+        outbound_number = await get_outbound_number_by_id(lead.outbound_number_id)
+        if outbound_number:
+            await _release_number(outbound_number.id, outbound_number.provider)
+        else:
+            logger.error(
+                f"Could not find outbound number with id: {lead.outbound_number_id} to release."
+            )
     else:
-        logger.error(
-            f"Could not find outbound number with id: {lead.outbound_number_id} to release."
-        )
+        logger.info(f"No outbound number id for lead: {lead.id}")
 
     config = await _get_lead_config(lead)
     if not config:

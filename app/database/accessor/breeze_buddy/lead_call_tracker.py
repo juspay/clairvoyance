@@ -127,7 +127,10 @@ async def get_leads_based_on_status_and_next_attempt(
         )
         result = await run_parameterized_query(query_text, values)
         if result:
-            return [decode_lead_call_tracker(row) for row in result]
+            decoded = [decode_lead_call_tracker(row) for row in result]
+            return [item for item in decoded if item is not None]
+        else:
+            logger.info("No leads found matching criteria")
         return []
     except Exception as e:
         logger.error(f"Error getting leads: {e}")
@@ -145,7 +148,10 @@ async def acquire_lock_on_lead_by_id(lead_id: str) -> Optional[LeadCallTracker]:
         result = await run_parameterized_query(query_text, values)
         if result and get_row_count(result) > 0:
             decoded_result = decode_lead_call_tracker(result[0])
-            logger.info(f"Lock acquired successfully for lead: {decoded_result.id}")
+            if decoded_result:
+                logger.info(f"Lock acquired successfully for lead: {decoded_result.id}")
+            else:
+                logger.error("Lead decoding failed after acquiring lock")
             return decoded_result
 
         logger.info(f"Lead {lead_id} is already locked or does not exist")
@@ -167,7 +173,10 @@ async def release_lock_on_lead_by_id(lead_id: str) -> Optional[LeadCallTracker]:
         result = await run_parameterized_query(query_text, values)
         if result and get_row_count(result) > 0:
             decoded_result = decode_lead_call_tracker(result[0])
-            logger.info(f"Lock released successfully for lead: {decoded_result.id}")
+            if decoded_result:
+                logger.info(f"Lock released successfully for lead: {decoded_result.id}")
+            else:
+                logger.error("Lead decoding failed after releasing lock")
             return decoded_result
 
         logger.warning(f"Lead {lead_id} not found for lock release")
@@ -393,9 +402,14 @@ async def get_all_lead_call_trackers(
         )
         result = await run_parameterized_query(query_text, values)
         if result:
-            return [
+            decoded_results = [
                 (decode_lead_call_tracker(row), row["calling_provider"])
                 for row in result
+            ]
+            return [
+                (item, provider)
+                for item, provider in decoded_results
+                if item is not None
             ]
         return []
     except Exception as e:
@@ -415,7 +429,10 @@ async def get_leads_by_status_and_time_before(
         query_text, values = get_leads_by_status_and_time_before_query(status, time)
         result = await run_parameterized_query(query_text, values)
         if result:
-            return [decode_lead_call_tracker(row) for row in result]
+            decoded = [decode_lead_call_tracker(row) for row in result]
+            return [item for item in decoded if item is not None]
+        else:
+            logger.info("No leads found matching criteria")
         return []
     except Exception as e:
         logger.error(f"Error getting leads: {e}")
