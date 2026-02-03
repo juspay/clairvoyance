@@ -235,6 +235,41 @@ async def get_config(key: str, default_value: Any, return_type: type = str) -> A
     return default_value
 
 
+async def set_config(key: str, value: Any) -> bool:
+    """Update a single config value in Redis at runtime.
+
+    This is used for runtime updates like TTS fallback triggers.
+    Note: This does NOT update DevCycle - that remains the source of truth.
+    When DevCycle syncs, it may overwrite values set through this function.
+
+    Args:
+        key: Configuration key to update
+        value: New value to set
+
+    Returns:
+        True if update was successful, False otherwise
+    """
+    try:
+        redis = await get_redis_service()
+        client = await redis.get_client()
+
+        # Load existing flags
+        raw = await client.get(FEATURE_FLAGS_KEY)
+        all_flags = json.loads(raw) if raw else {}
+
+        # Update the specific key (normalize to match DevCycle format)
+        normalized_key = normalize_key(key)
+        all_flags[normalized_key] = value
+
+        # Write back
+        await client.set(FEATURE_FLAGS_KEY, json.dumps(all_flags))
+        logger.info(f"Runtime config updated: {normalized_key} = {value}")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to set config {key}: {e}")
+        return False
+
+
 # ---------------------------------------------------------------------------
 #  REDIS OPERATIONS (CLUSTER SAFE)
 # ---------------------------------------------------------------------------

@@ -275,3 +275,43 @@ async def BB_NOISE_CANCELLATION_ENABLED() -> bool:
 async def BB_NOISE_CANCELLATION_LEVEL() -> int:
     """Returns BB_NOISE_CANCELLATION_LEVEL from Redis (0-100)"""
     return await get_config("BB_NOISE_CANCELLATION_LEVEL", 100, int)
+
+
+# --- TTS Fallback Configuration ---
+async def BB_TTS_FALLBACK_ENABLED() -> bool:
+    """Returns BB_TTS_FALLBACK_ENABLED from Redis.
+
+    When True, use alternate TTS provider instead of BB_TTS_SERVICE.
+    This is automatically set when the primary TTS provider fails.
+    Reset manually via DevCycle dashboard when the provider is fixed.
+    """
+    return await get_config("BB_TTS_FALLBACK_ENABLED", False, bool)
+
+
+async def BB_TTS_FAILURE_THRESHOLD() -> int:
+    """Returns BB_TTS_FAILURE_THRESHOLD from Redis.
+
+    Number of consecutive TTS failures before triggering automatic fallback.
+    Default is 3 failures.
+    """
+    return await get_config("BB_TTS_FAILURE_THRESHOLD", 3, int)
+
+
+async def BB_TTS_AUDIO_TIMEOUT_SECONDS() -> float:
+    """Returns BB_TTS_AUDIO_TIMEOUT_SECONDS from Redis.
+
+    Timeout in seconds to wait for audio frames after sending text to TTS.
+    If no audio is received within this timeout, it counts as a failure.
+    Default is 5.0 seconds.
+    """
+    return await get_config("BB_TTS_AUDIO_TIMEOUT_SECONDS", 5.0, float)
+
+
+async def BB_TTS_FAILED_PROVIDER() -> str:
+    """Returns BB_TTS_FAILED_PROVIDER from Redis.
+
+    The name of the provider that has failed and requires fallback logic.
+    e.g. 'elevenlabs' or 'cartesia'
+    Defaults to 'elevenlabs' if not specified.
+    """
+    return await get_config("BB_TTS_FAILED_PROVIDER", "elevenlabs", str)

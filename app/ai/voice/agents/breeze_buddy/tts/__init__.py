@@ -15,6 +15,7 @@ from app.ai.voice.tts import (
 from app.ai.voice.tts.cartesia import _generate_cartesia_audio
 from app.ai.voice.tts.elevenlabs import _generate_elevenlabs_audio
 from app.ai.voice.tts.sarvam import _generate_sarvam_audio
+from app.ai.voice.tts.tts_health_observer import TTS_SWAP_MAP
 from app.core.config.dynamic import (
     BB_CARTESIA_AGGREGATE_SENTENCES,
     BB_CARTESIA_GENERATION_EMOTION,
@@ -29,6 +30,8 @@ from app.core.config.dynamic import (
     BB_SARVAM_TTS_PACE,
     BB_SARVAM_TTS_PITCH,
     BB_SARVAM_TTS_VOICE_ID,
+    BB_TTS_FAILED_PROVIDER,
+    BB_TTS_FALLBACK_ENABLED,
     BB_TTS_SERVICE,
 )
 from app.core.config.static import (
@@ -139,29 +142,55 @@ async def get_tts_service(
     - "rhea": ElevenLabs TTS (high-quality English)
     - "mira": Cartesia TTS (customizable with emotions and speed)
 
-    Args:
-        voice_name: The TTS voice to use ("sara", "rhea", or "mira")
-        mira_voice_id: Optional custom Cartesia voice ID from template configuration.
-                          Only used when voice_name is "mira" or tts_service is "cartesia".
+    Respects fallback settings:
+    - If fallback is enabled and rhea (ElevenLabs) is requested, returns mira (Cartesia)
+    - If fallback is enabled and mira (Cartesia) is requested, returns rhea (ElevenLabs)
     """
+    # Voice name to provider mapping
+    VOICE_TO_PROVIDER = {
+        "rhea": "elevenlabs",
+        "mira": "cartesia",
+        "sara": "sarvam",
+    }
+
+    # Check if fallback is active
+    fallback_enabled = await BB_TTS_FALLBACK_ENABLED()
+    failed_provider = await BB_TTS_FAILED_PROVIDER()
 
     if voice_name is not None:
-        logger.info(f"Using specified TTS voice: {voice_name}")
-        if voice_name.lower() == "sara":
+        voice_lower = voice_name.lower()
+        logger.info(f"TTS voice requested: {voice_name}")
+
+        # Map voice to provider
+        requested_provider = VOICE_TO_PROVIDER.get(voice_lower)
+
+        # Apply fallback ONLY if the requested provider is the one currently failing
+        if (
+            fallback_enabled
+            and requested_provider == failed_provider
+            and requested_provider in TTS_SWAP_MAP
+        ):
+            actual_provider = TTS_SWAP_MAP[requested_provider]
+            logger.warning(
+                f"🔄 TTS fallback triggered for failing service: {voice_name} ({requested_provider}) → {actual_provider}"
+            )
+        else:
+            actual_provider = requested_provider
+
+        # Return appropriate service
+        if actual_provider == "sarvam":
             if not SARVAM_API_KEY:
                 raise ValueError("SARVAM_API_KEY is required for Sara voice")
-
-            logger.info("Using Sarvam TTS service for Sara voice")
+            logger.info("Using Sarvam TTS service")
             return await get_sarvam_tts_service()
 
-        elif voice_name.lower() == "rhea":
+        elif actual_provider == "elevenlabs":
             if not ELEVENLABS_API_KEY:
-                raise ValueError("ELEVENLABS_API_KEY is required for Rhea voice")
-
-            logger.info("Using ElevenLabs TTS service for Rhea voice")
+                raise ValueError("ELEVENLABS_API_KEY is required for ElevenLabs")
+            logger.info("Using ElevenLabs TTS service")
             return await get_elevenlabs_tts_service()
 
-        elif voice_name.lower() == "mira":
+        elif actual_provider == "cartesia":
             if not CARTESIA_API_KEY:
                 raise ValueError("CARTESIA_API_KEY is required for Mira voice")
 
@@ -172,10 +201,25 @@ async def get_tts_service(
             else:
                 logger.info("Using Cartesia TTS service for Mira voice")
             return await get_cartesia_tts_service(voice_id=mira_voice_id)
-    else:
-        logger.info("No TTS voice specified, using default from config")
 
-    tts_service = await BB_TTS_SERVICE()
+        else:
+            raise ValueError(f"Unknown voice: {voice_name}")
+
+    # No voice_name specified, use default from config
+    logger.info("No TTS voice specified, using default from config")
+
+    # Get configured service and apply fallback if it's the failing one
+    configured_service = await BB_TTS_SERVICE()
+
+    if fallback_enabled and configured_service == failed_provider:
+        # Swap to alternate provider
+        tts_service = TTS_SWAP_MAP.get(configured_service, configured_service)
+        logger.warning(
+            f"🔄 Default TTS service ({configured_service}) is failing, using fallback: {tts_service}"
+        )
+    else:
+        tts_service = configured_service
+
     if tts_service == "sarvam":
         if not SARVAM_API_KEY:
             raise ValueError(
@@ -229,13 +273,45 @@ async def generate_audio(text: str, voice_name: str) -> bytes:
     """
     voice_name_lower = voice_name.lower()
 
-    if voice_name_lower == "sara":
+    # Map voice to provider
+    VOICE_TO_PROVIDER = {
+        "rhea": "elevenlabs",
+        "mira": "cartesia",
+        "sara": "sarvam",
+    }
+    PROVIDER_TO_VOICE = {
+        "elevenlabs": "rhea",
+        "cartesia": "mira",
+        "sarvam": "sara",
+    }
+
+    requested_provider = VOICE_TO_PROVIDER.get(voice_name_lower)
+
+    # Check for fallback
+    fallback_enabled = await BB_TTS_FALLBACK_ENABLED()
+    failed_provider = await BB_TTS_FAILED_PROVIDER()
+
+    # Apply fallback swap if needed
+    if (
+        fallback_enabled
+        and requested_provider == failed_provider
+        and requested_provider in TTS_SWAP_MAP
+    ):
+        actual_provider = TTS_SWAP_MAP[requested_provider]
+        voice_to_use = PROVIDER_TO_VOICE.get(actual_provider, voice_name_lower)
+        logger.warning(
+            f"🔄 Greeting TTS fallback: {voice_name_lower} ({requested_provider}) → {voice_to_use} ({actual_provider})"
+        )
+    else:
+        voice_to_use = voice_name_lower
+
+    if voice_to_use == "sara":
         audio_data = await _generate_sarvam_audio(text)
         input_format = "raw"
-    elif voice_name_lower == "rhea":
+    elif voice_to_use == "rhea":
         audio_data = await _generate_elevenlabs_audio(text)
         input_format = "ulaw"
-    elif voice_name_lower == "mira":
+    elif voice_to_use == "mira":
         audio_data = await _generate_cartesia_audio(text)
         input_format = "raw"
     else:

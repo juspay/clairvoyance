@@ -320,6 +320,17 @@ class Agent:
         # Run the pipeline
         runner = PipelineRunner(handle_sigint=False, force_gc=True)
 
+        # Start TTS health check loop for timeout monitoring
+        from app.ai.voice.tts import (
+            get_tts_health_observer,
+            start_tts_health_check_loop,
+        )
+
+        tts_health_observer = get_tts_health_observer()
+        health_check_task = asyncio.create_task(
+            start_tts_health_check_loop(tts_health_observer), name="tts_health_check"
+        )
+
         try:
             if ENABLE_BREEZE_BUDDY_TRACING:
                 await self._run_with_tracing(runner)
@@ -330,6 +341,13 @@ class Agent:
                 await runner.run(self.task)
         except asyncio.CancelledError:
             logger.info("Pipeline task cancelled. Exiting gracefully.")
+        finally:
+            # Cancel the health check task when pipeline ends
+            health_check_task.cancel()
+            try:
+                await health_check_task
+            except asyncio.CancelledError:
+                pass
 
     async def _handle_unexpected_disconnect(self, reason: str) -> None:
         """Handle unexpected disconnection and cleanup."""

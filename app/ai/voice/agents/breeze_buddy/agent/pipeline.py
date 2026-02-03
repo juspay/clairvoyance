@@ -23,6 +23,7 @@ from app.ai.voice.agents.breeze_buddy.processors import ResponseStateGate
 from app.ai.voice.agents.breeze_buddy.stt import get_stt_service
 from app.ai.voice.agents.breeze_buddy.template.types import ConfigurationModel
 from app.ai.voice.agents.breeze_buddy.tts import get_tts_service
+from app.ai.voice.tts import get_tts_health_observer
 from app.core.config.dynamic import (
     BB_ENABLE_RESPONSE_GATE,
     BREEZE_BUDDY_AZURE_MAX_COMPLETION_TOKENS,
@@ -42,14 +43,20 @@ from app.core.logger import logger
 
 def get_observers() -> list:
     """Get pipeline observers for dev environment."""
+    # TTS health observer is always added for fallback monitoring
+    tts_health_observer = get_tts_health_observer()
+    logger.info("TTS health observer added for fallback monitoring")
+
     if ENVIRONMENT.lower() != "dev":
-        return []
+        return [tts_health_observer]
+
     return [
         MetricsLogObserver(),
         LLMLogObserver(),
         TranscriptionLogObserver(),
         UserBotLatencyLogObserver(),
         TurnTrackingObserver(),
+        tts_health_observer,
     ]
 
 
