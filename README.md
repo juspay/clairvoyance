@@ -172,3 +172,15 @@ uv run autoflake --in-place --remove-all-unused-imports -r app/
     *   Making calls to external services (e.g., starting a call via Twilio).
     *   Launching an agent as a subprocess to handle the real-time conversation.
 5.  The voice agent connects to the communication service (like Daily.co or a direct telephony stream) and manages the STT -> LLM -> TTS pipeline, using its specialized tools to complete its task.
+
+## 8. Documentation
+
+For detailed information about the platform and its agents, see the following documentation:
+
+*   **[Breeze Buddy Architecture](docs/BREEZE_BUDDY_ARCHITECTURE.md)** - Comprehensive architecture documentation for the Breeze Buddy agent
+*   **[BreezeBuddy Conversational Agent Gap Analysis](docs/BREEZEBUDDY_CONVERSATIONAL_AGENT_GAP_ANALYSIS.md)** - Analysis of gaps and roadmap for making BreezeBuddy a world-class conversational AI
+*   **[Langfuse Auto Evaluation and Alerting](docs/LANGFUSE_AUTO_EVALUATION_AND_ALERTING.md)** - Automated evaluation and alerting setup with Langfuse
+*   **[Pool Implementation](docs/POOL_IMPLEMENTATION.md)** - Resource pooling implementation details
+*   **[Redis Implementation](docs/REDIS_IMPLEMENTATION.md)** - Redis integration for distributed state management
+*   **[Response Gate](docs/response-gate.md)** - Response gating mechanism for controlling agent responses
+*   **[Simple DevCycle Approach](docs/SIMPLE_DEVCYCLE_APPROACH.md)** - Feature flag management with DevCycle
