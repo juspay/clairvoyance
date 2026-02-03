@@ -25,7 +25,11 @@ from app.ai.voice.agents.breeze_buddy.agent.flow import (
     prepare_initial_node,
     setup_flow_manager,
 )
-from app.ai.voice.agents.breeze_buddy.agent.inbound import handle_inbound_call
+from app.ai.voice.agents.breeze_buddy.agent.inbound import (
+    create_lead_from_template_id,
+    handle_inbound_call,
+)
+from app.ai.voice.agents.breeze_buddy.agent.ivr import get_template_id_from_call
 from app.ai.voice.agents.breeze_buddy.agent.pipeline import (
     build_pipeline,
     create_pipeline_task,
@@ -176,16 +180,47 @@ class Agent:
             self.call_sid, call_initiated_time
         )
         if not self.lead:
-            # Handle inbound call - create lead on-the-fly
-            self.lead, error_reason = await handle_inbound_call(
+            # Inbound call - extract template_id (handles IVR mode if enabled)
+            template_id_from_query, error_reason = await get_template_id_from_call(
+                ws=self.ws,
+                stream_sid=self.stream_sid,
                 call_sid=self.call_sid,
                 call_data=call_data,
-                call_initiated_time=call_initiated_time,
                 provider=self.provider,
             )
-            if not self.lead:
-                await close_websocket_safely(self.ws, code=4000, reason=error_reason)
+
+            # Check if there was an error (IVR failed or invalid template_id)
+            if error_reason:
+                # WebSocket already closed by get_template_id_from_call
                 return False
+
+            # Handle inbound call - create lead on-the-fly
+            if template_id_from_query:
+                # Template ID from IVR selection or query param
+                self.lead, error_reason = await create_lead_from_template_id(
+                    template_id=template_id_from_query,
+                    call_sid=self.call_sid,
+                    call_data=call_data,
+                    call_initiated_time=call_initiated_time,
+                )
+                if not self.lead:
+                    await close_websocket_safely(
+                        self.ws, code=4000, reason=error_reason
+                    )
+                    return False
+            else:
+                # Standard inbound handling (no IVR, no template_id in params)
+                self.lead, error_reason = await handle_inbound_call(
+                    call_sid=self.call_sid,
+                    call_data=call_data,
+                    call_initiated_time=call_initiated_time,
+                    provider=self.provider,
+                )
+                if not self.lead:
+                    await close_websocket_safely(
+                        self.ws, code=4000, reason=error_reason
+                    )
+                    return False
 
         try:
             self.template, self.configurations, self.template_vars = (

@@ -179,6 +179,34 @@ def get_template_by_outbound_number_id_query(
     return query, [outbound_number_id]
 
 
+def get_all_templates_by_outbound_number_id_query(
+    outbound_number_id: str,
+) -> Tuple[str, List[Any]]:
+    """
+    Generate query to get ALL templates by outbound_number_id.
+    Used for IVR to list all available templates for a phone number.
+
+    Only returns templates that are:
+    - Active (is_active = TRUE)
+    - Enabled for inbound (configurations.enable_inbound = true)
+
+    Note: We intentionally do NOT select the `secrets` column here.
+    This query is used only to list templates for IVR selection, and
+    loading sensitive secrets is unnecessary in this context. The
+    decoder will see `secrets` as None for these results, which is
+    expected and by design.
+    """
+    query = f"""
+        SELECT id, merchant_id, shop_identifier, name, flow, expected_payload_schema, expected_callback_response_schema, configurations, outbound_number_id, is_active, created_at, updated_at
+        FROM {TEMPLATE_TABLE}
+        WHERE outbound_number_id = $1
+        AND is_active = TRUE
+        AND COALESCE((configurations->>'enable_inbound')::boolean, FALSE) = TRUE
+        ORDER BY name ASC
+    """
+    return query, [outbound_number_id]
+
+
 def replace_template_query(
     template_id: str,
     name: str,

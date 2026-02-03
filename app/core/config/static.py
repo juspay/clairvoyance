@@ -414,6 +414,8 @@ DEFAULT_ANNOUNCEMENT_BANNER_BACKGROUND_COLOR = os.environ.get(
 EXOTEL_ACCOUNT_SID = os.getenv("EXOTEL_ACCOUNT_SID", "")
 EXOTEL_API_KEY = os.getenv("EXOTEL_API_KEY", "")
 EXOTEL_API_TOKEN = os.getenv("EXOTEL_API_TOKEN", "")
+# Exotel Webhook Authentication - required for inbound webhook security
+EXOTEL_WEBHOOK_AUTH_TOKEN = os.getenv("EXOTEL_WEBHOOK_AUTH_TOKEN", "")
 AWS_VAYU_URL = os.environ.get("AWS_VAYU_URL")
 AWS_VAYU_READ_API_KEY = os.environ.get("AWS_VAYU_READ_API_KEY")
 AWS_VAYU_WRITE_API_KEY = os.environ.get("AWS_VAYU_WRITE_API_KEY")

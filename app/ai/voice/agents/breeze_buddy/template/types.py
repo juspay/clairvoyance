@@ -54,6 +54,12 @@ class ConfigurationModel(BaseModel):
     initial_greeting: Optional[str] = (
         None  # Initial greeting text template with variables (e.g., "Hi {customer_name}")
     )
+    ivr_greeting: Optional[str] = (
+        None  # Greeting prefix for IVR menu (e.g., "Hello, this is Rhea from Namma Yatri support")
+    )
+    ivr_description: Optional[str] = (
+        None  # Description for IVR menu (e.g., "Trip feedback in English")
+    )
     vad_config: Optional[VadConfig] = Field(
         None, description="Default VAD configuration for the template"
     )
@@ -267,7 +273,6 @@ class CreateTemplateRequest(BaseModel):
     identifier: Optional[str] = None
     outbound_number_id: Optional[str] = None
     is_active: bool = True
-    description: Optional[str] = None
     flow: Dict[str, Any]
     expected_payload_schema: Optional[Dict[str, Any]] = None
     expected_callback_response_schema: Optional[Dict[str, Any]] = None
