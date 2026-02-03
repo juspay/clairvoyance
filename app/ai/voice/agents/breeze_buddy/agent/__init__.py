@@ -277,7 +277,7 @@ class Agent:
             template_type=self.lead.template,
         )
         try:
-            with trace.use_span(self.root_span):
+            with trace.use_span(self.root_span, end_on_exit=True):
                 await runner.run(self.task)
         except Exception as e:
             logger.error(f"Error during traced pipeline execution: {e}")

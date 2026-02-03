@@ -2,6 +2,7 @@
 
 from datetime import datetime
 from typing import Any, Optional
+from zoneinfo import ZoneInfo
 
 from pipecat.observers.loggers.llm_log_observer import LLMLogObserver
 from pipecat.observers.loggers.metrics_log_observer import MetricsLogObserver
@@ -54,8 +55,9 @@ def get_observers() -> list:
 
 
 def generate_conversation_id(payload: dict) -> str:
-    """Generate a unique conversation ID from lead payload."""
-    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    """Generate a trace name for Langfuse display from lead payload."""
+    ist_time = datetime.now(ZoneInfo("Asia/Kolkata"))
+    timestamp = ist_time.strftime("%Y-%m-%d_%H-%M-%S")
     customer_name = payload.get("customer_name", "unknown")
     shop_name = payload.get("shop_name", "unknown")
     return f"{customer_name}-{shop_name}-{timestamp}"
