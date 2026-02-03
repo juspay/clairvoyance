@@ -18,6 +18,7 @@ from app.database.queries.breeze_buddy.call_execution_config import (
 )
 from app.database.queries.breeze_buddy.template import (
     create_template_query,
+    get_all_templates_by_outbound_number_id_query,
     get_template_by_id_query,
     get_template_by_merchant_query,
     get_template_by_outbound_number_id_query,
@@ -400,3 +401,41 @@ async def get_template_by_outbound_number_id(
             f"Error getting template by outbound_number_id: {e}", exc_info=True
         )
         return None
+
+
+async def get_all_templates_by_outbound_number_id(
+    outbound_number_id: str,
+) -> List[TemplateModel]:
+    """
+    Get ALL templates by outbound_number_id.
+    Used for IVR to list all available templates for a phone number.
+
+    Args:
+        outbound_number_id: Outbound number UUID
+
+    Returns:
+        List of TemplateModel (empty list if none found)
+    """
+    logger.info(f"Getting all templates by outbound_number_id: {outbound_number_id}")
+
+    try:
+        query, values = get_all_templates_by_outbound_number_id_query(
+            outbound_number_id
+        )
+        result = await run_parameterized_query(query, values)
+
+        if result and get_row_count(result) > 0:
+            templates = [decode_template(row) for row in result]
+            logger.info(
+                f"Found {len(templates)} templates for outbound_number_id: {outbound_number_id}"
+            )
+            return templates
+
+        logger.info(f"No templates found with outbound_number_id: {outbound_number_id}")
+        return []
+
+    except Exception as e:
+        logger.error(
+            f"Error getting all templates by outbound_number_id: {e}", exc_info=True
+        )
+        return []

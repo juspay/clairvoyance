@@ -12,6 +12,7 @@ from app.database.accessor.breeze_buddy.outbound_number import (
     get_outbound_number_by_number,
 )
 from app.database.accessor.breeze_buddy.template import (
+    get_template_by_id,
     get_template_by_outbound_number_id,
 )
 from app.schemas import CallDirection, CallProvider, LeadCallStatus
@@ -93,4 +94,68 @@ async def handle_inbound_call(
         return None, "Failed to create lead"
 
     logger.info(f"Created lead for inbound call: {lead.id}, call_sid: {call_sid}")
+    return lead, None
+
+
+async def create_lead_from_template_id(
+    template_id: str,
+    call_sid: str,
+    call_data: Dict[str, Any],
+    call_initiated_time: datetime,
+) -> Tuple[Optional[LeadCallTracker], Optional[str]]:
+    """Create a lead for inbound call using a specific template_id.
+
+    Used when template is selected via IVR or passed as query param.
+
+    Args:
+        template_id: The template ID (from IVR selection or query param)
+        call_sid: The call SID
+        call_data: Call data from the telephony provider
+        call_initiated_time: When the call was initiated
+
+    Returns:
+        Tuple of (lead, error_reason). If successful, lead is set and error_reason is None.
+        If failed, lead is None and error_reason contains the failure reason.
+    """
+    logger.info(f"Creating lead from template_id: {template_id}")
+
+    # Load template by ID
+    template = await get_template_by_id(template_id)
+    if not template:
+        logger.error(f"Template not found for template_id: {template_id}")
+        return None, "Template not found"
+
+    # Get from_number from call_data
+    start_data = call_data.get("start", {})
+    custom_params = call_data.get("custom_parameters") or start_data.get(
+        "custom_parameters", {}
+    )
+    from_number = (
+        start_data.get("from")
+        or call_data.get("from")
+        or custom_params.get("from_number", "unknown")
+    )
+
+    # Create lead with the selected template
+    lead_id = str(uuid.uuid4())
+    lead = await create_lead_call_tracker(
+        id=lead_id,
+        merchant_id=template.merchant_id,
+        template=template.name,
+        template_id=str(template.id),
+        shop_identifier=template.shop_identifier,
+        next_attempt_at=None,
+        payload={"caller_number": from_number},
+        call_initiated_time=call_initiated_time,
+        status=LeadCallStatus.PROCESSING,
+        call_id=call_sid,
+        outbound_number_id=template.outbound_number_id,
+        call_direction=CallDirection.INBOUND,
+    )
+
+    if not lead:
+        logger.error("Failed to create lead for inbound call with template_id")
+        return None, "Failed to create lead"
+
+    logger.info(f"Created lead for inbound call: {lead.id}, template: {template.name}")
     return lead, None
