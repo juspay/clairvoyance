@@ -96,7 +96,13 @@ def create_root_span(
         A span object that can be used with trace.use_span() context manager
     """
     tracer = trace.get_tracer(__name__)
-    span = tracer.start_span(conversation_id)
+
+    # Use conversation_id as the trace name for display in Langfuse
+    trace_name = conversation_id
+
+    span = tracer.start_span(
+        name=trace_name,
+    )
 
     logger.info(
         f"Starting Langfuse trace for Breeze Buddy conversation: {conversation_id}"
