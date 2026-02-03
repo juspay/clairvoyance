@@ -41,7 +41,7 @@ from app.core.config.static import (
 from app.core.logger import logger
 
 
-def get_observers() -> list:
+def get_observers() -> list[Any]:
     """Get pipeline observers for dev environment."""
     if ENVIRONMENT.lower() != "dev":
         return []
@@ -54,10 +54,12 @@ def get_observers() -> list:
     ]
 
 
-def generate_conversation_id(payload: dict) -> str:
+def generate_conversation_id(payload: Optional[dict]) -> str:
     """Generate a trace name for Langfuse display from lead payload."""
     ist_time = datetime.now(ZoneInfo("Asia/Kolkata"))
     timestamp = ist_time.strftime("%Y-%m-%d_%H-%M-%S")
+    if payload is None:
+        return f"unknown-unknown-{timestamp}"
     customer_name = payload.get("customer_name", "unknown")
     shop_name = payload.get("shop_name", "unknown")
     return f"{customer_name}-{shop_name}-{timestamp}"
@@ -153,7 +155,7 @@ async def create_pipeline_task(
     Returns:
         Configured PipelineTask
     """
-    task_params = {
+    task_params: dict[str, Any] = {
         "params": PipelineParams(
             enable_metrics=True,
             enable_usage_metrics=True,

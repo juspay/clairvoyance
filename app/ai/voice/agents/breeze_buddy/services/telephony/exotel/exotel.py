@@ -1,4 +1,5 @@
 import json
+from typing import Any, Dict, Optional
 
 import requests
 from fastapi import WebSocket
@@ -65,7 +66,9 @@ class ExotelProvider(VoiceCallProvider):
                 provider,
             )
 
-    def make_call(self, customer_mobile_number: str, outbound_number: str):
+    def make_call(
+        self, customer_mobile_number: str, outbound_number: str
+    ) -> Optional[Dict[str, Any]]:
         flow_url = f"http://my.exotel.com/{self.EXOTEL_ACCOUNT_SID}/exoml/start_voice/{self.EXOTEL_APPLET_APP_ID if not self.use_template_flow else self.EXOTEL_TEMPLATE_APPLET_APP_ID}"
 
         payload = {

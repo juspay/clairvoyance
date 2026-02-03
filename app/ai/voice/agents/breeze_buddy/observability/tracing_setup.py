@@ -78,7 +78,7 @@ def create_root_span(
     order_id: str,
     provider: str,
     template_type: str,
-):
+) -> trace.Span:
     """
     Create and configure the root tracing span with all conversation attributes.
 

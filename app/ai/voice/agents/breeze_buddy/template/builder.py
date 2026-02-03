@@ -4,9 +4,10 @@ Flow Configuration Builder
 This module builds Pipecat flow configurations from database models.
 """
 
-from typing import Any, Dict, List
+from typing import Any, Callable, Dict, List, cast
 
-from pipecat_flows import FlowsFunctionSchema, NodeConfig
+from pipecat_flows import FlowManager, FlowsFunctionSchema, NodeConfig
+from pipecat_flows.types import ActionConfig, FlowResult
 
 from app.ai.voice.agents.breeze_buddy.handlers.internal import (
     end_conversation,
@@ -215,20 +216,20 @@ class FlowConfigBuilder:
             f"{len(task_messages)} task_messages, {len(role_messages)} role_messages"
         )
 
-        # Build NodeConfig dictionary
-        node_config = NodeConfig(
+        # Build NodeConfig dictionary - cast lists to expected types
+        node_config = NodeConfig(  # type: ignore[no-matching-overload]
             name=node.node_name,
             task_messages=task_messages,
             role_messages=role_messages,
-            functions=functions,
-            pre_actions=pre_actions,
-            post_actions=post_actions,
+            functions=cast(List[FlowsFunctionSchema], functions),
+            pre_actions=cast(List[ActionConfig], pre_actions),
+            post_actions=cast(List[ActionConfig], post_actions),
         )
 
         # Attach node-specific VAD config for transition handler to use
-        # NodeConfig is a TypedDict, so we store vad_config as a dict key
+        # NodeConfig is a TypedDict - use cast to allow custom key
         if node.vad_config:
-            node_config["vad_config"] = node.vad_config
+            cast(Dict[str, Any], node_config)["vad_config"] = node.vad_config
             logger.info(f"Attached VAD config to node {node.node_name}")
 
         return node_config
@@ -259,12 +260,14 @@ class FlowConfigBuilder:
         hooks = [hook.model_dump() for hook in func.hooks] if func.hooks else []
         logger.debug(f"Using hooks for {func.name}: {hooks}")
 
-        # Create a wrapper handler that passes all necessary params to unified handler
-        async def wrapper_handler(flow_manager, llm_args):
+        # Create a wrapper handler matching FlowsFunctionSchema expected signature
+        # Signature: (llm_args: Dict[str, Any], flow_manager: FlowManager) -> Awaitable[FlowResult | tuple]
+        async def wrapper_handler(
+            llm_args: Dict[str, Any], _flow_manager: FlowManager
+        ) -> FlowResult | tuple[FlowResult | None, str | NodeConfig | None]:
             # Call the wrapped unified transition handler
-            # The wrapped handler expects (flow_manager, llm_args) and will extract llm_args
-            result = await wrapped_unified_handler(
-                flow_manager,
+            # The with_context wrapper expects llm_args as first positional arg
+            result = await cast(Callable[..., Any], wrapped_unified_handler)(
                 llm_args,
                 transition_to=func.transition_to,
                 hooks=hooks,
@@ -314,7 +317,7 @@ class FlowConfigBuilder:
             logger.debug(
                 f"Successfully built FUNCTION action for handler: {action.handler} with args: {action.args}"
             )
-            result = {"type": "function", "handler": handler}
+            result: Dict[str, Any] = {"type": "function", "handler": handler}
             if action.args:
                 result["args"] = action.args
             return result

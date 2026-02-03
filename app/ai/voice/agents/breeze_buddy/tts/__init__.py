@@ -77,6 +77,9 @@ async def get_cartesia_tts_service(voice_id: str | None = None):
                 f"Language code '{bb_cartesia_language}' not found in Language enum, using EN"
             )
 
+    if not CARTESIA_API_KEY:
+        raise ValueError("CARTESIA_API_KEY is required for Cartesia TTS")
+
     return build_cartesia_tts(
         CartesiaConfig(
             api_key=CARTESIA_API_KEY,
@@ -100,6 +103,9 @@ async def get_sarvam_tts_service():
     bb_sarvam_tts_pace = await BB_SARVAM_TTS_PACE()
     bb_sarvam_tts_enable_preprocessing = await BB_SARVAM_TTS_ENABLE_PREPROCESSING()
 
+    if not SARVAM_API_KEY:
+        raise ValueError("SARVAM_API_KEY is not set")
+
     return build_sarvam_tts(
         SarvamTTSConfig(
             api_key=SARVAM_API_KEY,
@@ -117,6 +123,9 @@ async def get_elevenlabs_tts_service():
     """
     Returns an ElevenLabs TTS service instance based on the Breeze Buddy configuration.
     """
+    if not ELEVENLABS_API_KEY:
+        raise ValueError("ELEVENLABS_API_KEY is not set")
+
     return build_elevenlabs_tts(
         ElevenLabsConfig(
             api_key=ELEVENLABS_API_KEY,

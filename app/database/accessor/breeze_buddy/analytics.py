@@ -3,7 +3,7 @@ Database accessor functions for analytics with generic filtering.
 All queries are optimized to filter at database level.
 """
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from app.core.logger import logger
 from app.database.queries import run_parameterized_query
@@ -19,7 +19,7 @@ from app.database.queries.breeze_buddy.analytics import (
 
 
 async def get_summary_analytics_from_db(
-    filters: Dict[str, Any], group_by: str = None
+    filters: Dict[str, Any], group_by: Optional[str] = None
 ) -> Any:
     """
     Get summary analytics with all aggregations done at database level.
@@ -151,7 +151,7 @@ async def get_call_details_from_db(
         logger.info(
             f"[Analytics DB] Call details returned {len(result) if result else 0} records"
         )
-        return result or []
+        return [dict(row) for row in result] if result else []
 
     except Exception as e:
         logger.error(f"Error getting call details: {e}", exc_info=True)
@@ -199,7 +199,7 @@ async def get_trends_analytics_from_db(
         logger.info(
             f"[Analytics DB] Trends returned {len(result) if result else 0} time buckets"
         )
-        return result or []
+        return [dict(row) for row in result] if result else []
 
     except Exception as e:
         logger.error(f"Error getting trends analytics: {e}", exc_info=True)
@@ -207,7 +207,7 @@ async def get_trends_analytics_from_db(
 
 
 async def get_lead_based_analytics_from_db(
-    filters: Dict[str, Any], group_by: str = None
+    filters: Dict[str, Any], group_by: Optional[str] = None
 ) -> List[Dict[str, Any]]:
     """
     Get lead-based analytics (one row per unique lead/request_id).
@@ -229,7 +229,7 @@ async def get_lead_based_analytics_from_db(
         logger.info(
             f"[Analytics DB] Lead-based analytics returned {len(result) if result else 0} {'groups' if group_by else 'leads'}"
         )
-        return result or []
+        return [dict(row) for row in result] if result else []
 
     except Exception as e:
         logger.error(f"Error getting lead-based analytics: {e}", exc_info=True)
@@ -255,7 +255,7 @@ async def get_outbound_numbers_analytics_from_db(
         logger.info(
             f"[Analytics DB] Outbound numbers analytics returned {len(result) if result else 0} numbers"
         )
-        return result or []
+        return [dict(row) for row in result] if result else []
 
     except Exception as e:
         logger.error(f"Error getting outbound numbers analytics: {e}", exc_info=True)
@@ -283,7 +283,7 @@ async def get_lead_based_trends_from_db(
         logger.info(
             f"[Analytics DB] Lead-based trends returned {len(result) if result else 0} time buckets"
         )
-        return result or []
+        return [dict(row) for row in result] if result else []
 
     except Exception as e:
         logger.error(f"Error getting lead-based trends: {e}", exc_info=True)

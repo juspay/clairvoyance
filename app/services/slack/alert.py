@@ -4,7 +4,7 @@ Slack Alert Integration
 This module provides functionality to send alerts to Slack via webhooks.
 """
 
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import aiohttp
 
@@ -47,8 +47,8 @@ class Alert:
             return False
 
         try:
-            # Build blocks
-            blocks = [
+            # Build blocks - use Any type for flexible Slack block structure
+            blocks: List[Dict[str, Any]] = [
                 {
                     "type": "header",
                     "text": {

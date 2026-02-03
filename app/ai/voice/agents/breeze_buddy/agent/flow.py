@@ -1,9 +1,10 @@
 """Flow management and node configuration for voice agents."""
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 
 from pipecat.services.azure.llm import AzureLLMService
 from pipecat_flows import FlowManager, NodeConfig
+from pipecat_flows.types import FlowsDirectFunction, FlowsFunctionSchema
 
 from app.ai.voice.agents.breeze_buddy.template import (
     FlowConfigBuilder,
@@ -22,7 +23,7 @@ from app.schemas.breeze_buddy.core import LeadCallTracker
 
 async def load_template_config(
     lead: LeadCallTracker,
-) -> tuple[TemplateModel, ConfigurationModel, Dict[str, str]]:
+) -> tuple[TemplateModel, Optional[ConfigurationModel], Dict[str, str]]:
     """Load template configuration from database.
 
     Args:
@@ -75,7 +76,10 @@ def setup_flow_manager(
         llm=llm,
         context_aggregator=context_aggregator,
         transport=transport,
-        global_functions=global_functions or None,
+        global_functions=cast(
+            Optional[List[FlowsDirectFunction | FlowsFunctionSchema]],
+            global_functions or None,
+        ),
     )
 
 

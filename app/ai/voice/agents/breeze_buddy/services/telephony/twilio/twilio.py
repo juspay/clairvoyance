@@ -1,3 +1,5 @@
+from typing import Any, Dict, Optional
+
 from fastapi import WebSocket
 from pipecat.serializers.twilio import TwilioFrameSerializer
 from twilio.http.http_client import TwilioHttpClient
@@ -93,7 +95,9 @@ class TwilioProvider(VoiceCallProvider):
                 provider,
             )
 
-    def make_call(self, customer_mobile_number: str, outbound_number: str):
+    def make_call(
+        self, customer_mobile_number: str, outbound_number: str
+    ) -> Optional[Dict[str, Any]]:
         ws_url = (
             self.TWILIO_TEMPLATE_WEBSOCKET_URL
             if self.use_template_flow

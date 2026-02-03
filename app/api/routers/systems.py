@@ -5,6 +5,7 @@ Endpoints for monitoring system health including Redis connectivity.
 """
 
 import time
+from typing import Awaitable, cast
 
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
@@ -38,7 +39,10 @@ async def redis_health_check():
         # Check 1: PING
         try:
             start = time.time()
-            await client.ping()
+            ping_result = client.ping()
+            # Redis ping returns Union[Awaitable[bool], bool], await if awaitable
+            if hasattr(ping_result, "__await__"):
+                await cast(Awaitable[bool], ping_result)
             health_status["checks"]["ping"] = {
                 "status": "ok",
                 "latency_ms": round((time.time() - start) * 1000, 2),

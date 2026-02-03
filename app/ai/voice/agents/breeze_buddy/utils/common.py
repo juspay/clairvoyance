@@ -66,7 +66,7 @@ def convert_to_mulaw(audio_data: bytes, input_format: str = "raw") -> bytes:
         audio_segment = (
             audio_segment.set_frame_rate(8000).set_channels(1).set_sample_width(2)
         )
-        pcm_data = audio_segment.raw_data
+        pcm_data: bytes = audio_segment.raw_data  # type: ignore[assignment]
         mulaw_data = audioop.lin2ulaw(pcm_data, 2)
         return mulaw_data
 
@@ -175,7 +175,7 @@ def load_audio(audio_path) -> OutputAudioRawFrame | None:
             )
 
             # Get raw audio data
-            raw_audio_data = audio_segment.raw_data
+            raw_audio_data: bytes = audio_segment.raw_data  # type: ignore[assignment]
 
             # Create OutputAudioRawFrame with correct parameters
             audio_sound = OutputAudioRawFrame(
@@ -491,7 +491,7 @@ async def prepare_initial_greeting_payload(
     lead,
     template,
     provider,
-) -> Optional[Dict[str, any]]:
+) -> Optional[Dict[str, Any]]:
     """
     Prepare initial greeting audio payload for calls.
 
@@ -556,7 +556,7 @@ async def prepare_initial_greeting_payload(
             # Load and convert audio
             audio = AudioSegment.from_wav(wav_file_path)
             audio = audio.set_frame_rate(8000).set_channels(1).set_sample_width(2)
-            pcm_data = audio.raw_data
+            pcm_data: bytes = audio.raw_data  # type: ignore[assignment]
             mulaw_data = audioop.lin2ulaw(pcm_data, 2)
 
         logger.info(f"Prepared initial greeting audio from source: {greeting_source}")

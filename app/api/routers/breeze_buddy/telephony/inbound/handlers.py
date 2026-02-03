@@ -90,9 +90,12 @@ async def handle_voicebot_url(request: Request) -> Response:
     else:
         params = dict(await request.form())
 
-    call_sid = params.get("CallSid")
-    from_number = params.get("From") or params.get("CallFrom", "unknown")
-    to_number = params.get("To") or params.get("CallTo") or params.get("DialWhomNumber")
+    # Ensure string types (form data can return UploadFile for file fields)
+    call_sid = str(params.get("CallSid", "")) or None
+    from_number = str(params.get("From") or params.get("CallFrom", "unknown"))
+    to_number = str(
+        params.get("To") or params.get("CallTo") or params.get("DialWhomNumber", "")
+    )
 
     logger.info(
         f"[Voicebot] URL request - CallSid: {call_sid}, From: {from_number}, To: {to_number}"

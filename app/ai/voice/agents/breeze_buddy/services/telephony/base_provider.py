@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from typing import Any, Dict, Optional
 
 from fastapi import WebSocket
 
@@ -22,7 +23,9 @@ class VoiceCallProvider(ABC):
         """
 
     @abstractmethod
-    def make_call(self, customer_mobile_number: str, outbound_number: str):
+    def make_call(
+        self, customer_mobile_number: str, outbound_number: str
+    ) -> Optional[Dict[str, Any]]:
         """
         Initiate a call.
         """

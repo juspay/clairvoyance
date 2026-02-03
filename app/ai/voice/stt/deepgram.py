@@ -59,7 +59,7 @@ def build_deepgram_stt(config: DeepgramConfig):
         punctuate=config.punctuate,
         endpointing=config.endpointing,
         vad_events=config.vad_events,
-        utterance_end_ms=config.utterance_end_ms,
+        utterance_end_ms=str(config.utterance_end_ms),
         no_delay=config.no_delay,
         interim_results=config.interim_results,
         profanity_filter=config.profanity_filter,

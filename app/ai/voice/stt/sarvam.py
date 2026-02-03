@@ -31,7 +31,7 @@ class SarvamConfig:
     sample_rate: int
     language_code: Optional[str] = None
     prompt: Optional[str] = None
-    vad_signals: Optional[str] = None
+    vad_signals: Optional[bool] = None
     high_vad_sensitivity: Optional[bool] = None
 
 
@@ -93,7 +93,11 @@ def build_sarvam_stt(config: SarvamConfig):
         params=SarvamSTTService.InputParams(
             language=language_param,
             prompt=prompt_param,
-            vad_signals=config.vad_signals,
-            high_vad_sensitivity=config.high_vad_sensitivity,
+            vad_signals=config.vad_signals if config.vad_signals is not None else True,
+            high_vad_sensitivity=(
+                config.high_vad_sensitivity
+                if config.high_vad_sensitivity is not None
+                else False
+            ),
         ),
     )

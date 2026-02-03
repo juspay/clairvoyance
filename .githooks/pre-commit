@@ -1,4 +1,6 @@
 #!/bin/sh
+set -e
+
 echo "Running formatters before commit..."
 
 # Ensure dev dependencies are available (uv handles venv automatically)
@@ -12,6 +14,19 @@ uv run isort . --profile black
 
 # Format all python files with black
 uv run black .
+
+echo "Running pyrefly check..."
+
+TMP_ERR_FILE="$(mktemp)"
+
+if ! uv run pyrefly check > "$TMP_ERR_FILE" 2>&1; then
+  echo "❌ Pyrefly check failed. Commit aborted."
+  mv "$TMP_ERR_FILE" error.txt
+  exit 1
+fi
+
+# No errors → clean up temp file
+rm "$TMP_ERR_FILE"
 
 # Stage updated files (if formatters changed them)
 git add -u

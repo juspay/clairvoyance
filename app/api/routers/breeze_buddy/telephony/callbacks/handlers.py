@@ -100,11 +100,18 @@ async def handle_callback_details_post(
     provider_recording_url = form.get("RecordingUrl")
 
     if provider_recording_url and call_sid:
+        # Ensure we have string values (form can return UploadFile)
+        call_sid_str = str(call_sid) if not isinstance(call_sid, str) else call_sid
+        recording_url_str = (
+            str(provider_recording_url)
+            if not isinstance(provider_recording_url, str)
+            else provider_recording_url
+        )
         logger.info(
-            f"Extracted recording_url: {provider_recording_url} and call_sid: {call_sid}"
+            f"Extracted recording_url: {recording_url_str} and call_sid: {call_sid_str}"
         )
         background_tasks.add_task(
-            update_call_recording, call_sid, provider_recording_url, provider.lower()
+            update_call_recording, call_sid_str, recording_url_str, provider.lower()
         )
 
     return Response(status_code=200)
@@ -149,7 +156,9 @@ async def handle_callback_status(request: Request, provider: str) -> Response:
 
     if call_status in ("no-answer", "failed", "busy"):
         logger.info(f"Call with SID {call_sid} failed with status: {call_status}")
-        await handle_unanswered_calls(call_sid)
+        # Convert to string for the handler
+        if call_sid and isinstance(call_sid, str):
+            await handle_unanswered_calls(call_sid)
 
     return Response(status_code=200)
 

@@ -4,7 +4,7 @@ Simplified Redis Client Service
 Basic Redis client for essential key-value operations only.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Awaitable, Dict, List, Optional, Union, cast
 
 from redis.asyncio import Redis
 from redis.asyncio.cluster import ClusterNode, RedisCluster
@@ -42,7 +42,7 @@ class RedisFactory:
         self._cluster_client: Optional[RedisCluster] = None
         self._single_client: Optional[Redis] = None
 
-    async def get_client(self) -> Redis:
+    async def get_client(self) -> Union[Redis, RedisCluster]:
         """Get appropriate Redis client (cluster or single)"""
         if self._cluster_client is not None:
             return self._cluster_client
@@ -50,7 +50,11 @@ class RedisFactory:
             return self._single_client
         else:
             await self._create_client()
-            return self._cluster_client or self._single_client
+            if self._cluster_client is not None:
+                return self._cluster_client
+            if self._single_client is not None:
+                return self._single_client
+            raise RuntimeError("Redis client not initialized")
 
     async def _create_client(self) -> None:
         """Create Redis client"""
@@ -78,8 +82,10 @@ class RedisFactory:
                     decode_responses=True,  # Decode bytes to strings automatically
                 )
 
-                # Test connection
-                await self._cluster_client.ping()
+                # Test connection - ping() is async in redis-py
+                ping_result = self._cluster_client.ping()
+                if hasattr(ping_result, "__await__"):
+                    await ping_result  # type: ignore[misc]
                 logger.info("Redis cluster connection established successfully")
 
             else:
@@ -95,8 +101,10 @@ class RedisFactory:
                     decode_responses=True,  # Decode bytes to strings automatically
                 )
 
-                # Test connection
-                await self._single_client.ping()
+                # Test connection - ping() is async in redis-py
+                ping_result = self._single_client.ping()
+                if hasattr(ping_result, "__await__"):
+                    await ping_result  # type: ignore[misc]
                 logger.info("Redis single-node connection established successfully")
 
         except RedisConnectionError as e:
@@ -171,7 +179,7 @@ class RedisService:
     def __init__(self):
         self._factory: Optional[RedisFactory] = None
 
-    async def get_client(self) -> Redis:
+    async def get_client(self) -> Union[Redis, RedisCluster]:
         """Get Redis client instance"""
         if not is_redis_configured():
             raise ValueError("Redis is not properly configured")
@@ -253,7 +261,10 @@ class RedisService:
         """Test Redis connection"""
         try:
             client = await self.get_client()
-            await client.ping()
+            # Redis ping returns Union[Awaitable[bool], bool]
+            ping_result = client.ping()
+            if hasattr(ping_result, "__await__"):
+                await cast(Awaitable[bool], ping_result)
             return True
         except Exception as e:
             logger.error(f"Redis PING error: {e}")

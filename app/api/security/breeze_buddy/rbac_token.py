@@ -96,10 +96,21 @@ class BreezeBuddyRBACTokenManager:
                     headers={"WWW-Authenticate": "Bearer"},
                 )
 
+            # Validate required identity claims
+            user_id = payload.get("sub")
+            username = payload.get("username")
+            if not user_id or not username:
+                logger.warning("Token missing required identity claims (sub/username)")
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Could not validate credentials",
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+
             # Extract Breeze Buddy RBAC data
             user_info = UserInfo(
-                id=payload.get("sub"),
-                username=payload.get("username"),
+                id=user_id,
+                username=username,
                 role=UserRole(payload.get("role")),
                 email=payload.get("email"),
                 merchant_ids=payload.get("merchant_ids", []),

@@ -470,8 +470,8 @@ class HttpRequestExecutor:
         return result
 
     def _resolve_dict_templates(
-        self, template_dict: dict, resolved_fields: dict
-    ) -> dict:
+        self, template_dict: dict[str, Any], resolved_fields: dict[str, Any]
+    ) -> dict[str, Any]:
         """
         Recursively resolve templates in all string values of a dictionary.
 
@@ -485,7 +485,7 @@ class HttpRequestExecutor:
         if not template_dict:
             return {}
 
-        result = {}
+        result: dict[str, Any] = {}
         for key, value in template_dict.items():
             if isinstance(value, str):
                 result[key] = replace_placeholders(value, resolved_fields)

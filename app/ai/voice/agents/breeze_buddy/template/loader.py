@@ -120,7 +120,8 @@ class FlowConfigLoader:
             template_vars.update(template_obj.secrets)
             logger.info(f"Loaded {len(template_obj.secrets)} secrets from template")
 
-        for field_name in template_obj.expected_payload_schema.keys():
+        expected_schema = template_obj.expected_payload_schema or {}
+        for field_name in expected_schema.keys():
             if call_payload and field_name in call_payload:
                 template_vars[field_name] = call_payload[field_name]
             else:

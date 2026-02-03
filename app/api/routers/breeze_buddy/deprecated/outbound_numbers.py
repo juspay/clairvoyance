@@ -1,3 +1,4 @@
+from typing import Optional
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -34,6 +35,11 @@ async def add_outbound_number(
         f"Authenticated user {current_user.user_id} adding new outbound number: {number.number}"
     )
 
+    if not number.merchant_id:
+        return JSONResponse(
+            status_code=400, content={"detail": "merchant_id is required"}
+        )
+
     try:
         outbound_number = await create_outbound_number(
             id=str(uuid4()),
@@ -67,7 +73,7 @@ async def add_outbound_number(
 
 @router.get("/outbound-number")
 async def get_outbound_number(
-    id: str = None, current_user: TokenData = Depends(get_current_user)
+    id: Optional[str] = None, current_user: TokenData = Depends(get_current_user)
 ):
     """
     Gets an outbound number from the database based on the provided query parameters.

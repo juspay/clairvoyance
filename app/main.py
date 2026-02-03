@@ -312,6 +312,10 @@ async def bot_connect(
                 **session_params,
             }
 
+            if not voice_process.process.stdin:
+                logger.error("Process stdin is not available")
+                raise RuntimeError("Process stdin is not available")
+
             config_json = json.dumps(session_config) + "\n"
             voice_process.process.stdin.write(config_json.encode("utf-8"))
             await voice_process.process.stdin.drain()
@@ -381,8 +385,14 @@ async def bot_connect(
         for key, value in session_params.items():
             if value is not None:
                 arg_name = arg_map.get(key)
+                if arg_name is None:
+                    continue
                 if isinstance(value, list):
-                    cmd.extend([arg_name] + value)
+                    list_values = [str(v) for v in value if v is not None]
+                    if not list_values:
+                        continue
+                    cmd.extend([arg_name, *list_values])
+
                 else:
                     cmd.extend([arg_name, str(value)])
 

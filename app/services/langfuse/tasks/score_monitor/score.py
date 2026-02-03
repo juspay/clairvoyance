@@ -92,7 +92,7 @@ class ScoreMonitor:
             aiohttp.ClientResponseError: If API request fails
         """
         # Build query parameters - using correct parameter names from API spec
-        params = {"limit": limit}
+        params: Dict[str, Any] = {"limit": limit}
         if evaluator_name:
             params["name"] = evaluator_name
         if from_timestamp:
@@ -144,6 +144,10 @@ class ScoreMonitor:
             List of score dictionaries
         """
         try:
+            if not self.client._http_client:
+                logger.error("HTTP client not available")
+                return []
+
             # Fetch scores using Langfuse REST API via our own method
             scores_response = await self.fetch_scores(
                 http_client=self.client._http_client,
@@ -713,6 +717,10 @@ class ScoreMonitor:
             Dictionary with trace details or None if not found
         """
         if not self.client.initialized:
+            return None
+
+        if not self.client._http_client:
+            logger.error("HTTP client not available")
             return None
 
         try:

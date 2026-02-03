@@ -42,6 +42,12 @@ async def create_number_handler(
         f"Admin {current_user.username} creating outbound number: {number.number}"
     )
 
+    if not number.merchant_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="merchant_id is required",
+        )
+
     try:
         outbound_number = await create_outbound_number(
             id=str(uuid4()),

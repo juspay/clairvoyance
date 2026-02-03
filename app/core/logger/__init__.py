@@ -1,6 +1,7 @@
 import json
 import logging
 import sys
+from typing import Optional
 
 from loguru import logger
 
@@ -46,9 +47,13 @@ class InterceptHandler(logging.Handler):
             level = record.levelno
 
         # Find caller from where originated the logged message
-        frame, depth = logging.currentframe(), 2
-        while frame.f_code.co_filename == logging.__file__:
-            frame = frame.f_back
+        frame = logging.currentframe()
+        depth = 2
+        while frame is not None and frame.f_code.co_filename == logging.__file__:
+            next_frame = frame.f_back
+            if next_frame is None:
+                break
+            frame = next_frame
             depth += 1
 
         logger.opt(depth=depth, exception=record.exc_info).log(
@@ -162,7 +167,7 @@ def _setup_logger_sinks(
         )
 
 
-def configure_session_logger(session_id: str, client_sid: str = None):
+def configure_session_logger(session_id: str, client_sid: Optional[str] = None):
     """
     Configure the logger to automatically include session_id and client_sid in all log entries.
     This should be called once at the start of a subprocess.

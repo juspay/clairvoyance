@@ -250,8 +250,8 @@ def update_lead_call_completion_details_query(
     Generate query to update lead call completion details.
     Only updates fields that are not None.
     """
-    set_clauses = []
-    values = []
+    set_clauses: List[str] = []
+    values: List[Any] = []
 
     if status is not None:
         values.append(status.value)
