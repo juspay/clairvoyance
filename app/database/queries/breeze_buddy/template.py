@@ -210,7 +210,9 @@ def get_all_templates_by_outbound_number_id_query(
         WHERE outbound_number_id = $1
         AND is_active = TRUE
         AND COALESCE((configurations->>'enable_inbound')::boolean, FALSE) = TRUE
-        ORDER BY name ASC
+        ORDER BY 
+            COALESCE((configurations->>'ivr_priority')::integer, 999999) ASC,
+            name ASC
     """
     return query, [outbound_number_id]
 
