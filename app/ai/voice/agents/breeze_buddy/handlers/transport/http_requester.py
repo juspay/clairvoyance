@@ -523,17 +523,17 @@ class HttpRequestExecutor:
             return obj
 
     def _resolve_body(
-        self, body: Optional[dict | str], resolved_fields: dict
-    ) -> Optional[dict]:
+        self, body: Optional[dict | list | str], resolved_fields: dict
+    ) -> Optional[dict | list]:
         """
-        Resolve HTTP request body, handling both dict and JSON string formats.
+        Resolve HTTP request body, handling dict, list, and JSON string formats.
 
         Args:
-            body: Request body as dict or JSON string (may contain {placeholders})
+            body: Request body as dict, list, or JSON string (may contain {placeholders})
             resolved_fields: Dictionary of field_name -> value mappings
 
         Returns:
-            Resolved body as dict (ready for json= parameter) or None
+            Resolved body as dict or list (ready for json= parameter) or None
 
         Raises:
             ValueError: If body is a string that cannot be parsed as valid JSON
@@ -550,8 +550,8 @@ class HttpRequestExecutor:
         if body is None:
             return None
 
-        # If body is already a dict, resolve placeholders recursively
-        if isinstance(body, dict):
+        # If body is already a dict or list, resolve placeholders recursively
+        if isinstance(body, (dict, list)):
             return self._resolve_recursive(body, resolved_fields)
 
         # If body is a string, first resolve placeholders, then parse as JSON
@@ -563,9 +563,9 @@ class HttpRequestExecutor:
             # Step 2: Parse the resolved string as JSON
             try:
                 parsed_body = json.loads(resolved_string)
-                if not isinstance(parsed_body, dict):
+                if not isinstance(parsed_body, (dict, list)):
                     logger.warning(
-                        f"Parsed body is not a dict (got {type(parsed_body).__name__}), "
+                        f"Parsed body is not a dict or list (got {type(parsed_body).__name__}), "
                         f"wrapping in 'data' key"
                     )
                     return {"data": parsed_body}
