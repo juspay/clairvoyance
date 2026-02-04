@@ -273,7 +273,7 @@ async def prepare_ivr_menu_audio(
 
         # Generate cache key from template names, voice, and greeting
         # MD5 hash ensures constant key size regardless of input length
-        cache_components = "|".join(sorted([t["name"] or "" for t in templates]))
+        cache_components = "|".join([t["name"] or "" for t in templates])
         cache_components += f"|voice:{voice_name}|greeting:{ivr_greeting or 'default'}"
         cache_key = f"{IVR_AUDIO_CACHE_PREFIX}{hashlib.md5(cache_components.encode()).hexdigest()}"
 

@@ -60,6 +60,11 @@ class ConfigurationModel(BaseModel):
     ivr_description: Optional[str] = (
         None  # Description for IVR menu (e.g., "Trip feedback in English")
     )
+    ivr_priority: Optional[int] = Field(
+        None,
+        ge=1,
+        description="Priority order for IVR menu (lower number = earlier in menu). Gaps allowed (e.g., 1, 3, 4).",
+    )
     vad_config: Optional[VadConfig] = Field(
         None, description="Default VAD configuration for the template"
     )
