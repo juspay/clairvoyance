@@ -73,6 +73,9 @@ KRISP_MODEL_PATH = os.environ.get(
 
 # TTS Configuration
 ELEVENLABS_API_KEY = os.environ.get("ELEVENLABS_API_KEY")
+ELEVENLABS_INDIAN_RESIDENCY_API_KEY = os.environ.get(
+    "ELEVENLABS_INDIAN_RESIDENCY_API_KEY"
+)
 ELEVENLABS_VOICE_ID = os.environ.get(
     "ELEVENLABS_VOICE_ID", "bQQWtYx9EodAqMdkrNAc"
 )  # bQQWtYx9EodAqMdkrNAc
@@ -84,6 +87,9 @@ ELEVENLABS_VOICE_SPEED = float(os.environ.get("ELEVENLABS_VOICE_SPEED", 1.15))
 ELEVENLABS_TTS_SPEED = float(os.environ.get("ELEVENLABS_TTS_SPEED", "1.10"))
 ELEVENLABS_BB_VOICE_ID = os.environ.get(
     "ELEVENLABS_BB_VOICE_ID", "fG9s0SXJb213f4UxVHyG"
+)
+ELEVENLABS_INDIAN_RESIDENCY_WEBSOCKET_URL = os.environ.get(
+    "ELEVENLABS_INDIAN_RESIDENCY_WEBSOCKET_URL", "wss://api.in.residency.elevenlabs.io"
 )
 GOOGLE_BRET_VOICE = os.environ.get("GOOGLE_BRET_VOICE", "en-IN-Chirp3-HD-Sadaltager")
 GOOGLE_MIA_VOICE = os.environ.get("GOOGLE_MIA_VOICE", "en-IN-Chirp3-HD-Despina")

@@ -23,6 +23,7 @@ from app.core.config.dynamic import (
     BB_CARTESIA_LANGUAGE,
     BB_CARTESIA_MODEL,
     BB_CARTESIA_VOICE_ID,
+    BB_ENABLE_ELEVENLABS_INDIAN_RESIDENCY,
     BB_SARVAM_TTS_ENABLE_PREPROCESSING,
     BB_SARVAM_TTS_LANGUAGE_CODE,
     BB_SARVAM_TTS_MODEL,
@@ -35,6 +36,8 @@ from app.core.config.static import (
     CARTESIA_API_KEY,
     ELEVENLABS_API_KEY,
     ELEVENLABS_BB_VOICE_ID,
+    ELEVENLABS_INDIAN_RESIDENCY_API_KEY,
+    ELEVENLABS_INDIAN_RESIDENCY_WEBSOCKET_URL,
     ELEVENLABS_MODEL_ID,
     ELEVENLABS_VOICE_SPEED,
     SARVAM_API_KEY,
@@ -123,12 +126,29 @@ async def get_elevenlabs_tts_service():
     """
     Returns an ElevenLabs TTS service instance based on the Breeze Buddy configuration.
     """
-    if not ELEVENLABS_API_KEY:
+
+    use_indian_residency = await BB_ENABLE_ELEVENLABS_INDIAN_RESIDENCY()
+    if use_indian_residency and not ELEVENLABS_INDIAN_RESIDENCY_API_KEY:
+        raise ValueError(
+            "ELEVENLABS_INDIAN_RESIDENCY_API_KEY is required when BB_ENABLE_ELEVENLABS_INDIAN_RESIDENCY is True"
+        )
+
+    if not use_indian_residency and not ELEVENLABS_API_KEY:
         raise ValueError("ELEVENLABS_API_KEY is not set")
 
     return build_elevenlabs_tts(
         ElevenLabsConfig(
-            api_key=ELEVENLABS_API_KEY,
+            api_key=(
+                ELEVENLABS_INDIAN_RESIDENCY_API_KEY
+                if use_indian_residency
+                else ELEVENLABS_API_KEY
+            )
+            or "",
+            url=(
+                ELEVENLABS_INDIAN_RESIDENCY_WEBSOCKET_URL
+                if use_indian_residency
+                else "wss://api.elevenlabs.io"
+            ),
             voice_id=ELEVENLABS_BB_VOICE_ID,
             model_id=ELEVENLABS_MODEL_ID,
             speed=ELEVENLABS_VOICE_SPEED,

@@ -463,7 +463,6 @@ class Agent:
             return
 
         logger.info(f"{reason}. Updating call status.")
-        track_error(self.errors, reason)
 
         if self.lead:
             if self.lead.outcome is None:
