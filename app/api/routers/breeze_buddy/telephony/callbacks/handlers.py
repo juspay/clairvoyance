@@ -11,12 +11,17 @@ Handlers:
 - handle_plivo_answer() - POST answer webhook for Plivo (returns XML)
 """
 
+import json
+
 from fastapi import BackgroundTasks, HTTPException, Request, Response
 from starlette.responses import HTMLResponse
 
 from app.ai.voice.agents.breeze_buddy.managers.calls import (
     handle_unanswered_calls,
     update_call_recording,
+)
+from app.ai.voice.agents.breeze_buddy.services.telephony.plivo.recording import (
+    start_call_recording,
 )
 from app.core.config.dynamic import (
     BB_NOISE_CANCELLATION_ENABLED,
@@ -72,14 +77,14 @@ async def handle_callback_details_post(
     request: Request, provider: str, background_tasks: BackgroundTasks
 ) -> Response:
     """
-    Handle POST callback for call details (typically from Twilio).
+    Handle POST callback for call details (typically from Twilio or Plivo).
 
     This endpoint receives call recording URLs via form data.
     The recording URL is extracted and processed in the background.
 
     Args:
         request: FastAPI Request object with form data
-        provider: Telephony provider name (e.g., "twilio")
+        provider: Telephony provider name (e.g., "twilio", "plivo")
         background_tasks: FastAPI BackgroundTasks for async processing
 
     Returns:
@@ -91,13 +96,40 @@ async def handle_callback_details_post(
     form = await request.form()
     logger.info(f"Received callback from {provider} with form data: {form}")
 
-    if provider.lower() != "twilio":
+    provider_lower = provider.lower()
+    if provider_lower not in ["twilio", "plivo"]:
         raise HTTPException(
             status_code=404, detail="Feature not supported for this service provider"
         )
 
-    call_sid = form.get("CallSid")
-    provider_recording_url = form.get("RecordingUrl")
+    # Extract call_sid and recording_url based on provider
+    call_sid = None
+    provider_recording_url = None
+    if provider_lower == "twilio":
+        call_sid = form.get("CallSid")
+        provider_recording_url = form.get("RecordingUrl")
+    elif provider_lower == "plivo":
+        # Plivo sends callback data as JSON string in 'response' field
+        response_data = form.get("response")
+        if response_data:
+            try:
+                response_str = (
+                    str(response_data)
+                    if not isinstance(response_data, str)
+                    else response_data
+                )
+                plivo_data = json.loads(response_str)
+                call_sid = plivo_data.get("call_uuid")
+                provider_recording_url = plivo_data.get("record_url")
+                logger.info(
+                    f"Parsed Plivo response: call_uuid={call_sid}, record_url={provider_recording_url}"
+                )
+            except json.JSONDecodeError as e:
+                logger.error(f"Failed to parse Plivo response JSON: {e}")
+        else:
+            # Fallback to direct form fields (older format)
+            call_sid = form.get("call_uuid")
+            provider_recording_url = form.get("record_url")
 
     if provider_recording_url and call_sid:
         # Ensure we have string values (form can return UploadFile)
@@ -111,7 +143,7 @@ async def handle_callback_details_post(
             f"Extracted recording_url: {recording_url_str} and call_sid: {call_sid_str}"
         )
         background_tasks.add_task(
-            update_call_recording, call_sid_str, recording_url_str, provider.lower()
+            update_call_recording, call_sid_str, recording_url_str, provider_lower
         )
 
     return Response(status_code=200)
@@ -178,6 +210,16 @@ async def handle_plivo_answer(request: Request) -> HTMLResponse:
     """
     form = await request.form()
     logger.info(f"Received Plivo answer webhook with form data: {form}")
+
+    # Extract call UUID for recording
+    call_uuid = form.get("CallUUID")
+    if call_uuid:
+        call_uuid_str = str(call_uuid) if not isinstance(call_uuid, str) else call_uuid
+        logger.info(f"Starting recording for Plivo call UUID: {call_uuid_str}")
+        try:
+            start_call_recording(call_uuid_str)
+        except Exception as e:
+            logger.error(f"Failed to start Plivo recording: {e}", exc_info=True)
 
     # Build WebSocket URL using existing endpoint pattern
     # Reuses the existing telephony websocket handler
