@@ -12,6 +12,9 @@ from app.ai.voice.agents.breeze_buddy.managers.utils import (
 from app.ai.voice.agents.breeze_buddy.services.telephony.exotel.recording import (
     download_call_recording as download_call_recording_exotel,
 )
+from app.ai.voice.agents.breeze_buddy.services.telephony.plivo.recording import (
+    download_call_recording as download_call_recording_plivo,
+)
 from app.ai.voice.agents.breeze_buddy.services.telephony.twilio.recording import (
     download_call_recording as download_call_recording_twilio,
 )
@@ -811,6 +814,10 @@ async def update_call_recording(
             audio_file = await download_call_recording_exotel(
                 provider_recording_url, call_id
             )
+        elif provider == "plivo":
+            audio_file = await download_call_recording_plivo(
+                provider_recording_url, call_id
+            )
         else:
             logger.error(f"Unsupported provider: {provider}")
             return
@@ -823,6 +830,9 @@ async def update_call_recording(
         if provider == "twilio":
             content_type = "audio/wav"
             file_extension = "wav"
+        elif provider == "plivo":
+            content_type = "audio/mpeg"
+            file_extension = "mp3"
         else:  # exotel
             content_type = "audio/mp3"
             file_extension = "mp3"
