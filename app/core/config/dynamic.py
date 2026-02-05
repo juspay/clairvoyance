@@ -275,3 +275,8 @@ async def BB_NOISE_CANCELLATION_ENABLED() -> bool:
 async def BB_NOISE_CANCELLATION_LEVEL() -> int:
     """Returns BB_NOISE_CANCELLATION_LEVEL from Redis (0-100)"""
     return await get_config("BB_NOISE_CANCELLATION_LEVEL", 100, int)
+
+
+async def BB_ENABLE_ELEVENLABS_INDIAN_RESIDENCY() -> bool:
+    """Returns BB_ENABLE_ELEVENLABS_INDIAN_RESIDENCY from Redis"""
+    return await get_config("BB_ENABLE_ELEVENLABS_INDIAN_RESIDENCY", True, bool)

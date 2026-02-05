@@ -24,6 +24,7 @@ class ElevenLabsConfig:
     """Configuration for ElevenLabs TTS."""
 
     api_key: str
+    url: str
     voice_id: str
     model_id: str
     speed: float = 1.0
@@ -40,6 +41,7 @@ def build_elevenlabs_tts(config: ElevenLabsConfig):
         api_key=config.api_key,
         voice_id=config.voice_id,
         model_id=config.model_id,
+        url=config.url,
         params=ElevenLabsTTSService.InputParams(
             speed=config.speed,
             language=config.language,
