@@ -317,27 +317,36 @@ async def delete_lead_handler(
 
     This handler:
     1. Fetches each lead to validate it exists
-    2. Checks if lead is already aborted
-    3. Calls handle_lead_abort to set status to FINISHED and outcome to ABORT
-    4. Stores the cancellation reason in metadata if provided
+    2. Checks lead state (PROCESSING, FINISHED, BACKLOG, RETRY)
+    3. Attempts to abort leads in abortable states
+    4. Returns unified response with status for each lead
 
     Args:
         leads: List of LeadCancellation objects containing lead_id and cancellation_reason pairs
         current_user: Current authenticated user
 
     Returns:
-        Success message with aborted lead details for all leads
+        Unified response with individual status for each lead:
+        {
+            "leads": [
+                {
+                    "id": "lead_uuid",
+                    "status": "success|error|already_aborted|processing",
+                    "message": "descriptive message"
+                },
+                ...
+            ]
+        }
 
     Raises:
-        HTTPException: 404 if not found, 500 on abort failure
+        HTTPException: 500 on unexpected system failure
     """
     lead_ids = [lead.lead_id for lead in leads]
     logger.info(
         f"User {current_user.username} (role: {current_user.role}) requesting to delete leads: {lead_ids}"
     )
 
-    results = []
-    errors = []
+    lead_responses = []
 
     try:
         for lead_cancellation in leads:
@@ -345,39 +354,58 @@ async def delete_lead_handler(
             cancellation_reason = lead_cancellation.cancellation_reason
 
             try:
-                # Get lead to validate existence (will be used for RBAC validation)
+                # Get lead to validate existence
                 lead = await get_lead_by_id(lead_id)
 
                 if not lead:
-                    errors.append(
+                    lead_responses.append(
                         {
-                            "lead_id": lead_id,
-                            "error": f"Lead not found for ID: {lead_id}",
+                            "id": lead_id,
+                            "status": "error",
+                            "message": f"Lead not found",
                         }
                     )
                     continue
 
                 # Check if lead is already aborted
-                if lead.status.value == "FINISHED" and lead.outcome == "ABORT":
-                    logger.info(f"Lead {lead_id} is already aborted")
-                    results.append(
+                if lead.status.value == "FINISHED":
+                    logger.info(
+                        f"Lead {lead_id} is already finished with outcome: {lead.outcome}"
+                    )
+                    lead_responses.append(
                         {
-                            "lead_id": lead_id,
-                            "status": "already_aborted",
-                            "outcome": lead.outcome,
-                            "cancellation_reason": cancellation_reason,
-                            "message": f"Lead {lead_id} is already aborted",
+                            "id": lead_id,
+                            "status": "error",
+                            "message": f"Cannot abort - already finished with outcome: {lead.outcome}",
                         }
                     )
                     continue
 
-                # Abort the lead using existing function with cancellation reason
+                # Check if lead is in PROCESSING state (call in progress)
+                if lead.status.value == "PROCESSING":
+                    logger.warning(
+                        f"Cannot abort lead {lead_id} - call is currently in progress"
+                    )
+                    lead_responses.append(
+                        {
+                            "id": lead_id,
+                            "status": "processing",
+                            "message": "Cannot abort - call is currently in progress",
+                        }
+                    )
+                    continue
+
+                # Abort the lead (only BACKLOG and RETRY leads should reach here)
                 aborted_lead = await handle_lead_abort(lead_id, cancellation_reason)
 
                 if not aborted_lead:
                     logger.error(f"Failed to abort lead {lead_id}")
-                    errors.append(
-                        {"lead_id": lead_id, "error": f"Failed to abort lead {lead_id}"}
+                    lead_responses.append(
+                        {
+                            "id": lead_id,
+                            "status": "error",
+                            "message": "Failed to abort - lead may have transitioned to another state",
+                        }
                     )
                     continue
 
@@ -385,26 +413,25 @@ async def delete_lead_handler(
                     f"Lead {lead_id} successfully aborted by user {current_user.username}"
                 )
 
-                results.append(
+                lead_responses.append(
                     {
-                        "lead_id": lead_id,
-                        "status": "aborted",
-                        "outcome": aborted_lead.outcome,
-                        "cancellation_reason": cancellation_reason,
-                        "message": f"Lead {lead_id} has been aborted",
+                        "id": lead_id,
+                        "status": "success",
+                        "message": "Lead has been successfully aborted",
                     }
                 )
 
             except Exception as e:
                 logger.error(f"Error deleting lead {lead_id}: {e}", exc_info=True)
-                errors.append({"lead_id": lead_id, "error": str(e)})
+                lead_responses.append(
+                    {
+                        "id": lead_id,
+                        "status": "error",
+                        "message": f"Unexpected error: {str(e)}",
+                    }
+                )
 
-        return {
-            "status": "success" if results else "failed",
-            "message": f"Processed {len(leads)} lead(s)",
-            "results": results,
-            "errors": errors if errors else None,
-        }
+        return {"leads": lead_responses}
 
     except Exception as e:
         logger.error(f"Error deleting leads: {e}", exc_info=True)
