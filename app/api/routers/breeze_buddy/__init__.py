@@ -10,6 +10,7 @@ from app.api.routers.breeze_buddy.cron import router as cron_router
 
 # Daily transport (web/mobile clients via Daily.co)
 from app.api.routers.breeze_buddy.daily import router as daily_router
+from app.api.routers.breeze_buddy.demo import router as demo_router
 from app.api.routers.breeze_buddy.deprecated import router as deprecated_router
 from app.api.routers.breeze_buddy.leads import router as leads_router
 from app.api.routers.breeze_buddy.merchants import router as merchants_router
@@ -23,6 +24,9 @@ router = APIRouter()
 # ============================================================================
 # Modern RESTful Endpoints (Primary)
 # ============================================================================
+
+# Public demo (unauthenticated)
+router.include_router(demo_router, prefix="", tags=["demo"])
 
 # Authentication (JWT & S2S tokens)
 router.include_router(auth_router, prefix="", tags=["auth"])
