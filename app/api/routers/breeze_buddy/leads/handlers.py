@@ -13,6 +13,9 @@ from fastapi import HTTPException, status
 from app.ai.voice.agents.breeze_buddy.services.telephony.exotel.recording import (
     download_call_recording as download_call_recording_exotel,
 )
+from app.ai.voice.agents.breeze_buddy.services.telephony.plivo.recording import (
+    download_call_recording as download_call_recording_plivo,
+)
 from app.ai.voice.agents.breeze_buddy.services.telephony.twilio.recording import (
     download_call_recording as download_call_recording_twilio,
 )
@@ -292,6 +295,8 @@ async def get_call_recording_handler(call_sid: str, current_user: UserInfo) -> B
         audio_file = await download_call_recording_twilio(lead.recording_url, call_sid)
     elif call_provider.upper() == "EXOTEL":
         audio_file = await download_call_recording_exotel(lead.recording_url, call_sid)
+    elif call_provider.upper() == "PLIVO":
+        audio_file = await download_call_recording_plivo(lead.recording_url, call_sid)
     else:
         logger.error(f"Unsupported provider: {call_provider}")
         raise HTTPException(
