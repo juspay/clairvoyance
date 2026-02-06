@@ -506,8 +506,10 @@ async def prepare_initial_greeting_payload(
 
     Returns:
         Dictionary with "payload" (base64 encoded audio), "greeting_source",
-        and "greeting_text" (the resolved greeting text for LLM context),
-        or None if preparation failed
+        and "greeting_text" (the resolved greeting text for LLM context).
+        If ringing sound is disabled and no greeting exists, returns
+        {"payload": None, "greeting_source": "disabled"}.
+        Returns None only if preparation failed
     """
     try:
         logger.info("Preparing initial greeting audio payload.")
@@ -564,18 +566,32 @@ async def prepare_initial_greeting_payload(
                         f"Deleted dynamic greeting from Redis for lead {lead.id}"
                     )
 
-        # 3. Fall back to dial tone if no greeting audio found
+        # 3. Fall back to dial tone if no greeting audio found (and ringing sound is enabled)
         if not mulaw_data:
-            logger.info("No greeting audio found, using dial tone")
-            wav_file_path = (
-                "app/ai/voice/agents/breeze_buddy/static/audio/dial-tone.wav"
-            )
+            # Check if ringing sound is enabled in template configuration
+            enable_ringing_sound = True  # Default to enabled for backward compatibility
+            if template and template.configurations:
+                enable_ringing_sound = getattr(
+                    template.configurations, "enable_ringing_sound", True
+                )
 
-            # Load and convert audio
-            audio = AudioSegment.from_wav(wav_file_path)
-            audio = audio.set_frame_rate(8000).set_channels(1).set_sample_width(2)
-            pcm_data: bytes = audio.raw_data  # type: ignore[assignment]
-            mulaw_data = audioop.lin2ulaw(pcm_data, 2)
+            if enable_ringing_sound:
+                logger.info("No greeting audio found, using dial tone")
+                wav_file_path = (
+                    "app/ai/voice/agents/breeze_buddy/static/audio/dial-tone.wav"
+                )
+
+                # Load and convert audio
+                audio = AudioSegment.from_wav(wav_file_path)
+                audio = audio.set_frame_rate(8000).set_channels(1).set_sample_width(2)
+                pcm_data: bytes = audio.raw_data  # type: ignore[assignment]
+                mulaw_data = audioop.lin2ulaw(pcm_data, 2)
+                greeting_source = "dial_tone"
+            else:
+                logger.info(
+                    "No greeting audio found and ringing sound is disabled, skipping initial audio"
+                )
+                return {"payload": None, "greeting_source": "disabled"}
 
         logger.info(f"Prepared initial greeting audio from source: {greeting_source}")
 

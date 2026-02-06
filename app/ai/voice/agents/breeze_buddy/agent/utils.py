@@ -51,12 +51,16 @@ async def send_initial_greeting(
             template=template,
             provider=provider,
         )
-        if not greeting_result:
+        if greeting_result is None:
             logger.warning("Failed to prepare greeting payload, skipping initial audio")
             track_error(
                 errors, "Failed to prepare greeting payload, skipping initial audio"
             )
             return GreetingResult(source=None, text=None)
+
+        if greeting_result.get("greeting_source") == "disabled":
+            logger.info("Initial audio intentionally skipped (ringing sound disabled)")
+            return GreetingResult(source="disabled", text=None)
 
         greeting_source = greeting_result["greeting_source"]
         greeting_text = greeting_result.get("greeting_text")
