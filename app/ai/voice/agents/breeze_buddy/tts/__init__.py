@@ -3,6 +3,7 @@
 from pipecat.services.cartesia.tts import GenerationConfig
 from pipecat.transcriptions.language import Language
 
+from app.ai.voice.agents.breeze_buddy.template.types import CartesiaVoiceConfiguration
 from app.ai.voice.agents.breeze_buddy.utils.common import convert_to_mulaw
 from app.ai.voice.tts import (
     CartesiaConfig,
@@ -45,52 +46,96 @@ from app.core.config.static import (
 from app.core.logger import logger
 
 
-async def get_cartesia_tts_service(voice_id: str | None = None):
+async def get_cartesia_tts_service(
+    voice_id: str | None = None,
+    cartesia_config: CartesiaVoiceConfiguration | None = None,
+):
     """
     Returns a Cartesia TTS service instance based on the Breeze Buddy configuration.
 
-    Args:
-        voice_id: Optional custom voice ID from template configuration.
-                          If provided, overrides the default BB_CARTESIA_VOICE_ID.
-    """
-    bb_cartesia_voice_id = voice_id or await BB_CARTESIA_VOICE_ID()
-    bb_cartesia_model = await BB_CARTESIA_MODEL()
-    bb_cartesia_language = await BB_CARTESIA_LANGUAGE()
-    bb_cartesia_generation_volume = await BB_CARTESIA_GENERATION_VOLUME()
-    bb_cartesia_generation_speed = await BB_CARTESIA_GENERATION_SPEED()
-    bb_cartesia_generation_emotion = await BB_CARTESIA_GENERATION_EMOTION()
-    bb_cartesia_aggregate_sentences = await BB_CARTESIA_AGGREGATE_SENTENCES()
+    Template-level values (if provided) override global Redis defaults.
 
+    Args:
+        voice_id: DEPRECATED - Optional custom voice ID from legacy template configuration.
+                  Use cartesia_config.voice_id instead.
+        cartesia_config: Template-level Cartesia voice configuration. Values specified here
+                        override global Redis defaults. If None or specific fields are None,
+                        falls back to Redis configuration.
+    """
+    # Load global Redis defaults
+    default_voice_id = await BB_CARTESIA_VOICE_ID()
+    default_model = await BB_CARTESIA_MODEL()
+    default_language = await BB_CARTESIA_LANGUAGE()
+    default_volume = await BB_CARTESIA_GENERATION_VOLUME()
+    default_speed = await BB_CARTESIA_GENERATION_SPEED()
+    default_emotion = await BB_CARTESIA_GENERATION_EMOTION()
+    default_aggregate_sentences = await BB_CARTESIA_AGGREGATE_SENTENCES()
+
+    # Template overrides Redis (priority: cartesia_config.voice_id > legacy voice_id > default)
+    final_voice_id = default_voice_id
+    if cartesia_config and cartesia_config.voice_id:
+        final_voice_id = cartesia_config.voice_id
+    elif voice_id:
+        final_voice_id = voice_id
+
+    # Template overrides for generation parameters (or fall back to defaults)
+    final_volume = (
+        cartesia_config.volume
+        if cartesia_config and cartesia_config.volume is not None
+        else default_volume
+    )
+    final_speed = (
+        cartesia_config.speed
+        if cartesia_config and cartesia_config.speed is not None
+        else default_speed
+    )
+    final_emotion = (
+        cartesia_config.emotion
+        if cartesia_config and cartesia_config.emotion is not None
+        else default_emotion
+    )
+    final_language_code = (
+        cartesia_config.language
+        if cartesia_config and cartesia_config.language is not None
+        else default_language
+    )
+
+    # Build generation config with final values
     generation_config = GenerationConfig(
-        volume=bb_cartesia_generation_volume,
-        speed=bb_cartesia_generation_speed,
-        emotion=bb_cartesia_generation_emotion,
+        volume=final_volume,
+        speed=final_speed,
+        emotion=final_emotion,
     )
 
     # Map language code string to Language enum
     # The language code from config is like "en", "hi", etc.
     # We'll use Language.EN as default and let Cartesia handle the language string directly
     language = Language.EN
-    if bb_cartesia_language:
+    if final_language_code:
         # Try to get the language enum by uppercasing the code
         try:
-            language = Language[bb_cartesia_language.upper().replace("-", "_")]
+            language = Language[final_language_code.upper().replace("-", "_")]
         except KeyError:
             logger.warning(
-                f"Language code '{bb_cartesia_language}' not found in Language enum, using EN"
+                f"Language code '{final_language_code}' not found in Language enum, using EN"
             )
 
     if not CARTESIA_API_KEY:
         raise ValueError("CARTESIA_API_KEY is required for Cartesia TTS")
 
+    logger.info(
+        f"Building Cartesia TTS with: voice_id={final_voice_id}, "
+        f"volume={final_volume}, speed={final_speed}, emotion={final_emotion}, language={final_language_code}"
+    )
+
     return build_cartesia_tts(
         CartesiaConfig(
             api_key=CARTESIA_API_KEY,
-            voice_id=bb_cartesia_voice_id,
-            model=bb_cartesia_model,
+            voice_id=final_voice_id,
+            model=default_model,
             language=language,
             generation_config=generation_config,
-            aggregate_sentences=bb_cartesia_aggregate_sentences,
+            aggregate_sentences=default_aggregate_sentences,
         )
     )
 
@@ -158,7 +203,9 @@ async def get_elevenlabs_tts_service():
 
 
 async def get_tts_service(
-    voice_name: str | None = None, mira_voice_id: str | None = None
+    voice_name: str | None = None,
+    mira_voice_id: str | None = None,
+    cartesia_voice_configurations: CartesiaVoiceConfiguration | None = None,
 ):
     """
     Returns a TTS service instance based on the environment configuration.
@@ -170,8 +217,10 @@ async def get_tts_service(
 
     Args:
         voice_name: The TTS voice to use ("sara", "rhea", or "mira")
-        mira_voice_id: Optional custom Cartesia voice ID from template configuration.
-                          Only used when voice_name is "mira" or tts_service is "cartesia".
+        mira_voice_id: DEPRECATED - Optional custom Cartesia voice ID from legacy template configuration.
+                      Use cartesia_voice_configurations.voice_id instead.
+        cartesia_voice_configurations: Template-level Cartesia voice configuration (volume, speed, emotion, language).
+                                       Only used when voice_name is "mira" or tts_service is "cartesia".
     """
 
     if voice_name is not None:
@@ -194,13 +243,11 @@ async def get_tts_service(
             if not CARTESIA_API_KEY:
                 raise ValueError("CARTESIA_API_KEY is required for Mira voice")
 
-            if mira_voice_id:
-                logger.info(
-                    f"Using Cartesia TTS service for Mira voice with custom voice_id: {mira_voice_id}"
-                )
-            else:
-                logger.info("Using Cartesia TTS service for Mira voice")
-            return await get_cartesia_tts_service(voice_id=mira_voice_id)
+            logger.info("Using Cartesia TTS service for Mira voice")
+            return await get_cartesia_tts_service(
+                voice_id=mira_voice_id,
+                cartesia_config=cartesia_voice_configurations,
+            )
     else:
         logger.info("No TTS voice specified, using default from config")
 
@@ -229,13 +276,11 @@ async def get_tts_service(
                 "CARTESIA_API_KEY is required when BREEZE_BUDDY_TTS_SERVICE=cartesia"
             )
 
-        if mira_voice_id:
-            logger.info(
-                f"Using Cartesia TTS service for Breeze Buddy voice with custom voice_id: {mira_voice_id}"
-            )
-        else:
-            logger.info("Using Cartesia TTS service for Breeze Buddy voice")
-        return await get_cartesia_tts_service(voice_id=mira_voice_id)
+        logger.info("Using Cartesia TTS service for Breeze Buddy voice")
+        return await get_cartesia_tts_service(
+            voice_id=mira_voice_id,
+            cartesia_config=cartesia_voice_configurations,
+        )
 
     else:
         raise ValueError(f"Unsupported BREEZE_BUDDY_TTS_SERVICE: {tts_service}")

@@ -90,9 +90,21 @@ async def create_services(
         temperature=await BREEZE_BUDDY_AZURE_TEMPERATURE(),
     )
 
+    # Extract Cartesia voice configurations from template
+    cartesia_voice_config = getattr(
+        configurations, "cartesia_voice_configurations", None
+    )
+    legacy_mira_voice_id = getattr(configurations, "mira_voice_id", None)
+
+    if cartesia_voice_config:
+        logger.info(
+            f"Using Cartesia voice configurations from template: {cartesia_voice_config}"
+        )
+
     tts = await get_tts_service(
         voice_name=getattr(configurations, "tts_voice_name", None),
-        mira_voice_id=getattr(configurations, "mira_voice_id", None),
+        mira_voice_id=legacy_mira_voice_id,
+        cartesia_voice_configurations=cartesia_voice_config,
     )
 
     return stt, llm, tts
