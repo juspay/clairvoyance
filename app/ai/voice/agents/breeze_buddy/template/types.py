@@ -31,6 +31,37 @@ class VadConfig(BaseModel):
     )
 
 
+class CartesiaVoiceConfiguration(BaseModel):
+    """Cartesia voice configuration parameters for template-level customization.
+
+    Allows per-template override of Cartesia TTS parameters.
+    Values specified here take precedence over global Redis defaults.
+
+    TODO: Add validation for emotion strings against known Cartesia emotions
+    TODO: Add validation for language codes
+    """
+
+    voice_id: Optional[str] = Field(None, description="Cartesia voice ID (e.g., UUID)")
+    volume: Optional[float] = Field(
+        None,
+        ge=0.5,
+        le=2.0,
+        description="Volume multiplier (Cartesia range: 0.5-2.0)",
+    )
+    speed: Optional[float] = Field(
+        None,
+        ge=0.6,
+        le=1.5,
+        description="Speed multiplier (Cartesia range: 0.6-1.5)",
+    )
+    emotion: Optional[str] = Field(
+        None, description="Voice emotion (e.g., 'neutral', 'excited', 'happy')"
+    )
+    language: Optional[str] = Field(
+        None, description="TTS language code (e.g., 'en', 'hi')"
+    )
+
+
 class TTSVoiceName(str, Enum):
     RHEA = "rhea"
     SARA = "sara"
@@ -45,7 +76,12 @@ class BackgroundSoundFile(str, Enum):
 
 class ConfigurationModel(BaseModel):
     tts_voice_name: Optional[TTSVoiceName] = None
-    mira_voice_id: Optional[str] = None  # Custom Cartesia voice ID per template
+    mira_voice_id: Optional[str] = (
+        None  # DEPRECATED: Use cartesia_voice_configurations.voice_id instead
+    )
+    cartesia_voice_configurations: Optional[CartesiaVoiceConfiguration] = (
+        None  # Cartesia voice configuration (overrides global defaults)
+    )
     stt_language: Optional[str] = None
     payload_based_language_selection: bool = False
     enable_background_sound: bool = False
