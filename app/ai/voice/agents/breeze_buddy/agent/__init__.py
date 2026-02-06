@@ -61,7 +61,10 @@ from app.ai.voice.agents.breeze_buddy.template.types import (
     ConfigurationModel,
     TemplateModel,
 )
-from app.ai.voice.agents.breeze_buddy.utils.common import track_error
+from app.ai.voice.agents.breeze_buddy.utils.common import (
+    create_background_sound_mixer,
+    track_error,
+)
 from app.core.config.static import ENABLE_BREEZE_BUDDY_TRACING
 from app.core.logger import logger
 from app.database.accessor import update_lead_call_initiated_time
@@ -157,7 +160,8 @@ class Agent:
             is_daily_mode=True
         )
 
-        transport_params = get_transport_params(self.vad_analyzer)
+        # Daily transport does not support audio_out_mixer, so we pass None
+        transport_params = get_transport_params(self.vad_analyzer, None)
         self.transport = await create_transport(runner_args, transport_params)
 
     async def _setup_telephony_transport(self) -> bool:
@@ -302,8 +306,11 @@ class Agent:
             template=self.template,
         )
 
+        # Create background sound mixer if configured in template
+        audio_out_mixer = create_background_sound_mixer(self.template)
+
         # Get transport params using the detected transport type
-        transport_params = get_transport_params(self.vad_analyzer)
+        transport_params = get_transport_params(self.vad_analyzer, audio_out_mixer)
         params = transport_params[transport_type]()
 
         # Create transport with the call data
