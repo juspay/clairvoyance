@@ -421,7 +421,7 @@ async def process_backlog_leads():
                     continue
 
                 call_provider = get_voice_provider(
-                    config.calling_provider,
+                    number_to_use.provider,
                     session,
                     use_template_flow,
                 )
