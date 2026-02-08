@@ -1,7 +1,6 @@
 from typing import Any, Dict, Optional
 
 from fastapi import WebSocket
-from pipecat.serializers.twilio import TwilioFrameSerializer
 from twilio.http.http_client import TwilioHttpClient
 from twilio.rest import Client
 from twilio.twiml.voice_response import Connect, Stream, VoiceResponse
@@ -10,15 +9,11 @@ from app.ai.voice.agents.breeze_buddy.agent import telephony_bot
 from app.ai.voice.agents.breeze_buddy.services.telephony.base_provider import (
     VoiceCallProvider,
 )
-from app.ai.voice.agents.breeze_buddy.websocket_bot import (
-    main as telephony_websocket_conn,
-)
 from app.core.config.static import (
     APP_BASE_URL,
     TWILIO_ACCOUNT_SID,
     TWILIO_AUTH_TOKEN,
     TWILIO_TEMPLATE_WEBSOCKET_URL,
-    TWILIO_WEBSOCKET_URL,
 )
 from app.core.logger import logger
 from app.core.transport.http_client import get_proxy_config
@@ -26,18 +21,12 @@ from app.schemas import CallProvider
 
 
 class TwilioProvider(VoiceCallProvider):
-    class CustomTwilioFrameSerializer(TwilioFrameSerializer):
-        async def _hang_up_call(self):
-            logger.info("Skipping automatic hang-up from serializer.")
-
-    def __init__(self, aiohttp_session, use_template_flow: bool = False):
+    def __init__(self, aiohttp_session):
         # Store config values directly as instance attributes
         self.TWILIO_ACCOUNT_SID = TWILIO_ACCOUNT_SID
         self.TWILIO_AUTH_TOKEN = TWILIO_AUTH_TOKEN
-        self.TWILIO_WEBSOCKET_URL = TWILIO_WEBSOCKET_URL
         self.TWILIO_TEMPLATE_WEBSOCKET_URL = TWILIO_TEMPLATE_WEBSOCKET_URL
         self.APP_BASE_URL = APP_BASE_URL
-        self.use_template_flow = use_template_flow
 
         # Call parent without config object
         super().__init__(None, aiohttp_session)
@@ -69,40 +58,19 @@ class TwilioProvider(VoiceCallProvider):
         self.client.calls(call_sid).update(status="completed")
 
     async def handle_websocket(self, websocket: WebSocket, provider: CallProvider):
-        serializer = lambda stream_sid, call_sid: self.CustomTwilioFrameSerializer(
-            stream_sid=stream_sid,
-            call_sid=call_sid,
-            account_sid=self.TWILIO_ACCOUNT_SID,
-            auth_token=self.TWILIO_AUTH_TOKEN,
+        logger.info("Using template flow for Twilio WebSocket connection")
+        await telephony_bot(
+            websocket,
+            self.aiohttp_session,
+            self.hangup_call,
+            self.completion_callback,
+            provider,
         )
-        if self.use_template_flow:
-            logger.info("Using template flow for Twilio WebSocket connection")
-            await telephony_bot(
-                websocket,
-                self.aiohttp_session,
-                self.hangup_call,
-                self.completion_callback,
-                provider,
-            )
-        else:
-            logger.info("Using standard flow for Twilio WebSocket connection")
-            await telephony_websocket_conn(
-                websocket,
-                self.aiohttp_session,
-                serializer,
-                self.hangup_call,
-                self.completion_callback,
-                provider,
-            )
 
     def make_call(
         self, customer_mobile_number: str, outbound_number: str
     ) -> Optional[Dict[str, Any]]:
-        ws_url = (
-            self.TWILIO_TEMPLATE_WEBSOCKET_URL
-            if self.use_template_flow
-            else self.TWILIO_WEBSOCKET_URL
-        )
+        ws_url = self.TWILIO_TEMPLATE_WEBSOCKET_URL
 
         voice_call_payload = VoiceResponse()
         connect = Connect()

@@ -3,21 +3,16 @@ from typing import Any, Dict, Optional
 
 import requests
 from fastapi import WebSocket
-from pipecat.serializers.exotel import ExotelFrameSerializer
 
 from app.ai.voice.agents.breeze_buddy.agent import telephony_bot
 from app.ai.voice.agents.breeze_buddy.services.telephony.base_provider import (
     VoiceCallProvider,
-)
-from app.ai.voice.agents.breeze_buddy.websocket_bot import (
-    main as telephony_websocket_conn,
 )
 from app.core.config.static import (
     APP_BASE_URL,
     EXOTEL_ACCOUNT_SID,
     EXOTEL_API_KEY,
     EXOTEL_API_TOKEN,
-    EXOTEL_APPLET_APP_ID,
     EXOTEL_SUBDOMAIN,
     EXOTEL_TEMPLATE_APPLET_APP_ID,
 )
@@ -27,49 +22,32 @@ from app.schemas import CallProvider
 
 
 class ExotelProvider(VoiceCallProvider):
-    def __init__(self, aiohttp_session, use_template_flow: bool = False):
+    def __init__(self, aiohttp_session):
         # Store config values directly as instance attributes
         self.EXOTEL_ACCOUNT_SID = EXOTEL_ACCOUNT_SID
         self.EXOTEL_API_KEY = EXOTEL_API_KEY
         self.EXOTEL_API_TOKEN = EXOTEL_API_TOKEN
-        self.EXOTEL_APPLET_APP_ID = EXOTEL_APPLET_APP_ID
         self.EXOTEL_TEMPLATE_APPLET_APP_ID = EXOTEL_TEMPLATE_APPLET_APP_ID
         self.EXOTEL_SUBDOMAIN = EXOTEL_SUBDOMAIN
         self.APP_BASE_URL = APP_BASE_URL
-        self.use_template_flow = use_template_flow
 
         # Call parent without config object
         super().__init__(None, aiohttp_session)
 
     async def handle_websocket(self, websocket: WebSocket, provider: CallProvider):
-        serializer = lambda stream_sid, call_sid: ExotelFrameSerializer(
-            stream_sid=stream_sid,
-            call_sid=call_sid,
+        logger.info("Using template flow for Exotel WebSocket connection")
+        await telephony_bot(
+            websocket,
+            self.aiohttp_session,
+            None,
+            self.completion_callback,
+            provider,
         )
-        if self.use_template_flow:
-            logger.info("Using template flow for Exotel WebSocket connection")
-            await telephony_bot(
-                websocket,
-                self.aiohttp_session,
-                None,
-                self.completion_callback,
-                provider,
-            )
-        else:
-            logger.info("Using standard flow for Exotel WebSocket connection")
-            await telephony_websocket_conn(
-                websocket,
-                self.aiohttp_session,
-                serializer,
-                None,
-                self.completion_callback,
-                provider,
-            )
 
     def make_call(
         self, customer_mobile_number: str, outbound_number: str
     ) -> Optional[Dict[str, Any]]:
-        flow_url = f"http://my.exotel.com/{self.EXOTEL_ACCOUNT_SID}/exoml/start_voice/{self.EXOTEL_APPLET_APP_ID if not self.use_template_flow else self.EXOTEL_TEMPLATE_APPLET_APP_ID}"
+        flow_url = f"http://my.exotel.com/{self.EXOTEL_ACCOUNT_SID}/exoml/start_voice/{EXOTEL_TEMPLATE_APPLET_APP_ID}"
 
         payload = {
             "From": customer_mobile_number,

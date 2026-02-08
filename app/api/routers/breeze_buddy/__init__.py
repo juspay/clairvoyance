@@ -11,7 +11,6 @@ from app.api.routers.breeze_buddy.cron import router as cron_router
 # Daily transport (web/mobile clients via Daily.co)
 from app.api.routers.breeze_buddy.daily import router as daily_router
 from app.api.routers.breeze_buddy.demo import router as demo_router
-from app.api.routers.breeze_buddy.deprecated import router as deprecated_router
 from app.api.routers.breeze_buddy.leads import router as leads_router
 from app.api.routers.breeze_buddy.merchants import router as merchants_router
 from app.api.routers.breeze_buddy.numbers import router as numbers_router
@@ -58,11 +57,4 @@ router.include_router(cron_router, prefix="", tags=["cron"])
 # WebSocket (real-time communication)
 router.include_router(websocket_router, prefix="", tags=["websocket"])
 
-# ============================================================================
-# Deprecated Endpoints (Backward Compatibility)
-# ============================================================================
-# These endpoints maintain the old URL structure for backward compatibility.
-# They will eventually be removed in a future version.
-# Please migrate to the modern RESTful endpoints above.
-router.include_router(deprecated_router, prefix="", tags=["deprecated"])
 router.include_router(daily_router, prefix="", tags=["daily"])

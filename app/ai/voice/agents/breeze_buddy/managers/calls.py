@@ -255,13 +255,7 @@ async def _retry_call(
             payload=lead.payload,
             attempt_count=lead.attempt_count + 1,
             request_id=lead.request_id,
-            meta_data={
-                "use_template_flow": (
-                    lead.metaData.get("use_template_flow", False)
-                    if lead.metaData
-                    else False
-                )
-            },
+            meta_data={},
             call_direction=lead.call_direction,  # Inherit call direction from parent lead
         )
 
@@ -367,28 +361,18 @@ async def process_backlog_leads():
                     await release_lock_on_lead_by_id(locked_lead.id)
                     continue
 
-                use_template_flow = (
-                    lead.metaData.get("use_template_flow", False)
-                    if lead.metaData
-                    else False
-                )
-
-                template = (
-                    await get_template_by_merchant(
-                        merchant_id=config.merchant_id,
-                        shop_identifier=config.shop_identifier,
-                        name=config.template,
-                    )
-                    if use_template_flow
-                    else None
+                template = await get_template_by_merchant(
+                    merchant_id=config.merchant_id,
+                    shop_identifier=config.shop_identifier,
+                    name=config.template,
                 )
 
                 logger.info(
-                    f"Lead {locked_lead.id} - use_template_flow: {use_template_flow}, template found: {template is not None}"
+                    f"Lead {locked_lead.id} , template found: {template is not None}"
                 )
 
                 # Synthesize initial greeting audio and store in Redis
-                if use_template_flow and template:
+                if template:
                     await prepare_and_store_initial_greeting(
                         lead_id=locked_lead.id,
                         payload=locked_lead.payload or {},
@@ -414,7 +398,6 @@ async def process_backlog_leads():
                 call_provider = get_voice_provider(
                     number_to_use.provider,
                     session,
-                    use_template_flow,
                 )
                 customer_mobile = (locked_lead.payload or {}).get(
                     "customer_mobile_number"
@@ -584,9 +567,7 @@ async def process_backlog_leads():
                         continue
 
                     retry_call_provider = get_voice_provider(
-                        retry_calling_provider,
-                        session,
-                        use_template_flow,
+                        retry_calling_provider, session
                     )
 
                     retry_customer_mobile = (locked_lead.payload or {}).get(
