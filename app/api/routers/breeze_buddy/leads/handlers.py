@@ -192,7 +192,7 @@ async def push_lead_handler(req: PushLeadRequest, current_user: UserInfo) -> Dic
             next_attempt_at=next_attempt_at,
             payload=lead_payload,
             attempt_count=0,
-            meta_data={"use_template_flow": True},
+            meta_data={},
             request_id=req.request_id,
             execution_mode=req.execution_mode or ExecutionMode.TELEPHONY,
             status=LeadCallStatus.BACKLOG,

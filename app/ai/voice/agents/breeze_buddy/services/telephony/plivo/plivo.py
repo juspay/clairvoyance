@@ -2,14 +2,10 @@ from typing import Any, Dict, Optional
 
 import plivo
 from fastapi import WebSocket
-from pipecat.serializers.plivo import PlivoFrameSerializer
 
 from app.ai.voice.agents.breeze_buddy.agent import telephony_bot
 from app.ai.voice.agents.breeze_buddy.services.telephony.base_provider import (
     VoiceCallProvider,
-)
-from app.ai.voice.agents.breeze_buddy.websocket_bot import (
-    main as telephony_websocket_conn,
 )
 from app.core.config.static import APP_BASE_URL, PLIVO_AUTH_ID, PLIVO_AUTH_TOKEN
 from app.core.logger import logger
@@ -17,16 +13,11 @@ from app.schemas import CallProvider
 
 
 class PlivoProvider(VoiceCallProvider):
-    class CustomPlivoFrameSerializer(PlivoFrameSerializer):
-        async def _hang_up_call(self):
-            logger.info("Skipping automatic hang-up from serializer.")
-
-    def __init__(self, aiohttp_session, use_template_flow: bool = False):
+    def __init__(self, aiohttp_session):
         # Store config values directly as instance attributes
         self.PLIVO_AUTH_ID = PLIVO_AUTH_ID
         self.PLIVO_AUTH_TOKEN = PLIVO_AUTH_TOKEN
         self.APP_BASE_URL = APP_BASE_URL
-        self.use_template_flow = use_template_flow
 
         # Call parent without config object
         super().__init__(None, aiohttp_session)
@@ -35,31 +26,14 @@ class PlivoProvider(VoiceCallProvider):
         self.client = plivo.RestClient(self.PLIVO_AUTH_ID, self.PLIVO_AUTH_TOKEN)
 
     async def handle_websocket(self, websocket: WebSocket, provider: CallProvider):
-        serializer = lambda stream_id, call_id: self.CustomPlivoFrameSerializer(
-            stream_id=stream_id,
-            call_id=call_id,
-            auth_id=self.PLIVO_AUTH_ID,
-            auth_token=self.PLIVO_AUTH_TOKEN,
+        logger.info("Using template flow for Plivo WebSocket connection")
+        await telephony_bot(
+            websocket,
+            self.aiohttp_session,
+            None,
+            self.completion_callback,
+            provider,
         )
-        if self.use_template_flow:
-            logger.info("Using template flow for Plivo WebSocket connection")
-            await telephony_bot(
-                websocket,
-                self.aiohttp_session,
-                None,
-                self.completion_callback,
-                provider,
-            )
-        else:
-            logger.info("Using standard flow for Plivo WebSocket connection")
-            await telephony_websocket_conn(
-                websocket,
-                self.aiohttp_session,
-                serializer,
-                None,
-                self.completion_callback,
-                provider,
-            )
 
     def make_call(
         self, customer_mobile_number: str, outbound_number: str
