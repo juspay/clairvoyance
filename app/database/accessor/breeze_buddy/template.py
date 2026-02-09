@@ -105,19 +105,23 @@ async def create_template(
         # Convert flow to JSON string
         flow_json = json.dumps(flow)
         expected_payload_schema_json = (
-            json.dumps(expected_payload_schema) if expected_payload_schema else None
+            json.dumps(expected_payload_schema)
+            if expected_payload_schema is not None
+            else None
         )
         expected_callback_response_schema_json = (
             json.dumps(expected_callback_response_schema)
-            if expected_callback_response_schema
+            if expected_callback_response_schema is not None
             else None
         )
 
         # Convert configurations to JSON string
-        configurations_json = json.dumps(configurations) if configurations else None
+        configurations_json = (
+            json.dumps(configurations) if configurations is not None else None
+        )
 
         # Convert secrets to JSON string
-        secrets_json = json.dumps(secrets) if secrets else None
+        secrets_json = json.dumps(secrets) if secrets is not None else None
 
         query, values = create_template_query(
             template_id,
@@ -332,19 +336,23 @@ async def replace_template(
         # Convert flow to JSON string
         flow_json = json.dumps(flow)
         expected_payload_schema_json = (
-            json.dumps(expected_payload_schema) if expected_payload_schema else None
+            json.dumps(expected_payload_schema)
+            if expected_payload_schema is not None
+            else None
         )
         expected_callback_response_schema_json = (
             json.dumps(expected_callback_response_schema)
-            if expected_callback_response_schema
+            if expected_callback_response_schema is not None
             else None
         )
 
         # Convert configurations to JSON string
-        configurations_json = json.dumps(configurations) if configurations else None
+        configurations_json = (
+            json.dumps(configurations) if configurations is not None else None
+        )
 
         # Convert secrets to JSON string
-        secrets_json = json.dumps(secrets) if secrets else None
+        secrets_json = json.dumps(secrets) if secrets is not None else None
 
         query, values = replace_template_query(
             template_id,
