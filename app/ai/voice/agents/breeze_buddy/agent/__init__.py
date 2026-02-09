@@ -304,6 +304,7 @@ class Agent:
         self.vad_analyzer, self.default_vad_params = await create_vad_analyzer(
             is_daily_mode=False,
             template=self.template,
+            provider=transport_type,
         )
 
         # Create background sound mixer if configured in template
@@ -432,7 +433,9 @@ class Agent:
         # Generate conversation ID and create task
         lead_payload = self.lead.payload if self.lead else None
         self.conversation_id = generate_conversation_id(lead_payload)
-        self.task = await create_pipeline_task(pipeline, self.conversation_id)
+        self.task = await create_pipeline_task(
+            pipeline, self.conversation_id, self.transport_type
+        )
 
         # Validate required attributes for flow setup
         if not self.template:

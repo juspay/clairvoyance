@@ -59,7 +59,7 @@ def _build_websocket_url(
     """
     # Convert https:// to wss:// for WebSocket
     ws_base = APP_BASE_URL.replace("https://", "wss://").replace("http://", "ws://")
-    url = f"{ws_base}/agent/voice/breeze-buddy/exotel/callback/template/v2?template_id={template_id}&from_number={from_number}"
+    url = f"{ws_base}/agent/voice/breeze-buddy/exotel/callback/template/v2?template_id={template_id}&from_number={from_number}&sample-rate=16000"
 
     if ivr_mode:
         url += "&ivr_mode=true"

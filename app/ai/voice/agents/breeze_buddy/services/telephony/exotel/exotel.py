@@ -45,6 +45,7 @@ class ExotelProvider(VoiceCallProvider):
         serializer = lambda stream_sid, call_sid: ExotelFrameSerializer(
             stream_sid=stream_sid,
             call_sid=call_sid,
+            params=ExotelFrameSerializer.InputParams(exotel_sample_rate=16000),
         )
         if self.use_template_flow:
             logger.info("Using template flow for Exotel WebSocket connection")

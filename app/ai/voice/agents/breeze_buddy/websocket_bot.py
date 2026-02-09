@@ -30,6 +30,7 @@ from pipecat_flows import FlowManager, FlowsFunctionSchema, NodeConfig
 from pydantic import ValidationError
 from pydub import AudioSegment
 
+from app.ai.voice.agents.breeze_buddy.agent.constants import PROVIDER_SAMPLE_RATES
 from app.ai.voice.agents.breeze_buddy.observability.tracing_setup import (
     auto_trace,
     setup_tracing,
@@ -306,12 +307,17 @@ class OrderConfirmationBot:
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         conversation_id = f"{customer_name}-{self.shop_name}-{timestamp}"
 
-        # Create task parameters and initialize task (audio config moved to transport level)
+        # Get provider-specific sample rate for optimal performance
+        provider_sample_rate = PROVIDER_SAMPLE_RATES.get(self.provider, 16000)
+
+        # Create task parameters and initialize task with provider-specific audio config
         task_params: dict[str, Any] = {
             "params": PipelineParams(
                 allow_interruptions=True,
                 enable_metrics=True,
                 enable_usage_metrics=True,
+                audio_in_sample_rate=provider_sample_rate,
+                audio_out_sample_rate=provider_sample_rate,
             ),
         }
 

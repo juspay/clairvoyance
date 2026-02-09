@@ -2,9 +2,11 @@ from typing import Any, Dict, Optional
 
 import plivo
 from fastapi import WebSocket
-from pipecat.serializers.plivo import PlivoFrameSerializer
 
 from app.ai.voice.agents.breeze_buddy.agent import telephony_bot
+from app.ai.voice.agents.breeze_buddy.serializers.plivo_l16 import (
+    PlivoL16FrameSerializer,
+)
 from app.ai.voice.agents.breeze_buddy.services.telephony.base_provider import (
     VoiceCallProvider,
 )
@@ -17,7 +19,9 @@ from app.schemas import CallProvider
 
 
 class PlivoProvider(VoiceCallProvider):
-    class CustomPlivoFrameSerializer(PlivoFrameSerializer):
+    class CustomPlivoL16FrameSerializer(PlivoL16FrameSerializer):
+        """Custom L16 serializer that skips automatic hang-up."""
+
         async def _hang_up_call(self):
             logger.info("Skipping automatic hang-up from serializer.")
 
@@ -35,11 +39,12 @@ class PlivoProvider(VoiceCallProvider):
         self.client = plivo.RestClient(self.PLIVO_AUTH_ID, self.PLIVO_AUTH_TOKEN)
 
     async def handle_websocket(self, websocket: WebSocket, provider: CallProvider):
-        serializer = lambda stream_id, call_id: self.CustomPlivoFrameSerializer(
+        serializer = lambda stream_id, call_id: self.CustomPlivoL16FrameSerializer(
             stream_id=stream_id,
             call_id=call_id,
             auth_id=self.PLIVO_AUTH_ID,
             auth_token=self.PLIVO_AUTH_TOKEN,
+            params=PlivoL16FrameSerializer.InputParams(plivo_sample_rate=16000),
         )
         if self.use_template_flow:
             logger.info("Using template flow for Plivo WebSocket connection")

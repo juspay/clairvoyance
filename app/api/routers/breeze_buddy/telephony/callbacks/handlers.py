@@ -245,7 +245,7 @@ async def handle_plivo_answer(request: Request) -> HTMLResponse:
 
     xml_content = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Stream {noise_cancellation_attr} bidirectional="true" keepCallAlive="true" contentType="audio/x-mulaw;rate=8000">
+    <Stream {noise_cancellation_attr} bidirectional="true" keepCallAlive="true" contentType="audio/x-l16;rate=16000">
         {ws_url}
     </Stream>
 </Response>"""
