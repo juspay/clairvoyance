@@ -35,6 +35,11 @@ async def ENABLE_BREEZE_MCP() -> bool:
     return await get_config("ENABLE_BREEZE_MCP", False, bool)
 
 
+async def ENABLE_CHAT_MODE_PROMPT() -> bool:
+    """Returns ENABLE_CHAT_MODE_PROMPT from Redis"""
+    return await get_config("ENABLE_CHAT_MODE_PROMPT", True, bool)
+
+
 # --- Sarvam Configuration ---
 async def SARVAM_STT_MODEL() -> str:
     """Returns SARVAM_STT_MODEL from Redis"""

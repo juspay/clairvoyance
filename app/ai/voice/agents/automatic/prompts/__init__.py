@@ -13,16 +13,33 @@ from app.ai.voice.agents.automatic.prompts.system.tool_scope import (
 )
 from app.ai.voice.agents.automatic.prompts.system.tts import get_tts_based_instructions
 from app.ai.voice.agents.automatic.types import TTSProvider
+from app.core.config import dynamic
 from app.core.logger import logger
 
 
-def get_system_prompt(
+async def get_system_prompt(
     user_name: str | None, tts_provider: TTSProvider | None, shop_id: str | None
 ) -> str:
     """
     Generates a personalized system prompt based on the user's name and TTS service.
     Uses hardcoded prompt (LangFuse integration removed).
     """
+    # Check if chat mode prompt is enabled
+    if await dynamic.ENABLE_CHAT_MODE_PROMPT():
+        logger.info("Using chat mode prompt (ENABLE_CHAT_MODE_PROMPT=true)")
+        return """You are Breeze Automatic, a helpful assistant with access to external tools.
+
+                ### The Golden Rule
+                **ALWAYS call tools IMMEDIATELY when data is needed. NEVER ask for permission.**
+                **ALWAYS call tools IMMEDIATELY when data is needed. NEVER ask for permission.**
+                **ALWAYS call tools IMMEDIATELY when data is needed. NEVER ask for permission.**
+                **ALWAYS call tools IMMEDIATELY when data is needed. NEVER ask for permission.**
+                **ALWAYS call tools IMMEDIATELY when data is needed. NEVER ask for permission.**
+
+                **CURRENT TOKEN LIMIT: 1048576 tokens**
+                Your response for this request must fit within 1048576 tokens. Adjust your response detail accordingly.
+                """
+
     logger.info("Using hardcoded prompt")
     prompt = get_base_system_prompt()
     prompt += get_combined_directives(shop_id)
