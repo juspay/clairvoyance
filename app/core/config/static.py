@@ -432,6 +432,9 @@ EXOTEL_TEMPLATE_APPLET_APP_ID = os.getenv("EXOTEL_TEMPLATE_APPLET_APP_ID", "")
 # Plivo Configuration
 PLIVO_AUTH_ID = os.getenv("PLIVO_AUTH_ID", "")
 PLIVO_AUTH_TOKEN = os.getenv("PLIVO_AUTH_TOKEN", "")
+PLIVO_RECORDING_TIME_LIMIT = int(
+    os.getenv("PLIVO_RECORDING_TIME_LIMIT", "14400")
+)  # Default: 4 hours (14400 seconds)
 
 # Proxy Configuration
 AWS_PROXY_HOST = os.environ.get("AWS_PROXY_HOST")

@@ -8,7 +8,12 @@ from typing import Optional
 import aiohttp
 import plivo
 
-from app.core.config.static import APP_BASE_URL, PLIVO_AUTH_ID, PLIVO_AUTH_TOKEN
+from app.core.config.static import (
+    APP_BASE_URL,
+    PLIVO_AUTH_ID,
+    PLIVO_AUTH_TOKEN,
+    PLIVO_RECORDING_TIME_LIMIT,
+)
 from app.core.logger import logger
 from app.core.transport.http_client import get_proxy_config
 
@@ -31,7 +36,10 @@ def start_call_recording(call_uuid: str) -> bool:
         # Start recording the call with callback URL
         callback_url = f"{APP_BASE_URL}/agent/voice/breeze-buddy/plivo/callback/details"
         response = client.calls.record(
-            call_uuid=call_uuid, callback_url=callback_url, callback_method="POST"
+            call_uuid=call_uuid,
+            callback_url=callback_url,
+            callback_method="POST",
+            time_limit=PLIVO_RECORDING_TIME_LIMIT,
         )
 
         logger.info(f"Plivo recording started successfully: {response}")
