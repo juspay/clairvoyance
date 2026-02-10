@@ -426,7 +426,7 @@ class Agent:
         # Create services and pipeline
         stt, llm, tts = await create_services(self.configurations)
         pipeline, self.context, context_aggregator = await build_pipeline(
-            self.transport, stt, llm, tts
+            self.transport, stt, llm, tts, self.configurations
         )
 
         # Generate conversation ID and create task

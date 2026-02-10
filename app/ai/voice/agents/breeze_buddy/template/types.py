@@ -74,6 +74,21 @@ class BackgroundSoundFile(str, Enum):
     OFFICE_AMBIENCE = "office-ambience"
 
 
+class UserIdleHandlingConfig(BaseModel):
+    """Configuration for user idle detection and handling."""
+
+    enabled: bool = False
+    timeout: float = Field(
+        5.0,
+        ge=0.0,
+        description="User idle detection timeout in seconds. After this period of silence, the system will prompt the user.",
+    )
+    idle_message: str = Field(
+        "The user has been quiet for a while. Ask if they are still there and re-engage them in the conversation.",
+        description="System message to prompt LLM when user is idle.",
+    )
+
+
 class ConfigurationModel(BaseModel):
     tts_voice_name: Optional[TTSVoiceName] = None
     mira_voice_id: Optional[str] = (
@@ -105,6 +120,9 @@ class ConfigurationModel(BaseModel):
         None, description="Default VAD configuration for the template"
     )
     enable_inbound: bool = False  # Whether this template can handle inbound calls
+    user_idle_configuration: Optional[UserIdleHandlingConfig] = (
+        None  # User idle handling config
+    )
 
 
 class FlowAction(BaseModel):
