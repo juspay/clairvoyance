@@ -62,16 +62,27 @@ class PlivoL16FrameSerializer(PlivoFrameSerializer):
 
             # Output: Resample PCM to Plivo's sample rate (no codec conversion for L16)
             if frame.sample_rate != self._plivo_sample_rate:
+                logger.debug(
+                    f"[Plivo L16 Serialize] Resampling output from {frame.sample_rate} to {self._plivo_sample_rate}"
+                )
                 serialized_data = await self._output_resampler.resample(
                     data, frame.sample_rate, self._plivo_sample_rate
                 )
             else:
+                logger.debug(
+                    f"[Plivo L16 Serialize] No resampling needed for output (rate: {frame.sample_rate})"
+                )
                 serialized_data = data
 
             if serialized_data is None or len(serialized_data) == 0:
+                logger.warning("[Plivo L16 Serialize] Empty audio data, skipping")
                 return None
 
             payload = base64.b64encode(serialized_data).decode("utf-8")
+            logger.debug(
+                f"[Plivo L16 Serialize] Sending L16 audio: {len(serialized_data)} bytes, "
+                f"sample rate: {self._plivo_sample_rate}"
+            )
             answer = {
                 "event": "playAudio",
                 "media": {
@@ -105,35 +116,61 @@ class PlivoL16FrameSerializer(PlivoFrameSerializer):
             logger.warning(f"Failed to parse JSON message: {data}")
             return None
 
-        if message.get("event") == "media":
+        event_type = message.get("event")
+        logger.debug(f"[Plivo L16 Deserialize] Received event: {event_type}")
+
+        if event_type == "media":
             media = message.get("media", {})
+            content_type = media.get("contentType")
+            sample_rate = media.get("sampleRate")
             payload_base64 = media.get("payload")
 
+            logger.debug(
+                f"[Plivo L16 Deserialize] Media event - contentType: {content_type}, "
+                f"sampleRate: {sample_rate}, payload size: {len(payload_base64) if payload_base64 else 0}"
+            )
+
             if not payload_base64:
+                logger.warning("[Plivo L16 Deserialize] No payload in media event")
                 return None
 
             payload = base64.b64decode(payload_base64)
+            logger.debug(
+                f"[Plivo L16 Deserialize] Decoded payload size: {len(payload)} bytes, "
+                f"expected sample rate: {self._plivo_sample_rate}, target: {self._sample_rate}"
+            )
 
             # Input: Plivo sends L16 (PCM) - just resample if needed, no codec conversion
             if self._plivo_sample_rate != self._sample_rate:
+                logger.debug(
+                    f"[Plivo L16 Deserialize] Resampling from {self._plivo_sample_rate} to {self._sample_rate}"
+                )
                 deserialized_data = await self._input_resampler.resample(
                     payload,
                     self._plivo_sample_rate,
                     self._sample_rate,
                 )
             else:
+                logger.debug("[Plivo L16 Deserialize] No resampling needed")
                 deserialized_data = payload
 
             if deserialized_data is None or len(deserialized_data) == 0:
+                logger.warning(
+                    f"[Plivo L16 Deserialize] Empty data after processing: {deserialized_data is None}"
+                )
                 return None
 
+            logger.debug(
+                f"[Plivo L16 Deserialize] Creating InputAudioRawFrame with {len(deserialized_data)} bytes"
+            )
             audio_frame = InputAudioRawFrame(
                 audio=deserialized_data, num_channels=1, sample_rate=self._sample_rate
             )
             return audio_frame
-        elif message.get("event") == "dtmf":
+        elif event_type == "dtmf":
             dtmf_data = message.get("dtmf", {})
             digit = dtmf_data.get("digit")
+            logger.debug(f"[Plivo L16 Deserialize] DTMF event - digit: {digit}")
             if digit:
                 try:
                     return InputDTMFFrame(KeypadEntry(digit))
@@ -141,4 +178,5 @@ class PlivoL16FrameSerializer(PlivoFrameSerializer):
                     logger.warning(f"Invalid DTMF digit received: {digit}")
                     return None
         else:
+            logger.debug(f"[Plivo L16 Deserialize] Unhandled event type: {event_type}")
             return None

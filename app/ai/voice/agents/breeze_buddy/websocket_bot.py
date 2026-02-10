@@ -227,6 +227,12 @@ class OrderConfirmationBot:
             f"Order Details: ID-{self.order_id}, Customer-{customer_name}, Summary-{self.order_summary}, Price-₹{total_price}"
         )
 
+        # Get provider-specific sample rate for optimal audio quality
+        provider_sample_rate = PROVIDER_SAMPLE_RATES.get(self.provider, 16000)
+        logger.info(
+            f"Using sample rate {provider_sample_rate} Hz for provider {self.provider}"
+        )
+
         # Create VAD analyzer and store reference for muting
         self.vad_analyzer = SileroVADAnalyzer(
             sample_rate=16000,
@@ -245,8 +251,8 @@ class OrderConfirmationBot:
                 audio_out_enabled=True,
                 add_wav_header=False,
                 vad_analyzer=self.vad_analyzer,
-                audio_in_sample_rate=8000,  # Move audio config to transport level
-                audio_out_sample_rate=8000,  # Move audio config to transport level
+                audio_in_sample_rate=provider_sample_rate,
+                audio_out_sample_rate=provider_sample_rate,
                 serializer=(
                     self.serializer(stream_sid, self.call_sid)
                     if self.serializer
@@ -307,10 +313,8 @@ class OrderConfirmationBot:
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         conversation_id = f"{customer_name}-{self.shop_name}-{timestamp}"
 
-        # Get provider-specific sample rate for optimal performance
-        provider_sample_rate = PROVIDER_SAMPLE_RATES.get(self.provider, 16000)
-
         # Create task parameters and initialize task with provider-specific audio config
+        # (provider_sample_rate calculated earlier before transport creation)
         task_params: dict[str, Any] = {
             "params": PipelineParams(
                 allow_interruptions=True,
