@@ -20,7 +20,10 @@ from pipecat.processors.aggregators.openai_llm_context import OpenAILLMContext
 from pipecat.services.azure.llm import AzureLLMService
 
 from app.ai.voice.agents.breeze_buddy.observability.tracing_setup import setup_tracing
-from app.ai.voice.agents.breeze_buddy.processors import ResponseStateGate
+from app.ai.voice.agents.breeze_buddy.processors import (
+    ResponseStateGate,
+    create_user_idle_processor,
+)
 from app.ai.voice.agents.breeze_buddy.stt import get_stt_service
 from app.ai.voice.agents.breeze_buddy.template.types import ConfigurationModel
 from app.ai.voice.agents.breeze_buddy.tts import get_tts_service
@@ -115,6 +118,7 @@ async def build_pipeline(
     stt: Any,
     llm: AzureLLMService,
     tts: Any,
+    configurations: Optional[ConfigurationModel] = None,
 ) -> tuple[Pipeline, OpenAILLMContext, Any]:
     """Build the processing pipeline.
 
@@ -123,6 +127,7 @@ async def build_pipeline(
         stt: Speech-to-text service
         llm: LLM service
         tts: Text-to-speech service
+        configurations: Template configuration model
 
     Returns:
         Tuple of (pipeline, context, context_aggregator)
@@ -138,10 +143,25 @@ async def build_pipeline(
 
     response_gate = ResponseStateGate() if await BB_ENABLE_RESPONSE_GATE() else None
 
+    # Create user idle processor from template configuration
+    user_idle_config = getattr(configurations, "user_idle_configuration", None)
+    user_idle = (
+        create_user_idle_processor(
+            enabled=user_idle_config.enabled,
+            timeout=user_idle_config.timeout,
+            message=user_idle_config.idle_message,
+        )
+        if user_idle_config is not None
+        else None
+    )
+
+    # Store reference to user aggregator for position lookup
+    user_aggregator = context_aggregator.user()
+
     pipeline_parts = [
         transport.input(),
         stt,
-        context_aggregator.user(),
+        user_aggregator,
         llm,
         tts,
         transport.output(),
@@ -150,6 +170,18 @@ async def build_pipeline(
 
     if response_gate:
         pipeline_parts.insert(2, response_gate)
+
+    # Insert user idle processor before user_aggregator (context_aggregator.user()) to monitor user activity
+    if user_idle:
+        try:
+            user_aggregator_idx = pipeline_parts.index(user_aggregator)
+            pipeline_parts.insert(user_aggregator_idx, user_idle)
+        except ValueError as e:
+            # This should never happen since we explicitly added user_aggregator above
+            logger.error(
+                f"Failed to find user aggregator in pipeline: {e}. User idle detection disabled."
+            )
+            # Don't insert user_idle - it's safer to disable the feature than insert at wrong position
 
     return Pipeline(pipeline_parts), context, context_aggregator
 
