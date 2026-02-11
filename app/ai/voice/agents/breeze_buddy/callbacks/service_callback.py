@@ -6,7 +6,6 @@ from app.ai.voice.agents.breeze_buddy.utils.common import (
     send_webhook_with_retry,
 )
 from app.core.logger import logger
-from app.database.accessor import get_call_execution_config_by_merchant_id
 
 
 async def service_callback(context: TemplateContext, args):
@@ -101,47 +100,16 @@ async def service_callback(context: TemplateContext, args):
             f"call_duration={call_duration}s"
         )
 
-        # Check if this is the last retry attempt
-        is_last_attempt = False
-        if context.lead:
-            try:
-                configs = await get_call_execution_config_by_merchant_id(
-                    context.lead.merchant_id, context.lead.shop_identifier
-                )
-                if configs:
-                    config = next(
-                        (c for c in configs if c.template == context.lead.template),
-                        None,
-                    )
-                    if config:
-                        current_attempt = context.lead.attempt_count + 1
-                        is_last_attempt = current_attempt >= config.max_retry
-                        logger.debug(
-                            f"Call {context.call_sid}: attempt {current_attempt}/{config.max_retry}, "
-                            f"is_last_attempt={is_last_attempt}"
-                        )
-            except Exception as e:
-                logger.error(
-                    f"Error checking max retry for call {context.call_sid}: {e}",
-                    exc_info=True,
-                )
-
         webhook_url = (
             context.lead.payload.get("reporting_webhook_url")
             if context.lead and context.lead.payload
             else None
         )
 
-        # Send webhook - skip BUSY/NO_ANSWER unless it's the last attempt
-        should_send_webhook = webhook_url and (
-            outcome not in ["BUSY", "NO_ANSWER"] or is_last_attempt
-        )
-
-        if should_send_webhook:
+        if webhook_url:
             logger.info(
                 f"Sending webhook to {webhook_url} for call {context.call_sid} "
                 f"with outcome {outcome}"
-                + (" (last attempt)" if is_last_attempt else "")
             )
             try:
                 success = await send_webhook_with_retry(
