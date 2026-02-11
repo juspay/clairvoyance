@@ -404,12 +404,15 @@ def get_validation_error_message(errors: List[str]) -> str:
     return f"Payload validation failed with {len(errors)} errors:\n- {error_list}"
 
 
-def create_background_sound_mixer(template) -> Optional[SoundfileMixer]:
+def create_background_sound_mixer(
+    template, bandwidth: str = "low"
+) -> Optional[SoundfileMixer]:
     """
     Create a background sound mixer from template configuration.
 
     Args:
         template: Template object with configurations for background sound
+        bandwidth: Audio bandwidth setting ("low" = 8kHz, "high" = 16kHz)
 
     Returns:
         SoundfileMixer instance if successfully configured, None otherwise
@@ -433,8 +436,14 @@ def create_background_sound_mixer(template) -> Optional[SoundfileMixer]:
         logger.warning("Background sound enabled but no file specified in template")
         return None
 
+    # Determine sample rate suffix based on bandwidth
+    sample_rate_suffix = "-16k" if bandwidth == "high" else "-8k"
+
     # Mapping from background sound file identifier to actual filename with extension
-    background_sound_file_map = {"office-ambience": "office-ambience.mp3"}
+    # Each sound has bandwidth-specific variants (e.g., office-ambience-8k.mp3, office-ambience-16k.mp3)
+    background_sound_file_map = {
+        "office-ambience": f"office-ambience{sample_rate_suffix}.mp3",
+    }
 
     # Convert enum to string value if needed
     background_sound_key = (

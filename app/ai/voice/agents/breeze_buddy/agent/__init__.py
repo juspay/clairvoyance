@@ -19,6 +19,9 @@ from pipecat.runner.utils import (
 )
 from pipecat_flows import FlowManager
 
+from app.ai.voice.agents.breeze_buddy.agent.constants import (
+    get_sample_rate_for_provider,
+)
 from app.ai.voice.agents.breeze_buddy.agent.flow import (
     build_flow_config,
     load_template_config,
@@ -38,6 +41,7 @@ from app.ai.voice.agents.breeze_buddy.agent.pipeline import (
 )
 from app.ai.voice.agents.breeze_buddy.agent.transport import (
     TRANSPORT_TYPE_DAILY,
+    create_plivo_transport,
     get_transport_params,
 )
 from app.ai.voice.agents.breeze_buddy.agent.utils import (
@@ -119,6 +123,7 @@ class Agent:
         self.expected_callback_response_schema: Any = None
         self.greeting_source: Optional[str] = None
         self.default_vad_params: Optional[VADParams] = None
+        self.bandwidth: str = "low"  # Audio bandwidth setting
 
         # Error tracking
         self.errors: List[Dict[str, Any]] = []
@@ -301,22 +306,43 @@ class Agent:
             errors=self.errors,
         )
 
+        call_bandwidth = (
+            getattr(self.configurations, "call_bandwidth", None)
+            if self.configurations
+            else None
+        )
+        if call_bandwidth is not None:
+            self.bandwidth = call_bandwidth.value
+        logger.info(f"Using call bandwidth: {self.bandwidth}")
+
         self.vad_analyzer, self.default_vad_params = await create_vad_analyzer(
             is_daily_mode=False,
             template=self.template,
+            provider=transport_type,
+            bandwidth=self.bandwidth,
         )
 
         # Create background sound mixer if configured in template
-        audio_out_mixer = create_background_sound_mixer(self.template)
+        # Pass bandwidth to select appropriate sample rate variant
+        audio_out_mixer = create_background_sound_mixer(self.template, self.bandwidth)
 
-        # Get transport params using the detected transport type
-        transport_params = get_transport_params(self.vad_analyzer, audio_out_mixer)
+        # Get transport params using the detected transport type and bandwidth
+        transport_params = get_transport_params(
+            self.vad_analyzer, audio_out_mixer, self.bandwidth
+        )
         params = transport_params[transport_type]()
 
         # Create transport with the call data
-        self.transport = await _create_telephony_transport(
-            self.ws, params, transport_type, call_data
-        )
+        # Use custom Plivo transport for L16 audio (Pipecat's default uses μ-law 8 kHz only)
+        if transport_type == "plivo":
+            plivo_sample_rate = get_sample_rate_for_provider("plivo", self.bandwidth)
+            self.transport = await create_plivo_transport(
+                self.ws, params, call_data, plivo_sample_rate
+            )
+        else:
+            self.transport = await _create_telephony_transport(
+                self.ws, params, transport_type, call_data
+            )
 
         logger.info(f"Created transport: {self.transport.__class__.__name__}")
         return True
@@ -432,7 +458,9 @@ class Agent:
         # Generate conversation ID and create task
         lead_payload = self.lead.payload if self.lead else None
         self.conversation_id = generate_conversation_id(lead_payload)
-        self.task = await create_pipeline_task(pipeline, self.conversation_id)
+        self.task = await create_pipeline_task(
+            pipeline, self.conversation_id, self.transport_type, self.bandwidth
+        )
 
         # Validate required attributes for flow setup
         if not self.template:

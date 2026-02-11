@@ -16,6 +16,9 @@ import json
 from fastapi import BackgroundTasks, HTTPException, Request, Response
 from starlette.responses import HTMLResponse
 
+from app.ai.voice.agents.breeze_buddy.agent.constants import (
+    get_sample_rate_for_provider,
+)
 from app.ai.voice.agents.breeze_buddy.managers.calls import (
     handle_unanswered_calls,
     update_call_recording,
@@ -29,6 +32,7 @@ from app.core.config.dynamic import (
 )
 from app.core.config.static import APP_BASE_URL
 from app.core.logger import logger
+from app.database.accessor import get_lead_by_call_id, get_template_by_merchant
 
 
 async def handle_callback_details_get(
@@ -205,14 +209,19 @@ async def handle_plivo_answer(request: Request) -> HTMLResponse:
     The XML instructs Plivo to connect the call to the existing
     websocket endpoint for real-time audio streaming.
 
+    The sample rate is determined from the template's call_bandwidth configuration:
+    - "low" = 8000 Hz (narrowband)
+    - "high" = 16000 Hz (wideband)
+
     Returns:
         XML Response with Stream element for WebSocket connection
     """
     form = await request.form()
     logger.info(f"Received Plivo answer webhook with form data: {form}")
 
-    # Extract call UUID for recording
+    # Extract call UUID for recording and template lookup
     call_uuid = form.get("CallUUID")
+    call_uuid_str = None
     if call_uuid:
         call_uuid_str = str(call_uuid) if not isinstance(call_uuid, str) else call_uuid
         logger.info(f"Starting recording for Plivo call UUID: {call_uuid_str}")
@@ -220,6 +229,42 @@ async def handle_plivo_answer(request: Request) -> HTMLResponse:
             start_call_recording(call_uuid_str)
         except Exception as e:
             logger.error(f"Failed to start Plivo recording: {e}", exc_info=True)
+
+    # Determine sample rate and content type from template configuration
+    # Default to 8000 Hz (narrowband) with mulaw format for compatibility
+    sample_rate = 8000
+    bandwidth = "low"  # Default to low for maximum compatibility
+    content_type = "audio/x-mulaw"  # Default to mulaw narrowband
+
+    if call_uuid_str:
+        try:
+            # Get lead by call_id to find the merchant and template info
+            lead = await get_lead_by_call_id(call_uuid_str)
+            if lead:
+                template = await get_template_by_merchant(
+                    merchant_id=lead.merchant_id,
+                    shop_identifier=lead.shop_identifier,
+                    name=lead.template,
+                )
+                if template and template.configurations:
+                    call_bandwidth = getattr(
+                        template.configurations, "call_bandwidth", None
+                    )
+                    if call_bandwidth is not None:
+                        bandwidth = call_bandwidth.value
+                        sample_rate = get_sample_rate_for_provider("plivo", bandwidth)
+                        # Use mulaw for low bandwidth (8kHz), L16 for high bandwidth (16kHz)
+                        if bandwidth == "low":
+                            content_type = "audio/x-mulaw"
+                        else:
+                            content_type = f"audio/x-l16;rate={sample_rate}"
+                        logger.info(
+                            f"Plivo audio config from template: {content_type} (bandwidth={bandwidth})"
+                        )
+        except Exception as e:
+            logger.warning(
+                f"Failed to get template config for audio format, using default {content_type}: {e}"
+            )
 
     # Build WebSocket URL using existing endpoint pattern
     # Reuses the existing telephony websocket handler
@@ -245,11 +290,13 @@ async def handle_plivo_answer(request: Request) -> HTMLResponse:
 
     xml_content = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Stream {noise_cancellation_attr} bidirectional="true" keepCallAlive="true" contentType="audio/x-mulaw;rate=8000">
+    <Stream {noise_cancellation_attr} bidirectional="true" keepCallAlive="true" contentType="{content_type}">
         {ws_url}
     </Stream>
 </Response>"""
 
-    logger.info(f"Returning Plivo XML response with WebSocket URL: {ws_url}")
+    logger.info(
+        f"Returning Plivo XML response with WebSocket URL: {ws_url}, contentType: {content_type}"
+    )
 
     return HTMLResponse(content=xml_content, media_type="application/xml")

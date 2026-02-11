@@ -19,6 +19,9 @@ from pipecat.processors.aggregators.llm_response import LLMUserAggregatorParams
 from pipecat.processors.aggregators.openai_llm_context import OpenAILLMContext
 from pipecat.services.azure.llm import AzureLLMService
 
+from app.ai.voice.agents.breeze_buddy.agent.constants import (
+    get_sample_rate_for_provider,
+)
 from app.ai.voice.agents.breeze_buddy.observability.tracing_setup import setup_tracing
 from app.ai.voice.agents.breeze_buddy.processors import (
     ResponseStateGate,
@@ -189,21 +192,34 @@ async def build_pipeline(
 async def create_pipeline_task(
     pipeline: Pipeline,
     conversation_id: str,
+    transport_type: Optional[str] = None,
+    bandwidth: str = "low",
 ) -> PipelineTask:
     """Create and configure the pipeline task.
 
     Args:
         pipeline: The built pipeline
         conversation_id: Unique conversation identifier
+        transport_type: Transport/provider type (e.g., "exotel", "plivo", "twilio")
+        bandwidth: Audio bandwidth setting ("low" = 8kHz, "high" = 16kHz). Default is "low".
 
     Returns:
         Configured PipelineTask
     """
+    # Get provider-specific sample rate based on bandwidth configuration
+    provider_sample_rate = (
+        get_sample_rate_for_provider(transport_type, bandwidth)
+        if transport_type
+        else 8000
+    )
+
     task_params: dict[str, Any] = {
         "params": PipelineParams(
             enable_metrics=True,
             enable_usage_metrics=True,
             observers=get_observers(),
+            audio_in_sample_rate=provider_sample_rate,
+            audio_out_sample_rate=provider_sample_rate,
         ),
     }
 

@@ -69,9 +69,28 @@ class TTSVoiceName(str, Enum):
 
 
 class BackgroundSoundFile(str, Enum):
-    """Enum for available background sound files"""
+    """Enum for available background sound files.
+
+    Each sound file has two variants:
+    - Base name (e.g., 'office-ambience') - automatically selects based on bandwidth
+    - The system will append '-8k' or '-16k' suffix based on call_bandwidth setting
+    """
 
     OFFICE_AMBIENCE = "office-ambience"
+
+
+class CallBandwidth(str, Enum):
+    """Audio bandwidth configuration for telephony calls.
+
+    Controls the sample rate used for audio processing:
+    - LOW: 8 kHz (narrowband) - Compatible with all providers, lower quality
+    - HIGH: 16 kHz (wideband) - Better audio quality, requires provider support
+
+    Note: Some providers (e.g., Twilio) are limited to 8 kHz regardless of this setting.
+    """
+
+    LOW = "low"  # 8 kHz narrowband
+    HIGH = "high"  # 16 kHz wideband
 
 
 class UserIdleHandlingConfig(BaseModel):
@@ -122,6 +141,10 @@ class ConfigurationModel(BaseModel):
     enable_inbound: bool = False  # Whether this template can handle inbound calls
     user_idle_configuration: Optional[UserIdleHandlingConfig] = (
         None  # User idle handling config
+    )
+    call_bandwidth: CallBandwidth = Field(
+        CallBandwidth.LOW,
+        description="Audio bandwidth for telephony calls. 'low' = 8 kHz (narrowband), 'high' = 16 kHz (wideband). Default is 'low' for maximum compatibility.",
     )
 
 
