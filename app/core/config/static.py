@@ -362,6 +362,9 @@ BREEZE_BUDDY_VAD_STOP_SECS = float(
 BREEZE_BUDDY_VAD_MIN_VOLUME = float(
     os.getenv("BREEZE_BUDDY_VAD_MIN_VOLUME", "0.4")
 )  # More tolerant for soft voice
+BB_ENABLE_STT_ASSISTED_VAD = (
+    os.getenv("BB_ENABLE_STT_ASSISTED_VAD", "true").lower() == "true"
+)  # Use STT interim transcriptions to bypass VAD volume check on telephony
 BREEZE_BUDDY_STT_SERVICE = os.getenv(
     "BREEZE_BUDDY_STT_SERVICE", "soniox"
 ).lower()  # "google" or "openai"

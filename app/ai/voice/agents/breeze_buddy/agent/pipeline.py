@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
+from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.observers.loggers.llm_log_observer import LLMLogObserver
 from pipecat.observers.loggers.metrics_log_observer import MetricsLogObserver
 from pipecat.observers.loggers.transcription_log_observer import (
@@ -19,9 +20,11 @@ from pipecat.processors.aggregators.llm_response import LLMUserAggregatorParams
 from pipecat.processors.aggregators.openai_llm_context import OpenAILLMContext
 from pipecat.services.azure.llm import AzureLLMService
 
+from app.ai.voice.agents.breeze_buddy.agent.vad import STTAwareSileroVADAnalyzer
 from app.ai.voice.agents.breeze_buddy.observability.tracing_setup import setup_tracing
 from app.ai.voice.agents.breeze_buddy.processors import (
     ResponseStateGate,
+    STTVADBridge,
     create_user_idle_processor,
 )
 from app.ai.voice.agents.breeze_buddy.stt import get_stt_service
@@ -119,6 +122,7 @@ async def build_pipeline(
     llm: AzureLLMService,
     tts: Any,
     configurations: Optional[ConfigurationModel] = None,
+    vad_analyzer: Optional[SileroVADAnalyzer] = None,
 ) -> tuple[Pipeline, OpenAILLMContext, Any]:
     """Build the processing pipeline.
 
@@ -128,6 +132,7 @@ async def build_pipeline(
         llm: LLM service
         tts: Text-to-speech service
         configurations: Template configuration model
+        vad_analyzer: The VAD analyzer instance (used to wire STTVADBridge)
 
     Returns:
         Tuple of (pipeline, context, context_aggregator)
@@ -167,6 +172,13 @@ async def build_pipeline(
         transport.output(),
         context_aggregator.assistant(),
     ]
+
+    # Insert STT-VAD bridge right after STT if the analyzer supports it.
+    # The bridge observes InterimTranscriptionFrame and signals the VAD analyzer,
+    # enabling the dual-signal approach (confidence + STT) for telephony.
+    if vad_analyzer and isinstance(vad_analyzer, STTAwareSileroVADAnalyzer):
+        stt_idx = pipeline_parts.index(stt)
+        pipeline_parts.insert(stt_idx + 1, STTVADBridge(vad_analyzer))
 
     if response_gate:
         pipeline_parts.insert(2, response_gate)
