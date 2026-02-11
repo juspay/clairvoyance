@@ -12,12 +12,61 @@ from typing import Any, Dict, List, Optional
 from app.ai.voice.agents.breeze_buddy.observability.tracing_setup import auto_trace
 from app.ai.voice.agents.breeze_buddy.template.context import TemplateContext
 from app.ai.voice.agents.breeze_buddy.template.hooks import HookRegistry
-from app.ai.voice.agents.breeze_buddy.template.types import HookConfig
+from app.ai.voice.agents.breeze_buddy.template.types import FieldSource, HookConfig
 from app.ai.voice.agents.breeze_buddy.template.vad import (
     apply_node_vad_config,
     reset_vad_to_default,
 )
 from app.core.logger import logger
+
+
+def _eagerly_set_outcome_from_hooks(
+    context: TemplateContext,
+    hook_configs: List[Dict[str, Any]],
+    function_name: str,
+) -> None:
+    """
+    Eagerly set the lead outcome in-memory from hook configurations.
+
+    This prevents a race condition where:
+    1. Hooks are scheduled asynchronously (fire-and-forget)
+    2. The client disconnects before the hooks finish executing
+    3. _handle_unexpected_disconnect sees outcome=None and sets it to "BUSY"
+    4. This triggers a retry, resulting in duplicate tags (e.g., both
+       buddy-failed and buddy-confirmed on the same order)
+
+    By setting the outcome synchronously before the async hooks run,
+    the disconnect handler will see the correct outcome and won't
+    override it with the default "BUSY" value.
+    """
+    if not context.lead:
+        return
+
+    for hook_config_dict in hook_configs:
+        try:
+            hook_config = HookConfig.model_validate(hook_config_dict)
+            if (
+                hook_config.name == "update_outcome_in_database"
+                and hook_config.expected_fields
+            ):
+                outcome_field = hook_config.expected_fields.get("outcome")
+                if (
+                    outcome_field
+                    and outcome_field.source == FieldSource.STATIC
+                    and outcome_field.value
+                ):
+                    context.lead.outcome = outcome_field.value
+                    logger.info(
+                        f"Eagerly set lead outcome to '{outcome_field.value}' "
+                        f"for function '{function_name}' to prevent race condition "
+                        f"with client disconnect"
+                    )
+                    return
+        except Exception as e:
+            logger.warning(
+                f"Failed to eagerly extract outcome from hook config "
+                f"for function '{function_name}': {e}"
+            )
 
 
 @auto_trace("transition_handler")
@@ -53,6 +102,12 @@ async def transition_handler(
 
     # Schedule hooks to run asynchronously (fire and forget)
     if hooks:
+        # Eagerly set the outcome in-memory before async hooks run.
+        # This prevents a race condition where a client disconnect before
+        # the async hook completes would cause outcome=None to be overridden
+        # with "BUSY", triggering an incorrect retry and duplicate tags.
+        _eagerly_set_outcome_from_hooks(context, hooks, function_name or "unknown")
+
         logger.info(
             f"Scheduling {len(hooks)} hook(s) to execute asynchronously for function '{function_name}'"
         )
