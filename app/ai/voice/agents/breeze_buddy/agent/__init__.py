@@ -423,6 +423,13 @@ class Agent:
             if not await self._setup_telephony_transport():
                 return
 
+        # Override TTS voice name if LLM-based selection was done at lead push time
+        if self.lead and self.lead.payload:
+            payload_voice = self.lead.payload.get("tts_voice_name")
+            if payload_voice and self.configurations:
+                logger.info(f"Overriding TTS voice from payload: {payload_voice}")
+                self.configurations.tts_voice_name = payload_voice
+
         # Create services and pipeline
         stt, llm, tts = await create_services(self.configurations)
         pipeline, self.context, context_aggregator = await build_pipeline(

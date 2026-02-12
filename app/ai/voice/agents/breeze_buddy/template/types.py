@@ -90,6 +90,42 @@ class TTSVoiceName(str, Enum):
     MIRA = "mira"
 
 
+class TTSProvider(str, Enum):
+    """Supported TTS providers for intelligent selection."""
+
+    ELEVENLABS = "elevenlabs"
+    CARTESIA = "cartesia"
+
+
+class TTSSelectionConfig(BaseModel):
+    """Configuration for LLM-based TTS provider selection from payload.
+
+    When enabled, uses Gemini to analyze the lead payload and select
+    the optimal TTS provider based on rules defined in the prompt.
+
+    Example:
+        {
+            "enabled": true,
+            "prompt": "Based on the customer's address and region, decide the TTS provider.
+                       For Hindi and English speaking regions (North India), use 'elevenlabs'.
+                       For South Indian regions or if unsure, use 'cartesia'.",
+            "providers": ["elevenlabs", "cartesia"]
+        }
+    """
+
+    enabled: bool = False
+    prompt: str = Field(
+        ...,
+        description="Prompt template for Gemini to decide which TTS provider to use. "
+        "The payload will be appended to this prompt automatically.",
+    )
+    providers: List[TTSProvider] = Field(
+        ...,
+        min_length=1,
+        description="Allowed TTS providers the LLM can choose from.",
+    )
+
+
 class BackgroundSoundFile(str, Enum):
     """Enum for available background sound files"""
 
@@ -121,6 +157,9 @@ class ConfigurationModel(BaseModel):
     )
     elevenlabs_voice_configurations: Optional[ElevenLabsVoiceConfiguration] = (
         None  # ElevenLabs voice configuration (overrides global defaults)
+    )
+    tts_selection_config: Optional[TTSSelectionConfig] = (
+        None  # LLM-based TTS provider selection config
     )
     stt_language: Optional[str] = None
     payload_based_language_selection: bool = False
