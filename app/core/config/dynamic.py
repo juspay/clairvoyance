@@ -197,11 +197,6 @@ async def BREEZE_BUDDY_AZURE_TEMPERATURE() -> float:
     return await get_config("BREEZE_BUDDY_AZURE_TEMPERATURE", 0.7, float)
 
 
-async def BREEZE_BUDDY_LLM_AGGREGATION_TIMEOUT() -> float:
-    """Returns BREEZE_BUDDY_LLM_AGGREGATION_TIMEOUT from Redis (0.0 = send immediately)"""
-    return await get_config("BREEZE_BUDDY_LLM_AGGREGATION_TIMEOUT", 0.0, float)
-
-
 # --- Daily Mode VAD Configuration (for web/mobile frontends) ---
 async def BB_DAILY_VAD_CONFIDENCE() -> float:
     """Returns BB_DAILY_VAD_CONFIDENCE from Redis"""
