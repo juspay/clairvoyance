@@ -22,7 +22,12 @@ from pipecat.processors.aggregators.llm_response_universal import (
 )
 from pipecat.services.azure.llm import AzureLLMService
 from pipecat.turns.user_start import VADUserTurnStartStrategy
+from pipecat.turns.user_stop import SpeechTimeoutUserTurnStopStrategy
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
+
+from app.ai.voice.agents.breeze_buddy.turns import (
+    DelayedTranscriptionUserTurnStartStrategy,
+)
 
 from app.ai.voice.agents.breeze_buddy.observability.tracing_setup import setup_tracing
 from app.ai.voice.agents.breeze_buddy.processors import (
@@ -152,7 +157,17 @@ async def build_pipeline(
         context,
         user_params=LLMUserAggregatorParams(
             user_turn_strategies=UserTurnStrategies(
-                start=[VADUserTurnStartStrategy(enable_interruptions=False)],
+                start=[
+                    VADUserTurnStartStrategy(enable_interruptions=False),
+                    DelayedTranscriptionUserTurnStartStrategy(
+                        delay=0.5,
+                        use_interim=False,
+                        enable_interruptions=False,
+                    ),
+                ],
+                stop=[
+                    SpeechTimeoutUserTurnStopStrategy(user_speech_timeout=0.0),
+                ],
             ),
         ),
     )
