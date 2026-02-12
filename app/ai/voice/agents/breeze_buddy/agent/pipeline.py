@@ -15,6 +15,7 @@ from pipecat.observers.loggers.user_bot_latency_log_observer import (
 from pipecat.observers.turn_tracking_observer import TurnTrackingObserver
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.task import PipelineParams, PipelineTask
+from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import (
     LLMContextAggregatorPair,
@@ -138,6 +139,7 @@ async def build_pipeline(
     llm: AzureLLMService,
     tts: Any,
     configurations: Optional[ConfigurationModel] = None,
+    vad_analyzer: Optional[SileroVADAnalyzer] = None,
 ) -> tuple[Pipeline, LLMContext, Any]:
     """Build the processing pipeline.
 
@@ -147,6 +149,7 @@ async def build_pipeline(
         llm: LLM service
         tts: Text-to-speech service
         configurations: Template configuration model
+        vad_analyzer: VAD analyzer instance (runs inside the user aggregator)
 
     Returns:
         Tuple of (pipeline, context, context_aggregator)
@@ -155,6 +158,7 @@ async def build_pipeline(
     context_aggregator = LLMContextAggregatorPair(
         context,
         user_params=LLMUserAggregatorParams(
+            vad_analyzer=vad_analyzer,
             user_turn_strategies=UserTurnStrategies(
                 start=[
                     VADUserTurnStartStrategy(enable_interruptions=False),
