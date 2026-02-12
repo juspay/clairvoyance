@@ -280,3 +280,19 @@ async def BB_NOISE_CANCELLATION_LEVEL() -> int:
 async def BB_ENABLE_ELEVENLABS_INDIAN_RESIDENCY() -> bool:
     """Returns BB_ENABLE_ELEVENLABS_INDIAN_RESIDENCY from Redis"""
     return await get_config("BB_ENABLE_ELEVENLABS_INDIAN_RESIDENCY", True, bool)
+
+
+# --- Breeze Buddy ElevenLabs TTS Configuration ---
+async def BB_ELEVENLABS_VOICE_ID() -> str:
+    """Returns BB_ELEVENLABS_VOICE_ID from Redis"""
+    return await get_config("BB_ELEVENLABS_VOICE_ID", "fG9s0SXJb213f4UxVHyG", str)
+
+
+async def BB_ELEVENLABS_MODEL_ID() -> str:
+    """Returns BB_ELEVENLABS_MODEL_ID from Redis"""
+    return await get_config("BB_ELEVENLABS_MODEL_ID", "eleven_flash_v2_5", str)
+
+
+async def BB_ELEVENLABS_VOICE_SPEED() -> float:
+    """Returns BB_ELEVENLABS_VOICE_SPEED from Redis"""
+    return await get_config("BB_ELEVENLABS_VOICE_SPEED", 1.15, float)

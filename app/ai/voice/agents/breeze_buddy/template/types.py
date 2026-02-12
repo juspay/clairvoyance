@@ -62,6 +62,28 @@ class CartesiaVoiceConfiguration(BaseModel):
     )
 
 
+class ElevenLabsVoiceConfiguration(BaseModel):
+    """ElevenLabs voice configuration parameters for template-level customization.
+
+    Allows per-template override of ElevenLabs TTS parameters.
+    Values specified here take precedence over global Redis defaults.
+    """
+
+    voice_id: Optional[str] = Field(None, description="ElevenLabs voice ID")
+    model_id: Optional[str] = Field(
+        None, description="ElevenLabs model ID (e.g., 'eleven_flash_v2_5')"
+    )
+    speed: Optional[float] = Field(
+        None,
+        ge=0.7,
+        le=1.2,
+        description="Speed multiplier (ElevenLabs range: 0.7-1.2, where 1.0 is default)",
+    )
+    language: Optional[str] = Field(
+        None, description="TTS language code (e.g., 'en', 'hi')"
+    )
+
+
 class TTSVoiceName(str, Enum):
     RHEA = "rhea"
     SARA = "sara"
@@ -96,6 +118,9 @@ class ConfigurationModel(BaseModel):
     )
     cartesia_voice_configurations: Optional[CartesiaVoiceConfiguration] = (
         None  # Cartesia voice configuration (overrides global defaults)
+    )
+    elevenlabs_voice_configurations: Optional[ElevenLabsVoiceConfiguration] = (
+        None  # ElevenLabs voice configuration (overrides global defaults)
     )
     stt_language: Optional[str] = None
     payload_based_language_selection: bool = False
