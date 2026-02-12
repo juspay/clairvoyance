@@ -1,0 +1,318 @@
+{
+  "// TURN STRATEGY CONFIGURATION EXAMPLES": "==================================================",
+  "// These examples show different turn strategy configurations": "for various use cases",
+
+  "example_1_simple_smart_turn": {
+    "name": "Simple Smart Turn",
+    "description": "Basic smart turn detection with default start strategies",
+    "configurations": {
+      "turn_strategy_config": {
+        "enabled": true,
+        "stop_strategies": [
+          {
+            "type": "turn_analyzer",
+            "params": {
+              "analyzer": "local_smart_turn_v3",
+              "timeout": 0.5
+            }
+          }
+        ],
+        "user_turn_stop_timeout": 5.0
+      }
+    },
+    "use_case": "General purpose conversations with natural pauses"
+  },
+
+  "example_2_prevent_false_starts": {
+    "name": "Prevent False Starts",
+    "description": "Require minimum words before starting turn to prevent 'um', 'uh' interruptions",
+    "configurations": {
+      "turn_strategy_config": {
+        "enabled": true,
+        "start_strategies": [
+          {
+            "type": "min_words",
+            "params": {
+              "min_words": 3,
+              "use_interim": true
+            }
+          }
+        ],
+        "stop_strategies": [
+          {
+            "type": "turn_analyzer",
+            "params": {
+              "analyzer": "local_smart_turn_v3",
+              "timeout": 0.5
+            }
+          }
+        ],
+        "user_turn_stop_timeout": 7.0
+      }
+    },
+    "use_case": "Sales conversations where users frequently say filler words"
+  },
+
+  "example_3_cloud_based_analyzer": {
+    "name": "Cloud-Based Analyzer",
+    "description": "Use Fal.ai cloud analyzer instead of local model",
+    "configurations": {
+      "turn_strategy_config": {
+        "enabled": true,
+        "stop_strategies": [
+          {
+            "type": "turn_analyzer",
+            "params": {
+              "analyzer": "fal",
+              "timeout": 0.5,
+              "analyzer_params": {
+                "api_key": "${FAL_API_KEY}"
+              }
+            }
+          }
+        ],
+        "user_turn_stop_timeout": 5.0
+      }
+    },
+    "use_case": "Serverless deployments or when minimizing local compute"
+  },
+
+  "example_4_with_muting": {
+    "name": "Smart Turn with Function Call Muting",
+    "description": "Smart turn detection + mute during function calls",
+    "configurations": {
+      "turn_strategy_config": {
+        "enabled": true,
+        "stop_strategies": [
+          {
+            "type": "turn_analyzer",
+            "params": {
+              "analyzer": "local_smart_turn_v3",
+              "timeout": 0.5
+            }
+          }
+        ],
+        "mute_strategies": [
+          {
+            "type": "function_call"
+          }
+        ],
+        "user_turn_stop_timeout": 5.0
+      }
+    },
+    "use_case": "Conversations with API calls or database queries that need focus"
+  },
+
+  "example_5_no_interruptions": {
+    "name": "No Interruptions Allowed",
+    "description": "Mute user whenever bot is speaking",
+    "configurations": {
+      "turn_strategy_config": {
+        "enabled": true,
+        "mute_strategies": [
+          {
+            "type": "always"
+          }
+        ],
+        "user_turn_stop_timeout": 5.0
+      }
+    },
+    "use_case": "Information delivery where bot message must be heard completely"
+  },
+
+  "example_6_elderly_users": {
+    "name": "Elderly/Slower Speakers",
+    "description": "Longer timeout for users who need more thinking time",
+    "configurations": {
+      "turn_strategy_config": {
+        "enabled": true,
+        "stop_strategies": [
+          {
+            "type": "turn_analyzer",
+            "params": {
+              "analyzer": "local_smart_turn_v3",
+              "timeout": 0.5
+            }
+          }
+        ],
+        "user_turn_stop_timeout": 10.0
+      }
+    },
+    "use_case": "Healthcare, senior support, accessibility-focused conversations"
+  },
+
+  "example_7_fast_paced_sales": {
+    "name": "Fast-Paced Sales",
+    "description": "Shorter timeout for quick back-and-forth conversations",
+    "configurations": {
+      "turn_strategy_config": {
+        "enabled": true,
+        "start_strategies": [
+          {
+            "type": "vad",
+            "params": {}
+          }
+        ],
+        "stop_strategies": [
+          {
+            "type": "turn_analyzer",
+            "params": {
+              "analyzer": "local_smart_turn_v3",
+              "timeout": 0.3
+            }
+          }
+        ],
+        "user_turn_stop_timeout": 3.0
+      }
+    },
+    "use_case": "High-energy sales calls, competitive environments"
+  },
+
+  "example_8_simple_transcription_based": {
+    "name": "Simple Transcription-Based",
+    "description": "No ML model, just transcription-based turn detection",
+    "configurations": {
+      "turn_strategy_config": {
+        "enabled": true,
+        "stop_strategies": [
+          {
+            "type": "transcription",
+            "params": {
+              "timeout": 0.5
+            }
+          }
+        ],
+        "user_turn_stop_timeout": 3.0
+      }
+    },
+    "use_case": "When ML model overhead is unwanted, or for debugging"
+  },
+
+  "example_9_external_control": {
+    "name": "External Control",
+    "description": "Turn control managed by external processor",
+    "configurations": {
+      "turn_strategy_config": {
+        "enabled": true,
+        "start_strategies": [
+          {
+            "type": "external"
+          }
+        ],
+        "stop_strategies": [
+          {
+            "type": "external",
+            "params": {
+              "timeout": 0.5
+            }
+          }
+        ],
+        "user_turn_stop_timeout": 5.0
+      }
+    },
+    "use_case": "Custom turn logic, STT services with built-in turn detection"
+  },
+
+  "example_10_first_greeting_protection": {
+    "name": "First Greeting Protection",
+    "description": "Mute user only during bot's first speech, then allow interruptions",
+    "configurations": {
+      "turn_strategy_config": {
+        "enabled": true,
+        "stop_strategies": [
+          {
+            "type": "turn_analyzer",
+            "params": {
+              "analyzer": "local_smart_turn_v3",
+              "timeout": 0.5
+            }
+          }
+        ],
+        "mute_strategies": [
+          {
+            "type": "first_speech"
+          }
+        ],
+        "user_turn_stop_timeout": 5.0
+      }
+    },
+    "use_case": "Ensure bot can deliver initial greeting, then allow natural conversation"
+  },
+
+  "example_11_keyword_filter_exact": {
+    "name": "Keyword Filter - Exact Match",
+    "description": "Filter exact keyword matches when bot is busy (speaking, processing, or executing functions)",
+    "configurations": {
+      "keyword_filter_config": {
+        "enabled": true,
+        "keywords": ["hello", "hey", "hola"],
+        "match_mode": "exact",
+        "case_sensitive": false,
+        "remove_punctuation": true
+      },
+      "turn_strategy_config": {
+        "enabled": true,
+        "stop_strategies": [
+          {
+            "type": "turn_analyzer",
+            "params": {
+              "analyzer": "local_smart_turn_v3",
+              "timeout": 0.5
+            }
+          }
+        ],
+        "user_turn_stop_timeout": 5.0
+      }
+    },
+    "use_case": "Prevent repeated greetings when bot is processing response"
+  },
+
+  "example_12_keyword_filter_contains": {
+    "name": "Keyword Filter - Contains Match",
+    "description": "Filter keywords using substring matching when bot is busy",
+    "configurations": {
+      "keyword_filter_config": {
+        "enabled": true,
+        "keywords": ["hello", "anybody there", "are you there"],
+        "match_mode": "contains",
+        "case_sensitive": false,
+        "remove_punctuation": true
+      },
+      "turn_strategy_config": {
+        "enabled": true,
+        "stop_strategies": [
+          {
+            "type": "turn_analyzer",
+            "params": {
+              "analyzer": "local_smart_turn_v3",
+              "timeout": 0.5
+            }
+          }
+        ],
+        "mute_strategies": [
+          {
+            "type": "function_call"
+          }
+        ],
+        "user_turn_stop_timeout": 5.0
+      }
+    },
+    "use_case": "Filter impatient user phrases during API calls or long processing"
+  },
+
+  "// CONFIGURATION NOTES": "==================================================",
+  "configuration": {
+    "description": "Turn strategies are configured via template JSON only",
+    "step_1": "Add turn_strategy_config to your template JSON",
+    "step_2": "Set enabled: true",
+    "step_3": "Configure desired strategies (start, stop, mute, analyzers)",
+    "step_4": "Use user_turn_stop_timeout for safety timeout (default: 5.0s)",
+    "note": "Redis-based configuration (BB_ENABLE_SMART_TURN) is no longer supported"
+  },
+
+  "// ENVIRONMENT VARIABLES": "==================================================",
+  "environment_variables": {
+    "FAL_API_KEY": "Required for Fal analyzer: export FAL_API_KEY=your-key-here",
+    "KRISP_API_KEY": "Required for Krisp analyzer: export KRISP_API_KEY=your-key-here"
+  }
+}

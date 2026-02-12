@@ -15,12 +15,19 @@ from pipecat.observers.loggers.user_bot_latency_log_observer import (
 from pipecat.observers.turn_tracking_observer import TurnTrackingObserver
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.task import PipelineParams, PipelineTask
-from pipecat.processors.aggregators.llm_response import LLMUserAggregatorParams
-from pipecat.processors.aggregators.openai_llm_context import OpenAILLMContext
+from pipecat.processors.aggregators.llm_context import LLMContext
+from pipecat.processors.aggregators.llm_response_universal import (
+    LLMContextAggregatorPair,
+    LLMUserAggregatorParams,
+)
 from pipecat.services.azure.llm import AzureLLMService
 
+from app.ai.voice.agents.breeze_buddy.agent.turn_strategies import (
+    build_turn_strategies_from_template,
+)
 from app.ai.voice.agents.breeze_buddy.observability.tracing_setup import setup_tracing
 from app.ai.voice.agents.breeze_buddy.processors import (
+    BusyStateKeywordFilter,
     ResponseStateGate,
     create_user_idle_processor,
 )
@@ -38,7 +45,6 @@ from app.core.config.static import (
     AZURE_OPENAI_API_KEY,
     AZURE_OPENAI_ENDPOINT,
     ENABLE_BREEZE_BUDDY_TRACING,
-    ENABLE_BREEZE_BUDDY_USER_INTERRUPTION,
     ENVIRONMENT,
 )
 from app.core.logger import logger
@@ -130,7 +136,10 @@ async def build_pipeline(
     llm: AzureLLMService,
     tts: Any,
     configurations: Optional[ConfigurationModel] = None,
-) -> tuple[Pipeline, OpenAILLMContext, Any]:
+    template: Optional[Any] = None,
+    is_daily_mode: bool = False,
+    vad_analyzer: Optional[Any] = None,
+) -> tuple[Pipeline, LLMContext, Any]:
     """Build the processing pipeline.
 
     Args:
@@ -139,17 +148,54 @@ async def build_pipeline(
         llm: LLM service
         tts: Text-to-speech service
         configurations: Template configuration model
+        template: Optional template model for configuration
+        is_daily_mode: Whether this is Daily mode
+        vad_analyzer: Optional VAD analyzer for aggregator-level VAD (dual support)
 
     Returns:
         Tuple of (pipeline, context, context_aggregator)
     """
-    context = OpenAILLMContext()
-    context_aggregator = llm.create_context_aggregator(
+    # Use new universal LLMContext (pipecat 0.0.101+)
+    context = LLMContext()
+
+    # Build user params for LLMUserAggregatorParams (pipecat 0.0.101+)
+    user_params_dict: dict = {}
+
+    # Add VAD analyzer to aggregator if provided (dual support)
+    # This enables aggregator-level VAD while keeping transport-level VAD for backward compatibility
+    if vad_analyzer:
+        logger.info(
+            "VAD analyzer configured at aggregator level (dual support enabled)"
+        )
+        user_params_dict["vad_analyzer"] = vad_analyzer
+
+    # Build turn strategies from template config (with Redis fallback)
+    turn_strategies, user_turn_stop_timeout = await build_turn_strategies_from_template(
+        template=template,
+        is_daily_mode=is_daily_mode,
+    )
+
+    # Add turn strategy params if configured
+    if turn_strategies:
+        logger.info(
+            f"Turn strategies configured with timeout={user_turn_stop_timeout}s"
+        )
+        user_params_dict["user_turn_strategies"] = turn_strategies  # type: ignore
+        user_params_dict["user_turn_stop_timeout"] = user_turn_stop_timeout  # type: ignore
+    else:
+        # No turn strategies configured - use Redis config as fallback timeout
+        # This replaces the old aggregation_timeout parameter
+        fallback_timeout = await BREEZE_BUDDY_LLM_AGGREGATION_TIMEOUT()
+        if fallback_timeout:
+            user_params_dict["user_turn_stop_timeout"] = fallback_timeout
+            logger.debug(f"Using fallback turn stop timeout: {fallback_timeout}s")
+
+    # Use new LLMContextAggregatorPair (pipecat 0.0.101+)
+    # This replaces the deprecated llm.create_context_aggregator()
+    # LLMContextAggregatorPair provides .user() and .assistant() methods directly
+    context_aggregator = LLMContextAggregatorPair(
         context,
-        user_params=LLMUserAggregatorParams(
-            aggregation_timeout=await BREEZE_BUDDY_LLM_AGGREGATION_TIMEOUT(),
-            enable_emulated_vad_interruptions=ENABLE_BREEZE_BUDDY_USER_INTERRUPTION,
-        ),
+        user_params=LLMUserAggregatorParams(**user_params_dict),
     )
 
     response_gate = ResponseStateGate() if await BB_ENABLE_RESPONSE_GATE() else None
@@ -169,6 +215,24 @@ async def build_pipeline(
     # Store reference to user aggregator for position lookup
     user_aggregator = context_aggregator.user()
 
+    # Create keyword filter if enabled in template
+    keyword_filter = None
+    if template and hasattr(template, "configurations") and template.configurations:
+        keyword_filter_config = getattr(
+            template.configurations, "keyword_filter_config", None
+        )
+        if keyword_filter_config and keyword_filter_config.enabled:
+            logger.info(
+                f"Keyword filter enabled: keywords={keyword_filter_config.keywords}, "
+                f"match_mode={keyword_filter_config.match_mode}"
+            )
+            keyword_filter = BusyStateKeywordFilter(
+                keywords=keyword_filter_config.keywords,
+                match_mode=keyword_filter_config.match_mode,
+                case_sensitive=keyword_filter_config.case_sensitive,
+                remove_punctuation=keyword_filter_config.remove_punctuation,
+            )
+
     pipeline_parts = [
         transport.input(),
         stt,
@@ -179,8 +243,17 @@ async def build_pipeline(
         context_aggregator.assistant(),
     ]
 
+    # Insert processors in reverse order (so they end up in correct position)
+    # This ensures: STT -> keyword_filter -> response_gate -> context_aggregator.user()
+    # keyword_filter MUST come before response_gate so filtered transcriptions
+    # never reach the gate (which would trigger unnecessary interruptions)
+    insert_position = 2
+
     if response_gate:
-        pipeline_parts.insert(2, response_gate)
+        pipeline_parts.insert(insert_position, response_gate)
+
+    if keyword_filter:
+        pipeline_parts.insert(insert_position, keyword_filter)
 
     # Insert user idle processor before user_aggregator (context_aggregator.user()) to monitor user activity
     if user_idle:

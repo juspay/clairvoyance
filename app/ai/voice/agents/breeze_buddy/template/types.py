@@ -84,6 +84,29 @@ class ElevenLabsVoiceConfiguration(BaseModel):
     )
 
 
+class KeywordFilterConfig(BaseModel):
+    """Keyword filter configuration for filtering user transcriptions when bot is busy."""
+
+    enabled: bool = Field(
+        default=False, description="Whether to enable keyword filtering"
+    )
+    keywords: List[str] = Field(
+        default_factory=list,
+        description="List of keywords to filter when bot is busy (e.g., ['hello', 'hey'])",
+    )
+    match_mode: str = Field(
+        default="exact",
+        description="Match mode: 'exact' for exact word match, 'contains' for substring match",
+    )
+    case_sensitive: bool = Field(
+        default=False, description="Whether keyword matching should be case-sensitive"
+    )
+    remove_punctuation: bool = Field(
+        default=True,
+        description="Whether to remove punctuation before matching keywords",
+    )
+
+
 class TTSVoiceName(str, Enum):
     RHEA = "rhea"
     SARA = "sara"
@@ -143,6 +166,15 @@ class ConfigurationModel(BaseModel):
     )
     vad_config: Optional[VadConfig] = Field(
         None, description="Default VAD configuration for the template"
+    )
+    turn_strategy_config: Optional[Dict[str, Any]] = Field(
+        None,
+        description="Turn strategy configuration for intelligent conversation turn-taking. "
+        "Validated as TurnStrategyConfigModel at runtime.",
+    )
+    keyword_filter_config: Optional[KeywordFilterConfig] = Field(
+        None,
+        description="Keyword filter configuration for filtering repeated keywords when bot is busy",
     )
     enable_inbound: bool = False  # Whether this template can handle inbound calls
     user_idle_configuration: Optional[UserIdleHandlingConfig] = (
