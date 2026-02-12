@@ -60,6 +60,7 @@ from app.ai.voice.agents.breeze_buddy.template.context import with_context
 from app.ai.voice.agents.breeze_buddy.template.types import (
     ConfigurationModel,
     TemplateModel,
+    TTSVoiceName,
 )
 from app.ai.voice.agents.breeze_buddy.utils.common import (
     create_background_sound_mixer,
@@ -428,6 +429,21 @@ class Agent:
         else:
             if not await self._setup_telephony_transport():
                 return
+
+        # Override TTS voice name if LLM-based selection was done at lead push time
+        if self.lead and self.lead.payload:
+            payload_voice = self.lead.payload.get("tts_voice_name")
+            if payload_voice and self.configurations:
+                try:
+                    voice_enum = TTSVoiceName(payload_voice)
+                    logger.info(
+                        f"Overriding TTS voice from payload: {voice_enum.value}"
+                    )
+                    self.configurations.tts_voice_name = voice_enum
+                except ValueError:
+                    logger.warning(
+                        f"Invalid TTS voice '{payload_voice}' in payload, keeping existing config"
+                    )
 
         # Create services and pipeline
         stt, llm, tts = await create_services(self.configurations)

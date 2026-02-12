@@ -4,7 +4,7 @@ import base64
 import json
 from typing import Optional
 
-from app.ai.voice.agents.breeze_buddy.template.types import TemplateModel
+from app.ai.voice.agents.breeze_buddy.template.types import TemplateModel, TTSVoiceName
 from app.ai.voice.agents.breeze_buddy.tts import generate_audio
 from app.ai.voice.agents.breeze_buddy.utils.common import greeting_has_variables
 from app.core.logger import logger
@@ -70,14 +70,30 @@ async def prepare_and_store_initial_greeting(
                         placeholder, str(value)
                     )
 
-            # Get voice name from template configurations, default to "rhea"
-            voice_name = "rhea"
-            if template.configurations.tts_voice_name:
-                voice_name = (
-                    template.configurations.tts_voice_name.value
-                    if hasattr(template.configurations.tts_voice_name, "value")
-                    else str(template.configurations.tts_voice_name)
-                )
+            # Get voice name: check payload first (set during push lead), then template config, then default
+            voice_name = None
+            payload_voice = (payload or {}).get("tts_voice_name")
+            if payload_voice:
+                try:
+                    voice_name = TTSVoiceName(payload_voice).value
+                    logger.info(
+                        f"Using TTS voice '{voice_name}' from payload for greeting (lead {lead_id})"
+                    )
+                except ValueError:
+                    logger.warning(
+                        f"Invalid TTS voice '{payload_voice}' in payload, falling back to template config"
+                    )
+
+            # Fall back to template config or default
+            if not voice_name:
+                if template.configurations.tts_voice_name:
+                    voice_name = (
+                        template.configurations.tts_voice_name.value
+                        if hasattr(template.configurations.tts_voice_name, "value")
+                        else str(template.configurations.tts_voice_name)
+                    )
+                else:
+                    voice_name = "rhea"
 
             logger.info(
                 f"Synthesizing dynamic greeting for lead {lead_id}: {resolved_greeting[:50]}..."
