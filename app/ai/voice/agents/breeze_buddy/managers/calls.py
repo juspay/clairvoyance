@@ -222,7 +222,6 @@ async def _retry_call(
                 "attemptCount": lead.attempt_count + 1,
                 "callDuration": 0.0,
                 "orderId": lead.request_id,
-                "isLastAttempt": is_last_attempt,
             }
 
             try:
