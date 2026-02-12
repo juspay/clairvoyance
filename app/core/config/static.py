@@ -501,6 +501,12 @@ REDIS_PORT = os.getenv("REDIS_PORT", "")
 REDIS_CLUSTER_NODES = os.getenv("REDIS_CLUSTER_NODES", "")
 REDIS_TTL = int(os.getenv("REDIS_TTL", "3600"))  # Default TTL in seconds (1 hour)
 
+# When True (default), dynamic config keys are fetched from Redis first, then fall back to env/default.
+# When False, Redis is skipped entirely for dynamic config — all keys resolve from env/default directly.
+ENABLE_REDIS_DYNAMIC_CONFIG = (
+    os.getenv("ENABLE_REDIS_DYNAMIC_CONFIG", "true").lower() == "true"
+)
+
 # DevCycle Configuration
 DEVCYCLE_WEBHOOK_SECRET = os.getenv("DEVCYCLE_WEBHOOK_SECRET", "")
 DEVCYCLE_SERVER_KEY = os.getenv("DEVCYCLE_SERVER_KEY", "")

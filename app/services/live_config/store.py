@@ -14,7 +14,7 @@ from typing import Any, Dict, Optional
 import aiohttp
 
 # Get basic environment variables directly (to avoid circular imports)
-from app.core.config.static import DEVCYCLE_SERVER_KEY
+from app.core.config.static import DEVCYCLE_SERVER_KEY, ENABLE_REDIS_DYNAMIC_CONFIG
 from app.core.logger import logger
 from app.services.live_config.utils import (
     build_variable_mapping,
@@ -209,22 +209,31 @@ async def get_all_flags() -> Dict[str, Any]:
 
 
 async def get_config(key: str, default_value: Any, return_type: type = str) -> Any:
-    """Unified: Redis → Environment → Default (async version)"""
+    """Unified: Redis → Environment → Default (async version)
 
-    # Always try Redis first (don't check _INITIALIZED to support cross-process reads)
-    try:
-        val = await _get_flag_from_redis(key)
-        if val is not None:
-            converted = convert_type(val, return_type)
-            if converted is not None:
-                logger.debug(f"get_config({key}): Retrieved from Redis -> {converted}")
-                return converted
-        else:
-            logger.debug(f"get_config({key}): Not found in Redis, checking environment")
-    except Exception as e:
-        logger.warning(
-            f"get_config({key}): Redis lookup failed: {e}, falling back to environment"
-        )
+    When ENABLE_REDIS_DYNAMIC_CONFIG is False, the Redis step is skipped entirely
+    and config resolves from Environment → Default only.
+    """
+
+    # Try Redis first, unless Redis dynamic config is disabled
+    if ENABLE_REDIS_DYNAMIC_CONFIG:
+        try:
+            val = await _get_flag_from_redis(key)
+            if val is not None:
+                converted = convert_type(val, return_type)
+                if converted is not None:
+                    logger.debug(
+                        f"get_config({key}): Retrieved from Redis -> {converted}"
+                    )
+                    return converted
+            else:
+                logger.debug(
+                    f"get_config({key}): Not found in Redis, checking environment"
+                )
+        except Exception as e:
+            logger.warning(
+                f"get_config({key}): Redis lookup failed: {e}, falling back to environment"
+            )
 
     env_val = get_env_value(key, return_type)
     if env_val is not None:
