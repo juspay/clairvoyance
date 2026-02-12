@@ -15,12 +15,18 @@ from pipecat.observers.loggers.user_bot_latency_log_observer import (
 from pipecat.observers.turn_tracking_observer import TurnTrackingObserver
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.task import PipelineParams, PipelineTask
-from pipecat.processors.aggregators.llm_response import LLMUserAggregatorParams
-from pipecat.processors.aggregators.openai_llm_context import OpenAILLMContext
+from pipecat.processors.aggregators.llm_context import LLMContext
+from pipecat.processors.aggregators.llm_response_universal import (
+    LLMContextAggregatorPair,
+    LLMUserAggregatorParams,
+)
 from pipecat.services.azure.llm import AzureLLMService
+from pipecat.turns.user_start import VADUserTurnStartStrategy
+from pipecat.turns.user_turn_strategies import UserTurnStrategies
 
 from app.ai.voice.agents.breeze_buddy.observability.tracing_setup import setup_tracing
 from app.ai.voice.agents.breeze_buddy.processors import (
+    BusyStateKeywordFilter,
     ResponseStateGate,
     create_user_idle_processor,
 )
@@ -31,14 +37,12 @@ from app.core.config.dynamic import (
     BB_ENABLE_RESPONSE_GATE,
     BREEZE_BUDDY_AZURE_MAX_COMPLETION_TOKENS,
     BREEZE_BUDDY_AZURE_TEMPERATURE,
-    BREEZE_BUDDY_LLM_AGGREGATION_TIMEOUT,
 )
 from app.core.config.static import (
     AZURE_BREEZE_BUDDY_OPENAI_MODEL,
     AZURE_OPENAI_API_KEY,
     AZURE_OPENAI_ENDPOINT,
     ENABLE_BREEZE_BUDDY_TRACING,
-    ENABLE_BREEZE_BUDDY_USER_INTERRUPTION,
     ENVIRONMENT,
 )
 from app.core.logger import logger
@@ -130,7 +134,7 @@ async def build_pipeline(
     llm: AzureLLMService,
     tts: Any,
     configurations: Optional[ConfigurationModel] = None,
-) -> tuple[Pipeline, OpenAILLMContext, Any]:
+) -> tuple[Pipeline, LLMContext, Any]:
     """Build the processing pipeline.
 
     Args:
@@ -143,12 +147,13 @@ async def build_pipeline(
     Returns:
         Tuple of (pipeline, context, context_aggregator)
     """
-    context = OpenAILLMContext()
-    context_aggregator = llm.create_context_aggregator(
+    context = LLMContext()
+    context_aggregator = LLMContextAggregatorPair(
         context,
         user_params=LLMUserAggregatorParams(
-            aggregation_timeout=await BREEZE_BUDDY_LLM_AGGREGATION_TIMEOUT(),
-            enable_emulated_vad_interruptions=ENABLE_BREEZE_BUDDY_USER_INTERRUPTION,
+            user_turn_strategies=UserTurnStrategies(
+                start=[VADUserTurnStartStrategy(enable_interruptions=False)],
+            ),
         ),
     )
 
@@ -166,6 +171,21 @@ async def build_pipeline(
         else None
     )
 
+    # Create keyword filter if enabled in template configuration
+    keyword_filter = None
+    keyword_filter_config = getattr(configurations, "keyword_filter_config", None)
+    if keyword_filter_config and keyword_filter_config.enabled:
+        logger.info(
+            f"Keyword filter enabled: keywords={keyword_filter_config.keywords}, "
+            f"match_mode={keyword_filter_config.match_mode}"
+        )
+        keyword_filter = BusyStateKeywordFilter(
+            keywords=keyword_filter_config.keywords,
+            match_mode=keyword_filter_config.match_mode,
+            case_sensitive=keyword_filter_config.case_sensitive,
+            remove_punctuation=keyword_filter_config.remove_punctuation,
+        )
+
     # Store reference to user aggregator for position lookup
     user_aggregator = context_aggregator.user()
 
@@ -179,8 +199,17 @@ async def build_pipeline(
         context_aggregator.assistant(),
     ]
 
+    # Insert processors at position 2 (after stt).
+    # keyword_filter MUST come before response_gate so filtered transcriptions
+    # never reach the gate (which would trigger unnecessary interruptions).
+    # Pipeline order: transport.input() -> stt -> keyword_filter -> response_gate -> user_aggregator
+    insert_position = 2
+
     if response_gate:
-        pipeline_parts.insert(2, response_gate)
+        pipeline_parts.insert(insert_position, response_gate)
+
+    if keyword_filter:
+        pipeline_parts.insert(insert_position, keyword_filter)
 
     # Insert user idle processor before user_aggregator (context_aggregator.user()) to monitor user activity
     if user_idle:
@@ -212,6 +241,7 @@ async def create_pipeline_task(
     """
     task_params: dict[str, Any] = {
         "params": PipelineParams(
+            allow_interruptions=False,
             enable_metrics=True,
             enable_usage_metrics=True,
             observers=get_observers(),
