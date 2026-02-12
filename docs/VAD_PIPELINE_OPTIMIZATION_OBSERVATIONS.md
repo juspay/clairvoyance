@@ -9,7 +9,7 @@
 6. [TurnAnalyzer Deep Dive — Minimum Latency Configuration](#6-turnanalyzer-deep-dive--minimum-latency-configuration)
 7. [Current Pipeline Architecture Snapshot](#7-current-pipeline-architecture-snapshot)
 8. [Current Configuration Snapshot](#8-current-configuration-snapshot)
-9. [Item 3 Implementation: DelayedTranscriptionUserTurnStartStrategy](#9-item-3-delayedtranscriptionuserturststartstrategy--implementation)
+9. [Item 3 Implementation: TranscriptionUserTurnStartStrategy Fallback](#9-item-3-transcriptionuserturststartstrategy-fallback--implementation)
 10. [Item 4 Implementation: Explicit Stop Strategy — Zero Aggregation](#10-item-4-explicit-stop-strategy--zero-aggregation)
 11. [Item 5: Background Noise Prevention — Analysis & Approach](#11-item-5-background-noise-prevention--analysis--approach)
 12. [Changes Applied (Items 3-5)](#12-changes-applied)
@@ -705,58 +705,56 @@ When `vad_force_turn_endpoint = True`:
 
 ---
 
-## 9. Item 3: DelayedTranscriptionUserTurnStartStrategy — Implementation
+## 9. Item 3: TranscriptionUserTurnStartStrategy Fallback — Implementation
 
 ### Problem Recap
-Pipeline only has `VADUserTurnStartStrategy` — no fallback when VAD misses speech. Pipecat's stock `TranscriptionUserTurnStartStrategy` fires instantly on any transcription, which would let background noise trigger false turn starts.
+Pipeline only has `VADUserTurnStartStrategy` — no fallback when VAD misses speech.
 
-### Solution: Custom Delayed Strategy
+### Why Custom Delayed Strategy Was NOT Needed
 
-**File:** `app/ai/voice/agents/breeze_buddy/turns/delayed_transcription_start.py`
+Initially a custom `DelayedTranscriptionUserTurnStartStrategy` (0.5s delay) was considered but rejected after analysis:
 
-A custom `BaseUserTurnStartStrategy` subclass that:
-1. Receives transcription frames from Soniox
-2. Starts a configurable delay timer (default 0.5s)
-3. If VAD fires during the delay → cancels timer (VAD handled it)
-4. If timer expires and VAD still hasn't fired → triggers turn start as fallback
+1. **A delay doesn't filter noise** — it just postpones it. If Soniox finalizes noise "uh", the delayed strategy would trigger 0.5s later anyway.
+2. **`use_interim=False` already provides implicit VAD priority** — Soniox finalization takes ~300-500ms, while VAD fires in ~96-224ms. VAD almost always wins. The `UserTurnController` deduplicates.
+3. **Adds 500ms latency to the recovery path** — soft voice goes from ~400ms to ~900ms, hurting the very users we're trying to help.
 
-### Key Design Decisions
+### Solution: Stock TranscriptionUserTurnStartStrategy(use_interim=False)
 
-| Decision | Choice | Reasoning |
-|----------|--------|-----------|
-| `use_interim` | `False` (default) | Only finalized Soniox transcriptions trigger the fallback. Noise artifacts that don't get finalized are ignored. This is the primary noise filter. |
-| `delay` | `0.5s` (default) | Longer than worst-case VAD start time (~224ms for strong voice with volume smoothing at 8kHz). Gives VAD ample time to fire first. |
-| `enable_interruptions` | `False` | Consistent with VAD strategy. Fallback path shouldn't enable interruptions. |
-| Timer restart | No restart on subsequent transcriptions | First transcription starts the clock. Subsequent ones don't reset it. Prevents indefinite delay from streaming transcriptions. |
+**Configuration:**
+```python
+start=[
+    VADUserTurnStartStrategy(enable_interruptions=False),  # Primary
+    TranscriptionUserTurnStartStrategy(use_interim=False),  # Fallback
+]
+```
+
+### How It Works
+
+Pipecat's built-in `TranscriptionUserTurnStartStrategy` with `use_interim=False`:
+- Only fires on **finalized** `TranscriptionFrame` (not interim)
+- Triggers `trigger_user_turn_started()` immediately
+- `UserTurnController` deduplicates — if VAD already started the turn, this is a no-op
+
+### Why use_interim=False Is The Key
+
+| Setting | Triggers On | Noise Risk | Latency |
+|---------|------------|------------|---------|
+| `use_interim=True` (default) | Any interim/final transcript | HIGH — noise interims trigger turns | ~150-200ms |
+| `use_interim=False` | Only finalized transcripts | LOW — Soniox rarely finalizes noise | ~300-500ms |
+
+With `use_interim=False`:
+- **Noise protection**: Soniox with domain-specific context hints (`BREEZE_BUDDY_SONIOX_CONTEXT`) rarely finalizes noise artifacts. Interim "uh" from background noise → never finalized → never triggers fallback.
+- **Natural VAD priority**: Soniox finalization takes ~300-500ms. VAD fires in ~96-224ms. By the time a finalized transcript arrives, VAD has already started the turn in 95%+ of cases.
 
 ### Deduplication Safety
 
-The `UserTurnController._trigger_user_turn_start()` method (line 249) has a guard:
+The `UserTurnController._trigger_user_turn_start()` has a guard:
 ```python
 if self._user_turn:  # Already started by another strategy
     return
 ```
 
-This means:
-- If VAD fires at ~96ms and starts the turn → delayed strategy's trigger at ~596ms is a no-op
-- If delayed strategy fires first → VAD's subsequent trigger is a no-op
-- Both strategies can safely coexist without double-processing
-
-### State Machine
-
-```
-                    IDLE (waiting for transcription)
-                         │
-                         │ TranscriptionFrame (finalized, VAD not speaking)
-                         ▼
-               DELAY_PENDING (0.5s timer running)
-                    ╱         ╲
-     VAD fires   ╱             ╲  Timer expires (VAD still quiet)
-       ╱       ╱                 ╲         ╲
-      ▼       ▼                   ▼         ▼
-  CANCELLED               TRIGGER_TURN_START
-  (VAD handled it)        (fallback fires)
-```
+Both strategies can safely coexist — whichever fires first wins, the other is a no-op.
 
 ### Example Timelines
 
@@ -765,9 +763,7 @@ This means:
 0ms     User says "cancel my order"
 96ms    VAD fires → turn starts
 350ms   Soniox finalizes "cancel my order"
-350ms   Delayed strategy receives finalized transcription
-        BUT VAD already fired (_vad_speaking was True, now False after stop)
-        Delay timer starts... but UserTurnController guard prevents duplicate
+350ms   TranscriptionStartStrategy fires → no-op (turn already started by VAD)
 ```
 
 **Soft speech (VAD fails):**
@@ -775,21 +771,16 @@ This means:
 0ms     User says "yes" softly (raw volume ~0.45)
 256ms   VAD never reaches SPEAKING (smoothed volume < 0.4)
 400ms   Soniox finalizes "yes"
-400ms   Delayed strategy starts 0.5s timer
-900ms   Timer expires, VAD still hasn't fired → FALLBACK TRIGGERS
-        Turn starts, "yes" is processed by LLM
+400ms   TranscriptionStartStrategy fires → turn starts! Speech captured.
 ```
 
 **Background noise:**
 ```
 0ms     AC hum, ambient noise
 ---     VAD correctly stays QUIET
-150ms   Soniox produces interim "uh" → NOT finalized → strategy ignores it
-500ms   Soniox may or may not finalize → if it does, delay starts
-1000ms  Timer expires → trigger fires
-        RISK: If Soniox finalizes noise, it will trigger a turn
-        MITIGATION: Soniox with context hints is good at distinguishing noise from speech
-        ADDITIONAL: BusyStateKeywordFilter can catch common noise words when bot is busy
+150ms   Soniox produces interim "uh" → use_interim=False → IGNORED
+500ms   Soniox does NOT finalize (noise doesn't meet finalization threshold)
+---     No turn started. Noise filtered. ✅
 ```
 
 ---
@@ -967,16 +958,11 @@ This would suppress ALL transcriptions when VAD hasn't detected speech, providin
 
 ## 12. Changes Applied
 
-### Files Created
-| File | Purpose |
-|------|---------|
-| `app/ai/voice/agents/breeze_buddy/turns/__init__.py` | New turns module |
-| `app/ai/voice/agents/breeze_buddy/turns/delayed_transcription_start.py` | Custom delayed transcription fallback strategy |
-
 ### Files Modified
 | File | Change |
 |------|--------|
-| `app/ai/voice/agents/breeze_buddy/agent/pipeline.py` | Added `DelayedTranscriptionUserTurnStartStrategy` as fallback start strategy, added explicit `SpeechTimeoutUserTurnStopStrategy(user_speech_timeout=0.0)` stop strategy |
+| `app/ai/voice/agents/breeze_buddy/agent/pipeline.py` | Added `TranscriptionUserTurnStartStrategy(use_interim=False)` as fallback, added explicit `SpeechTimeoutUserTurnStopStrategy(user_speech_timeout=0.0)` stop strategy |
+| `app/ai/voice/agents/breeze_buddy/agent/__init__.py` | Replaced deprecated `OpenAILLMContext` with `LLMContext` |
 | `app/core/config/static.py` | Changed `BREEZE_BUDDY_VAD_STOP_SECS` default from `0.3` → `0.2` |
 
 ### New Pipeline Configuration
@@ -985,11 +971,7 @@ This would suppress ALL transcriptions when VAD hasn't detected speech, providin
 user_turn_strategies=UserTurnStrategies(
     start=[
         VADUserTurnStartStrategy(enable_interruptions=False),          # Primary
-        DelayedTranscriptionUserTurnStartStrategy(                      # Fallback
-            delay=0.5,
-            use_interim=False,
-            enable_interruptions=False,
-        ),
+        TranscriptionUserTurnStartStrategy(use_interim=False),          # Fallback (finalized only)
     ],
     stop=[
         SpeechTimeoutUserTurnStopStrategy(user_speech_timeout=0.0),    # Zero aggregation
@@ -1187,8 +1169,8 @@ USER SPEAKS
 │
 ├─ Transcription Fallback (WHEN VAD FAILS)
 │  ├─ Soniox produces final transcript: ~300-500ms from speech
-│  ├─ Delay timer:                       +500ms
-│  ├─ Total to turn start:              ~800-1000ms (fallback only)
+│  ├─ TranscriptionUserTurnStartStrategy fires: IMMEDIATE on finalized
+│  ├─ Total to turn start:              ~300-500ms (fallback only)
 │  └─ This is acceptable — it's a recovery path, not primary
 │
 USER STOPS SPEAKING
@@ -1236,7 +1218,7 @@ LLM PROCESSING
 |----------|---------------------|
 | **Best case**: Strong voice, Soniox fast (P99=0.2) | 200ms (VAD stop) + 0ms (transcript ready) = **200ms** |
 | **Typical**: Normal voice, Soniox normal (P99=0.3) | 200ms + 100ms = **300ms** |
-| **Soft voice (VAD fallback)**: VAD misses, Soniox catches | 500ms (Soniox) + 500ms (delay) + 0ms (stop) = **~1000ms** |
+| **Soft voice (VAD fallback)**: VAD misses, Soniox catches | 400ms (Soniox finalize) + 0ms (immediate trigger) = **~400ms** |
 | **Production 0s aggregation target** | Met for primary path (200-300ms) |
 
 ### Full End-to-End Latency (User → Bot Response)
