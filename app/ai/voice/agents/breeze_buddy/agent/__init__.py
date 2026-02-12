@@ -118,6 +118,9 @@ class Agent:
         self.end_conversation_callbacks: List = []
         self.expected_callback_response_schema: Any = None
         self.greeting_source: Optional[str] = None
+        self.greeting_text: Optional[str] = (
+            None  # Resolved greeting text for LLM context
+        )
         self.default_vad_params: Optional[VADParams] = None
 
         # Error tracking
@@ -292,7 +295,7 @@ class Agent:
             logger.error("Missing required attributes after setup")
             return False
 
-        self.greeting_source = await send_initial_greeting(
+        greeting_result = await send_initial_greeting(
             ws=self.ws,
             stream_sid=self.stream_sid,
             lead=self.lead,
@@ -300,6 +303,8 @@ class Agent:
             provider=self.provider or "",
             errors=self.errors,
         )
+        self.greeting_source = greeting_result.source
+        self.greeting_text = greeting_result.text
 
         self.vad_analyzer, self.default_vad_params = await create_vad_analyzer(
             is_daily_mode=False,
@@ -374,6 +379,7 @@ class Agent:
             lead_payload=lead_payload,
             configurations=self.configurations,
             has_greeting_source=bool(self.greeting_source),
+            greeting_text=self.greeting_text,
         )
 
         await self.flow_manager.initialize(initial_node_config)

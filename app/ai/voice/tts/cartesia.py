@@ -70,14 +70,31 @@ def build_cartesia_tts(config: CartesiaConfig) -> CartesiaTTSService:
     )
 
 
-async def _generate_cartesia_audio(text: str) -> bytes:
-    """Synthesize audio using Cartesia TTS API."""
+async def _generate_cartesia_audio(
+    text: str,
+    voice_id: str | None = None,
+    model: str | None = None,
+) -> bytes:
+    """Synthesize audio using Cartesia TTS API.
+
+    Args:
+        text: The text to synthesize
+        voice_id: Optional voice ID override. Falls back to BB_CARTESIA_VOICE_ID if None.
+        model: Optional model override. Falls back to BB_CARTESIA_MODEL if None.
+
+    Returns:
+        Audio bytes in raw PCM format (16-bit, 16kHz)
+    """
     if not CARTESIA_API_KEY:
         raise ValueError("CARTESIA_API_KEY is required for Mira voice")
 
-    voice_id = await BB_CARTESIA_VOICE_ID()
-    model = await BB_CARTESIA_MODEL()
+    # Use provided values or fall back to defaults
+    default_voice_id = await BB_CARTESIA_VOICE_ID()
+    default_model = await BB_CARTESIA_MODEL()
     language = await BB_CARTESIA_LANGUAGE()
+
+    final_voice_id = voice_id if voice_id else default_voice_id
+    final_model = model if model else default_model
 
     url = "https://api.cartesia.ai/tts/bytes"
     headers = {
@@ -87,9 +104,9 @@ async def _generate_cartesia_audio(text: str) -> bytes:
     }
 
     payload = {
-        "model_id": model,
+        "model_id": final_model,
         "transcript": text,
-        "voice": {"mode": "id", "id": voice_id},
+        "voice": {"mode": "id", "id": final_voice_id},
         "language": language or "en",
         "output_format": {
             "container": "raw",
@@ -98,7 +115,10 @@ async def _generate_cartesia_audio(text: str) -> bytes:
         },
     }
 
-    logger.info(f"Synthesizing greeting with Cartesia: {text[:50]}...")
+    logger.info(
+        f"Synthesizing greeting with Cartesia: {text[:50]}... "
+        f"[voice_id={final_voice_id}, model={final_model}]"
+    )
 
     async with httpx.AsyncClient() as client:
         response = await client.post(url, json=payload, headers=headers, timeout=30.0)

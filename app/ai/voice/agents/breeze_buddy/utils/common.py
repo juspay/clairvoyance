@@ -502,10 +502,11 @@ async def prepare_initial_greeting_payload(
     Args:
         lead: Lead object containing lead information
         template: Template object containing template configuration
-        provider: Call provider (enum or string "twilio" or "exotel")
+        provider: Call provider (enum or string "twilio", "plivo", or "exotel")
 
     Returns:
-        Dictionary with "payload" (base64 encoded audio) and "greeting_source",
+        Dictionary with "payload" (base64 encoded audio), "greeting_source",
+        and "greeting_text" (the resolved greeting text for LLM context),
         or None if preparation failed
     """
     try:
@@ -518,6 +519,7 @@ async def prepare_initial_greeting_payload(
 
         mulaw_data = None
         greeting_source = None
+        greeting_text = None
 
         if lead:
             redis = await get_redis_service()
@@ -530,19 +532,34 @@ async def prepare_initial_greeting_payload(
                     logger.info("Using static greeting audio from template")
                     mulaw_data = base64.b64decode(template_greeting)
                     greeting_source = "template_static"
+                    # For static greetings, get the text from template config
+                    if (
+                        template.configurations
+                        and template.configurations.initial_greeting
+                    ):
+                        greeting_text = template.configurations.initial_greeting
                     # Don't delete template audio - it's persistent
 
             # 2. Then check for lead audio (dynamic greeting - temporary)
             if not mulaw_data:
-                lead_audio_key = f"greeting:{lead.id}"
-                lead_greeting = await redis.get(lead_audio_key)
-                if lead_greeting:
-                    logger.info("Using dynamic greeting audio for lead")
-                    mulaw_data = base64.b64decode(lead_greeting)
+                lead_greeting_key = f"greeting:{lead.id}"
+                lead_greeting_data = await redis.get(lead_greeting_key)
+                if lead_greeting_data:
+                    logger.info("Using dynamic greeting for lead")
                     greeting_source = "lead_dynamic"
 
+                    # Parse JSON object containing both audio and text
+                    try:
+                        greeting_obj = json.loads(lead_greeting_data)
+                        mulaw_data = base64.b64decode(greeting_obj["audio"])
+                        greeting_text = greeting_obj.get("text")
+                    except (json.JSONDecodeError, KeyError):
+                        # Legacy format - just base64 audio, no JSON wrapper
+                        mulaw_data = base64.b64decode(lead_greeting_data)
+                        greeting_text = None
+
                     # Delete from Redis after retrieving (cleanup)
-                    await redis.delete(lead_audio_key)
+                    await redis.delete(lead_greeting_key)
                     logger.info(
                         f"Deleted dynamic greeting from Redis for lead {lead.id}"
                     )
@@ -563,11 +580,11 @@ async def prepare_initial_greeting_payload(
         logger.info(f"Prepared initial greeting audio from source: {greeting_source}")
 
         # Convert audio format based on provider
-        # Twilio expects mulaw, Exotel expects raw PCM (16-bit, 8kHz, mono)
-        if provider_str == "twilio":
-            # mulaw_data is already in correct format for Twilio
+        # Twilio and Plivo expect mulaw, Exotel expects raw PCM (16-bit, 8kHz, mono)
+        if provider_str in ("twilio", "plivo"):
+            # mulaw_data is already in correct format for Twilio and Plivo
             audio_to_send = mulaw_data
-            logger.info("Audio prepared as mulaw for Twilio")
+            logger.info(f"Audio prepared as mulaw for {provider_str}")
         else:
             try:
                 # Convert mulaw to 16-bit linear PCM
@@ -581,7 +598,11 @@ async def prepare_initial_greeting_payload(
         # Encode payload
         payload = base64.b64encode(audio_to_send).decode("utf-8")
 
-        return {"payload": payload, "greeting_source": greeting_source}
+        return {
+            "payload": payload,
+            "greeting_source": greeting_source,
+            "greeting_text": greeting_text,
+        }
 
     except Exception as e:
         logger.error(f"Failed to prepare initial greeting payload: {e}")

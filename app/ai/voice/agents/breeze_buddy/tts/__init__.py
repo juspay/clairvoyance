@@ -5,6 +5,7 @@ from pipecat.transcriptions.language import Language
 
 from app.ai.voice.agents.breeze_buddy.template.types import (
     CartesiaVoiceConfiguration,
+    ConfigurationModel,
     ElevenLabsVoiceConfiguration,
 )
 from app.ai.voice.agents.breeze_buddy.utils.common import convert_to_mulaw
@@ -333,13 +334,19 @@ async def get_tts_service(
         raise ValueError(f"Unsupported BREEZE_BUDDY_TTS_SERVICE: {tts_service}")
 
 
-async def generate_audio(text: str, voice_name: str) -> bytes:
+async def generate_audio(
+    text: str, voice_name: str, configurations: ConfigurationModel | None = None
+) -> bytes:
     """
     Synthesize text to audio bytes using the specified TTS voice.
 
     Args:
         text: The text to synthesize
         voice_name: The TTS voice to use ("sara", "rhea", or "mira")
+        configurations: Optional configuration model containing voice configurations.
+                       For ElevenLabs (rhea): uses voice_id and model_id if provided.
+                       For Cartesia (mira): uses voice_id and model if provided.
+                       Falls back to default values from static config if None.
 
     Returns:
         Audio bytes in mulaw format (8kHz, mono) ready to send via Twilio
@@ -354,10 +361,47 @@ async def generate_audio(text: str, voice_name: str) -> bytes:
         audio_data = await _generate_sarvam_audio(text)
         input_format = "raw"
     elif voice_name_lower == "rhea":
-        audio_data = await _generate_elevenlabs_audio(text)
+        # Extract ElevenLabs config if available
+        elevenlabs_config = (
+            configurations.elevenlabs_voice_configurations if configurations else None
+        )
+        voice_id = (
+            elevenlabs_config.voice_id
+            if elevenlabs_config and elevenlabs_config.voice_id
+            else None
+        )
+        model_id = (
+            elevenlabs_config.model_id
+            if elevenlabs_config and elevenlabs_config.model_id
+            else None
+        )
+
+        # Check if Indian residency should be used (default to True from dynamic config)
+        use_indian_residency = await BB_ENABLE_ELEVENLABS_INDIAN_RESIDENCY()
+
+        audio_data = await _generate_elevenlabs_audio(
+            text=text,
+            voice_id=voice_id,
+            model_id=model_id,
+            use_indian_residency=use_indian_residency,
+        )
         input_format = "ulaw"
     elif voice_name_lower == "mira":
-        audio_data = await _generate_cartesia_audio(text)
+        # Extract Cartesia config if available (only voice_id is configurable at template level)
+        cartesia_config = (
+            configurations.cartesia_voice_configurations if configurations else None
+        )
+        voice_id = (
+            cartesia_config.voice_id
+            if cartesia_config and cartesia_config.voice_id
+            else None
+        )
+
+        audio_data = await _generate_cartesia_audio(
+            text=text,
+            voice_id=voice_id,
+            # model uses default from BB_CARTESIA_MODEL (not configurable at template level)
+        )
         input_format = "raw"
     else:
         raise ValueError(

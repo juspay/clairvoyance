@@ -116,6 +116,7 @@ def prepare_initial_node(
     lead_payload: dict,
     configurations: Optional[ConfigurationModel],
     has_greeting_source: bool,
+    greeting_text: Optional[str] = None,
 ) -> NodeConfig:
     """Prepare the initial node configuration with language injection.
 
@@ -124,6 +125,7 @@ def prepare_initial_node(
         lead_payload: Lead payload data
         configurations: Template configurations
         has_greeting_source: Whether a greeting source exists
+        greeting_text: The resolved greeting text that was played to the user
 
     Returns:
         Configured NodeConfig for the initial node
@@ -137,9 +139,21 @@ def prepare_initial_node(
         getattr(configurations, "payload_based_language_selection", False),
     )
 
+    # Add greeting context to task messages if greeting was played
+    task_messages = list(node_config["task_messages"])
+    if greeting_text and has_greeting_source:
+        # Inject the greeting as an assistant message so LLM knows what was said
+        greeting_context_message = {
+            "role": "assistant",
+            "content": greeting_text,
+        }
+        # Prepend the greeting message to task messages
+        task_messages = [greeting_context_message] + task_messages
+        logger.info(f"Injected greeting into LLM context: {greeting_text[:50]}...")
+
     return NodeConfig(
         name=node_config["name"],
-        task_messages=node_config["task_messages"],
+        task_messages=task_messages,
         role_messages=role_messages,
         functions=node_config.get("functions", []),
         pre_actions=node_config.get("pre_actions", []),
