@@ -218,7 +218,7 @@ async def handle_ivr_menu(
         logger.info(f"[IVR] Attempt {attempt}/{IVR_MAX_ATTEMPTS}")
 
         # Send menu audio
-        await _send_audio(ws, stream_sid, menu_audio)
+        await _send_audio(ws, stream_sid, menu_audio, provider)
 
         # Wait for DTMF with timeout
         try:
@@ -236,7 +236,7 @@ async def handle_ivr_menu(
     # All attempts exhausted - say goodbye and close
     logger.info("[IVR] Max attempts reached, sending goodbye")
     if goodbye_audio:
-        await _send_audio(ws, stream_sid, goodbye_audio)
+        await _send_audio(ws, stream_sid, goodbye_audio, provider)
         # Wait for goodbye audio to play (~3 seconds) before closing
         await asyncio.sleep(3)
 
@@ -399,7 +399,7 @@ def _convert_audio_for_provider(mulaw_data: bytes, provider: str) -> bytes:
 
     Args:
         mulaw_data: Audio in mulaw format
-        provider: "twilio" or "exotel"
+        provider: "twilio", "exotel", or "plivo"
 
     Returns:
         Audio bytes in provider-specific format
@@ -408,8 +408,8 @@ def _convert_audio_for_provider(mulaw_data: bytes, provider: str) -> bytes:
         provider.lower() if hasattr(provider, "lower") else str(provider).lower()
     )
 
-    if provider_str == "twilio":
-        # Twilio expects mulaw
+    if provider_str in ("twilio", "plivo"):
+        # Twilio and Plivo both expect mulaw
         return mulaw_data
     else:
         # Exotel expects raw PCM 16-bit
@@ -417,7 +417,9 @@ def _convert_audio_for_provider(mulaw_data: bytes, provider: str) -> bytes:
         return pcm_data
 
 
-async def _send_audio(ws: WebSocket, stream_sid: str, audio_bytes: bytes):
+async def _send_audio(
+    ws: WebSocket, stream_sid: str, audio_bytes: bytes, provider: str = "exotel"
+):
     """
     Send audio to caller via WebSocket.
 
@@ -425,13 +427,32 @@ async def _send_audio(ws: WebSocket, stream_sid: str, audio_bytes: bytes):
         ws: WebSocket connection
         stream_sid: Stream ID for the media message
         audio_bytes: Audio bytes to send
+        provider: Telephony provider ("twilio", "exotel", or "plivo")
     """
     payload = base64.b64encode(audio_bytes).decode("utf-8")
-    media_message = {
-        "event": "media",
-        "streamSid": stream_sid,
-        "media": {"payload": payload},
-    }
+
+    provider_str = (
+        provider.lower() if hasattr(provider, "lower") else str(provider).lower()
+    )
+
+    if provider_str == "plivo":
+        # Plivo bidirectional streaming uses playAudio event
+        media_message = {
+            "event": "playAudio",
+            "media": {
+                "contentType": "audio/x-mulaw",
+                "sampleRate": 8000,
+                "payload": payload,
+            },
+        }
+    else:
+        # Twilio/Exotel use media event with streamSid
+        media_message = {
+            "event": "media",
+            "streamSid": stream_sid,
+            "media": {"payload": payload},
+        }
+
     success = await send_message(ws=ws, message=media_message)
     if success:
         logger.info(f"[IVR] Sent audio ({len(audio_bytes)} bytes)")

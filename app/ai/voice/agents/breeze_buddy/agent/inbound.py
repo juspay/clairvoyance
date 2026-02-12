@@ -37,8 +37,8 @@ async def handle_inbound_call(
         Tuple of (lead, error_reason). If successful, lead is set and error_reason is None.
         If failed, lead is None and error_reason contains the failure reason.
     """
-    # Inbound calls only supported for Exotel
-    if provider != CallProvider.EXOTEL:
+    # Inbound calls supported for Exotel and Plivo
+    if provider not in (CallProvider.EXOTEL, CallProvider.PLIVO):
         logger.warning(
             f"Inbound calls not supported for {provider}. call_sid: {call_sid}"
         )

@@ -4,35 +4,14 @@ Telephony provider callback endpoints.
 This module provides webhook endpoints for telephony providers (Twilio, Exotel, Plivo)
 to send call status updates and recording URLs.
 
-Current Endpoints (maintained for backward compatibility):
+Endpoints:
 - GET    /{provider}/callback/details  - Receive call details (Exotel)
 - POST   /{provider}/callback/details  - Receive call details (Twilio)
 - POST   /{provider}/callback/status   - Receive call status updates
-- POST   /plivo/answer                 - Plivo answer webhook (returns XML)
-Ideal RESTful Structure (for future migration):
-The current endpoints are provider-agnostic and follow a good pattern.
-However, for better RESTful design, consider:
+- POST   /plivo/ivr-select             - Plivo IVR selection callback (returns XML)
 
-Option 1 - Resource-oriented (recommended for multi-provider):
-- POST   /telephony/webhooks/{provider}/call-details   - Receive call details
-- POST   /telephony/webhooks/{provider}/call-status    - Receive call status
-- GET    /telephony/webhooks/{provider}/call-details   - Receive call details (GET)
-
-Option 2 - Provider-specific namespacing:
-- POST   /telephony/twilio/webhooks/call-details       - Twilio call details
-- POST   /telephony/twilio/webhooks/call-status        - Twilio call status
-- GET    /telephony/exotel/webhooks/call-details       - Exotel call details
-- POST   /telephony/exotel/webhooks/call-status        - Exotel call status
-
-Current Structure Assessment:
-The existing routes are acceptable because:
-1. They clearly indicate the provider via path parameter
-2. They differentiate between GET/POST for different providers
-3. They separate concerns (details vs status)
-4. They're webhook endpoints, so REST purity is less critical
-
-Recommendation: Keep current routes as-is for now since they're already well-designed
-and changing them would break existing provider integrations.
+Note: The answer webhook (previously /plivo/answer and /exotel/voicebot-url)
+has been unified into /{provider}/answer in the inbound module.
 """
 
 from fastapi import APIRouter, BackgroundTasks, Request
@@ -41,7 +20,7 @@ from .handlers import (
     handle_callback_details_get,
     handle_callback_details_post,
     handle_callback_status,
-    handle_plivo_answer,
+    handle_plivo_ivr_select,
 )
 
 router = APIRouter()
@@ -140,21 +119,16 @@ async def callback_status(request: Request, provider: str):
     return await handle_callback_status(request, provider)
 
 
-# Plivo-specific endpoints
-@router.post("/plivo/answer")
-async def plivo_answer(request: Request):
+@router.post("/plivo/ivr-select")
+async def plivo_ivr_select(request: Request):
     """
-    Webhook endpoint for Plivo to initiate audio streaming.
+    Webhook endpoint for Plivo IVR template selection.
 
-    Plivo calls this endpoint when an outbound call is answered.
-    Returns XML with Stream element that tells Plivo to connect
-    the call to a WebSocket for real-time audio streaming.
+    Plivo calls this endpoint after the user presses a DTMF digit during
+    the IVR menu (<GetInput> action URL). Returns Stream XML for valid
+    selection, or retries the IVR menu for invalid input.
 
     Returns:
-        XML Response with Stream element for WebSocket connection
-
-    Example:
-        POST /agent/voice/breeze-buddy/plivo/answer
-        Response: <Response>...<Stream websocketUrl="wss://..." bidirectional="true"/>...</Response>
+        XML Response with Stream, GetInput retry, or Speak+Hangup
     """
-    return await handle_plivo_answer(request)
+    return await handle_plivo_ivr_select(request)

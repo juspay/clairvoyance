@@ -50,11 +50,29 @@ async def send_initial_greeting(
             return None
 
         greeting_source = greeting_result["greeting_source"]
-        media_message = {
-            "event": "media",
-            "streamSid": stream_sid,
-            "media": {"payload": greeting_result["payload"]},
-        }
+
+        # Build provider-specific WebSocket message
+        provider_str = (
+            provider.lower() if hasattr(provider, "lower") else str(provider).lower()
+        )
+        if provider_str == "plivo":
+            # Plivo bidirectional streaming uses playAudio event
+            media_message = {
+                "event": "playAudio",
+                "media": {
+                    "contentType": "audio/x-mulaw",
+                    "sampleRate": 8000,
+                    "payload": greeting_result["payload"],
+                },
+            }
+        else:
+            # Twilio/Exotel use media event with streamSid
+            media_message = {
+                "event": "media",
+                "streamSid": stream_sid,
+                "media": {"payload": greeting_result["payload"]},
+            }
+
         success = await send_message(ws=ws, message=media_message)
         if success:
             logger.info(

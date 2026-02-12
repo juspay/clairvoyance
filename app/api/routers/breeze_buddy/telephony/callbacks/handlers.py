@@ -6,11 +6,12 @@ This module contains handlers for webhooks/callbacks from telephony providers
 
 Handlers:
 - handle_callback_details_get() - GET callback for call details (Exotel)
-- handle_callback_details_post() - POST callback for call details (Twilio)
+- handle_callback_details_post() - POST callback for call details (Twilio/Plivo)
 - handle_callback_status() - POST callback for call status updates
-- handle_plivo_answer() - POST answer webhook for Plivo (returns XML)
+- handle_plivo_ivr_select() - POST IVR selection callback from Plivo <GetInput>
 """
 
+import base64
 import json
 
 from fastapi import BackgroundTasks, HTTPException, Request, Response
@@ -23,11 +24,12 @@ from app.ai.voice.agents.breeze_buddy.managers.calls import (
 from app.ai.voice.agents.breeze_buddy.services.telephony.plivo.recording import (
     start_call_recording,
 )
-from app.core.config.dynamic import (
-    BB_NOISE_CANCELLATION_ENABLED,
-    BB_NOISE_CANCELLATION_LEVEL,
+from app.api.routers.breeze_buddy.telephony.inbound.handlers import (
+    PLIVO_IVR_MAX_ATTEMPTS,
+    _build_plivo_websocket_url,
+    build_plivo_ivr_xml,
+    build_plivo_stream_xml,
 )
-from app.core.config.static import APP_BASE_URL
 from app.core.logger import logger
 
 
@@ -195,61 +197,109 @@ async def handle_callback_status(request: Request, provider: str) -> Response:
     return Response(status_code=200)
 
 
-async def handle_plivo_answer(request: Request) -> HTMLResponse:
+async def handle_plivo_ivr_select(request: Request) -> HTMLResponse:
     """
-    Handle POST answer webhook from Plivo.
+    Handle POST callback from Plivo <GetInput> for IVR template selection.
 
-    Plivo calls this endpoint when a call comes in.
-    Returns XML to start streaming audio via WebSocket.
+    Plivo calls this endpoint after the user presses a DTMF digit during
+    the IVR menu. Validates the selection and either:
+    - Returns <Stream> XML if valid digit
+    - Returns <GetInput> XML retry if invalid digit and attempts remaining
+    - Returns <Speak> goodbye if max attempts reached
 
-    The XML instructs Plivo to connect the call to the existing
-    websocket endpoint for real-time audio streaming.
+    Query params:
+        attempt: Current attempt number (1-based)
+        options: Base64-encoded JSON of template list [{id, name, description}]
+        from_number: Caller's phone number
+        to_number: Called number
 
     Returns:
-        XML Response with Stream element for WebSocket connection
+        XML Response with Stream, GetInput, or Speak+Hangup
     """
     form = await request.form()
-    logger.info(f"Received Plivo answer webhook with form data: {form}")
-
-    # Extract call UUID for recording
-    call_uuid = form.get("CallUUID")
-    if call_uuid:
-        call_uuid_str = str(call_uuid) if not isinstance(call_uuid, str) else call_uuid
-        logger.info(f"Starting recording for Plivo call UUID: {call_uuid_str}")
-        try:
-            start_call_recording(call_uuid_str)
-        except Exception as e:
-            logger.error(f"Failed to start Plivo recording: {e}", exc_info=True)
-
-    # Build WebSocket URL using existing endpoint pattern
-    # Reuses the existing telephony websocket handler
-    ws_path = "/agent/voice/breeze-buddy/plivo/callback/order-confirmation/v2"
-    if APP_BASE_URL.startswith("https://"):
-        ws_url = "wss://" + APP_BASE_URL[len("https://") :].rstrip("/") + ws_path
-    elif APP_BASE_URL.startswith("http://"):
-        ws_url = "ws://" + APP_BASE_URL[len("http://") :].rstrip("/") + ws_path
-    else:
-        # Default to wss:// if no scheme is present
-        ws_url = "wss://" + APP_BASE_URL.rstrip("/") + ws_path
-
-    # Generate XML response for Plivo
-    noise_cancellation_enabled = await BB_NOISE_CANCELLATION_ENABLED()
-    noise_cancellation_level = await BB_NOISE_CANCELLATION_LEVEL()
-    noise_cancellation_attr = (
-        f'noiseCancellation="{str(noise_cancellation_enabled).lower()}" '
-        f'noiseCancellationLevel="{noise_cancellation_level}"'
-        if noise_cancellation_enabled
-        else ""
+    query_params = dict(request.query_params)
+    logger.info(
+        f"[PlivoIVR] Received IVR selection - form: {form}, query: {query_params}"
     )
-    logger.info(f"Plivo Noise Cancellation Attributes: {noise_cancellation_attr}")
 
-    xml_content = f"""<?xml version="1.0" encoding="UTF-8"?>
+    # Extract parameters
+    attempt = int(query_params.get("attempt", "1"))
+    options_b64 = query_params.get("options", "")
+    from_number = query_params.get("from_number", "unknown")
+    to_number = query_params.get("to_number", "")
+    digits = str(form.get("Digits", ""))
+
+    # Decode template options
+    try:
+        options_json = base64.urlsafe_b64decode(options_b64.encode()).decode()
+        template_list = json.loads(options_json)
+    except Exception as e:
+        logger.error(f"[PlivoIVR] Failed to decode options: {e}")
+        xml_content = """<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Stream {noise_cancellation_attr} bidirectional="true" keepCallAlive="true" contentType="audio/x-mulaw;rate=8000">
-        {ws_url}
-    </Stream>
+    <Speak>An error occurred. Please try again later.</Speak>
+    <Hangup/>
 </Response>"""
+        return HTMLResponse(content=xml_content, media_type="application/xml")
 
-    logger.info(f"Returning Plivo XML response with WebSocket URL: {ws_url}")
+    logger.info(
+        f"[PlivoIVR] Attempt {attempt}/{PLIVO_IVR_MAX_ATTEMPTS}, "
+        f"digits={digits!r}, options={len(template_list)}"
+    )
 
+    # Validate digit selection
+    selected_template = None
+    if digits:
+        try:
+            index = int(digits) - 1
+            if 0 <= index < len(template_list):
+                selected_template = template_list[index]
+        except ValueError:
+            pass
+
+    if selected_template:
+        # Valid selection - start recording and return Stream XML
+        logger.info(
+            f"[PlivoIVR] Valid selection: {selected_template['name']} "
+            f"(template_id: {selected_template['id']})"
+        )
+
+        # Extract CallUUID from form data for recording
+        call_uuid = str(form.get("CallUUID", ""))
+        if call_uuid:
+            try:
+                start_call_recording(call_uuid)
+            except Exception as e:
+                logger.error(f"Failed to start Plivo recording after IVR: {e}")
+
+        ws_url = _build_plivo_websocket_url(
+            template_id=selected_template["id"],
+            from_number=from_number,
+        )
+        xml_content = await build_plivo_stream_xml(ws_url)
+        return HTMLResponse(content=xml_content, media_type="application/xml")
+
+    # Invalid or no selection
+    if attempt < PLIVO_IVR_MAX_ATTEMPTS:
+        # Retry - return GetInput XML with incremented attempt
+        logger.info(
+            f"[PlivoIVR] Invalid input {digits!r}, retrying (attempt {attempt + 1})"
+        )
+        xml_content = build_plivo_ivr_xml(
+            template_list=template_list,
+            voice_name="sara",
+            ivr_greeting="Invalid selection. Please try again",
+            from_number=from_number,
+            to_number=to_number,
+            attempt=attempt + 1,
+        )
+        return HTMLResponse(content=xml_content, media_type="application/xml")
+
+    # Max attempts reached - goodbye
+    logger.info("[PlivoIVR] Max attempts reached, saying goodbye")
+    xml_content = """<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Speak>We didn't receive a valid input. Goodbye.</Speak>
+    <Hangup/>
+</Response>"""
     return HTMLResponse(content=xml_content, media_type="application/xml")

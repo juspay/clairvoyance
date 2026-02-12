@@ -1,60 +1,70 @@
 """
-Inbound call endpoint for Exotel.
+Unified answer endpoint for all telephony providers.
 
-This module provides the Voicebot URL endpoint for handling inbound calls.
-Uses Voicebot-only architecture - no Passthru applet needed.
+This module provides the /{provider}/answer endpoint that handles both
+inbound and outbound calls for any supported provider (Exotel, Plivo).
 
-Flow: Voicebot applet → WebSocket
+Flow: Provider webhook -> resolve templates -> return provider-specific response
 
 Endpoints:
-- GET/POST /exotel/voicebot-url - Returns JSON with WebSocket URL
+- GET/POST /{provider}/answer - Unified answer handler
 
 Authentication:
-- Requires `auth_token` query parameter matching EXOTEL_WEBHOOK_AUTH_TOKEN env var
-- Configure in Exotel dashboard: https://yourserver.com/...?auth_token=YOUR_SECRET
+- Exotel: Requires `auth_token` query parameter matching EXOTEL_WEBHOOK_AUTH_TOKEN env var
+- Plivo: No authentication (Plivo validates via answer_url configuration)
 """
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, HTTPException, Request
 
 from app.core.config.static import EXOTEL_WEBHOOK_AUTH_TOKEN
 
-from .handlers import handle_voicebot_url
+from .handlers import handle_provider_answer
 
 router = APIRouter()
 
+SUPPORTED_ANSWER_PROVIDERS = {"exotel", "plivo"}
 
-def verify_exotel_auth(auth_token: str = Query(None)):
-    """
-    Verify the auth token for Exotel webhook endpoints.
 
-    Raises HTTPException 401 if:
-    - EXOTEL_WEBHOOK_AUTH_TOKEN is not configured (required in all environments)
-    - Token doesn't match or is missing
+@router.api_route("/{provider}/answer", methods=["GET", "POST"])
+async def provider_answer(request: Request, provider: str):
     """
-    if not EXOTEL_WEBHOOK_AUTH_TOKEN:
+    Unified answer endpoint for telephony providers.
+
+    When a call is answered, the telephony provider hits this endpoint.
+    Resolves templates and returns a provider-appropriate response:
+    - Exotel: JSON ``{"url": "wss://..."}``
+    - Plivo: XML ``<Stream>`` or ``<GetInput>``
+
+    Path Parameters:
+        provider: Telephony provider name ("exotel" or "plivo")
+
+    Query Parameters (Exotel):
+        auth_token: Required authentication token
+        CallSid: Unique call identifier
+        CallFrom/From: Caller's phone number
+        CallTo/To: Called number
+
+    Form Data (Plivo):
+        CallUUID: Unique call identifier
+        From: Caller's phone number
+        To: Called number
+    """
+    provider_lower = provider.lower()
+
+    if provider_lower not in SUPPORTED_ANSWER_PROVIDERS:
         raise HTTPException(
-            status_code=401, detail="Webhook authentication not configured"
+            status_code=404,
+            detail=f"Provider '{provider}' is not supported for answer webhooks",
         )
-    if auth_token != EXOTEL_WEBHOOK_AUTH_TOKEN:
-        raise HTTPException(status_code=401, detail="Invalid auth token")
-    return True
 
+    # Exotel requires auth token verification
+    if provider_lower == "exotel":
+        auth_token = request.query_params.get("auth_token")
+        if not EXOTEL_WEBHOOK_AUTH_TOKEN:
+            raise HTTPException(
+                status_code=401, detail="Webhook authentication not configured"
+            )
+        if auth_token != EXOTEL_WEBHOOK_AUTH_TOKEN:
+            raise HTTPException(status_code=401, detail="Invalid auth token")
 
-@router.api_route("/exotel/voicebot-url", methods=["GET", "POST"])
-async def exotel_voicebot_url(request: Request, _: bool = Depends(verify_exotel_auth)):
-    """
-    Get WebSocket URL for Exotel Voicebot applet.
-
-    This is the single entry point for all calls (both inbound and outbound).
-    No Passthru applet needed - all lookups and IVR audio generation happen here.
-
-    Query Parameters:
-        auth_token: Required authentication token (must match EXOTEL_WEBHOOK_AUTH_TOKEN)
-        CallSid: Unique identifier for the call
-        CallFrom/From: The caller's phone number
-        CallTo/To: The number that was called
-
-    Returns:
-        JSON response: {"url": "wss://..."}
-    """
-    return await handle_voicebot_url(request)
+    return await handle_provider_answer(request, provider_lower)
