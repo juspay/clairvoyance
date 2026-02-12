@@ -137,7 +137,7 @@ async def send_webhook_with_retry(
     for attempt in range(1, max_retries + 1):
         try:
             logger.info(f"Webhook attempt {attempt}/{max_retries} to {url}")
-            async with session.post(url, json=data, headers=headers) as response:
+            async with session.post(url, data=payload, headers=headers) as response:
                 if response.status == 200:
                     logger.info(f"Webhook succeeded on attempt {attempt}")
                     return True
