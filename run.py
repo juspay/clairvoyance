@@ -9,7 +9,13 @@ import asyncio
 import uvicorn
 
 # STEP 3: Now safe to import config and logger
-from app.core.config.static import HOST, PORT, UVICORN_LOG_LEVEL, UVICORN_RELOAD
+from app.core.config.static import (
+    ENABLE_REDIS_DYNAMIC_CONFIG,
+    HOST,
+    PORT,
+    UVICORN_LOG_LEVEL,
+    UVICORN_RELOAD,
+)
 from app.core.logger import logger
 from app.services.live_config.store import initialize_feature_flags
 from app.services.redis import (
@@ -26,7 +32,12 @@ async def initialize_devcycle():
     without needing to call DevCycle API themselves.
     """
     try:
-        if is_redis_configured():
+        if not ENABLE_REDIS_DYNAMIC_CONFIG:
+            logger.info(
+                "Parent process: ENABLE_REDIS_DYNAMIC_CONFIG is False - "
+                "skipping Redis/DevCycle init, all dynamic config will use environment variables only"
+            )
+        elif is_redis_configured():
             # Initialize Redis connection
             redis_service = await get_redis_service()
             await redis_service.get_client()  # Initialize the client
