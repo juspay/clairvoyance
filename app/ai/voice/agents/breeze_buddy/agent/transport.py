@@ -3,7 +3,6 @@
 from typing import Optional
 
 from pipecat.audio.mixers.soundfile_mixer import SoundfileMixer
-from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.transports.daily.transport import DailyParams
 from pipecat.transports.websocket.fastapi import FastAPIWebsocketParams
 
@@ -14,13 +13,13 @@ TRANSPORT_TYPE_DAILY = "daily"
 
 
 def get_transport_params(
-    vad_analyzer: Optional[SileroVADAnalyzer],
     audio_out_mixer: Optional[SoundfileMixer] = None,
 ) -> dict:
     """Get transport parameters dictionary for all transport types.
 
+    VAD is handled by the user aggregator, not the transport.
+
     Args:
-        vad_analyzer: The VAD analyzer instance to use
         audio_out_mixer: Optional audio mixer for background sounds (only used by telephony transports)
 
     Returns:
@@ -30,13 +29,10 @@ def get_transport_params(
         "daily": lambda: DailyParams(
             audio_in_enabled=True,
             audio_out_enabled=True,
-            vad_analyzer=vad_analyzer,
-            # Note: DailyParams does not support audio_out_mixer
         ),
         "twilio": lambda: FastAPIWebsocketParams(
             audio_in_enabled=True,
             audio_out_enabled=True,
-            vad_analyzer=vad_analyzer,
             audio_in_sample_rate=TELEPHONY_SAMPLE_RATE,
             audio_out_sample_rate=TELEPHONY_SAMPLE_RATE,
             audio_out_mixer=audio_out_mixer,
@@ -44,7 +40,6 @@ def get_transport_params(
         "exotel": lambda: FastAPIWebsocketParams(
             audio_in_enabled=True,
             audio_out_enabled=True,
-            vad_analyzer=vad_analyzer,
             audio_in_sample_rate=TELEPHONY_SAMPLE_RATE,
             audio_out_sample_rate=TELEPHONY_SAMPLE_RATE,
             audio_out_mixer=audio_out_mixer,
@@ -52,7 +47,6 @@ def get_transport_params(
         "telnyx": lambda: FastAPIWebsocketParams(
             audio_in_enabled=True,
             audio_out_enabled=True,
-            vad_analyzer=vad_analyzer,
             audio_in_sample_rate=TELEPHONY_SAMPLE_RATE,
             audio_out_sample_rate=TELEPHONY_SAMPLE_RATE,
             audio_out_mixer=audio_out_mixer,
@@ -60,7 +54,6 @@ def get_transport_params(
         "plivo": lambda: FastAPIWebsocketParams(
             audio_in_enabled=True,
             audio_out_enabled=True,
-            vad_analyzer=vad_analyzer,
             audio_in_sample_rate=TELEPHONY_SAMPLE_RATE,
             audio_out_sample_rate=TELEPHONY_SAMPLE_RATE,
             audio_out_mixer=audio_out_mixer,

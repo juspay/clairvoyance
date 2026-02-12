@@ -357,8 +357,8 @@ BREEZE_BUDDY_VAD_START_SECS = float(
     os.getenv("BREEZE_BUDDY_VAD_START_SECS", "0.1")
 )  # Pick up quicker
 BREEZE_BUDDY_VAD_STOP_SECS = float(
-    os.getenv("BREEZE_BUDDY_VAD_STOP_SECS", "0.3")
-)  # Allow small pauses
+    os.getenv("BREEZE_BUDDY_VAD_STOP_SECS", "0.2")
+)  # Matches pipecat 0.0.102 default, 96ms faster than previous 0.3
 BREEZE_BUDDY_VAD_MIN_VOLUME = float(
     os.getenv("BREEZE_BUDDY_VAD_MIN_VOLUME", "0.4")
 )  # More tolerant for soft voice
@@ -462,10 +462,6 @@ BREEZE_BUDDY_SONIOX_MAX_NON_FINAL_TOKENS_DURATION_MS = int(
 BREEZE_BUDDY_SONIOX_VAD_FORCE_TURN_ENDPOINT = (
     os.environ.get("BREEZE_BUDDY_SONIOX_VAD_FORCE_TURN_ENDPOINT", "true").lower()
     == "true"
-)
-
-ENABLE_BREEZE_BUDDY_USER_INTERRUPTION = (
-    os.environ.get("ENABLE_BREEZE_BUDDY_USER_INTERRUPTION", "false").lower() == "true"
 )
 
 # Dashboard Authentication

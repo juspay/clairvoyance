@@ -10,7 +10,7 @@ from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.vad.vad_analyzer import VADParams
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineTask
-from pipecat.processors.aggregators.openai_llm_context import OpenAILLMContext
+from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.runner.types import RunnerArguments
 from pipecat.runner.utils import (
     _create_telephony_transport,
@@ -100,7 +100,7 @@ class Agent:
 
         # Runtime state
         self.task: Optional[PipelineTask] = None
-        self.context: Optional[OpenAILLMContext] = None
+        self.context: Optional[LLMContext] = None
         self.conversation_ended = False
         self.call_sid: Optional[str] = None
         self.stream_sid: Optional[str] = None
@@ -165,7 +165,7 @@ class Agent:
         )
 
         # Daily transport does not support audio_out_mixer, so we pass None
-        transport_params = get_transport_params(self.vad_analyzer, None)
+        transport_params = get_transport_params()
         self.transport = await create_transport(runner_args, transport_params)
 
     async def _setup_telephony_transport(self) -> bool:
@@ -316,7 +316,7 @@ class Agent:
         audio_out_mixer = create_background_sound_mixer(self.template)
 
         # Get transport params using the detected transport type
-        transport_params = get_transport_params(self.vad_analyzer, audio_out_mixer)
+        transport_params = get_transport_params(audio_out_mixer)
         params = transport_params[transport_type]()
 
         # Create transport with the call data
@@ -448,7 +448,7 @@ class Agent:
         # Create services and pipeline
         stt, llm, tts = await create_services(self.configurations)
         pipeline, self.context, context_aggregator = await build_pipeline(
-            self.transport, stt, llm, tts, self.configurations
+            self.transport, stt, llm, tts, self.configurations, self.vad_analyzer
         )
 
         # Generate conversation ID and create task
