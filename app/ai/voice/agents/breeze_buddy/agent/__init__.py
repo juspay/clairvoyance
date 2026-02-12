@@ -10,7 +10,7 @@ from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.vad.vad_analyzer import VADParams
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineTask
-from pipecat.processors.aggregators.openai_llm_context import OpenAILLMContext
+from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.runner.types import RunnerArguments
 from pipecat.runner.utils import (
     _create_telephony_transport,
@@ -99,7 +99,7 @@ class Agent:
 
         # Runtime state
         self.task: Optional[PipelineTask] = None
-        self.context: Optional[OpenAILLMContext] = None
+        self.context: Optional[LLMContext] = None
         self.conversation_ended = False
         self.call_sid: Optional[str] = None
         self.stream_sid: Optional[str] = None
