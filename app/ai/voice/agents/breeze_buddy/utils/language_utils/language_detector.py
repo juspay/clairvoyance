@@ -3,7 +3,8 @@
 import json
 from typing import Any, Dict, Optional
 
-import aiohttp
+from pipecat.processors.aggregators.llm_context import LLMContext
+from pipecat.services.google.llm import GoogleLLMService
 
 from app.core.config.static import GEMINI_API_KEY
 from app.core.logger import logger
@@ -104,63 +105,38 @@ Rules:
 Language code:"""
 
     try:
-        timeout = aiohttp.ClientTimeout(total=10.0)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.post(
-                f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_LANGUAGE_DETECTION_MODEL}:generateContent?key={GEMINI_API_KEY}",
-                headers={"Content-Type": "application/json"},
-                json={
-                    "contents": [{"parts": [{"text": prompt}]}],
-                    "generationConfig": {
-                        "maxOutputTokens": 200,
-                        "temperature": 0,
-                    },
-                },
-            ) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    logger.debug(f"Gemini language detection response: {data}")
+        llm = GoogleLLMService(
+            api_key=GEMINI_API_KEY,
+            model=GEMINI_LANGUAGE_DETECTION_MODEL,
+            params=GoogleLLMService.InputParams(
+                max_tokens=200,
+                temperature=0,
+            ),
+        )
 
-                    # Handle different response structures
-                    candidates = data.get("candidates", [])
-                    if not candidates:
-                        logger.warning(f"Gemini returned no candidates: {data}")
-                        return None
+        context = LLMContext(messages=[{"role": "user", "content": prompt}])
 
-                    content = candidates[0].get("content", {})
-                    parts = content.get("parts", [])
+        response = await llm.run_inference(context)
 
-                    if not parts:
-                        text = content.get("text", "")
-                        if not text:
-                            logger.warning(f"Gemini returned empty parts: {data}")
-                            return None
-                        language_code = text.strip()
-                    else:
-                        language_code = parts[0].get("text", "").strip()
+        if not response:
+            logger.warning("Gemini returned empty response for language detection")
+            return None
 
-                    # Normalize and validate the language code
-                    # Handle short codes like "te" -> "te-IN"
-                    if language_code in SHORT_TO_FULL_LANGUAGE_CODE:
-                        language_code = SHORT_TO_FULL_LANGUAGE_CODE[language_code]
-                        logger.debug(
-                            f"Normalized short language code to: {language_code}"
-                        )
+        language_code = response.strip()
+        logger.debug(f"Gemini language detection response: {language_code}")
 
-                    if language_code in SUPPORTED_LANGUAGES:
-                        logger.info(f"LLM detected language: {language_code}")
-                        return language_code
-                    else:
-                        logger.warning(
-                            f"LLM returned unsupported language code: {language_code}"
-                        )
-                        return None
-                else:
-                    response_text = await response.text()
-                    logger.warning(
-                        f"Gemini language detection failed: {response.status} - {response_text}"
-                    )
-                    return None
+        # Normalize and validate the language code
+        # Handle short codes like "te" -> "te-IN"
+        if language_code in SHORT_TO_FULL_LANGUAGE_CODE:
+            language_code = SHORT_TO_FULL_LANGUAGE_CODE[language_code]
+            logger.debug(f"Normalized short language code to: {language_code}")
+
+        if language_code in SUPPORTED_LANGUAGES:
+            logger.info(f"LLM detected language: {language_code}")
+            return language_code
+        else:
+            logger.warning(f"LLM returned unsupported language code: {language_code}")
+            return None
 
     except Exception as e:
         logger.warning(f"Gemini language detection error: {e}")
