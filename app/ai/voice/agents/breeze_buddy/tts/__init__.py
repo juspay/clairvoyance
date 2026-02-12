@@ -3,7 +3,10 @@
 from pipecat.services.cartesia.tts import GenerationConfig
 from pipecat.transcriptions.language import Language
 
-from app.ai.voice.agents.breeze_buddy.template.types import CartesiaVoiceConfiguration
+from app.ai.voice.agents.breeze_buddy.template.types import (
+    CartesiaVoiceConfiguration,
+    ElevenLabsVoiceConfiguration,
+)
 from app.ai.voice.agents.breeze_buddy.utils.common import convert_to_mulaw
 from app.ai.voice.tts import (
     CartesiaConfig,
@@ -24,6 +27,9 @@ from app.core.config.dynamic import (
     BB_CARTESIA_LANGUAGE,
     BB_CARTESIA_MODEL,
     BB_CARTESIA_VOICE_ID,
+    BB_ELEVENLABS_MODEL_ID,
+    BB_ELEVENLABS_VOICE_ID,
+    BB_ELEVENLABS_VOICE_SPEED,
     BB_ENABLE_ELEVENLABS_INDIAN_RESIDENCY,
     BB_SARVAM_TTS_ENABLE_PREPROCESSING,
     BB_SARVAM_TTS_LANGUAGE_CODE,
@@ -36,11 +42,8 @@ from app.core.config.dynamic import (
 from app.core.config.static import (
     CARTESIA_API_KEY,
     ELEVENLABS_API_KEY,
-    ELEVENLABS_BB_VOICE_ID,
     ELEVENLABS_INDIAN_RESIDENCY_API_KEY,
     ELEVENLABS_INDIAN_RESIDENCY_WEBSOCKET_URL,
-    ELEVENLABS_MODEL_ID,
-    ELEVENLABS_VOICE_SPEED,
     SARVAM_API_KEY,
 )
 from app.core.logger import logger
@@ -167,11 +170,19 @@ async def get_sarvam_tts_service():
     )
 
 
-async def get_elevenlabs_tts_service():
+async def get_elevenlabs_tts_service(
+    elevenlabs_config: ElevenLabsVoiceConfiguration | None = None,
+):
     """
     Returns an ElevenLabs TTS service instance based on the Breeze Buddy configuration.
-    """
 
+    Template-level values (if provided) override global Redis defaults.
+
+    Args:
+        elevenlabs_config: Template-level ElevenLabs voice configuration. Values specified here
+                          override global Redis defaults. If None or specific fields are None,
+                          falls back to Redis configuration.
+    """
     use_indian_residency = await BB_ENABLE_ELEVENLABS_INDIAN_RESIDENCY()
     if use_indian_residency and not ELEVENLABS_INDIAN_RESIDENCY_API_KEY:
         raise ValueError(
@@ -180,6 +191,43 @@ async def get_elevenlabs_tts_service():
 
     if not use_indian_residency and not ELEVENLABS_API_KEY:
         raise ValueError("ELEVENLABS_API_KEY is not set")
+
+    # Load global Redis defaults
+    default_voice_id = await BB_ELEVENLABS_VOICE_ID()
+    default_model_id = await BB_ELEVENLABS_MODEL_ID()
+    default_speed = await BB_ELEVENLABS_VOICE_SPEED()
+
+    # Template overrides Redis defaults
+    final_voice_id = (
+        elevenlabs_config.voice_id
+        if elevenlabs_config and elevenlabs_config.voice_id
+        else default_voice_id
+    )
+    final_model_id = (
+        elevenlabs_config.model_id
+        if elevenlabs_config and elevenlabs_config.model_id
+        else default_model_id
+    )
+    final_speed = (
+        elevenlabs_config.speed
+        if elevenlabs_config and elevenlabs_config.speed is not None
+        else default_speed
+    )
+
+    # Map language code string to Language enum
+    language = Language.EN_IN
+    if elevenlabs_config and elevenlabs_config.language:
+        try:
+            language = Language[elevenlabs_config.language.upper().replace("-", "_")]
+        except KeyError:
+            logger.warning(
+                f"Language code '{elevenlabs_config.language}' not found in Language enum, using EN_IN"
+            )
+
+    logger.info(
+        f"Building ElevenLabs TTS with: voice_id={final_voice_id}, "
+        f"model_id={final_model_id}, speed={final_speed}, language={language}"
+    )
 
     return build_elevenlabs_tts(
         ElevenLabsConfig(
@@ -194,10 +242,10 @@ async def get_elevenlabs_tts_service():
                 if use_indian_residency
                 else "wss://api.elevenlabs.io"
             ),
-            voice_id=ELEVENLABS_BB_VOICE_ID,
-            model_id=ELEVENLABS_MODEL_ID,
-            speed=ELEVENLABS_VOICE_SPEED,
-            language=Language.EN_IN,
+            voice_id=final_voice_id,
+            model_id=final_model_id,
+            speed=final_speed,
+            language=language,
         )
     )
 
@@ -206,6 +254,7 @@ async def get_tts_service(
     voice_name: str | None = None,
     mira_voice_id: str | None = None,
     cartesia_voice_configurations: CartesiaVoiceConfiguration | None = None,
+    elevenlabs_voice_configurations: ElevenLabsVoiceConfiguration | None = None,
 ):
     """
     Returns a TTS service instance based on the environment configuration.
@@ -221,6 +270,8 @@ async def get_tts_service(
                       Use cartesia_voice_configurations.voice_id instead.
         cartesia_voice_configurations: Template-level Cartesia voice configuration (volume, speed, emotion, language).
                                        Only used when voice_name is "mira" or tts_service is "cartesia".
+        elevenlabs_voice_configurations: Template-level ElevenLabs voice configuration (voice_id, model_id, speed, language).
+                                         Only used when voice_name is "rhea" or tts_service is "elevenlabs".
     """
 
     if voice_name is not None:
@@ -233,11 +284,10 @@ async def get_tts_service(
             return await get_sarvam_tts_service()
 
         elif voice_name.lower() == "rhea":
-            if not ELEVENLABS_API_KEY:
-                raise ValueError("ELEVENLABS_API_KEY is required for Rhea voice")
-
             logger.info("Using ElevenLabs TTS service for Rhea voice")
-            return await get_elevenlabs_tts_service()
+            return await get_elevenlabs_tts_service(
+                elevenlabs_config=elevenlabs_voice_configurations,
+            )
 
         elif voice_name.lower() == "mira":
             if not CARTESIA_API_KEY:
@@ -262,13 +312,10 @@ async def get_tts_service(
         return await get_sarvam_tts_service()
 
     elif tts_service == "elevenlabs":
-        if not ELEVENLABS_API_KEY:
-            raise ValueError(
-                "ELEVENLABS_API_KEY is required when BREEZE_BUDDY_TTS_SERVICE=elevenlabs"
-            )
-
         logger.info("Using ElevenLabs TTS service for Breeze Buddy voice")
-        return await get_elevenlabs_tts_service()
+        return await get_elevenlabs_tts_service(
+            elevenlabs_config=elevenlabs_voice_configurations,
+        )
 
     elif tts_service == "cartesia":
         if not CARTESIA_API_KEY:

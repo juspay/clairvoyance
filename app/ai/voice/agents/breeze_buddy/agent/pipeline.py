@@ -104,10 +104,21 @@ async def create_services(
             f"Using Cartesia voice configurations from template: {cartesia_voice_config}"
         )
 
+    # Extract ElevenLabs voice configurations from template
+    elevenlabs_voice_config = getattr(
+        configurations, "elevenlabs_voice_configurations", None
+    )
+
+    if elevenlabs_voice_config:
+        logger.info(
+            f"Using ElevenLabs voice configurations from template: {elevenlabs_voice_config}"
+        )
+
     tts = await get_tts_service(
         voice_name=getattr(configurations, "tts_voice_name", None),
         mira_voice_id=legacy_mira_voice_id,
         cartesia_voice_configurations=cartesia_voice_config,
+        elevenlabs_voice_configurations=elevenlabs_voice_config,
     )
 
     return stt, llm, tts
