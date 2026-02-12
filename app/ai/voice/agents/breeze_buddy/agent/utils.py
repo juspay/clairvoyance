@@ -1,5 +1,6 @@
 """Utility functions for voice agents."""
 
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional
 
@@ -15,6 +16,14 @@ from app.core.logger import logger
 from app.schemas.breeze_buddy.core import LeadCallTracker
 
 
+@dataclass
+class GreetingResult:
+    """Result of sending initial greeting."""
+
+    source: Optional[str]  # "template_static", "lead_dynamic", or None
+    text: Optional[str]  # The resolved greeting text for LLM context
+
+
 async def send_initial_greeting(
     ws: WebSocket,
     stream_sid: str,
@@ -22,7 +31,7 @@ async def send_initial_greeting(
     template: TemplateModel,
     provider: Optional[str],
     errors: Optional[List[Dict[str, Any]]] = None,
-) -> Optional[str]:
+) -> GreetingResult:
     """Send initial greeting audio for telephony calls.
 
     Args:
@@ -34,7 +43,7 @@ async def send_initial_greeting(
         errors: Optional errors list to track failures
 
     Returns:
-        Greeting source if successful, None otherwise
+        GreetingResult with source and resolved greeting text
     """
     try:
         greeting_result = await prepare_initial_greeting_payload(
@@ -47,29 +56,50 @@ async def send_initial_greeting(
             track_error(
                 errors, "Failed to prepare greeting payload, skipping initial audio"
             )
-            return None
+            return GreetingResult(source=None, text=None)
 
         greeting_source = greeting_result["greeting_source"]
-        media_message = {
-            "event": "media",
-            "streamSid": stream_sid,
-            "media": {"payload": greeting_result["payload"]},
-        }
+        greeting_text = greeting_result.get("greeting_text")
+
+        # Build provider-specific media message format
+        # Plivo uses different event name and message structure than Twilio/Exotel
+        provider_str = (
+            provider.lower() if hasattr(provider, "lower") else str(provider).lower()
+        )
+
+        if provider_str == "plivo":
+            media_message = {
+                "event": "playAudio",
+                "streamId": stream_sid,
+                "media": {
+                    "contentType": "audio/x-mulaw",
+                    "sampleRate": 8000,
+                    "payload": greeting_result["payload"],
+                },
+            }
+        else:
+            # Twilio/Exotel format: uses "media" event and "streamSid" key
+            media_message = {
+                "event": "media",
+                "streamSid": stream_sid,
+                "media": {"payload": greeting_result["payload"]},
+            }
+
         success = await send_message(ws=ws, message=media_message)
         if success:
             logger.info(
-                f"Successfully sent initial greeting for streamSid: {stream_sid}"
+                f"Successfully sent initial greeting for streamSid: {stream_sid} (provider: {provider_str})"
             )
-            return greeting_source
+            return GreetingResult(source=greeting_source, text=greeting_text)
         else:
             logger.warning("Failed to send initial greeting message via WebSocket")
             track_error(errors, "Failed to send initial greeting message via WebSocket")
-        return None
+        return GreetingResult(source=None, text=None)
 
     except Exception as e:
         logger.error(f"Failed to send initial greeting: {e}")
         track_error(errors, f"Failed to send initial greeting: {e}")
-        return None
+        return GreetingResult(source=None, text=None)
 
 
 async def end_call_with_errors(
