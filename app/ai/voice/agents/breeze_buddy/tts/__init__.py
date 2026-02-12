@@ -284,9 +284,6 @@ async def get_tts_service(
             return await get_sarvam_tts_service()
 
         elif voice_name.lower() == "rhea":
-            if not ELEVENLABS_API_KEY:
-                raise ValueError("ELEVENLABS_API_KEY is required for Rhea voice")
-
             logger.info("Using ElevenLabs TTS service for Rhea voice")
             return await get_elevenlabs_tts_service(
                 elevenlabs_config=elevenlabs_voice_configurations,
@@ -315,11 +312,6 @@ async def get_tts_service(
         return await get_sarvam_tts_service()
 
     elif tts_service == "elevenlabs":
-        if not ELEVENLABS_API_KEY:
-            raise ValueError(
-                "ELEVENLABS_API_KEY is required when BREEZE_BUDDY_TTS_SERVICE=elevenlabs"
-            )
-
         logger.info("Using ElevenLabs TTS service for Breeze Buddy voice")
         return await get_elevenlabs_tts_service(
             elevenlabs_config=elevenlabs_voice_configurations,
