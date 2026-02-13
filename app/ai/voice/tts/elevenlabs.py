@@ -27,10 +27,11 @@ class ElevenLabsConfig:
     api_key: str
     url: str
     voice_id: str
-    model_id: str
+    model: str
     speed: float = 1.0
     language: Language = Language.EN_IN
     text_filters: Optional[Sequence] = None
+    aggregate_sentences: bool = True
 
 
 def build_elevenlabs_tts(config: ElevenLabsConfig):
@@ -41,13 +42,14 @@ def build_elevenlabs_tts(config: ElevenLabsConfig):
     return ElevenLabsTTSService(
         api_key=config.api_key,
         voice_id=config.voice_id,
-        model_id=config.model_id,
+        model=config.model,
         url=config.url,
         params=ElevenLabsTTSService.InputParams(
             speed=config.speed,
             language=config.language,
         ),
         text_filters=text_filters,
+        aggregate_sentences=config.aggregate_sentences,
     )
 
 

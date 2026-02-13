@@ -90,7 +90,7 @@ async def get_tts_service(
                 api_key=ELEVENLABS_API_KEY,
                 url="wss://api.elevenlabs.io",
                 voice_id=ELEVENLABS_RHEA_VOICE_ID,
-                model_id=ELEVENLABS_MODEL_ID,
+                model=ELEVENLABS_MODEL_ID,
                 speed=ELEVENLABS_TTS_SPEED,
                 language=Language.EN_IN,
                 text_filters=text_filters,
