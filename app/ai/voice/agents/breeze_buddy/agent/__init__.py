@@ -165,7 +165,7 @@ class Agent:
         )
 
         # Daily transport does not support audio_out_mixer, so we pass None
-        transport_params = get_transport_params(self.vad_analyzer, None)
+        transport_params = await get_transport_params(self.vad_analyzer, None)
         self.transport = await create_transport(runner_args, transport_params)
 
     async def _setup_telephony_transport(self) -> bool:
@@ -316,7 +316,9 @@ class Agent:
         audio_out_mixer = create_background_sound_mixer(self.template)
 
         # Get transport params using the detected transport type
-        transport_params = get_transport_params(self.vad_analyzer, audio_out_mixer)
+        transport_params = await get_transport_params(
+            self.vad_analyzer, audio_out_mixer
+        )
         params = transport_params[transport_type]()
 
         # Create transport with the call data

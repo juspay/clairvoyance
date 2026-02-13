@@ -8,6 +8,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PORT=8000 \
     NLTK_DATA=/usr/local/nltk_data\
     KRISP_MODEL_PATH=/app/models/voice/krisp/krisp-viva-tel-v2.kef \
+    AIC_MODEL_PATH=/app/models/voice/aic/quail_l_8khz.aicmodel \
     UV_CACHE_DIR=/app/.uv-cache
 
 # Install system dependencies required for audio processing and compilation + curl for GCP CLI
@@ -26,9 +27,9 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 
-# Create app and krisp directory
+# Create app and model directories
 WORKDIR /app
-RUN mkdir -p /app/models/voice/krisp
+RUN mkdir -p /app/models/voice/krisp /app/models/voice/aic
 
 # Install uv
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
@@ -42,22 +43,26 @@ COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev --no-install-project && \
     uv pip show pipecat-ai
 
-# Start of Krisp installation process
-# Download Krisp assets from GCP Storage using authenticated context
+# Start of Krisp and AIC installation process
+# Download Krisp and AIC assets from GCP Storage using authenticated context
 ARG KRISP_BUCKET_PATH=gs://clairvoyance-models/krisp
+ARG AIC_BUCKET_PATH=gs://clairvoyance-models/aic
 
-# Install Google Cloud CLI and download Krisp files (only for GCP deployments)
+# Install Google Cloud CLI and download Krisp and AIC files (only for GCP deployments)
 # Use BuildKit secret mount to avoid leaking token in image layers
 RUN --mount=type=secret,id=gcp_token \
     if [ -f /run/secrets/gcp_token ]; then \
-        echo "=== Installing Google Cloud CLI for Krisp assets ===" && \
+        echo "=== Installing Google Cloud CLI for model assets ===" && \
         curl -sSL https://sdk.cloud.google.com | bash && \
         export PATH=$PATH:/root/google-cloud-sdk/bin && \
+        echo "=== Downloading Krisp assets ===" && \
         gcloud storage cp --access-token-file=/run/secrets/gcp_token ${KRISP_BUCKET_PATH}/krisp-viva-tel-v2.kef /app/models/voice/krisp/ || echo "Warning: Krisp model not found"; \
         gcloud storage cp --access-token-file=/run/secrets/gcp_token ${KRISP_BUCKET_PATH}/*linux_x86_64.whl /tmp/ || echo "Warning: x86_64 wheel not found"; \
         gcloud storage cp --access-token-file=/run/secrets/gcp_token ${KRISP_BUCKET_PATH}/*linux_aarch64.whl /tmp/ || echo "Warning: aarch64 wheel not found"; \
+        echo "=== Downloading AIC assets ===" && \
+        gcloud storage cp --access-token-file=/run/secrets/gcp_token ${AIC_BUCKET_PATH}/quail_l_8khz.aicmodel /app/models/voice/aic/ || echo "Warning: AIC model not found"; \
     else \
-        echo "Warning: GCP token secret not provided, skipping Krisp installation (AWS deployment)"; \
+        echo "Warning: GCP token secret not provided, skipping Krisp and AIC installation (AWS deployment)"; \
     fi
 
 # Install Krisp wheel package (if downloaded) - auto-detect architecture
@@ -84,7 +89,7 @@ RUN if ls /tmp/*linux_*.whl 1> /dev/null 2>&1; then \
         echo "Warning: No Krisp wheel files found, skipping installation"; \
     fi
 
-# End of Krisp installation process
+# End of Krisp and AIC installation process
 
 # Create NLTK data directory and download required data
 RUN mkdir -p /usr/local/nltk_data && \

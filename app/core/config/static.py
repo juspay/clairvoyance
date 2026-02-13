@@ -57,6 +57,10 @@ ENABLE_NOISE_REDUCE_FILTER = (
 )
 ENABLE_AIC_FILTER = os.environ.get("ENABLE_AIC_FILTER", "false").lower() == "true"
 AICOUSTICS_LICENSE_KEY = os.environ.get("AICOUSTICS_LICENSE_KEY", "")
+# Breeze Buddy AIC License Key
+BREEZE_BUDDY_AICOUSTICS_LICENSE_KEY = os.environ.get(
+    "BREEZE_BUDDY_AICOUSTICS_LICENSE_KEY", ""
+)
 
 # AIC Filter Parameters (simplified for tuning)
 AIC_ENHANCEMENT_LEVEL = float(os.environ.get("AIC_ENHANCEMENT_LEVEL", "1.0"))
@@ -69,6 +73,11 @@ AIC_NOISE_GATE_ENABLE = (
 ENABLE_KRISP_FILTER = os.environ.get("ENABLE_KRISP_FILTER", "false").lower() == "true"
 KRISP_MODEL_PATH = os.environ.get(
     "KRISP_MODEL_PATH", "/app/models/voice/krisp/krisp-viva-tel-v2.kef"
+)
+
+# AIC Model Path Configuration
+AIC_MODEL_PATH = os.environ.get(
+    "AIC_MODEL_PATH", "/app/models/voice/aic/quail_l_8khz.aicmodel"
 )
 
 # TTS Configuration
