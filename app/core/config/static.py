@@ -366,8 +366,8 @@ BREEZE_BUDDY_VAD_START_SECS = float(
     os.getenv("BREEZE_BUDDY_VAD_START_SECS", "0.1")
 )  # Pick up quicker
 BREEZE_BUDDY_VAD_STOP_SECS = float(
-    os.getenv("BREEZE_BUDDY_VAD_STOP_SECS", "0.3")
-)  # Allow small pauses
+    os.getenv("BREEZE_BUDDY_VAD_STOP_SECS", "0.2")
+)  # Matches pipecat 0.0.102 default, 96ms faster than previous 0.3
 BREEZE_BUDDY_VAD_MIN_VOLUME = float(
     os.getenv("BREEZE_BUDDY_VAD_MIN_VOLUME", "0.4")
 )  # More tolerant for soft voice
@@ -473,10 +473,6 @@ BREEZE_BUDDY_SONIOX_VAD_FORCE_TURN_ENDPOINT = (
     == "true"
 )
 
-ENABLE_BREEZE_BUDDY_USER_INTERRUPTION = (
-    os.environ.get("ENABLE_BREEZE_BUDDY_USER_INTERRUPTION", "false").lower() == "true"
-)
-
 # Dashboard Authentication
 BREEZE_BUDDY_DASHBOARD_USERNAME = os.getenv("BREEZE_BUDDY_DASHBOARD_USERNAME", "")
 BREEZE_BUDDY_DASHBOARD_PASSWORD = os.getenv("BREEZE_BUDDY_DASHBOARD_PASSWORD", "")
@@ -484,6 +480,9 @@ BREEZE_BUDDY_SESSION_SECRET_KEY = os.getenv("BREEZE_BUDDY_SESSION_SECRET_KEY", "
 
 ENABLE_BREEZE_BUDDY_TRACING = (
     os.getenv("ENABLE_BREEZE_BUDDY_TRACING", "false").lower() == "true"
+)
+ENABLE_BREEZE_BUDDY_USER_INTERRUPTION = (
+    os.getenv("ENABLE_BREEZE_BUDDY_USER_INTERRUPTION", "true").lower() == "true"
 )
 BUDDY_OTEL_EXPORTER_OTLP_TRACES_ENDPOINT = os.getenv(
     "BUDDY_OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", ""

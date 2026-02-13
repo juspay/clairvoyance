@@ -22,6 +22,7 @@ from pipecat.services.openai.base_llm import BaseOpenAILLMService
 
 from app.ai.voice.agents.breeze_buddy.observability.tracing_setup import setup_tracing
 from app.ai.voice.agents.breeze_buddy.processors import (
+    BusyStateKeywordFilter,
     ResponseStateGate,
     create_user_idle_processor,
 )
@@ -178,6 +179,21 @@ async def build_pipeline(
         else None
     )
 
+    # Create keyword filter if enabled in template configuration
+    keyword_filter = None
+    keyword_filter_config = getattr(configurations, "keyword_filter_config", None)
+    if keyword_filter_config and keyword_filter_config.enabled:
+        logger.info(
+            f"Keyword filter enabled: keywords={keyword_filter_config.keywords}, "
+            f"match_mode={keyword_filter_config.match_mode}"
+        )
+        keyword_filter = BusyStateKeywordFilter(
+            keywords=keyword_filter_config.keywords,
+            match_mode=keyword_filter_config.match_mode,
+            case_sensitive=keyword_filter_config.case_sensitive,
+            remove_punctuation=keyword_filter_config.remove_punctuation,
+        )
+
     # Store reference to user aggregator for position lookup
     user_aggregator = context_aggregator.user()
 
@@ -191,8 +207,17 @@ async def build_pipeline(
         context_aggregator.assistant(),
     ]
 
+    # Insert processors at position 2 (after stt).
+    # keyword_filter MUST come before response_gate so filtered transcriptions
+    # never reach the gate (which would trigger unnecessary interruptions).
+    # Pipeline order: transport.input() -> stt -> keyword_filter -> response_gate -> user_aggregator
+    insert_position = 2
+
     if response_gate:
-        pipeline_parts.insert(2, response_gate)
+        pipeline_parts.insert(insert_position, response_gate)
+
+    if keyword_filter:
+        pipeline_parts.insert(insert_position, keyword_filter)
 
     # Insert user idle processor before user_aggregator (context_aggregator.user()) to monitor user activity
     if user_idle:

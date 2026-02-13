@@ -1,19 +1,22 @@
 """
-Response State Gate Processor - V2
+Response State Gate Processor - V3
 
-Handles ALL interruption scenarios to prevent double-speaking:
+Handles ALL interruption scenarios with CONCATENATING buffer to preserve
+all user speech during rapid multi-part utterances.
 
-1. STT arrives → LLM processing → New STT arrives
-   → Cancel LLM, buffer new STT, process new STT
+Key improvements:
+- Transcriptions arriving during interruption are CONCATENATED, not overwritten
+- Prevents loss of intermediate speech like "of apples" in multi-part questions
+- Buffer is cleared only when bot returns to IDLE state
 
-2. LLM + TTS both processing → New STT arrives
-   → Cancel both, buffer new STT, process new STT
+Example:
+  T=0ms:   "what is the price" → IDLE, passes through → LLM starts
+  T=800ms: "of apples" → BUSY, buffer="of apples", interrupt sent
+  T=1200ms: "actually oranges" → BUSY, buffer="of apples actually oranges" (concatenated)
+  → After interruption completes, sends "of apples actually oranges" to LLM
 
-3. TTS is speaking → New STT arrives
-   → Stop TTS, buffer new STT, process new STT
-
-4. LLM processing (no TTS yet) → New STT arrives
-   → Cancel LLM, buffer new STT, process new STT
+Result: LLM context has ["what is the price", "of apples actually oranges"]
+Previous behavior: LLM would get ["what is the price", "actually oranges"] (losing "of apples")
 """
 
 from enum import Enum, auto
@@ -81,15 +84,26 @@ class ResponseStateGate(FrameProcessor):
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
 
-        # If interruption is in progress, buffer transcription frames.
-        # Later frames will overwrite earlier ones, so only the latest
-        # transcription is kept for processing after interruption completes.
+        # If interruption is in progress, buffer and CONCATENATE transcription frames.
+        # This prevents losing intermediate speech during rapid multi-part utterances.
         if self._interruption_in_progress and isinstance(frame, TranscriptionFrame):
+            if self._buffered_transcription:
+                # Concatenate new text with existing buffer
+                old_text = self._buffered_transcription.text
+                new_text = frame.text
+                combined_text = old_text + " " + new_text
+                # Update frame with concatenated text, preserving latest metadata
+                frame.text = combined_text
+                logger.debug(
+                    f"ResponseGate: Concatenating transcription during interruption "
+                    f"(buffer: '{old_text}' + new: '{new_text}' = combined: '{combined_text}')"
+                )
+            else:
+                logger.debug(
+                    f"ResponseGate: Buffering first transcription during interruption "
+                    f"(text: '{frame.text}')"
+                )
             self._buffered_transcription = frame
-            logger.debug(
-                f"ResponseGate: Buffering new transcription during interruption "
-                f"(id={id(frame)})"
-            )
             return  # Don't push, wait for interruption to finish
 
         # Track LLM state (only when NOT buffering)
@@ -118,7 +132,9 @@ class ResponseStateGate(FrameProcessor):
         elif isinstance(frame, BotStoppedSpeakingFrame):
             if self._state == ResponseState.TTS_SPEAKING:
                 self._state = ResponseState.IDLE
-                logger.debug("ResponseGate: IDLE")
+                # Clear buffer when bot fully returns to IDLE after completing response
+                self._buffered_transcription = None
+                logger.debug("ResponseGate: IDLE (buffer cleared)")
             elif self._state == ResponseState.BOTH:
                 self._state = ResponseState.LLM_PROCESSING
                 logger.debug("ResponseGate: LLM_PROCESSING (TTS stopped)")
