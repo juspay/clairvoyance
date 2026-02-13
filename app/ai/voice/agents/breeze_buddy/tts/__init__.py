@@ -28,6 +28,7 @@ from app.core.config.dynamic import (
     BB_CARTESIA_LANGUAGE,
     BB_CARTESIA_MODEL,
     BB_CARTESIA_VOICE_ID,
+    BB_ELEVENLABS_AGGREGATE_SENTENCES,
     BB_ELEVENLABS_MODEL_ID,
     BB_ELEVENLABS_VOICE_ID,
     BB_ELEVENLABS_VOICE_SPEED,
@@ -197,6 +198,7 @@ async def get_elevenlabs_tts_service(
     default_voice_id = await BB_ELEVENLABS_VOICE_ID()
     default_model_id = await BB_ELEVENLABS_MODEL_ID()
     default_speed = await BB_ELEVENLABS_VOICE_SPEED()
+    default_aggregate_sentences = await BB_ELEVENLABS_AGGREGATE_SENTENCES()
 
     # Template overrides Redis defaults
     final_voice_id = (
@@ -244,9 +246,10 @@ async def get_elevenlabs_tts_service(
                 else "wss://api.elevenlabs.io"
             ),
             voice_id=final_voice_id,
-            model_id=final_model_id,
+            model=final_model_id,
             speed=final_speed,
             language=language,
+            aggregate_sentences=default_aggregate_sentences,
         )
     )
 

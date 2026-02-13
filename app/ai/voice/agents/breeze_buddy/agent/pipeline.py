@@ -18,6 +18,7 @@ from pipecat.pipeline.task import PipelineParams, PipelineTask
 from pipecat.processors.aggregators.llm_response import LLMUserAggregatorParams
 from pipecat.processors.aggregators.openai_llm_context import OpenAILLMContext
 from pipecat.services.azure.llm import AzureLLMService
+from pipecat.services.openai.base_llm import BaseOpenAILLMService
 
 from app.ai.voice.agents.breeze_buddy.observability.tracing_setup import setup_tracing
 from app.ai.voice.agents.breeze_buddy.processors import (
@@ -85,12 +86,20 @@ async def create_services(
 
     stt = await get_stt_service(language_hints=stt_language)
 
+    # TODO: Add retry_on_timeout=True, retry_timeout_secs=3.0 to reduce P99 tail latency (500-1500ms).
+    #       These are valid top-level params on BaseOpenAILLMService. Needs testing before enabling.
+    # TODO: Override create_client() to add httpx connection pooling (keepalive_expiry=None,
+    #       max_keepalive_connections=100) to avoid TCP+TLS cold-start on first request (50-200ms).
+    #       AzureLLMService.create_client() currently creates AsyncAzureOpenAI without custom http_client.
     llm = AzureLLMService(
         api_key=AZURE_OPENAI_API_KEY,
         endpoint=AZURE_OPENAI_ENDPOINT,
         model=AZURE_BREEZE_BUDDY_OPENAI_MODEL,
-        max_completion_tokens=await BREEZE_BUDDY_AZURE_MAX_COMPLETION_TOKENS(),
-        temperature=await BREEZE_BUDDY_AZURE_TEMPERATURE(),
+        params=BaseOpenAILLMService.InputParams(
+            max_completion_tokens=await BREEZE_BUDDY_AZURE_MAX_COMPLETION_TOKENS(),
+            temperature=await BREEZE_BUDDY_AZURE_TEMPERATURE(),
+            service_tier="auto",
+        ),
     )
 
     # Extract Cartesia voice configurations from template
@@ -143,6 +152,9 @@ async def build_pipeline(
     Returns:
         Tuple of (pipeline, context, context_aggregator)
     """
+    # TODO: Add a breeze-buddy-specific context summarizer.
+    # Pipecat does not provide built-in summarization; implement one under
+    # app/ai/voice/agents/breeze_buddy/ to manage long conversation contexts.
     context = OpenAILLMContext()
     context_aggregator = llm.create_context_aggregator(
         context,

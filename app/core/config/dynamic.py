@@ -296,3 +296,8 @@ async def BB_ELEVENLABS_MODEL_ID() -> str:
 async def BB_ELEVENLABS_VOICE_SPEED() -> float:
     """Returns BB_ELEVENLABS_VOICE_SPEED from Redis"""
     return await get_config("BB_ELEVENLABS_VOICE_SPEED", 1.15, float)
+
+
+async def BB_ELEVENLABS_AGGREGATE_SENTENCES() -> bool:
+    """Returns BB_ELEVENLABS_AGGREGATE_SENTENCES from Redis (True = wait for full sentence, False = stream tokens immediately)"""
+    return await get_config("BB_ELEVENLABS_AGGREGATE_SENTENCES", True, bool)
