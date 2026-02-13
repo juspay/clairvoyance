@@ -14,6 +14,9 @@ from fastapi.responses import JSONResponse
 from pipecat.transports.daily.utils import DailyRESTHelper
 
 from app import __version__
+from app.ai.voice.agents.breeze_buddy.managers.tasks import (
+    initialize_call_initiation_tasks,
+)
 from app.api.routers import automatic, breeze_buddy, devcycle, systems
 
 # Import background task scheduler
@@ -164,7 +167,8 @@ async def lifespan(_app: FastAPI):
             # Initialize Langfuse tasks (if configured)
             await initialize_langfuse_tasks(_background_scheduler)
 
-            ### Register new tasks here
+            # Initialize Breeze Buddy call initiation tasks (if configured)
+            await initialize_call_initiation_tasks(_background_scheduler)
 
             # Start the scheduler only if tasks are registered
             if _background_scheduler.tasks:

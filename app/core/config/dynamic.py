@@ -191,6 +191,17 @@ async def SHOPS_FOR_TEMPLATE_FLOW() -> list[str]:
     return [shop.strip() for shop in config_value.split(",") if shop.strip()]
 
 
+# --- Breeze Buddy Call Initiation Configuration ---
+async def ENABLE_BB_CALL_INITIATION_LOOP() -> bool:
+    """Returns ENABLE_BB_CALL_INITIATION_LOOP from Redis"""
+    return await get_config("ENABLE_BB_CALL_INITIATION_LOOP", True, bool)
+
+
+async def CALL_INITIATION_INTERVAL_SECONDS() -> int:
+    """Returns CALL_INITIATION_INTERVAL_SECONDS from Redis (default: 58 seconds)"""
+    return await get_config("CALL_INITIATION_INTERVAL_SECONDS", 58, int)
+
+
 # --- Breeze Buddy Azure LLM Configuration ---
 async def BREEZE_BUDDY_AZURE_MAX_COMPLETION_TOKENS() -> int:
     """Returns BREEZE_BUDDY_AZURE_MAX_COMPLETION_TOKENS from Redis"""
