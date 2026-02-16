@@ -36,10 +36,10 @@ IVR_AUDIO_CACHE_PREFIX = "ivr_audio:menu:"
 IVR_GOODBYE_CACHE_PREFIX = "ivr_audio:goodbye:"
 IVR_AUDIO_CACHE_TTL = 86400  # 24 hours
 IVR_CONFIG_CACHE_PREFIX = (
-    "ivr_config:"  # Per-call IVR config (options, voice, greeting)
+    "ivr_config:"  # Per-call IVR config (options, voice, greeting, goodbye)
 )
 IVR_CONFIG_CACHE_TTL = 120  # 2 minutes - enough time for WebSocket to connect
-IVR_DEFAULT_GREETING = "Welcome"
+IVR_DEFAULT_GOODBYE = "We didn't receive your input. Goodbye."
 
 
 async def get_template_id_from_call(
@@ -147,11 +147,12 @@ async def _run_ivr_menu(
         ivr_options = ivr_config["options"]
         voice_name = ivr_config.get("voice_name", "sara")
         ivr_greeting = ivr_config.get("ivr_greeting")
+        ivr_goodbye = ivr_config.get("ivr_goodbye")
 
         logger.info(
             f"[IVR] Fetched config from Redis - "
             f"{len(ivr_options)} options: {[o['name'] for o in ivr_options]}, "
-            f"voice={voice_name!r}, greeting={ivr_greeting!r}"
+            f"voice={voice_name!r}, greeting={ivr_greeting!r}, goodbye={ivr_goodbye!r}"
         )
 
         # Handle IVR menu - speak options and wait for DTMF
@@ -162,6 +163,7 @@ async def _run_ivr_menu(
             provider=provider,
             voice_name=voice_name,
             ivr_greeting=ivr_greeting,
+            ivr_goodbye=ivr_goodbye,
         )
 
         return selected_template_id
@@ -181,6 +183,7 @@ async def handle_ivr_menu(
     provider: str,
     voice_name: str = "sara",
     ivr_greeting: Optional[str] = None,
+    ivr_goodbye: Optional[str] = None,
 ) -> Optional[str]:
     """
     Handle IVR menu with retry logic.
@@ -195,7 +198,8 @@ async def handle_ivr_menu(
         ivr_options: List of {"id": str, "name": str}
         provider: "twilio" or "exotel"
         voice_name: TTS voice to use (default "sara")
-        ivr_greeting: Greeting prefix for IVR menu (default "Welcome")
+        ivr_greeting: Full IVR audio text including greeting and menu options
+        ivr_goodbye: Goodbye message when no input received (default: English fallback)
 
     Returns:
         Selected template_id or None if no valid selection
@@ -205,10 +209,8 @@ async def handle_ivr_menu(
         return None
 
     # Get cached/generated audio once (reuse for retries)
-    menu_audio = await prepare_ivr_menu_audio(
-        ivr_options, provider, voice_name, ivr_greeting
-    )
-    goodbye_audio = await prepare_goodbye_audio(ivr_options, provider, voice_name)
+    menu_audio = await prepare_ivr_menu_audio(provider, voice_name, ivr_greeting)
+    goodbye_audio = await prepare_goodbye_audio(provider, voice_name, ivr_goodbye)
 
     if not menu_audio:
         logger.error("[IVR] Failed to prepare menu audio")
@@ -248,7 +250,6 @@ async def handle_ivr_menu(
 
 
 async def prepare_ivr_menu_audio(
-    templates: List[Dict[str, Optional[str]]],
     provider: str,
     voice_name: str = "sara",
     ivr_greeting: Optional[str] = None,
@@ -260,21 +261,27 @@ async def prepare_ivr_menu_audio(
     Stores as mulaw in Redis, converts to provider format on retrieval.
 
     Args:
-        templates: List of {"id": str, "name": str}
-        provider: "twilio" or "exotel"
+        provider: "twilio", "exotel", or "plivo"
         voice_name: TTS voice to use (default "sara")
-        ivr_greeting: Greeting prefix for IVR menu (default "Welcome")
+        ivr_greeting: Full IVR audio text including greeting and menu options
 
     Returns:
         Audio bytes ready to send, or None if failed
     """
+    # ivr_greeting is required - it contains the full menu text defined by the user
+    if not ivr_greeting:
+        logger.error(
+            "[IVR] No ivr_greeting provided - cannot generate menu audio. "
+            "Please define ivr_greeting in template configurations with the full menu text."
+        )
+        return None
+
     try:
         redis = await get_redis_service()
 
-        # Generate cache key from template names, voice, and greeting
+        # Generate cache key from ivr_greeting text and voice
         # MD5 hash ensures constant key size regardless of input length
-        cache_components = "|".join([t["name"] or "" for t in templates])
-        cache_components += f"|voice:{voice_name}|greeting:{ivr_greeting or 'default'}"
+        cache_components = f"greeting:{ivr_greeting}|voice:{voice_name}"
         cache_key = f"{IVR_AUDIO_CACHE_PREFIX}{hashlib.md5(cache_components.encode()).hexdigest()}"
 
         # Check cache first
@@ -283,20 +290,12 @@ async def prepare_ivr_menu_audio(
             logger.info("[IVR] Cache HIT - using cached menu audio")
             mulaw_data = base64.b64decode(cached_audio)
         else:
-            # Generate TTS
-            logger.info("[IVR] Cache MISS - generating menu audio")
-
-            # Build menu text with greeting prefix
-            greeting = ivr_greeting or IVR_DEFAULT_GREETING
-            menu_options = ". ".join(
-                [
-                    f"Press {i+1} for {t.get('description') or t['name']}"
-                    for i, t in enumerate(templates)
-                ]
+            # Generate TTS from user-defined ivr_greeting
+            logger.info(
+                f"[IVR] Cache MISS - generating menu audio for: {ivr_greeting!r}"
             )
-            menu_text = f"{greeting}. {menu_options}"
 
-            mulaw_data = await _generate_tts_audio_mulaw(menu_text, voice_name)
+            mulaw_data = await _generate_tts_audio_mulaw(ivr_greeting, voice_name)
 
             if mulaw_data:
                 # Cache for future calls
@@ -319,17 +318,17 @@ async def prepare_ivr_menu_audio(
 
 
 async def prepare_goodbye_audio(
-    templates: List[Dict[str, Optional[str]]],
     provider: str,
     voice_name: str = "sara",
+    ivr_goodbye: Optional[str] = None,
 ) -> Optional[bytes]:
     """
     Get cached goodbye audio or generate it.
 
     Args:
-        templates: List of {"id": str, "name": str} - used for cache key
         provider: "twilio" or "exotel"
         voice_name: TTS voice to use (default "sara")
+        ivr_goodbye: Custom goodbye message (default: English fallback)
 
     Returns:
         Audio bytes ready to send, or None if failed
@@ -337,10 +336,12 @@ async def prepare_goodbye_audio(
     try:
         redis = await get_redis_service()
 
-        # Generate cache key including voice name
+        # Use provided goodbye message or fall back to English default
+        goodbye_text = ivr_goodbye or IVR_DEFAULT_GOODBYE
+
+        # Generate cache key from goodbye text and voice name
         # MD5 hash ensures constant key size regardless of input length
-        cache_components = "|".join(sorted([t["name"] or "" for t in templates]))
-        cache_components += f"|voice:{voice_name}"
+        cache_components = f"goodbye:{goodbye_text}|voice:{voice_name}"
         cache_key = f"{IVR_GOODBYE_CACHE_PREFIX}{hashlib.md5(cache_components.encode()).hexdigest()}"
 
         cached = await redis.get(cache_key)
@@ -349,9 +350,8 @@ async def prepare_goodbye_audio(
             mulaw_data = base64.b64decode(cached)
         else:
             # Generate
-            logger.info("[IVR] Generating goodbye audio")
-            text = "We didn't receive your input. Goodbye."
-            mulaw_data = await _generate_tts_audio_mulaw(text, voice_name)
+            logger.info(f"[IVR] Generating goodbye audio: {goodbye_text!r}")
+            mulaw_data = await _generate_tts_audio_mulaw(goodbye_text, voice_name)
 
             if mulaw_data:
                 await redis.setex(

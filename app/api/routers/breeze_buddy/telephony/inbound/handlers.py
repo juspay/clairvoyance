@@ -171,16 +171,11 @@ async def handle_voicebot_url(request: Request) -> Response:
             status_code=404,
         )
 
-    # Build template list for IVR (use ivr_description from configurations, fallback to name)
+    # Build template list for IVR (only id and name needed)
     template_list = [
         {
             "id": str(t.id),
             "name": t.name,
-            "description": (
-                t.configurations.ivr_description
-                if t.configurations and t.configurations.ivr_description
-                else None
-            ),
         }
         for t in templates
     ]
@@ -193,9 +188,10 @@ async def handle_voicebot_url(request: Request) -> Response:
         )
     else:
         # Multiple templates - IVR mode
-        # Use first template's voice, check all templates for ivr_greeting (use first found)
+        # Use first template's voice, check all templates for ivr_greeting/ivr_goodbye (use first found)
         voice_name = "sara"  # Default voice
         ivr_greeting = None
+        ivr_goodbye = None
 
         # Get voice from first template (use .value to get string from enum)
         first_template = templates[0]
@@ -211,14 +207,29 @@ async def handle_voicebot_url(request: Request) -> Response:
                 ivr_greeting = template.configurations.ivr_greeting
                 break
 
+        # Check all templates for ivr_goodbye, use first one found
+        for template in templates:
+            if template.configurations and template.configurations.ivr_goodbye:
+                ivr_goodbye = template.configurations.ivr_goodbye
+                break
+
+        # Validation warning if no ivr_greeting defined
+        if not ivr_greeting:
+            logger.warning(
+                f"[Voicebot] Multiple templates ({len(templates)}) but no ivr_greeting defined in any template. "
+                f"IVR menu will not play any audio!"
+            )
+
         logger.info(
             f"[Voicebot] Multiple templates ({len(templates)}), "
-            f"generating IVR audio (voice={voice_name!r}, greeting={ivr_greeting!r})"
+            f"generating IVR audio (voice={voice_name!r}, greeting={ivr_greeting!r}, goodbye={ivr_goodbye!r})"
         )
 
         # Pre-generate IVR audio (checks cache first)
-        await prepare_ivr_menu_audio(template_list, "exotel", voice_name, ivr_greeting)
-        await prepare_goodbye_audio(template_list, "exotel", voice_name)
+        # Skip if ivr_greeting is None - audio will be generated on-demand by WebSocket agent
+        if ivr_greeting:
+            await prepare_ivr_menu_audio("exotel", voice_name, ivr_greeting)
+        await prepare_goodbye_audio("exotel", voice_name, ivr_goodbye)
 
         # Store IVR config in Redis (keyed by call_sid, 2 min TTL)
         # WebSocket agent will fetch this config instead of parsing URL params
@@ -226,6 +237,7 @@ async def handle_voicebot_url(request: Request) -> Response:
             "options": template_list,
             "voice_name": voice_name,
             "ivr_greeting": ivr_greeting,
+            "ivr_goodbye": ivr_goodbye,
         }
         redis = await get_redis_service()
         await redis.setex(

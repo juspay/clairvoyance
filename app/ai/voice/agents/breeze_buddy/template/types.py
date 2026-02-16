@@ -170,10 +170,10 @@ class ConfigurationModel(BaseModel):
         None  # Initial greeting text template with variables (e.g., "Hi {customer_name}")
     )
     ivr_greeting: Optional[str] = (
-        None  # Greeting prefix for IVR menu (e.g., "Hello, this is Rhea from Namma Yatri support")
+        None  # Full IVR audio text including greeting and menu options (e.g., "Welcome to support. Press 1 for billing, press 2 for technical support")
     )
-    ivr_description: Optional[str] = (
-        None  # Description for IVR menu (e.g., "Trip feedback in English")
+    ivr_goodbye: Optional[str] = (
+        None  # Goodbye message when no input received (default: "We didn't receive your input. Goodbye.")
     )
     ivr_priority: Optional[int] = Field(
         None,
