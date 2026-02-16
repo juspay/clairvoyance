@@ -1,0 +1,195 @@
+{
+  "merchant": "breeze",
+  "template_name": "keyword-filter-config-example",
+  "identifier": "keyword-filter-demo",
+  "is_active": true,
+  "description": "Example template demonstrating keyword filter configuration. The keyword filter prevents false triggers from common greetings or filler words (e.g., 'hello', 'hey', 'hi') when the bot is busy speaking, processing LLM responses, or executing function calls. Keywords are allowed through when the bot is idle, so the user's initial greeting still works normally.",
+  "expected_payload_schema": {
+    "customer_name": {
+      "type": "string"
+    },
+    "order_id": {
+      "type": "string"
+    }
+  },
+  "configurations": {
+    "tts_voice_name": "rhea",
+    "stt_language": "en",
+    "enable_background_sound": false,
+    "background_sound_volume": 2.0,
+    "keyword_filter_config": {
+      "enabled": true,
+      "keywords": ["hello", "hey", "hi", "haan", "ok", "hmm"],
+      "match_mode": "exact",
+      "case_sensitive": false,
+      "remove_punctuation": true
+    }
+  },
+  "expected_callback_response_schema": {
+    "outcome": {
+      "type": "string"
+    }
+  },
+  "flow": {
+    "initial_node": "greeting",
+    "end_conversation_callbacks": ["service_callback"],
+    "nodes": [
+      {
+        "node_name": "greeting",
+        "task_messages": [
+          {
+            "role": "system",
+            "content": "Greet the customer:\n\"Hi {customer_name}, this is Rhea from customer support. I'm calling about your order #{order_id}. Is now a good time to talk?\""
+          }
+        ],
+        "role_messages": [
+          {
+            "role": "system",
+            "content": "You are Rhea, a friendly customer care representative.\n\nIMPORTANT: You are a text-to-speech voice agent. Generate all responses as plain text.\n\nThis template uses keyword filtering to prevent repeated greeting words like 'hello', 'hey', 'hi', 'haan', 'ok', 'hmm' from interrupting the bot when it is busy. These words are only filtered while the bot is speaking or processing a response. When the bot is idle and waiting for user input, these words pass through normally so the user can initiate conversation."
+          }
+        ],
+        "pre_actions": [
+          {
+            "type": "function",
+            "handler": "mute_stt"
+          }
+        ],
+        "post_actions": [
+          {
+            "type": "function",
+            "handler": "unmute_stt"
+          }
+        ],
+        "functions": [
+          {
+            "function_name": "user_available",
+            "description": "Call when the user confirms they are available to talk",
+            "properties": {},
+            "required": [],
+            "transition_to": "order_details",
+            "hooks": []
+          },
+          {
+            "function_name": "user_busy",
+            "description": "Call when the user says they are busy",
+            "properties": {},
+            "required": [],
+            "transition_to": "end_call",
+            "hooks": [
+              {
+                "name": "update_outcome_in_database",
+                "expected_fields": {
+                  "outcome": {
+                    "source": "static",
+                    "value": "busy"
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "node_name": "order_details",
+        "task_messages": [
+          {
+            "role": "system",
+            "content": "Share the order details with the customer and ask them to confirm."
+          }
+        ],
+        "pre_actions": [],
+        "post_actions": [],
+        "functions": [
+          {
+            "function_name": "confirm_order",
+            "description": "Call when the customer confirms their order",
+            "properties": {},
+            "required": [],
+            "transition_to": "order_confirmed",
+            "hooks": [
+              {
+                "name": "update_outcome_in_database",
+                "expected_fields": {
+                  "outcome": {
+                    "source": "static",
+                    "value": "confirmed"
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "function_name": "cancel_order",
+            "description": "Call when the customer wants to cancel",
+            "properties": {
+              "reason": {
+                "type": "string",
+                "description": "Reason for cancellation"
+              }
+            },
+            "required": ["reason"],
+            "transition_to": "end_call",
+            "hooks": [
+              {
+                "name": "update_outcome_in_database",
+                "expected_fields": {
+                  "outcome": {
+                    "source": "static",
+                    "value": "cancelled"
+                  },
+                  "reason": {
+                    "source": "llm"
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "node_name": "order_confirmed",
+        "task_messages": [
+          {
+            "role": "system",
+            "content": "Thank the customer for confirming. Say goodbye."
+          }
+        ],
+        "pre_actions": [
+          {
+            "type": "function",
+            "handler": "mute_stt"
+          }
+        ],
+        "post_actions": [
+          {
+            "type": "function",
+            "handler": "end_conversation"
+          }
+        ],
+        "functions": []
+      },
+      {
+        "node_name": "end_call",
+        "task_messages": [
+          {
+            "role": "system",
+            "content": "Thank the customer for their time. Say goodbye politely."
+          }
+        ],
+        "pre_actions": [
+          {
+            "type": "function",
+            "handler": "mute_stt"
+          }
+        ],
+        "post_actions": [
+          {
+            "type": "function",
+            "handler": "end_conversation"
+          }
+        ],
+        "functions": []
+      }
+    ]
+  }
+}
