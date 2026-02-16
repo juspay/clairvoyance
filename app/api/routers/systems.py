@@ -7,9 +7,19 @@ Endpoints for monitoring system health including Redis connectivity.
 import time
 from typing import Awaitable, cast
 
+import httpx
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
+from google import genai
+from openai import AsyncAzureOpenAI
 
+from app.core.config.static import (
+    AZURE_OPENAI_API_KEY,
+    AZURE_OPENAI_ENDPOINT,
+    DAILY_API_KEY,
+    DAILY_API_URL,
+    GEMINI_API_KEY,
+)
 from app.core.logger import logger
 from app.database import get_db_connection
 from app.services.redis.client import get_redis_service
@@ -180,6 +190,219 @@ async def database_health_check():
                 "message": f"Database connection failed: {str(e)}",
             },
         )
+
+
+@router.get("/health/gemini")
+async def gemini_health_check():
+    """
+    Gemini API health check - tests API key validity and connectivity.
+    """
+    health_status = {
+        "status": "healthy",
+        "timestamp": time.time(),
+        "checks": {},
+        "api_info": None,
+    }
+
+    try:
+        if not GEMINI_API_KEY:
+            health_status["status"] = "unhealthy"
+            health_status["checks"]["api_key"] = {
+                "status": "failed",
+                "error": "GEMINI_API_KEY not configured",
+            }
+            return JSONResponse(status_code=503, content=health_status)
+
+        health_status["checks"]["api_key"] = {
+            "status": "ok",
+            "configured": True,
+        }
+
+        try:
+            start = time.time()
+
+            client = genai.Client(api_key=GEMINI_API_KEY)
+
+            models_response = client.models.list()
+            models = list(models_response)
+
+            latency = round((time.time() - start) * 1000, 2)
+
+            if models:
+                health_status["checks"]["api_call"] = {
+                    "status": "ok",
+                    "latency_ms": latency,
+                    "models_found": len(models),
+                }
+                health_status["api_info"] = {
+                    "models_available": len(models),
+                    "api_accessible": True,
+                }
+            else:
+                health_status["status"] = "degraded"
+                health_status["checks"]["api_call"] = {
+                    "status": "warning",
+                    "latency_ms": latency,
+                    "message": "API responded but no models returned",
+                }
+
+        except Exception as e:
+            health_status["status"] = "unhealthy"
+            health_status["checks"]["api_call"] = {
+                "status": "failed",
+                "error": str(e),
+                "error_type": type(e).__name__,
+            }
+            raise
+
+        status_code = 200 if health_status["status"] != "unhealthy" else 503
+        return JSONResponse(status_code=status_code, content=health_status)
+
+    except Exception as e:
+        logger.error(f"Gemini health check failed: {e}")
+        health_status["status"] = "unhealthy"
+        health_status["error"] = str(e)
+        return JSONResponse(status_code=503, content=health_status)
+
+
+@router.get("/health/daily")
+async def daily_health_check():
+    """
+    Daily API health check - tests API key validity and connectivity.
+    """
+    health_status = {
+        "status": "healthy",
+        "timestamp": time.time(),
+        "checks": {},
+        "api_info": None,
+    }
+
+    try:
+        if not DAILY_API_KEY:
+            health_status["status"] = "unhealthy"
+            health_status["checks"]["api_key"] = {
+                "status": "failed",
+                "error": "DAILY_API_KEY not configured",
+            }
+            return JSONResponse(status_code=503, content=health_status)
+
+        health_status["checks"]["api_key"] = {
+            "status": "ok",
+            "configured": True,
+        }
+
+        try:
+            start = time.time()
+
+            headers = {"Authorization": f"Bearer {DAILY_API_KEY}"}
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.get(
+                    f"{DAILY_API_URL}/rooms",
+                    headers=headers,
+                )
+                response.raise_for_status()
+
+            latency = round((time.time() - start) * 1000, 2)
+
+            health_status["checks"]["api_call"] = {
+                "status": "ok",
+                "latency_ms": latency,
+            }
+            health_status["api_info"] = {
+                "response_received": True,
+            }
+
+        except Exception as e:
+            health_status["status"] = "unhealthy"
+            health_status["checks"]["api_call"] = {
+                "status": "failed",
+                "error": str(e),
+                "error_type": type(e).__name__,
+            }
+            raise
+
+        status_code = 200 if health_status["status"] != "unhealthy" else 503
+        return JSONResponse(status_code=status_code, content=health_status)
+
+    except Exception as e:
+        logger.error(f"Daily health check failed: {e}")
+        health_status["status"] = "unhealthy"
+        health_status["error"] = str(e)
+        return JSONResponse(status_code=503, content=health_status)
+
+
+@router.get("/health/azure-openai")
+async def azure_openai_health_check():
+    """
+    Azure OpenAI health check - tests API key validity and connectivity.
+    """
+    health_status = {
+        "status": "healthy",
+        "timestamp": time.time(),
+        "checks": {},
+        "api_info": None,
+    }
+
+    try:
+        if not AZURE_OPENAI_API_KEY or not AZURE_OPENAI_ENDPOINT:
+            health_status["status"] = "unhealthy"
+            health_status["checks"]["api_key"] = {
+                "status": "failed",
+                "error": "AZURE_OPENAI_API_KEY or AZURE_OPENAI_ENDPOINT not configured",
+            }
+            return JSONResponse(status_code=503, content=health_status)
+
+        health_status["checks"]["api_key"] = {
+            "status": "ok",
+            "configured": True,
+        }
+
+        try:
+            start = time.time()
+
+            async with AsyncAzureOpenAI(
+                api_key=AZURE_OPENAI_API_KEY,
+                azure_endpoint=AZURE_OPENAI_ENDPOINT,
+            ) as client:
+                models = await client.models.list()
+                model_list = [m async for m in models]
+
+            latency = round((time.time() - start) * 1000, 2)
+
+            if model_list:
+                health_status["checks"]["api_call"] = {
+                    "status": "ok",
+                    "latency_ms": latency,
+                    "models_found": len(model_list),
+                }
+                health_status["api_info"] = {
+                    "models_available": len(model_list),
+                }
+            else:
+                health_status["status"] = "degraded"
+                health_status["checks"]["api_call"] = {
+                    "status": "warning",
+                    "latency_ms": latency,
+                    "message": "API responded but no models returned",
+                }
+
+        except Exception as e:
+            health_status["status"] = "unhealthy"
+            health_status["checks"]["api_call"] = {
+                "status": "failed",
+                "error": str(e),
+                "error_type": type(e).__name__,
+            }
+            raise
+
+        status_code = 200 if health_status["status"] != "unhealthy" else 503
+        return JSONResponse(status_code=status_code, content=health_status)
+
+    except Exception as e:
+        logger.error(f"Azure OpenAI health check failed: {e}")
+        health_status["status"] = "unhealthy"
+        health_status["error"] = str(e)
+        return JSONResponse(status_code=503, content=health_status)
 
 
 @router.get("/version")
