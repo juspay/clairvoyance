@@ -186,7 +186,7 @@ class LanguageAwareSarvamTTS(SarvamTTSService):
             logger.warning(f"[SARVAM] Error in language switching: {e}")
             return False
 
-    async def run_tts(self, text: str) -> AsyncGenerator[Frame, None]:
+    async def run_tts(self, text: str, context_id: str) -> AsyncGenerator[Frame, None]:
         """Override to auto-detect language before TTS generation.
 
         Ensures TTS always proceeds even if language detection fails.
@@ -198,7 +198,7 @@ class LanguageAwareSarvamTTS(SarvamTTSService):
                 f"[SARVAM] Language switch failed, continuing with current language: {e}"
             )
 
-        async for frame in super().run_tts(text):
+        async for frame in super().run_tts(text, context_id):
             yield frame
 
 

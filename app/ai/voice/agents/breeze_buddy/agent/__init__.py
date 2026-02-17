@@ -156,9 +156,11 @@ class Agent:
                 handler_func
             )
 
-        self.template, self.configurations, self.template_vars = (
-            await load_template_config(self.lead)
-        )
+        (
+            self.template,
+            self.configurations,
+            self.template_vars,
+        ) = await load_template_config(self.lead)
 
         self.vad_analyzer, self.default_vad_params = await create_vad_analyzer(
             is_daily_mode=True
@@ -213,6 +215,9 @@ class Agent:
                 # WebSocket already closed by get_template_id_from_call
                 return False
 
+            # Extract URL query params for Plivo inbound (contains from_number, to_number)
+            url_query_params = dict(self.ws.query_params) if self.ws else {}
+
             # Handle inbound call - create lead on-the-fly
             if template_id_from_query:
                 # Template ID from IVR selection or query param
@@ -221,6 +226,7 @@ class Agent:
                     call_sid=self.call_sid,
                     call_data=call_data,
                     call_initiated_time=call_initiated_time,
+                    url_query_params=url_query_params,
                 )
                 if not self.lead:
                     error_msg = f"Inbound call handling failed (IVR): {error_reason}"
@@ -239,6 +245,7 @@ class Agent:
                     call_data=call_data,
                     call_initiated_time=call_initiated_time,
                     provider=self.provider or "",
+                    url_query_params=url_query_params,
                 )
                 if not self.lead:
                     error_msg = f"Inbound call handling failed: {error_reason}"
@@ -252,9 +259,11 @@ class Agent:
                     return False
 
         try:
-            self.template, self.configurations, self.template_vars = (
-                await load_template_config(self.lead)
-            )
+            (
+                self.template,
+                self.configurations,
+                self.template_vars,
+            ) = await load_template_config(self.lead)
         except ValueError as e:
             error_msg = f"Template loading failed: {str(e)}"
             logger.error(error_msg)
