@@ -584,7 +584,7 @@ async def prepare_initial_greeting_payload(
         if provider_str in ("twilio", "plivo"):
             # mulaw_data is already in correct format for Twilio and Plivo
             audio_to_send = mulaw_data
-            logger.info(f"Audio prepared as mulaw for {provider_str}")
+            logger.info(f"Audio prepared as mulaw for {provider_str.capitalize()}")
         else:
             try:
                 # Convert mulaw to 16-bit linear PCM

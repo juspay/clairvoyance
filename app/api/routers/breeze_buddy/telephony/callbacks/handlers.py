@@ -6,28 +6,21 @@ This module contains handlers for webhooks/callbacks from telephony providers
 
 Handlers:
 - handle_callback_details_get() - GET callback for call details (Exotel)
-- handle_callback_details_post() - POST callback for call details (Twilio)
+- handle_callback_details_post() - POST callback for call details (Twilio/Plivo)
 - handle_callback_status() - POST callback for call status updates
-- handle_plivo_answer() - POST answer webhook for Plivo (returns XML)
+
+Note: Plivo IVR is now handled agent-side (in-band over WebSocket) like Exotel,
+so the handle_plivo_ivr_select() handler is no longer needed.
 """
 
 import json
 
 from fastapi import BackgroundTasks, HTTPException, Request, Response
-from starlette.responses import HTMLResponse
 
 from app.ai.voice.agents.breeze_buddy.managers.calls import (
     handle_unanswered_calls,
     update_call_recording,
 )
-from app.ai.voice.agents.breeze_buddy.services.telephony.plivo.recording import (
-    start_call_recording,
-)
-from app.core.config.dynamic import (
-    BB_NOISE_CANCELLATION_ENABLED,
-    BB_NOISE_CANCELLATION_LEVEL,
-)
-from app.core.config.static import APP_BASE_URL
 from app.core.logger import logger
 
 
@@ -193,63 +186,3 @@ async def handle_callback_status(request: Request, provider: str) -> Response:
             await handle_unanswered_calls(call_sid)
 
     return Response(status_code=200)
-
-
-async def handle_plivo_answer(request: Request) -> HTMLResponse:
-    """
-    Handle POST answer webhook from Plivo.
-
-    Plivo calls this endpoint when a call comes in.
-    Returns XML to start streaming audio via WebSocket.
-
-    The XML instructs Plivo to connect the call to the existing
-    websocket endpoint for real-time audio streaming.
-
-    Returns:
-        XML Response with Stream element for WebSocket connection
-    """
-    form = await request.form()
-    logger.info(f"Received Plivo answer webhook with form data: {form}")
-
-    # Extract call UUID for recording
-    call_uuid = form.get("CallUUID")
-    if call_uuid:
-        call_uuid_str = str(call_uuid) if not isinstance(call_uuid, str) else call_uuid
-        logger.info(f"Starting recording for Plivo call UUID: {call_uuid_str}")
-        try:
-            start_call_recording(call_uuid_str)
-        except Exception as e:
-            logger.error(f"Failed to start Plivo recording: {e}", exc_info=True)
-
-    # Build WebSocket URL using existing endpoint pattern
-    # Reuses the existing telephony websocket handler
-    ws_path = "/agent/voice/breeze-buddy/plivo/callback/order-confirmation/v2"
-    if APP_BASE_URL.startswith("https://"):
-        ws_url = "wss://" + APP_BASE_URL[len("https://") :].rstrip("/") + ws_path
-    elif APP_BASE_URL.startswith("http://"):
-        ws_url = "ws://" + APP_BASE_URL[len("http://") :].rstrip("/") + ws_path
-    else:
-        # Default to wss:// if no scheme is present
-        ws_url = "wss://" + APP_BASE_URL.rstrip("/") + ws_path
-
-    # Generate XML response for Plivo
-    noise_cancellation_enabled = await BB_NOISE_CANCELLATION_ENABLED()
-    noise_cancellation_level = await BB_NOISE_CANCELLATION_LEVEL()
-    noise_cancellation_attr = (
-        f'noiseCancellation="{str(noise_cancellation_enabled).lower()}" '
-        f'noiseCancellationLevel="{noise_cancellation_level}"'
-        if noise_cancellation_enabled
-        else ""
-    )
-    logger.info(f"Plivo Noise Cancellation Attributes: {noise_cancellation_attr}")
-
-    xml_content = f"""<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-    <Stream {noise_cancellation_attr} bidirectional="true" keepCallAlive="true" contentType="audio/x-mulaw;rate=8000">
-        {ws_url}
-    </Stream>
-</Response>"""
-
-    logger.info(f"Returning Plivo XML response with WebSocket URL: {ws_url}")
-
-    return HTMLResponse(content=xml_content, media_type="application/xml")
