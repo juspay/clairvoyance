@@ -39,7 +39,7 @@
         "task_messages": [
           {
             "role": "system",
-            "content": "Greet the customer warmly:\n\"Namaste {customer_name} ji! Aapka order #{order_id} confirm ho gaya hai. Kya main aapko order details bata sakti hoon?\""
+            "content": "Greet the customer warmly: \n\"Namaste {customer_name} ji! Aapka order #{order_id} confirm ho gaya hai. Kya main aapko order details bata sakti hoon?\""
           }
         ],
         "role_messages": [
