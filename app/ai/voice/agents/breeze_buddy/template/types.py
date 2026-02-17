@@ -89,6 +89,32 @@ class UserIdleHandlingConfig(BaseModel):
     )
 
 
+class ContextSummarizationConfig(BaseModel):
+    """Configuration for automatic conversation context summarization.
+
+    Context summarization is ONLY enabled when explicitly configured in the template
+    with enabled=True. By default, summarization is disabled.
+
+    When enabled, older conversation messages are automatically condensed into
+    a summary after a specified number of turns to prevent context window overflow.
+    """
+
+    enabled: bool = Field(
+        False,
+        description="Enable/disable automatic context summarization for this template. Defaults to False - must be explicitly enabled.",
+    )
+    max_turns_before_summary: int = Field(
+        10,
+        ge=1,
+        description="Number of user turns after which summarization is triggered",
+    )
+    keep_recent_turns: int = Field(
+        2,
+        ge=1,
+        description="Number of recent conversation turns to keep in full detail after summarization",
+    )
+
+
 class ConfigurationModel(BaseModel):
     tts_voice_name: Optional[TTSVoiceName] = None
     mira_voice_id: Optional[str] = (
@@ -122,6 +148,9 @@ class ConfigurationModel(BaseModel):
     enable_inbound: bool = False  # Whether this template can handle inbound calls
     user_idle_configuration: Optional[UserIdleHandlingConfig] = (
         None  # User idle handling config
+    )
+    context_summarization: Optional[ContextSummarizationConfig] = (
+        None  # Context summarization config (must be explicitly enabled)
     )
 
 

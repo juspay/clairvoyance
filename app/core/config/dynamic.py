@@ -280,3 +280,31 @@ async def BB_NOISE_CANCELLATION_LEVEL() -> int:
 async def BB_ENABLE_ELEVENLABS_INDIAN_RESIDENCY() -> bool:
     """Returns BB_ENABLE_ELEVENLABS_INDIAN_RESIDENCY from Redis"""
     return await get_config("BB_ENABLE_ELEVENLABS_INDIAN_RESIDENCY", True, bool)
+
+
+# --- Breeze Buddy Context Summarization Configuration ---
+async def ENABLE_BB_SUMMARIZATION() -> bool:
+    """Returns ENABLE_BB_SUMMARIZATION from Redis.
+
+    When True, enables automatic conversation context summarization after a specified
+    number of turns to maintain context window efficiency while preserving conversation memory.
+    """
+    return await get_config("ENABLE_BB_SUMMARIZATION", False, bool)
+
+
+async def BB_MAX_TURNS_BEFORE_SUMMARY() -> int:
+    """Returns BB_MAX_TURNS_BEFORE_SUMMARY from Redis.
+
+    Number of user turns after which the conversation context will be automatically
+    summarized to prevent context window overflow.
+    """
+    return await get_config("BB_MAX_TURNS_BEFORE_SUMMARY", 5, int)
+
+
+async def BB_KEEP_RECENT_TURNS() -> int:
+    """Returns BB_KEEP_RECENT_TURNS from Redis.
+
+    Number of recent conversation turns to keep in full detail after summarization.
+    Older turns will be condensed into a summary.
+    """
+    return await get_config("BB_KEEP_RECENT_TURNS", 2, int)

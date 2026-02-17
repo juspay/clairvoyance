@@ -19,6 +19,7 @@ from pipecat.processors.aggregators.llm_response import LLMUserAggregatorParams
 from pipecat.processors.aggregators.openai_llm_context import OpenAILLMContext
 from pipecat.services.azure.llm import AzureLLMService
 
+from app.ai.voice.agents.breeze_buddy.features.summarizer import ContextSummarizer
 from app.ai.voice.agents.breeze_buddy.observability.tracing_setup import setup_tracing
 from app.ai.voice.agents.breeze_buddy.processors import (
     ResponseStateGate,
@@ -132,7 +133,38 @@ async def build_pipeline(
     Returns:
         Tuple of (pipeline, context, context_aggregator)
     """
-    context = OpenAILLMContext()
+    # Create context with summarization support
+    # Context summarization is ONLY enabled when explicitly configured in template
+    template_summarization_config = getattr(
+        configurations, "context_summarization", None
+    )
+
+    if template_summarization_config and template_summarization_config.enabled:
+        # Use template-level configuration
+        max_turns = template_summarization_config.max_turns_before_summary
+        keep_turns = template_summarization_config.keep_recent_turns
+        logger.info(
+            f"Template context summarization ENABLED: "
+            f"max_turns={max_turns}, keep_turns={keep_turns}"
+        )
+        context = ContextSummarizer(
+            messages=[],
+            tools=None,
+            llm_service=llm,
+            max_turns_before_summary=max_turns,
+            keep_recent_turns=keep_turns,
+            enable_summarization=True,
+        )
+    else:
+        # No template config or disabled - use standard context without summarization
+        if template_summarization_config:
+            logger.info("Template context summarization explicitly disabled")
+        else:
+            logger.info(
+                "No template context summarization config - using standard context"
+            )
+        context = OpenAILLMContext()
+
     context_aggregator = llm.create_context_aggregator(
         context,
         user_params=LLMUserAggregatorParams(
