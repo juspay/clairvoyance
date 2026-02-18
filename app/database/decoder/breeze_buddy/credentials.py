@@ -8,7 +8,7 @@ import asyncpg
 
 from app.core.logger import logger
 from app.schemas import Credential, CredentialType
-from app.services.gcp.kms import decrypt_credential
+from app.services.encryption import decrypt_credential
 
 # Mask value for API responses
 CREDENTIAL_MASK = "******"

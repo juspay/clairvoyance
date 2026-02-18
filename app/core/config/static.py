@@ -350,12 +350,11 @@ AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
 AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID", "")
 AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY", "")
 
-# GCP KMS Configuration (for credential encryption at rest)
-GCP_KMS_CREDENTIALS_JSON = os.getenv("GCP_KMS_CREDENTIALS_JSON", "")
-GCP_KMS_PROJECT_ID = os.getenv("GCP_KMS_PROJECT_ID", "")
-GCP_KMS_LOCATION = os.getenv("GCP_KMS_LOCATION", "")
-GCP_KMS_KEYRING = os.getenv("GCP_KMS_KEYRING", "")
-GCP_KMS_KEY_NAME = os.getenv("GCP_KMS_KEY_NAME", "")
+# Credential Encryption (AES-256-GCM)
+# Base64-encoded 32-byte key. Generate with:
+#   python -c "import os,base64; print(base64.urlsafe_b64encode(os.urandom(32)).decode())"
+# When empty, credentials are stored as plain JSON (acceptable for dev/local).
+CREDENTIAL_ENCRYPTION_KEY = os.getenv("CREDENTIAL_ENCRYPTION_KEY", "")
 
 # JWT Authentication Configuration
 JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "")

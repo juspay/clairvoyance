@@ -22,7 +22,7 @@ from app.database.queries.breeze_buddy.credentials import (
     update_credential_query,
 )
 from app.schemas import Credential, CredentialType
-from app.services.gcp.kms import decrypt_credential, encrypt_credential
+from app.services.encryption import decrypt_credential, encrypt_credential
 
 
 def _merge_credential_value(
