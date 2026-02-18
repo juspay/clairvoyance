@@ -11,14 +11,20 @@ from pipecat.transports.daily.transport import DailyParams
 from pipecat.transports.websocket.fastapi import FastAPIWebsocketParams
 
 from app.ai.voice.agents.breeze_buddy.agent.vad import TELEPHONY_SAMPLE_RATE
-from app.core.config import dynamic, static
+from app.ai.voice.agents.breeze_buddy.template.types import (
+    ConfigurationModel,
+    NoiseFilterType,
+)
+from app.core.config import static
 from app.core.logger import logger
 
 # Constants
 TRANSPORT_TYPE_DAILY = "daily"
 
 
-async def _create_audio_input_filter() -> Optional[BaseAudioFilter]:
+def _create_audio_input_filter(
+    configurations: Optional[ConfigurationModel] = None,
+) -> Optional[BaseAudioFilter]:
     """Create audio input filter based on configuration.
 
     Currently supports:
@@ -26,14 +32,25 @@ async def _create_audio_input_filter() -> Optional[BaseAudioFilter]:
 
     Future filters can be added here with their own enable flags.
 
+    Args:
+        configurations: The configuration model containing noise filter settings.
+
     Returns:
         Audio filter instance if enabled and successfully created, None otherwise.
     """
-    # AIC Filter
-    if (
-        await dynamic.ENABLE_BB_AIC_FILTER()
-        and static.BREEZE_BUDDY_AICOUSTICS_LICENSE_KEY
-    ):
+    # Check if noise filter is configured and enabled
+    if not configurations:
+        return None
+
+    noise_filter_config = configurations.noise_filter
+    if not noise_filter_config or not noise_filter_config.enable:
+        return None
+
+    # Create filter based on type
+    if noise_filter_config.type == NoiseFilterType.AIC:
+        if not static.BREEZE_BUDDY_AICOUSTICS_LICENSE_KEY:
+            logger.warning("AIC filter enabled but license key not configured")
+            return None
         try:
             return AICFilter(
                 license_key=static.BREEZE_BUDDY_AICOUSTICS_LICENSE_KEY,
@@ -43,23 +60,26 @@ async def _create_audio_input_filter() -> Optional[BaseAudioFilter]:
             logger.warning(
                 f"Failed to initialize AIC filter, proceeding without it: {e}"
             )
+
     return None
 
 
-async def get_transport_params(
+def get_transport_params(
     vad_analyzer: Optional[SileroVADAnalyzer],
     audio_out_mixer: Optional[SoundfileMixer] = None,
+    configurations: Optional[ConfigurationModel] = None,
 ) -> dict:
     """Get transport parameters dictionary for all transport types.
 
     Args:
         vad_analyzer: The VAD analyzer instance to use
         audio_out_mixer: Optional audio mixer for background sounds (only used by telephony transports)
+        configurations: Optional configuration model for settings (e.g., noise filter)
 
     Returns:
         Dictionary mapping transport types to parameter factory functions
     """
-    audio_in_filter = await _create_audio_input_filter()
+    audio_in_filter = _create_audio_input_filter(configurations)
 
     return {
         "daily": lambda: DailyParams(
