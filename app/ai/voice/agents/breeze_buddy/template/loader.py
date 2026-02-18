@@ -10,6 +10,9 @@ from app.ai.voice.agents.breeze_buddy.template.types import (
     TemplateModel,
 )
 from app.core.logger import logger
+from app.database.accessor.breeze_buddy.credentials import (
+    get_credentials_as_template_vars,
+)
 from app.database.accessor.breeze_buddy.template import get_template_by_merchant
 
 
@@ -116,10 +119,23 @@ class FlowConfigLoader:
 
         template_vars = {}
 
+        # 1. Load credentials from credentials table (global + merchant-specific)
+        try:
+            credential_vars = await get_credentials_as_template_vars(merchant_id)
+            if credential_vars:
+                template_vars.update(credential_vars)
+                logger.info(
+                    f"Loaded {len(credential_vars)} credential vars for merchant {merchant_id}"
+                )
+        except Exception as e:
+            logger.warning(f"Failed to load credentials for merchant {merchant_id}: {e}")
+
+        # 2. Load template.secrets (overrides credentials for same keys)
         if template_obj.secrets:
             template_vars.update(template_obj.secrets)
             logger.info(f"Loaded {len(template_obj.secrets)} secrets from template")
 
+        # 3. Load payload fields (overrides both credentials and secrets)
         expected_schema = template_obj.expected_payload_schema or {}
         for field_name in expected_schema.keys():
             if call_payload and field_name in call_payload:

@@ -6,6 +6,7 @@ from app.api.routers.breeze_buddy.analytics import router as analytics_router
 # Auth, telephony, cron, websocket
 from app.api.routers.breeze_buddy.auth import router as auth_router
 from app.api.routers.breeze_buddy.configurations import router as configurations_router
+from app.api.routers.breeze_buddy.credentials import router as credentials_router
 from app.api.routers.breeze_buddy.cron import router as cron_router
 
 # Daily transport (web/mobile clients via Daily.co)
@@ -35,6 +36,9 @@ router.include_router(analytics_router, prefix="", tags=["analytics"])
 
 # Configurations (call execution configs)
 router.include_router(configurations_router, prefix="", tags=["configurations"])
+
+# Credentials (API keys, tokens - centralized secret management)
+router.include_router(credentials_router, prefix="", tags=["credentials"])
 
 # Outbound Numbers (phone numbers for making calls)
 router.include_router(numbers_router, prefix="", tags=["numbers"])

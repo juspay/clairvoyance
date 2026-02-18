@@ -40,6 +40,15 @@ from .breeze_buddy.outbound_number import (
     increment_outbound_number_channels,
     update_outbound_number_status,
 )
+from .breeze_buddy.credentials import (
+    create_credential,
+    delete_credential,
+    get_all_credentials,
+    get_credential_by_id,
+    get_credentials_as_template_vars,
+    get_credentials_by_merchant,
+    update_credential,
+)
 from .breeze_buddy.template import (
     create_template,
     get_template_by_merchant,
@@ -79,4 +88,11 @@ __all__ = [
     "get_lead_call_trackers_count",
     "get_leads_by_status_and_time_before",
     "handle_lead_abort",
+    "create_credential",
+    "get_credential_by_id",
+    "get_credentials_by_merchant",
+    "get_all_credentials",
+    "get_credentials_as_template_vars",
+    "update_credential",
+    "delete_credential",
 ]

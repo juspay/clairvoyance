@@ -21,6 +21,9 @@ from app.ai.voice.agents.breeze_buddy.template.types import (
     TemplateModel,
 )
 from app.core.logger import logger
+from app.database.accessor.breeze_buddy.credentials import (
+    get_credentials_as_template_vars,
+)
 from app.schemas import (
     LeadCallTracker,
     PreCheckConfig,
@@ -55,28 +58,38 @@ class PreCheckResult:
         return "; ".join(parts)
 
 
-def _build_resolution_context(
+async def _build_resolution_context(
     lead: LeadCallTracker,
     template: Optional[TemplateModel],
 ) -> Dict[str, Any]:
     """
-    Build the placeholder resolution context by merging lead payload and template secrets.
+    Build the placeholder resolution context by merging credentials, template secrets, and payload.
 
-    Placeholders like {customer_mobile_number} resolve from lead payload.
-    Placeholders like {api_token} resolve from template secrets.
-    Lead-level fields like {merchant_id}, {request_id} are also available.
+    Resolution order (later overrides earlier):
+    1. Credentials from credentials table (global + merchant-specific)
+    2. Template secrets (API keys, tokens, base URLs)
+    3. Lead payload (customer data, order data)
+    4. Core lead fields (merchant_id, lead_id, etc.)
     """
     context: Dict[str, Any] = {}
 
-    # Template secrets (API keys, tokens, base URLs)
+    # 1. Credentials from credentials table
+    try:
+        credential_vars = await get_credentials_as_template_vars(lead.merchant_id)
+        if credential_vars:
+            context.update(credential_vars)
+    except Exception as e:
+        logger.warning(f"Failed to load credentials for pre-check context: {e}")
+
+    # 2. Template secrets (override credentials for same keys)
     if template and template.secrets:
         context.update(template.secrets)
 
-    # Lead payload (customer data, order data)
+    # 3. Lead payload (override both)
     if lead.payload:
         context.update(lead.payload)
 
-    # Core lead fields available as placeholders
+    # 4. Core lead fields available as placeholders
     context["merchant_id"] = lead.merchant_id
     context["lead_id"] = lead.id
     if lead.request_id:
@@ -335,7 +348,7 @@ async def run_pre_checks(
     if not pre_checks:
         return PreCheckResult(should_proceed=True)
 
-    context = _build_resolution_context(lead, template)
+    context = await _build_resolution_context(lead, template)
     results: List[SinglePreCheckResult] = []
 
     for pre_check in pre_checks:
