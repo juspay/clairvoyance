@@ -360,17 +360,17 @@ LIGHTHOUSE_JWT_SECRET = os.getenv("LIGHTHOUSE_JWT_SECRET", "")
 ENABLE_LIGHTHOUSE_AUTH = os.getenv("ENABLE_LIGHTHOUSE_AUTH", "false").lower() == "true"
 
 BREEZE_BUDDY_VAD_CONFIDENCE = float(
-    os.getenv("BREEZE_BUDDY_VAD_CONFIDENCE", "0.5")
-)  # Require stronger confidence
+    os.getenv("BREEZE_BUDDY_VAD_CONFIDENCE", "0.35")
+)  # Lower for 8kHz telephony where Silero VAD confidence is reduced
 BREEZE_BUDDY_VAD_START_SECS = float(
-    os.getenv("BREEZE_BUDDY_VAD_START_SECS", "0.1")
-)  # Pick up quicker
+    os.getenv("BREEZE_BUDDY_VAD_START_SECS", "0.2")
+)  # Slightly slower to avoid noise triggering speech start
 BREEZE_BUDDY_VAD_STOP_SECS = float(
-    os.getenv("BREEZE_BUDDY_VAD_STOP_SECS", "0.3")
-)  # Allow small pauses
+    os.getenv("BREEZE_BUDDY_VAD_STOP_SECS", "0.5")
+)  # Allow natural pauses in telephony speech
 BREEZE_BUDDY_VAD_MIN_VOLUME = float(
-    os.getenv("BREEZE_BUDDY_VAD_MIN_VOLUME", "0.4")
-)  # More tolerant for soft voice
+    os.getenv("BREEZE_BUDDY_VAD_MIN_VOLUME", "0.15")
+)  # Much lower for 8kHz mulaw which produces lower amplitude values
 BREEZE_BUDDY_STT_SERVICE = os.getenv(
     "BREEZE_BUDDY_STT_SERVICE", "soniox"
 ).lower()  # "google" or "openai"
