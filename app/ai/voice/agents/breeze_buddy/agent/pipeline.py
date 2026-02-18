@@ -27,6 +27,7 @@ from pipecat.turns.user_start import (
     TranscriptionUserTurnStartStrategy,
     VADUserTurnStartStrategy,
 )
+from pipecat.turns.user_stop import SpeechTimeoutUserTurnStopStrategy
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 
 from app.ai.voice.agents.breeze_buddy.observability.tracing_setup import setup_tracing
@@ -153,7 +154,9 @@ async def build_pipeline(
     Uses the new universal LLMContextAggregatorPair with UserTurnStrategies:
     - Start: VADUserTurnStartStrategy (primary, ~100ms) + TranscriptionUserTurnStartStrategy
       (fallback for soft speech VAD misses, uses interim transcriptions)
-    - Stop: Default pipecat stop strategies (TurnAnalyzerUserTurnStopStrategy)
+    - Stop: SpeechTimeoutUserTurnStopStrategy (user_speech_timeout=0.0) — triggers
+      immediately when custom Soniox sends a finalized transcript. Soniox's own 500ms
+      endpoint timeout after VAD stop is the sole timing mechanism.
     - VAD runs inside the aggregator (not the transport)
 
     Args:
@@ -184,7 +187,9 @@ async def build_pipeline(
             VADUserTurnStartStrategy(),
             TranscriptionUserTurnStartStrategy(use_interim=True),
         ],
-        # stop: uses pipecat default (TurnAnalyzerUserTurnStopStrategy with SmartTurnAnalyzerV3)
+        stop=[
+            SpeechTimeoutUserTurnStopStrategy(user_speech_timeout=0.0),
+        ],
     )
 
     context_aggregator = LLMContextAggregatorPair(
