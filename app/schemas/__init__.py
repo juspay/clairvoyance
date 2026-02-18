@@ -57,6 +57,11 @@ from app.schemas.breeze_buddy.core import (
     LeadCallTracker,
     OutboundNumber,
     OutboundNumberStatus,
+    PreCheckConfig,
+    PreCheckDefaultAction,
+    PreCheckHttpRequest,
+    PreCheckResponseConfig,
+    PreCheckType,
     UpdateCallExecutionConfigRequest,
 )
 
@@ -99,6 +104,11 @@ __all__ = [
     "LeadCallTracker",
     "OutboundNumber",
     "OutboundNumberStatus",
+    "PreCheckConfig",
+    "PreCheckDefaultAction",
+    "PreCheckHttpRequest",
+    "PreCheckResponseConfig",
+    "PreCheckType",
     "UpdateCallExecutionConfigRequest",
     # Connection
     "BreezeBuddyDailyConnectRequest",

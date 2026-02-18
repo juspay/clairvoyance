@@ -2,8 +2,9 @@
 Database accessor functions for the application.
 """
 
+import json
 from datetime import time
-from typing import List, Optional
+from typing import Any, List, Optional
 
 import asyncpg
 
@@ -33,6 +34,13 @@ def get_row_count(result: Optional[List[asyncpg.Record]]) -> int:
     return len(result) if result else 0
 
 
+def _serialize_pre_checks(pre_checks: Optional[List[Any]]) -> Optional[str]:
+    """Serialize pre_checks list to JSON string for JSONB storage."""
+    if pre_checks is None:
+        return None
+    return json.dumps([pc.model_dump() if hasattr(pc, "model_dump") else pc for pc in pre_checks])
+
+
 async def create_call_execution_config(
     id: str,
     initial_offset: int,
@@ -46,7 +54,8 @@ async def create_call_execution_config(
     shop_identifier: Optional[str],
     enable_international_call: bool,
     enable_calling: bool = True,
-    template_id: Optional[str] = None,  # NEW: Add template_id parameter
+    template_id: Optional[str] = None,
+    pre_checks: Optional[List[Any]] = None,
 ) -> Optional[CallExecutionConfig]:
     """
     Create a new call execution config record.
@@ -54,6 +63,7 @@ async def create_call_execution_config(
     Args:
         template_id: UUID of the template (preferred, for referential integrity)
         template: Name of the template (kept for backward compatibility)
+        pre_checks: List of PreCheckConfig objects for call pre-validation
     """
     logger.info(f"Creating call execution config for merchant ID: {merchant_id}")
 
@@ -68,10 +78,11 @@ async def create_call_execution_config(
             calling_provider=calling_provider,
             merchant_id=merchant_id,
             template=template,
-            template_id=template_id,  # NEW
+            template_id=template_id,
             shop_identifier=shop_identifier,
             enable_international_call=enable_international_call,
             enable_calling=enable_calling,
+            pre_checks=_serialize_pre_checks(pre_checks),
         )
 
         result = await run_parameterized_query(query_text, values)
@@ -169,7 +180,8 @@ async def update_call_execution_config(
     calling_provider: Optional[CallProvider] = None,
     enable_international_call: Optional[bool] = None,
     enable_calling: Optional[bool] = None,
-    template_id: Optional[str] = None,  # NEW: Add template_id parameter
+    template_id: Optional[str] = None,
+    pre_checks: Optional[List[Any]] = None,
 ) -> Optional[CallExecutionConfig]:
     """
     Update an existing call execution config record based on merchant_id, template, and shop_identifier.
@@ -178,6 +190,7 @@ async def update_call_execution_config(
     Args:
         template_id: UUID of the template (optional update)
         template: Name of the template (kept for backward compatibility)
+        pre_checks: List of PreCheckConfig objects for call pre-validation
     """
     logger.info(
         f"Updating call execution config for merchant: {merchant_id}, template: {template}, shop_identifier: {shop_identifier}"
@@ -196,7 +209,8 @@ async def update_call_execution_config(
             calling_provider=calling_provider,
             enable_international_call=enable_international_call,
             enable_calling=enable_calling,
-            template_id=template_id,  # NEW
+            template_id=template_id,
+            pre_checks=_serialize_pre_checks(pre_checks),
         )
 
         result = await run_parameterized_query(query_text, values)

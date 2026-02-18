@@ -2,9 +2,9 @@
 
 from datetime import datetime, time
 from enum import Enum
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class OutboundNumberStatus(str, Enum):
@@ -46,6 +46,80 @@ class CallDirection(str, Enum):
 
     INBOUND = "INBOUND"  # Customer called us
     OUTBOUND = "OUTBOUND"  # We called customer
+
+
+class PreCheckType(str, Enum):
+    """Supported pre-check types"""
+
+    EXTERNAL_API = "external_api"
+
+
+class PreCheckDefaultAction(str, Enum):
+    """What to do when a pre-check API call fails or times out"""
+
+    PROCEED = "proceed"  # Fail-open: allow the call
+    SKIP = "skip"  # Fail-closed: block the call
+
+
+class PreCheckResponseConfig(BaseModel):
+    """Defines how to interpret the external API's response"""
+
+    should_proceed_field: str = Field(
+        default="should_call",
+        description="JSON field name in the API response that contains the boolean go/no-go decision",
+    )
+    reason_field: Optional[str] = Field(
+        default="reason",
+        description="JSON field name in the API response that contains a human-readable reason",
+    )
+
+
+class PreCheckHttpRequest(BaseModel):
+    """HTTP request configuration for a pre-check API call.
+    Supports {placeholder} syntax resolved from lead payload and template secrets."""
+
+    url: str
+    method: str = "POST"
+    headers: Optional[Dict[str, str]] = None
+    body: Optional[Dict[str, Any]] = None
+    auth: Optional[Dict[str, Any]] = None
+    timeout: int = Field(default=5, ge=1, le=30)
+    max_retries: int = Field(default=2, ge=0, le=5)
+
+
+class PreCheckConfig(BaseModel):
+    """Configuration for a single pre-check.
+
+    Example:
+        {
+            "type": "external_api",
+            "name": "DND Check",
+            "enabled": true,
+            "http_request": {
+                "url": "https://api.merchant.com/can-call",
+                "method": "POST",
+                "body": {"phone": "{customer_mobile_number}"},
+                "auth": {"type": "bearer", "token": "{api_token}"},
+                "timeout": 5,
+                "max_retries": 2
+            },
+            "response_config": {
+                "should_proceed_field": "can_proceed",
+                "reason_field": "reason"
+            },
+            "default_on_failure": "proceed"
+        }
+    """
+
+    type: PreCheckType = PreCheckType.EXTERNAL_API
+    name: str = Field(description="Human-readable name for logging (e.g., 'DND Check')")
+    enabled: bool = True
+    http_request: PreCheckHttpRequest
+    response_config: PreCheckResponseConfig = Field(default_factory=PreCheckResponseConfig)
+    default_on_failure: PreCheckDefaultAction = Field(
+        default=PreCheckDefaultAction.PROCEED,
+        description="What to do if the pre-check API call fails/times out. 'proceed' = fail-open, 'skip' = fail-closed",
+    )
 
 
 class LeadCallTracker(BaseModel):
@@ -116,6 +190,7 @@ class CreateCallExecutionConfigRequest(BaseModel):
     shop_identifier: Optional[str] = None
     enable_international_call: bool = True
     enable_calling: Optional[bool] = True
+    pre_checks: Optional[List[PreCheckConfig]] = None
 
 
 class UpdateCallExecutionConfigRequest(BaseModel):
@@ -132,6 +207,7 @@ class UpdateCallExecutionConfigRequest(BaseModel):
     calling_provider: Optional[CallProvider] = None
     enable_international_call: Optional[bool] = None
     enable_calling: Optional[bool] = None
+    pre_checks: Optional[List[PreCheckConfig]] = None
 
 
 class CallExecutionConfig(BaseModel):
@@ -149,5 +225,6 @@ class CallExecutionConfig(BaseModel):
     shop_identifier: Optional[str] = None
     enable_international_call: bool = True
     enable_calling: bool = True
+    pre_checks: Optional[List[PreCheckConfig]] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None

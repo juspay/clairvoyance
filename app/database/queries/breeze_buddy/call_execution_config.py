@@ -2,6 +2,7 @@
 Database query functions for the application.
 """
 
+import json
 from datetime import datetime, time
 from typing import Any, List, Optional, Tuple
 
@@ -25,7 +26,8 @@ def insert_call_execution_config_query(
     shop_identifier: Optional[str],
     enable_international_call: bool,
     enable_calling: bool = True,
-    template_id: Optional[str] = None,  # NEW: Add template_id parameter
+    template_id: Optional[str] = None,
+    pre_checks: Optional[str] = None,
 ) -> Tuple[str, List[Any]]:
     """
     Generate query to insert call execution config record.
@@ -33,6 +35,7 @@ def insert_call_execution_config_query(
     Args:
         template_id: UUID of the template (preferred, for referential integrity)
         template: Name of the template (kept for backward compatibility)
+        pre_checks: JSON string of pre-check configurations
     """
     text = f"""
         INSERT INTO "{CALL_EXECUTION_CONFIG_TABLE}"
@@ -50,10 +53,11 @@ def insert_call_execution_config_query(
             "shop_identifier",
             "enable_international_call",
             "enable_calling",
+            "pre_checks",
             "created_at",
             "updated_at"
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) RETURNING *;
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) RETURNING *;
     """
 
     values = [
@@ -66,10 +70,11 @@ def insert_call_execution_config_query(
         calling_provider.value,
         merchant_id,
         template,
-        template_id,  # NEW
+        template_id,
         shop_identifier,
         enable_international_call,
         enable_calling,
+        pre_checks,
         datetime.now(),
         datetime.now(),
     ]
@@ -132,7 +137,8 @@ def update_call_execution_config_query(
     calling_provider: Optional[CallProvider] = None,
     enable_international_call: Optional[bool] = None,
     enable_calling: Optional[bool] = None,
-    template_id: Optional[str] = None,  # NEW: Add template_id parameter
+    template_id: Optional[str] = None,
+    pre_checks: Optional[str] = None,
 ) -> Tuple[str, List[Any]]:
     """
     Generate query to update call execution config record based on merchant_id, template, and shop_identifier.
@@ -141,6 +147,7 @@ def update_call_execution_config_query(
     Args:
         template_id: UUID of the template (preferred, for referential integrity)
         template: Name of the template (kept for backward compatibility)
+        pre_checks: JSON string of pre-check configurations
     """
     updates = []
     values: List[Any] = []
@@ -186,9 +193,14 @@ def update_call_execution_config_query(
         values.append(enable_calling)
         param_count += 1
 
-    if template_id is not None:  # NEW
+    if template_id is not None:
         updates.append(f'"template_id" = ${param_count}')
         values.append(template_id)
+        param_count += 1
+
+    if pre_checks is not None:
+        updates.append(f'"pre_checks" = ${param_count}')
+        values.append(pre_checks)
         param_count += 1
 
     # Always update the updated_at timestamp
