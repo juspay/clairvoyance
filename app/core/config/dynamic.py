@@ -5,11 +5,6 @@ from app.services.live_config.store import get_config
 # -----------------------
 
 
-async def ENABLE_BB_AIC_FILTER() -> bool:
-    """Returns ENABLE_BB_AIC_FILTER from Redis"""
-    return await get_config("ENABLE_BB_AIC_FILTER", False, bool)
-
-
 async def ENABLE_FAL_SMART_TURN() -> bool:
     """Returns ENABLE_FAL_SMART_TURN from Redis"""
     return await get_config("ENABLE_FAL_SMART_TURN", False, bool)

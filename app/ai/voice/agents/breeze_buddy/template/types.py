@@ -31,6 +31,21 @@ class VadConfig(BaseModel):
     )
 
 
+class NoiseFilterType(str, Enum):
+    """Types of noise filters available for audio input processing."""
+
+    AIC = "aic"  # ai-coustics noise enhancement filter
+
+
+class NoiseFilterConfig(BaseModel):
+    """Configuration for audio input noise filtering."""
+
+    enable: bool = Field(False, description="Whether to enable the noise filter")
+    type: NoiseFilterType = Field(
+        NoiseFilterType.AIC, description="Type of noise filter to use"
+    )
+
+
 class CartesiaVoiceConfiguration(BaseModel):
     """Cartesia voice configuration parameters for template-level customization.
 
@@ -186,6 +201,9 @@ class ConfigurationModel(BaseModel):
     enable_inbound: bool = False  # Whether this template can handle inbound calls
     user_idle_configuration: Optional[UserIdleHandlingConfig] = (
         None  # User idle handling config
+    )
+    noise_filter: Optional[NoiseFilterConfig] = Field(
+        None, description="Noise filter configuration for audio input processing"
     )
 
 
