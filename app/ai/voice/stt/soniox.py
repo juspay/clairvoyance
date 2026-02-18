@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Iterable, Optional
 
 from pipecat.services.soniox.stt import (
@@ -15,9 +15,15 @@ from pipecat.services.soniox.stt import (
 )
 from pipecat.transcriptions.language import Language
 
+from app.ai.voice.stt.custom_soniox import CustomSonioxInputParams, CustomSonioxSTTService
 from app.core.logger import logger
 
-__all__ = ["SonioxConfig", "build_soniox_stt"]
+__all__ = [
+    "SonioxConfig",
+    "build_soniox_stt",
+    "CustomSonioxConfig",
+    "build_custom_soniox_stt",
+]
 
 
 @dataclass
@@ -172,4 +178,83 @@ def build_soniox_stt(config: SonioxConfig):
         api_key=config.api_key,
         params=soniox_params,
         vad_force_turn_endpoint=config.vad_force_turn_endpoint,
+    )
+
+
+@dataclass
+class CustomSonioxConfig:
+    """Configuration for Custom Soniox STT with endpoint detection timeout.
+
+    Extends SonioxConfig with endpoint detection timeout and hybrid mode settings
+    optimized for telephony (8kHz) environments where VAD is less reliable.
+    """
+
+    api_key: str
+    model: str
+    endpoint_timeout: float = 0.5
+    enable_soniox_endpoint_detection: bool = True
+    language_hints: Optional[str | Iterable[str]] = None
+    context_json: Optional[str] = None
+    client_reference_id: Optional[str] = None
+    log_context: str = "Soniox (Custom)"
+    language_hints_strict: bool = False
+
+
+def build_custom_soniox_stt(config: CustomSonioxConfig) -> CustomSonioxSTTService:
+    """Create a Custom Soniox STT service with endpoint detection timeout.
+
+    This builder creates a CustomSonioxSTTService that waits a configurable
+    delay after VAD stop before sending finalize to Soniox. This prevents
+    mid-sentence cutoffs in telephony (8kHz) where brief pauses trigger
+    premature finalization.
+    """
+    # Parse language hints
+    language_hints = None
+    if config.language_hints:
+        if isinstance(config.language_hints, str):
+            parsed_hints = [
+                lang.strip()
+                for lang in config.language_hints.split(",")
+                if lang.strip()
+            ]
+        else:
+            parsed_hints = list(config.language_hints)
+
+        if parsed_hints:
+            language_hints = [Language(lang) for lang in parsed_hints if lang]
+
+    context = _parse_soniox_context(config.context_json, config.log_context)
+
+    custom_params = CustomSonioxInputParams(
+        model=config.model,
+        language_hints=language_hints,
+        context=context,
+        language_hints_strict=config.language_hints_strict,
+        client_reference_id=config.client_reference_id,
+        enable_non_final_tokens=True,
+    )
+
+    # Format language hints for logging
+    hints_display = ""
+    if config.language_hints:
+        if isinstance(config.language_hints, str):
+            hints_display = config.language_hints
+        else:
+            hints_display = ",".join(config.language_hints)
+
+    logger.info(
+        "Using %s STT service with model: %s, language_hints: %s, "
+        "endpoint_timeout: %ss, soniox_endpoint_detection: %s",
+        config.log_context,
+        config.model,
+        hints_display,
+        config.endpoint_timeout,
+        config.enable_soniox_endpoint_detection,
+    )
+
+    return CustomSonioxSTTService(
+        api_key=config.api_key,
+        params=custom_params,
+        endpoint_timeout=config.endpoint_timeout,
+        enable_soniox_endpoint_detection=config.enable_soniox_endpoint_detection,
     )

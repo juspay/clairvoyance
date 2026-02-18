@@ -12,7 +12,7 @@ from .deepgram import DeepgramConfig, build_deepgram_stt
 from .google import build_google_stt
 from .openai import build_openai_stt
 from .sarvam import SarvamConfig, build_sarvam_stt, get_sarvam_language
-from .soniox import SonioxConfig, build_soniox_stt
+from .soniox import CustomSonioxConfig, SonioxConfig, build_custom_soniox_stt, build_soniox_stt
 
 __all__ = [
     # AssemblyAI
@@ -31,4 +31,7 @@ __all__ = [
     # Soniox
     "SonioxConfig",
     "build_soniox_stt",
+    # Soniox (Custom - with endpoint detection timeout)
+    "CustomSonioxConfig",
+    "build_custom_soniox_stt",
 ]

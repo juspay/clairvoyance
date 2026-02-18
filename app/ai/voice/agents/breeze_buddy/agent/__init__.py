@@ -165,7 +165,8 @@ class Agent:
         )
 
         # Daily transport does not support audio_out_mixer, so we pass None
-        transport_params = await get_transport_params(self.vad_analyzer, None)
+        # Note: VAD is configured in the aggregator (via UserTurnStrategies), not the transport
+        transport_params = await get_transport_params(None)
         self.transport = await create_transport(runner_args, transport_params)
 
     async def _setup_telephony_transport(self) -> bool:
@@ -316,9 +317,8 @@ class Agent:
         audio_out_mixer = create_background_sound_mixer(self.template)
 
         # Get transport params using the detected transport type
-        transport_params = await get_transport_params(
-            self.vad_analyzer, audio_out_mixer
-        )
+        # Note: VAD is configured in the aggregator (via UserTurnStrategies), not the transport
+        transport_params = await get_transport_params(audio_out_mixer)
         params = transport_params[transport_type]()
 
         # Create transport with the call data
@@ -448,9 +448,11 @@ class Agent:
                     )
 
         # Create services and pipeline
+        # VAD analyzer is passed to build_pipeline where it's configured inside the
+        # LLMUserAggregator. This enables UserTurnStrategies (VAD + Transcription fallback).
         stt, llm, tts = await create_services(self.configurations)
         pipeline, self.context, context_aggregator = await build_pipeline(
-            self.transport, stt, llm, tts, self.configurations
+            self.transport, stt, llm, tts, self.vad_analyzer, self.configurations
         )
 
         # Generate conversation ID and create task

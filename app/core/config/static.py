@@ -472,6 +472,13 @@ BREEZE_BUDDY_SONIOX_VAD_FORCE_TURN_ENDPOINT = (
     os.environ.get("BREEZE_BUDDY_SONIOX_VAD_FORCE_TURN_ENDPOINT", "true").lower()
     == "true"
 )
+BREEZE_BUDDY_SONIOX_ENDPOINT_TIMEOUT = float(
+    os.environ.get("BREEZE_BUDDY_SONIOX_ENDPOINT_TIMEOUT", "0.5")
+)  # Seconds to wait after VAD stop before finalizing (0 = immediate, like pipecat default)
+BREEZE_BUDDY_SONIOX_ENABLE_ENDPOINT_DETECTION = (
+    os.environ.get("BREEZE_BUDDY_SONIOX_ENABLE_ENDPOINT_DETECTION", "true").lower()
+    == "true"
+)  # Enable Soniox's native endpoint detection alongside VAD-driven finalization
 
 ENABLE_BREEZE_BUDDY_USER_INTERRUPTION = (
     os.environ.get("ENABLE_BREEZE_BUDDY_USER_INTERRUPTION", "false").lower() == "true"

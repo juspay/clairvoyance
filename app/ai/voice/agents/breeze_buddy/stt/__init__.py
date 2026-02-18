@@ -1,8 +1,10 @@
 from pipecat.transcriptions.language import Language
 
 from app.ai.voice.stt import (
+    CustomSonioxConfig,
     SarvamConfig,
     SonioxConfig,
+    build_custom_soniox_stt,
     build_google_stt,
     build_openai_stt,
     build_sarvam_stt,
@@ -17,7 +19,9 @@ from app.core.config.dynamic import (
 )
 from app.core.config.static import (
     BREEZE_BUDDY_SONIOX_CONTEXT,
+    BREEZE_BUDDY_SONIOX_ENABLE_ENDPOINT_DETECTION,
     BREEZE_BUDDY_SONIOX_ENABLE_NON_FINAL_TOKENS,
+    BREEZE_BUDDY_SONIOX_ENDPOINT_TIMEOUT,
     BREEZE_BUDDY_SONIOX_LANGUAGE_HINTS,
     BREEZE_BUDDY_SONIOX_MAX_NON_FINAL_TOKENS_DURATION_MS,
     BREEZE_BUDDY_SONIOX_MODEL,
@@ -83,20 +87,21 @@ async def get_stt_service(language_hints: str | None = None):
             raise ValueError(
                 "SONIOX_API_KEY is required when BREEZE_BUDDY_STT_SERVICE=soniox"
             )
-        # Pass raw config values - language hints parsing is handled internally by build_soniox_stt
-        return build_soniox_stt(
-            SonioxConfig(
+        # Use custom Soniox with endpoint detection timeout for telephony.
+        # This waits a configurable delay after VAD stop before finalizing,
+        # preventing mid-sentence cutoffs from brief pauses in 8kHz audio.
+        return build_custom_soniox_stt(
+            CustomSonioxConfig(
                 api_key=SONIOX_API_KEY,
                 model=BREEZE_BUDDY_SONIOX_MODEL,
-                vad_force_turn_endpoint=BREEZE_BUDDY_SONIOX_VAD_FORCE_TURN_ENDPOINT,
+                endpoint_timeout=BREEZE_BUDDY_SONIOX_ENDPOINT_TIMEOUT,
+                enable_soniox_endpoint_detection=BREEZE_BUDDY_SONIOX_ENABLE_ENDPOINT_DETECTION,
                 language_hints=(
                     language_hints
                     if language_hints is not None
                     else BREEZE_BUDDY_SONIOX_LANGUAGE_HINTS
                 ),
                 context_json=BREEZE_BUDDY_SONIOX_CONTEXT,
-                enable_non_final_tokens=BREEZE_BUDDY_SONIOX_ENABLE_NON_FINAL_TOKENS,
-                max_non_final_tokens_duration_ms=BREEZE_BUDDY_SONIOX_MAX_NON_FINAL_TOKENS_DURATION_MS,
                 log_context="Breeze Buddy",
                 language_hints_strict=True if language_hints else False,
             )

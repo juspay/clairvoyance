@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
+from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.observers.loggers.llm_log_observer import LLMLogObserver
 from pipecat.observers.loggers.metrics_log_observer import MetricsLogObserver
 from pipecat.observers.loggers.transcription_log_observer import (
@@ -15,10 +16,18 @@ from pipecat.observers.loggers.user_bot_latency_log_observer import (
 from pipecat.observers.turn_tracking_observer import TurnTrackingObserver
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.task import PipelineParams, PipelineTask
-from pipecat.processors.aggregators.llm_response import LLMUserAggregatorParams
+from pipecat.processors.aggregators.llm_response_universal import (
+    LLMContextAggregatorPair,
+    LLMUserAggregatorParams,
+)
 from pipecat.processors.aggregators.openai_llm_context import OpenAILLMContext
 from pipecat.services.azure.llm import AzureLLMService
 from pipecat.services.openai.base_llm import BaseOpenAILLMService
+from pipecat.turns.user_start import (
+    TranscriptionUserTurnStartStrategy,
+    VADUserTurnStartStrategy,
+)
+from pipecat.turns.user_turn_strategies import UserTurnStrategies
 
 from app.ai.voice.agents.breeze_buddy.observability.tracing_setup import setup_tracing
 from app.ai.voice.agents.breeze_buddy.processors import (
@@ -32,14 +41,12 @@ from app.core.config.dynamic import (
     BB_ENABLE_RESPONSE_GATE,
     BREEZE_BUDDY_AZURE_MAX_COMPLETION_TOKENS,
     BREEZE_BUDDY_AZURE_TEMPERATURE,
-    BREEZE_BUDDY_LLM_AGGREGATION_TIMEOUT,
 )
 from app.core.config.static import (
     AZURE_BREEZE_BUDDY_OPENAI_MODEL,
     AZURE_OPENAI_API_KEY,
     AZURE_OPENAI_ENDPOINT,
     ENABLE_BREEZE_BUDDY_TRACING,
-    ENABLE_BREEZE_BUDDY_USER_INTERRUPTION,
     ENVIRONMENT,
 )
 from app.core.logger import logger
@@ -138,15 +145,23 @@ async def build_pipeline(
     stt: Any,
     llm: AzureLLMService,
     tts: Any,
+    vad_analyzer: Optional[SileroVADAnalyzer] = None,
     configurations: Optional[ConfigurationModel] = None,
 ) -> tuple[Pipeline, OpenAILLMContext, Any]:
     """Build the processing pipeline.
+
+    Uses the new universal LLMContextAggregatorPair with UserTurnStrategies:
+    - Start: VADUserTurnStartStrategy (primary, ~100ms) + TranscriptionUserTurnStartStrategy
+      (fallback for soft speech VAD misses, uses interim transcriptions)
+    - Stop: Default pipecat stop strategies (TurnAnalyzerUserTurnStopStrategy)
+    - VAD runs inside the aggregator (not the transport)
 
     Args:
         transport: The transport instance
         stt: Speech-to-text service
         llm: LLM service
         tts: Text-to-speech service
+        vad_analyzer: SileroVADAnalyzer instance for voice activity detection
         configurations: Template configuration model
 
     Returns:
@@ -156,11 +171,27 @@ async def build_pipeline(
     # Pipecat does not provide built-in summarization; implement one under
     # app/ai/voice/agents/breeze_buddy/ to manage long conversation contexts.
     context = OpenAILLMContext()
-    context_aggregator = llm.create_context_aggregator(
+    context.set_llm_adapter(llm.get_llm_adapter())
+
+    # User turn strategies:
+    # 1. VADUserTurnStartStrategy: Primary detector, fires on VAD speech detection (~100ms).
+    #    First-one-wins semantics — if VAD fires first, transcription fallback is skipped.
+    # 2. TranscriptionUserTurnStartStrategy: Fallback for soft speech that VAD misses.
+    #    With use_interim=True, triggers on any interim transcription from Soniox,
+    #    catching cases where VAD fails at 8kHz but STT still picks up speech.
+    user_turn_strategies = UserTurnStrategies(
+        start=[
+            VADUserTurnStartStrategy(),
+            TranscriptionUserTurnStartStrategy(use_interim=True),
+        ],
+        # stop: uses pipecat default (TurnAnalyzerUserTurnStopStrategy with SmartTurnAnalyzerV3)
+    )
+
+    context_aggregator = LLMContextAggregatorPair(
         context,
         user_params=LLMUserAggregatorParams(
-            aggregation_timeout=await BREEZE_BUDDY_LLM_AGGREGATION_TIMEOUT(),
-            enable_emulated_vad_interruptions=ENABLE_BREEZE_BUDDY_USER_INTERRUPTION,
+            user_turn_strategies=user_turn_strategies,
+            vad_analyzer=vad_analyzer,
         ),
     )
 
