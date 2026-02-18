@@ -25,8 +25,10 @@ def _decrypt_and_parse_value(
     return result
 
 
-def _mask_credential_value(value: Dict[str, Any]) -> Dict[str, Any]:
+def _mask_credential_value(value: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     """Mask all values in a credential dict for API responses."""
+    if not value:
+        return {}
     return {key: CREDENTIAL_MASK for key in value.keys()}
 
 
@@ -58,7 +60,7 @@ def decode_credential(
 
 
 def decode_credential_list(
-    result: List[asyncpg.Record],
+    result: Optional[List[asyncpg.Record]],
     mask: bool = True,
 ) -> List[Credential]:
     """Decode multiple credential rows."""
@@ -68,7 +70,7 @@ def decode_credential_list(
 
 
 def decode_single_credential(
-    result: List[asyncpg.Record],
+    result: Optional[List[asyncpg.Record]],
     mask: bool = True,
 ) -> Optional[Credential]:
     """Decode a single credential from query result."""
@@ -78,7 +80,7 @@ def decode_single_credential(
 
 
 def decode_credentials_as_dict(
-    result: List[asyncpg.Record],
+    result: Optional[List[asyncpg.Record]],
 ) -> Dict[str, Any]:
     """
     Decode credentials into a flat dict for template_vars resolution.

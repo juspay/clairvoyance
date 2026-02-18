@@ -134,7 +134,9 @@ def _build_http_request_config(
 
     resolved_url = _resolve_placeholders(http_cfg.url, context)
     resolved_headers = _resolve_placeholders(http_cfg.headers or {}, context)
-    resolved_body = _resolve_placeholders(http_cfg.body, context) if http_cfg.body else None
+    resolved_body = (
+        _resolve_placeholders(http_cfg.body, context) if http_cfg.body else None
+    )
 
     # Build auth config if provided
     auth_config = None
@@ -187,12 +189,20 @@ async def _execute_external_api_pre_check(
         if http_config.auth:
             if http_config.auth.type == HttpAuthType.BEARER and http_config.auth.token:
                 token = http_config.auth.token
-                token_str = token.get_secret_value() if hasattr(token, "get_secret_value") else str(token)
+                token_str = (
+                    token.get_secret_value()
+                    if hasattr(token, "get_secret_value")
+                    else str(token)
+                )
                 headers["Authorization"] = f"Bearer {token_str}"
             elif http_config.auth.type == HttpAuthType.API_KEY:
                 if http_config.auth.api_key_name and http_config.auth.api_key_value:
                     key_val = http_config.auth.api_key_value
-                    key_str = key_val.get_secret_value() if hasattr(key_val, "get_secret_value") else str(key_val)
+                    key_str = (
+                        key_val.get_secret_value()
+                        if hasattr(key_val, "get_secret_value")
+                        else str(key_val)
+                    )
                     headers[http_config.auth.api_key_name] = key_str
 
         # Prepare body
@@ -231,7 +241,9 @@ async def _execute_external_api_pre_check(
                             logger.warning(
                                 f"Pre-check '{name}': response is not valid JSON"
                             )
-                            return _apply_default(pre_check, "Response is not valid JSON")
+                            return _apply_default(
+                                pre_check, "Response is not valid JSON"
+                            )
 
                         # Extract the should_proceed field
                         should_proceed_field = response_config.should_proceed_field
@@ -249,7 +261,10 @@ async def _execute_external_api_pre_check(
 
                         # Extract optional reason
                         reason = "No reason provided"
-                        if response_config.reason_field and response_config.reason_field in response_data:
+                        if (
+                            response_config.reason_field
+                            and response_config.reason_field in response_data
+                        ):
                             reason = str(response_data[response_config.reason_field])
 
                         return SinglePreCheckResult(
@@ -288,9 +303,7 @@ async def _execute_external_api_pre_check(
         return _apply_default(pre_check, f"All attempts failed: {last_error}")
 
     except Exception as e:
-        logger.error(
-            f"Pre-check '{name}': execution error: {e}", exc_info=True
-        )
+        logger.error(f"Pre-check '{name}': execution error: {e}", exc_info=True)
         return _apply_default(pre_check, f"Execution error: {e}")
 
 
@@ -366,7 +379,9 @@ async def run_pre_checks(
         if pre_check.type == PreCheckType.EXTERNAL_API:
             result = await _execute_external_api_pre_check(pre_check, context, session)
         else:
-            logger.warning(f"Pre-check '{pre_check.name}': unknown type '{pre_check.type}', skipping")
+            logger.warning(
+                f"Pre-check '{pre_check.name}': unknown type '{pre_check.type}', skipping"
+            )
             result = SinglePreCheckResult(
                 name=pre_check.name,
                 passed=True,

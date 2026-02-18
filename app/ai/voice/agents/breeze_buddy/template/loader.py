@@ -128,7 +128,9 @@ class FlowConfigLoader:
                     f"Loaded {len(credential_vars)} credential vars for merchant {merchant_id}"
                 )
         except Exception as e:
-            logger.warning(f"Failed to load credentials for merchant {merchant_id}: {e}")
+            logger.warning(
+                f"Failed to load credentials for merchant {merchant_id}: {e}"
+            )
 
         # 2. Load template.secrets (overrides credentials for same keys)
         if template_obj.secrets:

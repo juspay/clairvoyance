@@ -22,7 +22,7 @@ from app.database.queries.breeze_buddy.credentials import (
     update_credential_query,
 )
 from app.schemas import Credential, CredentialType
-from app.services.encryption import decrypt_credential, encrypt_credential
+from app.services.encryption import encrypt_credential
 
 
 def _merge_credential_value(
@@ -51,9 +51,7 @@ async def create_credential(
     description: Optional[str] = None,
 ) -> Optional[Credential]:
     """Create a new credential with optional KMS encryption."""
-    logger.info(
-        f"Creating credential '{name}' for merchant: {merchant_id or 'GLOBAL'}"
-    )
+    logger.info(f"Creating credential '{name}' for merchant: {merchant_id or 'GLOBAL'}")
 
     try:
         stored_value, is_encrypted = encrypt_credential(value)
@@ -71,7 +69,9 @@ async def create_credential(
         result = await run_parameterized_query(query_text, values)
         if result and len(result) > 0:
             credential = decode_single_credential(result, mask=True)
-            logger.info(f"Credential '{name}' created successfully (encrypted={is_encrypted})")
+            logger.info(
+                f"Credential '{name}' created successfully (encrypted={is_encrypted})"
+            )
             return credential
 
         logger.error(f"Failed to create credential '{name}'")

@@ -16,8 +16,8 @@ from app.database.accessor import (
     update_credential,
 )
 from app.schemas import (
-    Credential,
     CreateCredentialRequest,
+    Credential,
     UpdateCredentialRequest,
     UserInfo,
 )
@@ -153,9 +153,7 @@ async def update_credential_handler(
         )
 
 
-async def delete_credential_handler(
-    credential_id: str, current_user: UserInfo
-) -> None:
+async def delete_credential_handler(credential_id: str, current_user: UserInfo) -> None:
     """Delete a credential."""
     logger.info(f"User {current_user.username} deleting credential: {credential_id}")
 

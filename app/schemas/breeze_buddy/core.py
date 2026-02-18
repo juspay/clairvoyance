@@ -115,7 +115,9 @@ class PreCheckConfig(BaseModel):
     name: str = Field(description="Human-readable name for logging (e.g., 'DND Check')")
     enabled: bool = True
     http_request: PreCheckHttpRequest
-    response_config: PreCheckResponseConfig = Field(default_factory=PreCheckResponseConfig)
+    response_config: PreCheckResponseConfig = Field(
+        default_factory=PreCheckResponseConfig
+    )
     default_on_failure: PreCheckDefaultAction = Field(
         default=PreCheckDefaultAction.PROCEED,
         description="What to do if the pre-check API call fails/times out. 'proceed' = fail-open, 'skip' = fail-closed",

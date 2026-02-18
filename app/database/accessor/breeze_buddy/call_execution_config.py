@@ -38,7 +38,9 @@ def _serialize_pre_checks(pre_checks: Optional[List[Any]]) -> Optional[str]:
     """Serialize pre_checks list to JSON string for JSONB storage."""
     if pre_checks is None:
         return None
-    return json.dumps([pc.model_dump() if hasattr(pc, "model_dump") else pc for pc in pre_checks])
+    return json.dumps(
+        [pc.model_dump() if hasattr(pc, "model_dump") else pc for pc in pre_checks]
+    )
 
 
 async def create_call_execution_config(

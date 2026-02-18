@@ -53,7 +53,9 @@ class Credential(BaseModel):
     merchant_id: Optional[str] = None
     name: str
     credential_type: CredentialType
-    value: Dict[str, Any] = Field(description="Masked credential value in API responses")
+    value: Optional[Dict[str, Any]] = Field(
+        default=None, description="Masked credential value in API responses"
+    )
     is_encrypted: bool = False
     description: Optional[str] = None
     is_active: bool = True

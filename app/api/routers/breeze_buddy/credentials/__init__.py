@@ -18,8 +18,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.api.security.breeze_buddy.rbac_token import get_current_user_with_rbac
 from app.schemas import (
-    Credential,
     CreateCredentialRequest,
+    Credential,
     UpdateCredentialRequest,
     UserInfo,
 )
@@ -134,9 +134,7 @@ async def update_credential_endpoint(
     return await update_credential_handler(credential_id, req, current_user)
 
 
-@router.delete(
-    "/credentials/{credential_id}", status_code=status.HTTP_204_NO_CONTENT
-)
+@router.delete("/credentials/{credential_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_credential_endpoint(
     credential_id: str,
     current_user: UserInfo = Depends(get_current_user_with_rbac),

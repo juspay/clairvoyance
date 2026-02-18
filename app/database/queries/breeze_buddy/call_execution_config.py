@@ -2,7 +2,6 @@
 Database query functions for the application.
 """
 
-import json
 from datetime import datetime, time
 from typing import Any, List, Optional, Tuple
 

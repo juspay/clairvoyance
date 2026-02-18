@@ -29,7 +29,7 @@ def _get_key_bytes() -> Optional[bytes]:
         if len(key) != 32:
             logger.error(
                 f"CREDENTIAL_ENCRYPTION_KEY must be 32 bytes (got {len(key)}). "
-                "Generate with: python -c \"import os,base64; print(base64.urlsafe_b64encode(os.urandom(32)).decode())\""
+                'Generate with: python -c "import os,base64; print(base64.urlsafe_b64encode(os.urandom(32)).decode())"'
             )
             return None
         return key

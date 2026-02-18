@@ -46,12 +46,6 @@ from app.schemas.breeze_buddy.auth import (
     UserUpdate,
 )
 from app.schemas.breeze_buddy.connection import BreezeBuddyDailyConnectRequest
-from app.schemas.breeze_buddy.credentials import (
-    CreateCredentialRequest,
-    Credential,
-    CredentialType,
-    UpdateCredentialRequest,
-)
 from app.schemas.breeze_buddy.core import (
     CallDirection,
     CallExecutionConfig,
@@ -69,6 +63,12 @@ from app.schemas.breeze_buddy.core import (
     PreCheckResponseConfig,
     PreCheckType,
     UpdateCallExecutionConfigRequest,
+)
+from app.schemas.breeze_buddy.credentials import (
+    CreateCredentialRequest,
+    Credential,
+    CredentialType,
+    UpdateCredentialRequest,
 )
 
 __all__ = [
