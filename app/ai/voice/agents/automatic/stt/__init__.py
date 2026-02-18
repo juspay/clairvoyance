@@ -48,6 +48,7 @@ from app.core.config.static import (
     SONIOX_CONTEXT,
     SONIOX_ENABLE_NON_FINAL_TOKENS,
     SONIOX_LANGUAGE_HINTS,
+    SONIOX_MAX_ENDPOINT_DELAY_MS,
     SONIOX_MAX_NON_FINAL_TOKENS_DURATION_MS,
     SONIOX_MODEL,
     SONIOX_VAD_FORCE_TURN_ENDPOINT,
@@ -167,6 +168,7 @@ async def get_stt_service(voice_name: Optional[str] = None):
                 context_json=SONIOX_CONTEXT,
                 enable_non_final_tokens=SONIOX_ENABLE_NON_FINAL_TOKENS,
                 max_non_final_tokens_duration_ms=SONIOX_MAX_NON_FINAL_TOKENS_DURATION_MS,
+                max_endpoint_delay_ms=SONIOX_MAX_ENDPOINT_DELAY_MS,
                 log_context="Automatic",
             )
         )

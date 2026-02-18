@@ -11,10 +11,10 @@ from pipecat.services.soniox.stt import (
     SonioxContextObject,
     SonioxContextTranslationTerm,
     SonioxInputParams,
-    SonioxSTTService,
 )
 from pipecat.transcriptions.language import Language
 
+from app.ai.voice.stt.soniox.service import SonioxSTTServiceWithEndpointDelay
 from app.core.logger import logger
 
 __all__ = ["SonioxConfig", "build_soniox_stt"]
@@ -32,11 +32,12 @@ class SonioxConfig:
 
     api_key: str
     model: str
-    vad_force_turn_endpoint: bool
+    vad_force_turn_endpoint: bool = False
     language_hints: Optional[str | Iterable[str]] = None
     context_json: Optional[str] = None
     enable_non_final_tokens: bool = False
     max_non_final_tokens_duration_ms: Optional[int] = None
+    max_endpoint_delay_ms: Optional[int] = None
     client_reference_id: Optional[str] = None
     log_context: str = "Soniox"
     language_hints_strict: bool = False
@@ -106,7 +107,10 @@ def _parse_soniox_context(
 
 
 def build_soniox_stt(config: SonioxConfig):
-    """Create a Soniox STT service.
+    """Create a Soniox STT service with native endpoint detection support.
+
+    Uses ``SonioxSTTServiceWithEndpointDelay`` to support ``max_endpoint_delay_ms``
+    for controlling Soniox's semantic endpoint detection latency.
 
     Automatically handles language hints parsing:
     - If provided as a comma-separated string, it will be split and parsed
@@ -160,16 +164,19 @@ def build_soniox_stt(config: SonioxConfig):
             hints_display = ",".join(config.language_hints)
 
     logger.info(
-        "Using %s Soniox STT service with model: %s, language_hints: %s, VAD force endpoint: %s, non_final_tokens: %s",
+        "Using %s Soniox STT service with model: %s, language_hints: %s, "
+        "VAD force endpoint: %s, non_final_tokens: %s, max_endpoint_delay_ms: %s",
         config.log_context,
         config.model,
         hints_display,
         config.vad_force_turn_endpoint,
         config.enable_non_final_tokens,
+        config.max_endpoint_delay_ms,
     )
 
-    return SonioxSTTService(
+    return SonioxSTTServiceWithEndpointDelay(
         api_key=config.api_key,
         params=soniox_params,
         vad_force_turn_endpoint=config.vad_force_turn_endpoint,
+        max_endpoint_delay_ms=config.max_endpoint_delay_ms,
     )

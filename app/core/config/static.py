@@ -239,7 +239,7 @@ SONIOX_API_KEY = os.getenv(
     "SONIOX_API_KEY"
 )  # Required API key for Soniox authentication
 SONIOX_MODEL = os.environ.get(
-    "SONIOX_MODEL", "stt-rt-preview"
+    "SONIOX_MODEL", "stt-rt-v4"
 )  # Soniox model optimized for real-time conversation
 SONIOX_LANGUAGE_HINTS = os.environ.get(
     "SONIOX_LANGUAGE_HINTS", "en"
@@ -258,6 +258,9 @@ SONIOX_VAD_FORCE_TURN_ENDPOINT = (
     os.environ.get("SONIOX_VAD_FORCE_TURN_ENDPOINT", "false").lower() == "true"
 )  # CRITICAL: false = Use Soniox intelligent endpoint detection
 # true = Use external VAD (Silero)
+SONIOX_MAX_ENDPOINT_DELAY_MS = int(
+    os.environ.get("SONIOX_MAX_ENDPOINT_DELAY_MS", "500")
+)  # Max delay (ms) for Soniox native endpoint detection (500-3000, default 500)
 
 # Smart Turn Configuration - These will be loaded lazily to avoid circular imports
 # Required API key for FAL_SMART_TURN
@@ -453,7 +456,7 @@ LANGFUSE_SECRET_KEY = os.environ.get("LANGFUSE_SECRET_KEY", "")
 LANGFUSE_PUBLIC_KEY = os.environ.get("LANGFUSE_PUBLIC_KEY", "")
 LANGFUSE_BASEURL = os.environ.get("LANGFUSE_BASEURL", "https://us.cloud.langfuse.com")
 
-BREEZE_BUDDY_SONIOX_MODEL = os.environ.get("BREEZE_BUDDY_SONIOX_MODEL", "stt-rt-v3")
+BREEZE_BUDDY_SONIOX_MODEL = os.environ.get("BREEZE_BUDDY_SONIOX_MODEL", "stt-rt-v4")
 BREEZE_BUDDY_SONIOX_LANGUAGE_HINTS = os.environ.get(
     "BREEZE_BUDDY_SONIOX_LANGUAGE_HINTS", "en,hi"
 )
@@ -469,9 +472,12 @@ BREEZE_BUDDY_SONIOX_MAX_NON_FINAL_TOKENS_DURATION_MS = int(
     os.environ.get("BREEZE_BUDDY_SONIOX_MAX_NON_FINAL_TOKENS_DURATION_MS", "0")
 )
 BREEZE_BUDDY_SONIOX_VAD_FORCE_TURN_ENDPOINT = (
-    os.environ.get("BREEZE_BUDDY_SONIOX_VAD_FORCE_TURN_ENDPOINT", "true").lower()
+    os.environ.get("BREEZE_BUDDY_SONIOX_VAD_FORCE_TURN_ENDPOINT", "false").lower()
     == "true"
 )
+BREEZE_BUDDY_SONIOX_MAX_ENDPOINT_DELAY_MS = int(
+    os.environ.get("BREEZE_BUDDY_SONIOX_MAX_ENDPOINT_DELAY_MS", "500")
+)  # Max delay (ms) for Soniox native endpoint detection (500-3000, default 500)
 
 ENABLE_BREEZE_BUDDY_USER_INTERRUPTION = (
     os.environ.get("ENABLE_BREEZE_BUDDY_USER_INTERRUPTION", "false").lower() == "true"

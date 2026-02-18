@@ -1,4 +1,9 @@
-"""Transport configuration for voice agents."""
+"""Transport configuration for voice agents.
+
+Note: VAD (Voice Activity Detection) is configured in the LLMUserAggregator
+(via UserTurnStrategies), NOT in the transport. The transport only handles
+audio I/O, sample rates, and optional audio filters/mixers.
+"""
 
 from pathlib import Path
 from typing import Optional
@@ -6,7 +11,6 @@ from typing import Optional
 from pipecat.audio.filters.aic_filter import AICFilter
 from pipecat.audio.filters.base_audio_filter import BaseAudioFilter
 from pipecat.audio.mixers.soundfile_mixer import SoundfileMixer
-from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.transports.daily.transport import DailyParams
 from pipecat.transports.websocket.fastapi import FastAPIWebsocketParams
 
@@ -65,14 +69,15 @@ def _create_audio_input_filter(
 
 
 def get_transport_params(
-    vad_analyzer: Optional[SileroVADAnalyzer],
     audio_out_mixer: Optional[SoundfileMixer] = None,
     configurations: Optional[ConfigurationModel] = None,
 ) -> dict:
     """Get transport parameters dictionary for all transport types.
 
+    VAD is not configured here — it lives in the LLMUserAggregator
+    (via vad_analyzer + UserTurnStrategies) where it feeds turn detection.
+
     Args:
-        vad_analyzer: The VAD analyzer instance to use
         audio_out_mixer: Optional audio mixer for background sounds (only used by telephony transports)
         configurations: Optional configuration model for settings (e.g., noise filter)
 
@@ -85,14 +90,12 @@ def get_transport_params(
         "daily": lambda: DailyParams(
             audio_in_enabled=True,
             audio_out_enabled=True,
-            vad_analyzer=vad_analyzer,
             audio_in_filter=audio_in_filter,
             # Note: DailyParams does not support audio_out_mixer
         ),
         "twilio": lambda: FastAPIWebsocketParams(
             audio_in_enabled=True,
             audio_out_enabled=True,
-            vad_analyzer=vad_analyzer,
             audio_in_sample_rate=TELEPHONY_SAMPLE_RATE,
             audio_out_sample_rate=TELEPHONY_SAMPLE_RATE,
             audio_out_mixer=audio_out_mixer,
@@ -101,7 +104,6 @@ def get_transport_params(
         "exotel": lambda: FastAPIWebsocketParams(
             audio_in_enabled=True,
             audio_out_enabled=True,
-            vad_analyzer=vad_analyzer,
             audio_in_sample_rate=TELEPHONY_SAMPLE_RATE,
             audio_out_sample_rate=TELEPHONY_SAMPLE_RATE,
             audio_out_mixer=audio_out_mixer,
@@ -110,7 +112,6 @@ def get_transport_params(
         "telnyx": lambda: FastAPIWebsocketParams(
             audio_in_enabled=True,
             audio_out_enabled=True,
-            vad_analyzer=vad_analyzer,
             audio_in_sample_rate=TELEPHONY_SAMPLE_RATE,
             audio_out_sample_rate=TELEPHONY_SAMPLE_RATE,
             audio_out_mixer=audio_out_mixer,
@@ -119,7 +120,6 @@ def get_transport_params(
         "plivo": lambda: FastAPIWebsocketParams(
             audio_in_enabled=True,
             audio_out_enabled=True,
-            vad_analyzer=vad_analyzer,
             audio_in_sample_rate=TELEPHONY_SAMPLE_RATE,
             audio_out_sample_rate=TELEPHONY_SAMPLE_RATE,
             audio_out_mixer=audio_out_mixer,
