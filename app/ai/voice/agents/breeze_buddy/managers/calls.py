@@ -22,7 +22,7 @@ from app.ai.voice.agents.breeze_buddy.services.telephony.utils import get_voice_
 from app.ai.voice.agents.breeze_buddy.template.types import TemplateModel
 from app.ai.voice.agents.breeze_buddy.utils.common import send_webhook_with_retry
 from app.core.config.static import UPLOAD_BREEZE_BUDDY_CALL_RECORDINGS_TO_CLOUD
-from app.core.logger import logger
+from app.core.logger import get_bound_logger, logger, set_log_context
 from app.core.transport.http_client import create_aiohttp_session
 from app.database.accessor import (
     acquire_lock_on_lead_by_id,
@@ -291,7 +291,19 @@ async def _cleanup_stuck_leads():
                 )
                 continue
 
-            logger.info(f"Successfully locked stuck lead {lead.id} for cleanup.")
+            set_log_context(
+                lead_id=locked_lead.id,
+                merchant_id=locked_lead.merchant_id,
+                template=locked_lead.template,
+            )
+            lead_logger = get_bound_logger(
+                lead_id=locked_lead.id,
+                merchant_id=locked_lead.merchant_id,
+                template=locked_lead.template,
+            )
+            lead_logger.info(
+                f"Successfully locked stuck lead {locked_lead.id} for cleanup."
+            )
 
             # Close the stuck record so it won't be picked again
             await update_lead_call_completion_details(
@@ -345,8 +357,29 @@ async def process_backlog_leads():
                     )
                     continue
 
+                # Set call context so ALL logs within this iteration (including DB calls,
+                # webhooks etc.) automatically carry lead/merchant/phone context.
+                set_log_context(
+                    lead_id=locked_lead.id,
+                    merchant_id=locked_lead.merchant_id,
+                    template=locked_lead.template,
+                    phone_number=(locked_lead.payload or {}).get(
+                        "customer_mobile_number"
+                    ),
+                )
+                lead_logger = get_bound_logger(
+                    lead_id=locked_lead.id,
+                    merchant_id=locked_lead.merchant_id,
+                    template=locked_lead.template,
+                    phone_number=(locked_lead.payload or {}).get(
+                        "customer_mobile_number", "unknown"
+                    ),
+                )
+
                 # Now we have exclusive access to this lead
-                logger.info(f"Successfully locked lead {lead.id} for processing.")
+                lead_logger.info(
+                    f"Successfully locked lead {locked_lead.id} for processing."
+                )
 
                 config = await _get_lead_config(locked_lead)
                 if not config:
@@ -354,14 +387,14 @@ async def process_backlog_leads():
                     continue
 
                 if not config.enable_calling:
-                    logger.info(
+                    lead_logger.info(
                         f"Skipping lead {locked_lead.id} - calling is disabled for merchant {locked_lead.merchant_id}, template {locked_lead.template}"
                     )
                     await release_lock_on_lead_by_id(locked_lead.id)
                     continue
 
                 if not _is_within_calling_hours(config):
-                    logger.info(
+                    lead_logger.info(
                         f"Skipping lead {locked_lead.id} - outside calling hours. "
                         f"Current time: {datetime.now(timezone(timedelta(hours=5, minutes=30))).time()}, "
                         f"Allowed window: {config.call_start_time} - {config.call_end_time}"
@@ -375,7 +408,7 @@ async def process_backlog_leads():
                     name=config.template,
                 )
 
-                logger.info(
+                lead_logger.info(
                     f"Lead {locked_lead.id} , template found: {template is not None}"
                 )
 
@@ -394,7 +427,7 @@ async def process_backlog_leads():
 
                 acquired = await _acquire_number(number_to_use)
                 if not acquired:
-                    logger.warning(
+                    lead_logger.warning(
                         f"Failed to acquire number {number_to_use.id} for lead {locked_lead.id} - "
                         "number may be at maximum capacity"
                     )
@@ -411,7 +444,7 @@ async def process_backlog_leads():
                     "customer_mobile_number"
                 )
                 if not customer_mobile or not isinstance(customer_mobile, str):
-                    logger.error(
+                    lead_logger.error(
                         f"Invalid customer_mobile_number for lead {locked_lead.id}"
                     )
                     await _release_number(number_to_use.id, number_to_use.provider)
@@ -431,13 +464,13 @@ async def process_backlog_leads():
                         number_to_use.id,
                     )
                 else:
-                    logger.error(
+                    lead_logger.error(
                         f"Failed to initiate call for lead {locked_lead.id}. Call response: {call}"
                     )
                     await _release_number(number_to_use.id, number_to_use.provider)
 
                     if template and template.outbound_number_id:
-                        logger.info(
+                        lead_logger.info(
                             f"Not retrying call for lead {locked_lead.id} as outbound_number_id is set in template."
                         )
                         await update_lead_call_completion_details(
@@ -463,7 +496,7 @@ async def process_backlog_leads():
                                 "failureReason": "Failed to initiate call, no retry due to fixed outbound number.",
                                 "orderId": locked_lead.request_id,
                             }
-                            logger.info(
+                            lead_logger.info(
                                 f"Sending failure webhook for lead {locked_lead.id} to {reporting_webhook_url}"
                             )
                             try:
@@ -471,7 +504,7 @@ async def process_backlog_leads():
                                     session, reporting_webhook_url, webhook_data
                                 )
                             except Exception as e:
-                                logger.error(
+                                lead_logger.error(
                                     f"Error sending failure webhook for lead {locked_lead.id}: {e}"
                                 )
 
@@ -485,7 +518,7 @@ async def process_backlog_leads():
                         retry_calling_provider = CallProvider.EXOTEL
                     elif number_to_use.provider == CallProvider.EXOTEL:
                         if not config.enable_international_call:
-                            logger.warning(
+                            lead_logger.warning(
                                 f"International calls disabled for merchant {locked_lead.merchant_id}. Skipping retry with Twilio."
                             )
                             await update_lead_call_completion_details(
@@ -511,7 +544,7 @@ async def process_backlog_leads():
                                     "failureReason": "Failed to initiate call due to NCPR, international calling disabled.",
                                     "orderId": locked_lead.request_id,
                                 }
-                                logger.info(
+                                lead_logger.info(
                                     f"Sending failure webhook for lead {locked_lead.id} to {reporting_webhook_url}"
                                 )
                                 try:
@@ -519,7 +552,7 @@ async def process_backlog_leads():
                                         session, reporting_webhook_url, webhook_data
                                     )
                                 except Exception as e:
-                                    logger.error(
+                                    lead_logger.error(
                                         f"Error sending failure webhook for lead {locked_lead.id}: {e}"
                                     )
 
@@ -566,7 +599,7 @@ async def process_backlog_leads():
 
                     retry_acquired = await _acquire_number(retry_number_to_use)
                     if not retry_acquired:
-                        logger.warning(
+                        lead_logger.warning(
                             f"Failed to acquire retry number {retry_number_to_use.id} for lead {locked_lead.id} - "
                             "number may be at maximum capacity"
                         )
@@ -584,7 +617,7 @@ async def process_backlog_leads():
                     if not retry_customer_mobile or not isinstance(
                         retry_customer_mobile, str
                     ):
-                        logger.error(
+                        lead_logger.error(
                             f"Invalid customer_mobile_number for retry lead {locked_lead.id}"
                         )
                         await _release_number(
@@ -606,7 +639,7 @@ async def process_backlog_leads():
                             retry_number_to_use.id,
                         )
                     else:
-                        logger.error(
+                        lead_logger.error(
                             f"Failed to initiate retry call for lead {locked_lead.id}. Call response: {retry_call}"
                         )
                         await update_lead_call_completion_details(
@@ -635,7 +668,7 @@ async def process_backlog_leads():
                                 "failureReason": "Failed to initiate call with both providers.",
                                 "orderId": locked_lead.request_id,
                             }
-                            logger.info(
+                            lead_logger.info(
                                 f"Sending failure webhook for lead {locked_lead.id} to {reporting_webhook_url}"
                             )
                             try:
@@ -643,14 +676,16 @@ async def process_backlog_leads():
                                     session, reporting_webhook_url, webhook_data
                                 )
                             except Exception as e:
-                                logger.error(
+                                lead_logger.error(
                                     f"Error sending failure webhook for lead {locked_lead.id}: {e}"
                                 )
 
                 await release_lock_on_lead_by_id(locked_lead.id)
 
             except Exception as e:
-                logger.error(f"Error processing lead {lead.id}: {e}")
+                logger.error(
+                    f"Error processing lead {lead.id}: {e}"
+                )  # no lead_logger here — may not be bound yet
 
 
 async def handle_call_completion(
@@ -668,16 +703,29 @@ async def handle_call_completion(
         logger.error(f"Could not find lead for call_id: {call_id}")
         return
 
+    set_log_context(
+        lead_id=lead.id,
+        merchant_id=lead.merchant_id,
+        template=lead.template,
+        call_sid=call_id,
+    )
+    call_logger = get_bound_logger(
+        lead_id=lead.id,
+        merchant_id=lead.merchant_id,
+        template=lead.template,
+        call_sid=call_id,
+    )
+
     if lead.outbound_number_id:
         outbound_number = await get_outbound_number_by_id(lead.outbound_number_id)
         if outbound_number:
             await _release_number(outbound_number.id, outbound_number.provider)
         else:
-            logger.error(
+            call_logger.error(
                 f"Could not find outbound number with id: {lead.outbound_number_id} to release."
             )
     else:
-        logger.info(f"No outbound number id for lead: {lead.id}")
+        call_logger.info(f"No outbound number id for lead: {lead.id}")
 
     config = await _get_lead_config(lead)
     if not config:
@@ -711,14 +759,27 @@ async def handle_unanswered_calls(call_id: str):
         logger.error(f"Could not find lead for call_id: {call_id}")
         return
 
+    set_log_context(
+        lead_id=lead.id,
+        merchant_id=lead.merchant_id,
+        template=lead.template,
+        call_sid=call_id,
+    )
+    call_logger = get_bound_logger(
+        lead_id=lead.id,
+        merchant_id=lead.merchant_id,
+        template=lead.template,
+        call_sid=call_id,
+    )
+
     # Clean up greeting audio from Redis if it exists for unanswered calls
     try:
         redis = await get_redis_service()
         greeting_key = f"greeting:{lead.id}"
         await redis.delete(greeting_key)
-        logger.info(f"Deleted greeting audio from Redis for lead {lead.id}")
+        call_logger.info(f"Deleted greeting audio from Redis for lead {lead.id}")
     except Exception as e:
-        logger.warning(
+        call_logger.warning(
             f"Failed to delete greeting audio from Redis for lead {lead.id}: {e}"
         )
 
@@ -727,11 +788,11 @@ async def handle_unanswered_calls(call_id: str):
         if outbound_number:
             await _release_number(outbound_number.id, outbound_number.provider)
         else:
-            logger.error(
+            call_logger.error(
                 f"Could not find outbound number with id: {lead.outbound_number_id} to release."
             )
     else:
-        logger.info(f"No outbound number id for lead: {lead.id}")
+        call_logger.info(f"No outbound number id for lead: {lead.id}")
 
     config = await _get_lead_config(lead)
     if not config:
@@ -776,10 +837,23 @@ async def update_call_recording(
         logger.error(f"Could not find lead for call_id: {call_id}")
         return
 
+    set_log_context(
+        lead_id=lead.id,
+        merchant_id=lead.merchant_id,
+        template=lead.template,
+        call_sid=call_id,
+    )
+    call_logger = get_bound_logger(
+        lead_id=lead.id,
+        merchant_id=lead.merchant_id,
+        template=lead.template,
+        call_sid=call_id,
+    )
+
     try:
         # If cloud upload is disabled, just store the provider URL in DB
         if not UPLOAD_BREEZE_BUDDY_CALL_RECORDINGS_TO_CLOUD:
-            logger.info(
+            call_logger.info(
                 f"Cloud upload disabled. Storing provider recording URL in DB for call_id: {call_id}"
             )
             await update_lead_call_recording_url(call_id, provider_recording_url)
@@ -799,11 +873,11 @@ async def update_call_recording(
                 provider_recording_url, call_id
             )
         else:
-            logger.error(f"Unsupported provider: {provider}")
+            call_logger.error(f"Unsupported provider: {provider}")
             return
 
         if not audio_file:
-            logger.error(f"Failed to download recording for call_id: {call_id}")
+            call_logger.error(f"Failed to download recording for call_id: {call_id}")
             await update_lead_call_recording_url(call_id, provider_recording_url)
             return
 
@@ -828,13 +902,15 @@ async def update_call_recording(
         )
 
         if gcs_url:
-            logger.info(f"Successfully uploaded recording to GCS: {gcs_url}")
+            call_logger.info(f"Successfully uploaded recording to GCS: {gcs_url}")
             await update_lead_call_recording_url(call_id, gcs_url)
         else:
-            logger.error(f"Failed to upload recording to GCS for call_id: {call_id}")
+            call_logger.error(
+                f"Failed to upload recording to GCS for call_id: {call_id}"
+            )
             await update_lead_call_recording_url(call_id, provider_recording_url)
 
     except Exception as e:
-        logger.error(
+        call_logger.error(
             f"Error processing call recording for call_id {call_id}: {e}", exc_info=True
         )

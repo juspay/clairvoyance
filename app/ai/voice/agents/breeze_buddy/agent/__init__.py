@@ -67,7 +67,7 @@ from app.ai.voice.agents.breeze_buddy.utils.common import (
     track_error,
 )
 from app.core.config.static import ENABLE_BREEZE_BUDDY_TRACING
-from app.core.logger import logger
+from app.core.logger import get_bound_logger, logger, set_log_context
 from app.database.accessor import update_lead_call_initiated_time
 from app.database.accessor.breeze_buddy.lead_call_tracker import (
     update_lead_call_initiated_time_by_id,
@@ -107,6 +107,7 @@ class Agent:
         self.vad_analyzer: Optional[SileroVADAnalyzer] = None
         self.transport: Any = None
         self.lead: Optional[LeadCallTracker] = None
+        self.logger = logger  # unbound at construction; bound after lead is resolved
         self.root_span: Any = None
         self.flow_manager: Optional[FlowManager] = None
         self.conversation_id: Optional[str] = None
@@ -147,7 +148,7 @@ class Agent:
         if not self.lead:
             raise ValueError(f"Lead not found for lead_id: {lead_id}")
 
-        logger.info(f"Starting Daily bot for lead_id: {lead_id}")
+        self.logger.info(f"Starting Daily bot for lead_id: {lead_id}")
 
         self.flow_builder = FlowConfigBuilder()
 
@@ -169,11 +170,31 @@ class Agent:
         transport_params = get_transport_params(None, self.configurations)
         self.transport = await create_transport(runner_args, transport_params)
 
+        # Set async-task-scoped call context — propagates to ALL logs in this task,
+        # including DB accessors, template handlers, webhooks, and library logs.
+        set_log_context(
+            lead_id=self.lead.id,
+            merchant_id=self.lead.merchant_id,
+            template=self.lead.template,
+            phone_number=(self.lead.payload or {}).get("customer_mobile_number"),
+            call_sid=self.lead.call_id,
+        )
+        self.logger = get_bound_logger(
+            lead_id=self.lead.id,
+            merchant_id=self.lead.merchant_id,
+            template=self.lead.template,
+            phone_number=(self.lead.payload or {}).get("customer_mobile_number"),
+            call_sid=self.lead.call_id,
+        )
+        self.logger.info(
+            f"Call context set for Daily bot: lead={self.lead.id}, merchant={self.lead.merchant_id}, template={self.lead.template}"
+        )
+
     async def _setup_telephony_transport(self) -> bool:
         """Initialize transport for telephony mode. Returns False if setup fails."""
-        logger.info("Starting WebSocket bot")
+        self.logger.info("Starting WebSocket bot")
         if not self.ws:
-            logger.error("WebSocket not initialized")
+            self.logger.error("WebSocket not initialized")
             return False
         await self.ws.accept()
         call_initiated_time = datetime.now(timezone.utc)
@@ -185,12 +206,12 @@ class Agent:
         self.stream_sid = call_data.get("stream_id")
 
         if not self.stream_sid or not self.call_sid:
-            logger.error(
+            self.logger.error(
                 f"Missing required call identifiers: stream_sid={self.stream_sid}, call_id={self.call_sid}"
             )
             return False
 
-        logger.info(
+        self.logger.info(
             f"Parsed WebSocket: transport_type={transport_type}, "
             f"call_sid: {self.call_sid}, stream_sid: {self.stream_sid}"
         )
@@ -224,7 +245,7 @@ class Agent:
                 )
                 if not self.lead:
                     error_msg = f"Inbound call handling failed (IVR): {error_reason}"
-                    logger.info(error_msg)
+                    self.logger.info(error_msg)
                     track_error(self.errors, error_msg)
                     await close_websocket_safely(
                         self.ws,
@@ -242,7 +263,7 @@ class Agent:
                 )
                 if not self.lead:
                     error_msg = f"Inbound call handling failed: {error_reason}"
-                    logger.info(error_msg)
+                    self.logger.info(error_msg)
                     track_error(self.errors, error_msg)
                     await close_websocket_safely(
                         self.ws,
@@ -257,7 +278,7 @@ class Agent:
             )
         except ValueError as e:
             error_msg = f"Template loading failed: {str(e)}"
-            logger.error(error_msg)
+            self.logger.error(error_msg)
             track_error(self.errors, error_msg)
             if self.completion_function:
                 await end_call_with_errors(
@@ -271,7 +292,7 @@ class Agent:
             return False
         except Exception as e:
             error_msg = f"Unexpected error loading template: {str(e)}"
-            logger.error(error_msg)
+            self.logger.error(error_msg)
             track_error(self.errors, error_msg)
             if self.completion_function:
                 await end_call_with_errors(
@@ -294,7 +315,7 @@ class Agent:
 
         # Safe access for required attributes after lead check above
         if not self.ws or not self.stream_sid or not self.lead or not self.template:
-            logger.error("Missing required attributes after setup")
+            self.logger.error("Missing required attributes after setup")
             return False
 
         greeting_result = await send_initial_greeting(
@@ -326,13 +347,29 @@ class Agent:
             self.ws, params, transport_type, call_data
         )
 
-        logger.info(f"Created transport: {self.transport.__class__.__name__}")
+        # Set async-task-scoped call context — propagates to ALL logs in this task,
+        # including DB accessors, template handlers, webhooks, and library logs.
+        set_log_context(
+            lead_id=self.lead.id,
+            merchant_id=self.lead.merchant_id,
+            template=self.lead.template,
+            phone_number=(self.lead.payload or {}).get("customer_mobile_number"),
+            call_sid=self.call_sid,
+        )
+        self.logger = get_bound_logger(
+            lead_id=self.lead.id,
+            merchant_id=self.lead.merchant_id,
+            template=self.lead.template,
+            phone_number=(self.lead.payload or {}).get("customer_mobile_number"),
+            call_sid=self.call_sid,
+        )
+        self.logger.info(f"Created transport: {self.transport.__class__.__name__}")
         return True
 
     def _register_event_handlers(self) -> None:
         """Register transport and task event handlers."""
         if not self.transport or not self.task:
-            logger.error("Transport or task not initialized")
+            self.logger.error("Transport or task not initialized")
             return
 
         @self.task.event_handler("on_pipeline_error")
@@ -341,22 +378,22 @@ class Agent:
             processor = getattr(error, "processor", "unknown")
             error_msg = getattr(error, "error", str(error))
             detailed_msg = f"[PIPELINE] {processor}: {error_msg}"
-            logger.info(f"[PIPELINE_ERROR] {detailed_msg}")
+            self.logger.info(f"[PIPELINE_ERROR] {detailed_msg}")
             track_error(self.errors, detailed_msg)
 
         @self.transport.event_handler("on_client_connected")
         async def on_client_connected(transport, client):
-            logger.info(f"Client connected: {client}")
+            self.logger.info(f"Client connected: {client}")
             await self._handle_client_connected()
 
         @self.transport.event_handler("on_client_disconnected")
         async def on_client_disconnected(transport, client):
-            logger.info(f"Client disconnected: {client}")
+            self.logger.info(f"Client disconnected: {client}")
             await self._handle_unexpected_disconnect("client_disconnected")
 
         @self.task.event_handler("on_idle_timeout")
         async def on_idle_timeout(task):
-            logger.info("Idle timeout detected.")
+            self.logger.info("Idle timeout detected.")
             await self._handle_unexpected_disconnect("idle_timeout")
 
     async def _handle_client_connected(self) -> None:
@@ -367,7 +404,9 @@ class Agent:
             or not self.lead
             or not self.flow_manager
         ):
-            logger.error("Required attributes not initialized for client connection")
+            self.logger.error(
+                "Required attributes not initialized for client connection"
+            )
             return
 
         (
@@ -386,14 +425,14 @@ class Agent:
         )
 
         await self.flow_manager.initialize(initial_node_config)
-        logger.info(
+        self.logger.info(
             f"FlowManager initialized with initial node: {self.flow_config['initial_node']}"
         )
 
     async def _run_with_tracing(self, runner: PipelineRunner) -> None:
         """Run the pipeline with OpenTelemetry tracing."""
         if not self.lead or not self.task:
-            logger.error("Lead or task not initialized for tracing")
+            self.logger.error("Lead or task not initialized for tracing")
             return
 
         lead_payload = self.lead.payload or {}
@@ -412,7 +451,7 @@ class Agent:
                 await runner.run(self.task)
         except Exception as e:
             error_msg = f"Error during traced pipeline execution: {e}"
-            logger.error(error_msg)
+            self.logger.error(error_msg)
             track_error(self.errors, error_msg)
             self.root_span.end()
 
@@ -425,7 +464,7 @@ class Agent:
         # Setup transport based on mode
         if self.is_daily_mode:
             if not runner_args:
-                logger.error("runner_args is required for Daily mode")
+                self.logger.error("runner_args is required for Daily mode")
                 return
             await self._setup_daily_transport(runner_args)
         else:
@@ -438,12 +477,12 @@ class Agent:
             if payload_voice and self.configurations:
                 try:
                     voice_enum = TTSVoiceName(payload_voice)
-                    logger.info(
+                    self.logger.info(
                         f"Overriding TTS voice from payload: {voice_enum.value}"
                     )
                     self.configurations.tts_voice_name = voice_enum
                 except ValueError:
-                    logger.warning(
+                    self.logger.warning(
                         f"Invalid TTS voice '{payload_voice}' in payload, keeping existing config"
                     )
 
@@ -462,7 +501,7 @@ class Agent:
 
         # Validate required attributes for flow setup
         if not self.template:
-            logger.error("Template is not set, cannot setup flow manager")
+            self.logger.error("Template is not set, cannot setup flow manager")
             return
 
         # Setup flow management
@@ -483,19 +522,19 @@ class Agent:
             if ENABLE_BREEZE_BUDDY_TRACING:
                 await self._run_with_tracing(runner)
             else:
-                logger.info(
+                self.logger.info(
                     f"Running pipeline without tracing for conversation: {self.conversation_id}"
                 )
                 await runner.run(self.task)
         except asyncio.CancelledError:
-            logger.info("Pipeline task cancelled. Exiting gracefully.")
+            self.logger.info("Pipeline task cancelled. Exiting gracefully.")
 
     async def _handle_unexpected_disconnect(self, reason: str) -> None:
         """Handle unexpected disconnection and cleanup."""
         if self.conversation_ended:
             return
 
-        logger.info(f"{reason}. Updating call status.")
+        self.logger.info(f"{reason}. Updating call status.")
 
         if self.lead:
             if self.lead.outcome is None:
@@ -512,7 +551,7 @@ class Agent:
             else:
                 # Shouldn't happen, but safe fallback
                 self.lead.metaData["call_ended_by"] = "agent"
-                logger.warning(f"Unexpected disconnect reason: {reason}")
+                self.logger.warning(f"Unexpected disconnect reason: {reason}")
 
         context = TemplateContext(self)
         await end_conversation(context, {})

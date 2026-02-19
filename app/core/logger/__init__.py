@@ -1,6 +1,7 @@
 import json
 import logging
 import sys
+from contextvars import ContextVar
 from typing import Optional
 
 from loguru import logger
@@ -10,6 +11,77 @@ logger.remove()
 
 # Use environment variables directly to avoid circular import
 from app.core.config.static import ENVIRONMENT, PROD_LOG_LEVEL
+
+# ---------------------------------------------------------------------------
+# Generic per-async-task log context
+#
+# A single ContextVar holds an arbitrary dict of key-value pairs. Set it once
+# at the entry point of any async task (agent, background job, request handler)
+# and every log in that task — including DB accessors, template handlers,
+# webhooks, and third-party library logs intercepted by Loguru — automatically
+# carries those fields without any changes to downstream code.
+#
+# Concurrency safe: each asyncio Task owns its own copy of ContextVar state.
+# Setting context in one task has zero effect on any other concurrent task.
+# ---------------------------------------------------------------------------
+_log_context: ContextVar[dict] = ContextVar("log_context", default={})
+
+
+def set_log_context(**kwargs: Optional[str]) -> None:
+    """
+    Set arbitrary key-value pairs as log context for the current async task.
+
+    Every subsequent log call anywhere in the same async task — including DB
+    accessors, template handlers, webhook senders, and third-party library
+    logs intercepted by Loguru — will automatically carry these fields.
+
+    Callers decide which fields are relevant; core logger has no opinion on
+    field names. Examples of what callers might pass:
+
+        # Breeze Buddy agent after lead is resolved:
+        set_log_context(
+            lead_id=self.lead.id,
+            merchant_id=self.lead.merchant_id,
+            template=self.lead.template,
+            phone_number=(self.lead.payload or {}).get("customer_mobile_number", ""),
+            call_sid=self.call_sid or "",
+        )
+
+        # Automatic agent subprocess after session is established:
+        set_log_context(session_id=args.session_id, client_sid=args.client_sid)
+
+        # Any future agent or background worker with its own relevant fields:
+        set_log_context(job_id=job.id, queue=job.queue_name)
+    """
+    _log_context.set(kwargs)
+
+
+def clear_log_context() -> None:
+    """
+    Clear the log context for the current async task.
+
+    Optional — asyncio Tasks discard their ContextVar state automatically
+    when they complete, so explicit clearing is only needed if you reuse a
+    long-lived coroutine across multiple logical operations.
+    """
+    _log_context.set({})
+
+
+def _log_context_patcher(record: dict) -> None:  # type: ignore[type-arg]
+    """
+    Loguru patcher: injects the current async-task's log context into every
+    log record's extra dict before it reaches any sink.
+
+    Only non-empty string values are added, so logs that fire outside of a
+    task context (e.g. startup, scheduler ticks) are not polluted with empty
+    fields.
+    """
+    ctx = _log_context.get()
+    if ctx:
+        extra = record["extra"]
+        for key, value in ctx.items():
+            if value:
+                extra[key] = value
 
 
 def json_sink(message):
@@ -179,9 +251,41 @@ def configure_session_logger(session_id: str, client_sid: Optional[str] = None):
     if client_sid:
         extra_context["client_sid"] = client_sid
 
-    logger.configure(extra=extra_context)
+    logger.configure(extra=extra_context, patcher=_log_context_patcher)  # type: ignore[arg-type]
     # Also set up logging interception for session-based logging
     setup_logging_interception()
+
+
+def get_bound_logger(**context):
+    """
+    Return a Loguru bound logger enriched with the provided context fields.
+
+    All keyword arguments are added as structured extra fields on every log
+    entry emitted through the returned logger. Use this whenever you need
+    per-call / per-request log context without polluting the process-global
+    logger state.
+
+    Safe for concurrent async usage in the same process: logger.bind() returns
+    a new logger instance and does NOT mutate any global state.
+
+    Examples:
+        # In an Agent class after the lead is resolved:
+        self.logger = get_bound_logger(
+            lead_id=self.lead.id,
+            merchant_id=self.lead.merchant_id,
+            template=self.lead.template,
+            phone_number=(self.lead.payload or {}).get("customer_mobile_number"),
+            call_sid=self.call_sid,
+        )
+
+        # In a background task loop:
+        lead_logger = get_bound_logger(
+            lead_id=locked_lead.id,
+            merchant_id=locked_lead.merchant_id,
+            template=locked_lead.template,
+        )
+    """
+    return logger.bind(**context)
 
 
 def setup_logging_interception():
@@ -203,11 +307,19 @@ def setup_logging_interception():
     logging.getLogger("daily_core").disabled = True
 
 
-# Initial logger configuration
+# Initial logger configuration — register the patcher so log context flows
+# into every log record from the very first import.
 _setup_logger_sinks(include_session_id=False)
+logger.configure(patcher=_log_context_patcher)  # type: ignore[arg-type]
 
 # Set up logging interception for unified logging
 setup_logging_interception()
 
 # Export the configured logger for use throughout the application.
-__all__ = ["logger", "configure_session_logger"]
+__all__ = [
+    "logger",
+    "configure_session_logger",
+    "get_bound_logger",
+    "set_log_context",
+    "clear_log_context",
+]
