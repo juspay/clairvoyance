@@ -1,17 +1,6 @@
 import os
 
-from loguru import logger
-
 # --- Configuration ---
-
-
-# A helper function to get a required environment variable
-def get_required_env(var_name: str) -> str:
-    value = os.environ.get(var_name)
-    if not value:
-        logger.error(f"{var_name} environment variable is required")
-        raise ValueError(f"{var_name} environment variable is required")
-    return value
 
 
 # Environment
@@ -26,7 +15,7 @@ UVICORN_RELOAD = os.environ.get("UVICORN_RELOAD", "true").lower() == "true"
 UVICORN_LOG_LEVEL = os.environ.get("UVICORN_LOG_LEVEL", "info")
 
 # Gemini Proxy Configuration
-GEMINI_API_KEY = get_required_env("GEMINI_API_KEY")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 
 # Pipecat Agent Configuration
 AUTOMATIC_CONNECT_BLOCKED_ORIGINS = [
@@ -34,7 +23,7 @@ AUTOMATIC_CONNECT_BLOCKED_ORIGINS = [
     for item in os.environ.get("AUTOMATIC_CONNECT_BLOCKED_ORIGINS", "").split(",")
     if item.strip()
 ]
-DAILY_API_KEY = get_required_env("DAILY_API_KEY")
+DAILY_API_KEY = os.environ.get("DAILY_API_KEY", "")
 DAILY_API_URL = os.environ.get("DAILY_API_URL", "https://api.daily.co/v1")
 # Breeze Buddy Daily API Configuration - falls back to DAILY_API_KEY and DAILY_API_URL if not set
 BREEZE_BUDDY_DAILY_API_KEY = (
@@ -43,18 +32,15 @@ BREEZE_BUDDY_DAILY_API_KEY = (
 BREEZE_BUDDY_DAILY_API_URL = (
     os.environ.get("BREEZE_BUDDY_DAILY_API_URL") or DAILY_API_URL
 )
-AZURE_OPENAI_API_KEY = get_required_env("AZURE_OPENAI_API_KEY")
-AZURE_OPENAI_ENDPOINT = get_required_env("AZURE_OPENAI_ENDPOINT")
+AZURE_OPENAI_API_KEY = os.environ.get("AZURE_OPENAI_API_KEY", "")
+AZURE_OPENAI_ENDPOINT = os.environ.get("AZURE_OPENAI_ENDPOINT", "")
 AZURE_OPENAI_MODEL = os.environ.get("AZURE_OPENAI_MODEL", "gpt-4o-automatic")
-GOOGLE_CREDENTIALS_JSON = get_required_env("GOOGLE_CREDENTIALS_JSON")
+GOOGLE_CREDENTIALS_JSON = os.environ.get("GOOGLE_CREDENTIALS_JSON", "")
 
 # GCS Configuration
 GCS_CREDENTIALS_JSON = os.environ.get("GCS_CREDENTIALS_JSON", "")
 GCS_BUCKET = os.environ.get("GCS_BUCKET", "atoms-sdk")
 
-ENABLE_NOISE_REDUCE_FILTER = (
-    os.environ.get("ENABLE_NOISE_REDUCE_FILTER", "true").lower() == "true"
-)
 ENABLE_AIC_FILTER = os.environ.get("ENABLE_AIC_FILTER", "false").lower() == "true"
 AICOUSTICS_LICENSE_KEY = os.environ.get("AICOUSTICS_LICENSE_KEY", "")
 # Breeze Buddy AIC License Key
@@ -67,12 +53,6 @@ AIC_ENHANCEMENT_LEVEL = float(os.environ.get("AIC_ENHANCEMENT_LEVEL", "1.0"))
 AIC_VOICE_GAIN = float(os.environ.get("AIC_VOICE_GAIN", "1.2"))
 AIC_NOISE_GATE_ENABLE = (
     os.environ.get("AIC_NOISE_GATE_ENABLE", "true").lower() == "true"
-)
-
-# Krisp Audio Filter Configuration
-ENABLE_KRISP_FILTER = os.environ.get("ENABLE_KRISP_FILTER", "false").lower() == "true"
-KRISP_MODEL_PATH = os.environ.get(
-    "KRISP_MODEL_PATH", "/app/models/voice/krisp/krisp-viva-tel-v2.kef"
 )
 
 # AIC Model Path Configuration
@@ -261,12 +241,6 @@ SONIOX_VAD_FORCE_TURN_ENDPOINT = (
 SONIOX_MAX_ENDPOINT_DELAY_MS = int(
     os.environ.get("SONIOX_MAX_ENDPOINT_DELAY_MS", "500")
 )  # Max delay (ms) for Soniox native endpoint detection (500-3000, default 500)
-
-# Smart Turn Configuration - These will be loaded lazily to avoid circular imports
-# Required API key for FAL_SMART_TURN
-FAL_SMART_TURN_API_KEY = os.getenv("FAL_SMART_TURN_API_KEY")
-
-ENABLE_SMART_TURN = os.getenv("ENABLE_SMART_TURN", "false").lower() == "true"
 
 # Automatic MCP Tool Server
 ENABLE_BREEZE_MCP_FOR_BRET = (

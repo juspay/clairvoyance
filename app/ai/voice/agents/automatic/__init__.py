@@ -11,7 +11,6 @@ from zoneinfo import ZoneInfo
 from langfuse import get_client
 from opentelemetry import trace
 from pipecat.audio.filters.aic_filter import AICFilter
-from pipecat.audio.filters.noisereduce_filter import NoisereduceFilter
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.vad.vad_analyzer import VADParams
 from pipecat.frames.frames import (
@@ -47,13 +46,8 @@ from app.ai.voice.agents.automatic.features.llm_wrapper import LLMServiceWrapper
 from app.ai.voice.agents.automatic.processors.llm_spy import (
     handle_confirmation_response,
 )
-from app.ai.voice.agents.automatic.services.fal import FalSmartTurnService
-from app.ai.voice.agents.automatic.services.filters.krisp.noise import (
-    NoiseFilterFromKrisp,
-)
 from app.ai.voice.agents.automatic.services.mcp import init_breeze_mcp_tools
 from app.ai.voice.agents.automatic.services.mem0.memory import ImprovedMem0MemoryService
-from app.ai.voice.agents.automatic.services.smart_turn import LocalSmartTurnAnalyzer
 from app.ai.voice.agents.automatic.types import (
     Mode,
     TTSProvider,
@@ -66,7 +60,7 @@ from app.ai.voice.agents.automatic.utils.session_context import (
     create_session_context,
     set_current_session_id,
 )
-from app.core.config import dynamic, static
+from app.core.config import static
 from app.core.config.dynamic import ENABLE_BREEZE_MCP
 from app.core.logger import configure_session_logger, logger
 
@@ -317,51 +311,14 @@ async def run_normal_mode(args):
             params=vad_params,
         )
 
-    # Initialize Fal.ai Smart Turn service
-    smart_turn_analyzer = None
-    fal_session = None
-    fal_smart_turn_service = None
-
-    if static.ENABLE_SMART_TURN:
-        try:
-            # this can be tuned using sample_rate,vad_window_size,silence_threshold
-            smart_turn_analyzer = LocalSmartTurnAnalyzer()
-            logger.info("SMART_TURN: Using LocalSmartTurnAnalyzer")
-        except Exception as e:
-            logger.error(
-                f"SMART_TURN: Failed to initialize LocalSmartTurnAnalyzer: {e}"
-            )
-    elif dynamic.ENABLE_FAL_SMART_TURN:
-        if static.FAL_SMART_TURN_API_KEY:
-            fal_smart_turn_service = FalSmartTurnService()
-            smart_turn_analyzer, fal_session = (
-                await fal_smart_turn_service.create_analyzer()
-            )
-        else:
-            logger.warning(
-                "SMART_TURN: Fal.ai Smart Turn is enabled but FAL_SMART_TURN_API_KEY is missing; skipping."
-            )
-
     daily_params = DailyParams(
         audio_in_enabled=True,
         audio_out_enabled=True,
         vad_analyzer=None if static.DISABLE_SILERO_VAD else vad_analyzer,
-        turn_analyzer=smart_turn_analyzer,
     )
 
     # Audio filter configuration
-    if (
-        static.ENABLE_KRISP_FILTER
-        and static.KRISP_MODEL_PATH
-        and os.path.isfile(static.KRISP_MODEL_PATH)
-    ):
-        try:
-            daily_params.audio_in_filter = NoiseFilterFromKrisp(
-                model_path=static.KRISP_MODEL_PATH
-            )
-        except Exception as e:
-            logger.error(f"Krisp Filter failed: {e}")
-    elif static.ENABLE_AIC_FILTER and static.AICOUSTICS_LICENSE_KEY:
+    if static.ENABLE_AIC_FILTER and static.AICOUSTICS_LICENSE_KEY:
         try:
             aic_filter = AICFilter(
                 license_key=static.AICOUSTICS_LICENSE_KEY,
@@ -376,9 +333,6 @@ async def run_normal_mode(args):
 
         except Exception as e:
             logger.error(f"AIC Filter failed: {e}")
-    elif static.ENABLE_NOISE_REDUCE_FILTER:
-        daily_params.audio_in_filter = NoisereduceFilter()
-        logger.info("Audio Filter: NoiseReduce Enabled")
     else:
         logger.info("No Audio Filter enabled")
 
@@ -722,12 +676,6 @@ async def run_normal_mode(args):
     @task.event_handler("on_pipeline_finished")
     async def on_pipeline_finished(task, frame):
         logger.info("Pipeline task cancelled. Cancelling main task.")
-        # Clean up Fal.ai Smart Turn session
-        if fal_smart_turn_service:
-            await fal_smart_turn_service.cleanup(fal_session)
-        # Clean up Local Smart Turn analyzer if it has a shutdown method
-        elif smart_turn_analyzer and hasattr(smart_turn_analyzer, "shutdown"):
-            await smart_turn_analyzer.shutdown()
         main_task = asyncio.current_task()
         main_task.cancel()
 

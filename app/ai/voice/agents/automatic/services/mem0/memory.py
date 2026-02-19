@@ -22,12 +22,11 @@ from app.core.logger import logger
 
 try:
     from mem0 import Memory  # noqa: F401
-except ModuleNotFoundError as e:
-    logger.error(f"Exception: {e}")
-    logger.error(
-        "In order to use Mem0, you need to `pip install mem0ai`. Also, set the environment variable MEM0_API_KEY."
-    )
-    raise Exception(f"Missing module: {e}")
+
+    _MEM0_AVAILABLE = True
+except ModuleNotFoundError:
+    _MEM0_AVAILABLE = False
+    Memory = None
 
 
 class ImprovedMem0MemoryService(Mem0MemoryService):
@@ -63,6 +62,11 @@ class ImprovedMem0MemoryService(Mem0MemoryService):
     COUNTER_CORRUPTION_THRESHOLD = 10  # Reset if counter exceeds total + this value
 
     def __init__(self, *args, **kwargs):
+        if not _MEM0_AVAILABLE:
+            raise ImportError(
+                "mem0ai package is not installed. "
+                "Install it with: pip install mem0ai and add pipecat-ai[mem0] to your dependencies."
+            )
         super().__init__(*args, **kwargs)
 
         # Extract configuration from kwargs with config fallbacks
