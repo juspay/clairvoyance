@@ -20,8 +20,8 @@ jobs:
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v1
         with:
-          workload_identity_provider: projects/745400138007/locations/global/workloadIdentityPools/github-pool/providers/github-provider
-          service_account: github-deployer@breeze-uat-453414.iam.gserviceaccount.com
+          workload_identity_provider: projects/840384202515/locations/global/workloadIdentityPools/github-pool/providers/github-provider
+          service_account: github-deployer@breeze-automatic-prod.iam.gserviceaccount.com
 
       - name: Configure Docker for Artifact Registry
         run: |
@@ -44,9 +44,10 @@ jobs:
           context: .
           push: true
           platforms: linux/amd64
-          tags: asia-south1-docker.pkg.dev/breeze-uat-453414/clairvoyance/clairvoyance:${{ env.SHORT_SHA }}
+          tags: asia-south1-docker.pkg.dev/breeze-automatic-prod/clairvoyance/clairvoyance:${{ env.SHORT_SHA }}
           build-args: |
-            KRISP_BUCKET_PATH=gs://clairvoyance-models/krisp
+            KRISP_BUCKET_PATH=gs://breeze-clairvoyance-models/krisp
+            AIC_BUCKET_PATH=gs://breeze-clairvoyance-models/aic
           secrets: |
             gcp_token=${{ env.GCP_ACCESS_TOKEN }}
           provenance: false

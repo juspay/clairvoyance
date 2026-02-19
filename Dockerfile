@@ -45,8 +45,8 @@ RUN uv sync --frozen --no-dev --no-install-project && \
 
 # Start of Krisp and AIC installation process
 # Download Krisp and AIC assets from GCP Storage using authenticated context
-ARG KRISP_BUCKET_PATH=gs://clairvoyance-models/krisp
-ARG AIC_BUCKET_PATH=gs://clairvoyance-models/aic
+ARG KRISP_BUCKET_PATH=gs://breeze-clairvoyance-models/krisp
+ARG AIC_BUCKET_PATH=gs://breeze-clairvoyance-models/aic
 
 # Install Google Cloud CLI and download Krisp and AIC files (only for GCP deployments)
 # Use BuildKit secret mount to avoid leaking token in image layers
