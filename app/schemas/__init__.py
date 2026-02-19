@@ -62,6 +62,7 @@ from app.schemas.breeze_buddy.core import (
     PreCheckHttpRequest,
     PreCheckResponseConfig,
     PreCheckType,
+    TelephonyConfig,
     UpdateCallExecutionConfigRequest,
 )
 from app.schemas.breeze_buddy.credentials import (
@@ -115,6 +116,7 @@ __all__ = [
     "PreCheckHttpRequest",
     "PreCheckResponseConfig",
     "PreCheckType",
+    "TelephonyConfig",
     "UpdateCallExecutionConfigRequest",
     # Credentials
     "CreateCredentialRequest",

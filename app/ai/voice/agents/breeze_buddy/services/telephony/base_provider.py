@@ -3,7 +3,7 @@ from typing import Any, Dict, Optional
 
 from fastapi import WebSocket
 
-from app.schemas import CallProvider
+from app.schemas import CallProvider, TelephonyConfig
 
 
 class VoiceCallProvider(ABC):
@@ -11,9 +11,15 @@ class VoiceCallProvider(ABC):
     Abstract base class for voice call providers.
     """
 
-    def __init__(self, config, aiohttp_session):
+    def __init__(
+        self,
+        config,
+        aiohttp_session,
+        telephony_config: Optional[TelephonyConfig] = None,
+    ):
         self.config = config
         self.aiohttp_session = aiohttp_session
+        self.telephony_config = telephony_config
         self.completion_callback = None
 
     @abstractmethod

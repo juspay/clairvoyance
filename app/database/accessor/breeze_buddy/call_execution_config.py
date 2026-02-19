@@ -24,7 +24,7 @@ from app.database.queries.breeze_buddy.call_execution_config import (
     insert_call_execution_config_query,
     update_call_execution_config_query,
 )
-from app.schemas import CallExecutionConfig, CallProvider
+from app.schemas import CallExecutionConfig, CallProvider, TelephonyConfig
 
 
 def get_row_count(result: Optional[List[asyncpg.Record]]) -> int:
@@ -58,6 +58,7 @@ async def create_call_execution_config(
     enable_calling: bool = True,
     template_id: Optional[str] = None,
     pre_checks: Optional[List[Any]] = None,
+    telephony_config: Optional[TelephonyConfig] = None,
 ) -> Optional[CallExecutionConfig]:
     """
     Create a new call execution config record.
@@ -66,6 +67,7 @@ async def create_call_execution_config(
         template_id: UUID of the template (preferred, for referential integrity)
         template: Name of the template (kept for backward compatibility)
         pre_checks: List of PreCheckConfig objects for call pre-validation
+        telephony_config: Optional telephony provider overrides
     """
     logger.info(f"Creating call execution config for merchant ID: {merchant_id}")
 
@@ -85,6 +87,9 @@ async def create_call_execution_config(
             enable_international_call=enable_international_call,
             enable_calling=enable_calling,
             pre_checks=_serialize_pre_checks(pre_checks),
+            telephony_config=(
+                json.dumps(telephony_config.model_dump()) if telephony_config else None
+            ),
         )
 
         result = await run_parameterized_query(query_text, values)
@@ -184,6 +189,7 @@ async def update_call_execution_config(
     enable_calling: Optional[bool] = None,
     template_id: Optional[str] = None,
     pre_checks: Optional[List[Any]] = None,
+    telephony_config: Optional[TelephonyConfig] = None,
 ) -> Optional[CallExecutionConfig]:
     """
     Update an existing call execution config record based on merchant_id, template, and shop_identifier.
@@ -193,12 +199,29 @@ async def update_call_execution_config(
         template_id: UUID of the template (optional update)
         template: Name of the template (kept for backward compatibility)
         pre_checks: List of PreCheckConfig objects for call pre-validation
+        telephony_config: Optional telephony provider overrides
     """
     logger.info(
         f"Updating call execution config for merchant: {merchant_id}, template: {template}, shop_identifier: {shop_identifier}"
     )
 
     try:
+        # Serialize telephony_config for the query:
+        #  - None  → don't touch the column (skip in SET clause)
+        #  - TelephonyConfig() with all-None fields → clear to SQL NULL
+        #  - TelephonyConfig(applet_app_id="x") → store as JSONB
+        if telephony_config is not None:
+            has_any_value = any(
+                v is not None for v in telephony_config.model_dump().values()
+            )
+            serialized_telephony = (
+                json.dumps(telephony_config.model_dump())
+                if has_any_value
+                else "__CLEAR__"
+            )
+        else:
+            serialized_telephony = None
+
         query_text, values = update_call_execution_config_query(
             merchant_id=merchant_id,
             template=template,
@@ -213,6 +236,7 @@ async def update_call_execution_config(
             enable_calling=enable_calling,
             template_id=template_id,
             pre_checks=_serialize_pre_checks(pre_checks),
+            telephony_config=serialized_telephony,
         )
 
         result = await run_parameterized_query(query_text, values)

@@ -484,6 +484,7 @@ async def process_backlog_leads():
                 call_provider = get_voice_provider(
                     number_to_use.provider,
                     session,
+                    config.telephony_config,
                 )
 
                 # Pod allocation now happens at webhook time (when customer answers)
@@ -662,7 +663,9 @@ async def process_backlog_leads():
                         continue
 
                     retry_call_provider = get_voice_provider(
-                        retry_calling_provider, session
+                        retry_calling_provider,
+                        session,
+                        config.telephony_config,
                     )
 
                     # Pod allocation happens at webhook time (when customer answers)

@@ -1,5 +1,5 @@
 import json
-from typing import Optional
+from typing import Any, Dict, Optional
 
 import requests
 from fastapi import WebSocket
@@ -18,11 +18,13 @@ from app.core.config.static import (
 )
 from app.core.logger import logger
 from app.core.transport.http_client import get_proxy_config
-from app.schemas import CallProvider
+from app.schemas import CallProvider, TelephonyConfig
 
 
 class ExotelProvider(VoiceCallProvider):
-    def __init__(self, aiohttp_session):
+    def __init__(
+        self, aiohttp_session, telephony_config: Optional[TelephonyConfig] = None
+    ):
         # Store config values directly as instance attributes
         self.EXOTEL_ACCOUNT_SID = EXOTEL_ACCOUNT_SID
         self.EXOTEL_API_KEY = EXOTEL_API_KEY
@@ -31,8 +33,8 @@ class ExotelProvider(VoiceCallProvider):
         self.EXOTEL_SUBDOMAIN = EXOTEL_SUBDOMAIN
         self.APP_BASE_URL = APP_BASE_URL
 
-        # Call parent without config object
-        super().__init__(None, aiohttp_session)
+        # Call parent with telephony_config
+        super().__init__(None, aiohttp_session, telephony_config)
 
     async def handle_websocket(self, websocket: WebSocket, provider: CallProvider):
         logger.info("Using template flow for Exotel WebSocket connection")
@@ -50,7 +52,7 @@ class ExotelProvider(VoiceCallProvider):
         outbound_number: str,
         merchant_id: Optional[str] = None,
         template_name: Optional[str] = None,
-    ):
+    ) -> Optional[Dict[str, Any]]:
         """
         Initiate an outbound call via Exotel.
 
@@ -59,7 +61,15 @@ class ExotelProvider(VoiceCallProvider):
         for interface consistency). The template is resolved at answer-time
         via the voicebot-url webhook handler.
         """
-        flow_url = f"http://my.exotel.com/{self.EXOTEL_ACCOUNT_SID}/exoml/start_voice/{EXOTEL_TEMPLATE_APPLET_APP_ID}"
+        # Resolve applet app ID: telephony_config override > env default
+        if self.telephony_config and self.telephony_config.applet_app_id:
+            applet_id = self.telephony_config.applet_app_id
+            logger.info(f"Using applet_app_id from telephony_config: {applet_id}")
+        else:
+            applet_id = self.EXOTEL_TEMPLATE_APPLET_APP_ID
+            logger.info(f"Using applet_app_id from env default: {applet_id}")
+
+        flow_url = f"http://my.exotel.com/{self.EXOTEL_ACCOUNT_SID}/exoml/start_voice/{applet_id}"
 
         payload = {
             "From": customer_mobile_number,

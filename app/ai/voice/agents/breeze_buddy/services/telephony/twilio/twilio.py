@@ -19,19 +19,21 @@ from app.core.config.static import (
 )
 from app.core.logger import logger
 from app.core.transport.http_client import get_proxy_config
-from app.schemas import CallProvider
+from app.schemas import CallProvider, TelephonyConfig
 
 
 class TwilioProvider(VoiceCallProvider):
-    def __init__(self, aiohttp_session):
+    def __init__(
+        self, aiohttp_session, telephony_config: Optional[TelephonyConfig] = None
+    ):
         # Store config values directly as instance attributes
         self.TWILIO_ACCOUNT_SID = TWILIO_ACCOUNT_SID
         self.TWILIO_AUTH_TOKEN = TWILIO_AUTH_TOKEN
         self.TWILIO_TEMPLATE_WEBSOCKET_URL = TWILIO_TEMPLATE_WEBSOCKET_URL
         self.APP_BASE_URL = APP_BASE_URL
 
-        # Call parent without config object
-        super().__init__(None, aiohttp_session)
+        # Call parent with telephony_config
+        super().__init__(None, aiohttp_session, telephony_config)
 
         # Create Twilio client with proper proxy configuration
         self.client = self._create_twilio_client()

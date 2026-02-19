@@ -185,6 +185,17 @@ class OutboundNumber(BaseModel):
     updated_at: Optional[datetime] = None
 
 
+class TelephonyConfig(BaseModel):
+    """Per-merchant telephony provider overrides.
+
+    When set on a CallExecutionConfig, these values take precedence over the
+    global environment-variable defaults.  Any field left as None will fall
+    back to the env default.
+    """
+
+    applet_app_id: Optional[str] = None
+
+
 class CreateCallExecutionConfigRequest(BaseModel):
     """Request to create call execution configuration"""
 
@@ -200,6 +211,7 @@ class CreateCallExecutionConfigRequest(BaseModel):
     enable_international_call: bool = True
     enable_calling: Optional[bool] = True
     pre_checks: Optional[List[PreCheckConfig]] = None
+    telephony_config: Optional[TelephonyConfig] = None
 
 
 class UpdateCallExecutionConfigRequest(BaseModel):
@@ -217,6 +229,7 @@ class UpdateCallExecutionConfigRequest(BaseModel):
     enable_international_call: Optional[bool] = None
     enable_calling: Optional[bool] = None
     pre_checks: Optional[List[PreCheckConfig]] = None
+    telephony_config: Optional[TelephonyConfig] = None
 
 
 class CallExecutionConfig(BaseModel):
@@ -235,5 +248,6 @@ class CallExecutionConfig(BaseModel):
     enable_international_call: bool = True
     enable_calling: bool = True
     pre_checks: Optional[List[PreCheckConfig]] = None
+    telephony_config: Optional[TelephonyConfig] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
