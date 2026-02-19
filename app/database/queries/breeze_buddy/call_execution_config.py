@@ -27,6 +27,7 @@ def insert_call_execution_config_query(
     enable_calling: bool = True,
     template_id: Optional[str] = None,
     pre_checks: Optional[str] = None,
+    telephony_config: Optional[str] = None,
 ) -> Tuple[str, List[Any]]:
     """
     Generate query to insert call execution config record.
@@ -35,6 +36,7 @@ def insert_call_execution_config_query(
         template_id: UUID of the template (preferred, for referential integrity)
         template: Name of the template (kept for backward compatibility)
         pre_checks: JSON string of pre-check configurations
+        telephony_config: JSON string of telephony provider overrides
     """
     text = f"""
         INSERT INTO "{CALL_EXECUTION_CONFIG_TABLE}"
@@ -53,10 +55,11 @@ def insert_call_execution_config_query(
             "enable_international_call",
             "enable_calling",
             "pre_checks",
+            "telephony_config",
             "created_at",
             "updated_at"
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::json, $15, $16) RETURNING *;
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::json, $15::jsonb, $16, $17) RETURNING *;
     """
 
     values = [
@@ -74,6 +77,7 @@ def insert_call_execution_config_query(
         enable_international_call,
         enable_calling,
         pre_checks,
+        telephony_config,
         datetime.now(),
         datetime.now(),
     ]
@@ -138,6 +142,7 @@ def update_call_execution_config_query(
     enable_calling: Optional[bool] = None,
     template_id: Optional[str] = None,
     pre_checks: Optional[str] = None,
+    telephony_config: Optional[str] = None,
 ) -> Tuple[str, List[Any]]:
     """
     Generate query to update call execution config record based on merchant_id, template, and shop_identifier.
@@ -201,6 +206,14 @@ def update_call_execution_config_query(
         updates.append(f'"pre_checks" = ${param_count}::json')
         values.append(pre_checks)
         param_count += 1
+
+    if telephony_config is not None:
+        if telephony_config == "__CLEAR__":
+            updates.append('"telephony_config" = NULL')
+        else:
+            updates.append(f'"telephony_config" = ${param_count}::jsonb')
+            values.append(telephony_config)
+            param_count += 1
 
     # Always update the updated_at timestamp
     updates.append(f'"updated_at" = ${param_count}')

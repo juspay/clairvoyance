@@ -14,18 +14,19 @@ from app.core.config.static import (
     PLIVO_AUTH_TOKEN,
 )
 from app.core.logger import logger
-from app.schemas import CallProvider
+from app.schemas import CallProvider, TelephonyConfig
 
 
 class PlivoProvider(VoiceCallProvider):
-    def __init__(self, aiohttp_session):
+    def __init__(
+        self, aiohttp_session, telephony_config: Optional[TelephonyConfig] = None
+    ):
         # Store config values directly as instance attributes
         self.PLIVO_AUTH_ID = PLIVO_AUTH_ID
         self.PLIVO_AUTH_TOKEN = PLIVO_AUTH_TOKEN
         self.APP_BASE_URL = APP_BASE_URL
 
-        # Call parent without config object
-        super().__init__(None, aiohttp_session)
+        super().__init__(None, aiohttp_session, telephony_config)
 
         # Create Plivo client
         self.client = plivo.RestClient(self.PLIVO_AUTH_ID, self.PLIVO_AUTH_TOKEN)

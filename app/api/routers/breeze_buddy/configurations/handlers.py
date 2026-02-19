@@ -63,6 +63,7 @@ async def create_configuration_handler(
             shop_identifier=config.shop_identifier,
             enable_international_call=config.enable_international_call,
             pre_checks=config.pre_checks,
+            telephony_config=config.telephony_config,
         )
 
         if call_execution_config:
@@ -246,6 +247,7 @@ async def update_configuration_handler(
             calling_provider=config.calling_provider,
             enable_international_call=config.enable_international_call,
             pre_checks=config.pre_checks,
+            telephony_config=config.telephony_config,
         )
 
         if updated_config:

@@ -38,6 +38,7 @@ from app.schemas.breeze_buddy.core import (
     LeadCallTracker,
     OutboundNumber,
     OutboundNumberStatus,
+    TelephonyConfig,
     UpdateCallExecutionConfigRequest,
 )
 from app.schemas.breeze_buddy.merchants import MerchantsResponse
@@ -83,6 +84,7 @@ __all__ = [
     "LeadCallTracker",
     "OutboundNumber",
     "OutboundNumberStatus",
+    "TelephonyConfig",
     "UpdateCallExecutionConfigRequest",
     # Template
     "TemplateListResponse",

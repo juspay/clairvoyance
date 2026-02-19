@@ -8,7 +8,13 @@ from typing import Any, List, Optional
 import asyncpg
 
 from app.core.logger import logger
-from app.schemas import CallExecutionConfig, CallProvider, PreCheckConfig
+from app.schemas import (
+    CallExecutionConfig,
+    CallProvider,
+    PreCheckConfig,
+    TelephonyConfig,
+)
+from app.utils.common import parse_json
 
 
 def _decode_pre_checks(raw: Any) -> Optional[List[PreCheckConfig]]:
@@ -62,6 +68,11 @@ def _decode_single_row(row: asyncpg.Record) -> CallExecutionConfig:
         enable_international_call=row["enable_international_call"],
         enable_calling=row["enable_calling"],
         pre_checks=_decode_pre_checks(row.get("pre_checks")),
+        telephony_config=(
+            TelephonyConfig(**parsed)
+            if (parsed := parse_json(row, "telephony_config"))
+            else None
+        ),
         created_at=row["created_at"],
         updated_at=row["updated_at"],
     )
