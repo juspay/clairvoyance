@@ -10,6 +10,17 @@ from app.schemas import CallProvider
 router = APIRouter()
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# WebSocket endpoints
+#
+# Pod lifecycle (allocation/release) is managed entirely by Smart Router:
+#   - Allocation: telephony webhook → allocate.py → Smart Router HTTP API
+#   - Release (primary): status callback → handlers.py → Smart Router release
+#   - Release (backup): call completion → calls.py → Smart Router release
+#   - Release (safety net): Smart Router zombie cleanup (every 30s)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
 @router.websocket("/{service_provider}/callback/{template}/v2")
 async def telephony_websocket_handler_v2(
     service_provider: str, template: str, websocket: WebSocket
@@ -17,9 +28,12 @@ async def telephony_websocket_handler_v2(
     """
     WebSocket endpoint v2 that accepts a connection and passes it to the
     agent.py main function.
-    """
 
-    logger.info(f"Handling v2 websocket for {template}")
+    Pod allocation is handled upstream by Smart Router before the provider
+    connects here. Pod release is handled by status callbacks and call
+    completion handlers (both call Smart Router's release endpoint).
+    """
+    logger.info("Handling v2 websocket for %s", template)
 
     async with create_aiohttp_session() as session:
         try:
@@ -33,7 +47,10 @@ async def telephony_websocket_handler_v2(
             error_type = type(e).__name__
             error_message = str(e)
             logger.error(
-                f"An error occurred in the WebSocket v2 handler - Type: {error_type}, Message: '{error_message}', Args: {e.args}",
+                "An error occurred in the WebSocket v2 handler - Type: %s, Message: '%s', Args: %s",
+                error_type,
+                error_message,
+                e.args,
                 exc_info=True,
             )
             try:
@@ -41,7 +58,8 @@ async def telephony_websocket_handler_v2(
                     await websocket.close(code=1011, reason="Internal Server Error")
             except Exception as close_error:
                 logger.warning(
-                    f"Could not close websocket v2 (likely already closed): {close_error}"
+                    "Could not close websocket v2 (likely already closed): %s",
+                    close_error,
                 )
         finally:
             logger.info("WebSocket v2 client connection closed.")

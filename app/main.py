@@ -14,6 +14,9 @@ from fastapi.responses import JSONResponse
 from pipecat.transports.daily.utils import DailyRESTHelper
 
 from app import __version__
+from app.ai.voice.agents.breeze_buddy.services.agent_router.client import (
+    close_smart_router_client,
+)
 from app.api.routers import automatic, breeze_buddy, devcycle, systems
 
 # Import background task scheduler
@@ -197,6 +200,9 @@ async def lifespan(_app: FastAPI):
         logger.info(
             f"Drain period ({BOT_MAX_DRAIN_SECONDS}s) complete. Proceeding with cleanup."
         )
+
+    # Close Smart Router client (release HTTP connection pool)
+    await close_smart_router_client()
 
     # Cleanup room pool
     await cleanup_room_pool()

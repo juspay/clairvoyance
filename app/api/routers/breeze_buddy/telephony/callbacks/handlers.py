@@ -8,6 +8,7 @@ Handlers:
 - handle_callback_details_get() - GET callback for call details (Exotel)
 - handle_callback_details_post() - POST callback for call details (Twilio/Plivo)
 - handle_callback_status() - POST callback for call status updates
+- handle_twilio_twiml_fallback() - Fallback TwiML when Smart Router is down
 
 Note: Plivo IVR is now handled agent-side (in-band over WebSocket) like Exotel,
 so the handle_plivo_ivr_select() handler is no longer needed.
@@ -16,11 +17,17 @@ so the handle_plivo_ivr_select() handler is no longer needed.
 import json
 
 from fastapi import BackgroundTasks, HTTPException, Request, Response
+from starlette.responses import HTMLResponse
+from twilio.twiml.voice_response import Connect, Stream, VoiceResponse
 
 from app.ai.voice.agents.breeze_buddy.managers.calls import (
     handle_unanswered_calls,
     update_call_recording,
 )
+from app.ai.voice.agents.breeze_buddy.services.agent_router.client import (
+    safe_release_pod,
+)
+from app.core.config.static import TWILIO_TEMPLATE_WEBSOCKET_URL
 from app.core.logger import logger
 
 
@@ -147,16 +154,21 @@ async def handle_callback_status(request: Request, provider: str) -> Response:
     Handle POST callback for call status updates.
 
     This endpoint receives call status updates from telephony providers
-    (Twilio, Exotel). When a call fails (no-answer, failed, busy),
+    (Twilio, Exotel, Plivo). When a call fails (no-answer, failed, busy),
     it triggers retry logic.
+
+    Also serves as a backup release mechanism — when a call ends, it notifies
+    Smart Router to release the pod. This is idempotent and safe even if the
+    WebSocket handler already released the pod.
 
     Supported providers:
     - Twilio: Uses "CallStatus" field
     - Exotel: Uses "Status" field
+    - Plivo: Uses "CallStatus" field, "CallUUID" for call ID
 
     Args:
         request: FastAPI Request object with form data
-        provider: Telephony provider name (e.g., "twilio", "exotel")
+        provider: Telephony provider name (e.g., "twilio", "exotel", "plivo")
 
     Returns:
         200 OK response
@@ -175,14 +187,92 @@ async def handle_callback_status(request: Request, provider: str) -> Response:
         call_sid = form.get("CallUUID")
         call_status = form.get("CallStatus")
 
-    logger.info(
-        f"Extracted call_sid: {call_sid} and call_status: {call_status} from {provider}"
-    )
+    # Terminal call statuses across all providers:
+    # - completed, busy, failed, no-answer: universal (Twilio, Plivo, Exotel)
+    # - canceled/cancelled: Twilio + Exotel (American/British spelling)
+    # - cancel: Plivo (caller hung up before answer)
+    # - timeout: Plivo (network/carrier timeout)
+    ended_statuses = [
+        "completed",
+        "busy",
+        "failed",
+        "no-answer",
+        "canceled",
+        "cancelled",
+        "cancel",
+        "timeout",
+    ]
 
-    if call_status in ("no-answer", "failed", "busy"):
-        logger.info(f"Call with SID {call_sid} failed with status: {call_status}")
-        # Convert to string for the handler
-        if call_sid and isinstance(call_sid, str):
-            await handle_unanswered_calls(call_sid)
+    if call_sid and call_status:
+        call_status = str(call_status)
+        logger.info(
+            f"Status callback: {call_status} for call {call_sid} from {provider}",
+            extra={"call_sid": call_sid, "status": call_status, "provider": provider},
+        )
+
+        # Backup release: notify Smart Router when call ends.
+        # Idempotent — safe even if WebSocket already released the pod.
+        if call_status.lower() in ended_statuses:
+            await safe_release_pod(
+                call_sid=str(call_sid), reason=f"status_{call_status}"
+            )
+
+        # Handle failed calls for retry logic
+        if call_status.lower() in ("no-answer", "failed", "busy"):
+            logger.info(f"Call with SID {call_sid} failed with status: {call_status}")
+            # Convert to string for the handler
+            if isinstance(call_sid, str):
+                await handle_unanswered_calls(call_sid)
 
     return Response(status_code=200)
+
+
+async def handle_twilio_twiml_fallback(request: Request) -> HTMLResponse:
+    """
+    Fallback TwiML endpoint for Twilio when Smart Router is unreachable.
+
+    Twilio calls this via the ``fallback_url`` parameter when the primary ``url``
+    (Smart Router webhook) fails (timeout, 5xx, connection refused). Returns
+    TwiML with the static WebSocket URL — no pod isolation, but the call
+    still works.
+
+    This prevents calls from dropping silently when Smart Router is down.
+
+    Returns:
+        TwiML XML with <Connect><Stream> pointing to static WebSocket URL
+    """
+    form = await request.form()
+    call_sid = form.get("CallSid", "unknown")
+    error_code = form.get("ErrorCode", "")
+    error_url = form.get("ErrorUrl", "")
+
+    logger.warning(
+        "Twilio fallback triggered — Smart Router unreachable, using static WebSocket",
+        extra={
+            "call_sid": call_sid,
+            "error_code": error_code,
+            "error_url": error_url,
+        },
+    )
+
+    # Use template WebSocket URL (v2 flow) as default fallback
+    ws_url = TWILIO_TEMPLATE_WEBSOCKET_URL
+
+    if not ws_url:
+        logger.error(
+            "No fallback WebSocket URL configured — call will drop",
+            extra={"call_sid": call_sid},
+        )
+        return HTMLResponse(
+            content=str(VoiceResponse()),
+            media_type="application/xml",
+        )
+
+    # Build TwiML using Twilio SDK (consistent with twilio.py make_call)
+    voice_response = VoiceResponse()
+    connect = Connect()
+    stream = Stream(url=ws_url)
+    connect.append(stream)
+    voice_response.append(connect)
+
+    return HTMLResponse(content=str(voice_response), media_type="application/xml")

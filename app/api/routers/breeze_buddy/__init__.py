@@ -1,5 +1,8 @@
 from fastapi import APIRouter
 
+# Pod health probes (1-pod-1-call isolation architecture)
+from app.api.routers.breeze_buddy.agent_router.health import router as pod_router
+
 # Modern RESTful routers
 from app.api.routers.breeze_buddy.analytics import router as analytics_router
 
@@ -56,5 +59,8 @@ router.include_router(cron_router, prefix="", tags=["cron"])
 
 # WebSocket (real-time communication)
 router.include_router(websocket_router, prefix="", tags=["websocket"])
+
+# Pod management (1-pod-1-call isolation for Kubernetes)
+router.include_router(pod_router, prefix="/pod", tags=["pod"])
 
 router.include_router(daily_router, prefix="", tags=["daily"])

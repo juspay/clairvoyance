@@ -1,4 +1,5 @@
-from typing import Any, Dict, Optional
+from typing import Optional
+from urllib.parse import urlencode
 
 import plivo
 from fastapi import WebSocket
@@ -7,7 +8,11 @@ from app.ai.voice.agents.breeze_buddy.agent import telephony_bot
 from app.ai.voice.agents.breeze_buddy.services.telephony.base_provider import (
     VoiceCallProvider,
 )
-from app.core.config.static import APP_BASE_URL, PLIVO_AUTH_ID, PLIVO_AUTH_TOKEN
+from app.core.config.static import (
+    APP_BASE_URL,
+    PLIVO_AUTH_ID,
+    PLIVO_AUTH_TOKEN,
+)
 from app.core.logger import logger
 from app.schemas import CallProvider
 
@@ -36,18 +41,45 @@ class PlivoProvider(VoiceCallProvider):
         )
 
     def make_call(
-        self, customer_mobile_number: str, outbound_number: str
-    ) -> Optional[Dict[str, Any]]:
-        """Initiate an outbound call via Plivo."""
+        self,
+        customer_mobile_number: str,
+        outbound_number: str,
+        merchant_id: Optional[str] = None,
+        template_name: Optional[str] = None,
+    ):
+        """
+        Initiate an outbound call via Plivo.
+
+        The answer_url always points to /plivo/answer which handles:
+        - Starting call recording via Plivo API
+        - Noise cancellation configuration
+        - Pod allocation via Smart Router (when pod isolation is enabled)
+        - Returning XML with WebSocket URL
+
+        Args:
+            customer_mobile_number: Phone number to call
+            outbound_number: Caller ID / outbound number
+            merchant_id: Optional merchant ID for tiered pod allocation
+            template_name: Optional template name for WebSocket path routing
+        """
+        answer_url = f"{self.APP_BASE_URL}/agent/voice/breeze-buddy/plivo/answer"
+        params = {}
+        if merchant_id:
+            params["merchant_id"] = merchant_id
+        if template_name:
+            params["template"] = template_name
+        if params:
+            answer_url += "?" + urlencode(params)
+
         try:
-            # Create the call using Plivo's API
             response = self.client.calls.create(
                 from_=outbound_number,
                 to_=customer_mobile_number,
-                answer_url=f"{self.APP_BASE_URL}/agent/voice/breeze-buddy/plivo/answer",
+                answer_url=answer_url,
                 hangup_url=f"{self.APP_BASE_URL}/agent/voice/breeze-buddy/plivo/callback/status",
             )
 
+            logger.info(f"Plivo call initiated with answer_url: {answer_url}")
             logger.info(f"Plivo call response: {response}")
 
             # Get the call UUID from the response

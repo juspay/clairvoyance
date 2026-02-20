@@ -9,6 +9,9 @@ from typing import Optional
 from app.ai.voice.agents.breeze_buddy.managers.utils import (
     prepare_and_store_initial_greeting,
 )
+from app.ai.voice.agents.breeze_buddy.services.agent_router.client import (
+    safe_release_pod,
+)
 from app.ai.voice.agents.breeze_buddy.services.telephony.exotel.recording import (
     download_call_recording as download_call_recording_exotel,
 )
@@ -407,6 +410,11 @@ async def process_backlog_leads():
                     number_to_use.provider,
                     session,
                 )
+
+                # Pod allocation now happens at webhook time (when customer answers)
+                # via provider-specific answer webhooks. No pre-allocation needed.
+                # merchant_id is passed for tiered pod allocation.
+
                 customer_mobile = (locked_lead.payload or {}).get(
                     "customer_mobile_number"
                 )
@@ -420,13 +428,17 @@ async def process_backlog_leads():
                 call = call_provider.make_call(
                     customer_mobile,
                     number_to_use.number,
+                    merchant_id=locked_lead.merchant_id,
+                    template_name=locked_lead.template,
                 )
 
                 if call and call.get("sid"):
+                    actual_call_sid = str(call.get("sid"))
+
                     await update_lead_call_details(
                         locked_lead.id,
                         LeadCallStatus.PROCESSING,
-                        call.get("sid"),
+                        actual_call_sid,
                         datetime.now(timezone.utc),
                         number_to_use.id,
                     )
@@ -578,6 +590,8 @@ async def process_backlog_leads():
                         retry_calling_provider, session
                     )
 
+                    # Pod allocation happens at webhook time (when customer answers)
+                    # via provider-specific answer webhooks.
                     retry_customer_mobile = (locked_lead.payload or {}).get(
                         "customer_mobile_number"
                     )
@@ -595,13 +609,16 @@ async def process_backlog_leads():
                     retry_call = retry_call_provider.make_call(
                         retry_customer_mobile,
                         retry_number_to_use.number,
+                        merchant_id=locked_lead.merchant_id,
+                        template_name=locked_lead.template,
                     )
 
                     if retry_call and retry_call.get("sid"):
+                        retry_call_sid = str(retry_call.get("sid"))
                         await update_lead_call_details(
                             locked_lead.id,
                             LeadCallStatus.PROCESSING,
-                            retry_call.get("sid"),
+                            retry_call_sid,
                             datetime.now(timezone.utc),
                             retry_number_to_use.id,
                         )
@@ -668,6 +685,9 @@ async def handle_call_completion(
         logger.error(f"Could not find lead for call_id: {call_id}")
         return
 
+    # Release the allocated pod back to the pool
+    await safe_release_pod(call_sid=call_id, reason="call_completed")
+
     if lead.outbound_number_id:
         outbound_number = await get_outbound_number_by_id(lead.outbound_number_id)
         if outbound_number:
@@ -704,8 +724,17 @@ async def handle_call_completion(
 async def handle_unanswered_calls(call_id: str):
     """
     Handles unanswered call events.
+
+    This is called when a call fails to connect (no-answer, busy, failed).
+    It releases the allocated pod (if pod isolation is enabled), cleans up
+    resources, and schedules a retry if configured.
     """
     logger.info(f"Handling unanswered call for call_id: {call_id}")
+
+    # Release the allocated pod — critical for unanswered calls since
+    # the WebSocket never connected, so the pod won't release itself.
+    await safe_release_pod(call_sid=call_id, reason="status_unanswered")
+
     lead = await get_lead_by_call_id(call_id)
     if not lead:
         logger.error(f"Could not find lead for call_id: {call_id}")
@@ -745,7 +774,9 @@ async def handle_unanswered_calls(call_id: str):
         call_end_time=datetime.now(timezone.utc),
     )
 
-    await _retry_call(lead, config, "NO_ANSWER")
+    # Only retry outbound calls - inbound calls should not be retried
+    if lead.call_direction == CallDirection.OUTBOUND:
+        await _retry_call(lead, config, "NO_ANSWER")
 
 
 async def update_call_recording(

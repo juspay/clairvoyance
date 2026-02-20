@@ -40,6 +40,9 @@ from app.ai.voice.agents.breeze_buddy.agent.ivr import (
     prepare_goodbye_audio,
     prepare_ivr_menu_audio,
 )
+from app.ai.voice.agents.breeze_buddy.services.agent_router.client import (
+    safe_allocate_pod,
+)
 from app.ai.voice.agents.breeze_buddy.services.telephony.plivo.recording import (
     start_call_recording,
 )
@@ -81,6 +84,7 @@ async def resolve_call_templates(
         Dict with keys:
             is_outbound: bool
             template_id: Optional[str]         (outbound: template id from lead)
+            merchant_id: Optional[str]         (merchant ID for pod allocation)
             templates: List[TemplateModel]      (inbound: all matched templates)
             template_list: List[dict]           (inbound: [{id, name, description}])
             voice_name: str                     (IVR voice, default "sara")
@@ -105,6 +109,7 @@ async def resolve_call_templates(
         return {
             "is_outbound": True,
             "template_id": str(template.id),
+            "merchant_id": lead.merchant_id,
         }
 
     # Inbound call - look up templates by outbound number
@@ -170,6 +175,7 @@ async def resolve_call_templates(
         "voice_name": voice_name,
         "ivr_greeting": ivr_greeting,
         "ivr_goodbye": ivr_goodbye,
+        "merchant_id": first_template.merchant_id if first_template else None,
     }
 
 
@@ -184,18 +190,35 @@ def _build_websocket_url(
     from_number: str,
     to_number: str = "",
     ivr_mode: bool = False,
+    pod_ws_url: str = "",
 ) -> str:
-    """Build WebSocket URL with query params for any provider."""
-    ws_base = APP_BASE_URL.replace("https://", "wss://").replace("http://", "ws://")
+    """
+    Build WebSocket URL with query params for any provider.
 
-    # Use callback/ws/v2 path for both providers - this matches the WebSocket endpoint
-    # registered at /agent/voice/breeze-buddy/{provider}/callback/ws/v2 which handles
-    # the bidirectional audio stream for voice conversations.
-    url = (
-        f"{ws_base}/agent/voice/breeze-buddy/{provider}/callback/ws/v2"
-        f"?template_id={quote(template_id, safe='')}"
-        f"&from_number={quote(from_number, safe='')}"
-    )
+    When pod_ws_url is provided (from Smart Router allocation), it is used as
+    the base instead of APP_BASE_URL. This routes the WebSocket connection to
+    the specific pod allocated for this call (1-pod-1-call isolation).
+    When pod_ws_url is empty, falls back to the standard shared URL.
+    """
+    if pod_ws_url:
+        # Smart Router returned a pod-specific WebSocket URL.
+        # Append query params so the pod's handler knows the template/caller.
+        url = (
+            f"{pod_ws_url}"
+            f"?template_id={quote(template_id, safe='')}"
+            f"&from_number={quote(from_number, safe='')}"
+        )
+    else:
+        ws_base = APP_BASE_URL.replace("https://", "wss://").replace("http://", "ws://")
+
+        # Use callback/ws/v2 path for both providers - this matches the WebSocket endpoint
+        # registered at /agent/voice/breeze-buddy/{provider}/callback/ws/v2 which handles
+        # the bidirectional audio stream for voice conversations.
+        url = (
+            f"{ws_base}/agent/voice/breeze-buddy/{provider}/callback/ws/v2"
+            f"?template_id={quote(template_id, safe='')}"
+            f"&from_number={quote(from_number, safe='')}"
+        )
 
     if to_number:
         url += f"&to_number={quote(to_number, safe='')}"
@@ -310,10 +333,32 @@ async def _build_provider_response(
             return _build_json_response(ws_url)
         return await _build_xml_response(ws_url)
 
+    # ── Pod allocation (1-pod-1-call isolation) ──────────────────────────
+    # Attempt to allocate a dedicated pod via Smart Router. This runs for
+    # both inbound and outbound calls at answer-time (customer picked up).
+    # If allocation succeeds, the returned ws_url routes the WebSocket
+    # connection directly to that pod. If it fails (disabled, no capacity,
+    # Smart Router down), pod_ws_url stays empty and we fall back to the
+    # standard shared URL via _build_websocket_url().
+    pod_ws_url = ""
+    allocation = await safe_allocate_pod(
+        call_sid=call_id,
+        provider=provider,
+        merchant_id=result.get("merchant_id"),
+        template="ws",
+    )
+    if allocation:
+        pod_ws_url = allocation.ws_url
+        logger.info(f"[{tag}] Pod allocated: {allocation.pod_name} for call {call_id}")
+
     # Outbound call - direct connection
     if result.get("is_outbound"):
         ws_url = _build_websocket_url(
-            provider, result["template_id"], from_number, to_number
+            provider,
+            result["template_id"],
+            from_number,
+            to_number,
+            pod_ws_url=pod_ws_url,
         )
         logger.info(f"[{tag}] Outbound call - ws_url: {ws_url}")
         return await make_response(ws_url)
@@ -324,7 +369,11 @@ async def _build_provider_response(
     # Single template - direct connection
     if len(templates) == 1:
         ws_url = _build_websocket_url(
-            provider, template_list[0]["id"], from_number, to_number
+            provider,
+            template_list[0]["id"],
+            from_number,
+            to_number,
+            pod_ws_url=pod_ws_url,
         )
         logger.info(f"[{tag}] Single template ({templates[0].name})")
         return await make_response(ws_url)
@@ -355,7 +404,12 @@ async def _build_provider_response(
     )
 
     ws_url = _build_websocket_url(
-        provider, template_list[0]["id"], from_number, to_number, ivr_mode=True
+        provider,
+        template_list[0]["id"],
+        from_number,
+        to_number,
+        ivr_mode=True,
+        pod_ws_url=pod_ws_url,
     )
     return await make_response(ws_url)
 
