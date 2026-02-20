@@ -516,6 +516,54 @@ REDIS_PORT = os.getenv("REDIS_PORT", "")
 REDIS_CLUSTER_NODES = os.getenv("REDIS_CLUSTER_NODES", "")
 REDIS_TTL = int(os.getenv("REDIS_TTL", "3600"))  # Default TTL in seconds (1 hour)
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Voice Agent Pod Isolation Configuration (1-pod-1-call architecture)
+# ─────────────────────────────────────────────────────────────────────────────
+# Enable pod isolation mode (when True, uses 1-pod-1-call architecture)
+ENABLE_VOICE_AGENT_POD_ISOLATION = (
+    os.environ.get("ENABLE_VOICE_AGENT_POD_ISOLATION", "false").lower() == "true"
+)
+
+# Pod identity (injected by Kubernetes StatefulSet)
+# POD_NAME is the unique identifier like "voice-agent-0"
+VOICE_AGENT_POD_NAME = os.environ.get("POD_NAME", "")
+VOICE_AGENT_POD_IP = os.environ.get("POD_IP", "")
+
+
+# =============================================================================
+# Smart Router Configuration
+# =============================================================================
+# Smart Router is an external service that handles pod allocation and pool management
+# When enabled, allocation logic moves from Python to Smart Router service
+
+# Base URL for Smart Router API
+SMART_ROUTER_BASE_URL = os.environ.get(
+    "SMART_ROUTER_BASE_URL", "http://smart-router:8080"
+)
+
+# API Key for Smart Router authentication (if required)
+SMART_ROUTER_API_KEY = os.environ.get("SMART_ROUTER_API_KEY", "")
+
+# Timeout for Smart Router API calls (milliseconds)
+SMART_ROUTER_TIMEOUT_MS = int(os.environ.get("SMART_ROUTER_TIMEOUT_MS", "3000"))
+
+# Number of retry attempts for failed allocations
+SMART_ROUTER_RETRY_ATTEMPTS = int(os.environ.get("SMART_ROUTER_RETRY_ATTEMPTS", "3"))
+
+# Circuit Breaker Configuration
+# Number of consecutive failures before opening circuit
+SMART_ROUTER_CB_FAILURE_THRESHOLD = int(
+    os.environ.get("SMART_ROUTER_CB_FAILURE_THRESHOLD", "5")
+)
+# Seconds to wait before trying to recover from open circuit
+SMART_ROUTER_CB_RECOVERY_TIMEOUT = int(
+    os.environ.get("SMART_ROUTER_CB_RECOVERY_TIMEOUT", "30")
+)
+# Number of successful calls in half-open state before closing circuit
+SMART_ROUTER_CB_HALF_OPEN_MAX_CALLS = int(
+    os.environ.get("SMART_ROUTER_CB_HALF_OPEN_MAX_CALLS", "3")
+)
+
 # When True (default), dynamic config keys are fetched from Redis first, then fall back to env/default.
 # When False, Redis is skipped entirely for dynamic config — all keys resolve from env/default directly.
 ENABLE_REDIS_DYNAMIC_CONFIG = (

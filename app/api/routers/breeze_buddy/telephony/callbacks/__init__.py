@@ -8,6 +8,7 @@ Endpoints:
 - GET    /{provider}/callback/details  - Receive call details (Exotel)
 - POST   /{provider}/callback/details  - Receive call details (Twilio/Plivo)
 - POST   /{provider}/callback/status   - Receive call status updates
+- POST   /twilio/callback/twiml-fallback - Fallback TwiML when Smart Router is down
 
 Note: The answer webhook (previously /plivo/answer and /exotel/voicebot-url)
 has been unified into /{provider}/answer in the answer module.
@@ -21,6 +22,7 @@ from .handlers import (
     handle_callback_details_get,
     handle_callback_details_post,
     handle_callback_status,
+    handle_twilio_twiml_fallback,
 )
 
 router = APIRouter()
@@ -60,7 +62,7 @@ async def callback_details_post(
     request: Request, provider: str, background_tasks: BackgroundTasks
 ):
     """
-    Webhook endpoint for receiving call details via POST (Twilio).
+    Webhook endpoint for receiving call details via POST (Twilio/Plivo).
 
     This endpoint receives call recording URLs from Twilio via form data.
     The recording is downloaded and processed asynchronously.
@@ -93,16 +95,23 @@ async def callback_status(request: Request, provider: str):
     This endpoint receives call status updates from telephony providers.
     When a call fails (no-answer, failed, busy), it triggers retry logic.
 
+    Also serves as a backup release mechanism — when a call ends, it notifies
+    Smart Router to release the pod (idempotent, safe if already released).
+
     Path Parameters:
-        provider: Telephony provider name ("twilio" or "exotel")
+        provider: Telephony provider name ("twilio", "exotel", or "plivo")
 
     Form Data (Twilio):
         CallSid: Unique identifier for the call
-        CallStatus: Status of the call (e.g., "completed", "no-answer", "failed", "busy")
+        CallStatus: Status of the call
 
     Form Data (Exotel):
         CallSid: Unique identifier for the call
-        Status: Status of the call (e.g., "completed", "no-answer", "failed", "busy")
+        Status: Status of the call
+
+    Form Data (Plivo):
+        CallUUID: Unique identifier for the call
+        CallStatus: Status of the call
 
     Returns:
         200 OK response (webhook acknowledgment)
@@ -117,3 +126,18 @@ async def callback_status(request: Request, provider: str):
         Form data: CallSid=abc123&CallStatus=no-answer
     """
     return await handle_callback_status(request, provider)
+
+
+@router.post("/twilio/callback/twiml-fallback")
+async def twilio_twiml_fallback(request: Request):
+    """
+    Fallback TwiML endpoint for Twilio when Smart Router is unreachable.
+
+    Twilio calls this via the ``fallback_url`` parameter when the primary webhook
+    (Smart Router allocate) fails. Returns TwiML with static WebSocket URL so
+    the call still works without pod isolation.
+
+    Returns:
+        TwiML XML with <Connect><Stream> pointing to static WebSocket URL
+    """
+    return await handle_twilio_twiml_fallback(request)

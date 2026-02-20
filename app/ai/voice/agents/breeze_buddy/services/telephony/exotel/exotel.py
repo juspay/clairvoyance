@@ -1,5 +1,5 @@
 import json
-from typing import Any, Dict, Optional
+from typing import Optional
 
 import requests
 from fastapi import WebSocket
@@ -45,8 +45,20 @@ class ExotelProvider(VoiceCallProvider):
         )
 
     def make_call(
-        self, customer_mobile_number: str, outbound_number: str
-    ) -> Optional[Dict[str, Any]]:
+        self,
+        customer_mobile_number: str,
+        outbound_number: str,
+        merchant_id: Optional[str] = None,
+        template_name: Optional[str] = None,
+    ):
+        """
+        Initiate an outbound call via Exotel.
+
+        Note: Exotel uses applet-based routing configured in their dashboard,
+        so merchant_id and template_name are not used here directly (included
+        for interface consistency). The template is resolved at answer-time
+        via the voicebot-url webhook handler.
+        """
         flow_url = f"http://my.exotel.com/{self.EXOTEL_ACCOUNT_SID}/exoml/start_voice/{EXOTEL_TEMPLATE_APPLET_APP_ID}"
 
         payload = {
@@ -57,6 +69,7 @@ class ExotelProvider(VoiceCallProvider):
                 self.APP_BASE_URL + "/agent/voice/breeze-buddy/exotel/callback/status"
             ),
         }
+
         url = f"https://{self.EXOTEL_API_KEY}:{self.EXOTEL_API_TOKEN}@{self.EXOTEL_SUBDOMAIN}/v1/Accounts/{self.EXOTEL_ACCOUNT_SID}/Calls/connect.json"
 
         logger.info(f"Making Exotel API call to: {self.EXOTEL_SUBDOMAIN}")
