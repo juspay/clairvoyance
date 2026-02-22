@@ -2,9 +2,9 @@
 
 from datetime import datetime, time
 from enum import Enum
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class OutboundNumberStatus(str, Enum):
@@ -46,6 +46,89 @@ class CallDirection(str, Enum):
 
     INBOUND = "INBOUND"  # Customer called us
     OUTBOUND = "OUTBOUND"  # We called customer
+
+
+class PreCheckType(str, Enum):
+    """Supported pre-check types"""
+
+    EXTERNAL_API = "external_api"
+
+
+class PreCheckDefaultAction(str, Enum):
+    """What to do when a pre-check API call fails or times out"""
+
+    PROCEED = "proceed"  # Fail-open: allow the call
+    SKIP = "skip"  # Fail-closed: block the call
+
+
+class PreCheckHttpRequest(BaseModel):
+    """HTTP request configuration for pre-check API calls.
+    Matches HttpRequestConfig structure for compatibility with HttpRequestExecutor."""
+
+    url: str
+    method: str = "GET"
+    headers: Optional[Dict[str, str]] = None
+    body: Optional[Dict[str, Any]] = None
+    auth: Optional[Dict[str, Any]] = None
+    query_params: Optional[Dict[str, Any]] = None
+    timeout: int = Field(default=10, ge=1, le=30)
+    max_retries: int = Field(default=2, ge=1, le=5)
+
+
+class PreCheckResponseConfig(BaseModel):
+    """Configuration for interpreting pre-check API responses.
+
+    Example:
+        # Proceed only if blocked=false
+        {"response_field": "blocked", "response_field_value": false}
+
+        # Proceed only if status="active"
+        {"response_field": "status", "response_field_value": "active"}
+    """
+
+    response_field: str = Field(description="JSON field name in response to check")
+    response_field_value: Any = Field(
+        description="Expected value. Proceed only when field equals this value."
+    )
+
+
+class PreCheckConfig(BaseModel):
+    """Configuration for a single pre-check.
+
+    Example:
+        {
+            "type": "external_api",
+            "name": "DND Check",
+            "enabled": true,
+            "credential_id": "uuid-of-credential",
+            "http_request": {
+                "url": "{api_base_url}/can-call?phone={customer_mobile_number}",
+                "method": "GET",
+                "headers": {"token": "{api_token}"},
+                "timeout": 5,
+                "max_retries": 2
+            },
+            "response_config": {
+                "response_field": "blocked",
+                "response_field_value": false
+            },
+            "default_on_failure": "proceed"
+        }
+    """
+
+    type: PreCheckType = PreCheckType.EXTERNAL_API
+    name: str = Field(description="Human-readable name for logging (e.g., 'DND Check')")
+    enabled: bool = True
+    credential_id: Optional[str] = Field(
+        default=None,
+        description="UUID of the credential to use for placeholder resolution",
+    )
+    http_request: PreCheckHttpRequest
+    response_config: PreCheckResponseConfig
+    default_on_failure: PreCheckDefaultAction = Field(
+        default=PreCheckDefaultAction.PROCEED,
+        description="What to do if the pre-check API call fails/times out. 'proceed' = fail-open, 'skip' = fail-closed",
+    )
 
 
 class LeadCallTracker(BaseModel):
@@ -116,6 +199,7 @@ class CreateCallExecutionConfigRequest(BaseModel):
     shop_identifier: Optional[str] = None
     enable_international_call: bool = True
     enable_calling: Optional[bool] = True
+    pre_checks: Optional[List[PreCheckConfig]] = None
 
 
 class UpdateCallExecutionConfigRequest(BaseModel):
@@ -132,6 +216,7 @@ class UpdateCallExecutionConfigRequest(BaseModel):
     calling_provider: Optional[CallProvider] = None
     enable_international_call: Optional[bool] = None
     enable_calling: Optional[bool] = None
+    pre_checks: Optional[List[PreCheckConfig]] = None
 
 
 class CallExecutionConfig(BaseModel):
@@ -149,5 +234,6 @@ class CallExecutionConfig(BaseModel):
     shop_identifier: Optional[str] = None
     enable_international_call: bool = True
     enable_calling: bool = True
+    pre_checks: Optional[List[PreCheckConfig]] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None

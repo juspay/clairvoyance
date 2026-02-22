@@ -353,6 +353,12 @@ AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
 AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID", "")
 AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY", "")
 
+# Credential Encryption (AES-256-GCM)
+# Base64-encoded 32-byte key. Generate with:
+#   python -c "import os,base64; print(base64.urlsafe_b64encode(os.urandom(32)).decode())"
+# When empty, credentials are stored as plain JSON (acceptable for dev/local).
+CREDENTIAL_ENCRYPTION_KEY = os.getenv("CREDENTIAL_ENCRYPTION_KEY", "")
+
 # JWT Authentication Configuration
 JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "")
 JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "")

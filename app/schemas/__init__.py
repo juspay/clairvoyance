@@ -57,7 +57,18 @@ from app.schemas.breeze_buddy.core import (
     LeadCallTracker,
     OutboundNumber,
     OutboundNumberStatus,
+    PreCheckConfig,
+    PreCheckDefaultAction,
+    PreCheckHttpRequest,
+    PreCheckResponseConfig,
+    PreCheckType,
     UpdateCallExecutionConfigRequest,
+)
+from app.schemas.breeze_buddy.credentials import (
+    CreateCredentialRequest,
+    Credential,
+    CredentialType,
+    UpdateCredentialRequest,
 )
 
 __all__ = [
@@ -99,7 +110,17 @@ __all__ = [
     "LeadCallTracker",
     "OutboundNumber",
     "OutboundNumberStatus",
+    "PreCheckConfig",
+    "PreCheckDefaultAction",
+    "PreCheckHttpRequest",
+    "PreCheckResponseConfig",
+    "PreCheckType",
     "UpdateCallExecutionConfigRequest",
+    # Credentials
+    "CreateCredentialRequest",
+    "Credential",
+    "CredentialType",
+    "UpdateCredentialRequest",
     # Connection
     "BreezeBuddyDailyConnectRequest",
     # Automatic Voice

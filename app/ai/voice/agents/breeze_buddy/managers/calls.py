@@ -6,6 +6,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
+from app.ai.voice.agents.breeze_buddy.managers.pre_checks import run_pre_checks
 from app.ai.voice.agents.breeze_buddy.managers.utils import (
     prepare_and_store_initial_greeting,
 )
@@ -93,6 +94,73 @@ def _is_within_calling_hours(config: CallExecutionConfig) -> bool:
             current_time >= config.call_start_time
             or current_time <= config.call_end_time
         )
+
+
+async def _run_pre_checks_for_lead(
+    config: CallExecutionConfig,
+    lead: LeadCallTracker,
+    template: Optional[TemplateModel],
+    session,
+) -> bool:
+    """
+    Run pre-checks for a lead and handle failure cases.
+
+    Returns True if pre-checks pass (or no pre-checks configured), False otherwise.
+    On failure, marks lead as FINISHED with outcome=PRECHECK_FAILED and sends webhook.
+    """
+    if not config.pre_checks:
+        return True
+
+    pre_check_result = await run_pre_checks(
+        pre_checks=config.pre_checks,
+        lead=lead,
+        template=template,
+        session=session,
+    )
+
+    if pre_check_result.should_proceed:
+        return True
+
+    # Pre-checks failed
+    logger.info(f"Pre-checks failed for lead {lead.id}: {pre_check_result.summary()}")
+
+    await update_lead_call_completion_details(
+        id=lead.id,
+        status=LeadCallStatus.FINISHED,
+        outcome="PRECHECK_FAILED",
+        meta_data={
+            "pre_check_results": [
+                {
+                    "name": r.name,
+                    "passed": r.passed,
+                    "reason": r.reason,
+                }
+                for r in pre_check_result.results
+            ]
+        },
+        call_end_time=datetime.now(timezone.utc),
+    )
+
+    # Send webhook for pre-check failure
+    reporting_webhook_url = (
+        lead.payload.get("reporting_webhook_url") if lead.payload else None
+    )
+    if reporting_webhook_url:
+        failed_checks = [r for r in pre_check_result.results if not r.passed]
+        webhook_data = {
+            "outcome": "PRECHECK_FAILED",
+            "attemptCount": lead.attempt_count + 1,
+            "failureReason": "; ".join(f"{r.name}: {r.reason}" for r in failed_checks),
+            "orderId": lead.request_id,
+        }
+        try:
+            await send_webhook_with_retry(session, reporting_webhook_url, webhook_data)
+        except Exception as e:
+            logger.error(
+                f"Error sending pre-check failure webhook for lead {lead.id}: {e}"
+            )
+
+    return False
 
 
 async def _get_available_number(
@@ -381,6 +449,13 @@ async def process_backlog_leads():
                 logger.info(
                     f"Lead {locked_lead.id} , template found: {template is not None}"
                 )
+
+                # Run pre-checks before committing resources
+                if not await _run_pre_checks_for_lead(
+                    config, locked_lead, template, session
+                ):
+                    await release_lock_on_lead_by_id(locked_lead.id)
+                    continue
 
                 # Synthesize initial greeting audio and store in Redis
                 if template:
