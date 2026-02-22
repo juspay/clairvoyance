@@ -62,6 +62,7 @@ async def create_configuration_handler(
             template=config.template,
             shop_identifier=config.shop_identifier,
             enable_international_call=config.enable_international_call,
+            pre_checks=config.pre_checks,
         )
 
         if call_execution_config:
@@ -244,6 +245,7 @@ async def update_configuration_handler(
             max_retry=config.max_retry,
             calling_provider=config.calling_provider,
             enable_international_call=config.enable_international_call,
+            pre_checks=config.pre_checks,
         )
 
         if updated_config:

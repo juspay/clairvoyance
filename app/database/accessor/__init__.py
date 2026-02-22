@@ -12,6 +12,15 @@ from .breeze_buddy.call_execution_config import (
     get_call_execution_config_by_merchant_id,
     update_call_execution_config,
 )
+from .breeze_buddy.credentials import (
+    create_credential,
+    delete_credential,
+    get_all_credentials,
+    get_credential_by_id,
+    get_credentials_as_template_vars,
+    get_credentials_by_merchant,
+    update_credential,
+)
 from .breeze_buddy.lead_call_tracker import (
     acquire_lock_on_lead_by_id,
     create_lead_call_tracker,
@@ -79,4 +88,11 @@ __all__ = [
     "get_lead_call_trackers_count",
     "get_leads_by_status_and_time_before",
     "handle_lead_abort",
+    "create_credential",
+    "get_credential_by_id",
+    "get_credentials_by_merchant",
+    "get_all_credentials",
+    "get_credentials_as_template_vars",
+    "update_credential",
+    "delete_credential",
 ]
