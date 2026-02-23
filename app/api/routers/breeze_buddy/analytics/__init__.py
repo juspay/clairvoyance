@@ -19,6 +19,7 @@ from .handlers import (
     get_call_details_analytics,
     get_conversion_analytics,
     get_lead_based_analytics,
+    get_lead_status_counts,
     get_outbound_numbers_analytics,
     get_performance_analytics,
 )
@@ -83,6 +84,8 @@ async def get_analytics(
             data = await get_call_details_analytics(filters, options, current_user)
         elif request.type == AnalyticsType.LEAD_BASED:
             data = await get_lead_based_analytics(filters, options, current_user)
+        elif request.type == AnalyticsType.LEAD_STATUS_COUNTS:
+            data = await get_lead_status_counts(filters, options, current_user)
         elif request.type == AnalyticsType.OUTBOUND_NUMBERS:
             data = await get_outbound_numbers_analytics(filters, options, current_user)
         elif request.type == AnalyticsType.CONVERSION:
