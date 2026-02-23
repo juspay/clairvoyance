@@ -160,6 +160,11 @@ class UserIdleHandlingConfig(BaseModel):
         "The user has been quiet for a while. Ask if they are still there and re-engage them in the conversation.",
         description="System message to prompt LLM when user is idle.",
     )
+    max_retries: int = Field(
+        3,
+        ge=1,
+        description="Maximum number of idle timeout events before ending the call with 'busy' outcome. The user receives at most max_retries prompts. The call ends on the (max_retries+1)th event.",
+    )
 
 
 class ConfigurationModel(BaseModel):

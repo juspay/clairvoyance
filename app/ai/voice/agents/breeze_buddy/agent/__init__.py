@@ -91,7 +91,6 @@ class Agent:
         transport_type: str,
         ws: Optional[WebSocket] = None,
         aiohttp_session: Any = None,
-        hangup_function: Optional[Callable] = None,
         completion_function: Optional[Callable] = None,
         provider: Optional[str] = None,
     ):
@@ -100,7 +99,6 @@ class Agent:
         self.ws = ws
         self.aiohttp_session = aiohttp_session
         self.provider = provider
-        self.hangup_function = hangup_function
         self.completion_function = completion_function
 
         # Runtime state
@@ -129,12 +127,51 @@ class Agent:
         )
         self.default_vad_params: Optional[VADParams] = None
 
+        # User idle handling
+        self._user_idle_callback_handler: Any = None
+        self._context_aggregator: Any = None
+
         # Error tracking
         self.errors: List[Dict[str, Any]] = []
 
     @property
     def is_daily_mode(self) -> bool:
         return self.transport_type == TRANSPORT_TYPE_DAILY
+
+    async def _handle_user_idle_timeout(self, idle_retry_count: int) -> None:
+        """Handle user idle timeout by ending call with BUSY outcome.
+
+        This is passed as a callback to the user idle processor to trigger
+        the full end_conversation flow which collects transcription, errors,
+        and other metadata.
+
+        Args:
+            idle_retry_count: Number of idle retries that occurred
+        """
+        if self.conversation_ended:
+            logger.debug(
+                "Conversation already ended, skipping _handle_user_idle_timeout"
+            )
+            return
+
+        # Don't set conversation_ended here - let end_conversation handler do it
+        # This prevents end_conversation from skipping finalization
+
+        if self.lead:
+            self.lead.outcome = "BUSY"
+            if self.lead.metaData is None:
+                self.lead.metaData = {}
+            self.lead.metaData["call_ended_by"] = "system"
+            self.lead.metaData["call_end_reason"] = "user_idle_timeout"
+            self.lead.metaData["idle_retry_count"] = idle_retry_count
+
+        logger.info(
+            f"Ending call as BUSY due to user idle timeout "
+            f"(retries: {idle_retry_count})"
+        )
+
+        context = TemplateContext(self)
+        await end_conversation(context, {})
 
     async def _setup_daily_transport(self, runner_args: RunnerArguments) -> None:
         """Initialize transport for Daily mode."""
@@ -400,6 +437,15 @@ class Agent:
             logger.info("Idle timeout detected.")
             await self._handle_unexpected_disconnect("idle_timeout")
 
+        # Register user turn started event to reset idle retry counter
+        if self._context_aggregator and self._user_idle_callback_handler:
+            user_aggregator = self._context_aggregator.user()
+
+            @user_aggregator.event_handler("on_user_turn_started")
+            async def on_user_turn_started(aggregator, strategy):
+                """Reset idle retry counter when user starts speaking."""
+                self._user_idle_callback_handler.reset_retry_count()
+
     async def _handle_client_connected(self) -> None:
         """Handle client connection and initialize flow."""
         if (
@@ -493,9 +539,23 @@ class Agent:
             # VAD analyzer is passed to build_pipeline where it's configured inside the
             # LLMUserAggregator. This enables UserTurnStrategies (VAD + Transcription fallback).
             stt, llm, tts = await create_services(self.configurations)
-            pipeline, self.context, context_aggregator = await build_pipeline(
-                self.transport, stt, llm, tts, self.vad_analyzer, self.configurations
+            pipeline, self.context, context_aggregator, user_idle_callback_handler = (
+                await build_pipeline(
+                    self.transport,
+                    stt,
+                    llm,
+                    tts,
+                    self.vad_analyzer,
+                    self.configurations,
+                    on_user_idle_timeout=self._handle_user_idle_timeout,
+                )
             )
+
+            # Store callback handler for resetting retry count on user activity
+            self._user_idle_callback_handler = user_idle_callback_handler
+
+            # Store context aggregator for user turn event registration
+            self._context_aggregator = context_aggregator
 
             # Generate conversation ID and update context
             lead_payload = self.lead.payload if self.lead else None
@@ -570,7 +630,6 @@ class Agent:
 async def telephony_bot(
     ws: WebSocket,
     aiohttp_session: Any,
-    hangup_function: Optional[Callable],
     completion_function: Optional[Callable],
     provider: CallProvider,
 ) -> None:
@@ -579,7 +638,6 @@ async def telephony_bot(
         transport_type=provider,
         ws=ws,
         aiohttp_session=aiohttp_session,
-        hangup_function=hangup_function,
         completion_function=completion_function,
         provider=provider,
     )

@@ -58,15 +58,11 @@ class TwilioProvider(VoiceCallProvider):
             logger.info("Creating Twilio client without proxy")
             return Client(account_sid, auth_token)
 
-    def hangup_call(self, call_sid: str):
-        self.client.calls(call_sid).update(status="completed")
-
     async def handle_websocket(self, websocket: WebSocket, provider: CallProvider):
         logger.info("Using template flow for Twilio WebSocket connection")
         await telephony_bot(
             websocket,
             self.aiohttp_session,
-            self.hangup_call,
             self.completion_callback,
             provider,
         )
