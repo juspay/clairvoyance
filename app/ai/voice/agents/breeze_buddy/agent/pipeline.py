@@ -32,6 +32,7 @@ from pipecat.turns.user_turn_strategies import UserTurnStrategies
 
 from app.ai.voice.agents.breeze_buddy.observability.tracing_setup import setup_tracing
 from app.ai.voice.agents.breeze_buddy.processors import (
+    KeywordFilterProcessor,
     ResponseStateGate,
     UserIdleCallbackHandler,
     create_user_idle_processor,
@@ -207,6 +208,19 @@ async def build_pipeline(
 
     response_gate = ResponseStateGate() if await BB_ENABLE_RESPONSE_GATE() else None
 
+    # Create keyword filter processor from template configuration
+    keyword_filter_config = getattr(configurations, "keyword_filter", None)
+    keyword_filter = (
+        KeywordFilterProcessor(config=keyword_filter_config)
+        if keyword_filter_config is not None and keyword_filter_config.enabled
+        else None
+    )
+    if keyword_filter_config is not None and keyword_filter:
+        logger.info(
+            f"Keyword filter enabled: {len(keyword_filter_config.keywords)} keyword(s), "
+            f"match_type={keyword_filter_config.match_type.value}"
+        )
+
     # Create user idle processor from template configuration
     user_idle_config = getattr(configurations, "user_idle_configuration", None)
     user_idle_result = (
@@ -238,8 +252,16 @@ async def build_pipeline(
         context_aggregator.assistant(),
     ]
 
+    # Insert keyword_filter before response_gate (both sit between stt and user_aggregator).
+    # Order: stt → keyword_filter → response_gate → user_aggregator
+    # This ensures filtered frames never reach the gate's interruption logic.
+    insert_idx = 2  # Position after transport.input() and stt
+    if keyword_filter:
+        pipeline_parts.insert(insert_idx, keyword_filter)
+        insert_idx += 1
+
     if response_gate:
-        pipeline_parts.insert(2, response_gate)
+        pipeline_parts.insert(insert_idx, response_gate)
 
     # Insert user idle processor before user_aggregator (context_aggregator.user()) to monitor user activity
     if user_idle:

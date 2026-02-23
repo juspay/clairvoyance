@@ -147,6 +147,39 @@ class BackgroundSoundFile(str, Enum):
     OFFICE_AMBIENCE = "office-ambience"
 
 
+class KeywordMatchType(str, Enum):
+    """Match strategy for keyword filtering."""
+
+    EXACT = "exact"  # Transcription must equal the keyword (case-insensitive, trimmed)
+    INCLUDES = "includes"  # Transcription must contain the keyword (case-insensitive)
+
+
+class KeywordFilterConfig(BaseModel):
+    """Configuration for filtering out specific transcriptions during bot activity.
+
+    When the bot is actively speaking (TTS) or the LLM is processing a response,
+    user speech matching these keywords is silently dropped — it is neither forwarded
+    to the LLM nor treated as an interruption.
+
+    Example:
+        {
+            "enabled": true,
+            "keywords": ["hello", "yes", "okay"],
+            "match_type": "exact"
+        }
+    """
+
+    enabled: bool = False
+    keywords: List[str] = Field(
+        default_factory=list,
+        description="Keywords to filter out while bot is active.",
+    )
+    match_type: KeywordMatchType = Field(
+        KeywordMatchType.EXACT,
+        description="Whether the transcription must exactly equal or just contain a keyword.",
+    )
+
+
 class UserIdleHandlingConfig(BaseModel):
     """Configuration for user idle detection and handling."""
 
@@ -209,6 +242,10 @@ class ConfigurationModel(BaseModel):
     )
     noise_filter: Optional[NoiseFilterConfig] = Field(
         None, description="Noise filter configuration for audio input processing"
+    )
+    keyword_filter: Optional[KeywordFilterConfig] = Field(
+        None,
+        description="Keyword filter to suppress specific transcriptions while bot is active",
     )
 
 
