@@ -6,6 +6,9 @@ This module provides functionality to load templates from the database.
 
 from typing import Dict, Optional, Tuple
 
+from app.ai.voice.agents.breeze_buddy.template.transformation_function import (
+    TEMPLATE_FUNCTION_REGISTRY,
+)
 from app.ai.voice.agents.breeze_buddy.template.types import (
     TemplateModel,
 )
@@ -142,12 +145,29 @@ class FlowConfigLoader:
         logger.info(f"Loaded {template_vars} template vars from template")
         # 3. Load payload fields (overrides both credentials and secrets)
         expected_schema = template_obj.expected_payload_schema or {}
-        for field_name in expected_schema.keys():
+        for field_name, field_schema in expected_schema.items():
+            value = None
             if call_payload and field_name in call_payload:
-                template_vars[field_name] = call_payload[field_name]
+                value = call_payload[field_name]
             else:
                 logger.warning(f"Field '{field_name}' from schema not found in payload")
-                template_vars[field_name] = ""
+                value = ""
+            # Check for function in schema
+            function_name = None
+            if isinstance(field_schema, dict):
+                function_name = field_schema.get("function")
+            if function_name and function_name in TEMPLATE_FUNCTION_REGISTRY:
+                try:
+                    func = TEMPLATE_FUNCTION_REGISTRY[function_name]
+                    if value is None or value == "":
+                        value = func()
+                    else:
+                        value = func(value)
+                except Exception as e:
+                    logger.warning(
+                        f"Error applying function '{function_name}' to field '{field_name}': {e}"
+                    )
+            template_vars[field_name] = value
 
         logger.info(
             f"Dynamically built template_vars from schema: {list(template_vars.keys())}"
