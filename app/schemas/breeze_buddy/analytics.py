@@ -13,6 +13,7 @@ class AnalyticsType(str, Enum):
     CALL_BASED = "call-based"
     CALL_DETAILS = "call-details"
     LEAD_BASED = "lead-based"
+    LEAD_STATUS_COUNTS = "lead-status-counts"
     OUTBOUND_NUMBERS = "outbound-numbers"
     CONVERSION = "conversion"
     PERFORMANCE = "performance"
@@ -175,6 +176,27 @@ class OutboundNumberStat(BaseModel):
     total_calls: int
     calls_picked: int
     calls_no_answer: int
+
+
+class LeadStatusCountResult(BaseModel):
+    """Lead status count result - counts by status for a merchant or overall"""
+
+    merchant_id: Optional[str] = Field(
+        None, description="Merchant ID (null for aggregate/total)"
+    )
+    shop_identifier: Optional[str] = Field(
+        None, description="Shop identifier (if available)"
+    )
+    backlog_count: int = Field(
+        default=0, description="Number of leads in BACKLOG status"
+    )
+    processing_count: int = Field(
+        default=0, description="Number of leads in PROCESSING status"
+    )
+    finished_count: int = Field(
+        default=0, description="Number of leads in FINISHED status"
+    )
+    total_count: int = Field(default=0, description="Total number of leads")
 
 
 class AnalyticsResponse(BaseModel):

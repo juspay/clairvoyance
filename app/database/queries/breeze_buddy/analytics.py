@@ -19,6 +19,26 @@ OUTBOUND_NUMBER_TABLE = "outbound_number"
 VALID_JSONB_KEY_PATTERN = re.compile(r"^[a-zA-Z0-9_-]+$")
 
 
+def escape_ilike_pattern(value: str) -> str:
+    """
+    Escape ILIKE special characters for literal matching.
+
+    ILIKE uses % and _ as wildcards:
+    - % matches any sequence of characters
+    - _ matches any single character
+
+    To match these characters literally, we escape them with backslash.
+    We also escape backslash itself to handle it correctly.
+
+    Args:
+        value: The string to escape
+
+    Returns:
+        Escaped string safe for ILIKE pattern matching
+    """
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 def is_uuid(value: str) -> bool:
     """
     Check if a string is a valid UUID.
@@ -715,6 +735,113 @@ def get_analytics_outbound_numbers_query(
         {where_clause}
         GROUP BY ou.id, ou.number, ou.provider, ou.status, ou.channels, ou.maximum_channels
         ORDER BY total_calls DESC;
+    """
+
+    return text, values
+
+
+def get_analytics_lead_status_counts_query(
+    filters: Dict[str, Any],
+    page: int = 1,
+    limit: int = 10,
+    search_merchant_id: Optional[str] = None,
+    search_shop_identifier: Optional[str] = None,
+) -> Tuple[str, List[Any]]:
+    """
+    Generate query for lead status counts with pagination and search.
+    Returns counts grouped by merchant and shop, sorted by total_count DESC.
+
+    Args:
+        filters: Analytics filters (merchant_id, merchant_ids, date range, etc.)
+        page: Page number (1-indexed)
+        limit: Number of rows per page
+        search_merchant_id: Partial merchant_id to search for (case-insensitive)
+        search_shop_identifier: Partial shop_identifier to search for (case-insensitive)
+
+    Returns:
+        Tuple of (query_string, values_list)
+    """
+    conditions, values = build_analytics_where_clause(
+        filters, filter_execution_mode=False
+    )
+
+    # Add search conditions for merchant_id
+    if search_merchant_id:
+        conditions.append(f"lct.merchant_id ILIKE ${len(values) + 1} ESCAPE '\\'")
+        values.append(f"%{escape_ilike_pattern(search_merchant_id)}%")
+
+    # Add search conditions for shop_identifier
+    if search_shop_identifier:
+        conditions.append(f"lct.shop_identifier ILIKE ${len(values) + 1} ESCAPE '\\'")
+        values.append(f"%{escape_ilike_pattern(search_shop_identifier)}%")
+
+    where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
+
+    # Calculate offset (convert 1-indexed page to 0-indexed offset)
+    offset = (page - 1) * limit
+
+    # Main query with pagination - always groups by merchant_id and shop_identifier
+    text = f"""
+        SELECT
+            lct.merchant_id,
+            lct.shop_identifier,
+            COUNT(*) FILTER (WHERE lct.status = 'BACKLOG') as backlog_count,
+            COUNT(*) FILTER (WHERE lct.status = 'PROCESSING') as processing_count,
+            COUNT(*) FILTER (WHERE lct.status = 'FINISHED') as finished_count,
+            COUNT(*) as total_count
+        FROM "{LEAD_CALL_TRACKER_TABLE}" lct
+        {where_clause}
+        GROUP BY lct.merchant_id, lct.shop_identifier
+        ORDER BY total_count DESC
+        LIMIT ${len(values) + 1} OFFSET ${len(values) + 2};
+    """
+    values.append(limit)
+    values.append(offset)
+
+    return text, values
+
+
+def get_analytics_lead_status_counts_total_query(
+    filters: Dict[str, Any],
+    search_merchant_id: Optional[str] = None,
+    search_shop_identifier: Optional[str] = None,
+) -> Tuple[str, List[Any]]:
+    """
+    Generate query to get total count of lead status groups for pagination.
+    Returns the total number of merchant/shop combinations matching filters.
+
+    Args:
+        filters: Analytics filters
+        search_merchant_id: Partial merchant_id to search for
+        search_shop_identifier: Partial shop_identifier to search for
+
+    Returns:
+        Tuple of (query_string, values_list)
+    """
+    conditions, values = build_analytics_where_clause(
+        filters, filter_execution_mode=False
+    )
+
+    # Add search conditions for merchant_id
+    if search_merchant_id:
+        conditions.append(f"lct.merchant_id ILIKE ${len(values) + 1} ESCAPE '\\'")
+        values.append(f"%{escape_ilike_pattern(search_merchant_id)}%")
+
+    # Add search conditions for shop_identifier
+    if search_shop_identifier:
+        conditions.append(f"lct.shop_identifier ILIKE ${len(values) + 1} ESCAPE '\\'")
+        values.append(f"%{escape_ilike_pattern(search_shop_identifier)}%")
+
+    where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
+
+    text = f"""
+        SELECT COUNT(*) as total
+        FROM (
+            SELECT 1
+            FROM "{LEAD_CALL_TRACKER_TABLE}" lct
+            {where_clause}
+            GROUP BY lct.merchant_id, lct.shop_identifier
+        ) as grouped;
     """
 
     return text, values

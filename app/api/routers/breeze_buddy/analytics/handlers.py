@@ -12,6 +12,7 @@ from app.database.accessor.breeze_buddy.analytics import (
     get_call_details_from_db,
     get_lead_based_analytics_from_db,
     get_lead_based_trends_from_db,
+    get_lead_status_counts_from_db,
     get_outbound_numbers_analytics_from_db,
     get_summary_analytics_from_db,
     get_trends_analytics_from_db,
@@ -624,4 +625,78 @@ async def get_performance_analytics(
         "type": "performance",
         "filters_applied": filters,
         "results": performance_data,
+    }
+
+
+async def get_lead_status_counts(
+    filters: Dict[str, Any], options: Dict[str, Any], current_user: UserInfo
+) -> Dict[str, Any]:
+    """
+    Get lead status counts with pagination and search.
+    Groups by merchant_id and shop_identifier, sorted by total_count DESC.
+
+    Args:
+        filters: Analytics filters (date range, merchant_id, shop_identifier for search)
+        options: Analytics options (page, limit)
+        current_user: Current authenticated user info
+
+    Returns:
+        Dict with pagination info and lead status counts
+    """
+    # Extract pagination parameters from options (default: page 1, limit 10)
+    page = options.get("page", 1)
+    limit = options.get("limit", 10)
+
+    # Ensure valid pagination values
+    page = max(1, page)
+    limit = max(1, min(limit, 100))  # Cap at 100 rows per page
+
+    # Extract search parameters from filters
+    # These are partial text searches, not exact matches
+    search_merchant_id = filters.get("merchant_id")
+    search_shop_identifier = filters.get("shop_identifier")
+
+    # Remove search fields from filters before passing to database
+    # (they're handled separately as partial matches)
+    db_filters = {
+        k: v for k, v in filters.items() if k not in ["merchant_id", "shop_identifier"]
+    }
+
+    # If user is not admin, automatically filter by their merchant_id
+    if current_user.role != "admin":
+        # Use first merchant_id from the list (users typically have one)
+        db_filters["merchant_id"] = (
+            current_user.merchant_ids[0] if current_user.merchant_ids else None
+        )
+
+    # Get lead status counts from database with pagination
+    result = await get_lead_status_counts_from_db(
+        filters=db_filters,
+        page=page,
+        limit=limit,
+        search_merchant_id=search_merchant_id,
+        search_shop_identifier=search_shop_identifier,
+    )
+
+    # Format results
+    formatted_results = []
+    for row in result["results"]:
+        formatted_results.append(
+            {
+                "merchant_id": row.get("merchant_id"),
+                "shop_identifier": (
+                    row.get("shop_identifier") if row.get("shop_identifier") else None
+                ),
+                "backlog_count": row.get("backlog_count", 0) or 0,
+                "processing_count": row.get("processing_count", 0) or 0,
+                "finished_count": row.get("finished_count", 0) or 0,
+                "total_count": row.get("total_count", 0) or 0,
+            }
+        )
+
+    return {
+        "type": "lead-status-counts",
+        "filters_applied": filters,
+        "pagination": result["pagination"],
+        "results": formatted_results,
     }

@@ -12,6 +12,8 @@ from app.database.queries.breeze_buddy.analytics import (
     get_analytics_count_query,
     get_analytics_lead_based_query,
     get_analytics_lead_based_trends_query,
+    get_analytics_lead_status_counts_query,
+    get_analytics_lead_status_counts_total_query,
     get_analytics_outbound_numbers_query,
     get_analytics_summary_query,
     get_analytics_trends_query,
@@ -287,4 +289,67 @@ async def get_lead_based_trends_from_db(
 
     except Exception as e:
         logger.error(f"Error getting lead-based trends: {e}", exc_info=True)
+        raise
+
+
+async def get_lead_status_counts_from_db(
+    filters: Dict[str, Any],
+    page: int = 1,
+    limit: int = 10,
+    search_merchant_id: Optional[str] = None,
+    search_shop_identifier: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Get lead status counts with pagination and search.
+    Always groups by merchant_id and shop_identifier, sorted by total_count DESC.
+
+    Args:
+        filters: Analytics filters (merchant_id, merchant_ids, date range, etc.)
+        page: Page number (1-indexed)
+        limit: Number of rows per page
+        search_merchant_id: Partial merchant_id to search for (case-insensitive)
+        search_shop_identifier: Partial shop_identifier to search for (case-insensitive)
+
+    Returns:
+        Dict with 'results' (list of counts) and 'pagination' (total, page, limit, total_pages)
+    """
+    logger.info(
+        f"[Analytics DB] Getting lead status counts with filters: {filters}, "
+        f"page: {page}, limit: {limit}, "
+        f"search_merchant_id: {search_merchant_id}, search_shop_identifier: {search_shop_identifier}"
+    )
+
+    try:
+        # Get paginated data
+        query_text, values = get_analytics_lead_status_counts_query(
+            filters, page, limit, search_merchant_id, search_shop_identifier
+        )
+        result = await run_parameterized_query(query_text, values)
+
+        # Get total count for pagination
+        total_query_text, total_values = get_analytics_lead_status_counts_total_query(
+            filters, search_merchant_id, search_shop_identifier
+        )
+        total_result = await run_parameterized_query(total_query_text, total_values)
+        total_count = total_result[0]["total"] if total_result else 0
+
+        total_pages = (total_count + limit - 1) // limit if limit > 0 else 1
+
+        logger.info(
+            f"[Analytics DB] Lead status counts returned {len(result) if result else 0} rows, "
+            f"total: {total_count}, total_pages: {total_pages}"
+        )
+
+        return {
+            "results": [dict(row) for row in result] if result else [],
+            "pagination": {
+                "page": page,
+                "limit": limit,
+                "total": total_count,
+                "total_pages": total_pages,
+            },
+        }
+
+    except Exception as e:
+        logger.error(f"Error getting lead status counts: {e}", exc_info=True)
         raise
