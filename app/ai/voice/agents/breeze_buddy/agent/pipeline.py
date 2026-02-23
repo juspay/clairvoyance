@@ -33,8 +33,8 @@ from pipecat.turns.user_turn_strategies import UserTurnStrategies
 
 from app.ai.voice.agents.breeze_buddy.observability.tracing_setup import setup_tracing
 from app.ai.voice.agents.breeze_buddy.processors import (
-    KeywordFilterProcessor,
     ResponseStateGate,
+    TranscriptionGateProcessor,
     UserIdleCallbackHandler,
     create_user_idle_processor,
 )
@@ -152,7 +152,13 @@ async def build_pipeline(
     vad_analyzer: Optional[SileroVADAnalyzer] = None,
     configurations: Optional[ConfigurationModel] = None,
     on_user_idle_timeout: Optional[Callable[[int], Any]] = None,
-) -> tuple[Pipeline, LLMContext, Any, Optional[UserIdleCallbackHandler]]:
+) -> tuple[
+    Pipeline,
+    LLMContext,
+    Any,
+    Optional[UserIdleCallbackHandler],
+    TranscriptionGateProcessor,
+]:
     """Build the processing pipeline.
 
     Uses the universal LLMContextAggregatorPair with UserTurnStrategies:
@@ -173,8 +179,12 @@ async def build_pipeline(
         on_user_idle_timeout: Async callback to handle user idle timeout (triggers full end_conversation flow)
 
     Returns:
-        Tuple of (pipeline, context, context_aggregator, user_idle_callback_handler)
-        The user_idle_callback_handler can be used to reset retry count on user activity.
+        5-tuple of (pipeline, context, context_aggregator, user_idle_callback_handler, transcription_gate)
+        - pipeline: the built Pipeline instance
+        - context: the LLMContext for the conversation
+        - context_aggregator: LLMContextAggregatorPair for managing user/assistant turns
+        - user_idle_callback_handler: resets retry count on user activity; None if idle detection is disabled
+        - transcription_gate: TranscriptionGateProcessor instance wired into the pipeline
     """
     # TODO: Add a breeze-buddy-specific context summarizer.
     # Pipecat does not provide built-in summarization; implement one under
@@ -212,16 +222,16 @@ async def build_pipeline(
 
     response_gate = ResponseStateGate() if await BB_ENABLE_RESPONSE_GATE() else None
 
-    # Create keyword filter processor from template configuration
+    # TranscriptionGateProcessor is always in the pipeline.
+    # It is a transparent passthrough when neither mute nor keyword filter is active.
     keyword_filter_config = getattr(configurations, "keyword_filter", None)
-    keyword_filter = (
-        KeywordFilterProcessor(config=keyword_filter_config)
-        if keyword_filter_config is not None and keyword_filter_config.enabled
-        else None
+    transcription_gate = TranscriptionGateProcessor(
+        keyword_filter_config=keyword_filter_config
     )
-    if keyword_filter_config is not None and keyword_filter:
+    if keyword_filter_config and keyword_filter_config.enabled:
         logger.info(
-            f"Keyword filter enabled: {len(keyword_filter_config.keywords)} keyword(s), "
+            f"TranscriptionGate: keyword filter enabled with "
+            f"{len(keyword_filter_config.keywords)} keyword(s), "
             f"match_type={keyword_filter_config.match_type.value}"
         )
 
@@ -246,9 +256,13 @@ async def build_pipeline(
     # Store reference to user aggregator for position lookup
     user_aggregator = context_aggregator.user()
 
+    # Order: stt → transcription_gate → response_gate → user_aggregator
+    # transcription_gate must be before response_gate so dropped frames never
+    # reach the interruption logic.
     pipeline_parts = [
         transport.input(),
         stt,
+        transcription_gate,
         user_aggregator,
         llm,
         tts,
@@ -256,18 +270,11 @@ async def build_pipeline(
         context_aggregator.assistant(),
     ]
 
-    # Insert keyword_filter before response_gate (both sit between stt and user_aggregator).
-    # Order: stt → keyword_filter → response_gate → user_aggregator
-    # This ensures filtered frames never reach the gate's interruption logic.
-    insert_idx = 2  # Position after transport.input() and stt
-    if keyword_filter:
-        pipeline_parts.insert(insert_idx, keyword_filter)
-        insert_idx += 1
-
+    insert_idx = 3  # Position after transport.input(), stt, transcription_gate
     if response_gate:
         pipeline_parts.insert(insert_idx, response_gate)
 
-    # Insert user idle processor before user_aggregator (context_aggregator.user()) to monitor user activity
+    # Insert user idle processor before user_aggregator to monitor user activity
     if user_idle:
         try:
             user_aggregator_idx = pipeline_parts.index(user_aggregator)
@@ -284,6 +291,7 @@ async def build_pipeline(
         context,
         context_aggregator,
         user_idle_callback_handler,
+        transcription_gate,
     )
 
 

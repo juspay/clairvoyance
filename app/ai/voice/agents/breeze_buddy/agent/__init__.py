@@ -131,6 +131,9 @@ class Agent:
         self._user_idle_callback_handler: Any = None
         self._context_aggregator: Any = None
 
+        # Transcription gate processor (always present in pipeline)
+        self.speech_gate: Any = None
+
         # Error tracking
         self.errors: List[Dict[str, Any]] = []
 
@@ -539,16 +542,20 @@ class Agent:
             # VAD analyzer is passed to build_pipeline where it's configured inside the
             # LLMUserAggregator. This enables UserTurnStrategies (VAD + Transcription fallback).
             stt, llm, tts = await create_services(self.configurations)
-            pipeline, self.context, context_aggregator, user_idle_callback_handler = (
-                await build_pipeline(
-                    self.transport,
-                    stt,
-                    llm,
-                    tts,
-                    self.vad_analyzer,
-                    self.configurations,
-                    on_user_idle_timeout=self._handle_user_idle_timeout,
-                )
+            (
+                pipeline,
+                self.context,
+                context_aggregator,
+                user_idle_callback_handler,
+                self.speech_gate,
+            ) = await build_pipeline(
+                self.transport,
+                stt,
+                llm,
+                tts,
+                self.vad_analyzer,
+                self.configurations,
+                on_user_idle_timeout=self._handle_user_idle_timeout,
             )
 
             # Store callback handler for resetting retry count on user activity
