@@ -44,6 +44,16 @@ class TemplateContext:
         return self.bot.vad_analyzer
 
     @property
+    def speech_gate(self):
+        """Get TranscriptionGateProcessor instance.
+
+        Returns None if the pipeline has not been built yet or if an error
+        occurred during pipeline construction. Callers should guard with
+        ``if context.speech_gate:`` before use.
+        """
+        return getattr(self.bot, "speech_gate", None)
+
+    @property
     def aiohttp_session(self):
         """Get AIO Http Session instance"""
         return self.bot.aiohttp_session

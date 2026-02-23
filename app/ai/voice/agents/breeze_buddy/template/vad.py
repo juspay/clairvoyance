@@ -5,7 +5,10 @@ This module handles VAD parameter management for template-based voice agents:
 1. Building default VAD params from template config
 2. Resetting VAD params to default template-level config
 3. Applying node-specific VAD configurations
-4. Muting/unmuting VAD
+4. Muting/unmuting the VAD analyzer (VAD-enabled path only)
+
+For the full mute_stt/unmute_stt routing (VAD → TranscriptionGate fallback),
+see handlers/internal/stt.py.
 """
 
 from pipecat.audio.vad.vad_analyzer import VADParams
@@ -167,98 +170,80 @@ def _apply_vad_config_to_analyzer(vad_analyzer, vad_config, call_sid: str):
 
 
 def mute_vad(context: TemplateContext):
-    """
-    Mute VAD by setting confidence to 1.0.
+    """Mute STT by setting VAD confidence to 1.0 (impossible to trigger).
 
-    Stores the previous VAD params so they can be restored when unmuting.
+    Stores previous params so they can be restored on unmute.
+    Only call this when context.vad_analyzer is available.
     """
-    if context.vad_analyzer:
-        # Store current VAD params before muting
-        context.bot._pre_mute_vad_params = {
-            "confidence": context.vad_analyzer.params.confidence,
-            "start_secs": context.vad_analyzer.params.start_secs,
-            "stop_secs": context.vad_analyzer.params.stop_secs,
-            "min_volume": context.vad_analyzer.params.min_volume,
-        }
-        old_confidence = context.vad_analyzer.params.confidence
-        context.vad_analyzer.set_params(
-            VADParams(
-                confidence=1.0,
-                start_secs=context.vad_analyzer.params.start_secs,
-                stop_secs=context.vad_analyzer.params.stop_secs,
-                min_volume=context.vad_analyzer.params.min_volume,
-            )
+    # Store current VAD params before muting
+    context.bot._pre_mute_vad_params = {
+        "confidence": context.vad_analyzer.params.confidence,
+        "start_secs": context.vad_analyzer.params.start_secs,
+        "stop_secs": context.vad_analyzer.params.stop_secs,
+        "min_volume": context.vad_analyzer.params.min_volume,
+    }
+    old_confidence = context.vad_analyzer.params.confidence
+    context.vad_analyzer.set_params(
+        VADParams(
+            confidence=1.0,
+            start_secs=context.vad_analyzer.params.start_secs,
+            stop_secs=context.vad_analyzer.params.stop_secs,
+            min_volume=context.vad_analyzer.params.min_volume,
         )
-        logger.info(
-            f"STT muted via VAD for call {context.call_sid} "
-            f"(confidence: {old_confidence} -> 1.0, stored pre-mute params)"
-        )
-        return True
-    else:
-        logger.warning(
-            f"No VAD analyzer found for call {context.call_sid}, cannot mute STT"
-        )
-        return False
+    )
+    logger.info(
+        f"STT muted via VAD for call {context.call_sid} "
+        f"(confidence: {old_confidence} -> 1.0, stored pre-mute params)"
+    )
 
 
 def unmute_vad(context: TemplateContext):
-    """
-    Unmute VAD by restoring the params that were stored before muting.
+    """Restore VAD params after a mute.
 
-    Falls back to template's default VAD params or static config if no stored params exist.
+    Tries stored pre-mute params first, then template defaults, then static config.
+    Only call this when context.vad_analyzer is available.
     """
-    if context.vad_analyzer:
-        old_confidence = context.vad_analyzer.params.confidence
-        bot = context.bot
+    old_confidence = context.vad_analyzer.params.confidence
+    bot = context.bot
 
-        # Check if we have stored pre-mute params
-        if hasattr(bot, "_pre_mute_vad_params") and bot._pre_mute_vad_params:
-            stored_params = bot._pre_mute_vad_params
-            context.vad_analyzer.set_params(
-                VADParams(
-                    confidence=stored_params["confidence"],
-                    start_secs=stored_params["start_secs"],
-                    stop_secs=stored_params["stop_secs"],
-                    min_volume=stored_params["min_volume"],
-                )
+    if hasattr(bot, "_pre_mute_vad_params") and bot._pre_mute_vad_params:
+        stored_params = bot._pre_mute_vad_params
+        context.vad_analyzer.set_params(
+            VADParams(
+                confidence=stored_params["confidence"],
+                start_secs=stored_params["start_secs"],
+                stop_secs=stored_params["stop_secs"],
+                min_volume=stored_params["min_volume"],
             )
-            logger.info(
-                f"STT unmuted via VAD for call {context.call_sid} "
-                f"(restored pre-mute params: {stored_params})"
-            )
-            # Clear stored params after restoration
-            bot._pre_mute_vad_params = None
-        elif hasattr(bot, "default_vad_params") and bot.default_vad_params:
-            # Fall back to template's default VAD params
-            context.vad_analyzer.set_params(
-                VADParams(
-                    confidence=bot.default_vad_params.confidence,
-                    start_secs=bot.default_vad_params.start_secs,
-                    stop_secs=bot.default_vad_params.stop_secs,
-                    min_volume=bot.default_vad_params.min_volume,
-                )
-            )
-            logger.info(
-                f"STT unmuted via VAD for call {context.call_sid} "
-                f"(no stored params, using default: confidence {old_confidence} -> {bot.default_vad_params.confidence})"
-            )
-        else:
-            # Fall back to static config
-            context.vad_analyzer.set_params(
-                VADParams(
-                    confidence=BREEZE_BUDDY_VAD_CONFIDENCE,
-                    start_secs=BREEZE_BUDDY_VAD_START_SECS,
-                    stop_secs=BREEZE_BUDDY_VAD_STOP_SECS,
-                    min_volume=BREEZE_BUDDY_VAD_MIN_VOLUME,
-                )
-            )
-            logger.info(
-                f"STT unmuted via VAD for call {context.call_sid} "
-                f"(no stored/default params, using static config: confidence {old_confidence} -> {BREEZE_BUDDY_VAD_CONFIDENCE})"
-            )
-        return True
-    else:
-        logger.warning(
-            f"No VAD analyzer found for call {context.call_sid}, cannot unmute STT"
         )
-        return False
+        logger.info(
+            f"STT unmuted via VAD for call {context.call_sid} "
+            f"(restored pre-mute params: {stored_params})"
+        )
+        bot._pre_mute_vad_params = None
+    elif hasattr(bot, "default_vad_params") and bot.default_vad_params:
+        context.vad_analyzer.set_params(
+            VADParams(
+                confidence=bot.default_vad_params.confidence,
+                start_secs=bot.default_vad_params.start_secs,
+                stop_secs=bot.default_vad_params.stop_secs,
+                min_volume=bot.default_vad_params.min_volume,
+            )
+        )
+        logger.info(
+            f"STT unmuted via VAD for call {context.call_sid} "
+            f"(no stored params, using default: confidence {old_confidence} -> {bot.default_vad_params.confidence})"
+        )
+    else:
+        context.vad_analyzer.set_params(
+            VADParams(
+                confidence=BREEZE_BUDDY_VAD_CONFIDENCE,
+                start_secs=BREEZE_BUDDY_VAD_START_SECS,
+                stop_secs=BREEZE_BUDDY_VAD_STOP_SECS,
+                min_volume=BREEZE_BUDDY_VAD_MIN_VOLUME,
+            )
+        )
+        logger.info(
+            f"STT unmuted via VAD for call {context.call_sid} "
+            f"(no stored/default params, using static config: confidence {old_confidence} -> {BREEZE_BUDDY_VAD_CONFIDENCE})"
+        )
