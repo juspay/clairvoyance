@@ -36,7 +36,6 @@ class PlivoProvider(VoiceCallProvider):
         await telephony_bot(
             websocket,
             self.aiohttp_session,
-            None,
             self.completion_callback,
             provider,
         )

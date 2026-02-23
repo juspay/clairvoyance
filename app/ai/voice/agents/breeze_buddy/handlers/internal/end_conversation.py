@@ -99,14 +99,6 @@ async def end_conversation(context: TemplateContext, args, transition_to=None):
         # Update OpenTelemetry span with comprehensive evaluation data for LLM-as-a-Judge
         update_span_with_evaluation_data(context)
 
-        # Hangup call
-        if context.hangup_function:
-            logger.info(f"Calling hangup_function for call {context.call_sid}")
-            context.hangup_function(context.call_sid)
-            logger.info(f"Successfully hung up call {context.call_sid}")
-        else:
-            logger.warning(f"No hangup_function available for call {context.call_sid}")
-
         # Update database
         # For Daily mode: use lead.id (no telephony call_sid exists)
         # For telephony: use call_sid (how completion_function looks up the lead)

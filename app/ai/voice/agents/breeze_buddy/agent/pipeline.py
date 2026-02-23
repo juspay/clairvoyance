@@ -1,7 +1,7 @@
 """Pipeline creation and service initialization for voice agents."""
 
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 from zoneinfo import ZoneInfo
 
 from pipecat.audio.vad.silero import SileroVADAnalyzer
@@ -33,6 +33,7 @@ from pipecat.turns.user_turn_strategies import UserTurnStrategies
 from app.ai.voice.agents.breeze_buddy.observability.tracing_setup import setup_tracing
 from app.ai.voice.agents.breeze_buddy.processors import (
     ResponseStateGate,
+    UserIdleCallbackHandler,
     create_user_idle_processor,
 )
 from app.ai.voice.agents.breeze_buddy.stt import get_stt_service
@@ -148,7 +149,8 @@ async def build_pipeline(
     tts: Any,
     vad_analyzer: Optional[SileroVADAnalyzer] = None,
     configurations: Optional[ConfigurationModel] = None,
-) -> tuple[Pipeline, LLMContext, Any]:
+    on_user_idle_timeout: Optional[Callable[[int], Any]] = None,
+) -> tuple[Pipeline, LLMContext, Any, Optional[UserIdleCallbackHandler]]:
     """Build the processing pipeline.
 
     Uses the universal LLMContextAggregatorPair with UserTurnStrategies:
@@ -166,9 +168,11 @@ async def build_pipeline(
         tts: Text-to-speech service
         vad_analyzer: SileroVADAnalyzer instance for voice activity detection
         configurations: Template configuration model
+        on_user_idle_timeout: Async callback to handle user idle timeout (triggers full end_conversation flow)
 
     Returns:
-        Tuple of (pipeline, context, context_aggregator)
+        Tuple of (pipeline, context, context_aggregator, user_idle_callback_handler)
+        The user_idle_callback_handler can be used to reset retry count on user activity.
     """
     # TODO: Add a breeze-buddy-specific context summarizer.
     # Pipecat does not provide built-in summarization; implement one under
@@ -205,15 +209,21 @@ async def build_pipeline(
 
     # Create user idle processor from template configuration
     user_idle_config = getattr(configurations, "user_idle_configuration", None)
-    user_idle = (
+    user_idle_result = (
         create_user_idle_processor(
             enabled=user_idle_config.enabled,
             timeout=user_idle_config.timeout,
             message=user_idle_config.idle_message,
+            max_retries=user_idle_config.max_retries,
+            on_user_idle_timeout=on_user_idle_timeout,
         )
         if user_idle_config is not None
         else None
     )
+
+    # Unpack result - returns (processor, callback_handler) or None
+    user_idle = user_idle_result[0] if user_idle_result else None
+    user_idle_callback_handler = user_idle_result[1] if user_idle_result else None
 
     # Store reference to user aggregator for position lookup
     user_aggregator = context_aggregator.user()
@@ -243,7 +253,12 @@ async def build_pipeline(
             )
             # Don't insert user_idle - it's safer to disable the feature than insert at wrong position
 
-    return Pipeline(pipeline_parts), context, context_aggregator
+    return (
+        Pipeline(pipeline_parts),
+        context,
+        context_aggregator,
+        user_idle_callback_handler,
+    )
 
 
 async def create_pipeline_task(

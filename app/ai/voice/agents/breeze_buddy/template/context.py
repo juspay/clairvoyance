@@ -54,11 +54,6 @@ class TemplateContext:
         return self.bot.completion_function
 
     @property
-    def hangup_function(self):
-        """Get Hangup Function instance"""
-        return self.bot.hangup_function
-
-    @property
     def transport(self):
         """Get Transport instance"""
         return self.bot.transport
