@@ -167,13 +167,13 @@ class LanguageAwareSarvamTTS(SarvamTTSService):
 
             if new_lang_code != current_lang_code:
                 logger.info(
-                    f"[SARVAM] Script detected: {detected_script} - switching {current_lang_code} to {new_lang_code}"
+                    f"[SARVAM] Script detected: {detected_script} - switching {current_lang_code} to {current_lang_code}"
                 )
-                self._settings["target_language_code"] = new_lang_code
+                self._settings["target_language_code"] = current_lang_code
 
                 try:
                     await self._send_config()
-                    logger.info(f"[SARVAM] Language switched to {new_lang_code}")
+                    logger.info(f"[SARVAM] Language switched to {current_lang_code}")
                     return True
                 except Exception as e:
                     logger.warning(
