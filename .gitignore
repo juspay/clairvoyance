@@ -49,3 +49,6 @@ logs/
 Thumbs.db
 
 logs
+
+# Claude
+.claude
