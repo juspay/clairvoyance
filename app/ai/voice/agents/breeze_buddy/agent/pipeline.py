@@ -24,7 +24,6 @@ from pipecat.processors.aggregators.llm_response_universal import (
 from pipecat.services.azure.llm import AzureLLMService
 from pipecat.services.openai.base_llm import BaseOpenAILLMService
 from pipecat.turns.user_start import (
-    BaseUserTurnStartStrategy,
     TranscriptionUserTurnStartStrategy,
     VADUserTurnStartStrategy,
 )
@@ -183,20 +182,17 @@ async def build_pipeline(
 
     # User turn strategies:
     # 1. VADUserTurnStartStrategy: Primary detector, fires on VAD speech detection (~100ms).
-    #    Only included when vad_analyzer is provided (BREEZE_BUDDY_ENABLE_VAD=true).
     #    First-one-wins semantics — if VAD fires first, transcription fallback is skipped.
-    # 2. TranscriptionUserTurnStartStrategy: Used as sole start strategy when VAD is disabled,
-    #    or as fallback for soft speech that VAD misses when VAD is enabled.
-    #    With use_interim=True, triggers on any interim transcription from Soniox.
+    # 2. TranscriptionUserTurnStartStrategy: Fallback for soft speech that VAD misses.
+    #    With use_interim=True, triggers on any interim transcription from Soniox,
+    #    catching cases where VAD fails at 8kHz but STT still picks up speech.
     # 3. SpeechTimeoutUserTurnStopStrategy(0.0): Triggers immediately when Soniox
     #    sends a finalized transcript with <end> token (native semantic endpoint detection).
-    start_strategies: list[BaseUserTurnStartStrategy] = []
-    if vad_analyzer is not None:
-        start_strategies.append(VADUserTurnStartStrategy())
-    start_strategies.append(TranscriptionUserTurnStartStrategy(use_interim=True))
-
     user_turn_strategies = UserTurnStrategies(
-        start=start_strategies,
+        start=[
+            VADUserTurnStartStrategy(),
+            TranscriptionUserTurnStartStrategy(use_interim=True),
+        ],
         stop=[
             SpeechTimeoutUserTurnStopStrategy(user_speech_timeout=0.0),
         ],

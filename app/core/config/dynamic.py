@@ -301,13 +301,3 @@ async def BB_ELEVENLABS_VOICE_SPEED() -> float:
 async def BB_ELEVENLABS_AGGREGATE_SENTENCES() -> bool:
     """Returns BB_ELEVENLABS_AGGREGATE_SENTENCES from Redis (True = wait for full sentence, False = stream tokens immediately)"""
     return await get_config("BB_ELEVENLABS_AGGREGATE_SENTENCES", True, bool)
-
-
-async def BREEZE_BUDDY_ENABLE_VAD() -> bool:
-    """Returns BREEZE_BUDDY_ENABLE_VAD from Redis.
-
-    When False (default), VAD (SileroVADAnalyzer) is disabled for Breeze Buddy agent.
-    All VAD-related functionality is gated behind this flag.
-    When True, VAD is enabled and used for voice activity detection and turn management.
-    """
-    return await get_config("BREEZE_BUDDY_ENABLE_VAD", False, bool)
