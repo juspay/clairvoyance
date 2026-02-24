@@ -68,6 +68,9 @@ async def transition_handler(
             f"Transitioning from current node to '{transition_to}' for function '{function_name}'"
         )
 
+        # Record exit from current node (just mark as exited, no via_function)
+        context.record_node_exit()
+
         # Reset VAD params to default before applying node-specific config
         reset_vad_to_default(context)
 
@@ -75,6 +78,16 @@ async def transition_handler(
         apply_node_vad_config(context, transition_to)
 
         next_node = context.create_node_from_template(transition_to)
+
+        if next_node is None:
+            logger.warning(
+                f"Node '{transition_to}' not found; skipping traversal recording for function '{function_name}'"
+            )
+            return {}, None
+
+        # Record entry into new node (pass the function that brought us here)
+        context.record_node_entry(transition_to, function_name, args)
+
         return {}, next_node
     else:
         logger.info(

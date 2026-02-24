@@ -533,7 +533,17 @@ class Agent:
             greeting_text=self.greeting_text,
         )
 
+        # Initialize node traversal tracking
+        if self.lead.metaData is None:
+            self.lead.metaData = {}
+        self.lead.metaData["node_traversal"] = []
+
         await self.flow_manager.initialize(initial_node_config)
+
+        # Record initial node entry after FlowManager is initialized
+        initial_node_name = self.flow_config["initial_node"]
+        context = TemplateContext(self)
+        context.record_node_entry(initial_node_name)
         logger.info(
             f"FlowManager initialized with initial node: {self.flow_config['initial_node']}"
         )
