@@ -12,6 +12,7 @@ import aiohttp
 
 from app.core.config.dynamic import (
     DAILY_SUMMARY_HOUR,
+    EVALUATOR_ACTIONS,
     LANGFUSE_EVALUATORS,
 )
 from app.core.config.static import LANGFUSE_BASEURL
@@ -23,6 +24,7 @@ from app.database.accessor.breeze_buddy.lead_call_tracker import (
     update_langfuse_scores,
 )
 from app.services.langfuse.client import langfuse_readonly_client
+from app.services.langfuse.tasks.actions import ActionExecutor, ActionResult
 from app.services.langfuse.trace import fetch_trace
 from app.services.redis import get_redis_service, is_redis_configured
 from app.services.slack.alert import slack_alert
@@ -255,6 +257,7 @@ class ScoreMonitor:
         score: Dict[str, Any],
         trace_details: Optional[Dict[str, Any]] = None,
         include_tags: bool = True,
+        action_result: Optional["ActionResult"] = None,
     ) -> bool:
         """
         Send a Slack alert for a score below threshold (failure).
@@ -267,6 +270,7 @@ class ScoreMonitor:
             include_tags: Whether to include @mentions in the Slack message.
                 Defaults to True. Set to False to suppress tagging (e.g., after
                 the first alert in a batch to reduce notification noise).
+            action_result: ActionResult with detailed status for each step (or None)
 
         Returns:
             True if alert was sent successfully, False otherwise
@@ -317,7 +321,7 @@ class ScoreMonitor:
         # Get actual score value
         score_value = score.get("value", "N/A")
 
-        # Build fields for the alert
+        # Build fields for the alert (displayed in 2 columns)
         fields = [
             {"name": "Score", "value": f"{score_value} (BELOW THRESHOLD)"},
             {"name": "Timestamp", "value": time_str},
@@ -330,6 +334,15 @@ class ScoreMonitor:
                 ),
             },
         ]
+
+        # Add Lead ID if available from action result
+        if action_result and action_result.lead_id:
+            fields.append({"name": "Lead ID", "value": f"`{action_result.lead_id}`"})
+
+        # Extract action status if an action was executed (to be passed separately for proper multiline rendering)
+        action_status = None
+        if action_result:
+            action_status = action_result.to_slack_status()
 
         # Build sections for failure reason (if available)
         sections = []
@@ -347,6 +360,7 @@ class ScoreMonitor:
             links=links,
             fallback_text=f"LLM Judge Failure: {evaluator_name} - Score {score_value}",
             include_tags=include_tags,
+            action_status=action_status,
         )
 
         # Track alert count in Redis after successful Slack send
@@ -753,6 +767,65 @@ class ScoreMonitor:
             logger.error(f"Error fetching trace {trace_id}: {e}")
             return None
 
+    async def _process_evaluator_action(
+        self,
+        executor: Optional[ActionExecutor],
+        action_configs: dict[str, Any],
+        evaluator_name: str,
+        score: Dict[str, Any],
+        call_sid: Optional[str],
+        evaluators_config: dict[str, int],
+        call_sid_to_lead: Dict[str, Any],
+    ) -> Optional[ActionResult]:
+        """
+        Execute evaluator action if configured and triggered.
+
+        Runs the configured action (e.g. outcome_update) when the evaluator score
+        is below threshold, then re-fetches the lead to update the cache.
+
+        Returns:
+            ActionResult if action was attempted, None if skipped.
+        """
+        if not executor or not action_configs:
+            return None
+
+        evaluator_action_config = action_configs.get(evaluator_name)
+        if not evaluator_action_config:
+            return None
+
+        threshold = evaluators_config.get(evaluator_name, 5)
+        if not executor.should_trigger(score, threshold):
+            return None
+
+        try:
+            action_type = evaluator_action_config.get("action_type", "outcome_update")
+            current_lead = call_sid_to_lead.get(call_sid) if call_sid else None
+
+            action_result = await executor.execute_action(
+                action_type=action_type,
+                action_config=evaluator_action_config,
+                call_sid=call_sid,
+                score=score,
+                current_lead=current_lead,
+            )
+
+            # Update cached lead if action succeeded
+            if action_result and action_result.success and call_sid:
+                try:
+                    updated_lead = await get_lead_by_call_id(call_sid)
+                    if updated_lead:
+                        call_sid_to_lead[call_sid] = updated_lead
+                except Exception as e:
+                    logger.error(f"Error re-fetching lead for call_sid {call_sid}: {e}")
+
+            return action_result
+
+        except Exception as action_error:
+            logger.error(
+                f"Error executing action for evaluator '{evaluator_name}': {action_error}"
+            )
+            return ActionResult(success=False, error_message=str(action_error))
+
     async def check_and_alert(self) -> None:
         """
         Check for zero scores and send Slack alerts.
@@ -862,6 +935,7 @@ class ScoreMonitor:
         # ====================================================================
         trace_details_cache: Dict[str, Dict[str, Any]] = {}
         trace_to_call_sid: Dict[str, str] = {}
+        test_trace_ids: set[str] = set()
 
         for trace_id in scores_by_trace.keys():
             try:
@@ -878,6 +952,10 @@ class ScoreMonitor:
                     call_sid = attributes.get("call_sid")
                     if call_sid:
                         trace_to_call_sid[trace_id] = call_sid
+                    # Track test calls to skip evaluator actions
+                    execution_mode = attributes.get("execution_mode")
+                    if execution_mode and execution_mode.endswith("_TEST"):
+                        test_trace_ids.add(trace_id)
             except Exception as e:
                 logger.error(f"Error fetching trace details for {trace_id}: {e}")
 
@@ -914,24 +992,102 @@ class ScoreMonitor:
             f"{len(failing_scores_by_evaluator)} evaluators, sending Slack alerts..."
         )
 
+        # Get action configs for processing before alerts
+        action_configs = await EVALUATOR_ACTIONS()
+        executor = ActionExecutor() if action_configs else None
+
+        # Pre-fetch leads ONLY for call_sids that have failing scores with matching action configs
+        call_sid_to_lead: Dict[str, Any] = {}
+        if executor and action_configs:
+            # Collect call_sids that need pre-fetching (failing scores with action configs)
+            call_sids_to_fetch: set[str] = set()
+            for evaluator_name, failing_scores in failing_scores_by_evaluator.items():
+                if action_configs.get(evaluator_name):
+                    for score in failing_scores:
+                        trace_id = score.get("trace_id")
+                        call_sid = trace_to_call_sid.get(trace_id) if trace_id else None
+                        if call_sid and trace_id not in test_trace_ids:
+                            call_sids_to_fetch.add(call_sid)
+
+            # Fetch only the relevant leads
+            for call_sid in call_sids_to_fetch:
+                try:
+                    lead = await get_lead_by_call_id(call_sid)
+                    if lead:
+                        call_sid_to_lead[call_sid] = lead
+                except Exception as e:
+                    logger.error(f"Error fetching lead for call_sid {call_sid}: {e}")
+
         # Send individual alerts for each failing score using cached trace details
         # Only tag @mentions on the first alert per check cycle to reduce Slack noise
+        # Collect action results keyed by call_sid for DB storage after the loop
+        action_results_by_call_sid: Dict[str, Dict[str, Any]] = {}
         is_first_alert = True
         for evaluator_name, failing_scores in failing_scores_by_evaluator.items():
             for score in failing_scores:
                 try:
                     trace_id = score.get("trace_id")
+                    call_sid = trace_to_call_sid.get(trace_id) if trace_id else None
                     # Use cached trace details instead of fetching again
                     trace_details = (
                         trace_details_cache.get(trace_id) if trace_id else None
                     )
 
-                    # Send Slack alert (only tag users on the first alert)
+                    # Process action BEFORE sending alert
+                    # Skip actions for test calls (TELEPHONY_TEST, DAILY_TEST)
+                    if trace_id in test_trace_ids:
+                        logger.info(
+                            f"[EVALUATOR_ACTION] SKIPPED - test call "
+                            f"(trace_id={trace_id})"
+                        )
+                        action_result = None
+                    else:
+                        action_result = await self._process_evaluator_action(
+                            executor=executor,
+                            action_configs=action_configs,
+                            evaluator_name=evaluator_name,
+                            score=score,
+                            call_sid=call_sid,
+                            evaluators_config=evaluators_config,
+                            call_sid_to_lead=call_sid_to_lead,
+                        )
+
+                    # Collect action result for DB storage
+                    if action_result and call_sid:
+                        action_cfg = action_configs.get(evaluator_name, {})
+                        action_results_by_call_sid[call_sid] = {
+                            "evaluator_name": evaluator_name,
+                            "action_type": action_cfg.get(
+                                "action_type", "outcome_update"
+                            ),
+                            "outcome_change": action_result.outcome_change,
+                            "success": action_result.success,
+                            "steps": action_result.step_results
+                            or {
+                                k: v
+                                for k, v in [
+                                    ("update_in_db", action_result.db_update),
+                                    (
+                                        "cancel_retries",
+                                        action_result.cancel_retries,
+                                    ),
+                                    (
+                                        "send_reporting_webhook",
+                                        action_result.reporting_webhook,
+                                    ),
+                                ]
+                                if v is not None
+                            },
+                            "error_message": action_result.error_message,
+                        }
+
+                    # Send Slack alert with action status (only tag users on the first alert)
                     try:
                         await self.send_score_alert(
                             evaluator_name=evaluator_name,
                             score=score,
                             trace_details=trace_details,
+                            action_result=action_result,
                             include_tags=is_first_alert,
                         )
                     finally:
@@ -944,6 +1100,54 @@ class ScoreMonitor:
                         f"Error sending Slack alert for trace {score.get('trace_id')}: "
                         f"{alert_error}"
                     )
+
+        # Store action results in DB alongside evaluator scores
+        if action_results_by_call_sid:
+            await self._store_action_results(action_results_by_call_sid)
+
+    async def _store_action_results(
+        self,
+        action_results_by_call_sid: Dict[str, Dict[str, Any]],
+    ) -> None:
+        """
+        Merge action results into existing langfuse_scores for each call_sid.
+
+        Reads the current langfuse_scores, adds action_results, and writes back.
+        """
+        stored_count = 0
+        for call_sid, action_data in action_results_by_call_sid.items():
+            try:
+                lead = await get_lead_by_call_id(call_sid)
+                if not lead:
+                    logger.warning(
+                        f"Cannot store action results: lead not found for call_sid {call_sid}"
+                    )
+                    continue
+
+                existing_scores = lead.langfuse_scores or {}
+                if "action_results" in existing_scores:
+                    logger.info(
+                        f"Skipping action results for call_sid: {call_sid}: already stored"
+                    )
+                    continue
+                existing_scores["action_results"] = action_data
+
+                await update_langfuse_scores(call_sid, existing_scores)
+                stored_count += 1
+                logger.info(
+                    f"Stored action results for call_sid: {call_sid}, "
+                    f"success: {action_data.get('success')}, "
+                    f"outcome_change: {action_data.get('outcome_change')}"
+                )
+
+            except Exception as e:
+                logger.error(
+                    f"Error storing action results for call_sid {call_sid}: {e}"
+                )
+
+        logger.info(
+            f"Stored action results for {stored_count}/{len(action_results_by_call_sid)} leads"
+        )
 
     async def _store_scores(
         self,

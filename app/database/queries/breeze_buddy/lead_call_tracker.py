@@ -3,7 +3,7 @@ Database query functions for the application.
 """
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.schemas import CallDirection, ExecutionMode, LeadCallStatus
@@ -597,6 +597,52 @@ def abort_lead_by_id_query(
         "ABORT",  # Outcome string literal
         json.dumps(metadata),
         lead_id,
+        LeadCallStatus.BACKLOG.value,
+        LeadCallStatus.RETRY.value,
+    ]
+    return text, values
+
+
+def cancel_pending_retries_by_request_id_query(
+    request_id: str,
+    reason: str = "outcome_corrected",
+) -> Tuple[str, List[Any]]:
+    """
+    Generate query to cancel all pending retry leads for a given request_id.
+
+    Used when an outcome is corrected to a terminal state (e.g., BUSY -> CONFIRM)
+    to prevent scheduled retries from executing.
+
+    Args:
+        request_id: The order/request ID to cancel retries for
+        reason: Reason for cancellation (stored in meta_data)
+
+    Returns:
+        Tuple of (query_text, values)
+    """
+    text = f"""
+        UPDATE "{LEAD_CALL_TRACKER_TABLE}"
+        SET
+            "status" = $1,
+            "outcome" = $2,
+            "updated_at" = NOW(),
+            "meta_data" = COALESCE("meta_data", '{{}}')::jsonb || $3::jsonb
+        WHERE
+            "request_id" = $4
+            AND "status" IN ($5, $6)
+        RETURNING *;
+    """
+
+    metadata = {
+        "cancelled_at": datetime.now(timezone.utc).isoformat(),
+        "cancel_reason": reason,
+    }
+
+    values = [
+        LeadCallStatus.FINISHED.value,
+        "CANCELLED_BY_OUTCOME_CORRECTION",
+        json.dumps(metadata),
+        request_id,
         LeadCallStatus.BACKLOG.value,
         LeadCallStatus.RETRY.value,
     ]

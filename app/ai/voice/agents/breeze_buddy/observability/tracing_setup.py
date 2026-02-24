@@ -10,6 +10,7 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
 from app.ai.voice.agents.breeze_buddy.template.context import TemplateContext
+from app.ai.voice.agents.breeze_buddy.utils.traces import extract_possible_outcomes
 from app.core.config.static import (
     BUDDY_OTEL_EXPORTER_OTLP_TRACES_ENDPOINT,
     BUDDY_OTEL_EXPORTER_OTLP_TRACES_HEADERS,
@@ -79,6 +80,7 @@ def create_root_span(
     provider: str,
     template_type: str,
     evaluator_config: Optional[List[str]] = None,
+    execution_mode: Optional[str] = None,
 ) -> trace.Span:
     """
     Create and configure the root tracing span with all conversation attributes.
@@ -94,6 +96,7 @@ def create_root_span(
         template_type: Template type being used
         evaluator_config: List of evaluator names to add as Langfuse trace tags.
             If None/empty, "ALL_EVALS" tag is added so all evaluators run.
+        execution_mode: Execution mode of the call (e.g. "TELEPHONY", "TELEPHONY_TEST").
 
     Returns:
         A span object that can be used with trace.use_span() context manager
@@ -126,6 +129,8 @@ def create_root_span(
         "daily" if transport_type == "daily" else provider,
     )
     span.set_attribute("template.type", template_type)
+    if execution_mode:
+        span.set_attribute("execution_mode", execution_mode)
 
     # Set evaluator tags for Langfuse trace filtering
     # Langfuse maps `langfuse.trace.tags` span attribute to trace-level tags
@@ -202,6 +207,16 @@ def update_span_with_evaluation_data(context: TemplateContext) -> None:
 
         # Core evaluation data
         context.root_span.set_attribute("call_outcome", lead.outcome or "UNKNOWN")
+
+        # Extract and attach possible outcomes from the template flow definition
+        template = getattr(context.bot, "template", None)
+        if template and hasattr(template, "flow") and template.flow:
+            possible_outcomes = extract_possible_outcomes(template.flow)
+            if possible_outcomes:
+                context.root_span.set_attribute(
+                    "possible_outcomes",
+                    json.dumps(possible_outcomes),
+                )
 
         # Calculate call duration
         call_duration = None
