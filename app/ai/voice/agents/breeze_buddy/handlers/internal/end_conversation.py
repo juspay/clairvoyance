@@ -93,6 +93,22 @@ async def end_conversation(context: TemplateContext, args, transition_to=None):
                 f"Set call_ended_by to 'agent' for normal flow completion in call {context.call_sid}"
             )
 
+        # Finalize the last node in node_traversal
+        if (
+            "node_traversal" in context.lead.metaData
+            and context.lead.metaData["node_traversal"]
+        ):
+            context.record_node_exit()
+            # Mark the last node as exited via "call_ended"
+            last_entry = context.lead.metaData["node_traversal"][-1]
+            if last_entry.get("via_function") is None:
+                last_entry["via_function"] = "call_ended"
+
+            logger.info(
+                f"Finalized node traversal tracking for call {context.call_sid} - "
+                f"{len(context.lead.metaData['node_traversal'])} nodes visited"
+            )
+
         # Store errors collected during the call
         context.lead.metaData["errors"] = context.bot.errors
 

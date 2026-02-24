@@ -4,7 +4,9 @@ Handler Context
 Provides context and state access for handler functions.
 """
 
-from typing import Callable, Optional
+import time
+from datetime import datetime, timedelta, timezone
+from typing import Any, Callable, Dict, Optional
 
 from pipecat_flows import NodeConfig
 
@@ -150,6 +152,98 @@ class TemplateContext:
             f"Available nodes: {list(nodes.keys())}"
         )
         return None
+
+    def _get_ist_timestamp(self) -> str:
+        """Get current timestamp in IST (UTC+5:30) in simple readable format."""
+        utc_now = datetime.now(timezone.utc)
+        ist_offset = timedelta(hours=5, minutes=30)
+        ist_now = utc_now + ist_offset
+        # Format: "25 Feb 2025, 12:25:32 PM"
+        return ist_now.strftime("%d %b %Y, %I:%M:%S %p")
+
+    def _get_epoch_timestamp(self) -> float:
+        """Get current Unix epoch timestamp as a float (sub-second precision)."""
+        return time.time()
+
+    def record_node_entry(
+        self,
+        node_name: str,
+        via_function: Optional[str] = None,
+        function_args: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """
+        Record entry into a node.
+
+        Args:
+            node_name: Name of the node being entered
+            via_function: Name of the function that brought us to this node (null for initial node)
+            function_args: Arguments passed to the function that brought us here
+        """
+        if not self.lead:
+            logger.warning("Cannot record node entry: lead is None")
+            return
+
+        if self.lead.metaData is None:
+            self.lead.metaData = {}
+
+        if "node_traversal" not in self.lead.metaData:
+            self.lead.metaData["node_traversal"] = []
+
+        entry = {
+            "node_name": node_name,
+            "entered_at": self._get_ist_timestamp(),
+            "entered_at_epoch": self._get_epoch_timestamp(),
+            "exited_at": None,
+            "duration_seconds": None,
+            "via_function": via_function,
+            "function_args": function_args,
+        }
+
+        self.lead.metaData["node_traversal"].append(entry)
+        logger.info(f"Recorded entry into node: {node_name} via {via_function}")
+
+    def record_node_exit(self) -> None:
+        """
+        Record exit from the current node.
+
+        Marks the most recent active node as exited and calculates its duration.
+        The via_function and function_args are set during node entry, not exit.
+        """
+        if not self.lead or not self.lead.metaData:
+            logger.warning("Cannot record node exit: lead or metaData is None")
+            return
+
+        if "node_traversal" not in self.lead.metaData:
+            logger.warning("Cannot record node exit: node_traversal not initialized")
+            return
+
+        # Find the last entry without an exit timestamp
+        for entry in reversed(self.lead.metaData["node_traversal"]):
+            if entry.get("exited_at") is None:
+                entry["exited_at"] = self._get_ist_timestamp()
+
+                # Calculate duration using raw epoch floats for sub-second precision
+                try:
+                    start_epoch = entry.get("entered_at_epoch")
+                    if start_epoch is not None:
+                        duration = time.time() - start_epoch
+                        entry["duration_seconds"] = round(duration, 3)
+                    else:
+                        logger.warning(
+                            "No entered_at_epoch found; cannot calculate duration accurately"
+                        )
+                        entry["duration_seconds"] = None
+                except (TypeError, ValueError) as e:
+                    logger.warning(f"Failed to calculate duration: {e}")
+                    entry["duration_seconds"] = None
+
+                logger.info(
+                    f"Recorded exit from node: {entry['node_name']}, "
+                    f"duration: {entry['duration_seconds']}s"
+                )
+                return
+
+        logger.warning("No active node entry found to record exit")
 
 
 def with_context(bot_instance):
