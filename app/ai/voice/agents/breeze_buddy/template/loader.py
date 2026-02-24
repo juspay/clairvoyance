@@ -142,7 +142,6 @@ class FlowConfigLoader:
         if template_obj.secrets:
             template_vars.update(template_obj.secrets)
             logger.info(f"Loaded {len(template_obj.secrets)} secrets from template")
-        logger.info(f"Loaded {template_vars} template vars from template")
         # 3. Load payload fields (overrides both credentials and secrets)
         expected_schema = template_obj.expected_payload_schema or {}
         for field_name, field_schema in expected_schema.items():
@@ -172,7 +171,6 @@ class FlowConfigLoader:
         logger.info(
             f"Dynamically built template_vars from schema: {list(template_vars.keys())}"
         )
-        logger.info(f"Loaded {template_vars} template vars from template")
 
         # Get nodes from flow structure
         nodes = template_obj.flow.get("nodes", [])
