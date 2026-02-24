@@ -795,6 +795,16 @@ class ConfigurationModel(BaseModel):
         )
         return self
 
+    common_tools: Optional[Dict[str, List[str]]] = Field(
+        None,
+        description=(
+            'Common tools configuration. Key = category (e.g., "BASIC"), '
+            'Value = list of node names. Use ["*"] for all nodes, '
+            'or specific nodes like ["initial", "confirm_node"]. '
+            'Example: {"BASIC": ["*"]} or {"BASIC": ["initial"]}'
+        ),
+    )
+
 
 class FlowAction(BaseModel):
     type: ActionType

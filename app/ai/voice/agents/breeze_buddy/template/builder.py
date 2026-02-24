@@ -4,7 +4,7 @@ Flow Configuration Builder
 This module builds Pipecat flow configurations from database models.
 """
 
-from typing import Any, Callable, Dict, List, cast
+from typing import Any, Callable, Dict, List, Optional, cast
 
 from pipecat_flows import (
     FlowManager,
@@ -25,6 +25,10 @@ from app.ai.voice.agents.breeze_buddy.handlers.internal import (
 )
 from app.ai.voice.agents.breeze_buddy.handlers.transport.http_handler import (
     http_function_handler,
+)
+from app.ai.voice.agents.breeze_buddy.template.common_tools import (
+    CommonToolRegistry,
+    ToolCategory,
 )
 from app.ai.voice.agents.breeze_buddy.template.global_function import (
     GlobalFunctionRegistry,
@@ -78,7 +82,11 @@ class FlowConfigBuilder:
             "custom_python_code_handler": custom_python_code_handler,
         }
 
-    def build_flow_config(self, template: TemplateModel) -> Dict[str, Any]:
+    def build_flow_config(
+        self,
+        template: TemplateModel,
+        common_tools_config: Optional[Dict[str, List[str]]] = None,
+    ) -> Dict[str, Any]:
         """
         Convert database template to Pipecat flow format.
 
@@ -151,7 +159,9 @@ class FlowConfigBuilder:
         nodes = {}
         for node in flow_nodes:
             logger.debug(f"Building node: {node.node_name}")
-            nodes[node.node_name] = self._build_node(node)
+            nodes[node.node_name] = self._build_node(
+                node, common_tools_config=common_tools_config
+            )
 
         # Extract end_conversation_callbacks if present
         end_conversation_callbacks = flow.get("end_conversation_callbacks", [])
@@ -237,7 +247,10 @@ class FlowConfigBuilder:
         }
 
     def build_global_functions(
-        self, flow: Dict[str, Any], bot_instance: Any = None
+        self,
+        flow: Dict[str, Any],
+        common_tools_config: Optional[Dict[str, List[str]]] = None,
+        bot_instance: Any = None,
     ) -> List[FlowsFunctionSchema]:
         """
         Build global functions from template flow config using registered adapters.
@@ -250,27 +263,53 @@ class FlowConfigBuilder:
         The handler_map (with all handlers wrapped with with_context in agent.py)
         is passed to the registry, which resolves the correct handler for each adapter.
 
+        Common tools with ["*"] are added as global functions.
+        Common tools with specific nodes are NOT added here - use get_node_common_tools().
+
         Args:
             flow: Flow configuration dict containing optional 'global_functions' array
             bot_instance: Bot instance for post-action context creation
+            common_tools_config: Dict mapping category -> list of nodes.
+                                e.g., {"BASIC": ["*"]} for global, or
+                                {"BASIC": ["initial"]} for node-specific.
 
         Returns:
             List of FlowsFunctionSchema objects to pass to FlowManager(global_functions=[...])
         """
+        # Extract categories that should be global (have ["*"] in their node list)
+        global_categories = []
+        if common_tools_config:
+            for category_name, nodes in common_tools_config.items():
+                if "*" in nodes:
+                    global_categories.append(category_name)
+
         # Direct mode has a single flat `functions` array. Each entry is
         # routed by `type`: http/builtin/custom go through the global-function
         # adapter registry; everything else is a FlowFunction (hooks-only).
         if flow.get("mode") == FlowMode.DIRECT.value:
-            return self._build_direct_mode_functions(
+            result = self._build_direct_mode_functions(
                 flow.get("functions") or [],
                 bot_instance=bot_instance,
             )
+            if global_categories:
+                categories = self._parse_common_tool_categories(global_categories)
+                common_tools = CommonToolRegistry.get_by_categories(categories)
+                if common_tools:
+                    logger.info(
+                        f"Direct mode: added {len(common_tools)} common tools "
+                        f"for categories: {global_categories}"
+                    )
+                    result.extend(common_tools)
+            return result
 
         # Flow mode: keep the legacy split between per-node `functions` (built
         # by `_build_function_schema` during node construction) and top-level
         # `global_functions` (built here via the adapter registry).
         return GlobalFunctionRegistry.build(
-            flow, handler_map=self.handler_map, bot_instance=bot_instance
+            flow,
+            handler_map=self.handler_map,
+            common_tool_categories=global_categories if global_categories else None,
+            bot_instance=bot_instance,
         )
 
     def _build_direct_mode_functions(
@@ -325,12 +364,64 @@ class FlowConfigBuilder:
         )
         return result
 
-    def _build_node(self, node: FlowNodeModel) -> NodeConfig:
+    @staticmethod
+    def _parse_common_tool_categories(category_names: List[str]) -> List[ToolCategory]:
+        """Convert list of category name strings to ToolCategory enums."""
+        categories = []
+        for name in category_names:
+            try:
+                categories.append(ToolCategory(name.upper()))
+            except ValueError:
+                logger.warning(f"Unknown common tool category: {name}")
+        return categories
+
+    def get_node_common_tools(
+        self,
+        node_name: str,
+        common_tools_config: Optional[Dict[str, List[str]]] = None,
+    ) -> List[FlowsFunctionSchema]:
+        """
+        Get common tools that should be available at a specific node.
+
+        Args:
+            node_name: Name of the node to get tools for
+            common_tools_config: Dict mapping category -> list of nodes
+
+        Returns:
+            List of FlowsFunctionSchema objects for this node
+        """
+        if not common_tools_config:
+            return []
+
+        node_tools = []
+        for category_name, nodes in common_tools_config.items():
+            # Skip global tools (handled in build_global_functions)
+            if "*" in nodes:
+                continue
+            # Check if this node should have this category's tools
+            if node_name in nodes:
+                categories = self._parse_common_tool_categories([category_name])
+                if categories:
+                    tools = CommonToolRegistry.get_by_categories(categories)
+                    node_tools.extend(tools)
+                    logger.debug(
+                        f"Adding {len(tools)} common tools from {category_name} "
+                        f"to node {node_name}"
+                    )
+
+        return node_tools
+
+    def _build_node(
+        self,
+        node: FlowNodeModel,
+        common_tools_config: Optional[Dict[str, List[str]]] = None,
+    ) -> NodeConfig:
         """
         Build NodeConfig from FlowNodeModel.
 
         Args:
             node: Flow node model from database
+            common_tools_config: Dict mapping category -> list of nodes for common tools
 
         Returns:
             NodeConfig object
@@ -353,6 +444,17 @@ class FlowConfigBuilder:
             functions = [self._build_function_schema(func) for func in node.functions]
         else:
             logger.debug(f"Node {node.node_name} has no functions")
+
+        # Add node-specific common tools
+        if common_tools_config:
+            node_common_tools = self.get_node_common_tools(
+                node.node_name, common_tools_config
+            )
+            if node_common_tools:
+                functions.extend(node_common_tools)
+                logger.info(
+                    f"Added {len(node_common_tools)} common tools to node {node.node_name}"
+                )
 
         pre_actions = []
         if node.pre_actions:

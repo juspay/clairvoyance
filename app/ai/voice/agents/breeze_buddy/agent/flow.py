@@ -83,8 +83,15 @@ def setup_flow_manager(
     Returns:
         Configured FlowManager
     """
+    # Get common tools config from template configurations
+    # Format: {"BASIC": ["*"]} for global, {"BASIC": ["initial"]} for node-specific
+    common_tools_config = (
+        template.configurations.common_tools if template.configurations else None
+    )
     global_functions = flow_builder.build_global_functions(
-        flow=template.flow, bot_instance=bot_instance
+        flow=template.flow,
+        common_tools_config=common_tools_config,
+        bot_instance=bot_instance,
     )
     if global_functions:
         logger.info(
@@ -116,7 +123,13 @@ def build_flow_config(
     Returns:
         Tuple of (flow_config, end_conversation_callbacks, expected_callback_response_schema)
     """
-    flow_config = flow_builder.build_flow_config(template)
+    # Get common tools config for node-specific tool injection
+    common_tools_config = (
+        template.configurations.common_tools if template.configurations else None
+    )
+    flow_config = flow_builder.build_flow_config(
+        template, common_tools_config=common_tools_config
+    )
     end_conversation_callbacks = flow_config.get("end_conversation_callbacks", [])
     expected_callback_response_schema = flow_config.get(
         "expected_callback_response_schema", None

@@ -17,6 +17,10 @@ from typing import Any, Callable, Dict, List, Optional, Protocol, runtime_checka
 
 from pipecat_flows import FlowsFunctionSchema
 
+from app.ai.voice.agents.breeze_buddy.template.common_tools import (
+    CommonToolRegistry,
+    ToolCategory,
+)
 from app.ai.voice.agents.breeze_buddy.template.context import TemplateContext
 from app.ai.voice.agents.breeze_buddy.template.func_action_handlers import (
     execute_func_post_actions,
@@ -597,6 +601,7 @@ class GlobalFunctionRegistry:
         cls,
         flow: Dict[str, Any],
         handler_map: Dict[str, Callable],
+        common_tool_categories: Optional[List[str]] = None,
         bot_instance: Any = None,
     ) -> List[FlowsFunctionSchema]:
         """
@@ -605,32 +610,64 @@ class GlobalFunctionRegistry:
         Each adapter declares which handler it needs via the handler_name property.
         This allows different global function types to use different handlers.
 
+        Common tools are added based on categories specified in common_tool_categories.
+        If empty/None, no common tools are added.
+
         Args:
             flow: Flow configuration dict containing optional 'global_functions' array
             handler_map: Dictionary mapping handler names to wrapped handlers.
                         Handlers should already be wrapped with with_context(bot_instance).
                         Example: {"http_function_handler": wrapped_http_handler, ...}
             bot_instance: Bot instance for creating TemplateContext in func_post_actions
+            common_tool_categories: List of category names (e.g., ["BASIC"]) to include.
+                                   If None or empty, no common tools are added.
 
         Returns:
             List of FlowsFunctionSchema objects to pass to FlowManager
         """
-        global_functions_config = flow.get("global_functions", [])
-        if not global_functions_config:
-            logger.debug("No global_functions defined in flow config")
-            return []
-
-        logger.info(f"Building {len(global_functions_config)} global functions")
-
         result: List[FlowsFunctionSchema] = []
+
+        # Build template-defined global functions
+        global_functions_config = flow.get("global_functions", [])
+        if global_functions_config:
+            logger.info(f"Building {len(global_functions_config)} global functions")
+        else:
+            logger.debug("No global_functions defined in flow config")
 
         for func_config in global_functions_config:
             schema = cls._build_one(func_config, handler_map, bot_instance)
             if schema:
                 result.append(schema)
 
-        logger.info(f"Built {len(result)} global functions successfully")
+        # Append common tools based on requested categories
+        if common_tool_categories:
+            categories = cls._parse_categories(common_tool_categories)
+            if categories:
+                common_tools = CommonToolRegistry.get_by_categories(categories)
+                if common_tools:
+                    logger.info(
+                        f"Appending {len(common_tools)} common tools "
+                        f"for categories: {[c.value for c in categories]}"
+                    )
+                    result.extend(common_tools)
+
+        if result:
+            logger.info(f"Built {len(result)} total global functions successfully")
+        else:
+            logger.debug("No global functions or common tools configured")
+
         return result
+
+    @classmethod
+    def _parse_categories(cls, category_names: List[str]) -> List[ToolCategory]:
+        """Convert list of category names to ToolCategory enums."""
+        categories = []
+        for name in category_names:
+            try:
+                categories.append(ToolCategory(name.upper()))
+            except ValueError:
+                logger.warning(f"Unknown common tool category: {name}")
+        return categories
 
     @classmethod
     def _build_one(

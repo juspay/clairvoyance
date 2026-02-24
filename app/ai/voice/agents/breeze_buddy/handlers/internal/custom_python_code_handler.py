@@ -7,7 +7,7 @@ Invoked when LLM calls a custom function.
 Follows the same pattern as http_function_handler and builtin_function_dispatcher.
 """
 
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional
 
 from app.ai.voice.agents.breeze_buddy.template.context import TemplateContext
 from app.ai.voice.agents.breeze_buddy.template.global_function import (
@@ -21,7 +21,7 @@ async def custom_python_code_handler(
     context: TemplateContext,
     args: Dict[str, Any],
     function_config: Optional[GlobalCustomFunction] = None,
-) -> Tuple[Dict[str, Any], None]:
+) -> tuple[dict[str, Any], None]:
     """
     Execute a custom Python global function.
 
