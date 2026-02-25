@@ -31,6 +31,7 @@ This processor is always inserted in the pipeline. When neither mode is active
 it is a transparent passthrough with negligible overhead.
 """
 
+import asyncio
 import unicodedata
 from typing import Optional
 
@@ -67,6 +68,7 @@ class TranscriptionGateProcessor(FrameProcessor):
 
         # --- Hard mute state ---
         self._muted: bool = False
+        self._timed_unmute_task: Optional[asyncio.Task] = None
 
         # --- Keyword filter state ---
         if keyword_filter_config and keyword_filter_config.enabled:
@@ -94,13 +96,44 @@ class TranscriptionGateProcessor(FrameProcessor):
 
     def mute(self) -> None:
         """Drop ALL TranscriptionFrames until unmute() is called."""
+        self._cancel_timed_unmute()
         self._muted = True
         logger.info("TranscriptionGate: hard mute engaged")
 
     def unmute(self) -> None:
         """Resume normal passthrough (keyword filter still applies if configured)."""
+        self._cancel_timed_unmute()
         self._muted = False
         logger.info("TranscriptionGate: hard mute released")
+
+    def mute_for(self, duration: float) -> None:
+        """Drop ALL TranscriptionFrames for *duration* seconds, then auto-unmute.
+
+        Any previous timed-unmute task is cancelled before scheduling a new one.
+        An explicit call to unmute() (or another mute/mute_for) also cancels the
+        pending timer.
+        """
+        self._cancel_timed_unmute()
+        self._muted = True
+        self._timed_unmute_task = asyncio.create_task(self._auto_unmute(duration))
+        logger.info(f"TranscriptionGate: hard mute engaged for {duration}s")
+
+    def _cancel_timed_unmute(self) -> None:
+        """Cancel any pending timed-unmute task."""
+        if self._timed_unmute_task and not self._timed_unmute_task.done():
+            self._timed_unmute_task.cancel()
+            logger.debug("TranscriptionGate: cancelled pending timed unmute")
+        self._timed_unmute_task = None
+
+    async def _auto_unmute(self, duration: float) -> None:
+        """Sleep for *duration* seconds then release the hard mute."""
+        try:
+            await asyncio.sleep(duration)
+            self._muted = False
+            self._timed_unmute_task = None
+            logger.info(f"TranscriptionGate: hard mute auto-released after {duration}s")
+        except asyncio.CancelledError:
+            pass
 
     @property
     def is_muted(self) -> bool:
