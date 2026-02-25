@@ -140,6 +140,34 @@ def require_admin_or_merchant_owner(
     )
 
 
+def require_admin(
+    current_user: UserInfo, operation: str = "perform this operation"
+) -> None:
+    """
+    Require user to have admin role.
+
+    Used for destructive operations like template deletion.
+
+    Args:
+        current_user: Current authenticated user
+        operation: Operation being performed (for error message)
+
+    Raises:
+        HTTPException: 403 if user is not admin
+    """
+    if current_user.role == "admin":
+        return
+
+    logger.warning(
+        f"User {current_user.username} (role: {current_user.role}) "
+        f"attempted to {operation} without admin privileges"
+    )
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail=f"Admin access required to {operation}",
+    )
+
+
 def apply_hierarchical_template_filters(
     filters: Dict[str, Any], current_user: UserInfo
 ) -> Dict[str, Any]:

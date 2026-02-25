@@ -217,6 +217,56 @@ def get_all_templates_by_outbound_number_id_query(
     return query, [outbound_number_id]
 
 
+def check_template_usage_query(template_id: str) -> Tuple[str, List[Any]]:
+    """
+    Generate query to check if a template is referenced by call_execution_config
+    or has active leads in lead_call_tracker.
+
+    Returns rows indicating where the template is in use:
+    - source: 'call_execution_config' or 'lead_call_tracker'
+    - reference_count: number of references found
+
+    Args:
+        template_id: Template UUID
+
+    Returns:
+        Tuple of (query string, values list)
+    """
+    query = """
+        SELECT 'call_execution_config' AS source, COUNT(*) AS reference_count
+        FROM call_execution_config
+        WHERE template_id = $1
+
+        UNION ALL
+
+        SELECT 'lead_call_tracker' AS source, COUNT(*) AS reference_count
+        FROM lead_call_tracker
+        WHERE template_id = $1
+        AND status IN ('BACKLOG', 'RETRY', 'IN_PROGRESS')
+    """
+
+    return query, [template_id]
+
+
+def delete_template_query(template_id: str) -> Tuple[str, List[Any]]:
+    """
+    Generate query to delete a template by ID.
+
+    Args:
+        template_id: Template UUID
+
+    Returns:
+        Tuple of (query string, values list)
+    """
+    query = f"""
+        DELETE FROM {TEMPLATE_TABLE}
+        WHERE id = $1
+        RETURNING id, merchant_id, shop_identifier, name, is_active, created_at, updated_at
+    """
+
+    return query, [template_id]
+
+
 def replace_template_query(
     template_id: str,
     name: str,
