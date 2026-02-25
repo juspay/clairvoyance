@@ -30,3 +30,14 @@ class TemplateListResponse(BaseModel):
 
     templates: List[TemplateMetadata]
     total: int
+
+
+class DeleteTemplateResponse(BaseModel):
+    """Response for template deletion.
+
+    Includes the deleted template's metadata and a confirmation message.
+    """
+
+    status: str
+    message: str
+    deleted_template: TemplateMetadata

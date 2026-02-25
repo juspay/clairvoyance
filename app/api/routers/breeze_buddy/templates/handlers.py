@@ -20,13 +20,18 @@ from app.ai.voice.agents.breeze_buddy.utils.secrets import (
 from app.core.logger import logger
 from app.database.accessor import get_outbound_number_by_id, get_template_by_merchant
 from app.database.accessor.breeze_buddy.template import (
+    check_template_usage,
     create_template,
+    delete_template_if_not_referenced,
     get_template_by_id,
     get_templates_list,
     replace_template,
 )
 from app.schemas import UserInfo
-from app.schemas.breeze_buddy.template import TemplateListResponse
+from app.schemas.breeze_buddy.template import (
+    DeleteTemplateResponse,
+    TemplateListResponse,
+)
 
 from .rbac import apply_hierarchical_template_filters, validate_template_access
 
@@ -423,4 +428,89 @@ async def replace_template_handler(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error updating template: {str(e)}",
+        )
+
+
+async def delete_template_handler(
+    template_id: str, current_user: UserInfo
+) -> DeleteTemplateResponse:
+    """
+    Delete a template by ID after verifying it can be safely removed.
+
+    Safety checks:
+    - Template must exist
+    - Template must not be referenced by any call_execution_config
+    - Template must not have active leads (BACKLOG, RETRY, PROCESSING) in lead_call_tracker
+
+    Args:
+        template_id: Template UUID
+        current_user: Current authenticated user (must be admin)
+
+    Returns:
+        DeleteTemplateResponse with deleted template metadata
+
+    Raises:
+        HTTPException: 404 if not found, 409 if in use, 500 on error
+    """
+    logger.info(
+        f"Admin {current_user.username} requesting deletion of template: {template_id}"
+    )
+
+    try:
+        # Check if template exists
+        existing_template = await get_template_by_id(template_id)
+        if not existing_template:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Template not found: {template_id}",
+            )
+
+        deleted = await delete_template_if_not_referenced(template_id)
+
+        if not deleted:
+            # Fetch fresh usage counts for error message
+            usage = await check_template_usage(template_id)
+            blockers = []
+            config_count = usage.get("call_execution_config", 0) if usage else 0
+            active_leads_count = usage.get("lead_call_tracker", 0) if usage else 0
+
+            if config_count > 0:
+                blockers.append(
+                    f"{config_count} call execution config(s) reference this template"
+                )
+
+            if active_leads_count > 0:
+                blockers.append(
+                    f"{active_leads_count} active lead(s) (BACKLOG/RETRY/PROCESSING) are using this template"
+                )
+
+            detail = (
+                f"Template '{existing_template.name}' cannot be safely deleted. "
+                f"Reasons: {'; '.join(blockers)}. "
+                f"Please remove these references before deleting the template."
+            )
+            logger.warning(f"Template {template_id} deletion blocked: {detail}")
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=detail,
+            )
+
+        logger.info(
+            f"Admin {current_user.username} successfully deleted template: "
+            f"{deleted.id} ({deleted.name})"
+        )
+
+        return DeleteTemplateResponse(
+            status="success",
+            message=f"Template '{deleted.name}' deleted successfully",
+            deleted_template=deleted,
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting template: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error deleting template: {str(e)}",
         )

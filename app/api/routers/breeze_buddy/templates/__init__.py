@@ -8,6 +8,7 @@ Endpoints:
 - POST   /templates           - Create new template
 - GET    /templates           - Get templates (filtered by merchant/shop/name)
 - PUT    /templates/{id}      - Replace existing template by ID
+- DELETE /templates/{id}      - Delete template by ID (admin only)
 
 For backward compatibility, old endpoints are available in deprecated/template.py
 """
@@ -22,11 +23,16 @@ from app.ai.voice.agents.breeze_buddy.template.types import (
     TemplateModel,
 )
 from app.api.security.breeze_buddy.rbac_token import get_current_user_with_rbac
+from app.core.security.authorization import require_admin
 from app.schemas import UserInfo
-from app.schemas.breeze_buddy.template import TemplateListResponse
+from app.schemas.breeze_buddy.template import (
+    DeleteTemplateResponse,
+    TemplateListResponse,
+)
 
 from .handlers import (
     create_template_handler,
+    delete_template_handler,
     get_template_by_id_handler,
     list_templates_handler,
     replace_template_handler,
@@ -202,3 +208,37 @@ async def replace_template(
         - 400: Validation error (missing required fields)
     """
     return await replace_template_handler(template_id, template_data, current_user)
+
+
+@router.delete("/templates/{template_id}", response_model=DeleteTemplateResponse)
+async def delete_template_by_id(
+    template_id: str,
+    current_user: UserInfo = Depends(get_current_user_with_rbac),
+):
+    """
+    Delete a template by ID (admin only).
+
+    Performs safety checks before deletion to ensure the template is not in use:
+    - Checks if any call_execution_config references this template
+    - Checks if any active leads (BACKLOG/RETRY/PROCESSING) are using this template
+
+    If the template is in use, returns 409 Conflict with details about what is
+    referencing it. The references must be removed before the template can be deleted.
+
+    Path Parameters:
+    - template_id: Template UUID
+
+    Permissions:
+    - Admin only
+
+    Returns:
+        DeleteTemplateResponse with deleted template metadata
+
+    Raises:
+        - 403: Non-admin user
+        - 404: Template not found
+        - 409: Template is in use and cannot be safely deleted
+    """
+    require_admin(current_user)
+
+    return await delete_template_handler(template_id, current_user)
