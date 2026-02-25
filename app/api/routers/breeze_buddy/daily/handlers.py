@@ -45,7 +45,7 @@ async def breeze_buddy_daily_connect_handler(
             )
 
         logger.info(
-            f"Found lead for Daily session: {lead.id}, template: {lead.template}, "
+            f"Found lead for Daily session: {lead.id}, template_id: {lead.template_id}, "
             f"status: {lead.status}, execution_mode: {lead.execution_mode}"
         )
 

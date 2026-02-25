@@ -58,7 +58,7 @@ from app.database.accessor.breeze_buddy.outbound_number import (
 )
 from app.database.accessor.breeze_buddy.template import (
     get_all_templates_by_outbound_number_id,
-    get_template_by_merchant,
+    get_template_by_id,
 )
 from app.services.redis.client import get_redis_service
 
@@ -95,13 +95,13 @@ async def resolve_call_templates(
     # Check if lead exists (outbound call)
     lead = await get_lead_by_call_id(call_sid)
     if lead:
-        # Outbound call - look up template using merchant info from lead
+        # Outbound call - look up template using template_id from lead
         logger.info(f"[Answer] Outbound call detected, lead: {lead.id}")
-        template = await get_template_by_merchant(
-            merchant_id=lead.merchant_id,
-            shop_identifier=lead.shop_identifier,
-            name=lead.template,
-        )
+        if not lead.template_id:
+            logger.error(f"[Answer] Lead has no template_id: {lead.id}")
+            return {"error": "Lead has no template_id", "error_status": 404}
+
+        template = await get_template_by_id(lead.template_id)
         if not template:
             logger.error(f"[Answer] Template not found for lead: {lead.id}")
             return {"error": "Template not found", "error_status": 404}
@@ -109,7 +109,7 @@ async def resolve_call_templates(
         return {
             "is_outbound": True,
             "template_id": str(template.id),
-            "merchant_id": lead.merchant_id,
+            "merchant_id": template.merchant_id,
         }
 
     # Inbound call - look up templates by outbound number

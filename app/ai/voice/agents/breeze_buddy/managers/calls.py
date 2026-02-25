@@ -32,13 +32,13 @@ from app.database.accessor import (
     acquire_lock_on_lead_by_id,
     create_lead_call_tracker,
     decrement_outbound_number_channels,
-    get_call_execution_config_by_merchant_id,
+    get_call_execution_config_by_template_id,
     get_lead_by_call_id,
     get_leads_based_on_status_and_next_attempt,
     get_leads_by_status_and_time_before,
     get_outbound_number_based_on_status_and_provider,
     get_outbound_number_by_id,
-    get_template_by_merchant,
+    get_template_by_id,
     increment_outbound_number_channels,
     release_lock_on_lead_by_id,
     update_lead_call_completion_details,
@@ -63,18 +63,15 @@ async def _get_lead_config(lead: LeadCallTracker) -> Optional[CallExecutionConfi
     """
     Retrieves the call execution configuration for a given lead.
     """
-    configs = await get_call_execution_config_by_merchant_id(
-        lead.merchant_id, lead.shop_identifier
-    )
-    if not configs:
-        logger.warning(
-            f"No call execution config found for merchant: {lead.merchant_id} and shop: {lead.shop_identifier}"
-        )
+    if not lead.template_id:
+        logger.warning(f"Lead {lead.id} has no template_id")
         return None
 
-    config = next((c for c in configs if c.template == lead.template), None)
+    config = await get_call_execution_config_by_template_id(lead.template_id)
     if not config:
-        logger.warning(f"No call execution config found for template: {lead.template}")
+        logger.warning(
+            f"No call execution config found for template_id: {lead.template_id}"
+        )
     return config
 
 
@@ -178,7 +175,7 @@ async def _get_available_number(
 
     if template and template.outbound_number_id:
         logger.info(
-            f"Using new approach: template {config.template} has outbound_number_id {template.outbound_number_id}"
+            f"Using new approach: template {template.name} has outbound_number_id {template.outbound_number_id}"
         )
         outbound_number = await get_outbound_number_by_id(template.outbound_number_id)
 
@@ -198,7 +195,7 @@ async def _get_available_number(
     else:
         logger.info(
             f"Using backward compatible approach: looking for outbound number "
-            f"matching merchant {config.merchant_id}, shop {config.shop_identifier}"
+            f"matching template_id {config.template_id}"
         )
 
         # Get all available numbers
@@ -228,15 +225,12 @@ async def _get_available_number(
                     break
 
     if not number:
-        logger.warning(
-            f"No outbound number found for merchant {config.merchant_id}, "
-            f"template {config.template}, shop {config.shop_identifier}"
-        )
+        logger.warning(f"No outbound number found for template_id {config.template_id}")
         return None
 
     logger.info(
         f"Using outbound number {number.number} (provider: {number.provider}) "
-        f"for template {config.template}, merchant {config.merchant_id}, shop {config.shop_identifier}"
+        f"for template_id {config.template_id}"
     )
     return number
 
@@ -325,11 +319,13 @@ async def _retry_call(
         next_attempt_at = datetime.now(timezone.utc) + timedelta(
             seconds=config.retry_offset
         )
+        if not lead.template_id:
+            logger.error(f"Lead {lead.id} has no template_id, cannot schedule retry")
+            return
+
         await create_lead_call_tracker(
             id=str(uuid.uuid4()),
-            merchant_id=lead.merchant_id,
-            template=lead.template,
-            shop_identifier=lead.shop_identifier,
+            template_id=lead.template_id,
             next_attempt_at=next_attempt_at,
             payload=lead.payload,
             attempt_count=lead.attempt_count + 1,
@@ -426,7 +422,7 @@ async def process_backlog_leads():
 
                 if not config.enable_calling:
                     logger.info(
-                        f"Skipping lead {locked_lead.id} - calling is disabled for merchant {locked_lead.merchant_id}, template {locked_lead.template}"
+                        f"Skipping lead {locked_lead.id} - calling is disabled for template_id {locked_lead.template_id}"
                     )
                     await release_lock_on_lead_by_id(locked_lead.id)
                     continue
@@ -440,10 +436,10 @@ async def process_backlog_leads():
                     await release_lock_on_lead_by_id(locked_lead.id)
                     continue
 
-                template = await get_template_by_merchant(
-                    merchant_id=config.merchant_id,
-                    shop_identifier=config.shop_identifier,
-                    name=config.template,
+                template = (
+                    await get_template_by_id(config.template_id)
+                    if config.template_id
+                    else None
                 )
 
                 logger.info(
@@ -504,8 +500,8 @@ async def process_backlog_leads():
                 call = call_provider.make_call(
                     customer_mobile,
                     number_to_use.number,
-                    merchant_id=locked_lead.merchant_id,
-                    template_name=locked_lead.template,
+                    merchant_id=None,  # Not available in new schema, provider handles this
+                    template_name=locked_lead.template_id or "unknown",
                 )
 
                 if call and call.get("sid"):
@@ -574,7 +570,7 @@ async def process_backlog_leads():
                     elif number_to_use.provider == CallProvider.EXOTEL:
                         if not config.enable_international_call:
                             logger.warning(
-                                f"International calls disabled for merchant {locked_lead.merchant_id}. Skipping retry with Twilio."
+                                f"International calls disabled for template_id {locked_lead.template_id}. Skipping retry with Twilio."
                             )
                             await update_lead_call_completion_details(
                                 id=locked_lead.id,
@@ -687,8 +683,8 @@ async def process_backlog_leads():
                     retry_call = retry_call_provider.make_call(
                         retry_customer_mobile,
                         retry_number_to_use.number,
-                        merchant_id=locked_lead.merchant_id,
-                        template_name=locked_lead.template,
+                        merchant_id=None,  # Not available in new schema, provider handles this
+                        template_name=locked_lead.template_id or "unknown",
                     )
 
                     if retry_call and retry_call.get("sid"):

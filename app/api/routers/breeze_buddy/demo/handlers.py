@@ -215,10 +215,7 @@ async def breeze_buddy_demo_connect_handler(
 
     lead = await create_lead_call_tracker(
         id=lead_id,
-        merchant_id=DEMO_MERCHANT_ID,
-        template=body.agent,
         template_id=str(template.id),
-        shop_identifier=DEMO_SHOP_IDENTIFIER,
         next_attempt_at=None,
         payload=payload,
         attempt_count=0,

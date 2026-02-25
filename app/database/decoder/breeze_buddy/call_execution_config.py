@@ -56,15 +56,13 @@ def _decode_single_row(row: asyncpg.Record) -> CallExecutionConfig:
     """Decode a single call execution config row."""
     return CallExecutionConfig(
         id=row["id"],
+        template_id=row.get("template_id"),
         initial_offset=row["initial_offset"],
         retry_offset=row["retry_offset"],
         call_start_time=row["call_start_time"],
         call_end_time=row["call_end_time"],
         max_retry=row["max_retry"],
         calling_provider=CallProvider(row["calling_provider"]),
-        merchant_id=row["merchant_id"],
-        template=row["template"],
-        shop_identifier=row["shop_identifier"],
         enable_international_call=row["enable_international_call"],
         enable_calling=row["enable_calling"],
         pre_checks=_decode_pre_checks(row.get("pre_checks")),

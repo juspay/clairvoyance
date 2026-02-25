@@ -3,12 +3,41 @@ RBAC (Role-Based Access Control) utilities for configurations.
 Handles merchant + shop access control based on JWT token.
 """
 
-from typing import List, Optional
+from typing import List, Optional, Set
 
 from fastapi import HTTPException, status
 
 from app.core.logger import logger
+from app.database.accessor import get_templates_list
 from app.schemas import UserInfo
+
+
+async def get_accessible_template_ids(current_user: UserInfo) -> Set[str]:
+    """
+    Get set of template IDs accessible to the user based on RBAC.
+
+    Args:
+        current_user: Current authenticated user
+
+    Returns:
+        Set of template IDs the user has access to
+    """
+    # Admin and wildcard access - return empty set to indicate "all access"
+    if current_user.role == "admin":
+        return set()  # Empty set means all access
+
+    if "*" in current_user.merchant_ids and "*" in current_user.shop_identifiers:
+        return set()  # Empty set means all access
+
+    # Build filters based on user's RBAC
+    filters = {}
+    if current_user.merchant_ids and "*" not in current_user.merchant_ids:
+        filters["merchant_ids"] = current_user.merchant_ids
+    if current_user.shop_identifiers and "*" not in current_user.shop_identifiers:
+        filters["shop_identifiers"] = current_user.shop_identifiers
+
+    templates = await get_templates_list(filters)
+    return {t.id for t in templates}
 
 
 def validate_config_access(
@@ -63,9 +92,11 @@ def validate_config_access(
         )
 
 
-def filter_configs_by_rbac(configs: List, current_user: UserInfo) -> List:
+async def filter_configs_by_rbac(configs: List, current_user: UserInfo) -> List:
     """
     Filter configurations based on user's RBAC permissions.
+    Configs are filtered by checking if their template_id belongs to
+    a template the user has access to.
 
     Args:
         configs: List of configuration objects
@@ -82,21 +113,12 @@ def filter_configs_by_rbac(configs: List, current_user: UserInfo) -> List:
     if "*" in current_user.merchant_ids and "*" in current_user.shop_identifiers:
         return configs
 
-    filtered = []
-    for config in configs:
-        # Check merchant access
-        has_merchant_access = (
-            "*" in current_user.merchant_ids
-            or config.merchant_id in current_user.merchant_ids
-        )
+    # Get accessible template IDs
+    accessible_template_ids = await get_accessible_template_ids(current_user)
 
-        # Check shop access
-        has_shop_access = (
-            "*" in current_user.shop_identifiers
-            or config.shop_identifier in current_user.shop_identifiers
-        )
+    # If empty set returned, user has access to all templates
+    if not accessible_template_ids:
+        return configs
 
-        if has_merchant_access and has_shop_access:
-            filtered.append(config)
-
-    return filtered
+    # Filter configs by template_id
+    return [c for c in configs if c.template_id in accessible_template_ids]

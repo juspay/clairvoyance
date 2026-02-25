@@ -16,9 +16,7 @@ OUTBOUND_NUMBER_TABLE = "outbound_number"
 # Lead call tracker queries
 def insert_lead_call_tracker_query(
     id: str,
-    merchant_id: str,
-    template: str,
-    shop_identifier: Optional[str],
+    template_id: str,  # Primary reference - required
     next_attempt_at: Optional[datetime],
     payload: Optional[Dict[str, Any]],
     meta_data: Optional[Dict[str, Any]],
@@ -27,19 +25,17 @@ def insert_lead_call_tracker_query(
     call_initiated_time: Optional[datetime] = None,
     cost: Optional[float] = None,
     request_id: Optional[str] = None,
-    template_id: Optional[str] = None,
     execution_mode: ExecutionMode = ExecutionMode.TELEPHONY,
-    status: LeadCallStatus = LeadCallStatus.BACKLOG,  # Status with default for backward compatibility
-    call_id: Optional[str] = None,  # For inbound calls where call_sid is known upfront
-    outbound_number_id: Optional[str] = None,  # For inbound calls
-    call_direction: CallDirection = CallDirection.OUTBOUND,  # Direction of call
+    status: LeadCallStatus = LeadCallStatus.BACKLOG,
+    call_id: Optional[str] = None,
+    outbound_number_id: Optional[str] = None,
+    call_direction: CallDirection = CallDirection.OUTBOUND,
 ) -> Tuple[str, List[Any]]:
     """
     Generate query to insert lead call tracker record.
 
     Args:
-        template_id: UUID of the template (preferred, for referential integrity)
-        template: Name of the template (kept for backward compatibility)
+        template_id: UUID of the template (required, primary reference)
         execution_mode: Execution mode (TELEPHONY, TELEPHONY_TEST, DAILY, DAILY_TEST)
         call_id: Call SID (optional, used for inbound calls where call_sid is known upfront)
         outbound_number_id: Outbound number ID (optional, used for inbound calls)
@@ -49,10 +45,7 @@ def insert_lead_call_tracker_query(
         INSERT INTO "{LEAD_CALL_TRACKER_TABLE}"
         (
             "id",
-            "merchant_id",
-            "template",
             "template_id",
-            "shop_identifier",
             "request_id",
             "next_attempt_at",
             "payload",
@@ -69,20 +62,17 @@ def insert_lead_call_tracker_query(
             "created_at",
             "updated_at"
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20) RETURNING *;
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17) RETURNING *;
     """
 
     values = [
         id,
-        merchant_id,
-        template,
-        template_id,
-        shop_identifier,
+        template_id,  # Primary reference
         request_id,
         next_attempt_at,
         json.dumps(payload) if payload else None,
         json.dumps(meta_data) if meta_data else None,
-        status.value,  # Use parameter (defaults to BACKLOG for backward compatibility)
+        status.value,
         call_initiated_time,
         call_end_time,
         attempt_count,

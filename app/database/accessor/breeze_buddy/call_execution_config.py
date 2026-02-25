@@ -20,9 +20,9 @@ from app.database.queries.breeze_buddy.call_execution_config import (
     get_all_call_execution_configs_query,
     get_all_merchants_query,
     get_call_execution_config_by_id_query,
-    get_call_execution_config_by_merchant_id_query,
+    get_call_execution_config_by_template_id_query,
     insert_call_execution_config_query,
-    update_call_execution_config_query,
+    update_call_execution_config_by_id_query,
 )
 from app.schemas import CallExecutionConfig, CallProvider, TelephonyConfig
 
@@ -45,18 +45,15 @@ def _serialize_pre_checks(pre_checks: Optional[List[Any]]) -> Optional[str]:
 
 async def create_call_execution_config(
     id: str,
+    template_id: str,  # Primary reference - required
     initial_offset: int,
     retry_offset: int,
     call_start_time: time,
     call_end_time: time,
     max_retry: int,
     calling_provider: CallProvider,
-    merchant_id: str,
-    template: str,
-    shop_identifier: Optional[str],
     enable_international_call: bool,
-    enable_calling: bool = True,
-    template_id: Optional[str] = None,
+    enable_calling: bool | None = True,
     pre_checks: Optional[List[Any]] = None,
     telephony_config: Optional[TelephonyConfig] = None,
 ) -> Optional[CallExecutionConfig]:
@@ -69,21 +66,18 @@ async def create_call_execution_config(
         pre_checks: List of PreCheckConfig objects for call pre-validation
         telephony_config: Optional telephony provider overrides
     """
-    logger.info(f"Creating call execution config for merchant ID: {merchant_id}")
+    logger.info(f"Creating call execution config for template_id: {template_id}")
 
     try:
         query_text, values = insert_call_execution_config_query(
             id=id,
+            template_id=template_id,
             initial_offset=initial_offset,
             retry_offset=retry_offset,
             call_start_time=call_start_time,
             call_end_time=call_end_time,
             max_retry=max_retry,
             calling_provider=calling_provider,
-            merchant_id=merchant_id,
-            template=template,
-            template_id=template_id,
-            shop_identifier=shop_identifier,
             enable_international_call=enable_international_call,
             enable_calling=enable_calling,
             pre_checks=_serialize_pre_checks(pre_checks),
@@ -106,50 +100,30 @@ async def create_call_execution_config(
         return None
 
 
-async def get_call_execution_config_by_merchant_id(
-    merchant_id: str,
-    shop_identifier: Optional[str] = None,
-) -> List[CallExecutionConfig]:
+async def get_call_execution_config_by_template_id(
+    template_id: str,
+) -> Optional[CallExecutionConfig]:
     """
-    Get call execution config by merchant ID.
+    Get call execution config by template_id.
+    This is the preferred method as template_id is the primary reference.
     """
-    logger.info(f"Getting call execution config by merchant ID: {merchant_id}")
+    logger.info(f"Getting call execution config by template_id: {template_id}")
 
     try:
-        query_text, values = get_call_execution_config_by_merchant_id_query(
-            merchant_id, shop_identifier
-        )
+        query_text, values = get_call_execution_config_by_template_id_query(template_id)
         result = await run_parameterized_query(query_text, values)
 
         if result:
-            decoded_result = decode_call_execution_config_list(result)
-            logger.info(
-                f"Found {len(decoded_result)} call execution configs for merchant ID: {merchant_id}"
-            )
+            decoded_result = decode_call_execution_config(result)
+            logger.info(f"Found call execution config for template_id: {template_id}")
             return decoded_result
 
-        if shop_identifier:
-            # If no config is found for the specific shop_identifier, try with NULL
-            logger.info(
-                f"No config found for shop_identifier {shop_identifier}, trying generic config."
-            )
-            query_text, values = get_call_execution_config_by_merchant_id_query(
-                merchant_id, None
-            )
-            result = await run_parameterized_query(query_text, values)
-            if result:
-                decoded_result = decode_call_execution_config_list(result)
-                logger.info(
-                    f"Found {len(decoded_result)} generic call execution configs for merchant ID: {merchant_id}"
-                )
-                return decoded_result
-
-        logger.info(f"No call execution config found with merchant ID: {merchant_id}")
-        return []
+        logger.info(f"No call execution config found for template_id: {template_id}")
+        return None
 
     except Exception as e:
-        logger.error(f"Error getting call execution config by merchant ID: {e}")
-        return []
+        logger.error(f"Error getting call execution config by template_id: {e}")
+        return None
 
 
 async def get_all_call_execution_configs() -> List[CallExecutionConfig]:
@@ -175,10 +149,8 @@ async def get_all_call_execution_configs() -> List[CallExecutionConfig]:
         return []
 
 
-async def update_call_execution_config(
-    merchant_id: str,
-    template: str,
-    shop_identifier: Optional[str] = None,
+async def update_call_execution_config_by_id(
+    config_id: str,
     initial_offset: Optional[int] = None,
     retry_offset: Optional[int] = None,
     call_start_time: Optional[time] = None,
@@ -192,7 +164,8 @@ async def update_call_execution_config(
     telephony_config: Optional[TelephonyConfig] = None,
 ) -> Optional[CallExecutionConfig]:
     """
-    Update an existing call execution config record based on merchant_id, template, and shop_identifier.
+    Update an existing call execution config by its ID.
+    This is the preferred method for updates.
     Only updates fields that are provided (not None).
 
     Args:
@@ -201,9 +174,7 @@ async def update_call_execution_config(
         pre_checks: List of PreCheckConfig objects for call pre-validation
         telephony_config: Optional telephony provider overrides
     """
-    logger.info(
-        f"Updating call execution config for merchant: {merchant_id}, template: {template}, shop_identifier: {shop_identifier}"
-    )
+    logger.info(f"Updating call execution config by ID: {config_id}")
 
     try:
         # Serialize telephony_config for the query:
@@ -222,10 +193,8 @@ async def update_call_execution_config(
         else:
             serialized_telephony = None
 
-        query_text, values = update_call_execution_config_query(
-            merchant_id=merchant_id,
-            template=template,
-            shop_identifier=shop_identifier,
+        query_text, values = update_call_execution_config_by_id_query(
+            config_id=config_id,
             initial_offset=initial_offset,
             retry_offset=retry_offset,
             call_start_time=call_start_time,
@@ -245,13 +214,11 @@ async def update_call_execution_config(
             logger.info(f"Call execution config updated successfully: {decoded_result}")
             return decoded_result
 
-        logger.error(
-            f"Failed to update call execution config for merchant: {merchant_id}, template: {template}, shop_identifier: {shop_identifier}"
-        )
+        logger.error(f"Failed to update call execution config by ID: {config_id}")
         return None
 
     except Exception as e:
-        logger.error(f"Error updating call execution config: {e}")
+        logger.error(f"Error updating call execution config by ID: {e}")
         return None
 
 

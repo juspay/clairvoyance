@@ -16,7 +16,10 @@ from app.core.logger import logger
 from app.database.accessor.breeze_buddy.credentials import (
     get_credentials_as_template_vars,
 )
-from app.database.accessor.breeze_buddy.template import get_template_by_merchant
+from app.database.accessor.breeze_buddy.template import (
+    get_template_by_id,
+    get_template_by_merchant,
+)
 
 
 class FlowConfigLoader:
@@ -89,19 +92,15 @@ class FlowConfigLoader:
 
     async def load_template(
         self,
-        merchant_id: str,
-        template: str,
-        shop_identifier: Optional[str] = None,
+        template_id: str,
         call_payload: Optional[Dict[str, str]] = None,
     ) -> Tuple[TemplateModel, Dict[str, str]]:
         """
         Load template and render task messages with variables.
 
         Args:
-            merchant_id: Merchant identifier
-            template: str type
-            template_vars: Variables for template rendering
-            shop_identifier: Optional shop-specific identifier
+            template_id: Template UUID (primary reference)
+            call_payload: Optional payload for template rendering
 
         Returns:
             TemplateModel with rendered task messages, and dictionary of template variables
@@ -109,33 +108,30 @@ class FlowConfigLoader:
         Raises:
             ValueError: If template not found
         """
-
-        # Load template from database
-        template_obj = await self._load_template_from_db(
-            merchant_id, template, shop_identifier
-        )
+        # Load template from database by ID (primary reference)
+        template_obj = await get_template_by_id(template_id)
 
         if not template_obj:
-            raise ValueError(
-                f"No template found for merchant={merchant_id}, template={template}"
-            )
+            raise ValueError(f"No template found for template_id={template_id}")
 
         template_vars = {}
 
         # 1. Load credentials from credentials table (global + merchant-specific)
         try:
-            credential_vars = await get_credentials_as_template_vars(merchant_id)
+            credential_vars = await get_credentials_as_template_vars(
+                template_obj.merchant_id
+            )
             if credential_vars:
                 template_vars.update(credential_vars)
                 logger.info(
-                    f"Loaded {len(credential_vars)} credential vars for merchant {merchant_id}"
+                    f"Loaded {len(credential_vars)} credential vars for merchant {template_obj.merchant_id}"
                 )
         except Exception as e:
             logger.warning(
-                f"Failed to load credentials for merchant {merchant_id}: {e}"
+                f"Failed to load credentials for merchant {template_obj.merchant_id}: {e}"
             )
         logger.info(
-            f"Loaded {len(template_vars)} template vars for merchant {merchant_id}"
+            f"Loaded {len(template_vars)} template vars for merchant {template_obj.merchant_id}"
         )
 
         # 2. Load template.secrets (overrides credentials for same keys)

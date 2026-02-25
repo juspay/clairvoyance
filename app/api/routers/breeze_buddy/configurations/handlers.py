@@ -15,8 +15,8 @@ from app.database.accessor import (
     delete_call_execution_config,
     get_all_call_execution_configs,
     get_call_execution_config_by_id,
-    get_call_execution_config_by_merchant_id,
-    update_call_execution_config,
+    get_template_by_id,
+    update_call_execution_config_by_id,
 )
 from app.schemas import (
     CallExecutionConfig,
@@ -25,7 +25,7 @@ from app.schemas import (
     UserInfo,
 )
 
-from .rbac import validate_config_access
+from .rbac import filter_configs_by_rbac, validate_config_access
 
 
 async def create_configuration_handler(
@@ -42,26 +42,31 @@ async def create_configuration_handler(
         Created configuration object
 
     Raises:
-        HTTPException: 400 if creation fails
+        HTTPException: 400 if creation fails, template_id is required
     """
+    if not config.template_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="template_id is required for creating a configuration",
+        )
+
     logger.info(
         f"User {current_user.username} (role: {current_user.role}) creating configuration "
-        f"for merchant: {config.merchant_id}, template: {config.template}"
+        f"with template_id: {config.template_id}"
     )
 
     try:
         call_execution_config = await create_call_execution_config(
             id=str(uuid4()),
+            template_id=config.template_id,
             initial_offset=config.initial_offset,
             retry_offset=config.retry_offset,
             call_start_time=config.call_start_time,
             call_end_time=config.call_end_time,
             max_retry=config.max_retry,
             calling_provider=config.calling_provider,
-            merchant_id=config.merchant_id,
-            template=config.template,
-            shop_identifier=config.shop_identifier,
             enable_international_call=config.enable_international_call,
+            enable_calling=config.enable_calling,
             pre_checks=config.pre_checks,
             telephony_config=config.telephony_config,
         )
@@ -69,7 +74,7 @@ async def create_configuration_handler(
         if call_execution_config:
             logger.info(
                 f"Configuration created successfully: ID={call_execution_config.id}, "
-                f"merchant={config.merchant_id}, template={config.template}"
+                f"template_id={config.template_id}"
             )
             return call_execution_config
         else:
@@ -87,43 +92,36 @@ async def create_configuration_handler(
 
 
 async def list_configurations_handler(
-    merchant_id: Optional[str],
-    template: Optional[str],
-    shop_identifier: Optional[str],
+    template_id: Optional[str],
     current_user: UserInfo,
 ) -> List[CallExecutionConfig]:
     """
     List configurations with optional filters.
 
     Args:
-        merchant_id: Optional merchant ID filter
-        template: Optional template filter
-        shop_identifier: Optional shop identifier filter
+        template_id: Optional template filter
         current_user: Current authenticated user
 
     Returns:
-        List of configurations (RBAC filtering applied separately)
+        List of configurations (RBAC filtering applied)
     """
     logger.info(
         f"User {current_user.username} (role: {current_user.role}) listing configurations "
-        f"(merchant={merchant_id}, template={template}, shop={shop_identifier})"
+        f"(template={template_id})"
     )
 
     try:
-        # Get configurations based on filters
-        if merchant_id:
-            configs = await get_call_execution_config_by_merchant_id(merchant_id)
-        else:
-            configs = await get_all_call_execution_configs()
+        # Get all configurations and filter in-memory
+        configs = await get_all_call_execution_configs()
 
-        # Apply additional filters
-        if template:
-            configs = [c for c in configs if c.template == template]
+        # Apply template_id filter
+        if template_id:
+            configs = [c for c in configs if c.template_id == template_id]
 
-        if shop_identifier:
-            configs = [c for c in configs if c.shop_identifier == shop_identifier]
+        # Apply RBAC filtering
+        configs = await filter_configs_by_rbac(configs, current_user)
 
-        logger.info(f"Found {len(configs)} configurations before RBAC filtering")
+        logger.info(f"Found {len(configs)} configurations after RBAC filtering")
         return configs
 
     except Exception as e:
@@ -206,39 +204,38 @@ async def update_configuration_handler(
                 detail=f"Configuration {config_id} not found",
             )
 
-        # RBAC: Validate access against existing configuration (not request body)
+        # Fetch template to get merchant_id and shop_identifier for RBAC
+        if not existing_config.template_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Configuration {config_id} has no template_id",
+            )
+
+        template = await get_template_by_id(existing_config.template_id)
+        if not template:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Template not found for configuration {config_id}",
+            )
+
+        # RBAC: Validate access against the template's merchant and shop
         validate_config_access(
             current_user,
-            existing_config.merchant_id,
-            existing_config.shop_identifier,
+            template.merchant_id,
+            template.shop_identifier,
             operation="update configuration for",
         )
 
-        # Validate that identity fields match the existing configuration
-        # This prevents accidentally updating a different record
-        if existing_config.merchant_id != config.merchant_id:
+        # Validate that template_id cannot be changed
+        if existing_config.template_id != config.template_id:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Cannot change merchant_id from {existing_config.merchant_id} to {config.merchant_id}",
+                detail=f"Cannot change template_id from {existing_config.template_id} to {config.template_id}",
             )
 
-        if existing_config.template != config.template:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Cannot change template from {existing_config.template} to {config.template}",
-            )
-
-        if existing_config.shop_identifier != config.shop_identifier:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Cannot change shop_identifier from {existing_config.shop_identifier} to {config.shop_identifier}",
-            )
-
-        # Update configuration
-        updated_config = await update_call_execution_config(
-            merchant_id=config.merchant_id,
-            template=config.template,
-            shop_identifier=config.shop_identifier,
+        # Update configuration using the new ID-based update
+        updated_config = await update_call_execution_config_by_id(
+            config_id=config_id,
             initial_offset=config.initial_offset,
             retry_offset=config.retry_offset,
             call_start_time=config.call_start_time,
@@ -246,6 +243,7 @@ async def update_configuration_handler(
             max_retry=config.max_retry,
             calling_provider=config.calling_provider,
             enable_international_call=config.enable_international_call,
+            enable_calling=config.enable_calling,
             pre_checks=config.pre_checks,
             telephony_config=config.telephony_config,
         )

@@ -9,8 +9,8 @@ from .breeze_buddy.call_execution_config import (
     delete_call_execution_config,
     get_all_call_execution_configs,
     get_call_execution_config_by_id,
-    get_call_execution_config_by_merchant_id,
-    update_call_execution_config,
+    get_call_execution_config_by_template_id,
+    update_call_execution_config_by_id,
 )
 from .breeze_buddy.credentials import (
     create_credential,
@@ -51,12 +51,16 @@ from .breeze_buddy.outbound_number import (
 )
 from .breeze_buddy.template import (
     create_template,
+    get_template_by_id,
     get_template_by_merchant,
+    get_templates_list,
 )
 
 __all__ = [
     "create_template",
+    "get_template_by_id",
     "get_template_by_merchant",
+    "get_templates_list",
     "create_outbound_number",
     "get_outbound_number_by_id",
     "update_outbound_number_status",
@@ -68,9 +72,9 @@ __all__ = [
     "get_outbound_number_based_on_status_and_provider",
     "create_call_execution_config",
     "get_call_execution_config_by_id",
-    "get_call_execution_config_by_merchant_id",
+    "get_call_execution_config_by_template_id",
     "get_all_call_execution_configs",
-    "update_call_execution_config",
+    "update_call_execution_config_by_id",
     "delete_call_execution_config",
     "calling_activation_for_merchant",
     "create_lead_call_tracker",

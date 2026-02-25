@@ -19,6 +19,7 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.api.security.breeze_buddy.rbac_token import get_current_user_with_rbac
+from app.database.accessor import get_template_by_id
 from app.schemas import (
     CallExecutionConfig,
     CreateCallExecutionConfigRequest,
@@ -37,6 +38,23 @@ from .handlers import (
 from .rbac import filter_configs_by_rbac, validate_config_access
 
 router = APIRouter()
+
+
+async def _validate_template_access(current_user: UserInfo, template_id: str) -> None:
+    """Helper to validate user has access to template via RBAC."""
+    template = await get_template_by_id(template_id)
+    if not template:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Template {template_id} not found",
+        )
+
+    validate_config_access(
+        current_user,
+        template.merchant_id,
+        template.shop_identifier,
+        operation="create configuration for",
+    )
 
 
 @router.post(
@@ -60,9 +78,7 @@ async def create_configuration(
 
     Request Body:
         {
-            "merchant_id": "shop_123",
-            "template": "order-confirmation",
-            "shop_identifier": "shop_123",
+            "template_id": "uuid-of-template",
             "initial_offset": 0,
             "retry_offset": 300,
             "call_start_time": "09:00",
@@ -75,35 +91,22 @@ async def create_configuration(
     Returns:
         Created configuration object with generated ID
     """
-    # RBAC: Check if user has permission to create config for this merchant/shop
-    validate_config_access(
-        current_user,
-        config.merchant_id,
-        config.shop_identifier,
-        operation="create configuration for",
-    )
+    # RBAC: Check if user has permission to create config for this template's merchant/shop
+    await _validate_template_access(current_user, config.template_id)
 
     return await create_configuration_handler(config, current_user)
 
 
 @router.get("/configurations", response_model=List[CallExecutionConfig])
 async def list_configurations(
-    merchant_id: Optional[str] = Query(None, description="Filter by merchant ID"),
-    template: Optional[str] = Query(
-        None, description="Filter by template name (e.g., 'order-confirmation')"
-    ),
-    shop_identifier: Optional[str] = Query(
-        None, description="Filter by shop identifier"
-    ),
+    template_id: Optional[str] = Query(None, description="Filter by template ID"),
     current_user: UserInfo = Depends(get_current_user_with_rbac),
 ):
     """
     List all call execution configurations with optional filters.
 
     Query Parameters:
-    - merchant_id: Filter configurations by merchant
-    - template: Filter by template name (order-confirmation, appointment-reminder, etc.)
-    - shop_identifier: Filter by specific shop
+    - template_id: Filter configurations by template ID
 
     RBAC Filtering:
     - Admin: Sees all configurations (or filtered by query params)
@@ -111,31 +114,17 @@ async def list_configurations(
 
     Example Requests:
         GET /configurations                                    # All accessible configs
-        GET /configurations?template=order-confirmation        # Filter by template
-        GET /configurations?merchant_id=shop_123               # Filter by merchant
-        GET /configurations?shop_identifier=shop_456           # Filter by shop
+        GET /configurations?template_id=uuid-of-template       # Filter by template
 
     Returns:
         List of configuration objects matching filters and user permissions
     """
-    # Validate merchant access if filter provided
-    if merchant_id and current_user.role != "admin":
-        if (
-            merchant_id not in current_user.merchant_ids
-            and "*" not in current_user.merchant_ids
-        ):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Access denied to merchant {merchant_id}",
-            )
+    # Validate template access if filter provided
+    if template_id and current_user.role != "admin":
+        await _validate_template_access(current_user, template_id)
 
     # Get configurations
-    configs = await list_configurations_handler(
-        merchant_id, template, shop_identifier, current_user
-    )
-
-    # Apply RBAC filtering
-    configs = filter_configs_by_rbac(configs, current_user)
+    configs = await list_configurations_handler(template_id, current_user)
 
     return configs
 
@@ -162,19 +151,15 @@ async def get_configuration(
     # Get configuration
     config = await get_configuration_handler(config_id, current_user)
 
-    # RBAC: Check access (return 404 to avoid leaking existence)
-    try:
-        validate_config_access(
-            current_user,
-            config.merchant_id,
-            config.shop_identifier,
-            operation="access configuration for",
-        )
-    except HTTPException:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Configuration {config_id} not found",
-        )
+    # RBAC: Check access via template (return 404 to avoid leaking existence)
+    if config.template_id:
+        try:
+            await _validate_template_access(current_user, config.template_id)
+        except HTTPException:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Configuration {config_id} not found",
+            )
 
     return config
 
@@ -308,7 +293,7 @@ async def calling_activation(
     )
 
     # Apply RBAC filtering to returned configs
-    result["configs"] = filter_configs_by_rbac(result["configs"], current_user)
+    result["configs"] = await filter_configs_by_rbac(result["configs"], current_user)
     result["message"] = f"Updated {len(result['configs'])} config(s)"
 
     return result

@@ -14,18 +14,15 @@ CALL_EXECUTION_CONFIG_TABLE = "call_execution_config"
 # Call execution config queries
 def insert_call_execution_config_query(
     id: str,
+    template_id: str,  # Primary reference - required
     initial_offset: int,
     retry_offset: int,
     call_start_time: time,
     call_end_time: time,
     max_retry: int,
     calling_provider: CallProvider,
-    merchant_id: str,
-    template: str,
-    shop_identifier: Optional[str],
     enable_international_call: bool,
-    enable_calling: bool = True,
-    template_id: Optional[str] = None,
+    enable_calling: bool | None = True,
     pre_checks: Optional[str] = None,
     telephony_config: Optional[str] = None,
 ) -> Tuple[str, List[Any]]:
@@ -48,10 +45,7 @@ def insert_call_execution_config_query(
             "call_end_time",
             "max_retry",
             "calling_provider",
-            "merchant_id",
-            "template",
             "template_id",
-            "shop_identifier",
             "enable_international_call",
             "enable_calling",
             "pre_checks",
@@ -70,10 +64,7 @@ def insert_call_execution_config_query(
         call_end_time,
         max_retry,
         calling_provider.value,
-        merchant_id,
-        template,
         template_id,
-        shop_identifier,
         enable_international_call,
         enable_calling,
         pre_checks,
@@ -85,19 +76,15 @@ def insert_call_execution_config_query(
     return text, values
 
 
-def get_call_execution_config_by_merchant_id_query(
-    merchant_id: str,
-    shop_identifier: Optional[str],
+def get_call_execution_config_by_template_id_query(
+    template_id: str,
 ) -> Tuple[str, List[Any]]:
     """
-    Generate query to get call execution config by merchant ID and shop identifier.
+    Generate query to get call execution config by template_id.
+    This is the preferred method as template_id is the primary reference.
     """
-    if shop_identifier:
-        text = f'SELECT * FROM "{CALL_EXECUTION_CONFIG_TABLE}" WHERE "merchant_id" = $1 AND "shop_identifier" = $2;'
-        values: List[Any] = [merchant_id, shop_identifier]
-    else:
-        text = f'SELECT * FROM "{CALL_EXECUTION_CONFIG_TABLE}" WHERE "merchant_id" = $1'
-        values = [merchant_id]
+    text = f'SELECT * FROM "{CALL_EXECUTION_CONFIG_TABLE}" WHERE "template_id" = $1;'
+    values: List[Any] = [template_id]
     return text, values
 
 
@@ -128,10 +115,8 @@ def delete_call_execution_config_query(config_id: str) -> Tuple[str, List[Any]]:
     return text, values
 
 
-def update_call_execution_config_query(
-    merchant_id: str,
-    template: str,
-    shop_identifier: Optional[str] = None,
+def update_call_execution_config_by_id_query(
+    config_id: str,
     initial_offset: Optional[int] = None,
     retry_offset: Optional[int] = None,
     call_start_time: Optional[time] = None,
@@ -145,7 +130,8 @@ def update_call_execution_config_query(
     telephony_config: Optional[str] = None,
 ) -> Tuple[str, List[Any]]:
     """
-    Generate query to update call execution config record based on merchant_id, template, and shop_identifier.
+    Generate query to update call execution config by its ID.
+    This is the preferred method for updates.
     Only updates fields that are provided (not None).
 
     Args:
@@ -220,26 +206,13 @@ def update_call_execution_config_query(
     values.append(datetime.now())
     param_count += 1
 
-    # Build WHERE clause based on merchant_id, template, and shop_identifier
-    values.append(merchant_id)
-    merchant_id_param = param_count
-    param_count += 1
-
-    values.append(template)
-    template_param = param_count
-    param_count += 1
-
-    if shop_identifier:
-        values.append(shop_identifier)
-        shop_identifier_param = param_count
-        where_clause = f'"merchant_id" = ${merchant_id_param} AND "template" = ${template_param} AND "shop_identifier" = ${shop_identifier_param}'
-    else:
-        where_clause = f'"merchant_id" = ${merchant_id_param} AND "template" = ${template_param} AND "shop_identifier" IS NULL'
+    # WHERE clause by config ID
+    values.append(config_id)
 
     text = f"""
         UPDATE "{CALL_EXECUTION_CONFIG_TABLE}"
         SET {', '.join(updates)}
-        WHERE {where_clause}
+        WHERE "id" = ${param_count}
         RETURNING *;
     """
 

@@ -24,10 +24,8 @@ def decode_lead_call_tracker(row: asyncpg.Record) -> Optional[LeadCallTracker]:
 
     return LeadCallTracker(
         id=row["id"],
+        template_id=row.get("template_id"),
         outbound_number_id=row["outbound_number_id"],
-        merchant_id=row["merchant_id"],
-        template=row["template"],
-        shop_identifier=row["shop_identifier"],
         request_id=row.get("request_id"),
         attempt_count=row["attempt_count"],
         next_attempt_at=row["next_attempt_at"],

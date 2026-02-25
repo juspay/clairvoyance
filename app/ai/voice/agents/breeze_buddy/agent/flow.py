@@ -24,7 +24,7 @@ from app.schemas.breeze_buddy.core import LeadCallTracker
 async def load_template_config(
     lead: LeadCallTracker,
 ) -> tuple[TemplateModel, Optional[ConfigurationModel], Dict[str, str]]:
-    """Load template configuration from database.
+    """Load template configuration from database using template_id.
 
     Args:
         lead: The lead instance
@@ -32,12 +32,14 @@ async def load_template_config(
     Returns:
         Tuple of (template, configurations, template_vars)
     """
+    if not lead.template_id:
+        raise ValueError(f"Lead {lead.id} has no template_id")
+
     flow_loader = FlowConfigLoader()
 
+    # Load template by ID (primary reference) with rendering
     template, template_vars = await flow_loader.load_template(
-        merchant_id=lead.merchant_id,
-        template=lead.template,
-        shop_identifier=lead.shop_identifier if lead else None,
+        template_id=lead.template_id,
         call_payload=lead.payload,
     )
 

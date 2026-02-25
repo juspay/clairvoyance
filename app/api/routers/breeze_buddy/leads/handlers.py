@@ -36,10 +36,11 @@ from app.ai.voice.agents.breeze_buddy.utils.tts_utils.tts_provider_selector impo
 from app.core.logger import logger
 from app.database.accessor import (
     create_lead_call_tracker,
-    get_call_execution_config_by_merchant_id,
+    get_call_execution_config_by_template_id,
     get_lead_by_call_id,
     get_lead_by_id,
     get_outbound_number_by_id,
+    get_template_by_id,
     get_template_by_merchant,
     handle_lead_abort,
 )
@@ -142,20 +143,8 @@ async def push_lead_handler(req: PushLeadRequest, current_user: UserInfo) -> Dic
 
             logger.info(f"Payload validation successful for merchant {req.merchant}")
 
-        # Get call execution config
-        call_execution_configs = await get_call_execution_config_by_merchant_id(
-            req.merchant, req.identifier
-        )
-
-        if not call_execution_configs:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Call execution config not found for merchant_id: {req.merchant}",
-            )
-
-        config = next(
-            (c for c in call_execution_configs if c.template == req.template), None
-        )
+        # Get call execution config using template_id
+        config = await get_call_execution_config_by_template_id(str(template.id))
 
         if not config:
             raise HTTPException(
@@ -197,10 +186,7 @@ async def push_lead_handler(req: PushLeadRequest, current_user: UserInfo) -> Dic
         # Insert lead call tracker record with both template name and template_id
         lead_call_tracker = await create_lead_call_tracker(
             id=uuid,
-            merchant_id=req.merchant,
-            template=req.template,
             template_id=str(template.id),
-            shop_identifier=req.identifier,
             next_attempt_at=next_attempt_at,
             payload=lead_payload,
             attempt_count=0,
@@ -269,9 +255,25 @@ async def get_call_recording_handler(call_sid: str, current_user: UserInfo) -> B
             detail=f"Recording not found for call_sid: {call_sid}",
         )
 
-    # Step 2: RBAC validation (fails fast before fetching recording)
+    # Step 2: Fetch template to get merchant_id and shop_identifier for RBAC
+    if not lead.template_id:
+        logger.warning(f"Lead {lead.id} has no template_id")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Recording not found for call_sid: {call_sid}",
+        )
+
+    template = await get_template_by_id(lead.template_id)
+    if not template:
+        logger.warning(f"Template not found for lead {lead.id}")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Recording not found for call_sid: {call_sid}",
+        )
+
+    # RBAC validation (fails fast before fetching recording)
     validate_recording_access(
-        current_user, call_sid, lead.merchant_id, lead.shop_identifier
+        current_user, call_sid, template.merchant_id, template.shop_identifier
     )
 
     # Step 3: Check if recording URL exists

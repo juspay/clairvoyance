@@ -46,9 +46,7 @@ def get_row_count(result: Optional[List[asyncpg.Record]]) -> int:
 
 async def create_lead_call_tracker(
     id: str,
-    merchant_id: str,
-    template: str,
-    shop_identifier: Optional[str],
+    template_id: str,
     next_attempt_at: Optional[datetime],
     payload: Optional[Dict[str, Any]],
     attempt_count: int = 0,
@@ -57,7 +55,6 @@ async def create_lead_call_tracker(
     call_end_time: Optional[datetime] = None,
     cost: Optional[float] = None,
     request_id: Optional[str] = None,
-    template_id: Optional[str] = None,
     execution_mode: ExecutionMode = ExecutionMode.TELEPHONY,
     status: LeadCallStatus = LeadCallStatus.BACKLOG,  # Status with default for backward compatibility
     call_id: Optional[str] = None,  # For inbound calls where call_sid is known upfront
@@ -68,22 +65,21 @@ async def create_lead_call_tracker(
     Create a new lead call tracker record.
 
     Args:
-        template_id: UUID of the template (preferred, for referential integrity)
-        template: Name of the template (kept for backward compatibility)
+        id: Unique identifier for the lead
+        template_id: UUID of the template (REQUIRED - primary reference)
+        next_attempt_at: When to next attempt the call
+        payload: Call payload data
         execution_mode: Execution mode (TELEPHONY, TELEPHONY_TEST, DAILY, DAILY_TEST)
         call_id: Call SID (optional, used for inbound calls where call_sid is known upfront)
         outbound_number_id: Outbound number ID (optional, used for inbound calls)
         call_direction: Direction of call (INBOUND or OUTBOUND, defaults to OUTBOUND)
     """
-    logger.info(f"Creating lead call tracker for merchant ID: {merchant_id}")
+    logger.info(f"Creating lead call tracker with template_id: {template_id}")
 
     try:
         query_text, values = insert_lead_call_tracker_query(
             id=id,
-            merchant_id=merchant_id,
-            template=template,
             template_id=template_id,
-            shop_identifier=shop_identifier,
             next_attempt_at=next_attempt_at,
             payload=payload,
             meta_data=meta_data,

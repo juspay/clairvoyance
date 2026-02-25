@@ -495,7 +495,7 @@ class Agent:
             call_sid=self.call_sid or "unknown",
             order_id=self.lead.request_id or "unknown",
             provider=self.provider or "",
-            template_type=self.lead.template,
+            template_type=self.lead.template_id or "unknown",
         )
         try:
             with trace.use_span(self.root_span, end_on_exit=True):

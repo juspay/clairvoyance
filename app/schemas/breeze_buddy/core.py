@@ -135,10 +135,8 @@ class LeadCallTracker(BaseModel):
     """Lead call tracking model"""
 
     id: str
+    template_id: Optional[str] = None  # Primary reference for config lookup
     outbound_number_id: Optional[str] = None
-    merchant_id: str
-    template: str
-    shop_identifier: Optional[str] = None
     request_id: Optional[str] = None
     attempt_count: int = 0
     next_attempt_at: Optional[datetime] = None
@@ -199,15 +197,13 @@ class TelephonyConfig(BaseModel):
 class CreateCallExecutionConfigRequest(BaseModel):
     """Request to create call execution configuration"""
 
+    template_id: str
     initial_offset: int
     retry_offset: int
     call_start_time: time
     call_end_time: time
     max_retry: int
     calling_provider: CallProvider
-    merchant_id: str
-    template: str
-    shop_identifier: Optional[str] = None
     enable_international_call: bool = True
     enable_calling: Optional[bool] = True
     pre_checks: Optional[List[PreCheckConfig]] = None
@@ -217,9 +213,7 @@ class CreateCallExecutionConfigRequest(BaseModel):
 class UpdateCallExecutionConfigRequest(BaseModel):
     """Request to update call execution configuration"""
 
-    merchant_id: str
-    template: str
-    shop_identifier: Optional[str] = None
+    template_id: str
     initial_offset: Optional[int] = None
     retry_offset: Optional[int] = None
     call_start_time: Optional[time] = None
@@ -236,15 +230,13 @@ class CallExecutionConfig(BaseModel):
     """Call execution configuration model"""
 
     id: str
+    template_id: Optional[str]
     initial_offset: int
     retry_offset: int
     call_start_time: time
     call_end_time: time
     max_retry: int
     calling_provider: CallProvider
-    merchant_id: str
-    template: str
-    shop_identifier: Optional[str] = None
     enable_international_call: bool = True
     enable_calling: bool = True
     pre_checks: Optional[List[PreCheckConfig]] = None

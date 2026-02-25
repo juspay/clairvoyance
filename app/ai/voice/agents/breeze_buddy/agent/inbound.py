@@ -79,10 +79,7 @@ async def handle_inbound_call(
     lead_id = str(uuid.uuid4())
     lead = await create_lead_call_tracker(
         id=lead_id,
-        merchant_id=template.merchant_id,
-        template=template.name,
         template_id=str(template.id),
-        shop_identifier=template.shop_identifier,
         next_attempt_at=None,
         payload={"caller_number": from_number},
         call_initiated_time=call_initiated_time,
@@ -147,10 +144,7 @@ async def create_lead_from_template_id(
     lead_id = str(uuid.uuid4())
     lead = await create_lead_call_tracker(
         id=lead_id,
-        merchant_id=template.merchant_id,
-        template=template.name,
         template_id=str(template.id),
-        shop_identifier=template.shop_identifier,
         next_attempt_at=None,
         payload={"caller_number": from_number},
         call_initiated_time=call_initiated_time,

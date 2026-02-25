@@ -102,14 +102,10 @@ async def _build_resolution_context(
         context.update(lead.payload)
 
     # 4. Core lead fields available as placeholders
-    context["merchant_id"] = lead.merchant_id
+    context["template_id"] = lead.template_id
     context["lead_id"] = lead.id
     if lead.request_id:
         context["request_id"] = lead.request_id
-    if lead.template:
-        context["template_name"] = lead.template
-    if lead.shop_identifier:
-        context["shop_identifier"] = lead.shop_identifier
 
     return context
 
