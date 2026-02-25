@@ -17,7 +17,9 @@ from app.database.queries.breeze_buddy.call_execution_config import (
     get_merchant_id_by_shop_identifier_from_config_query,
 )
 from app.database.queries.breeze_buddy.template import (
+    check_template_usage_query,
     create_template_query,
+    delete_template_if_not_referenced_query,
     get_all_templates_by_outbound_number_id_query,
     get_template_by_id_query,
     get_template_by_merchant_query,
@@ -426,6 +428,73 @@ async def get_template_by_outbound_number_id(
         logger.error(
             f"Error getting template by outbound_number_id: {e}", exc_info=True
         )
+        return None
+
+
+async def check_template_usage(template_id: str) -> Dict[str, int]:
+    """
+    Check if a template is referenced by other tables.
+
+    Checks:
+    - call_execution_config: configs that reference this template
+    - lead_call_tracker: active leads (BACKLOG, RETRY, PROCESSING) using this template
+
+    Args:
+        template_id: Template UUID
+
+    Returns:
+        Dict mapping source table name to reference count.
+        Example: {"call_execution_config": 2, "lead_call_tracker": 0}
+    """
+    logger.info(f"Checking usage for template: {template_id}")
+
+    try:
+        query, values = check_template_usage_query(template_id)
+        result = await run_parameterized_query(query, values)
+
+        usage: Dict[str, int] = {}
+        if result:
+            for row in result:
+                usage[row["source"]] = row["reference_count"]
+
+        logger.info(f"Template {template_id} usage: {usage}")
+        return usage
+
+    except Exception as e:
+        logger.error(f"Error checking template usage: {e}", exc_info=True)
+        return {}
+
+
+async def delete_template_if_not_referenced(
+    template_id: str,
+) -> Optional[TemplateMetadata]:
+    """
+    Atomically delete a template only if it is not referenced by call_execution_config or active leads.
+    Returns the deleted TemplateMetadata if successful, None otherwise.
+    """
+    logger.info(f"Attempting atomic delete for template: {template_id}")
+    try:
+        query, values = delete_template_if_not_referenced_query(template_id)
+        result = await run_parameterized_query(query, values)
+        if result and get_row_count(result) > 0:
+            row = result[0]
+            deleted = TemplateMetadata(
+                id=str(row["id"]),
+                merchant_id=row["merchant_id"],
+                shop_identifier=row.get("shop_identifier"),
+                name=row["name"],
+                is_active=row["is_active"],
+                created_at=row["created_at"],
+                updated_at=row["updated_at"],
+            )
+            logger.info(f"Atomic delete succeeded for template: {deleted.id}")
+            return deleted
+        logger.info(
+            f"Atomic delete failed (template in use or not found): {template_id}"
+        )
+        return None
+    except Exception as e:
+        logger.error(f"Error in atomic delete for template: {e}", exc_info=True)
         return None
 
 

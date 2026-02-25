@@ -83,6 +83,29 @@ def create_template_query(
     ]
 
 
+def delete_template_if_not_referenced_query(template_id: str) -> tuple[str, list]:
+    """
+    Atomically delete a template only if it is not referenced by call_execution_config or active leads.
+    Returns the deleted row if successful, otherwise returns nothing.
+    """
+    query = f"""
+        WITH can_delete AS (
+            SELECT id FROM {TEMPLATE_TABLE}
+            WHERE id = $1
+            AND NOT EXISTS (
+                SELECT 1 FROM call_execution_config WHERE template_id = $1
+            )
+            AND NOT EXISTS (
+                SELECT 1 FROM lead_call_tracker WHERE template_id = $1 AND status IN ('BACKLOG', 'RETRY', 'PROCESSING')
+            )
+        )
+        DELETE FROM {TEMPLATE_TABLE}
+        WHERE id IN (SELECT id FROM can_delete)
+        RETURNING id, merchant_id, shop_identifier, name, is_active, created_at, updated_at
+    """
+    return query, [template_id]
+
+
 def get_templates_list_query(filters: Dict[str, Any]) -> Tuple[str, List[Any]]:
     """
     Generate query to list multiple templates (metadata only, no flow).
@@ -215,6 +238,37 @@ def get_all_templates_by_outbound_number_id_query(
             name ASC
     """
     return query, [outbound_number_id]
+
+
+def check_template_usage_query(template_id: str) -> Tuple[str, List[Any]]:
+    """
+    Generate query to check if a template is referenced by call_execution_config
+    or has active leads in lead_call_tracker.
+
+    Returns rows indicating where the template is in use:
+    - source: 'call_execution_config' or 'lead_call_tracker'
+    - reference_count: number of references found
+
+    Args:
+        template_id: Template UUID
+
+    Returns:
+        Tuple of (query string, values list)
+    """
+    query = """
+        SELECT 'call_execution_config' AS source, COUNT(*) AS reference_count
+        FROM call_execution_config
+        WHERE template_id = $1
+
+        UNION ALL
+
+        SELECT 'lead_call_tracker' AS source, COUNT(*) AS reference_count
+        FROM lead_call_tracker
+        WHERE template_id = $1
+        AND status IN ('BACKLOG', 'RETRY', 'PROCESSING')
+    """
+
+    return query, [template_id]
 
 
 def replace_template_query(
