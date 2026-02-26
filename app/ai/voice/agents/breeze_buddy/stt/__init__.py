@@ -34,13 +34,17 @@ from app.core.config.static import (
 from app.core.logger import logger
 
 
-async def get_stt_service(language_hints: str | None = None):
+async def get_stt_service(
+    language_hints: str | None = None, soniox_context: str | None = None
+):
     """
     Returns an STT service instance based on the environment configuration.
 
     Args:
         language_hints: Optional list of language codes (e.g., ["en", "hi"]) to help STT recognize specific languages.
                        Only used with soniox STT service.
+        soniox_context: Optional Soniox STT context for speech recognition domain adaptation.
+                       If provided, overrides BREEZE_BUDDY_SONIOX_CONTEXT env var.
     """
     if BREEZE_BUDDY_STT_SERVICE == "sarvam":
         if not SARVAM_API_KEY:
@@ -84,6 +88,15 @@ async def get_stt_service(language_hints: str | None = None):
             raise ValueError(
                 "SONIOX_API_KEY is required when BREEZE_BUDDY_STT_SERVICE=soniox"
             )
+        # Priority: Template context > Env context > None
+        effective_context = (
+            soniox_context
+            if soniox_context is not None
+            else BREEZE_BUDDY_SONIOX_CONTEXT
+        )
+        if soniox_context:
+            logger.info("Using template-specific Soniox context")
+
         # Pass raw config values - language hints parsing is handled internally by build_soniox_stt
         return build_soniox_stt(
             SonioxConfig(
@@ -95,7 +108,7 @@ async def get_stt_service(language_hints: str | None = None):
                     if language_hints is not None
                     else BREEZE_BUDDY_SONIOX_LANGUAGE_HINTS
                 ),
-                context_json=BREEZE_BUDDY_SONIOX_CONTEXT,
+                context_json=effective_context,
                 enable_non_final_tokens=BREEZE_BUDDY_SONIOX_ENABLE_NON_FINAL_TOKENS,
                 max_non_final_tokens_duration_ms=BREEZE_BUDDY_SONIOX_MAX_NON_FINAL_TOKENS_DURATION_MS,
                 max_endpoint_delay_ms=BREEZE_BUDDY_SONIOX_MAX_ENDPOINT_DELAY_MS,
