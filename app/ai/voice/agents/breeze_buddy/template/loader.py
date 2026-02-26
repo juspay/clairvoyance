@@ -151,21 +151,33 @@ class FlowConfigLoader:
             else:
                 logger.warning(f"Field '{field_name}' from schema not found in payload")
                 value = ""
-            # Check for function in schema
-            function_name = None
+            # Check for function(s) in schema — supports a single string
+            # or a list of function names applied sequentially as a pipeline.
+            function_names = None
             if isinstance(field_schema, dict):
-                function_name = field_schema.get("function")
-            if function_name and function_name in TEMPLATE_FUNCTION_REGISTRY:
-                try:
-                    func = TEMPLATE_FUNCTION_REGISTRY[function_name]
-                    if value is None or value == "":
-                        value = func()
-                    else:
-                        value = func(value)
-                except Exception as e:
-                    logger.warning(
-                        f"Error applying function '{function_name}' to field '{field_name}': {e}"
-                    )
+                raw = field_schema.get("function")
+                if isinstance(raw, list):
+                    function_names = raw
+                elif isinstance(raw, str):
+                    function_names = [raw]
+            if function_names:
+                for fn_name in function_names:
+                    if fn_name not in TEMPLATE_FUNCTION_REGISTRY:
+                        logger.warning(
+                            f"Unknown transformation function '{fn_name}' "
+                            f"for field '{field_name}', skipping"
+                        )
+                        continue
+                    try:
+                        func = TEMPLATE_FUNCTION_REGISTRY[fn_name]
+                        if value is None or value == "":
+                            value = func()
+                        else:
+                            value = func(value)
+                    except Exception as e:
+                        logger.warning(
+                            f"Error applying function '{fn_name}' to field '{field_name}': {e}"
+                        )
             template_vars[field_name] = value
 
         logger.info(
