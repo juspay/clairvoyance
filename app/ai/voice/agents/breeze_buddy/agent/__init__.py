@@ -8,6 +8,7 @@ from fastapi import WebSocket
 from opentelemetry import trace
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.vad.vad_analyzer import VADParams
+from pipecat.frames.frames import LLMMessagesAppendFrame
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineTask
 from pipecat.processors.aggregators.llm_context import LLMContext
@@ -131,6 +132,10 @@ class Agent:
         self._user_idle_callback_handler: Any = None
         self._context_aggregator: Any = None
 
+        # Post-greeting idle detection
+        self._post_greeting_task: Optional[asyncio.Task] = None
+        self._user_spoke: bool = False
+
         # Transcription gate processor (always present in pipeline)
         self.speech_gate: Any = None
 
@@ -175,6 +180,37 @@ class Agent:
 
         context = TemplateContext(self)
         await end_conversation(context, {})
+
+    async def _handle_post_greeting_idle(self, user_idle_config) -> None:
+        """Handle post-greeting idle detection before user speaks for the first time.
+
+        This runs as an asyncio task that waits for the idle timeout and triggers
+        the first idle prompt if the user hasn't spoken yet.
+        """
+        try:
+            # Wait for greeting to finish (~5s) + idle timeout before checking
+            initial_delay = 5.0  # Estimated greeting duration
+            await asyncio.sleep(initial_delay + user_idle_config.timeout)
+
+            # If user never spoke, trigger first idle prompt
+            if not self._user_spoke and self.task:
+                logger.info("Post-greeting idle detected. Triggering first prompt.")
+                await self.task.queue_frames(
+                    [
+                        LLMMessagesAppendFrame(
+                            [
+                                {
+                                    "role": "system",
+                                    "content": user_idle_config.idle_message,
+                                }
+                            ],
+                            run_llm=True,
+                        )
+                    ]
+                )
+        except asyncio.CancelledError:
+            logger.debug("Post-greeting idle timer cancelled.")
+            return
 
     async def _setup_daily_transport(self, runner_args: RunnerArguments) -> None:
         """Initialize transport for Daily mode."""
@@ -389,6 +425,16 @@ class Agent:
         self.greeting_source = greeting_result.source
         self.greeting_text = greeting_result.text
 
+        # Start post-greeting idle timer if greeting was sent
+        if self.greeting_source and self.configurations:
+            user_idle_config = getattr(
+                self.configurations, "user_idle_configuration", None
+            )
+            if user_idle_config and user_idle_config.enabled:
+                self._post_greeting_task = asyncio.create_task(
+                    self._handle_post_greeting_idle(user_idle_config)
+                )
+
         self.vad_analyzer, self.default_vad_params = await create_vad_analyzer(
             is_daily_mode=False,
             template=self.template,
@@ -447,6 +493,13 @@ class Agent:
             @user_aggregator.event_handler("on_user_turn_started")
             async def on_user_turn_started(aggregator, strategy):
                 """Reset idle retry counter when user starts speaking."""
+                # Detect first user speech and cancel post-greeting timer
+                if not self._user_spoke:
+                    self._user_spoke = True
+                    if self._post_greeting_task:
+                        self._post_greeting_task.cancel()
+                        self._post_greeting_task = None
+                        logger.debug("Post-greeting timer cancelled - user spoke")
                 self._user_idle_callback_handler.reset_retry_count()
 
     async def _handle_client_connected(self) -> None:
