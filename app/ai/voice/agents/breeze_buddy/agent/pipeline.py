@@ -92,10 +92,15 @@ async def create_services(
         Tuple of (stt_service, llm_service, tts_service)
     """
     stt_language = getattr(configurations, "stt_language", None)
+    soniox_context = getattr(configurations, "soniox_context", None)
     if stt_language:
         logger.info(f"Using STT language from template: {stt_language}")
+    if soniox_context:
+        logger.info(f"Using Soniox context from template")
 
-    stt = await get_stt_service(language_hints=stt_language)
+    stt = await get_stt_service(
+        language_hints=stt_language, soniox_context=soniox_context
+    )
 
     # TODO: Add retry_on_timeout=True, retry_timeout_secs=3.0 to reduce P99 tail latency (500-1500ms).
     #       These are valid top-level params on BaseOpenAILLMService. Needs testing before enabling.

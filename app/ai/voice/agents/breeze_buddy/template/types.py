@@ -215,6 +215,10 @@ class ConfigurationModel(BaseModel):
         None  # LLM-based TTS provider selection config
     )
     stt_language: Optional[str] = None
+    soniox_context: Optional[str] = Field(
+        None,
+        description="Soniox STT context for speech recognition domain adaptation (e.g., business terms, product names). Overrides BREEZE_BUDDY_SONIOX_CONTEXT env var if set.",
+    )
     payload_based_language_selection: bool = False
     enable_background_sound: bool = False
     background_sound_file: Optional[BackgroundSoundFile] = None
