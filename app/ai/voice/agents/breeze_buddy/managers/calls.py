@@ -40,6 +40,7 @@ from app.database.accessor import (
     get_outbound_number_by_id,
     get_template_by_merchant,
     increment_outbound_number_channels,
+    is_number_blacklisted,
     release_lock_on_lead_by_id,
     update_lead_call_completion_details,
     update_lead_call_details,
@@ -427,6 +428,26 @@ async def process_backlog_leads():
                 if not config.enable_calling:
                     logger.info(
                         f"Skipping lead {locked_lead.id} - calling is disabled for merchant {locked_lead.merchant_id}, template {locked_lead.template}"
+                    )
+                    await release_lock_on_lead_by_id(locked_lead.id)
+                    continue
+
+                # Check if customer phone number is blacklisted
+                blacklist_phone = (locked_lead.payload or {}).get(
+                    "customer_mobile_number"
+                )
+                if blacklist_phone and await is_number_blacklisted(
+                    blacklist_phone, locked_lead.merchant_id
+                ):
+                    logger.info(
+                        f"Skipping lead {locked_lead.id} - phone number {blacklist_phone} is blacklisted"
+                    )
+                    await update_lead_call_completion_details(
+                        id=locked_lead.id,
+                        status=LeadCallStatus.FINISHED,
+                        outcome="BLACKLISTED",
+                        meta_data={"reason": "Phone number is blacklisted"},
+                        call_end_time=datetime.now(timezone.utc),
                     )
                     await release_lock_on_lead_by_id(locked_lead.id)
                     continue

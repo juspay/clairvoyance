@@ -47,9 +47,11 @@ from app.schemas.breeze_buddy.auth import (
 )
 from app.schemas.breeze_buddy.connection import BreezeBuddyDailyConnectRequest
 from app.schemas.breeze_buddy.core import (
+    BlacklistedNumber,
     CallDirection,
     CallExecutionConfig,
     CallProvider,
+    CreateBlacklistNumberRequest,
     CreateCallExecutionConfigRequest,
     CreateOutboundNumberRequest,
     ExecutionMode,
@@ -101,9 +103,11 @@ __all__ = [
     "TimeGranularity",
     "TrendDataPoint",
     # Core
+    "BlacklistedNumber",
     "CallDirection",
     "CallExecutionConfig",
     "CallProvider",
+    "CreateBlacklistNumberRequest",
     "CreateCallExecutionConfigRequest",
     "CreateOutboundNumberRequest",
     "ExecutionMode",
