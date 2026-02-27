@@ -14,6 +14,7 @@ from fastapi.responses import JSONResponse
 from pipecat.transports.daily.utils import DailyRESTHelper
 
 from app import __version__
+from app.ai.text.api import router as text_agent_router
 from app.ai.voice.agents.breeze_buddy.services.agent_router.client import (
     close_smart_router_client,
 )
@@ -236,6 +237,7 @@ app.include_router(
 app.include_router(
     automatic.router, prefix="/agent/voice/automatic", tags=["Automatic Agent"]
 )
+app.include_router(text_agent_router, prefix="/agent/text", tags=["Text Agents"])
 app.include_router(devcycle.router, prefix="", tags=["DevCycle"])
 
 # System health endpoints
