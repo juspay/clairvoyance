@@ -90,6 +90,23 @@ def _ordinal_suffix(day: int) -> str:
     return "th"
 
 
+def extract_10_digit_mobile(value) -> str:
+    """
+    Extracts the last 10 digits from a phone number string.
+
+    Handles all common Indian provider formats:
+      - 91XXXXXXXXXX  (12 digits, Plivo/Exotel with country code)
+      - 0XXXXXXXXXX   (11 digits, STD prefix)
+      - 00XXXXXXXXXX  (12 digits, IDD prefix)
+      - XXXXXXXXXX    (10 digits, already clean)
+
+    Always returns the trailing 10 digits regardless of prefix length.
+    Safe fallback: returns whatever digits are present if fewer than 10.
+    """
+    digits = "".join(ch for ch in str(value) if ch.isdigit())
+    return digits[-10:] if len(digits) >= 10 else digits
+
+
 def date_to_speech(value: str) -> str:
     text = str(value).strip()
     # Try common date formats: YYYY-MM-DD, DD-MM-YYYY, DD/MM/YYYY, YYYY/MM/DD

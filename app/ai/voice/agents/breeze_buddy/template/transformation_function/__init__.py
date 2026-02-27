@@ -1,6 +1,7 @@
 from .utils import (
     date_to_speech,
     digits_to_speech,
+    extract_10_digit_mobile,
     indian_number_to_speech,
     string_to_lowercase,
     string_to_uppercase,
@@ -20,6 +21,7 @@ register_template_function("string_to_uppercase", string_to_uppercase)
 register_template_function("string_trim", string_trim)
 register_template_function("digits_to_speech", digits_to_speech)
 register_template_function("date_to_speech", date_to_speech)
+register_template_function("extract_10_digit_mobile", extract_10_digit_mobile)
 
 __all__ = [
     "TEMPLATE_FUNCTION_REGISTRY",
