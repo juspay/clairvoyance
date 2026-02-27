@@ -21,11 +21,11 @@ from typing import Dict, List, Optional, Tuple
 
 from fastapi import WebSocket
 
-from app.ai.voice.agents.breeze_buddy.agent.websocket import (
+from app.ai.voice.agents.breeze_buddy.tts import generate_audio
+from app.ai.voice.agents.breeze_buddy.utils.transport.websockets import (
     close_websocket_safely,
     send_message,
 )
-from app.ai.voice.agents.breeze_buddy.tts import generate_audio
 from app.core.logger import logger
 from app.services.redis.client import get_redis_service
 

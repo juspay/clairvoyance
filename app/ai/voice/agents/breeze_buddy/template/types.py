@@ -233,6 +233,9 @@ class ConfigurationModel(BaseModel):
         ge=1,
         description="Priority order for IVR menu (lower number = earlier in menu). Gaps allowed (e.g., 1, 3, 4).",
     )
+    transfer_number: Optional[str] = Field(
+        None, description="Phone number to transfer the call to"
+    )
     vad_config: Optional[VadConfig] = Field(
         None, description="Default VAD configuration for the template"
     )

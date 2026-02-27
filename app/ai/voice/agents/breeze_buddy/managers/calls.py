@@ -763,9 +763,7 @@ async def handle_call_completion(
         logger.error(f"Could not find lead for call_id: {call_id}")
         return
 
-    # Release the allocated pod back to the pool
-    await safe_release_pod(call_sid=call_id, reason="call_completed")
-
+    # Always release outbound number (including transfers — bot leaves, cleanup happens here)
     if lead.outbound_number_id:
         outbound_number = await get_outbound_number_by_id(lead.outbound_number_id)
         if outbound_number:
@@ -777,9 +775,24 @@ async def handle_call_completion(
     else:
         logger.info(f"No outbound number id for lead: {lead.id}")
 
+    await safe_release_pod(call_sid=call_id, reason="call_completed")
+
+    # Check if this is a transfer — for outcome override only
+    is_transfer = (
+        meta_data
+        and "transfer" in meta_data
+        and meta_data.get("transfer", {}).get("status") == "success"
+    ) or (
+        lead.metaData and lead.metaData.get("transfer", {}).get("status") == "success"
+    )
+
     config = await _get_lead_config(lead)
     if not config:
         return
+
+    # Override outcome to "transferred" for transfer calls
+    if is_transfer:
+        outcome = "transferred"
 
     updated_lead = await update_lead_call_completion_details(
         id=lead.id,

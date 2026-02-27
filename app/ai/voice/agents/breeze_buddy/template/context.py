@@ -104,6 +104,11 @@ class TemplateContext:
         return self.bot.provider
 
     @property
+    def telephony_service(self):
+        """Get telephony service instance (TwilioProvider)"""
+        return getattr(self.bot, "telephony_service", None)
+
+    @property
     def end_conversation_callbacks(self):
         """Get end conversation callbacks"""
         return self.bot.end_conversation_callbacks

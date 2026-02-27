@@ -2,11 +2,14 @@ import json
 from typing import Any, Dict, Optional
 
 import requests
-from fastapi import WebSocket
+from fastapi import Response, WebSocket
 
 from app.ai.voice.agents.breeze_buddy.agent import telephony_bot
 from app.ai.voice.agents.breeze_buddy.services.telephony.base_provider import (
     VoiceCallProvider,
+)
+from app.ai.voice.agents.breeze_buddy.services.telephony.exotel.conference import (
+    ExotelConferenceService,
 )
 from app.core.config.static import (
     APP_BASE_URL,
@@ -36,6 +39,14 @@ class ExotelProvider(VoiceCallProvider):
         # Call parent with telephony_config
         super().__init__(None, aiohttp_session, telephony_config)
 
+        # Initialize conference service for transfers
+        self.conference_service = ExotelConferenceService(
+            account_sid=EXOTEL_ACCOUNT_SID,
+            api_key=EXOTEL_API_KEY,
+            api_token=EXOTEL_API_TOKEN,
+            subdomain=EXOTEL_SUBDOMAIN,
+        )
+
     async def handle_websocket(self, websocket: WebSocket, provider: CallProvider):
         logger.info("Using template flow for Exotel WebSocket connection")
         await telephony_bot(
@@ -43,6 +54,7 @@ class ExotelProvider(VoiceCallProvider):
             self.aiohttp_session,
             self.completion_callback,
             provider,
+            telephony_service=self,
         )
 
     def make_call(
@@ -141,3 +153,22 @@ class ExotelProvider(VoiceCallProvider):
         except Exception as e:
             logger.error(f"Unexpected error when calling Exotel API: {e}")
             return None
+
+
+async def exotel_dial_text(transfer_data: dict) -> Response:
+    """Return the agent phone number as plain text for Exotel to dial."""
+    transfer_number = transfer_data.get("transfer_number")
+    if not transfer_number:
+        return Response(status_code=404, content="Agent not assigned")
+
+    try:
+        number = transfer_number
+        if not number.startswith("+"):
+            number = f"+{number}"
+        return Response(content=number, media_type="text/plain", status_code=200)
+    except Exception as e:
+        logger.error(
+            f"[TRANSFER DIAL-UP] Error fetching agent {e}",
+            exc_info=True,
+        )
+        return Response(status_code=500, content="Internal error")

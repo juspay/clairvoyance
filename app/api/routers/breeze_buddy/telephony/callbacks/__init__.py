@@ -5,20 +5,19 @@ This module provides webhook endpoints for telephony providers (Twilio, Exotel, 
 to send call status updates and recording URLs.
 
 Endpoints:
-- GET    /{provider}/callback/details  - Receive call details (Exotel)
-- POST   /{provider}/callback/details  - Receive call details (Twilio/Plivo)
-- POST   /{provider}/callback/status   - Receive call status updates
+- GET    /{provider}/callback/details                        - Receive call details (Exotel)
+- POST   /{provider}/callback/details                        - Receive call details (Twilio/Plivo)
+- POST   /{provider}/callback/status                         - Receive call status updates
 - POST   /twilio/callback/twiml-fallback - Fallback TwiML when Smart Router is down
-
-Note: The answer webhook (previously /plivo/answer and /exotel/voicebot-url)
-has been unified into /{provider}/answer in the answer module.
-Plivo IVR is now handled agent-side (in-band over WebSocket) like Exotel,
-so the /plivo/ivr-select endpoint is no longer needed.
+- *      /{provider}/callback/transfer/{action}              - Transfer callbacks (GET/POST)
+    - dial-up           : Fetch dial-target info (Exotel GET, Plivo POST)
+    - conference-end    : Conference ended — resource cleanup (Twilio/Plivo POST)
 """
 
 from fastapi import APIRouter, BackgroundTasks, Request
 
 from .handlers import (
+    handle_call_transfer,
     handle_callback_details_get,
     handle_callback_details_post,
     handle_callback_status,
@@ -94,6 +93,7 @@ async def callback_status(request: Request, provider: str):
 
     This endpoint receives call status updates from telephony providers.
     When a call fails (no-answer, failed, busy), it triggers retry logic.
+    For transfer calls, if recording URL is present, saves it to metadata.
 
     Also serves as a backup release mechanism — when a call ends, it notifies
     Smart Router to release the pod (idempotent, safe if already released).
@@ -104,6 +104,7 @@ async def callback_status(request: Request, provider: str):
     Form Data (Twilio):
         CallSid: Unique identifier for the call
         CallStatus: Status of the call
+        RecordingUrl: (Optional) URL to download the call recording
 
     Form Data (Exotel):
         CallSid: Unique identifier for the call
@@ -112,6 +113,12 @@ async def callback_status(request: Request, provider: str):
     Form Data (Plivo):
         CallUUID: Unique identifier for the call
         CallStatus: Status of the call
+        RecordingUrl or Stream[RecordingUrl]: (Optional) URL to download the call recording
+
+    Form Data (Plivo):
+        CallUUID: Unique identifier for the call
+        CallStatus: Status of the call
+        record_url: (Optional) URL to download the call recording
 
     Returns:
         200 OK response (webhook acknowledgment)
@@ -119,13 +126,38 @@ async def callback_status(request: Request, provider: str):
     Behavior:
         - If call_status is "no-answer", "failed", or "busy":
           Triggers retry logic via handle_unanswered_calls()
+        - If recording URL present and call is transfer:
+          Saves recording URL to lead metadata
         - Otherwise: Logs the status and acknowledges
 
     Example:
         POST /twilio/callback/status
-        Form data: CallSid=abc123&CallStatus=no-answer
+        Form data: CallSid=abc123&CallStatus=completed&RecordingUrl=https://...
     """
     return await handle_callback_status(request, provider)
+
+
+# ---------------------------------------------------------------------------
+# Transfer callbacks — unified under /{provider}/callback/transfer/{action}
+# ---------------------------------------------------------------------------
+
+
+@router.api_route(
+    "/{provider}/callback/transfer/{action}",
+    methods=["GET", "POST"],
+)
+async def transfer_callback(request: Request, provider: str, action: str):
+    """
+    Unified transfer callback endpoint.
+
+    All transfer-related webhooks are routed here and dispatched
+    by ``handle_call_transfer`` based on ``{provider}`` + ``{action}``.
+
+    Supported (provider, action) combinations:
+        - (exotel, dial-up)           — Fetch agent phone number to dial (GET)
+        - (plivo, dial-up)            — Dial-back XML: agent → customer bridge (POST)
+    """
+    return await handle_call_transfer(request, provider, action)
 
 
 @router.post("/twilio/callback/twiml-fallback")
