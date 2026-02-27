@@ -1,17 +1,12 @@
 """
 Telephony provider callback handlers.
 
-This module contains handlers for webhooks/callbacks from telephony providers
-(Twilio, Exotel, Plivo, etc.) for call status updates and recording delivery.
-
 Handlers:
-- handle_callback_details_get() - GET callback for call details (Exotel)
+- handle_callback_details_get()  - GET callback for call details (Exotel)
 - handle_callback_details_post() - POST callback for call details (Twilio/Plivo)
-- handle_callback_status() - POST callback for call status updates
+- handle_call_transfer()         - Unified transfer callback
+- handle_callback_status()       - POST callback for call status updates
 - handle_twilio_twiml_fallback() - Fallback TwiML when Smart Router is down
-
-Note: Plivo IVR is now handled agent-side (in-band over WebSocket) like Exotel,
-so the handle_plivo_ivr_select() handler is no longer needed.
 """
 
 import json
@@ -26,6 +21,15 @@ from app.ai.voice.agents.breeze_buddy.managers.calls import (
 )
 from app.ai.voice.agents.breeze_buddy.services.agent_router.client import (
     safe_release_pod,
+)
+from app.ai.voice.agents.breeze_buddy.services.telephony.exotel.exotel import (
+    exotel_dial_text,
+)
+from app.ai.voice.agents.breeze_buddy.services.telephony.plivo.plivo import (
+    plivo_dial_xml,
+)
+from app.ai.voice.agents.breeze_buddy.utils.warm_transfer import (
+    get_transfer_flag,
 )
 from app.core.config.static import TWILIO_TEMPLATE_WEBSOCKET_URL
 from app.core.logger import logger
@@ -71,6 +75,62 @@ async def handle_callback_details_get(
         )
 
     return Response(status_code=200)
+
+
+async def handle_call_transfer(
+    request: Request, provider: str, action: str
+) -> Response:
+    """Unified transfer callback — dispatches by provider + action."""
+    provider_lower = provider.lower()
+
+    if action == "dial-up":
+        return await _handle_transfer_dial_up(request, provider_lower)
+    elif action in ("conclude", "conference-end"):
+        # future scope: to be implemented
+        return Response(status_code=200)
+    else:
+        logger.warning(f"[TRANSFER] Unknown callback: {provider}/{action}")
+        return Response(
+            status_code=404,
+            content=f"Unknown transfer action: {provider}/{action}",
+        )
+
+
+async def _handle_transfer_dial_up(request: Request, provider: str) -> Response:
+    """Return dial-target info so the provider can bridge the transfer.
+
+    Exotel  → plain-text agent phone number.
+    Plivo   → <Dial><Number> XML that bridges agent → customer.
+    """
+    params = {**dict(request.query_params), **dict(await request.form())}
+
+    # Resolve the call SID used to look up the Redis transfer flag
+    call_sid = params.get("CallSid") or params.get("customer_call_sid")
+    if not call_sid:
+        logger.error(f"[TRANSFER DIAL-UP] No call SID in {provider} request")
+        return Response(status_code=404, content="Missing call SID")
+    call_sid = str(call_sid)
+
+    transfer_data = await get_transfer_flag(call_sid)
+    if not transfer_data:
+        # Plivo may re-fetch the answer_url after the call ends — return
+        # a graceful hangup instead of 404 to avoid noisy error logs.
+        if provider == "plivo":
+            logger.info(
+                f"[TRANSFER DIAL-UP] No transfer data for {call_sid} "
+                "(likely already cleaned up) — returning <Hangup/>"
+            )
+            return HTMLResponse(
+                content='<?xml version="1.0" encoding="UTF-8"?><Response><Hangup/></Response>',
+                media_type="application/xml",
+            )
+        return Response(status_code=404, content="Transfer not requested")
+
+    if provider == "plivo":
+        return await plivo_dial_xml(transfer_data, call_sid, params)
+
+    # Exotel — return agent phone number as plain text
+    return await exotel_dial_text(transfer_data)
 
 
 async def handle_callback_details_post(

@@ -10,6 +10,7 @@ from pipecat_flows import FlowManager, FlowsFunctionSchema, NodeConfig
 from pipecat_flows.types import ActionConfig, FlowResult
 
 from app.ai.voice.agents.breeze_buddy.handlers.internal import (
+    connect_to_live_agent,
     end_conversation,
     mute_stt,
     play_audio_sound,
@@ -53,6 +54,7 @@ class FlowConfigBuilder:
             "play_audio_sound": play_audio_sound,
             "end_conversation": end_conversation,
             "transition_handler": transition_handler,
+            "connect_to_live_agent": connect_to_live_agent,
             "http_function_handler": http_function_handler,
         }
 

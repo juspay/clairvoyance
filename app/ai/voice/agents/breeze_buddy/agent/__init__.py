@@ -45,14 +45,14 @@ from app.ai.voice.agents.breeze_buddy.agent.utils import (
     send_initial_greeting,
 )
 from app.ai.voice.agents.breeze_buddy.agent.vad import create_vad_analyzer
-from app.ai.voice.agents.breeze_buddy.agent.websocket import (
-    close_websocket_safely,
-)
 from app.ai.voice.agents.breeze_buddy.handlers.internal.end_conversation import (
     end_conversation,
 )
 from app.ai.voice.agents.breeze_buddy.observability.tracing_setup import (
     create_root_span,
+)
+from app.ai.voice.agents.breeze_buddy.services.telephony.base_provider import (
+    VoiceCallProvider,
 )
 from app.ai.voice.agents.breeze_buddy.template import TemplateContext
 from app.ai.voice.agents.breeze_buddy.template.builder import FlowConfigBuilder
@@ -65,6 +65,9 @@ from app.ai.voice.agents.breeze_buddy.template.types import (
 from app.ai.voice.agents.breeze_buddy.utils.common import (
     create_background_sound_mixer,
     track_error,
+)
+from app.ai.voice.agents.breeze_buddy.utils.transport.websockets import (
+    close_websocket_safely,
 )
 from app.core.config.static import ENABLE_BREEZE_BUDDY_TRACING
 from app.core.logger import logger
@@ -93,6 +96,7 @@ class Agent:
         aiohttp_session: Any = None,
         completion_function: Optional[Callable] = None,
         provider: Optional[str] = None,
+        telephony_service: Optional[VoiceCallProvider] = None,
     ):
         # Transport configuration
         self.transport_type = transport_type
@@ -100,6 +104,7 @@ class Agent:
         self.aiohttp_session = aiohttp_session
         self.provider = provider
         self.completion_function = completion_function
+        self.telephony_service = telephony_service
 
         # Runtime state
         self.task: Optional[PipelineTask] = None
@@ -639,6 +644,7 @@ async def telephony_bot(
     aiohttp_session: Any,
     completion_function: Optional[Callable],
     provider: CallProvider,
+    telephony_service: Optional[VoiceCallProvider] = None,
 ) -> None:
     """Entry point for telephony-based agents (Twilio/Exotel)."""
     agent = Agent(
@@ -647,6 +653,7 @@ async def telephony_bot(
         aiohttp_session=aiohttp_session,
         completion_function=completion_function,
         provider=provider,
+        telephony_service=telephony_service,
     )
     await agent.run()
 

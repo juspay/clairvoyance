@@ -12,10 +12,14 @@ from app.ai.voice.agents.breeze_buddy.handlers.internal.stt import (
     mute_stt,
     unmute_stt,
 )
+from app.ai.voice.agents.breeze_buddy.handlers.internal.warm_transfer import (
+    connect_to_live_agent,
+)
 
 __all__ = [
     "end_conversation",
     "mute_stt",
     "play_audio_sound",
     "unmute_stt",
+    "connect_to_live_agent",
 ]

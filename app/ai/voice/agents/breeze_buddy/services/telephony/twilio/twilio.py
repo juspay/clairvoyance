@@ -10,6 +10,9 @@ from app.ai.voice.agents.breeze_buddy.agent import telephony_bot
 from app.ai.voice.agents.breeze_buddy.services.telephony.base_provider import (
     VoiceCallProvider,
 )
+from app.ai.voice.agents.breeze_buddy.services.telephony.twilio.conference import (
+    TwilioConferenceService,
+)
 from app.core.config.static import (
     APP_BASE_URL,
     ENABLE_VOICE_AGENT_POD_ISOLATION,
@@ -38,6 +41,9 @@ class TwilioProvider(VoiceCallProvider):
         # Create Twilio client with proper proxy configuration
         self.client = self._create_twilio_client()
 
+        # Initialize conference service
+        self.conference_service = TwilioConferenceService(self.client)
+
     def _create_twilio_client(self) -> Client:
         """Create Twilio client with proper proxy configuration using TwilioHttpClient"""
         proxy_url = get_proxy_config()
@@ -65,6 +71,7 @@ class TwilioProvider(VoiceCallProvider):
             self.aiohttp_session,
             self.completion_callback,
             provider,
+            telephony_service=self,
         )
 
     def make_call(

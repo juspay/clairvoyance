@@ -3,10 +3,14 @@ from urllib.parse import urlencode
 
 import plivo
 from fastapi import WebSocket
+from starlette.responses import HTMLResponse
 
 from app.ai.voice.agents.breeze_buddy.agent import telephony_bot
 from app.ai.voice.agents.breeze_buddy.services.telephony.base_provider import (
     VoiceCallProvider,
+)
+from app.ai.voice.agents.breeze_buddy.services.telephony.plivo.conference import (
+    PlivoConferenceService,
 )
 from app.core.config.static import (
     APP_BASE_URL,
@@ -31,6 +35,9 @@ class PlivoProvider(VoiceCallProvider):
         # Create Plivo client
         self.client = plivo.RestClient(self.PLIVO_AUTH_ID, self.PLIVO_AUTH_TOKEN)
 
+        # Initialize conference service for transfers
+        self.conference_service = PlivoConferenceService(self.client)
+
     async def handle_websocket(self, websocket: WebSocket, provider: CallProvider):
         logger.info("Using template flow for Plivo WebSocket connection")
         await telephony_bot(
@@ -38,6 +45,7 @@ class PlivoProvider(VoiceCallProvider):
             self.aiohttp_session,
             self.completion_callback,
             provider,
+            telephony_service=self,
         )
 
     def make_call(
@@ -97,3 +105,38 @@ class PlivoProvider(VoiceCallProvider):
         except Exception as e:
             logger.error(f"Error when making call via Plivo: {e}")
             return None
+
+
+async def plivo_dial_xml(
+    transfer_data: dict, call_sid: str, params: dict
+) -> HTMLResponse:
+    """Build <Dial><Number> XML that bridges customer → agent."""
+    transfer_number = transfer_data.get("transfer_number")
+    if not transfer_number:
+        logger.error(f"[TRANSFER DIAL-UP] No transfer_number for call {call_sid}")
+        return HTMLResponse(
+            content='<?xml version="1.0" encoding="UTF-8"?>'
+            "<Response><Speak>Sorry, the transfer could not be completed.</Speak>"
+            "<Hangup/></Response>",
+            media_type="application/xml",
+        )
+
+    agent_phone = transfer_number
+    if not agent_phone.startswith("+"):
+        agent_phone = f"+{agent_phone}"
+
+    outbound_number = params.get("outbound_number", "")
+    action_url = (
+        f"{APP_BASE_URL}/agent/voice/breeze-buddy"
+        f"/plivo/callback/transfer/conclude"
+        f"?customer_call_sid={call_sid}"
+    )
+    xml = (
+        f'<?xml version="1.0" encoding="UTF-8"?>'
+        f"<Response>"
+        f'<Dial action="{action_url}" method="POST"'
+        f' callerId="{outbound_number}" timeout="30">'
+        f"<Number>{agent_phone}</Number>"
+        f"</Dial></Response>"
+    )
+    return HTMLResponse(content=xml, media_type="application/xml")

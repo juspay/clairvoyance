@@ -20,7 +20,7 @@ Breeze Buddy is a template-based voice agent system built on top of Pipecat for 
 - **Dynamic Variable Substitution**: Lead payload data automatically injected into conversation prompts
 - **Node-Based Flow Control**: Graph-based conversation navigation with LLM-triggered transitions
 - **Hook System**: Asynchronous side-effect handlers for database updates and external integrations
-- **Multi-Provider Support**: Compatible with Twilio and Exotel telephony providers
+- **Multi-Provider Support**: Compatible with Twilio, Exotel, and Plivo telephony providers
 - **Schema Validation**: Payload and callback response validation against expected schemas
 
 ### Technology Stack
@@ -742,6 +742,7 @@ Creates new template in database ([template.py:55-105](app/database/accessor/bre
 **Locations**:
 - [services/telephony/twilio/](app/ai/voice/agents/breeze_buddy/services/telephony/twilio/)
 - [services/telephony/exotel/](app/ai/voice/agents/breeze_buddy/services/telephony/exotel/)
+- [services/telephony/plivo/](app/ai/voice/agents/breeze_buddy/services/telephony/plivo/)
 
 **Purpose**: Handle provider-specific call operations.
 
@@ -752,7 +753,25 @@ Creates new template in database ([template.py:55-105](app/database/accessor/bre
 - Callback handling
 - Call status updates
 
-#### 2. Callback Handlers
+#### 2. Telephony Callback Router
+**Location**: [api/routers/breeze_buddy/telephony/callbacks/](app/api/routers/breeze_buddy/telephony/callbacks/)
+
+**Purpose**: Webhook endpoints for telephony provider callbacks (thin router + handlers).
+
+**Endpoints**:
+- `GET  /{provider}/callback/details` — Receive call recording URLs (Exotel)
+- `POST /{provider}/callback/details` — Receive call recording URLs (Twilio/Plivo)
+- `POST /{provider}/callback/status`  — Call status updates, retry logic
+- `GET|POST /{provider}/callback/transfer/{action}` — Unified transfer callbacks:
+  - `dial-up` — Return dial-target info (Exotel: plain-text agent number, Plivo: `<Dial><Number>` XML)
+  - `conclude` — Transfer completion cleanup (Exotel GET, Plivo POST)
+  - `conference-end` — Conference lifecycle events → resource cleanup (Twilio/Plivo POST)
+
+**Key Design**:
+- All transfer cleanup goes through `_cleanup_transfer_resources()` with Redis SETNX idempotency lock
+- `acquire_cleanup_lock()` prevents duplicate cleanup when both `conclude` and `conference-end` fire for the same call
+
+#### 3. Callback Handlers
 **Location**: [callbacks/service_callback.py](app/ai/voice/agents/breeze_buddy/callbacks/service_callback.py)
 
 **Purpose**: Execute callbacks at end of conversation.
@@ -769,10 +788,13 @@ Creates new template in database ([template.py:55-105](app/database/accessor/bre
 #### 1. `end_conversation`
 Terminates conversation and ends call.
 
-#### 2. `mute_stt` / `unmute_stt`
+#### 2. `transfer`
+Initiates agent transfer — sets Redis transfer flag, calls provider conference service, persists transfer metadata.
+
+#### 3. `mute_stt` / `unmute_stt`
 Controls speech-to-text processing.
 
-#### 3. `play_audio_sound`
+#### 4. `play_audio_sound`
 Plays audio (e.g., dial tone, hold music).
 
 ---

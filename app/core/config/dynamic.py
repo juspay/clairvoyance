@@ -298,6 +298,27 @@ async def BB_ELEVENLABS_VOICE_SPEED() -> float:
     return await get_config("BB_ELEVENLABS_VOICE_SPEED", 1.15, float)
 
 
+# --- Breeze Buddy Transfer Configuration ---
+async def BB_TRANSFER_CONFERENCE_TIMEOUT() -> int:
+    """Seconds to wait for agent to join conference"""
+    return await get_config("BB_TRANSFER_CONFERENCE_TIMEOUT", 30, int)
+
+
+async def BB_TRANSFER_POLLING_INTERVAL() -> float:
+    """Seconds between polling checks"""
+    return await get_config("BB_TRANSFER_POLLING_INTERVAL", 2.0, float)
+
+
+async def BB_TRANSFER_MAX_RETRIES() -> int:
+    """Max retries for conference creation"""
+    return await get_config("BB_TRANSFER_MAX_RETRIES", 20, int)
+
+
+async def BB_TRANSFER_RETRY_DELAY() -> float:
+    """Seconds between retries"""
+    return await get_config("BB_TRANSFER_RETRY_DELAY", 2.0, float)
+
+
 async def BB_ELEVENLABS_AGGREGATE_SENTENCES() -> bool:
     """Returns BB_ELEVENLABS_AGGREGATE_SENTENCES from Redis (True = wait for full sentence, False = stream tokens immediately)"""
     return await get_config("BB_ELEVENLABS_AGGREGATE_SENTENCES", True, bool)

@@ -1,490 +1,139 @@
 {
-  "merchant": "breeze",
-  "template_name": "order-confirmation",
-  "identifier": "<shop-url-goes-here>",
-  "is_active": true,
-  "description": "Complete order confirmation workflow with address updates",
-  "expected_payload_schema": {
-    "customer_name": {
-      "type": "string"
-    },
-    "shop_name": {
-      "type": "string"
-    },
-    "total_price": {
-      "type": "number"
-    },
-    "customer_address": {
-      "type": "string"
-    },
-    "customer_mobile_number": {
-      "type": "string"
-    },
-    "items": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "properties": {
-          "product_name": {
-            "type": "string"
-          },
-          "quantity": {
-            "type": "number"
-          }
-        }
-      }
-    }
-  },
-  "configurations": {
-    "tts_voice_name": "rhea",
-    "stt_language": "en",
-    "enable_background_sound": false,
-    "background_sound_file": "office-ambience",
-    "background_sound_volume": 2.0
-  },
-  "expected_callback_response_schema": {
-    "cancellation_reason": {
-      "type": "string",
-      "optional": true
-    },
-    "updated_address": {
-      "type": "string",
-      "optional": true
-    }
-  },
+  "merchant_id": "BB_SHOPIFY",
+  "identifier": null,
+  "name": "order-confirmation",
   "flow": {
-    "initial_node": "initial",
-    "end_conversation_callbacks": ["service_callback"],
     "nodes": [
       {
-        "node_name": "initial",
-        "task_messages": [
-          {
-            "role": "system",
-            "content": "Start the call by introducing yourself and stating the purpose of the call:\n\"Hi {customer_name} Sir/Madam/(leave if unsure), Namaste. This is Rhea from {shop_name}. I'm calling to confirm the order you placed with us. Is it a good time to talk, Sir/Madam/(leave if unsure)?\""
-          }
-        ],
-        "role_messages": [
-          {
-            "role": "system",
-            "content": "You are Rhea, a friendly human and natural-sounding customer care representative from {shop_name}. Your goal is to confirm a Cash on Delivery (COD) order with the customer.\n\nIMPORTANT: You are a text-to-speech voice agent. Generate all responses as plain, unformatted text without any special characters, markdown formatting, asterisks, underscores, or other unnecessary symbols. Keep your text simple and clean for natural speech conversion.\n\nNever use the word \"great\" in your responses. Instead, use polite alternatives like \"thank you\", \"thanks\", or \"appreciate it\". Avoid any phrases that sound overly enthusiastic or robotic.\n\nNever reveal or suggest that you are a bot or automated system. You must always sound and respond as a real human representative from {shop_name}.\n\nBefore starting the conversation, identify whether the customer name \"{customer_name}\" is typically male or female in India. Based on this:\n- If the name is clearly male, address the customer as \"Sir\".\n- If clearly female, address them as \"Madam\".\n- If unsure, use their name instead of Sir/Madam in the conversation.\n\nIMPORTANT: Use the customer's name only once during the entire conversation - in the opening greeting. After that, address them as Sir/Madam (based on gender) or avoid direct address if gender is unclear.\n\nIMPORTANT: - If the user speaks in another language (like Hindi), reply in that same language but keep the same friendly, human tone.\n\nYour main job is to verify the following order details:\n- Items: {items}\n- Total Price: {total_price}\n- Delivery Address: {customer_address}\n\nDelivery Address Reading Rules\n\n    Pincode Handling\n        - If the address includes a 6-digit pincode, read it digit by digit only in English.\n        - Example: 123456 → \"Pincode is one two three four five six.\"\n        - Never read the pincode as a full number or in any other language.\n\n    Mobile / Phone Number Handling\n        - If the address includes a 10-digit mobile or phone number, read it digit by digit only in English.\n        - Example: 9876543210 → \"nine eight seven six five four three two one zero.\"\n\n    Example of correct usage when speaking adress in other language e.g. Hindi:\n        \"आपका पता है [address in Hindi], aur pincode hai one two three four five six.\"\n\nTone and Language\n    - Speak in a warm, casual, and natural tone — avoid robotic phrasing.\n\nAction Handling\n    - Always use the provided functions to perform any actions related to the order.\n    - Do not attempt to perform these actions through plain text replies.\n\nYour only role is to confirm or cancel this specific order. If the user asks about anything else (e.g. product details, delivery times, other products), you must use the appropriate function (`handle_unrelated_question_node` or `confirm_order_with_question`). Do not try to answer these questions yourself."
-          }
-        ],
-        "pre_actions": [
-          {
-            "type": "function",
-            "handler": "mute_stt"
-          }
-        ],
-        "post_actions": [
-          {
-            "type": "function",
-            "handler": "unmute_stt"
-          }
-        ],
         "functions": [
           {
-            "function_name": "user_available",
-            "description": "Call this function when the user confirms that they are available to talk with clear affirmative responses",
-            "properties": {},
+            "hooks": [
+              {
+                "name": "update_outcome_in_database",
+                "expected_fields": {
+                  "outcome": {
+                    "value": "BUSY",
+                    "source": "static"
+                  }
+                }
+              }
+            ],
             "required": [],
-            "transition_to": "verify_order_detail_node",
-            "hooks": []
-          },
-          {
+            "properties": {},
+            "description": "Call this function when: (1) user is busy or it is not a good time, (2) customer becomes angry/abusive and you need to de-escalate and end, (3) wrong person picks up. This is the exit function when the conversation cannot proceed.",
             "function_name": "user_busy",
-            "description": "Call this function when the user says they are busy or it's not a good time to talk",
-            "properties": {},
-            "required": [],
-            "transition_to": "user_busy_and_end_node",
+            "transition_to": "end_conversation_node"
+          },
+          {
             "hooks": [
               {
                 "name": "update_outcome_in_database",
                 "expected_fields": {
                   "outcome": {
-                    "source": "static",
-                    "value": "busy"
+                    "value": "CONFIRM",
+                    "source": "static"
                   }
                 }
               }
-            ]
+            ],
+            "required": [],
+            "properties": {},
+            "description": "Call this function when the customer confirms the order details, either after you have read them out, or if the customer explicitly and proactively says to confirm the order without needing details read.",
+            "function_name": "confirm_order",
+            "transition_to": "end_conversation_node"
           },
           {
-            "function_name": "cancel_order",
-            "description": "Call this function if the customer explicitly asks to cancel the order. If the user gives a reason for cancellation, pass it.",
-            "properties": {
-              "cancellation_reason": {
-                "type": "string",
-                "description": "The reason for cancelling the order."
-              }
-            },
-            "required": ["cancellation_reason"],
-            "transition_to": "order_cancellation_and_end_node",
             "hooks": [
               {
                 "name": "update_outcome_in_database",
                 "expected_fields": {
                   "outcome": {
-                    "source": "static",
-                    "value": "cancelled"
+                    "value": "CANCEL",
+                    "source": "static"
                   },
                   "cancellation_reason": {
                     "source": "llm"
                   }
                 }
               }
-            ]
-          },
-          {
-            "function_name": "handle_unrelated_question",
-            "description": "Call this function if the user asks a question about anything other than confirming or cancelling the order, without confirming the order",
-            "properties": {},
-            "required": [],
-            "transition_to": "handle_unrelated_question_node",
-            "hooks": []
-          }
-        ]
-      },
-      {
-        "node_name": "verify_order_detail_node",
-        "task_messages": [
-          {
-            "role": "system",
-            "content": "Now verify the order details with the customer. The order contains {order_summary}. The total price is {total_price_words} rupees. The delivery address is {address}. Ask for confirmation of the order."
-          }
-        ],
-        "pre_actions": [
-          {
-            "type": "function",
-            "handler": "play_audio_sound",
-            "args": {
-              "audio": "cough"
-            }
-          },
-          {
-            "type": "function",
-            "handler": "mute_stt"
-          }
-        ],
-        "post_actions": [
-          {
-            "type": "function",
-            "handler": "unmute_stt"
-          }
-        ],
-        "functions": [
-          {
-            "function_name": "confirm_order",
-            "description": "Call this function if the customer agrees/confirms the order details (items, price, and address) and asks no other questions",
-            "properties": {},
-            "required": [],
-            "transition_to": "order_confirmation_and_end_node",
-            "hooks": [
-              {
-                "name": "update_outcome_in_database",
-                "expected_fields": {
-                  "outcome": {
-                    "source": "static",
-                    "value": "confirmed"
-                  }
-                }
-              }
-            ]
-          },
-          {
-            "function_name": "confirm_order_with_question",
-            "description": "Call this function if the customer agrees/confirms the order but also asks an unrelated question about delivery time, product details, or other topics",
-            "properties": {},
-            "required": [],
-            "transition_to": "order_confirmation_with_question_and_end_node",
-            "hooks": [
-              {
-                "name": "update_outcome_in_database",
-                "expected_fields": {
-                  "outcome": {
-                    "source": "static",
-                    "value": "confirmed"
-                  }
-                }
-              }
-            ]
-          },
-          {
-            "function_name": "cancel_order",
-            "description": "Call this function if the customer explicitly asks to cancel the order. If the user gives a reason for cancellation, pass it.",
+            ],
+            "required": [
+              "cancellation_reason"
+            ],
             "properties": {
               "cancellation_reason": {
                 "type": "string",
                 "description": "The reason for cancelling the order."
               }
             },
-            "required": ["cancellation_reason"],
-            "transition_to": "order_cancellation_and_end_node",
-            "hooks": [
-              {
-                "name": "update_outcome_in_database",
-                "expected_fields": {
-                  "outcome": {
-                    "source": "static",
-                    "value": "cancelled"
-                  },
-                  "cancellation_reason": {
-                    "source": "llm"
-                  }
-                }
-              }
-            ]
-          },
-          {
-            "function_name": "handle_unrelated_question",
-            "description": "Call this function if the user asks a question about anything other than confirming or cancelling the order, without confirming the order",
-            "properties": {},
-            "required": [],
-            "transition_to": "handle_unrelated_question_node",
-            "hooks": []
-          },
-          {
-            "function_name": "address_incorrect",
-            "description": "User says the address or phone number is wrong or wants to update it. Only landmark, pincode, locality, or city or phone number can be updated",
-            "properties": {},
-            "required": [],
-            "transition_to": "update_address_node",
-            "hooks": []
-          }
-        ]
-      },
-      {
-        "node_name": "handle_unrelated_question_node",
-        "task_messages": [
-          {
-            "role": "system",
-            "content": "I'm not able to help you with that right now, but you can find all the latest details on the {shop_name} website. Regarding your order, would you like to confirm it?"
-          }
-        ],
-        "pre_actions": [],
-        "post_actions": [],
-        "functions": [
-          {
-            "function_name": "confirm_order",
-            "description": "Call this function if the customer agrees/confirms the order details",
-            "properties": {},
-            "required": [],
-            "transition_to": "order_confirmation_and_end_node",
-            "hooks": [
-              {
-                "name": "update_outcome_in_database",
-                "expected_fields": {
-                  "outcome": {
-                    "source": "static",
-                    "value": "confirmed"
-                  }
-                }
-              }
-            ]
-          },
-          {
+            "description": "Call this function if the customer explicitly asks to cancel the order.",
             "function_name": "cancel_order",
-            "description": "Call this function if the customer explicitly asks to cancel the order. If the user gives a reason for cancellation, pass it.",
-            "properties": {
-              "cancellation_reason": {
-                "type": "string",
-                "description": "The reason for cancelling the order."
-              }
-            },
-            "required": ["cancellation_reason"],
-            "transition_to": "order_cancellation_and_end_node",
+            "transition_to": "end_conversation_node"
+          },
+          {
             "hooks": [
               {
                 "name": "update_outcome_in_database",
                 "expected_fields": {
                   "outcome": {
-                    "source": "static",
-                    "value": "cancelled"
-                  },
-                  "cancellation_reason": {
-                    "source": "llm"
-                  }
-                }
-              }
-            ]
-          },
-          {
-            "function_name": "address_incorrect",
-            "description": "User wants to update address",
-            "properties": {},
-            "required": [],
-            "transition_to": "update_address_node",
-            "hooks": []
-          }
-        ]
-      },
-      {
-        "node_name": "update_address_node",
-        "task_messages": [
-          {
-            "role": "system",
-            "content": "Sure, I can help with that. What part of the address would you like to update? You can update the locality, landmark, pincode, or city or phone number."
-          }
-        ],
-        "pre_actions": [],
-        "post_actions": [],
-        "functions": [
-          {
-            "function_name": "update_landmark",
-            "description": "User wants to update the landmark of the address",
-            "properties": {
-              "landmark": {
-                "type": "string",
-                "description": "The new landmark"
-              }
-            },
-            "required": ["landmark"],
-            "transition_to": "confirm_address_update_node",
-            "hooks": []
-          },
-          {
-            "function_name": "update_pincode",
-            "description": "User provides the pincode",
-            "properties": {
-              "pincode": {
-                "type": "string",
-                "description": "The new pincode"
-              }
-            },
-            "required": ["pincode"],
-            "transition_to": "confirm_address_update_node",
-            "hooks": []
-          },
-          {
-            "function_name": "update_city",
-            "description": "User provides the city",
-            "properties": {
-              "city": {
-                "type": "string",
-                "description": "The new city"
-              }
-            },
-            "required": ["city"],
-            "transition_to": "confirm_address_update_node",
-            "hooks": []
-          },
-          {
-            "function_name": "update_locality",
-            "description": "User provides the locality",
-            "properties": {
-              "locality": {
-                "type": "string",
-                "description": "The new locality"
-              }
-            },
-            "required": ["locality"],
-            "transition_to": "confirm_address_update_node",
-            "hooks": []
-          },
-          {
-            "function_name": "update_phone_number",
-            "description": "User provides the new phone number. Must be a 10-digit Indian mobile number",
-            "properties": {
-              "phone_number": {
-                "type": "string",
-                "description": "The new 10-digit phone number"
-              }
-            },
-            "required": ["phone_number"],
-            "transition_to": "confirm_address_update_node",
-            "hooks": []
-          },
-          {
-            "function_name": "handle_unrelated_question",
-            "description": "Call this function if the user asks an unrelated question",
-            "properties": {},
-            "required": [],
-            "transition_to": "handle_unrelated_question_node",
-            "hooks": []
-          }
-        ]
-      },
-      {
-        "node_name": "confirm_address_update_node",
-        "task_messages": [
-          {
-            "role": "system",
-            "content": "Got it. Your address has been updated. Is there anything else you would like to update, or should I go ahead and confirm the order?"
-          }
-        ],
-        "pre_actions": [],
-        "post_actions": [],
-        "functions": [
-          {
-            "function_name": "confirm_order",
-            "description": "Customer confirms the order after address update",
-            "properties": {
-              "updated_address": {
-                "type": "string",
-                "description": "The updated address if it was changed"
-              }
-            },
-            "required": [],
-            "transition_to": "order_confirmation_and_end_node",
-            "hooks": [
-              {
-                "name": "update_outcome_in_database",
-                "expected_fields": {
-                  "outcome": {
-                    "source": "static",
-                    "value": "address_updated"
+                    "value": "ADDRESS_UPDATED",
+                    "source": "static"
                   },
                   "updated_address": {
                     "source": "llm"
                   }
                 }
               }
-            ]
-          },
-          {
-            "function_name": "address_incorrect",
-            "description": "User wants to update more address fields",
-            "properties": {},
-            "required": [],
-            "transition_to": "update_address_node",
-            "hooks": []
-          },
-          {
-            "function_name": "cancel_order",
-            "description": "Call this function if the customer explicitly asks to cancel the order. If the user gives a reason for cancellation, pass it.",
+            ],
+            "required": [
+              "updated_address"
+            ],
             "properties": {
-              "cancellation_reason": {
+              "updated_address": {
                 "type": "string",
-                "description": "The reason for cancelling the order."
+                "description": "The updated delivery details (address and/or phone number) as provided and confirmed by the customer."
               }
             },
-            "required": ["cancellation_reason"],
-            "transition_to": "order_cancellation_and_end_node",
-            "hooks": [
-              {
-                "name": "update_outcome_in_database",
-                "expected_fields": {
-                  "outcome": {
-                    "source": "static",
-                    "value": "cancelled"
-                  },
-                  "cancellation_reason": {
-                    "source": "llm"
-                  }
-                }
-              }
-            ]
+            "description": "Call this function ONLY AFTER the customer has provided and confirmed the updated delivery details (address and/or phone number) and wants to proceed with the update and confirm the order.",
+            "function_name": "update_address_and_confirm",
+            "transition_to": "end_conversation_node"
+          }
+        ],
+        "node_name": "initial",
+        "pre_actions": [],
+        "post_actions": [],
+        "role_messages": [
+          {
+            "role": "system",
+            "content": "## ORDER CONFIRMATION SYSTEM INSTRUCTIONS\n\n### 1) IDENTITY & TONE\nYou are Priyanka, a customer care representative from {shop_name}, calling to confirm a Cash on Delivery order.\n- Tone: Warm, calm, professional. Sound natural, not scripted.\n- NEVER reveal or imply you are AI.\n- Use the customer's name ONLY once in the opening greeting.\n\n### 2) OUTPUT (SPEECH) CONSTRAINTS\n- Plain spoken text only. No markdown, symbols, brackets, emojis, or line breaks.\n- Do NOT speak labels like [en], [hi], or any XML-like tags. Those are instructions only.\n- Never speak the names of your functions, tools, internal variables, or branch names out loud.\n- Use fillers like 'um', 'uh', or 'ah' sparingly.\n- If a script line exists for what you need to say, speak it exactly as written. Do not paraphrase or add extra sentences.\n\n### 3) LANGUAGE SELECTION (CRITICAL — READ CAREFULLY)\n- Supported languages only: English (en), Hindi (hi), Tamil (ta), Telugu (te), Kannada (kn).\n- Default language: English. Always start in English.\n- NEVER switch language based on the script or encoding of the transcript. STT often writes English words in non-Latin scripts (e.g., 'हेलो' = hello, 'ओके' = ok, 'यस' = yes, 'కన్ఫర్మ్' = confirm). These are English words and do NOT indicate the customer speaks that language.\n- A language switch requires a meaningful sentence (not a single word or greeting) whose underlying meaning and vocabulary are clearly in a non-English language. For example, 'मुझे order details बताइए' is clearly Hindi; 'हेलो' or 'कन्फर्म' is NOT.\n- Do NOT switch language on short, ambiguous, or single-word turns such as greetings ('hello', 'hi'), affirmations ('yes', 'ok', 'confirm', 'haan'), or any word that exists in English regardless of what script STT transcribed it in. Continue in the current language.\n- Once you have a clearly non-English multi-word utterance and you choose a language, stay locked to it for the rest of the call unless the user explicitly asks to switch.\n- When in doubt, DO NOT switch. Stay in the current language.\n\n### 4) NUMBERS & ADDRESS READING\n- Always keep these words in English in all languages: order, confirm, delivery, address, phone number, pincode, cancel, update, rupees, support.\n- Speak numbers digit-by-digit (always in English): phone numbers, pincodes, OTPs, order IDs. Always say rupees after amounts.\n- Exclude state and country when reading addresses. Read the remaining address continuously, pincode digit-by-digit at the end.\n\n### 4A) ORDER ITEMS FORMATTING (items)\n- Never return items as a JSON array. If the items value appears as a JSON array/list after runtime substitution, NEVER speak it as JSON.\n- Always convert items into a single human-readable, TTS-friendly string using proper commas and 'and'.\n- For quantities, use: '{quantity} {product_name}'.\n- If there are more than 3 items, do not enumerate; speak only the total count (e.g., '4 items').\n- Do not modify any other parts of the script template. Only transform the items value into a natural speakable format.\n\n### 5) DETERMINISTIC BEHAVIOR & FUNCTION CALLING\n- This node NEVER ends the call and NEVER says final goodbye or outcome lines. Final speaking happens ONLY in end_conversation_node.\n- Every conversation MUST end with exactly one function call: user_busy OR confirm_order OR cancel_order OR update_address_and_confirm.\n- When you are ready to end, call exactly one function immediately. Do not say any additional text right before or right after the function call.\n\n### 6) ROUTING LOGIC (FOLLOW IN THIS PRIORITY ORDER)\n1) UNCLEAR SPEECH:\n- If the transcribed text is only noise or non-verbal sounds, do not respond.\n- If you cannot understand but it seems like speech, ask ONCE:\n  [en]: Sorry, could you say that again?\n  [hi]: Sorry, क्या आप दोबारा बोल सकते हैं?\n  [ta]: Sorry, ஒரு தடவை சொல்ல முடியுமா?\n  [te]: Sorry, మీరు మళ్ళీ చెప్పగలరా?\n  [kn]: Sorry, ಒಂದ್ ಸಾರಿ ಮತ್ತೆ ಹೇಳಿ?\n- If still unclear, make your best logical guess and continue.\n\n2) EMOTIONAL ESCALATION:\n- If the customer is angry/abusive: say 'I understand. Please contact our support team, they will be able to help you better.' (translate naturally into the current language) and immediately call user_busy.\n\n3) BUSY / CALL LATER:\n- If the customer is busy, unavailable, or says call later: immediately call user_busy.\n\n4) OUT OF SCOPE:\n- If asked about changing product/quantity or general support: say 'I cannot help with that, please contact support.' (translate naturally). Do NOT call any end function just for this. Continue the order confirmation flow.\n\n5) DIRECT CONFIRM AT OPENING:\n- A 'yes' or affirmative reply right after the opening greeting ALWAYS means the customer is available to talk. It is NEVER a confirmation of order details. Proceed to read order details.\n- Only treat it as direct confirm if the customer explicitly says something like 'confirm my order' or 'everything is correct' WITHOUT being asked.\n- If direct confirm intent is present: immediately call confirm_order.\n\n6) MAIN FLOW:\n- If the opening greeting has already been spoken in the conversation context, do NOT repeat it.\n- If the customer is available to talk, read the order details using the provided script.\n- After you ask if everything is correct:\n  - If the customer confirms: immediately call confirm_order.\n  - If the customer wants to cancel: ask for a reason using the provided script. After they answer (or refuse), immediately call cancel_order with cancellation_reason set to their answer or 'No specific reason provided'.\n  - If the customer wants to update the delivery details (address or phone number):\n    - If they already said what to change, take it. If not, ask what to update using the provided script.\n    - Do NOT validate pincode, location, or phone format. Focus on understanding what the customer wants to change and confirming it back.\n    - Read back the full updated delivery details using the provided script.\n    - Only if the customer acknowledges the read-back and wants to proceed, immediately call update_address_and_confirm with updated_address containing the full updated delivery details (include phone number if provided). If they refuse and want to cancel, follow the cancel flow."
+          }
+        ],
+        "task_messages": [
+          {
+            "role": "system",
+            "content": "<task>\n  <opening_script>\n  Say this when the call connects:\n  [en]: Hi {customer_name}, I'm Priyanka from {shop_name}. Um, I'm calling to confirm your order. Is this a good time to talk?\n  [hi]: Hi {customer_name}, मैं Priyanka बोल रही हूँ {shop_name} से. Um, order confirm करने के लिए call किया है. अभी बात कर सकते हैं?\n  [ta]: Hi {customer_name}, நான் {shop_name}-ல இருந்து Priyanka பேசுறேன். Um, உங்கள் order confirm பண்ண call பண்ணுறேன். இப்போ பேசலாமா?\n  [te]: Hi {customer_name}, నేను Priyanka మాట్లాడుతున్నా {shop_name} నుండి. Umm, మీ order confirm చేయడానికి call చేశాను. ఇప్పుడు మాట్లాడటానికి free గా ఉన్నారా?\n  [kn]: Hi {customer_name}, ನಾನು {shop_name} ಇಂದ Priyanka ಮಾತಾಡ್ತಿದ್ದೀನಿ. Um, ನಿಮ್ಮ order confirm ಮಾಡೋಕೆ call ಮಾಡ್ತಿದ್ದೀನಿ. ಈಗ ಮಾತಾಡಬಹುದಾ?\n  </opening_script>\n</task>"
+          },
+          {
+            "role": "system",
+            "content": "<task>\n  <idle_reengage>\n  Use this only when the user is silent/idle and you need to check if they are still on the call. Keep it very short.\n  [en]: Hello, are you there?\n  [hi]: Hello, आप call पे हैं?\n  [ta]: Hello, call-la irukeengala?\n  [te]: Hello, call lo unnara?\n  [kn]: Hello, call alli iddira?\n  </idle_reengage>\n</task>"
+          },
+          {
+            "role": "system",
+            "content": "<task>\n  <branch_c_available>\n  TRIGGER: Customer is available to talk.\n  Read the order details. (3 or fewer items: list each. >3 items: say total count only).\n  [en]: You ordered {items} for {total_price} to this address: {customer_address}. Is that all correct so I can confirm your order?\n  [hi]: आपने {items} order किया है {total_price} का, और address है: {customer_address}. सब ठीक है ना, मैं order confirm कर दूँ?\n  [ta]: நீங்க {items} order பண்ணீங்க {total_price}-க்கு, address: {customer_address}. எல்லாம் correct தானே, order confirm பண்ணட்டுமா?\n  [te]: మీరు {items} order చేశారు {total_price} కి, address: {customer_address}. అన్నీ correct గా ఉందా, order confirm చేయానా?\n  [kn]: ನೀವು {items} order ಮಾಡಿದ್ದೀರಾ {total_price} ಗೆ, address: {customer_address}. ಎಲ್ಲಾ ಸರಿ ಆಗಿದೆಯಾ, order confirm ಮಾಡಲಿ?\n  </branch_c_available>\n</task>"
+          },
+          {
+            "role": "system",
+            "content": "<task>\n  <branch_c2_cancel>\n  TRIGGER: Customer wants to cancel.\n  Step 1: Ask for reason gently.\n  [en]: Um, may I quickly know the reason for cancelling?\n  [hi]: Um, cancel करने का reason थोड़ा सा बता देंगे?\n  [ta]: Um, cancel பண்ணறதுக்கு reason என்னன்னு கொஞ்சம் சொல்ல முடியுமா?\n  [te]: Um, cancel చేయడానికి reason ఏమైందో కొంచెం చెబుతారా?\n  [kn]: Um, cancel ಮಾಡೋಕೆ reason ಏನು ಅಂತ ಸ್ವಲ್ಪ ಹೇಳ್ತೀರಾ?\n  Step 2: After they answer (or refuse), DO NOT SAY ANYTHING ELSE.\n  ACTION: Call `cancel_order` with `cancellation_reason` set to their answer or 'No specific reason provided'.\n  </branch_c2_cancel>\n</task>"
+          },
+          {
+            "role": "system",
+            "content": "<task>\n  <branch_c3_update_address>\n  TRIGGER: Customer indicates the address/phone is wrong or needs updating.\n\n  Step 1: If the customer did not specify what they want to change, ask what to update.\n  [en]: Um, okay, what would you like to update in the address or phone number?\n  [hi]: Um, okay, address या phone number में क्या update करना है?\n  [ta]: Um, okay, address இல்ல phone number ல என்ன update பண்ணணும்?\n  [te]: Um, okay, address లేదా phone number లో ఏం update చేయాలి?\n  [kn]: Um, okay, address ಅಥವಾ phone number ನಲ್ಲಿ ಏನು update ಮಾಡಬೇಕು?\n\n  Step 2: COLLECT.\n  Take whatever the customer says as the updated delivery details. Do NOT validate pincode, location, or phone format. Ask a follow-up question only if you genuinely did not understand what they said.\n\n  Step 3: READ BACK & CONFIRM.\n  Read back the full updated delivery details:\n  [en]: Okay, I have noted the updated delivery details as {new_address}. Is that correct, or would you like to change anything? If it is correct, should I confirm your order?\n  [hi]: Okay, मैंने updated delivery details note कर लिया है: {new_address}. यही सही है ना, या कुछ change करना है? अगर सब ठीक है, order confirm कर दूँ?\n  [ta]: Okay, updated delivery details நான் note பண்ணிட்டேன்: {new_address}. இது சரிதானே, இல்ல வேற ஏதாவது change பண்ணணுமா? எல்லாம் சரி என்றா order confirm பண்ணட்டுமா?\n  [te]: Okay, updated delivery details నేను note చేశాను: {new_address}. ఇది correct ఏనా, లేక ఇంకేదైనా change చేయాలా? అన్నీ okay అయితే order confirm చేయనా?\n  [kn]: Okay, updated delivery details ನಾನು note ಮಾಡಿದ್ದೀನಿ: {new_address}. ಇದು correctನಾ, ಅಥವಾ ಇನ್ನೇನಾದ್ರೂ change ಮಾಡಬೇಕಾ? ಎಲ್ಲವೂ okay ಅಂದ್ರೆ order confirm ಮಾಡಲಾ?\n\n  Step 4: EXECUTE.\n  - If they say yes/confirm: DO NOT SAY ANYTHING ELSE. ACTION: Call `update_address_and_confirm`.\n  - If they say no and want to change something: go back to Step 2 (COLLECT) and repeat Step 3.\n  - If they say they want to cancel: Proceed to the cancel flow.\n  </branch_c3_update_address>\n</task>"
           }
         ]
       },
       {
-        "node_name": "order_confirmation_and_end_node",
-        "task_messages": [
-          {
-            "role": "system",
-            "content": "Thank you for confirming your order. Your order will be delivered soon. Have a good day."
-          }
-        ],
+        "functions": [],
+        "node_name": "end_conversation_node",
         "pre_actions": [
           {
             "type": "function",
@@ -497,74 +146,145 @@
             "handler": "end_conversation"
           }
         ],
-        "functions": []
-      },
-      {
-        "node_name": "order_confirmation_with_question_and_end_node",
         "task_messages": [
           {
             "role": "system",
-            "content": "Thank you for confirming the order. I am here just to confirm your order, for any questions related to the order please refer to the website for more details. Have a good day."
+            "content": "<role>\nYou are the closing node.\n</role>\n\n<task>\nYour ONLY job is to say the final line based on the action that was just taken. Use the SAME language the assistant used most recently before this node. Do not re-detect or switch languages here. Do not ask any more questions. Speak ONLY the script below.\n</task>\n\n<constraints>\n  <item>IF USER WAS BUSY (user_busy called):\n  [en]: Thank you. Have a great day.\n  [hi]: Thank you. Have a great day.\n  [ta]: Thank you. Have a great day.\n  [te]: Thank you. Have a great day.\n  [kn]: Thank you. Have a great day.</item>\n\n  <item>IF DELIVERY DETAILS WERE UPDATED AND ORDER CONFIRMED (update_address_and_confirm called):\n  [en]: Your delivery details have been updated and your order is successfully confirmed. Have a nice day.\n  [hi]: आपका delivery details update हो गया है और आपका order successfully confirm हो गया है. Have a nice day.\n  [ta]: உங்கள் delivery details update ஆயிடுச்சு, மேலும் உங்கள் order successfully confirm ஆயிடுச்சு. Have a nice day.\n  [te]: మీ delivery details update అయ్యాయి, అలాగే మీ order successfully confirm అయ్యింది. Have a nice day.\n  [kn]: ನಿಮ್ಮ delivery details update ಆಗಿದೆ, ಹಾಗೂ ನಿಮ್ಮ order successfully confirm ಆಗಿದೆ. Have a nice day.</item>\n\n  <item>IF ORDER WAS CONFIRMED (confirm_order called):\n  [en]: Your order is successfully confirmed. Have a nice day.\n  [hi]: आपका order successfully confirm हो गया है. Have a nice day.\n  [ta]: உங்கள் order successfully confirm ஆயிடுச்சு. Have a nice day.\n  [te]: మీ order successfully confirm అయ్యింది. Have a nice day.\n  [kn]: ನಿಮ್ಮ order successfully confirm ಆಗಿದೆ. Have a nice day.</item>\n\n  <item>IF ORDER WAS CANCELLED (cancel_order called):\n  [en]: Alright, your order has been cancelled. Thank you, and have a nice day.\n  [hi]: ठीक है, आपका order cancel हो गया है. Thank you, have a nice day.\n  [ta]: சரி, உங்கள் order cancel ஆயிடுச்சு. Thank you, have a nice day.\n  [te]: సరే, మీ order cancel అయ్యింది. Thank you, have a nice day.\n  [kn]: ಸರಿ, ನಿಮ್ಮ order cancel ಆಗಿದೆ. Thank you, have a nice day.</item>\n</constraints>"
           }
-        ],
-        "pre_actions": [
-          {
-            "type": "function",
-            "handler": "mute_stt"
-          }
-        ],
-        "post_actions": [
-          {
-            "type": "function",
-            "handler": "end_conversation"
-          }
-        ],
-        "functions": []
-      },
-      {
-        "node_name": "order_cancellation_and_end_node",
-        "task_messages": [
-          {
-            "role": "system",
-            "content": "I understand you don't want to proceed with this order. I am cancelling your order. Thank you for your time."
-          }
-        ],
-        "pre_actions": [
-          {
-            "type": "function",
-            "handler": "mute_stt"
-          }
-        ],
-        "post_actions": [
-          {
-            "type": "function",
-            "handler": "end_conversation"
-          }
-        ],
-        "functions": []
-      },
-      {
-        "node_name": "user_busy_and_end_node",
-        "task_messages": [
-          {
-            "role": "system",
-            "content": "I understand. I will call you back later. Thank you for your time."
-          }
-        ],
-        "pre_actions": [
-          {
-            "type": "function",
-            "handler": "mute_stt"
-          }
-        ],
-        "post_actions": [
-          {
-            "type": "function",
-            "handler": "end_conversation"
-          }
-        ],
-        "functions": []
+        ]
       }
+    ],
+    "initial_node": "initial",
+    "end_conversation_callbacks": [
+      "service_callback"
     ]
-  }
+  },
+  "expected_payload_schema": {
+    "items": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "quantity": {
+            "type": "number"
+          },
+          "product_name": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "shop_name": {
+      "type": "string"
+    },
+    "total_price": {
+      "type": "number",
+      "function": "indian_number_to_speech"
+    },
+    "customer_name": {
+      "type": "string"
+    },
+    "customer_address": {
+      "type": "string"
+    },
+    "customer_mobile_number": {
+      "type": "string"
+    }
+  },
+  "expected_callback_response_schema": {
+    "updated_address": {
+      "type": "string",
+      "optional": true
+    },
+    "cancellation_reason": {
+      "type": "string",
+      "optional": true
+    }
+  },
+  "configurations": {
+    "tts_voice_name": "mira",
+    "mira_voice_id": null,
+    "cartesia_voice_configurations": null,
+    "elevenlabs_voice_configurations": {
+      "voice_id": "81xnrLNObbKDEs179emP",
+      "model_id": "eleven_flash_v2_5",
+      "speed": 1.0,
+      "language": "en"
+    },
+    "tts_selection_config": {
+      "enabled": true,
+      "prompt": "Determine the TTS provider from the customer's delivery address by identifying the Indian state, city, or abbreviation: reply 'elevenlabs' if it belongs to North/Hindi-English regions (Delhi, NCR, Haryana, Punjab, Uttar Pradesh, Rajasthan, Madhya Pradesh, Bihar, Jharkhand, Chhattisgarh, Uttarakhand, Himachal Pradesh, Gujarat, Chandigarh, Jammu, or cities like Gurgaon, Noida, Ghaziabad, Faridabad, or abbreviations DL, HR, PB, UP, RJ, MP, BR, JH, CG, UK, HP, GJ); reply 'cartesia' if it belongs to South Indian regions (Karnataka, Tamil Nadu, Kerala, Andhra Pradesh, Telangana, or cities like Bangalore/Bengaluru, Chennai, Hyderabad, Kochi, Mysore, Coimbatore, Vijayawada, Visakhapatnam, or abbreviations KA, TN, KL, AP, TS); if unclear or ambiguous, default to 'cartesia'; your response must always be exactly one word: either 'elevenlabs' or 'cartesia', and nothing else.",
+      "providers": [
+        "elevenlabs",
+        "cartesia"
+      ]
+    },
+    "stt_language": null,
+    "payload_based_language_selection": false,
+    "initial_greeting": "Hi {customer_name}, I'm Priyanka from {shop_name}. Um, I'm calling to confirm your order. Is this a good time to talk?",
+    "ivr_greeting": null,
+    "ivr_goodbye": null,
+    "ivr_priority": null,
+    "vad_config": null,
+    "enable_inbound": false,
+    "user_idle_configuration": {
+      "enabled": true,
+      "timeout": 7.0,
+      "idle_message": "The user has been quiet for a while. Use the idle re-engagement script from the task messages to check if they are still there."
+    },
+    "keyword_filter": {
+      "enabled": true,
+      "keywords": [
+        "hello",
+        "ह",
+        "h",
+        "हेलो",
+        "yes",
+        "हैलो",
+        "हलो",
+        "ok",
+        "okay",
+        "hmm",
+        "hm",
+        "yeah",
+        "haan",
+        "राइट",
+        "right",
+        "ओके",
+        "बोलिए",
+        "ha",
+        "acha",
+        "accha",
+        "ji",
+        "हाँ",
+        "हां",
+        "हम्म",
+        "यस",
+        "हा",
+        "अच्छा",
+        "जी",
+        "ठीक",
+        "ஹ்ம்ம்",
+        "ஹ்ம்",
+        "சரி",
+        "హ్మ్",
+        "హ్మ్మ్",
+        "సరే",
+        "ಹ್ಮ್",
+        "ಹ್ಮ್ಮ್",
+        "ಸರಿ"
+      ],
+      "match_type": "exact"
+    },
+    "noise_filter": {
+      "enable": true,
+      "type": "aic"
+    }
+  },
+  "secrets": null,
+  "outbound_number_id": "d1bdeec9-3e72-4c7f-a060-a1b672d0457b",
+  "is_active": true,
+  "rendered_system_prompt": "",
+  "created_at": "2026-02-07T06:45:27.143900Z",
+  "updated_at": "2026-02-23T13:25:59.490596Z"
 }

@@ -6,12 +6,12 @@ from typing import Any, Callable, Dict, List, Optional
 
 from fastapi import WebSocket
 
-from app.ai.voice.agents.breeze_buddy.agent.websocket import send_message
 from app.ai.voice.agents.breeze_buddy.template.types import TemplateModel
 from app.ai.voice.agents.breeze_buddy.utils.common import (
     prepare_initial_greeting_payload,
     track_error,
 )
+from app.ai.voice.agents.breeze_buddy.utils.transport.websockets import send_message
 from app.core.logger import logger
 from app.schemas.breeze_buddy.core import LeadCallTracker
 
