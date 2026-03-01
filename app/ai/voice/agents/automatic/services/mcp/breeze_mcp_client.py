@@ -25,7 +25,7 @@ async def init_breeze_mcp_tools(
     mode,
     args,
 ):
-    logger.info(f"Initializing tools from remote MCP server")
+    logger.info("Initializing tools from remote MCP server")
 
     # Use pure Pipecat MCP client
     logger.info(f"Using pure Pipecat MCP client for shop_id: {args.shop_id}")
@@ -72,11 +72,9 @@ async def init_breeze_mcp_tools(
 
         # Log registration success
         if tools:
-            logger.info(
-                f"Successfully registered MCP tools via pure Pipecat MCP client"
-            )
+            logger.info("Successfully registered MCP tools via pure Pipecat MCP client")
         else:
-            logger.warning(f"MCP client returned None or empty tools object")
+            logger.warning("MCP client returned None or empty tools object")
 
         return tools
 

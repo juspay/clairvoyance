@@ -91,7 +91,7 @@ def validate_lead_read_access(
             f"for unauthorized merchant: {lead.merchant_id}"
         )
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail=f"Lead not found"
+            status_code=status.HTTP_404_NOT_FOUND, detail="Lead not found"
         )
 
     # Check shop access
@@ -105,7 +105,7 @@ def validate_lead_read_access(
                 f"for unauthorized shop: {lead.shop_identifier}"
             )
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail=f"Lead not found"
+                status_code=status.HTTP_404_NOT_FOUND, detail="Lead not found"
             )
 
 

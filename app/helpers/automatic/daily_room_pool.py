@@ -133,9 +133,9 @@ class DailyRoomPool:
         for i in range(self.pool_size):
             try:
                 await self._create_and_add_room()
-                logger.info(f"Created room {i+1}/{self.pool_size}")
+                logger.info(f"Created room {i + 1}/{self.pool_size}")
             except Exception as e:
-                logger.error(f"Failed to create room {i+1}: {e}")
+                logger.error(f"Failed to create room {i + 1}: {e}")
 
         logger.info(
             f"Daily room pool initialized with {self.available_rooms.qsize()} rooms"

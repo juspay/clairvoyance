@@ -5,12 +5,11 @@ from typing import Optional
 
 from loguru import logger
 
-# Remove the default sink to have full control over logging.
-logger.remove()
-
-# Use environment variables directly to avoid circular import
 from app.core.config.static import ENVIRONMENT, PROD_LOG_LEVEL
 from app.core.logger.context import get_log_context
+
+# Remove the default sink to have full control over logging.
+logger.remove()
 
 
 # Patcher to inject log context into extra BEFORE enqueueing

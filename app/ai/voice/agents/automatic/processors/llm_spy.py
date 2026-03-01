@@ -5,6 +5,7 @@ Lightweight frame processor that delegates business logic to ConversationManager
 
 import asyncio
 import json
+import threading
 import time
 from typing import Any, Dict, Optional
 
@@ -44,9 +45,8 @@ from ..features.text_sanitizer.tts_sanitizer import sanitize_markdown
 # Global RTVI processor reference for function confirmations
 _rtvi_processor = None
 
-# Global storage for pending confirmations with thread safety
-import threading
 
+# Global storage for pending confirmations with thread safety
 _pending_confirmations: Dict[str, asyncio.Future] = {}
 _confirmations_lock = threading.Lock()
 

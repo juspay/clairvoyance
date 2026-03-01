@@ -379,7 +379,7 @@ async def delete_lead_handler(
                         {
                             "id": lead_id,
                             "status": "error",
-                            "message": f"Lead not found",
+                            "message": "Lead not found",
                         }
                     )
                     continue

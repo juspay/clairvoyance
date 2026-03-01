@@ -1,14 +1,7 @@
-# STEP 1: Load environment variables VERY FIRST - before any other imports
-from dotenv import load_dotenv
-
-load_dotenv()
-
-# STEP 2: Now safe to import everything else
 import asyncio
 
 import uvicorn
 
-# STEP 3: Now safe to import config and logger
 from app.core.config.static import (
     ENABLE_REDIS_DYNAMIC_CONFIG,
     HOST,

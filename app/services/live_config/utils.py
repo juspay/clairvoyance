@@ -16,21 +16,21 @@ def normalize_key(key: str) -> str:
 
 def convert_type(value: Any, target_type: type) -> Any:
     """Convert value to target type with fallback handling"""
-    if target_type == bool:
+    if target_type is bool:
         if isinstance(value, bool):
             return value
         return str(value).lower() == "true"
-    elif target_type == int:
+    elif target_type is int:
         try:
             return int(value)
         except (ValueError, TypeError):
             return None
-    elif target_type == float:
+    elif target_type is float:
         try:
             return float(value)
         except (ValueError, TypeError):
             return None
-    elif target_type == list:
+    elif target_type is list:
         if isinstance(value, list):
             return value
         str_value = str(value) if value else ""

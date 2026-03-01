@@ -101,9 +101,9 @@ async def get_tts_service(
     if tts_provider == TTSProvider.GOOGLE.value:
         if voice_name == VoiceName.MIA.value:
             voice_id = GOOGLE_MIA_VOICE
-            logger.info(f"Using Google TTS service with MIA voice.")
+            logger.info("Using Google TTS service with MIA voice.")
         else:
-            logger.info(f"Using Google TTS service with BRET voice.")
+            logger.info("Using Google TTS service with BRET voice.")
 
         # Minimal secure logging for Google credentials
         if GOOGLE_CREDENTIALS_JSON:

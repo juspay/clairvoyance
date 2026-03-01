@@ -25,9 +25,7 @@ async def mute_stt(context: TemplateContext, args, transition_to=None):
         }
     """
     duration = args.get("args", {}).get("duration") if args else None
-    logger.debug(
-        f"mute_stt called for call {context.call_sid} " f"(duration={duration})"
-    )
+    logger.debug(f"mute_stt called for call {context.call_sid} (duration={duration})")
 
     if context.vad_analyzer:
         if duration is not None:

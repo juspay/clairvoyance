@@ -278,7 +278,7 @@ def update_lead_call_completion_details_query(
 
     text = f"""
         UPDATE "{LEAD_CALL_TRACKER_TABLE}"
-        SET {', '.join(set_clauses)}
+        SET {", ".join(set_clauses)}
         WHERE {where_clause}
         RETURNING *;
     """

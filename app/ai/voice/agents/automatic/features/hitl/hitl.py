@@ -106,7 +106,7 @@ class HITLManager:
             rules = arguments.get("rules", [])
             if rules:
                 for i, rule in enumerate(rules):
-                    prefix = f"RULE {i+1} " if len(rules) > 1 else ""
+                    prefix = f"RULE {i + 1} " if len(rules) > 1 else ""
                     display_arguments[f"{prefix}Rate"] = rule.get("rate", 0)
                     display_arguments[f"{prefix}Rate Type"] = rule.get(
                         "rateType", "AMOUNT"

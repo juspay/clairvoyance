@@ -491,9 +491,7 @@ class ImprovedMem0MemoryService(Mem0MemoryService):
 
                 # If we received an LLMMessagesFrame, create a new one with the enhanced messages
                 if messages is not None:
-                    logger.debug(
-                        f"Creating new LLMMessagesFrame with enhanced messages"
-                    )
+                    logger.debug("Creating new LLMMessagesFrame with enhanced messages")
                     enhanced_messages = context.get_messages()
                     # Convert enhanced messages to dict format for LLMMessagesFrame
                     enhanced_dict_messages = []
@@ -511,7 +509,7 @@ class ImprovedMem0MemoryService(Mem0MemoryService):
                     await self.push_frame(LLMMessagesFrame(enhanced_dict_messages))
                 else:
                     # Otherwise, pass the enhanced context frame downstream
-                    logger.debug(f"Pushing enhanced OpenAILLMContextFrame downstream")
+                    logger.debug("Pushing enhanced OpenAILLMContextFrame downstream")
                     await self.push_frame(frame)
             except Exception as e:
                 end_time = datetime.datetime.now()

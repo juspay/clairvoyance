@@ -1,5 +1,9 @@
 import os
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 # --- Configuration ---
 
 
@@ -155,9 +159,9 @@ GEMINI_SEARCH_RESULT_API_MODEL = os.environ.get(
 )
 
 # --- STT Configuration ---
-STT_PROVIDER = os.environ.get(
-    "STT_PROVIDER", "google"
-).lower()  # "google", "assemblyai", "openai", "deepgram", "soniox", "elevenlabs", or "sarvam"
+STT_PROVIDER = (
+    os.environ.get("STT_PROVIDER", "google").lower()
+)  # "google", "assemblyai", "openai", "deepgram", "soniox", "elevenlabs", or "sarvam"
 ASSEMBLYAI_API_KEY = os.getenv("ASSEMBLYAI_API_KEY")
 OPENAI_STT_API_KEY = os.getenv("OPENAI_STT_API_KEY")
 OPENAI_STT_MODEL = os.environ.get(

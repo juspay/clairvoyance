@@ -181,7 +181,6 @@ async def connect_to_live_agent(
                     and hasattr(context.bot, "ws")
                     and context.bot.ws
                 ):
-
                     logger.info(
                         f"Explicitly closing websocket for Plivo transfer on call {context.call_sid}"
                     )

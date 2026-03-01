@@ -96,7 +96,7 @@ async def create_services(
     if stt_language:
         logger.info(f"Using STT language from template: {stt_language}")
     if soniox_context:
-        logger.info(f"Using Soniox context from template")
+        logger.info("Using Soniox context from template")
 
     stt = await get_stt_service(
         language_hints=stt_language, soniox_context=soniox_context

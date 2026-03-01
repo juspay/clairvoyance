@@ -204,7 +204,7 @@ def get_template_by_outbound_number_id_query(
     query = f"""
         SELECT id, merchant_id, shop_identifier, name, flow, expected_payload_schema, expected_callback_response_schema, configurations, secrets, outbound_number_id, is_active, created_at, updated_at
         FROM {TEMPLATE_TABLE}
-        WHERE {' AND '.join(conditions)}
+        WHERE {" AND ".join(conditions)}
         LIMIT 1
     """
     return query, [outbound_number_id]

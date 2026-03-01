@@ -123,7 +123,6 @@ class LLMServiceWrapper:
             else:
                 self._original_register_function(name, function)
         else:
-
             self._original_register_function(name, function)
 
     def create_summarizing_context(

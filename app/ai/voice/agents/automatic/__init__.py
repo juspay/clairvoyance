@@ -42,6 +42,10 @@ from pipecat.utils.tracing.conversation_context_provider import (
     ConversationContextProvider,
 )
 
+from app.ai.voice.agents.automatic.analytics.tracing_setup import setup_tracing
+from app.ai.voice.agents.automatic.analytics.utils import (
+    generate_open_observer_url_for_session_id,
+)
 from app.ai.voice.agents.automatic.features.llm_wrapper import LLMServiceWrapper
 from app.ai.voice.agents.automatic.processors.llm_spy import (
     handle_confirmation_response,
@@ -82,13 +86,6 @@ if static.ENABLE_TOOL_CALL_SOUND and os.path.exists(static.TOOL_CALL_SOUND_FILE)
             audio_file.getframerate(),
             audio_file.getnchannels(),
         )
-
-
-# import setup_tracing from tracing_setup.py file
-from app.ai.voice.agents.automatic.analytics.tracing_setup import setup_tracing
-from app.ai.voice.agents.automatic.analytics.utils import (
-    generate_open_observer_url_for_session_id,
-)
 
 
 async def main():
@@ -392,7 +389,7 @@ async def run_normal_mode(args):
             logger.info("Initializing the default function tools")
             llm.register_function(name, function)
     else:
-        logger.info(f"Initializing tools from remote MCP server")
+        logger.info("Initializing tools from remote MCP server")
 
         mcp_context = {
             "sessionId": args.client_sid,  # Pass client_sid instead of session_id

@@ -97,7 +97,9 @@ async def cleanup_session(session_id: str):
                         await asyncio.to_thread(proc.wait)
                     elif hasattr(proc, "returncode") and proc.returncode is None:
                         proc.terminate()
-                        await proc.wait()  # This is already an asyncio process, so await is correct
+                        await (
+                            proc.wait()
+                        )  # This is already an asyncio process, so await is correct
                     logger.info(f"Terminated direct process for session {session_id}")
                 except Exception as e:
                     logger.error(

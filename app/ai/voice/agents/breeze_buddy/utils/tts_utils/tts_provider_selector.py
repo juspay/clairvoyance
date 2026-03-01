@@ -62,7 +62,7 @@ async def detect_tts_provider_from_payload(
 Payload:
 {payload_str}
 
-You MUST return ONLY one of these provider names: {', '.join(provider_names)}
+You MUST return ONLY one of these provider names: {", ".join(provider_names)}
 Do not return anything else. Just the provider name."""
 
     try:

@@ -156,9 +156,9 @@ class VoiceAgentPool:
         for i in range(self.pool_size):
             try:
                 await self._create_and_add_process()
-                logger.info(f"Created process {i+1}/{self.pool_size}")
+                logger.info(f"Created process {i + 1}/{self.pool_size}")
             except Exception as e:
-                logger.error(f"Failed to create process {i+1}: {e}")
+                logger.error(f"Failed to create process {i + 1}: {e}")
 
         logger.info(
             f"Voice agent pool initialized with {self._managed_process_count()} processes"

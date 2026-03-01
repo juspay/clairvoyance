@@ -15,6 +15,16 @@ uv run isort . --profile black
 # Format all python files with black
 uv run black .
 
+uv run ruff format .
+
+TMP_ERR_FILE="$(mktemp)"
+
+if ! uv run ruff check . --fix > "$TMP_ERR_FILE" 2>&1; then
+  echo "❌ Ruff check failed. Commit aborted."
+  mv "$TMP_ERR_FILE" error.txt
+  exit 1
+fi
+
 echo "Running pyrefly check..."
 
 TMP_ERR_FILE="$(mktemp)"

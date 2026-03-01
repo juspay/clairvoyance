@@ -353,7 +353,7 @@ class TwilioConferenceService:
             )
 
             if not conference_sid:
-                logger.error(f"[Stage 2/4] Failed - Conference not found")
+                logger.error("[Stage 2/4] Failed - Conference not found")
                 return {
                     "success": False,
                     "agent_call_id": agent_call_sid,
@@ -389,7 +389,7 @@ class TwilioConferenceService:
                     ),
                 }
 
-            logger.info(f"[Stage 3/4] Success - Agent joined conference")
+            logger.info("[Stage 3/4] Success - Agent joined conference")
 
             # Stage 4: Transfer customer to conference
             logger.info("[Stage 4/4] Transferring customer to conference...")

@@ -129,7 +129,7 @@ def update_credential_query(
 
     text = f"""
         UPDATE "{CREDENTIALS_TABLE}"
-        SET {', '.join(updates)}
+        SET {", ".join(updates)}
         WHERE "id" = ${param_count}
         RETURNING *;
     """

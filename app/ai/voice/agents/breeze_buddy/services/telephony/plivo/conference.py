@@ -98,8 +98,7 @@ class PlivoConferenceService:
             response = self.client.calls.transfer(**transfer_kwargs)
 
             logger.info(
-                f"[Transfer] calls.transfer response: {response}, "
-                f"type={type(response)}"
+                f"[Transfer] calls.transfer response: {response}, type={type(response)}"
             )
             if hasattr(response, "__dict__"):
                 logger.info(f"[Transfer] response.__dict__: {response.__dict__}")

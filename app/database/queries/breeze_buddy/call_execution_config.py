@@ -238,7 +238,7 @@ def update_call_execution_config_query(
 
     text = f"""
         UPDATE "{CALL_EXECUTION_CONFIG_TABLE}"
-        SET {', '.join(updates)}
+        SET {", ".join(updates)}
         WHERE {where_clause}
         RETURNING *;
     """

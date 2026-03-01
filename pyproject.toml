@@ -39,7 +39,8 @@ dev = [
     "black",
     "isort",
     "autoflake",
-    "pyrefly"
+    "pyrefly",
+    "ruff",
 ]
 
 [build-system]
