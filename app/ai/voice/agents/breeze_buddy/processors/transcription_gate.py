@@ -200,10 +200,9 @@ class TranscriptionGateProcessor(FrameProcessor):
                 return  # Silently drop
 
             # Mode 2: keyword filter — drop matching words while bot is active.
-            # Only applies to final TranscriptionFrames; interim frames are too noisy to match reliably.
+            # Applies to both final TranscriptionFrames and InterimTranscriptionFrames
             if (
-                isinstance(frame, TranscriptionFrame)
-                and self._keyword_filter_enabled
+                self._keyword_filter_enabled
                 and self._is_bot_active()
                 and self._keywords
                 and self._keyword_matches(frame.text)
