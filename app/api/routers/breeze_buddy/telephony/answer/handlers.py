@@ -26,6 +26,7 @@ INBOUND (customer calls us):
    - Agent handles IVR in-band over WebSocket
 """
 
+import asyncio
 import json
 from html import escape as html_escape
 from typing import Any, Dict
@@ -445,9 +446,22 @@ async def handle_provider_answer(request: Request, provider: str) -> Response:
     # Plivo-specific: start recording
     if provider == "plivo":
         try:
-            start_call_recording(call_id)
+            # Wait for call to be fully established before starting recording
+            # Plivo requires 200-500ms delay between answer and record API
+            # to ensure the call is fully connected internally
+            logger.info(
+                f"[{tag}] Waiting 500ms before starting recording for call: {call_id}"
+            )
+            await asyncio.sleep(0.5)  # 500ms delay (middle of 200-500ms range)
+
+            recording_started = start_call_recording(call_id)
+            if not recording_started:
+                logger.error(f"[{tag}] Recording failed to start for call: {call_id}")
         except Exception as e:
-            logger.error(f"Failed to start Plivo recording: {e}", exc_info=True)
+            logger.error(
+                f"[{tag}] Failed to start Plivo recording for call: {call_id} - {e}",
+                exc_info=True,
+            )
 
     # Resolve templates
     result = await resolve_call_templates(call_id, from_number, to_number)

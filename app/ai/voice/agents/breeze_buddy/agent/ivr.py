@@ -236,7 +236,8 @@ async def handle_ivr_menu(
         # Wait for DTMF with timeout
         try:
             selected_id = await asyncio.wait_for(
-                _wait_for_valid_dtmf(ws, ivr_options), timeout=IVR_TIMEOUT_SECONDS
+                _wait_for_valid_dtmf(ws, ivr_options, stream_sid, provider),
+                timeout=IVR_TIMEOUT_SECONDS,
             )
             if selected_id:
                 logger.info(f"[IVR] Template selected: {selected_id}")
@@ -475,21 +476,31 @@ async def _send_audio(
 
 
 async def _wait_for_valid_dtmf(
-    ws: WebSocket, ivr_options: List[Dict[str, Optional[str]]]
+    ws: WebSocket,
+    ivr_options: List[Dict[str, Optional[str]]],
+    stream_sid: str,
+    provider: str = "exotel",
 ) -> Optional[str]:
     """
-    Wait for a valid DTMF digit.
+    Wait for a valid DTMF digit and interrupt audio playback.
 
     Only returns when a valid digit is pressed or call stops.
     Invalid digits are logged but ignored (keeps waiting).
+    Sends clearAudio command to interrupt playback when valid digit received.
 
     Args:
         ws: WebSocket connection
         ivr_options: List of {"id": str, "name": str}
+        stream_sid: Stream ID for clearAudio command
+        provider: Telephony provider for clearAudio support
 
     Returns:
         Selected template_id or None if call stopped
     """
+    provider_str = (
+        provider.lower() if hasattr(provider, "lower") else str(provider).lower()
+    )
+
     async for message in ws.iter_text():
         try:
             data = json.loads(message)
@@ -502,8 +513,22 @@ async def _wait_for_valid_dtmf(
                     try:
                         index = int(digit) - 1
                         if 0 <= index < len(ivr_options):
+                            # Valid digit - interrupt audio playback
+                            logger.info(
+                                f"[IVR] Valid digit {digit} - interrupting audio"
+                            )
+                            # Send clearAudio to stop provider's audio playback
+                            if provider_str == "plivo":
+                                clear_message = {
+                                    "event": "clearAudio",
+                                    "streamId": stream_sid,
+                                }
+                                await send_message(ws=ws, message=clear_message)
+                                logger.info("[IVR] Sent clearAudio command to Plivo")
+
                             return ivr_options[index]["id"]
                         else:
+                            # Invalid digit - do NOT interrupt audio
                             logger.warning(
                                 f"[IVR] Invalid digit {digit}, only {len(ivr_options)} options available"
                             )
