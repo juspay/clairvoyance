@@ -284,7 +284,6 @@
   "secrets": null,
   "outbound_number_id": "d1bdeec9-3e72-4c7f-a060-a1b672d0457b",
   "is_active": true,
-  "rendered_system_prompt": "",
   "created_at": "2026-02-07T06:45:27.143900Z",
   "updated_at": "2026-02-23T13:25:59.490596Z"
 }

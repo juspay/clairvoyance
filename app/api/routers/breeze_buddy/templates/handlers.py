@@ -54,7 +54,7 @@ async def create_template_handler(
     """
     logger.info(
         f"User {current_user.username} (role: {current_user.role}) creating template "
-        f"for merchant: {template_data.merchant}, name: {template_data.template_name}"
+        f"for merchant: {template_data.merchant_id}, name: {template_data.name}"
     )
 
     try:
@@ -71,17 +71,17 @@ async def create_template_handler(
 
         # Check if template already exists
         existing = await get_template_by_merchant(
-            template_data.merchant,
-            template_data.identifier,
-            template_data.template_name,
+            template_data.merchant_id,
+            template_data.shop_identifier,
+            template_data.name,
             should_prioritize_merchant_specific=False,
         )
 
         if existing:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail=f"Template already exists for merchant {template_data.merchant} "
-                f"and template name: {template_data.template_name}",
+                detail=f"Template already exists for merchant {template_data.merchant_id} "
+                f"and template name: {template_data.name}",
             )
 
         # Validate outbound_number_id if provided
@@ -105,9 +105,9 @@ async def create_template_handler(
 
         template = await create_template(
             template_id=str(uuid4()),
-            merchant=template_data.merchant,
-            identifier=template_data.identifier,
-            name=template_data.template_name,
+            merchant=template_data.merchant_id,
+            identifier=template_data.shop_identifier,
+            name=template_data.name,
             flow=flow,
             expected_payload_schema=template_data.expected_payload_schema,
             expected_callback_response_schema=template_data.expected_callback_response_schema,
@@ -132,7 +132,7 @@ async def create_template_handler(
         return {
             "status": "success",
             "template_id": template.id,
-            "message": f"Template '{template_data.template_name}' created successfully "
+            "message": f"Template '{template_data.name}' created successfully "
             f"with {len(flow.get('nodes', []))} nodes",
         }
 
@@ -401,7 +401,7 @@ async def replace_template_handler(
             secrets=merged_secrets,
             outbound_number_id=template_data.outbound_number_id,
             is_active=template_data.is_active,
-            shop_identifier=template_data.identifier,
+            shop_identifier=template_data.shop_identifier,
             now=now,
         )
 

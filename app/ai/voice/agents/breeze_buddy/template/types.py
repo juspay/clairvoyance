@@ -5,7 +5,7 @@ Pydantic models for the dynamic workflow engine.
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field, SecretStr
+from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
 
 class ActionType(str, Enum):
@@ -422,8 +422,15 @@ class FlowNodeModel(BaseModel):
 
 
 class TemplateModel(BaseModel):
+    # Read-only fields (set by server, not editable via API).
+    # These are intentionally excluded from ReplaceTemplateRequest so that
+    # a GET response can be sent directly to PUT — extra fields are auto-stripped.
     id: str
     merchant_id: str
+    created_at: Optional[Any] = None
+    updated_at: Optional[Any] = None
+
+    # Editable fields (these match ReplaceTemplateRequest field names 1:1).
     shop_identifier: Optional[str] = None
     name: str
     flow: Dict[str, Any]
@@ -433,9 +440,6 @@ class TemplateModel(BaseModel):
     secrets: Optional[Dict[str, Any]] = None
     outbound_number_id: Optional[str] = None
     is_active: bool = True
-    rendered_system_prompt: str = ""
-    created_at: Optional[Any] = None
-    updated_at: Optional[Any] = None
 
 
 # Request models for API
@@ -458,9 +462,9 @@ class RequestFlowNode(BaseModel):
 
 
 class CreateTemplateRequest(BaseModel):
-    merchant: str
-    template_name: str
-    identifier: Optional[str] = None
+    merchant_id: str
+    name: str
+    shop_identifier: Optional[str] = None
     outbound_number_id: Optional[str] = None
     is_active: bool = True
     flow: Dict[str, Any]
@@ -471,15 +475,27 @@ class CreateTemplateRequest(BaseModel):
 
 
 class ReplaceTemplateRequest(BaseModel):
-    """Request model for updating a template.
+    """Request model for updating a template via PUT.
+
+    IMPORTANT — GET-to-PUT contract:
+    This model uses extra="ignore" so that a GET /templates/{id} response can be
+    sent directly to PUT /templates/{id} after editing. Read-only fields returned
+    by GET (id, merchant_id, created_at, updated_at) are automatically stripped.
+    When adding new read-only fields to TemplateModel, do NOT add them here —
+    they will be safely ignored. When adding new editable fields, add them to
+    BOTH TemplateModel and this model with the SAME field name.
 
     Non-nullable fields (name, flow, is_active) must be provided - throws 400 if not.
-    Nullable fields (identifier, outbound_number_id, expected_payload_schema,
+    Nullable fields (shop_identifier, outbound_number_id, expected_payload_schema,
     expected_callback_response_schema, configurations) - if not provided, set to NULL.
     """
 
+    # extra="ignore" allows clients to pass the full GET response body to PUT;
+    # read-only fields (id, merchant_id, created_at, updated_at) are auto-stripped.
+    model_config = ConfigDict(extra="ignore")
+
     name: str
-    identifier: Optional[str] = None
+    shop_identifier: Optional[str] = None
     outbound_number_id: Optional[str] = None
     is_active: bool
     flow: Dict[str, Any]

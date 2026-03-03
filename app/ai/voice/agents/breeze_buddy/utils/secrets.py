@@ -90,7 +90,6 @@ def mask_template_secrets(template: TemplateModel) -> TemplateModel:
         secrets=mask_secrets(template.secrets),
         outbound_number_id=template.outbound_number_id,
         is_active=template.is_active,
-        rendered_system_prompt=template.rendered_system_prompt,
         created_at=template.created_at,
         updated_at=template.updated_at,
     )
