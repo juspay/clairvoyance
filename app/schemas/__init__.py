@@ -53,6 +53,7 @@ from app.schemas.breeze_buddy.core import (
     CreateCallExecutionConfigRequest,
     CreateOutboundNumberRequest,
     ExecutionMode,
+    IvrVoiceConfig,
     LeadCallStatus,
     LeadCallTracker,
     OutboundNumber,
@@ -64,6 +65,7 @@ from app.schemas.breeze_buddy.core import (
     PreCheckType,
     TelephonyConfig,
     UpdateCallExecutionConfigRequest,
+    UpdateOutboundNumberRequest,
 )
 from app.schemas.breeze_buddy.credentials import (
     CreateCredentialRequest,
@@ -107,6 +109,7 @@ __all__ = [
     "CreateCallExecutionConfigRequest",
     "CreateOutboundNumberRequest",
     "ExecutionMode",
+    "IvrVoiceConfig",
     "LeadCallStatus",
     "LeadCallTracker",
     "OutboundNumber",
@@ -118,6 +121,7 @@ __all__ = [
     "PreCheckType",
     "TelephonyConfig",
     "UpdateCallExecutionConfigRequest",
+    "UpdateOutboundNumberRequest",
     # Credentials
     "CreateCredentialRequest",
     "Credential",

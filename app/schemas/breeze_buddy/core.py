@@ -159,6 +159,35 @@ class LeadCallTracker(BaseModel):
     updated_at: Optional[datetime] = None
 
 
+class IvrVoiceConfig(BaseModel):
+    """IVR-level voice configuration for outbound numbers.
+
+    When set on an outbound number, these values are used for IVR menu
+    playback instead of inheriting from the first template's configuration.
+    """
+
+    tts_voice_name: Optional[str] = Field(
+        None,
+        description="TTS voice for IVR menu audio ('sara', 'rhea', or 'mira')",
+    )
+    ivr_greeting: Optional[str] = Field(
+        None,
+        description="Full IVR audio text including greeting and menu options",
+    )
+    ivr_goodbye: Optional[str] = Field(
+        None,
+        description="Goodbye message when no input received",
+    )
+    cartesia_voice_configurations: Optional[Dict[str, Any]] = Field(
+        None,
+        description="Cartesia voice config (voice_id, volume, speed, emotion, language)",
+    )
+    elevenlabs_voice_configurations: Optional[Dict[str, Any]] = Field(
+        None,
+        description="ElevenLabs voice config (voice_id, model_id, speed, language)",
+    )
+
+
 class CreateOutboundNumberRequest(BaseModel):
     """Request to create a new outbound number"""
 
@@ -168,6 +197,17 @@ class CreateOutboundNumberRequest(BaseModel):
     maximum_channels: Optional[int] = None
     merchant_id: Optional[str] = None
     shop_identifier: Optional[str] = None
+    ivr_config: Optional[IvrVoiceConfig] = Field(
+        None, description="IVR-level voice configuration (overrides template-level IVR settings)"
+    )
+
+
+class UpdateOutboundNumberRequest(BaseModel):
+    """Request to update an outbound number's IVR configuration"""
+
+    ivr_config: Optional[IvrVoiceConfig] = Field(
+        None, description="IVR-level voice configuration (overrides template-level IVR settings)"
+    )
 
 
 class OutboundNumber(BaseModel):
@@ -181,6 +221,7 @@ class OutboundNumber(BaseModel):
     maximum_channels: Optional[int] = None
     merchant_id: Optional[str] = None
     shop_identifier: Optional[str] = None
+    ivr_config: Optional[IvrVoiceConfig] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 

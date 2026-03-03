@@ -143,23 +143,44 @@ async def resolve_call_templates(
         for t in templates
     ]
 
-    # Resolve voice_name, ivr_greeting, and ivr_goodbye from template configurations
+    # Resolve IVR voice configuration.
+    # Priority: outbound_number.ivr_config > template configurations > defaults
+    ivr_cfg = outbound_number.ivr_config  # IvrVoiceConfig or None
+
+    # --- voice_name ---
     voice_name = "sara"  # Default voice
-    ivr_greeting = None
-    ivr_goodbye = None
+    if ivr_cfg and ivr_cfg.tts_voice_name:
+        voice_name = ivr_cfg.tts_voice_name
+        logger.info(f"[Answer] Using IVR-level voice_name: {voice_name}")
+    else:
+        first_template = templates[0]
+        if first_template.configurations and first_template.configurations.tts_voice_name:
+            voice_name = first_template.configurations.tts_voice_name.value
 
-    first_template = templates[0]
-    if first_template.configurations and first_template.configurations.tts_voice_name:
-        voice_name = first_template.configurations.tts_voice_name.value
-
-    for template in templates:
-        if template.configurations:
-            if not ivr_greeting and template.configurations.ivr_greeting:
+    # --- ivr_greeting ---
+    ivr_greeting = ivr_cfg.ivr_greeting if ivr_cfg and ivr_cfg.ivr_greeting else None
+    if not ivr_greeting:
+        for template in templates:
+            if template.configurations and template.configurations.ivr_greeting:
                 ivr_greeting = template.configurations.ivr_greeting
-            if not ivr_goodbye and template.configurations.ivr_goodbye:
-                ivr_goodbye = template.configurations.ivr_goodbye
-            if ivr_greeting and ivr_goodbye:
                 break
+
+    # --- ivr_goodbye ---
+    ivr_goodbye = ivr_cfg.ivr_goodbye if ivr_cfg and ivr_cfg.ivr_goodbye else None
+    if not ivr_goodbye:
+        for template in templates:
+            if template.configurations and template.configurations.ivr_goodbye:
+                ivr_goodbye = template.configurations.ivr_goodbye
+                break
+
+    # --- provider-specific voice configurations (for IVR audio generation) ---
+    ivr_voice_configurations = None
+    if ivr_cfg and (ivr_cfg.cartesia_voice_configurations or ivr_cfg.elevenlabs_voice_configurations):
+        ivr_voice_configurations = {
+            "cartesia_voice_configurations": ivr_cfg.cartesia_voice_configurations,
+            "elevenlabs_voice_configurations": ivr_cfg.elevenlabs_voice_configurations,
+        }
+        logger.info(f"[Answer] Using IVR-level voice configurations")
 
     # Warn if IVR mode (multiple templates) but no ivr_greeting configured
     if len(templates) > 1 and ivr_greeting is None:
@@ -168,6 +189,7 @@ async def resolve_call_templates(
             f"for outbound_number: {to_number}"
         )
 
+    first_template = templates[0]
     return {
         "is_outbound": False,
         "templates": templates,
@@ -175,6 +197,7 @@ async def resolve_call_templates(
         "voice_name": voice_name,
         "ivr_greeting": ivr_greeting,
         "ivr_goodbye": ivr_goodbye,
+        "ivr_voice_configurations": ivr_voice_configurations,
         "merchant_id": first_template.merchant_id if first_template else None,
     }
 
@@ -382,12 +405,19 @@ async def _build_provider_response(
     voice_name = result["voice_name"]
     ivr_greeting = result["ivr_greeting"]
     ivr_goodbye = result.get("ivr_goodbye")
+    ivr_voice_configurations = result.get("ivr_voice_configurations")
 
     logger.info(f"[{tag}] IVR mode - {len(templates)} templates, voice={voice_name}")
 
     # Pre-generate IVR audio (checks cache first)
-    await prepare_ivr_menu_audio(provider, voice_name, ivr_greeting)
-    await prepare_goodbye_audio(provider, voice_name, ivr_goodbye)
+    await prepare_ivr_menu_audio(
+        provider, voice_name, ivr_greeting,
+        ivr_voice_configurations=ivr_voice_configurations,
+    )
+    await prepare_goodbye_audio(
+        provider, voice_name, ivr_goodbye,
+        ivr_voice_configurations=ivr_voice_configurations,
+    )
 
     # Store IVR config in Redis
     ivr_config = {
@@ -396,6 +426,8 @@ async def _build_provider_response(
         "ivr_greeting": ivr_greeting,
         "ivr_goodbye": ivr_goodbye,
     }
+    if ivr_voice_configurations:
+        ivr_config["ivr_voice_configurations"] = ivr_voice_configurations
     redis = await get_redis_service()
     await redis.setex(
         f"{IVR_CONFIG_CACHE_PREFIX}{call_id}",

@@ -21,6 +21,11 @@ from typing import Dict, List, Optional, Tuple
 
 from fastapi import WebSocket
 
+from app.ai.voice.agents.breeze_buddy.template.types import (
+    CartesiaVoiceConfiguration,
+    ConfigurationModel,
+    ElevenLabsVoiceConfiguration,
+)
 from app.ai.voice.agents.breeze_buddy.tts import generate_audio
 from app.ai.voice.agents.breeze_buddy.utils.transport.websockets import (
     close_websocket_safely,
@@ -159,11 +164,13 @@ async def _run_ivr_menu(
         voice_name = ivr_config.get("voice_name", "sara")
         ivr_greeting = ivr_config.get("ivr_greeting")
         ivr_goodbye = ivr_config.get("ivr_goodbye")
+        ivr_voice_configurations = ivr_config.get("ivr_voice_configurations")
 
         logger.info(
             f"[IVR] Fetched config from Redis - "
             f"{len(ivr_options)} options: {[o['name'] for o in ivr_options]}, "
-            f"voice={voice_name!r}, greeting={ivr_greeting!r}, goodbye={ivr_goodbye!r}"
+            f"voice={voice_name!r}, greeting={ivr_greeting!r}, goodbye={ivr_goodbye!r}, "
+            f"has_voice_configs={ivr_voice_configurations is not None}"
         )
 
         # Handle IVR menu - speak options and wait for DTMF
@@ -175,6 +182,7 @@ async def _run_ivr_menu(
             voice_name=voice_name,
             ivr_greeting=ivr_greeting,
             ivr_goodbye=ivr_goodbye,
+            ivr_voice_configurations=ivr_voice_configurations,
         )
 
         return selected_template_id
@@ -195,6 +203,7 @@ async def handle_ivr_menu(
     voice_name: str = "sara",
     ivr_greeting: Optional[str] = None,
     ivr_goodbye: Optional[str] = None,
+    ivr_voice_configurations: Optional[Dict] = None,
 ) -> Optional[str]:
     """
     Handle IVR menu with retry logic.
@@ -211,6 +220,7 @@ async def handle_ivr_menu(
         voice_name: TTS voice to use (default "sara")
         ivr_greeting: Full IVR audio text including greeting and menu options
         ivr_goodbye: Goodbye message when no input received (default: English fallback)
+        ivr_voice_configurations: Optional IVR-level voice configs (cartesia/elevenlabs)
 
     Returns:
         Selected template_id or None if no valid selection
@@ -220,8 +230,14 @@ async def handle_ivr_menu(
         return None
 
     # Get cached/generated audio once (reuse for retries)
-    menu_audio = await prepare_ivr_menu_audio(provider, voice_name, ivr_greeting)
-    goodbye_audio = await prepare_goodbye_audio(provider, voice_name, ivr_goodbye)
+    menu_audio = await prepare_ivr_menu_audio(
+        provider, voice_name, ivr_greeting,
+        ivr_voice_configurations=ivr_voice_configurations,
+    )
+    goodbye_audio = await prepare_goodbye_audio(
+        provider, voice_name, ivr_goodbye,
+        ivr_voice_configurations=ivr_voice_configurations,
+    )
 
     if not menu_audio:
         logger.error("[IVR] Failed to prepare menu audio")
@@ -264,6 +280,7 @@ async def prepare_ivr_menu_audio(
     provider: str,
     voice_name: str = "sara",
     ivr_greeting: Optional[str] = None,
+    ivr_voice_configurations: Optional[Dict] = None,
 ) -> Optional[bytes]:
     """
     Prepare IVR menu audio - from cache or generate new.
@@ -275,6 +292,7 @@ async def prepare_ivr_menu_audio(
         provider: "twilio", "exotel", or "plivo"
         voice_name: TTS voice to use (default "sara")
         ivr_greeting: Full IVR audio text including greeting and menu options
+        ivr_voice_configurations: Optional IVR-level voice configs (cartesia/elevenlabs)
 
     Returns:
         Audio bytes ready to send, or None if failed
@@ -283,16 +301,19 @@ async def prepare_ivr_menu_audio(
     if not ivr_greeting:
         logger.error(
             "[IVR] No ivr_greeting provided - cannot generate menu audio. "
-            "Please define ivr_greeting in template configurations with the full menu text."
+            "Please define ivr_greeting in template or outbound number IVR configurations."
         )
         return None
 
     try:
         redis = await get_redis_service()
 
-        # Generate cache key from ivr_greeting text and voice
-        # MD5 hash ensures constant key size regardless of input length
-        cache_components = f"greeting:{ivr_greeting}|voice:{voice_name}"
+        # Generate cache key from ivr_greeting text, voice, and voice configurations
+        # Include voice configs in cache key so different configs produce different audio
+        config_hash = ""
+        if ivr_voice_configurations:
+            config_hash = f"|config:{json.dumps(ivr_voice_configurations, sort_keys=True)}"
+        cache_components = f"greeting:{ivr_greeting}|voice:{voice_name}{config_hash}"
         cache_key = f"{IVR_AUDIO_CACHE_PREFIX}{hashlib.md5(cache_components.encode()).hexdigest()}"
 
         # Check cache first
@@ -306,7 +327,10 @@ async def prepare_ivr_menu_audio(
                 f"[IVR] Cache MISS - generating menu audio for: {ivr_greeting!r}"
             )
 
-            mulaw_data = await _generate_tts_audio_mulaw(ivr_greeting, voice_name)
+            configurations = _build_configurations_model(ivr_voice_configurations)
+            mulaw_data = await _generate_tts_audio_mulaw(
+                ivr_greeting, voice_name, configurations=configurations,
+            )
 
             if mulaw_data:
                 # Cache for future calls
@@ -332,6 +356,7 @@ async def prepare_goodbye_audio(
     provider: str,
     voice_name: str = "sara",
     ivr_goodbye: Optional[str] = None,
+    ivr_voice_configurations: Optional[Dict] = None,
 ) -> Optional[bytes]:
     """
     Get cached goodbye audio or generate it.
@@ -340,6 +365,7 @@ async def prepare_goodbye_audio(
         provider: "twilio" or "exotel"
         voice_name: TTS voice to use (default "sara")
         ivr_goodbye: Custom goodbye message (default: English fallback)
+        ivr_voice_configurations: Optional IVR-level voice configs (cartesia/elevenlabs)
 
     Returns:
         Audio bytes ready to send, or None if failed
@@ -350,9 +376,11 @@ async def prepare_goodbye_audio(
         # Use provided goodbye message or fall back to English default
         goodbye_text = ivr_goodbye or IVR_DEFAULT_GOODBYE
 
-        # Generate cache key from goodbye text and voice name
-        # MD5 hash ensures constant key size regardless of input length
-        cache_components = f"goodbye:{goodbye_text}|voice:{voice_name}"
+        # Generate cache key from goodbye text, voice name, and voice configurations
+        config_hash = ""
+        if ivr_voice_configurations:
+            config_hash = f"|config:{json.dumps(ivr_voice_configurations, sort_keys=True)}"
+        cache_components = f"goodbye:{goodbye_text}|voice:{voice_name}{config_hash}"
         cache_key = f"{IVR_GOODBYE_CACHE_PREFIX}{hashlib.md5(cache_components.encode()).hexdigest()}"
 
         cached = await redis.get(cache_key)
@@ -362,7 +390,10 @@ async def prepare_goodbye_audio(
         else:
             # Generate
             logger.info(f"[IVR] Generating goodbye audio: {goodbye_text!r}")
-            mulaw_data = await _generate_tts_audio_mulaw(goodbye_text, voice_name)
+            configurations = _build_configurations_model(ivr_voice_configurations)
+            mulaw_data = await _generate_tts_audio_mulaw(
+                goodbye_text, voice_name, configurations=configurations,
+            )
 
             if mulaw_data:
                 await redis.setex(
@@ -380,8 +411,42 @@ async def prepare_goodbye_audio(
         return None
 
 
+def _build_configurations_model(
+    ivr_voice_configurations: Optional[Dict],
+) -> Optional[ConfigurationModel]:
+    """Build a ConfigurationModel from IVR voice configurations dict.
+
+    Converts the raw dict (from Redis / outbound_number.ivr_config)
+    into a ConfigurationModel so generate_audio can use provider-specific
+    voice settings (voice_id, speed, etc.).
+    """
+    if not ivr_voice_configurations:
+        return None
+
+    cartesia_config = None
+    elevenlabs_config = None
+
+    raw_cartesia = ivr_voice_configurations.get("cartesia_voice_configurations")
+    if raw_cartesia and isinstance(raw_cartesia, dict):
+        cartesia_config = CartesiaVoiceConfiguration(**raw_cartesia)
+
+    raw_elevenlabs = ivr_voice_configurations.get("elevenlabs_voice_configurations")
+    if raw_elevenlabs and isinstance(raw_elevenlabs, dict):
+        elevenlabs_config = ElevenLabsVoiceConfiguration(**raw_elevenlabs)
+
+    if not cartesia_config and not elevenlabs_config:
+        return None
+
+    return ConfigurationModel(
+        cartesia_voice_configurations=cartesia_config,
+        elevenlabs_voice_configurations=elevenlabs_config,
+    )
+
+
 async def _generate_tts_audio_mulaw(
-    text: str, voice_name: str = "sara"
+    text: str,
+    voice_name: str = "sara",
+    configurations: Optional[ConfigurationModel] = None,
 ) -> Optional[bytes]:
     """
     Generate TTS audio using existing TTS abstraction.
@@ -389,12 +454,15 @@ async def _generate_tts_audio_mulaw(
     Args:
         text: Text to synthesize
         voice_name: TTS voice to use (default "sara")
+        configurations: Optional ConfigurationModel with provider-specific voice settings
 
     Returns:
         Audio bytes in mulaw format, or None if failed
     """
     try:
-        mulaw_data = await generate_audio(text=text, voice_name=voice_name)
+        mulaw_data = await generate_audio(
+            text=text, voice_name=voice_name, configurations=configurations,
+        )
         logger.info(f"[IVR] Generated TTS audio: {len(mulaw_data)} bytes mulaw")
         return mulaw_data
     except Exception as e:
