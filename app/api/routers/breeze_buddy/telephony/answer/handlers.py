@@ -143,11 +143,11 @@ async def resolve_call_templates(
         for t in templates
     ]
 
-    # Resolve IVR voice configuration.
+    # Resolve IVR TTS voice configuration.
     # Priority: outbound_number.ivr_config > template configurations > defaults
     ivr_cfg = outbound_number.ivr_config  # IvrVoiceConfig or None
 
-    # --- voice_name ---
+    # --- voice_name (from ivr_config or first template) ---
     voice_name = "sara"  # Default voice
     if ivr_cfg and ivr_cfg.tts_voice_name:
         voice_name = ivr_cfg.tts_voice_name
@@ -157,30 +157,26 @@ async def resolve_call_templates(
         if first_template.configurations and first_template.configurations.tts_voice_name:
             voice_name = first_template.configurations.tts_voice_name.value
 
-    # --- ivr_greeting ---
-    ivr_greeting = ivr_cfg.ivr_greeting if ivr_cfg and ivr_cfg.ivr_greeting else None
-    if not ivr_greeting:
-        for template in templates:
-            if template.configurations and template.configurations.ivr_greeting:
-                ivr_greeting = template.configurations.ivr_greeting
-                break
-
-    # --- ivr_goodbye ---
-    ivr_goodbye = ivr_cfg.ivr_goodbye if ivr_cfg and ivr_cfg.ivr_goodbye else None
-    if not ivr_goodbye:
-        for template in templates:
-            if template.configurations and template.configurations.ivr_goodbye:
-                ivr_goodbye = template.configurations.ivr_goodbye
-                break
-
-    # --- provider-specific voice configurations (for IVR audio generation) ---
+    # --- provider-specific voice configurations (from ivr_config) ---
     ivr_voice_configurations = None
     if ivr_cfg and (ivr_cfg.cartesia_voice_configurations or ivr_cfg.elevenlabs_voice_configurations):
         ivr_voice_configurations = {
             "cartesia_voice_configurations": ivr_cfg.cartesia_voice_configurations,
             "elevenlabs_voice_configurations": ivr_cfg.elevenlabs_voice_configurations,
         }
-        logger.info(f"[Answer] Using IVR-level voice configurations")
+        logger.info("[Answer] Using IVR-level voice configurations")
+
+    # --- ivr_greeting and ivr_goodbye (from template configurations) ---
+    ivr_greeting = None
+    ivr_goodbye = None
+    for template in templates:
+        if template.configurations:
+            if not ivr_greeting and template.configurations.ivr_greeting:
+                ivr_greeting = template.configurations.ivr_greeting
+            if not ivr_goodbye and template.configurations.ivr_goodbye:
+                ivr_goodbye = template.configurations.ivr_goodbye
+            if ivr_greeting and ivr_goodbye:
+                break
 
     # Warn if IVR mode (multiple templates) but no ivr_greeting configured
     if len(templates) > 1 and ivr_greeting is None:

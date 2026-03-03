@@ -160,23 +160,18 @@ class LeadCallTracker(BaseModel):
 
 
 class IvrVoiceConfig(BaseModel):
-    """IVR-level voice configuration for outbound numbers.
+    """IVR-level TTS provider configuration for outbound numbers.
 
-    When set on an outbound number, these values are used for IVR menu
-    playback instead of inheriting from the first template's configuration.
+    When set on an outbound number, these values control which TTS voice
+    and provider-specific settings are used for IVR menu audio playback,
+    instead of inheriting from the first template's configuration.
+
+    Note: ivr_greeting and ivr_goodbye text remain on template configurations.
     """
 
     tts_voice_name: Optional[str] = Field(
         None,
         description="TTS voice for IVR menu audio ('sara', 'rhea', or 'mira')",
-    )
-    ivr_greeting: Optional[str] = Field(
-        None,
-        description="Full IVR audio text including greeting and menu options",
-    )
-    ivr_goodbye: Optional[str] = Field(
-        None,
-        description="Goodbye message when no input received",
     )
     cartesia_voice_configurations: Optional[Dict[str, Any]] = Field(
         None,
