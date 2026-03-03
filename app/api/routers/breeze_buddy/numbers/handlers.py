@@ -14,12 +14,10 @@ from app.database.accessor import (
     disable_outbound_number,
     get_all_outbound_numbers,
     get_outbound_number_by_id,
-    update_outbound_number_ivr_config,
 )
 from app.schemas import (
     CreateOutboundNumberRequest,
     OutboundNumber,
-    UpdateOutboundNumberRequest,
     UserInfo,
 )
 
@@ -60,7 +58,6 @@ async def create_number_handler(
             shop_identifier=number.shop_identifier,
             channels=0,
             maximum_channels=number.maximum_channels,
-            ivr_config=number.ivr_config.model_dump(exclude_none=True) if number.ivr_config else None,
         )
 
         if outbound_number:
@@ -159,66 +156,6 @@ async def get_number_handler(number_id: str, current_user: UserInfo) -> Outbound
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error getting outbound number: {str(e)}",
-        )
-
-
-async def update_number_handler(
-    number_id: str, body: UpdateOutboundNumberRequest, current_user: UserInfo
-) -> OutboundNumber:
-    """
-    Update an outbound number's IVR configuration.
-
-    Args:
-        number_id: Outbound number UUID
-        body: Update request containing ivr_config
-        current_user: Current authenticated user (must be admin)
-
-    Returns:
-        Updated outbound number object
-
-    Raises:
-        HTTPException: 404 if not found
-    """
-    logger.info(
-        f"Admin {current_user.username} updating IVR config for outbound number: {number_id}"
-    )
-
-    try:
-        # Verify the number exists first
-        existing = await get_outbound_number_by_id(number_id)
-        if not existing:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Outbound number {number_id} not found",
-            )
-
-        ivr_config_dict = (
-            body.ivr_config.model_dump(exclude_none=True) if body.ivr_config else None
-        )
-
-        outbound_number = await update_outbound_number_ivr_config(
-            outbound_number_id=number_id,
-            ivr_config=ivr_config_dict,
-        )
-
-        if outbound_number:
-            logger.info(f"Outbound number {number_id} IVR config updated successfully")
-            return outbound_number
-        else:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Failed to update outbound number IVR config",
-            )
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(
-            f"Error updating outbound number {number_id}: {e}", exc_info=True
-        )
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error updating outbound number: {str(e)}",
         )
 
 

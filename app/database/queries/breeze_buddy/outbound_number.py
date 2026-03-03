@@ -2,7 +2,6 @@
 Database query functions for the application.
 """
 
-import json
 from datetime import datetime
 from typing import Any, List, Optional, Tuple
 
@@ -23,7 +22,6 @@ def insert_outbound_number_query(
     maximum_channels: Optional[int] = None,
     merchant_id: Optional[str] = None,
     shop_identifier: Optional[str] = None,
-    ivr_config: Optional[dict] = None,
 ) -> Tuple[str, List[Any]]:
     """
     Generate query to insert outbound number record.
@@ -39,11 +37,10 @@ def insert_outbound_number_query(
             "maximum_channels",
             "merchant_id",
             "shop_identifier",
-            "ivr_config",
             "created_at",
             "updated_at"
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *;
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *;
     """
 
     values = [
@@ -55,7 +52,6 @@ def insert_outbound_number_query(
         maximum_channels,
         merchant_id,
         shop_identifier,
-        json.dumps(ivr_config) if ivr_config else None,
         datetime.now(),
         datetime.now(),
     ]
@@ -209,24 +205,4 @@ def get_outbound_number_by_number_query(number: str) -> Tuple[str, List[Any]]:
     """
     text = f'SELECT * FROM "{OUTBOUND_NUMBER_TABLE}" WHERE "number" = $1;'
     values = [number]
-    return text, values
-
-
-def update_outbound_number_ivr_config_query(
-    outbound_number_id: str,
-    ivr_config: Optional[dict] = None,
-) -> Tuple[str, List[Any]]:
-    """
-    Generate query to update outbound number IVR configuration.
-    """
-    text = f"""
-        UPDATE "{OUTBOUND_NUMBER_TABLE}"
-        SET "ivr_config" = $2, "updated_at" = NOW()
-        WHERE "id" = $1
-        RETURNING *;
-    """
-    values = [
-        outbound_number_id,
-        json.dumps(ivr_config) if ivr_config else None,
-    ]
     return text, values

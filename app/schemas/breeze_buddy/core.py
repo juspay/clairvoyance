@@ -192,17 +192,6 @@ class CreateOutboundNumberRequest(BaseModel):
     maximum_channels: Optional[int] = None
     merchant_id: Optional[str] = None
     shop_identifier: Optional[str] = None
-    ivr_config: Optional[IvrVoiceConfig] = Field(
-        None, description="IVR-level voice configuration (overrides template-level IVR settings)"
-    )
-
-
-class UpdateOutboundNumberRequest(BaseModel):
-    """Request to update an outbound number's IVR configuration"""
-
-    ivr_config: Optional[IvrVoiceConfig] = Field(
-        None, description="IVR-level voice configuration (overrides template-level IVR settings)"
-    )
 
 
 class OutboundNumber(BaseModel):

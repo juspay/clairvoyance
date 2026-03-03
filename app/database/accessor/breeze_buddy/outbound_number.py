@@ -23,7 +23,6 @@ from app.database.queries.breeze_buddy.outbound_number import (
     get_outbound_number_by_number_query,
     increment_outbound_number_channels_query,
     insert_outbound_number_query,
-    update_outbound_number_ivr_config_query,
     update_outbound_number_status_query,
 )
 from app.schemas import CallProvider, OutboundNumber, OutboundNumberStatus
@@ -45,7 +44,6 @@ async def create_outbound_number(
     shop_identifier: Optional[str] = None,
     channels: Optional[int] = None,
     maximum_channels: Optional[int] = None,
-    ivr_config: Optional[dict] = None,
 ) -> Optional[OutboundNumber]:
     """
     Create a new outbound number record.
@@ -62,7 +60,6 @@ async def create_outbound_number(
             shop_identifier=shop_identifier,
             channels=channels,
             maximum_channels=maximum_channels,
-            ivr_config=ivr_config,
         )
 
         result = await run_parameterized_query(query_text, values)
@@ -298,36 +295,6 @@ async def get_outbound_number_based_on_status_and_provider(
     except Exception as e:
         logger.error(f"Error getting outbound numbers: {e}")
         return []
-
-
-async def update_outbound_number_ivr_config(
-    outbound_number_id: str,
-    ivr_config: Optional[dict] = None,
-) -> Optional[OutboundNumber]:
-    """
-    Update outbound number IVR configuration.
-    """
-    logger.info(f"Updating IVR config for outbound number ID: {outbound_number_id}")
-
-    try:
-        query_text, values = update_outbound_number_ivr_config_query(
-            outbound_number_id, ivr_config
-        )
-        result = await run_parameterized_query(query_text, values)
-
-        if result and get_row_count(result) > 0:
-            decoded_result = decode_outbound_number(result)
-            logger.info(f"Outbound number IVR config updated: {decoded_result}")
-            return decoded_result
-
-        logger.error(
-            f"Failed to update IVR config for outbound number ID: {outbound_number_id}"
-        )
-        return None
-
-    except Exception as e:
-        logger.error(f"Error updating outbound number IVR config: {e}")
-        return None
 
 
 async def get_outbound_number_by_number(number: str) -> Optional[OutboundNumber]:

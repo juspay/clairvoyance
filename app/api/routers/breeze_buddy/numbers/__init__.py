@@ -8,7 +8,6 @@ Endpoints:
 - POST   /numbers           - Create new outbound number (admin only)
 - GET    /numbers           - List all outbound numbers (with filters)
 - GET    /numbers/{id}      - Get single outbound number by ID
-- PUT    /numbers/{id}      - Update outbound number IVR config (admin only)
 - DELETE /numbers/{id}      - Disable outbound number (admin only)
 
 For backward compatibility, old endpoints are available in deprecated/outbound_numbers.py
@@ -22,7 +21,6 @@ from app.api.security.breeze_buddy.rbac_token import get_current_user_with_rbac
 from app.schemas import (
     CreateOutboundNumberRequest,
     OutboundNumber,
-    UpdateOutboundNumberRequest,
     UserInfo,
 )
 
@@ -31,7 +29,6 @@ from .handlers import (
     delete_number_handler,
     get_number_handler,
     list_numbers_handler,
-    update_number_handler,
 )
 from .rbac import filter_numbers_by_rbac, require_admin_access
 
@@ -127,47 +124,6 @@ async def get_outbound_number(
         404 if not found
     """
     return await get_number_handler(number_id, current_user)
-
-
-@router.put("/numbers/{number_id}", response_model=OutboundNumber)
-async def update_outbound_number(
-    number_id: str,
-    body: UpdateOutboundNumberRequest,
-    current_user: UserInfo = Depends(get_current_user_with_rbac),
-):
-    """
-    Update an outbound number's IVR voice configuration.
-
-    Allows setting IVR-level voice configuration (voice name, greeting,
-    goodbye, provider-specific voice settings) that overrides template-level
-    IVR settings when handling inbound calls.
-
-    Path Parameters:
-    - number_id: Outbound number UUID
-
-    Request Body:
-        {
-            "ivr_config": {
-                "tts_voice_name": "rhea",
-                "ivr_greeting": "Welcome. Press 1 for billing, press 2 for support.",
-                "ivr_goodbye": "Goodbye.",
-                "elevenlabs_voice_configurations": {
-                    "voice_id": "voice-id-here",
-                    "model_id": "eleven_flash_v2_5"
-                }
-            }
-        }
-
-    Permissions:
-    - Admin only
-
-    Returns:
-        Updated outbound number object
-        404 if number not found
-    """
-    require_admin_access(current_user, "update outbound numbers")
-
-    return await update_number_handler(number_id, body, current_user)
 
 
 @router.delete("/numbers/{number_id}", response_model=OutboundNumber)
