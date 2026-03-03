@@ -62,9 +62,9 @@ async def create_template(
 
     Request Body:
         {
-            "merchant": "shop_123",
-            "template_name": "order-confirmation",
-            "identifier": "shop_123",
+            "merchant_id": "shop_123",
+            "name": "order-confirmation",
+            "shop_identifier": "shop_123",
             "is_active": true,
             "description": "Order confirmation flow",
             "flow": {
@@ -90,7 +90,7 @@ async def create_template(
     """
     # RBAC: Check permission to create template for this merchant
     require_admin_or_merchant_owner(
-        current_user, template_data.merchant, operation="create templates"
+        current_user, template_data.merchant_id, operation="create templates"
     )
 
     return await create_template_handler(template_data, current_user)
@@ -181,7 +181,7 @@ async def replace_template(
     replace an existing template.
 
     replaces all fields of the template. Non-nullable fields (name, flow, is_active)
-    must be provided. Nullable fields (identifier, outbound_number_id,
+    must be provided. Nullable fields (shop_identifier, outbound_number_id,
     expected_payload_schema, expected_callback_response_schema, configurations)
     - if not provided, they will be set to NULL.
 
@@ -191,7 +191,7 @@ async def replace_template(
     Request Body:
         {
             "name": "updated-template-name",
-            "identifier": "shop_identifier",
+            "shop_identifier": "shop_identifier",
             "outbound_number_id": "uuid",
             "is_active": true,
             "flow": {...},

@@ -192,7 +192,6 @@ class TemplateModel(BaseModel):
     expected_payload_schema: Optional[Dict[str, Any]] = None
     expected_callback_response_schema: Optional[Dict[str, Any]] = None
     is_active: bool = True
-    rendered_system_prompt: str = ""
 ```
 
 **Fields**:
