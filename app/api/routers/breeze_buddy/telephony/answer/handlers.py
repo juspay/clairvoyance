@@ -172,14 +172,16 @@ async def resolve_call_templates(
         logger.info("[Answer] Using IVR-specific voice configurations")
 
     # --- ivr_greeting and ivr_goodbye (from template configurations) ---
+    # Uses resolve_ivr_greeting/goodbye which checks ivr_configuration first,
+    # then falls back to the deprecated top-level ivr_greeting/ivr_goodbye fields.
     ivr_greeting = None
     ivr_goodbye = None
     for template in templates:
         if template.configurations:
-            if not ivr_greeting and template.configurations.ivr_greeting:
-                ivr_greeting = template.configurations.ivr_greeting
-            if not ivr_goodbye and template.configurations.ivr_goodbye:
-                ivr_goodbye = template.configurations.ivr_goodbye
+            if not ivr_greeting:
+                ivr_greeting = template.configurations.resolve_ivr_greeting()
+            if not ivr_goodbye:
+                ivr_goodbye = template.configurations.resolve_ivr_goodbye()
             if ivr_greeting and ivr_goodbye:
                 break
 

@@ -201,11 +201,14 @@ class UserIdleHandlingConfig(BaseModel):
 
 
 class IvrConfiguration(BaseModel):
-    """IVR-specific voice configuration.
+    """IVR-specific configuration.
 
-    When set on a template's configurations, these values control the TTS voice
-    used for IVR menu audio (greeting, goodbye), separate from the agent's
-    conversation voice. Falls back to the template's main voice settings if not set.
+    Groups all IVR-related settings: voice, greeting text, goodbye text,
+    and menu priority. When set on a template's configurations, the IVR
+    menu uses these settings instead of inheriting from the template's
+    main (agent) configuration.
+
+    Voice fields fall back to the template's main voice settings if not set.
     """
 
     tts_voice_name: Optional[TTSVoiceName] = Field(
@@ -219,6 +222,19 @@ class IvrConfiguration(BaseModel):
     elevenlabs_voice_configurations: Optional[ElevenLabsVoiceConfiguration] = Field(
         None,
         description="ElevenLabs voice config for IVR audio (overrides template's elevenlabs config for IVR)",
+    )
+    greeting: Optional[str] = Field(
+        None,
+        description="Full IVR audio text including greeting and menu options (e.g., 'Welcome to support. Press 1 for billing, press 2 for technical support')",
+    )
+    goodbye: Optional[str] = Field(
+        None,
+        description="Goodbye message when no input received (default: 'We didn't receive your input. Goodbye.')",
+    )
+    priority: Optional[int] = Field(
+        None,
+        ge=1,
+        description="Priority order for IVR menu (lower number = earlier in menu). Gaps allowed (e.g., 1, 3, 4).",
     )
 
 
@@ -248,20 +264,18 @@ class ConfigurationModel(BaseModel):
     initial_greeting: Optional[str] = (
         None  # Initial greeting text template with variables (e.g., "Hi {customer_name}")
     )
-    ivr_greeting: Optional[str] = (
-        None  # Full IVR audio text including greeting and menu options (e.g., "Welcome to support. Press 1 for billing, press 2 for technical support")
-    )
-    ivr_goodbye: Optional[str] = (
-        None  # Goodbye message when no input received (default: "We didn't receive your input. Goodbye.")
-    )
-    ivr_priority: Optional[int] = Field(
-        None,
-        ge=1,
-        description="Priority order for IVR menu (lower number = earlier in menu). Gaps allowed (e.g., 1, 3, 4).",
-    )
+
+    # DEPRECATED: Use ivr_configuration.greeting instead. Kept for backward compatibility.
+    ivr_greeting: Optional[str] = None
+    # DEPRECATED: Use ivr_configuration.goodbye instead. Kept for backward compatibility.
+    ivr_goodbye: Optional[str] = None
+    # DEPRECATED: Use ivr_configuration.priority instead. Kept for backward compatibility.
+    ivr_priority: Optional[int] = Field(None, ge=1)
+
     ivr_configuration: Optional[IvrConfiguration] = Field(
         None,
-        description="IVR-specific voice configuration. When set, IVR menu audio uses these voice settings instead of the template's main voice.",
+        description="IVR-specific configuration (voice, greeting, goodbye, priority). "
+        "Fields here take precedence over the deprecated top-level ivr_* fields.",
     )
     transfer_number: Optional[str] = Field(
         None, description="Phone number to transfer the call to"
@@ -280,6 +294,24 @@ class ConfigurationModel(BaseModel):
         None,
         description="Keyword filter to suppress specific transcriptions while bot is active",
     )
+
+    def resolve_ivr_greeting(self) -> Optional[str]:
+        """Resolve IVR greeting: ivr_configuration.greeting > ivr_greeting (deprecated)."""
+        if self.ivr_configuration and self.ivr_configuration.greeting is not None:
+            return self.ivr_configuration.greeting
+        return self.ivr_greeting
+
+    def resolve_ivr_goodbye(self) -> Optional[str]:
+        """Resolve IVR goodbye: ivr_configuration.goodbye > ivr_goodbye (deprecated)."""
+        if self.ivr_configuration and self.ivr_configuration.goodbye is not None:
+            return self.ivr_configuration.goodbye
+        return self.ivr_goodbye
+
+    def resolve_ivr_priority(self) -> Optional[int]:
+        """Resolve IVR priority: ivr_configuration.priority > ivr_priority (deprecated)."""
+        if self.ivr_configuration and self.ivr_configuration.priority is not None:
+            return self.ivr_configuration.priority
+        return self.ivr_priority
 
 
 class FlowAction(BaseModel):
