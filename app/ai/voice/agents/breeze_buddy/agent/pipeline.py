@@ -33,6 +33,7 @@ from pipecat.turns.user_turn_strategies import UserTurnStrategies
 
 from app.ai.voice.agents.breeze_buddy.observability.tracing_setup import setup_tracing
 from app.ai.voice.agents.breeze_buddy.processors import (
+    InterruptionContextProcessor,
     ResponseStateGate,
     TranscriptionGateProcessor,
     UserIdleCallbackHandler,
@@ -261,13 +262,21 @@ async def build_pipeline(
     # Store reference to user aggregator for position lookup
     user_aggregator = context_aggregator.user()
 
-    # Order: stt → transcription_gate → response_gate → user_aggregator
+    # Interruption context processor: detects when user speaks during TTS and
+    # injects a system note into LLM context so the LLM knows its previous
+    # response was interrupted and the user may not have heard the full message.
+    interruption_context = InterruptionContextProcessor()
+
+    # Order: stt → transcription_gate → interruption_context → response_gate → user_aggregator
     # transcription_gate must be before response_gate so dropped frames never
     # reach the interruption logic.
+    # interruption_context sits between transcription_gate and response_gate so
+    # that keyword-filtered transcriptions don't trigger false interruption notes.
     pipeline_parts = [
         transport.input(),
         stt,
         transcription_gate,
+        interruption_context,
         user_aggregator,
         llm,
         tts,
@@ -275,7 +284,7 @@ async def build_pipeline(
         context_aggregator.assistant(),
     ]
 
-    insert_idx = 3  # Position after transport.input(), stt, transcription_gate
+    insert_idx = 4  # Position after transport.input(), stt, transcription_gate, interruption_context
     if response_gate:
         pipeline_parts.insert(insert_idx, response_gate)
 
