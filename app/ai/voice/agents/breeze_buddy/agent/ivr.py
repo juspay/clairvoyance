@@ -301,7 +301,7 @@ async def prepare_ivr_menu_audio(
     if not ivr_greeting:
         logger.error(
             "[IVR] No ivr_greeting provided - cannot generate menu audio. "
-            "Please define ivr_greeting in template or outbound number IVR configurations."
+            "Please define ivr_greeting in template configurations."
         )
         return None
 
@@ -416,7 +416,7 @@ def _build_configurations_model(
 ) -> Optional[ConfigurationModel]:
     """Build a ConfigurationModel from IVR voice configurations dict.
 
-    Converts the raw dict (from Redis / outbound_number.ivr_config)
+    Converts the raw dict (from Redis / template ivr_configuration)
     into a ConfigurationModel so generate_audio can use provider-specific
     voice settings (voice_id, speed, etc.).
     """

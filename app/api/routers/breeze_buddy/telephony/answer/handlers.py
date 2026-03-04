@@ -143,28 +143,33 @@ async def resolve_call_templates(
         for t in templates
     ]
 
-    # Resolve IVR TTS voice configuration.
-    # Priority: outbound_number.ivr_config > template configurations > defaults
-    ivr_cfg = outbound_number.ivr_config  # IvrVoiceConfig or None
+    # Resolve IVR voice configuration from the first template.
+    # Priority for voice: ivr_configuration > template voice config > default
+    first_template = templates[0]
+    cfg = first_template.configurations
+    ivr_cfg = cfg.ivr_configuration if cfg else None
 
-    # --- voice_name (from ivr_config or first template) ---
-    voice_name = "sara"  # Default voice
+    # --- voice_name ---
+    voice_name = "sara"  # Default
     if ivr_cfg and ivr_cfg.tts_voice_name:
-        voice_name = ivr_cfg.tts_voice_name
-        logger.info(f"[Answer] Using IVR-level voice_name: {voice_name}")
-    else:
-        first_template = templates[0]
-        if first_template.configurations and first_template.configurations.tts_voice_name:
-            voice_name = first_template.configurations.tts_voice_name.value
+        voice_name = ivr_cfg.tts_voice_name.value
+        logger.info(f"[Answer] Using IVR-specific voice_name: {voice_name}")
+    elif cfg and cfg.tts_voice_name:
+        voice_name = cfg.tts_voice_name.value
 
-    # --- provider-specific voice configurations (from ivr_config) ---
+    # --- provider-specific voice configurations ---
     ivr_voice_configurations = None
     if ivr_cfg and (ivr_cfg.cartesia_voice_configurations or ivr_cfg.elevenlabs_voice_configurations):
-        ivr_voice_configurations = {
-            "cartesia_voice_configurations": ivr_cfg.cartesia_voice_configurations,
-            "elevenlabs_voice_configurations": ivr_cfg.elevenlabs_voice_configurations,
-        }
-        logger.info("[Answer] Using IVR-level voice configurations")
+        ivr_voice_configurations = {}
+        if ivr_cfg.cartesia_voice_configurations:
+            ivr_voice_configurations["cartesia_voice_configurations"] = (
+                ivr_cfg.cartesia_voice_configurations.model_dump(exclude_none=True)
+            )
+        if ivr_cfg.elevenlabs_voice_configurations:
+            ivr_voice_configurations["elevenlabs_voice_configurations"] = (
+                ivr_cfg.elevenlabs_voice_configurations.model_dump(exclude_none=True)
+            )
+        logger.info("[Answer] Using IVR-specific voice configurations")
 
     # --- ivr_greeting and ivr_goodbye (from template configurations) ---
     ivr_greeting = None
@@ -185,7 +190,6 @@ async def resolve_call_templates(
             f"for outbound_number: {to_number}"
         )
 
-    first_template = templates[0]
     return {
         "is_outbound": False,
         "templates": templates,

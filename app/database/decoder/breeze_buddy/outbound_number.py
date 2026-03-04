@@ -2,21 +2,11 @@
 Decoder functions for outbound number.
 """
 
-import json
 from typing import List, Optional
 
 import asyncpg
 
-from app.schemas import CallProvider, IvrVoiceConfig, OutboundNumber, OutboundNumberStatus
-
-
-def _decode_ivr_config(raw: object) -> Optional[IvrVoiceConfig]:
-    """Parse the ivr_config column (JSONB) into an IvrVoiceConfig model."""
-    if raw is None:
-        return None
-    if isinstance(raw, str):
-        raw = json.loads(raw)
-    return IvrVoiceConfig(**raw)
+from app.schemas import CallProvider, OutboundNumber, OutboundNumberStatus
 
 
 def decode_outbound_number(result: List[asyncpg.Record]) -> Optional[OutboundNumber]:
@@ -36,7 +26,6 @@ def decode_outbound_number(result: List[asyncpg.Record]) -> Optional[OutboundNum
         maximum_channels=row["maximum_channels"],
         merchant_id=row["merchant_id"],
         shop_identifier=row["shop_identifier"],
-        ivr_config=_decode_ivr_config(row.get("ivr_config")),
         created_at=row["created_at"],
         updated_at=row["updated_at"],
     )
@@ -59,7 +48,6 @@ def decode_outbound_number_list(result: List[asyncpg.Record]) -> List[OutboundNu
             maximum_channels=row["maximum_channels"],
             merchant_id=row["merchant_id"],
             shop_identifier=row["shop_identifier"],
-            ivr_config=_decode_ivr_config(row.get("ivr_config")),
             created_at=row["created_at"],
             updated_at=row["updated_at"],
         )

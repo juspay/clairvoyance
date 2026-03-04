@@ -200,6 +200,28 @@ class UserIdleHandlingConfig(BaseModel):
     )
 
 
+class IvrConfiguration(BaseModel):
+    """IVR-specific voice configuration.
+
+    When set on a template's configurations, these values control the TTS voice
+    used for IVR menu audio (greeting, goodbye), separate from the agent's
+    conversation voice. Falls back to the template's main voice settings if not set.
+    """
+
+    tts_voice_name: Optional[TTSVoiceName] = Field(
+        None,
+        description="TTS voice for IVR menu audio (overrides template's tts_voice_name for IVR)",
+    )
+    cartesia_voice_configurations: Optional[CartesiaVoiceConfiguration] = Field(
+        None,
+        description="Cartesia voice config for IVR audio (overrides template's cartesia config for IVR)",
+    )
+    elevenlabs_voice_configurations: Optional[ElevenLabsVoiceConfiguration] = Field(
+        None,
+        description="ElevenLabs voice config for IVR audio (overrides template's elevenlabs config for IVR)",
+    )
+
+
 class ConfigurationModel(BaseModel):
     tts_voice_name: Optional[TTSVoiceName] = None
     mira_voice_id: Optional[str] = (
@@ -236,6 +258,10 @@ class ConfigurationModel(BaseModel):
         None,
         ge=1,
         description="Priority order for IVR menu (lower number = earlier in menu). Gaps allowed (e.g., 1, 3, 4).",
+    )
+    ivr_configuration: Optional[IvrConfiguration] = Field(
+        None,
+        description="IVR-specific voice configuration. When set, IVR menu audio uses these voice settings instead of the template's main voice.",
     )
     transfer_number: Optional[str] = Field(
         None, description="Phone number to transfer the call to"

@@ -159,30 +159,6 @@ class LeadCallTracker(BaseModel):
     updated_at: Optional[datetime] = None
 
 
-class IvrVoiceConfig(BaseModel):
-    """IVR-level TTS provider configuration for outbound numbers.
-
-    When set on an outbound number, these values control which TTS voice
-    and provider-specific settings are used for IVR menu audio playback,
-    instead of inheriting from the first template's configuration.
-
-    Note: ivr_greeting and ivr_goodbye text remain on template configurations.
-    """
-
-    tts_voice_name: Optional[str] = Field(
-        None,
-        description="TTS voice for IVR menu audio ('sara', 'rhea', or 'mira')",
-    )
-    cartesia_voice_configurations: Optional[Dict[str, Any]] = Field(
-        None,
-        description="Cartesia voice config (voice_id, volume, speed, emotion, language)",
-    )
-    elevenlabs_voice_configurations: Optional[Dict[str, Any]] = Field(
-        None,
-        description="ElevenLabs voice config (voice_id, model_id, speed, language)",
-    )
-
-
 class CreateOutboundNumberRequest(BaseModel):
     """Request to create a new outbound number"""
 
@@ -205,7 +181,6 @@ class OutboundNumber(BaseModel):
     maximum_channels: Optional[int] = None
     merchant_id: Optional[str] = None
     shop_identifier: Optional[str] = None
-    ivr_config: Optional[IvrVoiceConfig] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
