@@ -10,6 +10,7 @@ from typing import Any, Dict
 from app.database.accessor.breeze_buddy.analytics import (
     get_analytics_count_from_db,
     get_call_details_from_db,
+    get_inbound_count_from_db,
     get_lead_based_analytics_from_db,
     get_lead_based_trends_from_db,
     get_lead_status_counts_from_db,
@@ -123,12 +124,45 @@ async def get_call_based_analytics(
         # Aggregate mode: Get summary data
         group_by = options.get("group_by")
         summary = await get_summary_analytics_from_db(filters, group_by)
+        inbound_data = await get_inbound_count_from_db(filters, group_by)
 
         # If group_by is used, summary is already a list; otherwise wrap in array
         if isinstance(summary, list):
-            results = summary
+            # Grouped mode: Match inbound counts by group_by key
+            inbound_map = {}
+            if isinstance(inbound_data, list):
+                for inbound_row in inbound_data:
+                    key = inbound_row.get(group_by)
+                    if key:
+                        inbound_map[key] = inbound_row.get("inbound_calls", 0)
+
+            results = []
+            for row in summary:
+                group_key = row[group_by]
+                outbound_calls = row["total_calls"]
+                inbound_calls = inbound_map.get(group_key, 0)
+
+                results.append(
+                    {
+                        **row,
+                        "outbound_calls": outbound_calls,
+                        "inbound_calls": inbound_calls,
+                        "total_calls": outbound_calls + inbound_calls,
+                    }
+                )
         else:
-            results = [summary]
+            # Aggregate mode: Simple addition
+            outbound_calls = summary["total_calls"]
+            inbound_calls = inbound_data if isinstance(inbound_data, int) else 0
+
+            results = [
+                {
+                    **summary,
+                    "outbound_calls": outbound_calls,
+                    "inbound_calls": inbound_calls,
+                    "total_calls": outbound_calls + inbound_calls,
+                }
+            ]
 
         return {
             "type": "call-based",
@@ -316,16 +350,33 @@ async def get_lead_based_analytics(
         # Aggregate mode: Get lead-based summary data
         group_by = options.get("group_by")
         lead_data = await get_lead_based_analytics_from_db(filters, group_by)
+        inbound_data = await get_inbound_count_from_db(filters, group_by)
 
         if group_by:
             # Grouped results - data is already aggregated by database
+            # Create a map of inbound counts by group_by key
+            inbound_map = {}
+            if isinstance(inbound_data, list):
+                for inbound_row in inbound_data:
+                    key = inbound_row.get(group_by)
+                    if key:
+                        inbound_map[key] = inbound_row.get("inbound_calls", 0)
+
             results = []
             for row in lead_data:
+                group_key = row[group_by]
+                # Note: row["total_leads"] from the query contains only outbound leads
+                # (filtered by request_id IS NOT NULL). The field name is misleading
+                # but kept for backward compatibility with the query structure.
+                outbound_count = row["total_leads"] or 0
+                inbound_count = inbound_map.get(group_key, 0)
                 results.append(
                     {
-                        group_by: row[group_by],
+                        group_by: group_key,
                         "shop_name": row.get("shop_name"),
-                        "total_leads": row["total_leads"] or 0,
+                        "outbound_leads": outbound_count,
+                        "inbound_leads": inbound_count,
+                        "total_leads": outbound_count + inbound_count,
                         "picked_calls": row["picked_calls"] or 0,
                         "outcome_counts": parse_outcome_breakdown(
                             row.get("outcome_counts")
@@ -363,8 +414,13 @@ async def get_lead_based_analytics(
                     if count > 0:
                         outcome_counts[outcome] = outcome_counts.get(outcome, 0) + 1
 
+            # Get inbound count (should be int in aggregate mode)
+            inbound_count = inbound_data if isinstance(inbound_data, int) else 0
+
             lead_based = {
-                "total_leads": total_leads,
+                "outbound_leads": total_leads,
+                "inbound_leads": inbound_count,
+                "total_leads": total_leads + inbound_count,
                 "picked_calls": picked_calls,
                 "outcome_counts": outcome_counts,
             }
