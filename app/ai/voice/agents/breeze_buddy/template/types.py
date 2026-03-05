@@ -362,6 +362,7 @@ class GlobalFunctionType(str, Enum):
     """Types of global functions supported by the system."""
 
     HTTP = "http"
+    BUILTIN = "builtin"  # Built-in handlers (e.g., warm transfer, get current time)
     CUSTOM = "custom"  # Future: custom Python function handlers
 
 
@@ -407,6 +408,30 @@ class GlobalHttpFunction(BaseGlobalFunction):
     type: GlobalFunctionType = GlobalFunctionType.HTTP
     expected_fields: Dict[str, FieldConfig] = {}
     http_request: HttpRequestConfig
+
+
+class GlobalBuiltinFunction(BaseGlobalFunction):
+    """
+    Configuration for a built-in global function available across all nodes.
+
+    Built-in functions are internal handlers (e.g., warm transfer, get current time)
+    that can be exposed as global functions via template configuration. The `handler`
+    field maps to a key in the builtin handler registry.
+
+    Example:
+        {
+            "type": "builtin",
+            "name": "transfer_to_agent",
+            "handler": "connect_to_live_agent",
+            "description": "Transfer the call to a human agent when requested"
+        }
+    """
+
+    type: GlobalFunctionType = GlobalFunctionType.BUILTIN
+    handler: str = Field(
+        ...,
+        description="Key in the builtin handler registry (e.g., 'connect_to_live_agent', 'get_current_time')",
+    )
 
 
 class FlowNodeModel(BaseModel):

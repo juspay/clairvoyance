@@ -15,6 +15,7 @@ from typing import Any, Callable, Dict, List, Optional, Protocol, runtime_checka
 from pipecat_flows import FlowsFunctionSchema
 
 from app.ai.voice.agents.breeze_buddy.template.types import (
+    GlobalBuiltinFunction,
     GlobalFunctionType,
     GlobalHttpFunction,
 )
@@ -177,6 +178,93 @@ class HttpGlobalFunctionAdapter:
         )
 
 
+class BuiltinGlobalFunctionAdapter:
+    """
+    Adapter for built-in global functions (e.g., warm transfer, get current time).
+
+    Built-in functions are internal handlers that can be exposed as global functions
+    via template configuration. The adapter routes through a single dispatcher handler
+    that resolves the actual handler from the builtin registry.
+
+    Template config example:
+        {
+            "type": "builtin",
+            "name": "transfer_to_agent",
+            "handler": "connect_to_live_agent",
+            "description": "Transfer the call to a human agent when requested"
+        }
+
+    To add a new built-in function:
+    1. Create a handler in handlers/internal/ with signature: (context, args) -> Dict
+    2. Add it to BUILTIN_HANDLERS in builtin_dispatcher.py
+    3. Use it in templates with: {"type": "builtin", "handler": "<key>", ...}
+    """
+
+    @property
+    def function_type(self) -> GlobalFunctionType:
+        return GlobalFunctionType.BUILTIN
+
+    @property
+    def handler_name(self) -> str:
+        """Return the dispatcher handler name from handler_map."""
+        return "builtin_function_dispatcher"
+
+    def can_handle(self, config: Dict[str, Any]) -> bool:
+        """Check if config has type='builtin'."""
+        return config.get("type") == GlobalFunctionType.BUILTIN.value
+
+    def build_schema(
+        self,
+        config: Dict[str, Any],
+        wrapped_handler: Callable,
+    ) -> FlowsFunctionSchema:
+        """
+        Build FlowsFunctionSchema for a built-in global function.
+
+        Args:
+            config: Raw function configuration dict with 'handler' field
+            wrapped_handler: builtin_function_dispatcher wrapped with with_context
+
+        Returns:
+            FlowsFunctionSchema with handler that passes function_config to dispatcher
+        """
+        func = GlobalBuiltinFunction.model_validate(config)
+
+        enhanced_description = func.description
+        if GLOBAL_FUNCTION_DESCRIPTION_SUFFIX:
+            enhanced_description = (
+                f"{func.description} {GLOBAL_FUNCTION_DESCRIPTION_SUFFIX}"
+            )
+
+        logger.debug(
+            f"Building builtin global function: {func.name}, handler={func.handler}"
+        )
+
+        def create_wrapper(captured_func: GlobalBuiltinFunction):
+            async def wrapper_handler(llm_args, flow_manager):
+                """
+                Outer wrapper for built-in global function.
+
+                Passes function_config to the dispatcher via kwargs.
+                The with_context wrapper extracts function_config and passes
+                it to builtin_function_dispatcher.
+                """
+                return await wrapped_handler(
+                    llm_args,
+                    function_config=captured_func,
+                )
+
+            return wrapper_handler
+
+        return FlowsFunctionSchema(
+            name=func.name,
+            description=enhanced_description,
+            handler=create_wrapper(func),
+            properties=func.properties,
+            required=func.required,
+        )
+
+
 class GlobalFunctionRegistry:
     """
     Registry for global function adapters.
@@ -310,3 +398,4 @@ class GlobalFunctionRegistry:
 
 # Register adapters at module load time (same pattern as HookRegistry)
 GlobalFunctionRegistry.register("http", HttpGlobalFunctionAdapter())
+GlobalFunctionRegistry.register("builtin", BuiltinGlobalFunctionAdapter())
