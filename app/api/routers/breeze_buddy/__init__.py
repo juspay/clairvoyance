@@ -8,6 +8,7 @@ from app.api.routers.breeze_buddy.analytics import router as analytics_router
 
 # Auth, telephony, cron, websocket
 from app.api.routers.breeze_buddy.auth import router as auth_router
+from app.api.routers.breeze_buddy.blacklist import router as blacklist_router
 from app.api.routers.breeze_buddy.configurations import router as configurations_router
 from app.api.routers.breeze_buddy.credentials import router as credentials_router
 from app.api.routers.breeze_buddy.cron import router as cron_router
@@ -48,6 +49,9 @@ router.include_router(numbers_router, prefix="", tags=["numbers"])
 
 # Templates (conversational flow definitions)
 router.include_router(templates_router, prefix="", tags=["templates"])
+
+# Blacklist (blocked phone numbers - admin only)
+router.include_router(blacklist_router, prefix="", tags=["blacklist"])
 
 # Merchants (shop identifiers - admin only)
 router.include_router(merchants_router, prefix="", tags=["merchants"])

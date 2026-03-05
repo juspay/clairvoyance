@@ -45,8 +45,10 @@ from app.schemas.breeze_buddy.auth import (
     UserUpdate,
 )
 from app.schemas.breeze_buddy.core import (
+    BlacklistedNumber,
     CallExecutionConfig,
     CallProvider,
+    CreateBlacklistNumberRequest,
     CreateCallExecutionConfigRequest,
     CreateOutboundNumberRequest,
     LeadCallStatus,
@@ -65,10 +67,12 @@ __all__ = [
     "AuthTokenData",
     "AutomaticVoiceTTSServiceConfig",
     "AutomaticVoiceUserConnectRequest",
+    "BlacklistedNumber",
     "CallBasedAnalyticsResult",
     "CallDetailResult",
     "CallExecutionConfig",
     "CallProvider",
+    "CreateBlacklistNumberRequest",
     "CreateCallExecutionConfigRequest",
     "CreateOutboundNumberRequest",
     "LeadCallStatus",
