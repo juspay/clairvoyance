@@ -196,6 +196,10 @@ def get_analytics_summary_query(
     Uses a filtered_data CTE to avoid duplicating WHERE clauses and parameters.
     """
     conditions, values = build_analytics_where_clause(filters)
+
+    # Filter for OUTBOUND calls only
+    conditions.append("lct.call_direction = 'OUTBOUND'")
+
     where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
 
     # Add LEFT JOIN only if provider filter is present
@@ -843,5 +847,76 @@ def get_analytics_lead_status_counts_total_query(
             GROUP BY lct.merchant_id, lct.shop_identifier
         ) as grouped;
     """
+
+    return text, values
+
+
+def get_analytics_inbound_count_query(
+    filters: Dict[str, Any], group_by: Optional[str] = None
+) -> Tuple[str, List[Any]]:
+    """
+    Generate query to count inbound calls with same RBAC filters as outbound queries.
+
+    This query is completely separate from outbound lead queries. It counts raw inbound
+    call records (not deduplicated) because inbound calls typically don't have request_id.
+
+    Args:
+        filters: Analytics filters (merchant_id, shop_identifier, dates, etc.)
+        group_by: Optional grouping field (shop_identifier, template, or merchant_id)
+
+    Returns:
+        Tuple of (query_string, values_list)
+
+    Examples:
+        Aggregate (no grouping):
+            Returns single row: {"inbound_calls": 42}
+
+        Grouped by shop:
+            Returns multiple rows: [
+                {"shop_identifier": "shop1", "inbound_calls": 10},
+                {"shop_identifier": "shop2", "inbound_calls": 32}
+            ]
+    """
+    # Use existing filter builder - ensures RBAC consistency with outbound queries
+    conditions, values = build_analytics_where_clause(filters)
+
+    # Add inbound direction filter
+    conditions.append("lct.call_direction = 'INBOUND'")
+
+    where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
+
+    # Add LEFT JOIN only if provider filter is present
+    join_clause = (
+        f'LEFT JOIN "{OUTBOUND_NUMBER_TABLE}" ou ON lct.outbound_number_id = ou.id'
+        if "provider" in filters and filters["provider"]
+        else ""
+    )
+
+    # Validate and sanitize group_by to prevent SQL injection
+    allowed_group_by_fields = ["shop_identifier", "template", "merchant_id"]
+    if group_by and group_by not in allowed_group_by_fields:
+        logger.warning(f"Invalid group_by field '{group_by}', ignoring grouping")
+        group_by = None
+
+    if group_by:
+        # Grouped inbound count - returns one row per group
+        text = f"""
+            SELECT 
+                lct.{group_by},
+                COUNT(*) as inbound_calls
+            FROM "{LEAD_CALL_TRACKER_TABLE}" lct
+            {join_clause}
+            {where_clause}
+            GROUP BY lct.{group_by}
+            ORDER BY inbound_calls DESC;
+        """
+    else:
+        # Aggregate inbound count - returns single count
+        text = f"""
+            SELECT COUNT(*) as inbound_calls
+            FROM "{LEAD_CALL_TRACKER_TABLE}" lct
+            {join_clause}
+            {where_clause};
+        """
 
     return text, values
