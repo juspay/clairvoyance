@@ -42,6 +42,7 @@ from app.database.accessor import (
     get_outbound_number_by_id,
     get_template_by_merchant,
     handle_lead_abort,
+    is_number_blacklisted,
 )
 from app.schemas import ExecutionMode, LeadCallStatus, UserInfo
 
@@ -122,6 +123,19 @@ async def push_lead_handler(req: PushLeadRequest, current_user: UserInfo) -> Dic
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Template '{req.template}' not found for merchant: {req.merchant}",
+            )
+
+        # Check if customer phone number is blacklisted
+        customer_mobile = req.payload.get("customer_mobile_number")
+        if customer_mobile and await is_number_blacklisted(
+            customer_mobile, req.merchant
+        ):
+            logger.warning(
+                f"Blacklisted number {customer_mobile} rejected for merchant {req.merchant}"
+            )
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Phone number is blacklisted",
             )
 
         # Validate payload against expected schema if schema exists

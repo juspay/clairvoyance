@@ -3,6 +3,14 @@ Main database accessor module.
 This module exports all database accessor functions.
 """
 
+from .breeze_buddy.blacklisted_numbers import (
+    add_blacklisted_number,
+    check_blacklisted_number,
+    get_all_blacklisted_numbers,
+    is_number_blacklisted,
+    mask_phone,
+    remove_blacklisted_number,
+)
 from .breeze_buddy.call_execution_config import (
     calling_activation_for_merchant,
     create_call_execution_config,
@@ -55,6 +63,12 @@ from .breeze_buddy.template import (
 )
 
 __all__ = [
+    "is_number_blacklisted",
+    "add_blacklisted_number",
+    "remove_blacklisted_number",
+    "get_all_blacklisted_numbers",
+    "check_blacklisted_number",
+    "mask_phone",
     "create_template",
     "get_template_by_merchant",
     "create_outbound_number",
