@@ -15,6 +15,7 @@ from openai import AsyncAzureOpenAI
 
 from app.core.config.static import (
     AZURE_OPENAI_API_KEY,
+    AZURE_OPENAI_API_VERSION_HEALTH_CHECK,
     AZURE_OPENAI_ENDPOINT,
     DAILY_API_KEY,
     DAILY_API_URL,
@@ -363,6 +364,7 @@ async def azure_openai_health_check():
             async with AsyncAzureOpenAI(
                 api_key=AZURE_OPENAI_API_KEY,
                 azure_endpoint=AZURE_OPENAI_ENDPOINT,
+                api_version=AZURE_OPENAI_API_VERSION_HEALTH_CHECK,
             ) as client:
                 models = await client.models.list()
                 model_list = [m async for m in models]
