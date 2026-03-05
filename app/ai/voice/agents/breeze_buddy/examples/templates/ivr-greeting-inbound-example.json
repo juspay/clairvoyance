@@ -1,0 +1,75 @@
+{
+  "merchant": "breeze",
+  "template_name": "ivr-greeting-inbound-example",
+  "identifier": "ivr-inbound-demo",
+  "is_active": true,
+  "description": "Demonstrates IVR (Interactive Voice Response) for inbound calls. Customers call in and select options via keypad to reach the appropriate department.",
+  "expected_payload_schema": {
+    "from_number": {
+      "type": "string"
+    },
+    "to_number": {
+      "type": "string"
+    }
+  },
+  "configurations": {
+    "tts_voice_name": "rhea",
+    "enable_inbound": true,
+    "ivr_greeting": "Welcome to Breeze Support. Press 1 for order inquiries, Press 2 for billing support, Press 3 for technical assistance, or stay on the line to speak with an agent.",
+    "ivr_goodbye": "We didn't receive your input. Please call back later. Goodbye.",
+    "ivr_priority": 1
+  },
+  "flow": {
+    "initial_node": "handle_selection",
+    "nodes": [
+      {
+        "node_name": "handle_selection",
+        "task_messages": [
+          {
+            "role": "system",
+            "content": "The customer selected this option from the IVR menu. Greet them: \"Hello! Thank you for calling Breeze Support. I'm here to help you today. What can I assist you with?\""
+          }
+        ],
+        "role_messages": [
+          {
+            "role": "system",
+            "content": "You are a customer support representative. The customer called in and selected this department from the IVR menu. Be helpful and professional."
+          }
+        ],
+        "functions": [
+          {
+            "function_name": "resolve_issue",
+            "description": "Call when the customer's issue is resolved",
+            "transition_to": "closing",
+            "hooks": [
+              {
+                "name": "update_outcome_in_database",
+                "expected_fields": {
+                  "outcome": {
+                    "source": "static",
+                    "value": "RESOLVED"
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "node_name": "closing",
+        "task_messages": [
+          {
+            "role": "system",
+            "content": "Thank the customer: \"Thank you for calling Breeze Support! Is there anything else I can help you with today?\""
+          }
+        ],
+        "post_actions": [
+          {
+            "type": "end_conversation"
+          }
+        ],
+        "functions": []
+      }
+    ]
+  }
+}

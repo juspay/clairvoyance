@@ -1,0 +1,141 @@
+{
+  "merchant": "breeze",
+  "template_name": "transfer-number-example",
+  "identifier": "transfer-demo",
+  "is_active": true,
+  "description": "Demonstrates call transfer to a live human agent. When the customer requests to speak with a human, the call is transferred to the configured phone number.",
+  "expected_payload_schema": {
+    "customer_name": {
+      "type": "string"
+    },
+    "order_id": {
+      "type": "string"
+    }
+  },
+  "configurations": {
+    "tts_voice_name": "rhea",
+    "transfer_number": "+91-9876543210"
+  },
+  "flow": {
+    "initial_node": "greeting",
+    "nodes": [
+      {
+        "node_name": "greeting",
+        "task_messages": [
+          {
+            "role": "system",
+            "content": "Greet the customer: \"Hi {customer_name}! This is regarding your order #{order_id}. I'm calling to confirm the details with you. Is now a good time to talk?\""
+          }
+        ],
+        "role_messages": [
+          {
+            "role": "system",
+            "content": "You are a friendly customer service representative. If the customer asks to speak with a human agent, use the transfer function to connect them to a live agent."
+          }
+        ],
+        "pre_actions": [
+          {
+            "type": "function",
+            "handler": "mute_stt"
+          }
+        ],
+        "post_actions": [
+          {
+            "type": "function",
+            "handler": "unmute_stt"
+          }
+        ],
+        "functions": [
+          {
+            "function_name": "user_wants_to_talk",
+            "description": "Call when user confirms it's a good time to talk",
+            "properties": {},
+            "required": [],
+            "transition_to": "order_details",
+            "hooks": []
+          },
+          {
+            "function_name": "user_not_interested",
+            "description": "Call when user doesn't want to continue or asks to call back later",
+            "properties": {},
+            "required": [],
+            "transition_to": "end_call",
+            "hooks": []
+          },
+          {
+            "function_name": "transfer_to_agent",
+            "description": "Call when customer wants to speak to a human agent",
+            "properties": {},
+            "required": [],
+            "transition_to": "transfer",
+            "hooks": []
+          }
+        ]
+      },
+      {
+        "node_name": "order_details",
+        "task_messages": [
+          {
+            "role": "system",
+            "content": "Confirm the order: \"Thank you, {customer_name}! Your order is confirmed. Have a great day!\""
+          }
+        ],
+        "role_messages": [
+          {
+            "role": "system",
+            "content": "Confirm the order and thank the customer."
+          }
+        ],
+        "post_actions": [
+          {
+            "type": "end_conversation"
+          }
+        ],
+        "functions": []
+      },
+      {
+        "node_name": "end_call",
+        "task_messages": [
+          {
+            "role": "system",
+            "content": "End the call politely: \"No problem at all, {customer_name}. When would be a better time for me to call you back?\" Wait for their response, confirm the callback time, thank them, and end the call."
+          }
+        ],
+        "role_messages": [
+          {
+            "role": "system",
+            "content": "Be understanding and flexible. Ask for a convenient callback time, confirm it, then politely end the call."
+          }
+        ],
+        "post_actions": [
+          {
+            "type": "end_conversation"
+          }
+        ],
+        "functions": []
+      },
+      {
+        "node_name": "transfer",
+        "task_messages": [
+          {
+            "role": "system",
+            "content": "Inform the customer: \"Of course! Let me connect you to one of our specialists. Please hold on.\""
+          }
+        ],
+        "role_messages": [
+          {
+            "role": "system",
+            "content": "Inform the customer that you are transferring them to a live agent."
+          }
+        ],
+        "post_actions": [
+          {
+            "type": "function",
+            "handler": "connect_to_live_agent"
+          }
+        ],
+        "functions": []
+      }
+    ]
+  }
+}

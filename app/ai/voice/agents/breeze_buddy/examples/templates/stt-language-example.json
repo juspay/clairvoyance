@@ -1,0 +1,111 @@
+{
+  "merchant": "breeze",
+  "template_name": "stt-language-example",
+  "identifier": "stt-language-demo",
+  "is_active": true,
+  "description": "Demonstrates STT language configuration for Hindi speech recognition. The AI will understand and transcribe Hindi language from the customer.",
+  "expected_payload_schema": {
+    "customer_name": {
+      "type": "string"
+    },
+    "order_id": {
+      "type": "string"
+    }
+  },
+  "configurations": {
+    "tts_voice_name": "rhea",
+    "stt_language": "hi"
+  },
+  "flow": {
+    "initial_node": "greeting",
+    "nodes": [
+      {
+        "node_name": "greeting",
+        "task_messages": [
+          {
+            "role": "system",
+            "content": "Greet the customer in Hindi: \"Namaste {customer_name} ji! Main aapke order #{order_id} ke baare mein baat karne ke liye call kar rahi hoon. Kya abhi baat kar sakte hain?\""
+          }
+        ],
+        "role_messages": [
+          {
+            "role": "system",
+            "content": "You are a friendly customer service representative. The customer may speak in Hindi, and you should respond in Hindi if they do. The system is configured to understand Hindi speech."
+          }
+        ],
+        "pre_actions": [
+          {
+            "type": "function",
+            "handler": "mute_stt"
+          }
+        ],
+        "post_actions": [
+          {
+            "type": "function",
+            "handler": "unmute_stt"
+          }
+        ],
+        "functions": [
+          {
+            "function_name": "user_wants_to_talk",
+            "description": "Call when user confirms it's a good time to talk in Hindi or English",
+            "properties": {},
+            "required": [],
+            "transition_to": "order_details",
+            "hooks": []
+          },
+          {
+            "function_name": "user_not_interested",
+            "description": "Call when user doesn't want to continue or asks to call back later",
+            "properties": {},
+            "required": [],
+            "transition_to": "end_call",
+            "hooks": []
+          }
+        ]
+      },
+      {
+        "node_name": "order_details",
+        "task_messages": [
+          {
+            "role": "system",
+            "content": "Thank the customer in Hindi: \"Dhanyavaad {customer_name} ji! Aapka order confirm ho gaya hai. Aapka din shubh ho!\""
+          }
+        ],
+        "role_messages": [
+          {
+            "role": "system",
+            "content": "Thank the customer and end the call."
+          }
+        ],
+        "post_actions": [
+          {
+            "type": "end_conversation"
+          }
+        ],
+        "functions": []
+      },
+      {
+        "node_name": "end_call",
+        "task_messages": [
+          {
+            "role": "system",
+            "content": "End the call politely in Hindi: \"Koi baat nahi, {customer_name} ji. Main aapko kab call karun?\" Wait for their response, confirm the callback time, thank them, and end the call."
+          }
+        ],
+        "role_messages": [
+          {
+            "role": "system",
+            "content": "Be understanding and flexible. Ask for a convenient callback time in Hindi, confirm it, then politely end the call."
+          }
+        ],
+        "post_actions": [
+          {
+            "type": "end_conversation"
+          }
+        ],
+        "functions": []
+      }
+    ]
+  }
+}
