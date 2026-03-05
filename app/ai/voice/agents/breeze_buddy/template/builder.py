@@ -10,6 +10,7 @@ from pipecat_flows import FlowManager, FlowsFunctionSchema, NodeConfig
 from pipecat_flows.types import ActionConfig, FlowResult
 
 from app.ai.voice.agents.breeze_buddy.handlers.internal import (
+    builtin_function_dispatcher,
     connect_to_live_agent,
     end_conversation,
     mute_stt,
@@ -56,6 +57,7 @@ class FlowConfigBuilder:
             "transition_handler": transition_handler,
             "connect_to_live_agent": connect_to_live_agent,
             "http_function_handler": http_function_handler,
+            "builtin_function_dispatcher": builtin_function_dispatcher,
         }
 
     def build_flow_config(self, template: TemplateModel) -> Dict[str, Any]:
