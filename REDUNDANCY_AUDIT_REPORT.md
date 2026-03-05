@@ -219,6 +219,44 @@ Character-for-character identical (except log message). Should be in `VoiceCallP
 
 `handlers/transport/http_requester.py` — `_resolve_dict_templates` (lines 472-497) is a subset of `_resolve_recursive` (lines 499-523). The recursive version handles dicts, lists, and None.
 
+#### 2.C.7 — 3x Identical `download_call_recording()` across providers (HIGH)
+
+| File |
+|------|
+| `services/telephony/twilio/recording.py:1-59` |
+| `services/telephony/exotel/recording.py:1-59` |
+| `services/telephony/plivo/recording.py:1-97` |
+
+All three implement the same aiohttp download-with-BasicAuth pattern. Only difference is auth credentials (different env vars). Plivo's version adds retry-on-404 logic. Extract a shared `download_recording(url, auth, call_sid, retry_on_404=False)`.
+
+#### 2.C.8 — 2x Duplicated audio conversion logic (HIGH)
+
+- `agent/ivr.py:406-429` — `_convert_audio_for_provider()` (WAV → mulaw → base64)
+- `utils/common.py` — `prepare_initial_greeting_payload()` contains the same `audioop.lin2ulaw` + base64 encoding
+
+Same conversion, two places. Extract shared function.
+
+#### 2.C.9 — 2x Duplicated provider-specific audio message building (HIGH)
+
+- `agent/ivr.py:432-475` — `_send_audio()` builds per-provider WebSocket messages
+- `agent/utils.py:72-89` — `send_initial_greeting()` builds the same per-provider messages
+
+Both construct `{"event": "media", "media": {"payload": ...}}` with provider-specific tweaks. Extract `build_audio_message(provider, audio_base64)`.
+
+#### 2.C.10 — 2x Duplicated Gemini LLM inference pattern (LOW)
+
+- `utils/tts_utils/tts_provider_selector.py`
+- `utils/language_utils/language_detector.py`
+
+Both follow identical: `GoogleLLMService(...)` → `LLMContext(messages=[...])` → `asyncio.wait_for(llm.run_inference(context), timeout=...)`. Extract `gemini_one_shot_inference(prompt, model, timeout)`.
+
+#### 2.C.11 — 2x Duplicated LLM/TTS activity state tracking (MEDIUM)
+
+- `processors/response_gate.py` — `ResponseStateGate` tracks `_llm_active` / `_tts_active`
+- `processors/transcription_gate.py` — `TranscriptionGateProcessor` tracks same frames with same booleans
+
+Both independently track LLM/TTS state via `LLMFullResponseStartFrame`/`EndFrame` and `BotStartedSpeakingFrame`/`StoppedSpeakingFrame`. Consider shared state mixin.
+
 ---
 
 ### 2.D — Schema/Model Duplication
@@ -339,6 +377,18 @@ These items are kept for backward compatibility. We need your help to determine 
 - **Question:** Are both mechanisms actively used? Should we consolidate to one approach?
 - **If `credentials` table can replace `template.secrets`:** Migrate secrets to `credentials` table and drop the column.
 
+### 4.9 Deprecated `mira_voice_id` field (BC)
+- **File:** `app/ai/voice/agents/breeze_buddy/template/types.py:205-206`
+- **Why:** Field is marked `# DEPRECATED: Use cartesia_voice_configurations.voice_id instead`. Fallback logic in `tts/__init__.py` checks `mira_voice_id` when `cartesia_voice_configurations.voice_id` is not set.
+- **Question:** Are all templates now using `cartesia_voice_configurations.voice_id` instead of `mira_voice_id`?
+- **If yes:** Remove the deprecated field and fallback logic.
+
+### 4.10 Backward-compatible outbound number lookup (BC)
+- **File:** `app/ai/voice/agents/breeze_buddy/managers/calls.py` — `_get_available_number()` lines 167-242
+- **Why:** First tries `outbound_number_id` from template, then falls back to old merchant-level number lookup. The fallback is legacy compatibility.
+- **Question:** Are all templates now configured with `outbound_number_id`?
+- **If yes:** Remove the merchant-level fallback path.
+
 ---
 
 ## Estimated Impact Summary
@@ -348,8 +398,8 @@ These items are kept for backward compatibility. We need your help to determine 
 | Dead code removal (Section 1) | ~200 lines | Low — safe to remove now |
 | RBAC consolidation (Section 2.A) | ~400+ lines | Medium — wire routers to existing centralized module |
 | DB layer dedup (Section 2.B) | ~300+ lines | Medium — extract shared helpers |
-| Agent/services dedup (Section 2.C) | ~150+ lines | Medium — base class + helpers |
+| Agent/services dedup (Section 2.C) | ~350+ lines | Medium — base class + helpers |
 | Schema dedup (Section 2.D) | ~80 lines | Low — inheritance + remove duplicates |
 | Analytics handler dedup (Section 2.E) | ~35 lines | Low — extract helpers |
 | DB schema cleanup (Section 3, pending answers) | Multiple columns/constraints | High — requires migrations |
-| **Total** | **~1,200+ lines** | |
+| **Total** | **~1,400+ lines** | |
