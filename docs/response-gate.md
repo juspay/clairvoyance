@@ -207,40 +207,40 @@ T1: push_frame(new_stt) ✅ ONLY NEW REQUEST
 
 ## Configuration
 
-### Redis Control
+### Template Configuration
 
-| Key | Type | Default | Description |
-|-----|------|---------|-------------|
-| `BB_ENABLE_RESPONSE_GATE` | bool | `True` | Enable/disable the response gate |
+Interruption behavior is controlled per-template via `interruption_config`:
 
-```bash
-# Enable (default)
-BB_ENABLE_RESPONSE_GATE=True
-
-# Disable
-BB_ENABLE_RESPONSE_GATE=False
-```
+| Mode | JSON value | Behavior |
+|------|------------|----------|
+| `ENABLED` (default) | `"enabled"` | Interrupt bot, buffer user speech, process after interruption |
+| `DISABLED_WITH_STORE` | `"disabled_with_store"` | Don't interrupt; buffer user speech, flush when bot finishes |
+| `DISABLED_WITHOUT_STORE` | `"disabled_without_store"` | Don't interrupt; silently discard user speech |
 
 ### Code Configuration
 
 ```python
 from app.ai.voice.agents.breeze_buddy.processors import ResponseStateGate
+from app.ai.voice.agents.breeze_buddy.template.types import InterruptionMode
 
-# In agent.py:
-response_gate = ResponseStateGate() if await BB_ENABLE_RESPONSE_GATE() else None
+# The response gate is always active, driven by the template's interruption_config.
+interruption_config = getattr(configurations, "interruption_config", None)
+interruption_mode = (
+    interruption_config.mode if interruption_config else InterruptionMode.ENABLED
+)
+response_gate = ResponseStateGate(interruption_mode=interruption_mode)
 
 pipeline_parts = [
     transport.input(),
     stt,
+    transcription_gate,
+    response_gate,
     context_aggregator.user(),
     llm,
     tts,
     transport.output(),
     context_aggregator.assistant(),
 ]
-
-if response_gate:
-    pipeline_parts.insert(2, response_gate)  # After stt
 
 pipeline = Pipeline(pipeline_parts)
 ```
@@ -358,8 +358,8 @@ The response gate intercepts new transcriptions that would otherwise trigger sep
 
 ### Double Speaking Still Occurring
 
-1. Check `BB_ENABLE_RESPONSE_GATE=True` in Redis
-2. Verify response_gate is in the pipeline
+1. Verify response_gate is in the pipeline
+2. Check the template's `interruption_config.mode` is set correctly
 3. Check logs for "Interrupting state=..." messages
 4. Ensure no other processor is bypassing the gate
 
@@ -382,6 +382,6 @@ Buffer should flush immediately after interruption. If not:
 | File | Purpose |
 |------|---------|
 | `app/ai/voice/agents/breeze_buddy/processors/response_gate.py` | Main processor implementation |
-| `app/ai/voice/agents/breeze_buddy/agent.py` | Pipeline integration |
-| `app/core/config/dynamic.py` | `BB_ENABLE_RESPONSE_GATE` config |
+| `app/ai/voice/agents/breeze_buddy/agent/pipeline.py` | Pipeline integration |
+| `app/ai/voice/agents/breeze_buddy/template/types.py` | `InterruptionMode` and `InterruptionConfig` definitions |
 | `docs/aggregation-timeout.md` | Related: aggregation timeout explanation |

@@ -1,19 +1,18 @@
 """
 Response State Gate Processor - V2
 
-Handles ALL interruption scenarios to prevent double-speaking:
+Handles interruption scenarios based on the configured InterruptionMode:
 
-1. STT arrives → LLM processing → New STT arrives
-   → Cancel LLM, buffer new STT, process new STT
+Mode: ENABLED (default)
+  User speaks while bot is active → interrupt bot, buffer & process user speech.
 
-2. LLM + TTS both processing → New STT arrives
-   → Cancel both, buffer new STT, process new STT
+Mode: DISABLED_WITH_STORE
+  User speaks while bot is active → do NOT interrupt, buffer user speech,
+  flush it downstream once the bot finishes speaking.
 
-3. TTS is speaking → New STT arrives
-   → Stop TTS, buffer new STT, process new STT
-
-4. LLM processing (no TTS yet) → New STT arrives
-   → Cancel LLM, buffer new STT, process new STT
+Mode: DISABLED_WITHOUT_STORE
+  User speaks while bot is active → do NOT interrupt, silently discard
+  user speech.
 """
 
 from enum import Enum, auto
@@ -28,6 +27,7 @@ from pipecat.frames.frames import (
 )
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
+from app.ai.voice.agents.breeze_buddy.template.types import InterruptionMode
 from app.core.logger import logger
 
 
@@ -42,17 +42,25 @@ class ResponseState(Enum):
 
 class ResponseStateGate(FrameProcessor):
     """
-    State machine that tracks LLM/TTS state and handles ALL interruptions.
+    State machine that tracks LLM/TTS state and handles interruptions
+    according to the configured InterruptionMode.
 
-    Key insight: When interrupting, we must BUFFER the new transcription
-    until the interruption completes, then process ONLY the buffered frame.
+    - ENABLED: interrupt bot, buffer new transcription, process after interruption.
+    - DISABLED_WITH_STORE: don't interrupt, buffer transcription, flush when bot goes IDLE.
+    - DISABLED_WITHOUT_STORE: don't interrupt, drop transcription silently.
     """
 
-    def __init__(self, **kwargs):
+    def __init__(
+        self,
+        interruption_mode: InterruptionMode = InterruptionMode.ENABLED,
+        **kwargs,
+    ):
         super().__init__(**kwargs)
         self._state = ResponseState.IDLE
         self._buffered_transcription = None  # Hold transcription during interruption
         self._interruption_in_progress = False
+        self._interruption_mode = interruption_mode
+        logger.info(f"ResponseGate: initialized with mode={interruption_mode.value}")
 
     @property
     def state(self) -> ResponseState:
@@ -105,6 +113,21 @@ class ResponseStateGate(FrameProcessor):
             if self._state == ResponseState.BOTH:
                 self._state = ResponseState.TTS_SPEAKING
                 logger.debug("ResponseGate: TTS_SPEAKING (LLM finished)")
+            elif self._state == ResponseState.LLM_PROCESSING:
+                # LLM finished without TTS (e.g. empty response) → back to IDLE
+                self._state = ResponseState.IDLE
+                logger.debug("ResponseGate: IDLE (LLM finished, no TTS)")
+
+                if (
+                    self._interruption_mode == InterruptionMode.DISABLED_WITH_STORE
+                    and self._buffered_transcription
+                ):
+                    logger.info(
+                        "ResponseGate: LLM finished without TTS, flushing stored transcription"
+                    )
+                    await self.push_frame(frame, direction)
+                    await self._flush_buffered_transcription(FrameDirection.DOWNSTREAM)
+                    return
 
         # Track TTS/Output state
         elif isinstance(frame, BotStartedSpeakingFrame):
@@ -123,31 +146,58 @@ class ResponseStateGate(FrameProcessor):
                 self._state = ResponseState.LLM_PROCESSING
                 logger.debug("ResponseGate: LLM_PROCESSING (TTS stopped)")
 
+            # DISABLED_WITH_STORE: flush buffered transcription when bot goes idle
+            if (
+                self._state == ResponseState.IDLE
+                and self._interruption_mode == InterruptionMode.DISABLED_WITH_STORE
+                and self._buffered_transcription
+            ):
+                logger.info(
+                    "ResponseGate: Bot finished speaking, flushing stored transcription"
+                )
+                # Forward the BotStoppedSpeakingFrame first so downstream
+                # processors see the bot-stopped event before the new
+                # transcription arrives.
+                await self.push_frame(frame, direction)
+                await self._flush_buffered_transcription(FrameDirection.DOWNSTREAM)
+                return
+
         # Handle new transcription - THE KEY INTERRUPTION LOGIC
         elif isinstance(frame, TranscriptionFrame):
             if self._state != ResponseState.IDLE:
-                # We have an active response, need to interrupt
-                logger.debug(
-                    f"ResponseGate: Interrupting state={self._state.name} "
-                    f"for new transcription (id={id(frame)})"
-                )
-                # Push interruption to cancel current LLM/TTS
-                self._interruption_in_progress = True
-                # Buffer this frame BEFORE starting interruption
-                # Any later frames will overwrite this buffer during the await
-                self._buffered_transcription = frame
-                await self.push_interruption_task_frame_and_wait()
+                # Bot is active — behaviour depends on mode
+                if self._interruption_mode == InterruptionMode.ENABLED:
+                    # Interrupt bot: cancel LLM/TTS and process user speech
+                    logger.debug(
+                        f"ResponseGate: Interrupting state={self._state.name} "
+                        f"for new transcription (id={id(frame)})"
+                    )
+                    self._interruption_in_progress = True
+                    self._buffered_transcription = frame
+                    await self.push_interruption_task_frame_and_wait()
 
-                # Interruption complete - DON'T overwrite buffer!
-                # The buffer already contains the latest transcription (if any
-                # arrived during the await, it would have overwritten the buffer)
-                self._interruption_in_progress = False
-                self._state = ResponseState.IDLE
+                    self._interruption_in_progress = False
+                    self._state = ResponseState.IDLE
 
-                # Flush whatever is currently buffered (may be the original
-                # frame or a newer one that arrived during the await)
-                await self._flush_buffered_transcription(direction)
-                return
+                    await self._flush_buffered_transcription(direction)
+                    return
+
+                elif self._interruption_mode == InterruptionMode.DISABLED_WITH_STORE:
+                    # Don't interrupt, but keep the latest transcription for later
+                    self._buffered_transcription = frame
+                    logger.debug(
+                        f"ResponseGate: Storing transcription while bot active "
+                        f"(mode=disabled_with_store, state={self._state.name})"
+                    )
+                    return
+
+                else:
+                    # DISABLED_WITHOUT_STORE — silently discard
+                    logger.debug(
+                        f"ResponseGate: Discarding transcription while bot active "
+                        f"(mode=disabled_without_store, state={self._state.name})"
+                    )
+                    return
 
             # No active response, just process normally
             await self._handle_transcription_frame(frame, direction)
