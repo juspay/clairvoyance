@@ -1,0 +1,115 @@
+{
+  "merchant": "breeze",
+  "template_name": "soniox-context-example",
+  "identifier": "soniox-context-demo",
+  "is_active": true,
+  "description": "Demonstrates Soniox context configuration for improved speech recognition of domain-specific terms like brand names, product categories, and e-commerce terminology.",
+  "expected_payload_schema": {
+    "customer_name": {
+      "type": "string"
+    },
+    "order_id": {
+      "type": "string"
+    },
+    "product_name": {
+      "type": "string"
+    }
+  },
+  "configurations": {
+    "tts_voice_name": "rhea",
+    "stt_language": "en",
+    "soniox_context": "e-commerce, fashion, Nike, Adidas, Zara, payment methods, order tracking, delivery, refund"
+  },
+  "flow": {
+    "initial_node": "greeting",
+    "nodes": [
+      {
+        "node_name": "greeting",
+        "task_messages": [
+          {
+            "role": "system",
+            "content": "Greet the customer: \"Hi {{customer_name}}! I'm calling about your recent order #{{order_id}} for {{product_name}}. I wanted to confirm a few details with you. Is now a good time?\""
+          }
+        ],
+        "role_messages": [
+          {
+            "role": "system",
+            "content": "You are a customer service representative for a fashion e-commerce store. The system is optimized to recognize brand names like Nike, Adidas, Zara and terms like order tracking, delivery, payment, and refund. Speak naturally about these topics."
+          }
+        ],
+        "pre_actions": [
+          {
+            "type": "function",
+            "handler": "mute_stt"
+          }
+        ],
+        "post_actions": [
+          {
+            "type": "function",
+            "handler": "unmute_stt"
+          }
+        ],
+        "functions": [
+          {
+            "function_name": "user_wants_to_talk",
+            "description": "Call when user confirms it's a good time to talk",
+            "properties": {},
+            "required": [],
+            "transition_to": "order_details",
+            "hooks": []
+          },
+          {
+            "function_name": "user_not_interested",
+            "description": "Call when user doesn't want to continue or asks to call back later",
+            "properties": {},
+            "required": [],
+            "transition_to": "end_call",
+            "hooks": []
+          }
+        ]
+      },
+      {
+        "node_name": "order_details",
+        "task_messages": [
+          {
+            "role": "system",
+            "content": "Confirm the order: \"Thank you, {{customer_name}}! Your order for {{product_name}} is confirmed. You can track the delivery using order ID {{order_id}}. Have a great day!\""
+          }
+        ],
+        "role_messages": [
+          {
+            "role": "system",
+            "content": "Confirm the order and thank the customer."
+          }
+        ],
+        "post_actions": [
+          {
+            "type": "end_conversation"
+          }
+        ],
+        "functions": []
+      },
+      {
+        "node_name": "end_call",
+        "task_messages": [
+          {
+            "role": "system",
+            "content": "End the call politely: \"No problem at all, {{customer_name}}. When would be a better time for me to call you back?\" Wait for their response, confirm the callback time, thank them, and end the call."
+          }
+        ],
+        "role_messages": [
+          {
+            "role": "system",
+            "content": "Be understanding and flexible. Ask for a convenient callback time, confirm it, then politely end the call."
+          }
+        ],
+        "post_actions": [
+          {
+            "type": "end_conversation"
+          }
+        ],
+        "functions": []
+      }
+    ]
+  }
+}
