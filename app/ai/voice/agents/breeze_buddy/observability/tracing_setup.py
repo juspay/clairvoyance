@@ -211,10 +211,11 @@ def update_span_with_evaluation_data(context: TemplateContext) -> None:
             context.root_span.set_attribute(
                 "payload", json.dumps(lead.payload, ensure_ascii=False, default=str)
             )
+        reseller_id = lead.reseller_id or lead.merchant_id
 
-        # Merchant ID
-        if lead.merchant_id:
-            context.root_span.set_attribute("merchant_id", lead.merchant_id)
+        # Reseller ID
+        if reseller_id:
+            context.root_span.set_attribute("reseller_id", reseller_id)
 
         # Send entire metaData as JSON string (contains transcription, and template-specific data)
         if lead.metaData:

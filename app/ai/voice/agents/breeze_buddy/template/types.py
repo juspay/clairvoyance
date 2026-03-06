@@ -426,12 +426,12 @@ class TemplateModel(BaseModel):
     # These are intentionally excluded from ReplaceTemplateRequest so that
     # a GET response can be sent directly to PUT — extra fields are auto-stripped.
     id: str
-    merchant_id: str
+    reseller_id: str
+    merchant_identifier: Optional[str] = None
     created_at: Optional[Any] = None
     updated_at: Optional[Any] = None
 
     # Editable fields (these match ReplaceTemplateRequest field names 1:1).
-    shop_identifier: Optional[str] = None
     name: str
     flow: Dict[str, Any]
     expected_payload_schema: Optional[Dict[str, Any]] = None
@@ -462,8 +462,11 @@ class RequestFlowNode(BaseModel):
 
 
 class CreateTemplateRequest(BaseModel):
-    merchant_id: str
+    # New field names
+    reseller_id: Optional[str] = None
+    merchant_id: Optional[str] = None
     name: str
+    merchant_identifier: Optional[str] = None
     shop_identifier: Optional[str] = None
     outbound_number_id: Optional[str] = None
     is_active: bool = True
@@ -495,7 +498,7 @@ class ReplaceTemplateRequest(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     name: str
-    shop_identifier: Optional[str] = None
+    merchant_identifier: Optional[str] = None
     outbound_number_id: Optional[str] = None
     is_active: bool
     flow: Dict[str, Any]

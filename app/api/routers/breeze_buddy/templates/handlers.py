@@ -52,9 +52,18 @@ async def create_template_handler(
     Raises:
         HTTPException: 409 if template exists, 400/500 on error
     """
+    # Get reseller_id - support both 'reseller' and 'merchant' for backward compatibility
+    reseller = template_data.reseller_id or template_data.merchant_id
+    identifier = template_data.merchant_identifier or template_data.shop_identifier
+    if not reseller:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="reseller (or merchant for backward compatibility) is required",
+        )
+
     logger.info(
         f"User {current_user.username} (role: {current_user.role}) creating template "
-        f"for merchant: {template_data.merchant_id}, name: {template_data.name}"
+        f"for reseller: {reseller}, name: {template_data.name}"
     )
 
     try:
@@ -71,8 +80,8 @@ async def create_template_handler(
 
         # Check if template already exists
         existing = await get_template_by_merchant(
-            template_data.merchant_id,
-            template_data.shop_identifier,
+            reseller,
+            identifier,
             template_data.name,
             should_prioritize_merchant_specific=False,
         )
@@ -80,7 +89,7 @@ async def create_template_handler(
         if existing:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail=f"Template already exists for merchant {template_data.merchant_id} "
+                detail=f"Template already exists for reseller {reseller} "
                 f"and template name: {template_data.name}",
             )
 
@@ -105,8 +114,8 @@ async def create_template_handler(
 
         template = await create_template(
             template_id=str(uuid4()),
-            merchant=template_data.merchant_id,
-            identifier=template_data.shop_identifier,
+            reseller_id=reseller,
+            identifier=identifier,
             name=template_data.name,
             flow=flow,
             expected_payload_schema=template_data.expected_payload_schema,
@@ -150,17 +159,17 @@ async def create_template_handler(
 
 
 async def get_template_handler(
-    merchant_id: str,
-    shop_identifier: Optional[str],
+    reseller_id: str,
+    merchant_identifier: Optional[str],
     name: Optional[str],
     current_user: UserInfo,
 ):
     """
-    Get template(s) by merchant, shop, and name.
+    Get template(s) by reseller, shop, and name.
 
     Args:
-        merchant_id: Merchant ID
-        shop_identifier: Optional shop identifier
+        reseller_id: Reseller ID
+        merchant_identifier: Optional shop identifier
         name: Optional template name
         current_user: Current authenticated user
 
@@ -169,13 +178,13 @@ async def get_template_handler(
     """
     logger.info(
         f"User {current_user.username} (role: {current_user.role}) requesting template "
-        f"for merchant: {merchant_id}, shop: {shop_identifier}, name: {name}"
+        f"for reseller: {reseller_id}, shop: {merchant_identifier}, name: {name}"
     )
 
     try:
         template = await get_template_by_merchant(
-            merchant_id=merchant_id,
-            shop_identifier=shop_identifier,
+            reseller_id=reseller_id,
+            merchant_identifier=merchant_identifier,
             name=name,
         )
 
@@ -184,12 +193,12 @@ async def get_template_handler(
             return mask_template_secrets(template)
         else:
             logger.info(
-                f"No template found for merchant: {merchant_id}, "
-                f"shop_identifier: {shop_identifier}, name: {name}"
+                f"No template found for reseller: {reseller_id}, "
+                f"merchant_identifier: {merchant_identifier}, name: {name}"
             )
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Template '{name}' not found for merchant: {merchant_id}",
+                detail=f"Template '{name}' not found for reseller: {reseller_id}",
             )
 
     except Exception as e:
@@ -201,8 +210,8 @@ async def get_template_handler(
 
 
 async def list_templates_handler(
-    merchant_id: Optional[str],
-    shop_identifier: Optional[str],
+    reseller_id: Optional[str],
+    merchant_identifier: Optional[str],
     include_inactive: bool,
     current_user: UserInfo,
 ) -> TemplateListResponse:
@@ -212,8 +221,8 @@ async def list_templates_handler(
     Returns metadata only (no flow) for optimal performance.
 
     Args:
-        merchant_id: Optional merchant ID to filter by
-        shop_identifier: Optional shop identifier to filter by
+        reseller_id: Optional reseller ID to filter by
+        merchant_identifier: Optional merchant identifier to filter by
         include_inactive: Whether to include inactive templates
         current_user: Current authenticated user
 
@@ -225,16 +234,16 @@ async def list_templates_handler(
     """
     logger.info(
         f"User {current_user.username} (role: {current_user.role}) requesting templates list: "
-        f"merchant_id={merchant_id}, shop_identifier={shop_identifier}, include_inactive={include_inactive}"
+        f"reseller_id={reseller_id}, merchant_identifier={merchant_identifier}, include_inactive={include_inactive}"
     )
 
     try:
         # Build filters from query params
         filters: Dict[str, Any] = {}
-        if merchant_id:
-            filters["merchant_id"] = merchant_id
-        if shop_identifier:
-            filters["shop_identifier"] = shop_identifier
+        if reseller_id:
+            filters["reseller_id"] = reseller_id
+        if merchant_identifier:
+            filters["merchant_identifier"] = merchant_identifier
         if not include_inactive:
             filters["is_active"] = True
 
@@ -294,8 +303,8 @@ async def get_template_by_id_handler(template_id: str, current_user: UserInfo):
         # Validate RBAC access
         validate_template_access(
             current_user,
-            template.merchant_id,
-            template.shop_identifier,
+            template.reseller_id,
+            template.merchant_identifier,
             operation="access template",
         )
 
@@ -349,8 +358,8 @@ async def replace_template_handler(
         # Validate RBAC access
         validate_template_access(
             current_user,
-            existing_template.merchant_id,
-            existing_template.shop_identifier,
+            existing_template.reseller_id,
+            existing_template.merchant_identifier,
             operation="access template",
         )
 
@@ -390,7 +399,6 @@ async def replace_template_handler(
             incoming_secrets=template_data.secrets,
             existing_secrets=existing_template.secrets,
         )
-
         updated_template = await replace_template(
             template_id=template_id,
             name=template_data.name,
@@ -401,7 +409,7 @@ async def replace_template_handler(
             secrets=merged_secrets,
             outbound_number_id=template_data.outbound_number_id,
             is_active=template_data.is_active,
-            shop_identifier=template_data.shop_identifier,
+            merchant_identifier=template_data.merchant_identifier,
             now=now,
         )
 

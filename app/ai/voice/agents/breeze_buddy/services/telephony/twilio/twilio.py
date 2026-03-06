@@ -78,7 +78,7 @@ class TwilioProvider(VoiceCallProvider):
         self,
         customer_mobile_number: str,
         outbound_number: str,
-        merchant_id: Optional[str] = None,
+        reseller_id: Optional[str] = None,
         template_name: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """
@@ -97,7 +97,7 @@ class TwilioProvider(VoiceCallProvider):
         Args:
             customer_mobile_number: Phone number to call
             outbound_number: Caller ID / outbound number
-            merchant_id: Optional merchant ID for tiered pod allocation
+            reseller_id: Optional merchant ID for tiered pod allocation
             template_name: Optional template name for WebSocket path routing
         """
         try:
@@ -107,8 +107,8 @@ class TwilioProvider(VoiceCallProvider):
                 # Smart Router allocates a pod and returns TwiML with pod-specific ws_url.
                 flow = "v2"
                 query_params = {"flow": flow}
-                if merchant_id:
-                    query_params["merchant_id"] = merchant_id
+                if reseller_id:
+                    query_params["reseller_id"] = reseller_id
                 if template_name:
                     query_params["template"] = template_name
                 webhook_url = (

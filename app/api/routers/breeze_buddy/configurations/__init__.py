@@ -55,14 +55,14 @@ async def create_configuration(
     Works with order-confirmation, appointment-reminder, or any custom template.
 
     Permissions:
-    - Admin: Can create configurations for any merchant/shop
-    - Merchant: Can create configurations for own shops only
+    - Admin: Can create configurations for any reseller/shop
+    - Reseller: Can create configurations for own shops only
 
     Request Body:
         {
-            "merchant_id": "shop_123",
+            "reseller_id": "shop_123",
             "template": "order-confirmation",
-            "shop_identifier": "shop_123",
+            "merchant_identifier": "merchant_123",
             "initial_offset": 0,
             "retry_offset": 300,
             "call_start_time": "09:00",
@@ -75,11 +75,21 @@ async def create_configuration(
     Returns:
         Created configuration object with generated ID
     """
-    # RBAC: Check if user has permission to create config for this merchant/shop
+    # Support both new (reseller_id, merchant_identifier) and old (merchant_id, shop_identifier) field names
+    reseller_id = config.reseller_id or config.merchant_id
+    merchant_identifier = config.merchant_identifier or config.shop_identifier
+
+    if not reseller_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Either 'reseller_id' or 'merchant_id' field is required",
+        )
+
+    # RBAC: Check if user has permission to create config for this reseller/shop
     validate_config_access(
         current_user,
-        config.merchant_id,
-        config.shop_identifier,
+        reseller_id,
+        merchant_identifier,
         operation="create configuration for",
     )
 
@@ -88,12 +98,20 @@ async def create_configuration(
 
 @router.get("/configurations", response_model=List[CallExecutionConfig])
 async def list_configurations(
-    merchant_id: Optional[str] = Query(None, description="Filter by merchant ID"),
+    reseller_id: Optional[str] = Query(None, description="Filter by reseller ID"),
+    merchant_id: Optional[str] = Query(
+        None,
+        description="Filter by merchant ID (backward compatibility, use reseller_id)",
+    ),
     template: Optional[str] = Query(
         None, description="Filter by template name (e.g., 'order-confirmation')"
     ),
     shop_identifier: Optional[str] = Query(
-        None, description="Filter by shop identifier"
+        None,
+        description="Filter by shop identifier (backward compatibility, use merchant_identifier)",
+    ),
+    merchant_identifier: Optional[str] = Query(
+        None, description="Filter by merchant identifier"
     ),
     current_user: UserInfo = Depends(get_current_user_with_rbac),
 ):
@@ -101,9 +119,9 @@ async def list_configurations(
     List all call execution configurations with optional filters.
 
     Query Parameters:
-    - merchant_id: Filter configurations by merchant
+    - reseller_id: Filter configurations by reseller (or merchant_id for backward compatibility)
     - template: Filter by template name (order-confirmation, appointment-reminder, etc.)
-    - shop_identifier: Filter by specific shop
+    - merchant_identifier: Filter by specific shop (or shop_identifier for backward compatibility)
 
     RBAC Filtering:
     - Admin: Sees all configurations (or filtered by query params)
@@ -112,26 +130,31 @@ async def list_configurations(
     Example Requests:
         GET /configurations                                    # All accessible configs
         GET /configurations?template=order-confirmation        # Filter by template
-        GET /configurations?merchant_id=shop_123               # Filter by merchant
-        GET /configurations?shop_identifier=shop_456           # Filter by shop
+        GET /configurations?reseller_id=shop_123               # Filter by reseller
+        GET /configurations?merchant_identifier=shop_456       # Filter by shop
 
     Returns:
         List of configuration objects matching filters and user permissions
     """
-    # Validate merchant access if filter provided
-    if merchant_id and current_user.role != "admin":
+    # Support both new and old field names for backward compatibility
+    effective_reseller_id = reseller_id or merchant_id
+    effective_merchant_identifier = merchant_identifier or shop_identifier
+
+    # Validate reseller access if filter provided
+    if effective_reseller_id and current_user.role != "admin":
+        # Support both new (reseller_ids) and old (merchant_ids) field names in user info
+        user_reseller_ids = current_user.reseller_ids or current_user.merchant_ids
         if (
-            merchant_id not in current_user.merchant_ids
-            and "*" not in current_user.merchant_ids
+            effective_reseller_id not in user_reseller_ids
+            and "*" not in user_reseller_ids
         ):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Access denied to merchant {merchant_id}",
+                detail=f"Access denied to reseller {effective_reseller_id}",
             )
-
     # Get configurations
     configs = await list_configurations_handler(
-        merchant_id, template, shop_identifier, current_user
+        effective_reseller_id, template, effective_merchant_identifier, current_user
     )
 
     # Apply RBAC filtering
@@ -162,12 +185,16 @@ async def get_configuration(
     # Get configuration
     config = await get_configuration_handler(config_id, current_user)
 
+    # Support both new (reseller_id, merchant_identifier) and old (merchant_id, shop_identifier) field names
+    config_reseller_id = config.reseller_id or config.merchant_id
+    config_merchant_identifier = config.merchant_identifier or config.shop_identifier
+
     # RBAC: Check access (return 404 to avoid leaking existence)
     try:
         validate_config_access(
             current_user,
-            config.merchant_id,
-            config.shop_identifier,
+            config_reseller_id,
+            config_merchant_identifier,
             operation="access configuration for",
         )
     except HTTPException:
@@ -200,9 +227,9 @@ async def update_configuration(
 
     Request Body:
         {
-            "merchant_id": "shop_123",
+            "reseller_id": "shop_123",
             "template": "order-confirmation",
-            "shop_identifier": "shop_123",
+            "merchant_identifier": "shop_123",
             "initial_offset": 0,
             "retry_offset": 600,
             "call_start_time": "10:00",
@@ -253,22 +280,32 @@ async def delete_configuration(
 @router.patch("/configurations/calling/activation")
 async def calling_activation(
     enable_calling: bool,
-    merchant_id: Optional[str] = None,
-    shop_identifier: Optional[str] = None,
+    reseller_id: Optional[str] = Query(None, description="Filter by reseller ID"),
+    merchant_id: Optional[str] = Query(
+        None,
+        description="Filter by merchant ID (backward compatibility, use reseller_id)",
+    ),
+    merchant_identifier: Optional[str] = Query(
+        None, description="Filter by merchant identifier"
+    ),
+    shop_identifier: Optional[str] = Query(
+        None,
+        description="Filter by shop identifier (backward compatibility, use merchant_identifier)",
+    ),
     current_user: UserInfo = Depends(get_current_user_with_rbac),
 ):
     """
-    Enable or disable calling globally or for specific merchants/shops.
+    Enable or disable calling globally or for specific resellers/shops.
 
     Query Parameters:
     - enable_calling: Boolean to enable or disable calling
-    - merchant_id: Optional merchant ID filter
-    - shop_identifier: Optional shop identifier filter
+    - reseller_id: Optional reseller ID filter (or merchant_id for backward compatibility)
+    - merchant_identifier: Optional shop identifier filter (or shop_identifier for backward compatibility)
 
     Behavior:
-    - If merchant_id is None: All configs across all merchants are updated (admin only)
-    - If merchant_id is provided but shop_identifier is None: All configs for that merchant are updated
-    - If both merchant_id and shop_identifier are provided: Only that specific config is updated
+    - If reseller_id is None: All configs across all resellers are updated (admin only)
+    - If reseller_id is provided but merchant_identifier is None: All configs for that reseller are updated
+    - If both reseller_id and merchant_identifier are provided: Only that specific config is updated
 
     Permissions:
     - Admin: Can toggle calling for any merchant/shop or globally
@@ -276,8 +313,8 @@ async def calling_activation(
 
     Example Requests:
         PATCH /configurations/toggle-calling?enable_calling=false                           # Global disable (admin only)
-        PATCH /configurations/toggle-calling?enable_calling=true&merchant_id=shop_123       # Enable for merchant
-        PATCH /configurations/toggle-calling?enable_calling=false&merchant_id=shop_123&shop_identifier=shop_456  # Disable for specific shop
+        PATCH /configurations/toggle-calling?enable_calling=true&reseller_id=shop_123       # Enable for reseller
+        PATCH /configurations/toggle-calling?enable_calling=false&reseller_id=shop_123&merchant_identifier=shop_456  # Disable for specific shop
 
     Returns:
         {
@@ -286,8 +323,12 @@ async def calling_activation(
             "configs": [...]
         }
     """
+    # Support both new and old field names for backward compatibility
+    effective_reseller_id = reseller_id or merchant_id
+    effective_merchant_identifier = merchant_identifier or shop_identifier
+
     # RBAC: Check permissions
-    if merchant_id is None:
+    if effective_reseller_id is None:
         # Global toggle - only admins allowed
         if current_user.role != "admin":
             raise HTTPException(
@@ -295,15 +336,18 @@ async def calling_activation(
                 detail="Only admin users can toggle calling globally",
             )
     else:
-        # Merchant-specific toggle - validate access
+        # Reseller-specific toggle - validate access
         validate_config_access(
-            current_user, merchant_id, shop_identifier, operation="toggle calling for"
+            current_user,
+            effective_reseller_id,
+            effective_merchant_identifier,
+            operation="toggle calling for",
         )
 
     result = await calling_activation_handler(
         enable_calling=enable_calling,
-        merchant_id=merchant_id,
-        shop_identifier=shop_identifier,
+        reseller_id=effective_reseller_id,
+        merchant_identifier=effective_merchant_identifier,
         current_user=current_user,
     )
 

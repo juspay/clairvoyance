@@ -55,12 +55,12 @@ async def push_lead(
     4. Return a lead_call_tracker_id for tracking
 
     Permissions:
-    - Admin: Can push leads for any merchant/shop
-    - Merchant: Can push leads for own shops only
+    - Admin: Can push leads for any reseller/shop
+    - Reseller: Can push leads for own shops only
 
     Request Body:
         {
-            "merchant": "shop_123",
+            "reseller": "shop_123",
             "template": "order-confirmation",
             "identifier": "shop_123",
             "request_id": "order_456",
@@ -82,9 +82,17 @@ async def push_lead(
             "message": "Call request added to queue for processing"
         }
     """
-    # RBAC: Check permission to push leads for this merchant/shop
+    # Get reseller_id with backward compatibility
+    reseller_id = req.reseller or req.merchant
+
+    if not reseller_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="reseller (or merchant for backward compatibility) is required",
+        )
+    # RBAC: Check permission to push leads for this reseller/shop
     validate_lead_access(
-        current_user, req.merchant, req.identifier, operation="push leads for"
+        current_user, reseller_id, req.identifier, operation="push leads for"
     )
 
     return await push_lead_handler(req, current_user)

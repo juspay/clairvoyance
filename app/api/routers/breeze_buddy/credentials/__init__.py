@@ -47,27 +47,27 @@ async def create_credential_endpoint(
     """
     Create a new credential.
 
-    - Global credentials (merchant_id=null): available to all merchants as {name} placeholder
-    - Merchant credentials (merchant_id set): available only to that merchant's templates
+    - Global credentials (reseller_id=null): available to all merchants as {name} placeholder
+    - Merchant credentials (reseller_id set): available only to that merchant's templates
 
     Values are encrypted at rest when CREDENTIAL_ENCRYPTION_KEY is configured.
     """
     # Only admins can create global credentials
-    if req.merchant_id is None and current_user.role != "admin":
+    if req.reseller_id is None and current_user.role != "admin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only admin users can create global credentials",
         )
 
     # Non-admin: validate merchant access
-    if req.merchant_id and current_user.role != "admin":
+    if req.reseller_id and current_user.role != "admin":
         if (
-            req.merchant_id not in current_user.merchant_ids
-            and "*" not in current_user.merchant_ids
+            req.reseller_id not in current_user.reseller_ids
+            and "*" not in current_user.reseller_ids
         ):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Access denied to merchant {req.merchant_id}",
+                detail=f"Access denied to merchant {req.reseller_id}",
             )
 
     return await create_credential_handler(req, current_user)
@@ -75,8 +75,8 @@ async def create_credential_endpoint(
 
 @router.get("/credentials", response_model=List[Credential])
 async def list_credentials_endpoint(
-    merchant_id: Optional[str] = Query(
-        None, description="Filter by merchant ID. Omit to list all (admin only)."
+    reseller_id: Optional[str] = Query(
+        None, description="Filter by reseller ID. Omit to list all (admin only)."
     ),
     current_user: UserInfo = Depends(get_current_user_with_rbac),
 ):
@@ -84,28 +84,28 @@ async def list_credentials_endpoint(
     List credentials with optional merchant filter.
 
     - Admin: sees all credentials or filtered by merchant
-    - Merchant: must provide merchant_id, sees merchant + global credentials
+    - Merchant: must provide reseller_id, sees merchant + global credentials
     - Values are always masked in responses
     """
-    # Non-admin must provide merchant_id
-    if not merchant_id and current_user.role != "admin":
+    # Non-admin must provide reseller_id
+    if not reseller_id and current_user.role != "admin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Non-admin users must provide a merchant_id filter",
+            detail="Non-admin users must provide a reseller_id filter",
         )
 
     # Validate merchant access
-    if merchant_id and current_user.role != "admin":
+    if reseller_id and current_user.role != "admin":
         if (
-            merchant_id not in current_user.merchant_ids
-            and "*" not in current_user.merchant_ids
+            reseller_id not in current_user.reseller_ids
+            and "*" not in current_user.reseller_ids
         ):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Access denied to merchant {merchant_id}",
+                detail=f"Access denied to reseller {reseller_id}",
             )
 
-    return await list_credentials_handler(merchant_id, current_user)
+    return await list_credentials_handler(reseller_id, current_user)
 
 
 @router.get("/credentials/{credential_id}", response_model=Credential)
@@ -124,14 +124,14 @@ async def get_credential_endpoint(
 
     # RBAC check: non-admin users can only access global or their own merchant's credentials
     if current_user.role != "admin":
-        if credential.merchant_id is not None:
+        if credential.reseller_id is not None:
             if (
-                credential.merchant_id not in current_user.merchant_ids
-                and "*" not in current_user.merchant_ids
+                credential.reseller_id not in current_user.reseller_ids
+                and "*" not in current_user.reseller_ids
             ):
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
-                    detail=f"Access denied to credential for merchant {credential.merchant_id}",
+                    detail=f"Access denied to credential for reseller {credential.reseller_id}",
                 )
 
     return credential
@@ -156,19 +156,19 @@ async def update_credential_endpoint(
 
     # RBAC check: non-admin users cannot update global credentials
     if current_user.role != "admin":
-        if credential.merchant_id is None:
+        if credential.reseller_id is None:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Only admin users can update global credentials",
             )
-        # Check merchant access
+        # Check reseller access
         if (
-            credential.merchant_id not in current_user.merchant_ids
-            and "*" not in current_user.merchant_ids
+            credential.reseller_id not in current_user.reseller_ids
+            and "*" not in current_user.reseller_ids
         ):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Access denied to credential for merchant {credential.merchant_id}",
+                detail=f"Access denied to credential for reseller {credential.reseller_id}",
             )
 
     return await update_credential_handler(credential_id, req, current_user)

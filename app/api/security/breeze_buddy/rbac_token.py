@@ -29,8 +29,8 @@ class BreezeBuddyRBACTokenManager:
         user_id: str,
         username: str,
         role: UserRole,
-        merchant_ids: List[str],
-        shop_identifiers: List[str],
+        reseller_ids: List[str],
+        merchant_identifiers: List[str],
         email: Optional[str] = None,
         expires_delta: Optional[timedelta] = None,
     ) -> str:
@@ -41,8 +41,8 @@ class BreezeBuddyRBACTokenManager:
             user_id: User's unique identifier
             username: Username
             role: User's role (admin, reseller, merchant, shop)
-            merchant_ids: List of accessible merchant IDs (["*"] for all merchants)
-            shop_identifiers: List of accessible shop identifiers (["*"] for all shops under the merchant(s))
+            reseller_ids: List of accessible merchant IDs (["*"] for all merchants)
+            merchant_identifiers: List of accessible shop identifiers (["*"] for all shops under the merchant(s))
             email: User's email (optional)
             expires_delta: Optional custom expiration time
 
@@ -58,8 +58,8 @@ class BreezeBuddyRBACTokenManager:
             "username": username,
             "role": role.value if isinstance(role, UserRole) else role,
             "email": email,
-            "merchant_ids": merchant_ids,
-            "shop_identifiers": shop_identifiers,
+            "reseller_ids": reseller_ids,
+            "merchant_identifiers": merchant_identifiers,
             "permissions": permissions,
         }
 
@@ -113,14 +113,14 @@ class BreezeBuddyRBACTokenManager:
                 username=username,
                 role=UserRole(payload.get("role")),
                 email=payload.get("email"),
-                merchant_ids=payload.get("merchant_ids", []),
-                shop_identifiers=payload.get("shop_identifiers", []),
+                reseller_ids=payload.get("reseller_ids", []),
+                merchant_identifiers=payload.get("merchant_identifiers", []),
                 permissions=payload.get("permissions", []),
             )
 
             logger.info(
                 f"RBAC token verified for user: {user_info.username} "
-                f"(role: {user_info.role}, merchants: {user_info.merchant_ids}, shops: {user_info.shop_identifiers})"
+                f"(role: {user_info.role}, resellers: {user_info.reseller_ids}, shops: {user_info.merchant_identifiers})"
             )
             return user_info
 

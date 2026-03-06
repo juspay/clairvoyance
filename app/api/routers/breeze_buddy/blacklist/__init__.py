@@ -38,8 +38,8 @@ async def add_to_blacklist(
     """
     Add a phone number to the blacklist.
 
-    When merchant_id is provided, the number is blocked for that merchant only.
-    When merchant_id is omitted, the number is blocked globally for all merchants.
+    When reseller_id is provided, the number is blocked for that reseller only.
+    When reseller_id is omitted, the number is blocked globally for all resellers.
 
     Permissions:
     - Admin only
@@ -51,19 +51,21 @@ async def add_to_blacklist(
 @router.get("/blacklist", response_model=List[BlacklistedNumber])
 async def list_blacklisted_numbers(
     merchant_id: Optional[str] = Query(None, description="Filter by merchant ID"),
+    reseller_id: Optional[str] = Query(None, description="Filter by reseller ID"),
     current_user: UserInfo = Depends(get_current_user_with_rbac),
 ):
     """
     List all blacklisted phone numbers.
 
     Query Parameters:
-    - merchant_id: Optional filter by merchant ID
+    - reseller_id: Optional filter by merchant ID
 
     Permissions:
     - Admin only
     """
+    reseller = reseller_id or merchant_id
     require_admin_access(current_user, "view blacklisted numbers")
-    return await list_blacklist_handler(merchant_id, current_user)
+    return await list_blacklist_handler(reseller, current_user)
 
 
 @router.get("/blacklist/check/{phone_number}")
@@ -86,6 +88,9 @@ async def check_blacklisted_number(
 @router.delete("/blacklist/{phone_number}")
 async def remove_from_blacklist(
     phone_number: str,
+    reseller_id: Optional[str] = Query(
+        None, description="Reseller ID (omit to remove global blacklist entry)"
+    ),
     merchant_id: Optional[str] = Query(
         None, description="Merchant ID (omit to remove global blacklist entry)"
     ),
@@ -95,11 +100,12 @@ async def remove_from_blacklist(
     Remove a phone number from the blacklist.
 
     Query Parameters:
-    - merchant_id: If provided, removes only the merchant-specific entry.
+    - reseller_id: If provided, removes only the reseller-specific entry.
                    If omitted, removes the global entry.
 
     Permissions:
     - Admin only
     """
+    reseller = reseller_id or merchant_id
     require_admin_access(current_user, "remove numbers from blacklist")
-    return await remove_blacklist_handler(phone_number, merchant_id, current_user)
+    return await remove_blacklist_handler(phone_number, reseller, current_user)

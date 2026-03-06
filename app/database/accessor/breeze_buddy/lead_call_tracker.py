@@ -46,9 +46,9 @@ def get_row_count(result: Optional[List[asyncpg.Record]]) -> int:
 
 async def create_lead_call_tracker(
     id: str,
-    merchant_id: str,
+    reseller_id: str,
     template: str,
-    shop_identifier: Optional[str],
+    merchant_identifier: Optional[str],
     next_attempt_at: Optional[datetime],
     payload: Optional[Dict[str, Any]],
     attempt_count: int = 0,
@@ -75,15 +75,15 @@ async def create_lead_call_tracker(
         outbound_number_id: Outbound number ID (optional, used for inbound calls)
         call_direction: Direction of call (INBOUND or OUTBOUND, defaults to OUTBOUND)
     """
-    logger.info(f"Creating lead call tracker for merchant ID: {merchant_id}")
+    logger.info(f"Creating lead call tracker for reseller ID: {reseller_id}")
 
     try:
         query_text, values = insert_lead_call_tracker_query(
             id=id,
-            merchant_id=merchant_id,
+            reseller_id=reseller_id,
             template=template,
             template_id=template_id,
-            shop_identifier=shop_identifier,
+            merchant_identifier=merchant_identifier,
             next_attempt_at=next_attempt_at,
             payload=payload,
             meta_data=meta_data,

@@ -47,7 +47,8 @@ def decode_credential(
 
     return Credential(
         id=str(row["id"]),
-        merchant_id=row["merchant_id"],
+        merchant_id=row["merchant_id"] or row["reseller_id"],
+        reseller_id=row["merchant_id"] or row["reseller_id"],
         name=row["name"],
         credential_type=CredentialType(row["credential_type"]),
         value=_mask_credential_value(real_value) if mask else real_value,
@@ -91,8 +92,8 @@ def decode_credentials_as_dict(
     For basic_auth: {"api_username": "user", "api_password": "pass"}
     For custom: all key-value pairs are flattened
 
-    If multiple credentials share the same key, merchant-specific overrides global
-    (query must ORDER BY merchant_id NULLS FIRST).
+    If multiple credentials share the same key, reseller-specific overrides global
+    (query must ORDER BY reseller_id NULLS FIRST).
     """
     if not result:
         return {}

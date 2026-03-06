@@ -24,28 +24,30 @@ class FlowConfigLoader:
 
     async def _load_template_from_db(
         self,
-        merchant_id: str,
+        reseller_id: str,
         name: str = "order-confirmation",
-        shop_identifier: Optional[str] = None,
+        merchant_identifier: Optional[str] = None,
     ) -> Optional[TemplateModel]:
         """
         Load complete template from database.
 
         Args:
-            merchant_id: Merchant identifier
+            reseller_id: Reseller identifier
             name: Template name (defaults to "order-confirmation")
-            shop_identifier: Optional shop-specific identifier
+            merchant_identifier: Optional merchant-specific identifier
 
         Returns:
             TemplateModel if found, None otherwise
         """
         logger.info(
-            f"Loading template for merchant={merchant_id}, name={name}, "
-            f"shop={shop_identifier}"
+            f"Loading template for reseller={reseller_id}, name={name}, "
+            f"merchant={merchant_identifier}"
         )
 
         # Load from database using accessor
-        template = await get_template_by_merchant(merchant_id, shop_identifier, name)
+        template = await get_template_by_merchant(
+            reseller_id, merchant_identifier, name
+        )
 
         if template:
             nodes_count = len(template.flow.get("nodes", []))
@@ -53,7 +55,7 @@ class FlowConfigLoader:
                 f"Successfully loaded template: {template.id} with {nodes_count} nodes"
             )
         else:
-            logger.warning(f"No template found for merchant={merchant_id}, name={name}")
+            logger.warning(f"No template found for reseller={reseller_id}, name={name}")
 
         return template
 
@@ -89,19 +91,19 @@ class FlowConfigLoader:
 
     async def load_template(
         self,
-        merchant_id: str,
+        reseller_id: str,
         template: str,
-        shop_identifier: Optional[str] = None,
+        merchant_identifier: Optional[str] = None,
         call_payload: Optional[Dict[str, str]] = None,
     ) -> Tuple[TemplateModel, Dict[str, str]]:
         """
         Load template and render task messages with variables.
 
         Args:
-            merchant_id: Merchant identifier
+            reseller_id: Reseller identifier
             template: str type
             template_vars: Variables for template rendering
-            shop_identifier: Optional shop-specific identifier
+            merchant_identifier: Optional merchant-specific identifier
 
         Returns:
             TemplateModel with rendered task messages, and dictionary of template variables
@@ -112,30 +114,30 @@ class FlowConfigLoader:
 
         # Load template from database
         template_obj = await self._load_template_from_db(
-            merchant_id, template, shop_identifier
+            reseller_id, template, merchant_identifier
         )
 
         if not template_obj:
             raise ValueError(
-                f"No template found for merchant={merchant_id}, template={template}"
+                f"No template found for reseller={reseller_id}, template={template}"
             )
 
         template_vars = {}
 
         # 1. Load credentials from credentials table (global + merchant-specific)
         try:
-            credential_vars = await get_credentials_as_template_vars(merchant_id)
+            credential_vars = await get_credentials_as_template_vars(reseller_id)
             if credential_vars:
                 template_vars.update(credential_vars)
                 logger.info(
-                    f"Loaded {len(credential_vars)} credential vars for merchant {merchant_id}"
+                    f"Loaded {len(credential_vars)} credential vars for reseller {reseller_id}"
                 )
         except Exception as e:
             logger.warning(
-                f"Failed to load credentials for merchant {merchant_id}: {e}"
+                f"Failed to load credentials for merchant {reseller_id}: {e}"
             )
         logger.info(
-            f"Loaded {len(template_vars)} template vars for merchant {merchant_id}"
+            f"Loaded {len(template_vars)} template vars for merchant {reseller_id}"
         )
 
         # 2. Load template.secrets (overrides credentials for same keys)

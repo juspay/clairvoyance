@@ -13,17 +13,17 @@ from app.schemas import UserInfo
 
 def validate_template_access(
     current_user: UserInfo,
-    merchant_id: str,
-    shop_identifier: Optional[str],
+    reseller_id: str,
+    merchant_identifier: Optional[str],
     operation: str = "access",
 ) -> None:
     """
-    Validate user has access to template for given merchant and shop.
+    Validate user has access to template for given reseller and shop.
 
     Args:
         current_user: Current authenticated user with RBAC info
-        merchant_id: Merchant ID to validate access for
-        shop_identifier: Shop identifier to validate access for (optional)
+        reseller_id: Reseller ID to validate access for
+        merchant_identifier: Shop identifier to validate access for (optional)
         operation: Operation being performed (for logging)
 
     Raises:
@@ -32,34 +32,28 @@ def validate_template_access(
     # Admin has full access
     if current_user.role == "admin":
         return
-
-    # Check merchant access
-    if (
-        merchant_id not in current_user.merchant_ids
-        and "*" not in current_user.merchant_ids
-    ):
+    reseller = current_user.reseller_ids or current_user.merchant_ids
+    # Check reseller access
+    if reseller_id not in reseller and "*" not in reseller:
         logger.warning(
             f"User {current_user.username} attempted to {operation} template "
-            f"for unauthorized merchant: {merchant_id}"
+            f"for unauthorized reseller: {reseller_id}"
         )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"Access denied to merchant {merchant_id}",
+            detail=f"Access denied to reseller {reseller_id}",
         )
-
-    # Check shop access (if shop_identifier is specified)
-    if shop_identifier:
-        if (
-            shop_identifier not in current_user.shop_identifiers
-            and "*" not in current_user.shop_identifiers
-        ):
+    # Check shop access (if merchant_identifier is specified)
+    if merchant_identifier:
+        identifier = current_user.merchant_identifiers or current_user.shop_identifiers
+        if merchant_identifier not in identifier and "*" not in identifier:
             logger.warning(
                 f"User {current_user.username} attempted to {operation} template "
-                f"for unauthorized shop: {shop_identifier}"
+                f"for unauthorized shop: {merchant_identifier}"
             )
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Access denied to shop {shop_identifier}",
+                detail=f"Access denied to shop {merchant_identifier}",
             )
 
 
@@ -77,46 +71,43 @@ def filter_templates_by_rbac(templates: List, current_user: UserInfo) -> List:
     # Admin sees all
     if current_user.role == "admin":
         return templates
-
+    reseller = current_user.reseller_ids or current_user.merchant_ids
+    identifier = current_user.merchant_identifiers or current_user.shop_identifiers
     # Wildcard access
-    if "*" in current_user.merchant_ids and "*" in current_user.shop_identifiers:
+    if "*" in reseller and "*" in identifier:
         return templates
 
     filtered = []
     for template in templates:
-        # Check merchant access
-        has_merchant_access = (
-            "*" in current_user.merchant_ids
-            or template.merchant_id in current_user.merchant_ids
-        )
+        # Check reseller access
+        has_reseller_access = "*" in reseller or template.reseller_id in reseller
 
-        # Check shop access (templates might not have shop_identifier)
-        if template.shop_identifier:
+        # Check shop access (templates might not have merchant_identifier)
+        if template.merchant_identifier:
             has_shop_access = (
-                "*" in current_user.shop_identifiers
-                or template.shop_identifier in current_user.shop_identifiers
+                "*" in identifier or template.merchant_identifier in identifier
             )
         else:
-            # Templates without shop_identifier are accessible if merchant access granted
+            # Templates without merchant_identifier are accessible if reseller access granted
             has_shop_access = True
 
-        if has_merchant_access and has_shop_access:
+        if has_reseller_access and has_shop_access:
             filtered.append(template)
 
     return filtered
 
 
-def require_admin_or_merchant_owner(
-    current_user: UserInfo, merchant_id: str, operation: str = "perform this operation"
+def require_admin_or_reseller_owner(
+    current_user: UserInfo, reseller_id: str, operation: str = "perform this operation"
 ) -> None:
     """
-    Require user to be admin or merchant owner.
+    Require user to be admin or reseller owner.
 
     Used for create/update operations on templates.
 
     Args:
         current_user: Current authenticated user
-        merchant_id: Merchant ID being modified
+        reseller_id: Reseller ID being modified
         operation: Operation being performed (for error message)
 
     Raises:
@@ -125,18 +116,19 @@ def require_admin_or_merchant_owner(
     # Admin has full access
     if current_user.role == "admin":
         return
-
-    # Merchant owners can manage their own templates
-    if merchant_id in current_user.merchant_ids or "*" in current_user.merchant_ids:
+    reseller = current_user.reseller_ids or current_user.merchant_ids
+    current_user.merchant_identifiers or current_user.shop_identifiers
+    # Reseller owners can manage their own templates
+    if reseller_id in reseller or "*" in reseller:
         return
 
     logger.warning(
         f"User {current_user.username} (role: {current_user.role}) "
-        f"attempted to {operation} for unauthorized merchant: {merchant_id}"
+        f"attempted to {operation} for unauthorized reseller: {reseller_id}"
     )
     raise HTTPException(
         status_code=status.HTTP_403_FORBIDDEN,
-        detail=f"Access denied to {operation} for merchant {merchant_id}",
+        detail=f"Access denied to {operation} for reseller {reseller_id}",
     )
 
 
@@ -144,74 +136,76 @@ def apply_hierarchical_template_filters(
     filters: Dict[str, Any], current_user: UserInfo
 ) -> Dict[str, Any]:
     """
-    Apply hierarchical merchant + shop filtering based on user's JWT token.
+    Apply hierarchical reseller + shop filtering based on user's JWT token.
 
-    CRITICAL SECURITY: Always use merchant_ids and shop_identifiers from JWT token,
+    CRITICAL SECURITY: Always use reseller_ids and merchant_identifier from JWT token,
     NEVER from request parameters alone.
 
     Similar to analytics RBAC pattern, this function:
-    1. Extracts accessible merchants/shops from JWT
-    2. Validates any merchant/shop filters in the request
-    3. Injects user's accessible merchants/shops if not specified
+    1. Extracts accessible resellers/shops from JWT
+    2. Validates any reseller/shop filters in the request
+    3. Injects user's accessible resellers/shops if not specified
     4. Returns 403 if user tries to access unauthorized resources
 
     Args:
-        filters: Request filters (may contain merchant_id/shop_identifier)
+        filters: Request filters (may contain reseller_id/merchant_identifier)
         current_user: Current authenticated user with RBAC info
 
     Returns:
-        Updated filters with validated merchant/shop access
+        Updated filters with validated reseller/shop access
 
     Raises:
-        HTTPException: 403 if user tries to access unauthorized merchants/shops
+        HTTPException: 403 if user tries to access unauthorized resellers/shops
     """
-    # Determine accessible merchants
-    if "*" in current_user.merchant_ids:
-        accessible_merchants = None  # Wildcard access (admin)
+    reseller = current_user.reseller_ids or current_user.merchant_ids
+    identifier = current_user.merchant_identifiers or current_user.shop_identifiers
+    # Determine accessible resellers
+    if "*" in reseller:
+        accessible_resellers = None  # Wildcard access (admin)
     else:
-        accessible_merchants = current_user.merchant_ids
+        accessible_resellers = reseller
 
     # Determine accessible shops
-    if "*" in current_user.shop_identifiers:
+    if "*" in identifier:
         accessible_shops = None  # Wildcard access
     else:
-        accessible_shops = current_user.shop_identifiers
+        accessible_shops = identifier
 
-    # Apply merchant filtering
-    if accessible_merchants is None:
-        # Admin/wildcard access - can access all merchants
-        # Keep any merchant filters from request (if admin specified specific merchants)
+    # Apply reseller filtering
+    if accessible_resellers is None:
+        # Admin/wildcard access - can access all resellers
+        # Keep any reseller filters from request (if admin specified specific resellers)
         pass
     else:
-        # Non-admin user - enforce merchant access
-        # Check if user has no merchant access (empty list)
-        if len(accessible_merchants) == 0:
+        # Non-admin user - enforce reseller access
+        # Check if user has no reseller access (empty list)
+        if len(accessible_resellers) == 0:
             logger.warning(
-                f"User {current_user.username} has no merchant access (empty merchant_ids)"
+                f"User {current_user.username} has no reseller access (empty reseller_ids)"
             )
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Access denied: user has no merchant assignments",
+                detail="Access denied: user has no reseller assignments",
             )
 
-        if "merchant_id" in filters:
-            # Validate user has access to requested merchant
-            if filters["merchant_id"] not in accessible_merchants:
+        if "reseller_id" in filters:
+            # Validate user has access to requested reseller
+            if filters["reseller_id"] not in accessible_resellers:
                 logger.warning(
-                    f"User {current_user.username} attempted to access unauthorized merchant: {filters['merchant_id']}"
+                    f"User {current_user.username} attempted to access unauthorized reseller: {filters['reseller_id']}"
                 )
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
-                    detail=f"Access denied to merchant {filters['merchant_id']}",
+                    detail=f"Access denied to reseller {filters['reseller_id']}",
                 )
-            # Keep the single merchant_id filter (no change needed)
+            # Keep the single reseller_id filter (no change needed)
         else:
-            # No merchant filter - apply user's accessible merchants as array
-            filters["merchant_ids"] = accessible_merchants
+            # No reseller filter - apply user's accessible resellers as array
+            filters["reseller_ids"] = accessible_resellers
 
     # Apply shop filtering
     if accessible_shops is None:
-        # Admin/wildcard shop access - can access all shops (within accessible merchants)
+        # Admin/wildcard shop access - can access all shops (within accessible resellers)
         # Keep any shop filters from request (if user specified specific shops)
         pass
     else:
@@ -219,27 +213,27 @@ def apply_hierarchical_template_filters(
         # Check if user has no shop access (empty list)
         if len(accessible_shops) == 0:
             logger.warning(
-                f"User {current_user.username} has no shop access (empty shop_identifiers)"
+                f"User {current_user.username} has no shop access (empty merchant_identifiers)"
             )
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Access denied: user has no shop assignments",
             )
 
-        if "shop_identifier" in filters:
+        if "merchant_identifier" in filters:
             # Validate user has access to requested shop
-            if filters["shop_identifier"] not in accessible_shops:
+            if filters["merchant_identifier"] not in accessible_shops:
                 logger.warning(
-                    f"User {current_user.username} attempted to access unauthorized shop: {filters['shop_identifier']}"
+                    f"User {current_user.username} attempted to access unauthorized shop: {filters['merchant_identifier']}"
                 )
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
-                    detail=f"Access denied to shop {filters['shop_identifier']}",
+                    detail=f"Access denied to shop {filters['merchant_identifier']}",
                 )
-            # Keep the single shop_identifier filter (no change needed)
+            # Keep the single merchant_identifier filter (no change needed)
         else:
             # No shop filter - apply user's accessible shops as array
-            filters["shop_identifiers"] = accessible_shops
+            filters["merchant_identifiers"] = accessible_shops
 
     logger.info(
         f"Applied hierarchical filters for user {current_user.username}: {filters}"

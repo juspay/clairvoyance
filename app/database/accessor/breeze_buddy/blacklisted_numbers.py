@@ -24,21 +24,21 @@ from app.schemas import BlacklistedNumber
 from app.services.redis.client import get_redis_service
 
 
-def _cache_key(phone_number: str, merchant_id: Optional[str] = None) -> str:
+def _cache_key(phone_number: str, reseller_id: Optional[str] = None) -> str:
     """Build Redis cache key for blacklist lookup.
 
-    Key includes merchant_id because the DB query checks both per-merchant
+    Key includes reseller_id because the DB query checks both per-merchant
     and global entries — the result is specific to a (phone, merchant) pair.
     """
     normalized = normalize_phone_number(phone_number)
-    if merchant_id:
-        return f"blacklist:{normalized}:{merchant_id}"
+    if reseller_id:
+        return f"blacklist:{normalized}:{reseller_id}"
     return f"blacklist:{normalized}"
 
 
 async def is_number_blacklisted(
     phone_number: str,
-    merchant_id: Optional[str] = None,
+    reseller_id: Optional[str] = None,
 ) -> bool:
     """
     Check if a phone number is blacklisted. Uses Redis cache for performance.
@@ -48,7 +48,7 @@ async def is_number_blacklisted(
         return False
 
     global_key = _cache_key(phone_number)
-    merchant_key = _cache_key(phone_number, merchant_id) if merchant_id else None
+    merchant_key = _cache_key(phone_number, reseller_id) if reseller_id else None
 
     try:
         redis = await get_redis_service()
@@ -70,7 +70,7 @@ async def is_number_blacklisted(
 
     # 3️⃣ Query DB
     try:
-        query_text, values = is_number_blacklisted_query(phone_number, merchant_id)
+        query_text, values = is_number_blacklisted_query(phone_number, reseller_id)
         result = await run_parameterized_query(query_text, values)
 
         if result is None:
@@ -80,7 +80,7 @@ async def is_number_blacklisted(
             return True
 
         is_blocked = bool(result and result[0]["is_blacklisted"])
-        is_global_block = bool(result and result[0].get("merchant_id") is None)
+        is_global_block = bool(result and result[0].get("reseller_id") is None)
 
         # 4️⃣ Cache result
         try:
@@ -105,7 +105,7 @@ async def is_number_blacklisted(
 async def add_blacklisted_number(
     id: str,
     phone_number: str,
-    merchant_id: Optional[str] = None,
+    reseller_id: Optional[str] = None,
     reason: Optional[str] = None,
     created_by: Optional[str] = None,
 ) -> Optional[BlacklistedNumber]:
@@ -113,13 +113,13 @@ async def add_blacklisted_number(
     Add a phone number to the blacklist.
     """
     masked = mask_phone(phone_number)
-    logger.info(f"Adding {masked} to blacklist (merchant: {merchant_id})")
+    logger.info(f"Adding {masked} to blacklist (merchant: {reseller_id})")
 
     try:
         query_text, values = insert_blacklisted_number_query(
             id=id,
             phone_number=phone_number,
-            merchant_id=merchant_id,
+            reseller_id=reseller_id,
             reason=reason,
             created_by=created_by,
         )
@@ -127,7 +127,7 @@ async def add_blacklisted_number(
         if result and len(result) > 0:
             decoded = decode_blacklisted_number(result[0])
             # Invalidate cache for all merchant contexts
-            await _invalidate_cache(phone_number, merchant_id)
+            await _invalidate_cache(phone_number, reseller_id)
             logger.info(f"Blacklisted number added: {masked}")
             return decoded
 
@@ -140,21 +140,21 @@ async def add_blacklisted_number(
 
 async def remove_blacklisted_number(
     phone_number: str,
-    merchant_id: Optional[str] = None,
+    reseller_id: Optional[str] = None,
 ) -> Optional[BlacklistedNumber]:
     """
     Remove a phone number from the blacklist.
     """
     masked = mask_phone(phone_number)
-    logger.info(f"Removing {masked} from blacklist (merchant: {merchant_id})")
+    logger.info(f"Removing {masked} from blacklist (merchant: {reseller_id})")
 
     try:
-        query_text, values = delete_blacklisted_number_query(phone_number, merchant_id)
+        query_text, values = delete_blacklisted_number_query(phone_number, reseller_id)
         result = await run_parameterized_query(query_text, values)
         if result and len(result) > 0:
             decoded = decode_blacklisted_number(result[0])
             # Invalidate cache for all merchant contexts
-            await _invalidate_cache(phone_number, merchant_id)
+            await _invalidate_cache(phone_number, reseller_id)
             logger.info(f"Blacklisted number removed: {masked}")
             return decoded
 
@@ -166,15 +166,15 @@ async def remove_blacklisted_number(
 
 
 async def get_all_blacklisted_numbers(
-    merchant_id: Optional[str] = None,
+    reseller_id: Optional[str] = None,
 ) -> List[BlacklistedNumber]:
     """
-    Get all blacklisted numbers with optional merchant filter.
+    Get all blacklisted numbers with optional reseller filter.
     """
-    logger.info(f"Getting all blacklisted numbers (merchant: {merchant_id})")
+    logger.info(f"Getting all blacklisted numbers (reseller: {reseller_id})")
 
     try:
-        query_text, values = get_all_blacklisted_numbers_query(merchant_id)
+        query_text, values = get_all_blacklisted_numbers_query(reseller_id)
         result = await run_parameterized_query(query_text, values)
         if result:
             return decode_blacklisted_number_list(result)
@@ -204,7 +204,7 @@ async def check_blacklisted_number(
 
 
 async def _invalidate_cache(
-    phone_number: str, merchant_id: Optional[str] = None
+    phone_number: str, reseller_id: Optional[str] = None
 ) -> None:
     """Invalidate Redis cache entries for a phone number.
 
@@ -215,9 +215,9 @@ async def _invalidate_cache(
     try:
         redis = await get_redis_service()
 
-        if merchant_id:
+        if reseller_id:
             # Merchant-specific change - invalidate only that merchant's key
-            await redis.delete(_cache_key(phone_number, merchant_id))
+            await redis.delete(_cache_key(phone_number, reseller_id))
         else:
             # Global change - invalidate only the global key
             # Merchant cache is ignored when global cache is None (see is_number_blacklisted)

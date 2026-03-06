@@ -201,7 +201,7 @@ class SmartRouterClient:
     async def allocate_pod(
         self,
         call_sid: str,
-        merchant_id: Optional[str] = None,
+        reseller_id: Optional[str] = None,
         provider: str = "exotel",
         flow: str = "v2",
         template: str = "",
@@ -211,7 +211,7 @@ class SmartRouterClient:
 
         Args:
             call_sid: Unique call identifier
-            merchant_id: Optional merchant ID for tiered routing
+            reseller_id: Optional merchant ID for tiered routing
             provider: Provider name (twilio, plivo, exotel)
             flow: WebSocket handler version ("v1" or "v2")
             template: Template name for WebSocket path (e.g., "order-confirmation").
@@ -226,7 +226,7 @@ class SmartRouterClient:
         url = f"{self.base_url}/api/v1/allocate"
         payload = {
             "call_sid": call_sid,
-            "merchant_id": merchant_id or "",
+            "reseller_id": reseller_id or "",
             "provider": provider,
             "flow": flow,
         }
@@ -250,7 +250,7 @@ class SmartRouterClient:
                                 "Smart Router returned invalid JSON in 200 response",
                                 extra={
                                     "call_sid": call_sid,
-                                    "merchant_id": merchant_id,
+                                    "reseller_id": reseller_id,
                                     "status_code": response.status,
                                     "response_text": response_text[:200],
                                     "latency_ms": duration_ms,
@@ -270,7 +270,7 @@ class SmartRouterClient:
                             "Smart Router allocation successful",
                             extra={
                                 "call_sid": call_sid,
-                                "merchant_id": merchant_id,
+                                "reseller_id": reseller_id,
                                 "pod_name": allocation_data.get("pod_name"),
                                 "source_pool": allocation_data.get("source_pool"),
                                 "latency_ms": duration_ms,
@@ -285,7 +285,7 @@ class SmartRouterClient:
                                 "Smart Router 200 response missing required fields",
                                 extra={
                                     "call_sid": call_sid,
-                                    "merchant_id": merchant_id,
+                                    "reseller_id": reseller_id,
                                     "has_pod_name": bool(pod_name),
                                     "has_ws_url": bool(ws_url),
                                     "response_keys": list(allocation_data.keys()),
@@ -314,7 +314,7 @@ class SmartRouterClient:
                             "Smart Router: No pods available",
                             extra={
                                 "call_sid": call_sid,
-                                "merchant_id": merchant_id,
+                                "reseller_id": reseller_id,
                                 "latency_ms": duration_ms,
                             },
                         )
@@ -341,7 +341,7 @@ class SmartRouterClient:
                             "Smart Router allocation failed after all retries",
                             extra={
                                 "call_sid": call_sid,
-                                "merchant_id": merchant_id,
+                                "reseller_id": reseller_id,
                                 "status_code": response.status,
                                 "error": error_text,
                                 "latency_ms": duration_ms,
@@ -355,7 +355,7 @@ class SmartRouterClient:
                 "Smart Router allocation timeout",
                 extra={
                     "call_sid": call_sid,
-                    "merchant_id": merchant_id,
+                    "reseller_id": reseller_id,
                     "timeout_ms": (self.timeout.total or 0) * 1000,
                 },
             )
@@ -367,7 +367,7 @@ class SmartRouterClient:
                 "Smart Router connection error",
                 extra={
                     "call_sid": call_sid,
-                    "merchant_id": merchant_id,
+                    "reseller_id": reseller_id,
                     "base_url": self.base_url,
                     "error": str(e),
                 },
@@ -380,7 +380,7 @@ class SmartRouterClient:
                 "Smart Router allocation unexpected error",
                 extra={
                     "call_sid": call_sid,
-                    "merchant_id": merchant_id,
+                    "reseller_id": reseller_id,
                     "error_type": type(e).__name__,
                     "error": str(e),
                 },
@@ -513,7 +513,7 @@ async def safe_release_pod(call_sid: str, reason: str = "call_completed") -> boo
 async def safe_allocate_pod(
     call_sid: str,
     provider: str,
-    merchant_id: Optional[str] = None,
+    reseller_id: Optional[str] = None,
     flow: str = "v2",
     template: str = "",
 ) -> Optional[PodAllocation]:
@@ -529,7 +529,7 @@ async def safe_allocate_pod(
     client = get_smart_router_client()
     allocation = await client.allocate_pod(
         call_sid=call_sid,
-        merchant_id=merchant_id,
+        reseller_id=reseller_id,
         provider=provider,
         flow=flow,
         template=template,

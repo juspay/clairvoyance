@@ -126,8 +126,9 @@ async def connect_to_live_agent(
         # Set transfer flag in Redis (includes customer phone for Plivo dial-back)
         await set_transfer_flag(
             call_sid=context.call_sid,
-            merchant_id=context.lead.merchant_id,
-            shop_identifier=context.lead.shop_identifier,
+            reseller_id=context.lead.reseller_id or context.lead.merchant_id,
+            merchant_identifier=context.lead.shop_identifier
+            or context.lead.merchant_identifier,
             transfer_number=agent_phone_number,
             customer_phone_number=customer_phone_number,
         )

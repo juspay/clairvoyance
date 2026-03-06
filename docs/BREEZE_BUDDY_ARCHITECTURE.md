@@ -78,17 +78,17 @@ Leads are inserted through the `/push/lead/v2` endpoint:
 class PushLeadRequest(BaseModel):
     payload: Dict[str, Any]          # Order/lead data
     template: str                     # Template name to use
-    merchant: str                     # Merchant identifier
+    reseller: str                     # Reseller identifier
     identifier: Optional[str] = None  # Shop-specific identifier
     reporting_webhook_url: str | None = None  # Callback URL
 ```
 
 **Insertion Process** ([leads.py:153-275](app/api/routers/breeze_buddy/leads.py#L153-L275)):
 
-1. **Template Retrieval**: Fetch template by merchant, identifier, and name
+1. **Template Retrieval**: Fetch template by reseller, identifier, and name
    ```python
    template = await get_template_by_merchant(
-       req.merchant, req.identifier, req.template
+       req.reseller, req.identifier, req.template
    )
    ```
 
@@ -103,7 +103,7 @@ class PushLeadRequest(BaseModel):
 3. **Call Config Retrieval**: Get execution configuration
    ```python
    call_execution_configs = await get_call_execution_config_by_merchant_id(
-       req.merchant, req.identifier
+       req.reseller, req.identifier
    )
    ```
 
@@ -111,7 +111,7 @@ class PushLeadRequest(BaseModel):
    ```python
    lead_call_tracker = await create_lead_call_tracker(
        id=uuid,
-       merchant_id=req.merchant,
+       reseller_id=req.reseller,
        template=req.template,
        shop_identifier=req.identifier,
        next_attempt_at=next_attempt_at,  # Scheduled time
@@ -134,7 +134,7 @@ lead = await get_lead_by_call_id(self.call_sid)
 **Step 2: Template Loading**
 ```python
 template = await get_template_by_merchant(
-    merchant_id=merchant_id,
+    reseller_id=reseller_id,
     shop_identifier=self.lead.shop_identifier,
     name=self.lead.template,
 )
@@ -158,7 +158,7 @@ The loader renders all task messages by substituting `{variable}` placeholders:
 
 ```python
 self.template_config = await self.flow_loader.load_template(
-    merchant_id=merchant_id,
+    reseller_id=reseller_id,
     template=self.lead.template,
     template_vars=self.template_vars,
 )
@@ -185,7 +185,7 @@ The template system is the core of Breeze Buddy's architecture. It consists of f
 ```python
 class TemplateModel(BaseModel):
     id: str
-    merchant_id: str
+    reseller_id: str
     shop_identifier: Optional[str] = None
     name: str
     flow: Dict[str, Any]  # The complete flow configuration
@@ -196,7 +196,7 @@ class TemplateModel(BaseModel):
 
 **Fields**:
 - `id`: Unique template identifier
-- `merchant_id`: Merchant this template belongs to
+- `reseller_id`: Reseller this template belongs to
 - `shop_identifier`: Optional shop-specific override
 - `name`: Template name (e.g., "order-confirmation")
 - `flow`: Complete flow configuration with nodes and transitions
@@ -279,7 +279,7 @@ class HookFieldConfigSource(str, Enum):
 
 **Key Methods**:
 
-#### `load_template(merchant_id, template, template_vars, shop_identifier)`
+#### `load_template(reseller_id, template, template_vars, shop_identifier)`
 Main entry point for loading and rendering templates.
 
 **Process**:
@@ -621,7 +621,7 @@ Inserts new lead for processing ([leads.py:153-275](app/api/routers/breeze_buddy
     "total_price": 1500
   },
   "template": "order-confirmation",
-  "merchant": "merchant_123",
+  "reseller": "reseller_123",
   "identifier": "shop_456",
   "reporting_webhook_url": "https://example.com/webhook"
 }
@@ -639,13 +639,13 @@ Inserts new lead for processing ([leads.py:153-275](app/api/routers/breeze_buddy
 
 **Validation**:
 - Validates payload against template's `expected_payload_schema`
-- Checks template exists for merchant
+- Checks template exists for reseller
 - Verifies call execution config exists
 
 ##### `GET /lead/{lead_id}`
 Retrieves lead by ID ([leads.py:25-55](app/api/routers/breeze_buddy/leads.py#L25-L55))
 
-##### `POST /{merchant}/{template}`
+##### `POST /{reseller}/{template}`
 Legacy endpoint for order confirmation ([leads.py:58-150](app/api/routers/breeze_buddy/leads.py#L58-L150))
 
 #### 2. Template Router
@@ -654,10 +654,10 @@ Legacy endpoint for order confirmation ([leads.py:58-150](app/api/routers/breeze
 **Endpoints**:
 
 ##### `GET /template`
-Retrieves template by merchant, shop, and name ([template.py:17-52](app/api/routers/breeze_buddy/template.py#L17-L52))
+Retrieves template by reseller, shop, and name ([template.py:17-52](app/api/routers/breeze_buddy/template.py#L17-L52))
 
 **Query Parameters**:
-- `merchant_id`: Required
+- `reseller_id`: Required
 - `shop_identifier`: Optional
 - `name`: Optional
 
@@ -667,7 +667,7 @@ Creates new template from JSON ([template.py:55-123](app/api/routers/breeze_budd
 **Request**:
 ```json
 {
-  "merchant": "merchant_123",
+  "reseller": "reseller_123",
   "identifier": "shop_456",
   "template_name": "order-confirmation",
   "is_active": true,
@@ -693,7 +693,7 @@ Creates new template from JSON ([template.py:55-123](app/api/routers/breeze_budd
 
 **Functions**:
 
-##### `get_template_by_merchant(merchant_id, shop_identifier, name)`
+##### `get_template_by_merchant(reseller_id, shop_identifier, name)`
 Retrieves template from database ([template.py:29-52](app/database/accessor/breeze_buddy/template.py#L29-L52))
 
 **Process**:
@@ -728,7 +728,7 @@ Creates new template in database ([template.py:55-105](app/database/accessor/bre
 **Initialization Flow**:
 1. Connect WebSocket
 2. Retrieve lead by call_sid
-3. Load template for merchant
+3. Load template for reseller
 4. Build template variables from payload
 5. Render template with variables
 6. Build flow configuration
@@ -1179,7 +1179,7 @@ Have a good day."
     ]
   },
   "template": "order-confirmation",
-  "merchant": "merchant_123",
+  "reseller": "reseller_123",
   "identifier": "myshop.myshopify.com",
   "reporting_webhook_url": "https://myshop.com/webhooks/call-status"
 }

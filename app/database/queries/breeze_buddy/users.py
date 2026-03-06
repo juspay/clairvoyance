@@ -22,9 +22,19 @@ async def get_user_by_username(username: str) -> Optional[UserInDB]:
         UserInDB object if found, None otherwise
     """
     query = """
-        SELECT id, username, password_hash, role, email, merchant_ids, shop_identifiers, is_active, created_at, updated_at
-        FROM users
-        WHERE username = $1
+        SELECT 
+    id,
+    username,
+    password_hash,
+    role,
+    email,
+    COALESCE(reseller_ids, merchant_ids) AS reseller_ids,
+    COALESCE(merchant_identifiers, shop_identifiers) AS merchant_identifiers,
+    is_active,
+    created_at,
+    updated_at
+FROM users
+WHERE username = $1
     """
 
     try:
@@ -40,15 +50,15 @@ async def get_user_by_username(username: str) -> Optional[UserInDB]:
                 password_hash=row["password_hash"],
                 role=UserRole(row["role"]),
                 email=row["email"],
-                merchant_ids=(
-                    row["merchant_ids"]
-                    if isinstance(row["merchant_ids"], list)
-                    else json.loads(row["merchant_ids"])
+                reseller_ids=(
+                    row["reseller_ids"]
+                    if isinstance(row["reseller_ids"], list)
+                    else json.loads(row["reseller_ids"])
                 ),
-                shop_identifiers=(
-                    row["shop_identifiers"]
-                    if isinstance(row["shop_identifiers"], list)
-                    else json.loads(row["shop_identifiers"])
+                merchant_identifiers=(
+                    row["merchant_identifiers"]
+                    if isinstance(row["merchant_identifiers"], list)
+                    else json.loads(row["merchant_identifiers"])
                 ),
                 is_active=row["is_active"],
                 created_at=row["created_at"],

@@ -52,7 +52,7 @@ class PlivoProvider(VoiceCallProvider):
         self,
         customer_mobile_number: str,
         outbound_number: str,
-        merchant_id: Optional[str] = None,
+        reseller_id: Optional[str] = None,
         template_name: Optional[str] = None,
     ):
         """
@@ -67,13 +67,13 @@ class PlivoProvider(VoiceCallProvider):
         Args:
             customer_mobile_number: Phone number to call
             outbound_number: Caller ID / outbound number
-            merchant_id: Optional merchant ID for tiered pod allocation
+            reseller_id: Optional merchant ID for tiered pod allocation
             template_name: Optional template name for WebSocket path routing
         """
         answer_url = f"{self.APP_BASE_URL}/agent/voice/breeze-buddy/plivo/answer"
         params = {}
-        if merchant_id:
-            params["merchant_id"] = merchant_id
+        if reseller_id:
+            params["reseller_id"] = reseller_id
         if template_name:
             params["template"] = template_name
         if params:
