@@ -31,7 +31,7 @@ async def add_blacklist_handler(
         result = await add_blacklisted_number(
             id=str(uuid4()),
             phone_number=request.phone_number,
-            merchant_id=request.merchant_id,
+            reseller_id=request.reseller_id or request.merchant_id,
             reason=request.reason,
             created_by=current_user.username,
         )
@@ -54,18 +54,18 @@ async def add_blacklist_handler(
 
 
 async def list_blacklist_handler(
-    merchant_id: Optional[str], current_user: UserInfo
+    reseller_id: Optional[str], current_user: UserInfo
 ) -> List[BlacklistedNumber]:
     """
     List all blacklisted numbers.
     """
     logger.info(
         f"Admin {current_user.username} listing blacklisted numbers "
-        f"(merchant: {merchant_id})"
+        f"(reseller: {reseller_id})"
     )
 
     try:
-        return await get_all_blacklisted_numbers(merchant_id)
+        return await get_all_blacklisted_numbers(reseller_id)
     except Exception as e:
         logger.error(f"Error listing blacklisted numbers: {e}", exc_info=True)
         raise HTTPException(
@@ -97,7 +97,7 @@ async def check_blacklist_handler(phone_number: str, current_user: UserInfo) -> 
 
 
 async def remove_blacklist_handler(
-    phone_number: str, merchant_id: Optional[str], current_user: UserInfo
+    phone_number: str, reseller_id: Optional[str], current_user: UserInfo
 ) -> Dict:
     """
     Remove a phone number from the blacklist.
@@ -105,17 +105,17 @@ async def remove_blacklist_handler(
     masked = mask_phone(phone_number)
     logger.info(
         f"Admin {current_user.username} removing {masked} from blacklist "
-        f"(merchant: {merchant_id})"
+        f"(reseller: {reseller_id})"
     )
 
     try:
-        result = await remove_blacklisted_number(phone_number, merchant_id)
+        result = await remove_blacklisted_number(phone_number, reseller_id)
 
         if result:
             return {
                 "status": "removed",
                 "phone_number": phone_number,
-                "merchant_id": merchant_id,
+                "reseller_id": reseller_id,
                 "message": "Number removed from blacklist",
             }
 

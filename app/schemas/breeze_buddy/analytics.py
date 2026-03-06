@@ -33,15 +33,33 @@ class AnalyticsFilters(BaseModel):
     template: Optional[str] = Field(
         None, description="Filter by template name (e.g., 'order-confirmation')"
     )
+    # New field names
+    merchant_identifier: Optional[str] = Field(
+        None, description="Filter by single merchant identifier"
+    )
+    merchant_identifiers: Optional[List[str]] = Field(
+        None, description="Filter by multiple merchant identifiers"
+    )
+    reseller_id: Optional[str] = Field(None, description="Filter by reseller ID")
+    reseller_ids: Optional[List[str]] = Field(
+        None, description="Filter by multiple reseller IDs"
+    )
+    # Old field names for backward compatibility
     shop_identifier: Optional[str] = Field(
-        None, description="Filter by single shop identifier"
+        None,
+        description="Filter by single shop identifier (backward compatibility, use merchant_identifier)",
     )
     shop_identifiers: Optional[List[str]] = Field(
-        None, description="Filter by multiple shop identifiers"
+        None,
+        description="Filter by multiple shop identifiers (backward compatibility, use merchant_identifiers)",
     )
-    merchant_id: Optional[str] = Field(None, description="Filter by merchant ID")
+    merchant_id: Optional[str] = Field(
+        None,
+        description="Filter by merchant ID (backward compatibility, use reseller_id)",
+    )
     merchant_ids: Optional[List[str]] = Field(
-        None, description="Filter by multiple merchant IDs"
+        None,
+        description="Filter by multiple merchant IDs (backward compatibility, use reseller_ids)",
     )
     status: Optional[str] = Field(
         None, description="Filter by call status (completed, failed, etc.)"
@@ -79,7 +97,7 @@ class AnalyticsOptions(BaseModel):
     limit: int = Field(default=50, ge=1, le=1000, description="Items per page")
     group_by: Optional[str] = Field(
         None,
-        description="Group results by field (template, shop_identifier, date, etc.)",
+        description="Group results by field (template, merchant_identifier, date, etc.)",
     )
     time_granularity: Optional[TimeGranularity] = Field(
         None,
@@ -126,14 +144,14 @@ class CallBasedAnalyticsResult(BaseModel):
 
 
 class CallDetailResult(BaseModel):
-    """Individual call detail result"""
+    """Single call detail record for analytics."""
 
     call_id: str
     lead_id: str
     order_id: Optional[str] = None
     template: str
-    merchant_id: str
-    shop_identifier: Optional[str] = None
+    reseller_id: str
+    merchant_identifier: Optional[str] = None
     shop_name: Optional[str] = None
     customer_name: Optional[str] = None
     customer_phone: Optional[str] = None

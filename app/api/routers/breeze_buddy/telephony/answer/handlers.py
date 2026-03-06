@@ -32,7 +32,7 @@ from html import escape as html_escape
 from typing import Any, Dict
 from urllib.parse import quote
 
-from fastapi import Request, Response
+from fastapi import HTTPException, Request, Response, status
 from starlette.responses import HTMLResponse
 
 from app.ai.voice.agents.breeze_buddy.agent.ivr import (
@@ -96,11 +96,17 @@ async def resolve_call_templates(
     # Check if lead exists (outbound call)
     lead = await get_lead_by_call_id(call_sid)
     if lead:
+        reseller = lead.reseller_id or lead.merchant_id
+        if not reseller:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="reseller (or merchant for backward compatibility) is required",
+            )
         # Outbound call - look up template using merchant info from lead
         logger.info(f"[Answer] Outbound call detected, lead: {lead.id}")
         template = await get_template_by_merchant(
-            merchant_id=lead.merchant_id,
-            shop_identifier=lead.shop_identifier,
+            reseller_id=reseller,
+            merchant_identifier=lead.merchant_identifier,
             name=lead.template,
         )
         if not template:
@@ -110,7 +116,7 @@ async def resolve_call_templates(
         return {
             "is_outbound": True,
             "template_id": str(template.id),
-            "merchant_id": lead.merchant_id,
+            "merchant_id": reseller,
         }
 
     # Inbound call - look up templates by outbound number
@@ -176,7 +182,7 @@ async def resolve_call_templates(
         "voice_name": voice_name,
         "ivr_greeting": ivr_greeting,
         "ivr_goodbye": ivr_goodbye,
-        "merchant_id": first_template.merchant_id if first_template else None,
+        "merchant_id": first_template.reseller_id if first_template else None,
     }
 
 
@@ -345,7 +351,7 @@ async def _build_provider_response(
     allocation = await safe_allocate_pod(
         call_sid=call_id,
         provider=provider,
-        merchant_id=result.get("merchant_id"),
+        reseller_id=result.get("merchant_id") or result.get("reseller_id"),
         template="ws",
     )
     if allocation:

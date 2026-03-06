@@ -51,9 +51,9 @@ async def create_call_execution_config(
     call_end_time: time,
     max_retry: int,
     calling_provider: CallProvider,
-    merchant_id: str,
+    reseller_id: str,
     template: str,
-    shop_identifier: Optional[str],
+    merchant_identifier: Optional[str],
     enable_international_call: bool,
     enable_calling: bool = True,
     template_id: Optional[str] = None,
@@ -69,7 +69,7 @@ async def create_call_execution_config(
         pre_checks: List of PreCheckConfig objects for call pre-validation
         telephony_config: Optional telephony provider overrides
     """
-    logger.info(f"Creating call execution config for merchant ID: {merchant_id}")
+    logger.info(f"Creating call execution config for reseller ID: {reseller_id}")
 
     try:
         query_text, values = insert_call_execution_config_query(
@@ -80,10 +80,10 @@ async def create_call_execution_config(
             call_end_time=call_end_time,
             max_retry=max_retry,
             calling_provider=calling_provider,
-            merchant_id=merchant_id,
+            reseller_id=reseller_id,
             template=template,
-            template_id=template_id,
-            shop_identifier=shop_identifier,
+            template_id=template_id,  # NEW
+            merchant_identifier=merchant_identifier,
             enable_international_call=enable_international_call,
             enable_calling=enable_calling,
             pre_checks=_serialize_pre_checks(pre_checks),
@@ -107,48 +107,48 @@ async def create_call_execution_config(
 
 
 async def get_call_execution_config_by_merchant_id(
-    merchant_id: str,
-    shop_identifier: Optional[str] = None,
+    reseller_id: str,
+    merchant_identifier: Optional[str] = None,
 ) -> List[CallExecutionConfig]:
     """
-    Get call execution config by merchant ID.
+    Get call execution config by reseller ID.
     """
-    logger.info(f"Getting call execution config by merchant ID: {merchant_id}")
+    logger.info(f"Getting call execution config by reseller ID: {reseller_id}")
 
     try:
         query_text, values = get_call_execution_config_by_merchant_id_query(
-            merchant_id, shop_identifier
+            reseller_id, merchant_identifier
         )
         result = await run_parameterized_query(query_text, values)
 
         if result:
             decoded_result = decode_call_execution_config_list(result)
             logger.info(
-                f"Found {len(decoded_result)} call execution configs for merchant ID: {merchant_id}"
+                f"Found {len(decoded_result)} call execution configs for reseller ID: {reseller_id}"
             )
             return decoded_result
 
-        if shop_identifier:
-            # If no config is found for the specific shop_identifier, try with NULL
+        if merchant_identifier:
+            # If no config is found for the specific merchant_identifier, try with NULL
             logger.info(
-                f"No config found for shop_identifier {shop_identifier}, trying generic config."
+                f"No config found for merchant_identifier {merchant_identifier}, trying generic config."
             )
             query_text, values = get_call_execution_config_by_merchant_id_query(
-                merchant_id, None
+                reseller_id, None
             )
             result = await run_parameterized_query(query_text, values)
             if result:
                 decoded_result = decode_call_execution_config_list(result)
                 logger.info(
-                    f"Found {len(decoded_result)} generic call execution configs for merchant ID: {merchant_id}"
+                    f"Found {len(decoded_result)} generic call execution configs for reseller ID: {reseller_id}"
                 )
                 return decoded_result
 
-        logger.info(f"No call execution config found with merchant ID: {merchant_id}")
+        logger.info(f"No call execution config found with reseller ID: {reseller_id}")
         return []
 
     except Exception as e:
-        logger.error(f"Error getting call execution config by merchant ID: {e}")
+        logger.error(f"Error getting call execution config by reseller ID: {e}")
         return []
 
 
@@ -164,6 +164,7 @@ async def get_all_call_execution_configs() -> List[CallExecutionConfig]:
 
         if result:
             decoded_result = decode_call_execution_config_list(result)
+            logger.info(f"decoded_result: {decoded_result}")
             logger.info(f"Found {len(decoded_result)} call execution configs")
             return decoded_result
 
@@ -176,9 +177,9 @@ async def get_all_call_execution_configs() -> List[CallExecutionConfig]:
 
 
 async def update_call_execution_config(
-    merchant_id: str,
+    reseller_id: str,
     template: str,
-    shop_identifier: Optional[str] = None,
+    merchant_identifier: Optional[str] = None,
     initial_offset: Optional[int] = None,
     retry_offset: Optional[int] = None,
     call_start_time: Optional[time] = None,
@@ -192,7 +193,7 @@ async def update_call_execution_config(
     telephony_config: Optional[TelephonyConfig] = None,
 ) -> Optional[CallExecutionConfig]:
     """
-    Update an existing call execution config record based on merchant_id, template, and shop_identifier.
+    Update an existing call execution config record based on reseller_id, template, and merchant_identifier.
     Only updates fields that are provided (not None).
 
     Args:
@@ -202,7 +203,7 @@ async def update_call_execution_config(
         telephony_config: Optional telephony provider overrides
     """
     logger.info(
-        f"Updating call execution config for merchant: {merchant_id}, template: {template}, shop_identifier: {shop_identifier}"
+        f"Updating call execution config for reseller: {reseller_id}, template: {template}, merchant_identifier: {merchant_identifier}"
     )
 
     try:
@@ -223,9 +224,9 @@ async def update_call_execution_config(
             serialized_telephony = None
 
         query_text, values = update_call_execution_config_query(
-            merchant_id=merchant_id,
+            reseller_id=reseller_id,
             template=template,
-            shop_identifier=shop_identifier,
+            merchant_identifier=merchant_identifier,
             initial_offset=initial_offset,
             retry_offset=retry_offset,
             call_start_time=call_start_time,
@@ -246,7 +247,7 @@ async def update_call_execution_config(
             return decoded_result
 
         logger.error(
-            f"Failed to update call execution config for merchant: {merchant_id}, template: {template}, shop_identifier: {shop_identifier}"
+            f"Failed to update call execution config for reseller: {reseller_id}, template: {template}, merchant_identifier: {merchant_identifier}"
         )
         return None
 
@@ -305,24 +306,24 @@ async def delete_call_execution_config(config_id: str) -> bool:
 
 async def calling_activation_for_merchant(
     enable_calling: bool,
-    merchant_id: Optional[str] = None,
-    shop_identifier: Optional[str] = None,
+    reseller_id: Optional[str] = None,
+    merchant_identifier: Optional[str] = None,
 ) -> List[CallExecutionConfig]:
     """
     Toggle enable_calling for configs.
-    - If merchant_id is None: All configs across all merchants are updated
-    - If merchant_id is provided but shop_identifier is None: All configs for that merchant are updated
-    - If both merchant_id and shop_identifier are provided: Only that specific config is updated
+    - If reseller_id is None: All configs across all resellers are updated
+    - If reseller_id is provided but merchant_identifier is None: All configs for that reseller are updated
+    - If both reseller_id and merchant_identifier are provided: Only that specific config is updated
     """
     logger.info(
-        f"Toggling calling to {enable_calling} for merchant: {merchant_id}, shop_identifier: {shop_identifier}"
+        f"Toggling calling to {enable_calling} for reseller: {reseller_id}, merchant_identifier: {merchant_identifier}"
     )
 
     try:
         query_text, values = calling_activation_for_merchant_query(
-            merchant_id=merchant_id,
+            reseller_id=reseller_id,
             enable_calling=enable_calling,
-            shop_identifier=shop_identifier,
+            merchant_identifier=merchant_identifier,
         )
 
         result = await run_parameterized_query(query_text, values)
@@ -332,7 +333,7 @@ async def calling_activation_for_merchant(
             return decoded_result
 
         logger.info(
-            f"No configs found for merchant {merchant_id} with shop_identifier {shop_identifier}"
+            f"No configs found for reseller {reseller_id} with merchant_identifier {merchant_identifier}"
         )
         return []
 
@@ -343,29 +344,29 @@ async def calling_activation_for_merchant(
 
 async def get_all_merchants() -> List[str]:
     """
-    Get all unique merchants (shop_identifiers).
+    Get all unique resellers (merchant_identifiers).
 
-    Each shop_identifier represents a distinct merchant in the system.
-    This assumes every shop has at least one call execution config.
+    Each merchant_identifier represents a distinct reseller in the system.
+    This assumes every merchant has at least one call execution config.
 
     Returns:
-        List of unique shop_identifier strings
+        List of unique merchant_identifier strings
     """
-    logger.info("Getting all merchants (shop_identifiers)")
+    logger.info("Getting all resellers (merchant_identifiers)")
 
     try:
         query_text, values = get_all_merchants_query()
         result = await run_parameterized_query(query_text, values)
 
         if result:
-            # Extract shop_identifier from each row
-            merchants = [row["shop_identifier"] for row in result]
-            logger.info(f"Found {len(merchants)} unique merchants")
-            return merchants
+            # Extract merchant_identifier from each row
+            resellers = [row["merchant_identifier"] for row in result]
+            logger.info(f"Found {len(resellers)} unique resellers")
+            return resellers
 
-        logger.info("No merchants found")
+        logger.info("No resellers found")
         return []
 
     except Exception as e:
-        logger.error(f"Error getting all merchants: {e}", exc_info=True)
+        logger.error(f"Error getting all resellers: {e}", exc_info=True)
         return []

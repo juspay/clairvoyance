@@ -90,14 +90,14 @@ def _validate_credential_value(
 
 
 async def create_credential(
-    merchant_id: Optional[str],
+    reseller_id: Optional[str],
     name: str,
     credential_type: CredentialType,
     value: Dict[str, Any],
     description: Optional[str] = None,
 ) -> Optional[Credential]:
     """Create a new credential with optional KMS encryption."""
-    logger.info(f"Creating credential '{name}' for merchant: {merchant_id or 'GLOBAL'}")
+    logger.info(f"Creating credential '{name}' for merchant: {reseller_id or 'GLOBAL'}")
 
     try:
         # Validate value structure matches credential_type
@@ -107,7 +107,7 @@ async def create_credential(
 
         query_text, values = insert_credential_query(
             id=str(uuid4()),
-            merchant_id=merchant_id,
+            reseller_id=reseller_id,
             name=name,
             credential_type=credential_type.value,
             value=stored_value,
@@ -146,7 +146,7 @@ async def get_credential_by_id(
 
 
 async def get_credentials_by_merchant(
-    merchant_id: Optional[str],
+    reseller_id: Optional[str],
     mask: bool = True,
 ) -> List[Credential]:
     """
@@ -154,11 +154,11 @@ async def get_credentials_by_merchant(
     Results ordered: global first, then merchant-specific.
     """
     try:
-        query_text, values = get_credentials_by_merchant_query(merchant_id)
+        query_text, values = get_credentials_by_merchant_query(reseller_id)
         result = await run_parameterized_query(query_text, values)
         return decode_credential_list(result, mask=mask)
     except Exception as e:
-        logger.error(f"Error getting credentials for merchant {merchant_id}: {e}")
+        logger.error(f"Error getting credentials for merchant {reseller_id}: {e}")
         return []
 
 
@@ -174,19 +174,19 @@ async def get_all_credentials(mask: bool = True) -> List[Credential]:
 
 
 async def get_credentials_as_template_vars(
-    merchant_id: str,
+    reseller_id: str,
 ) -> Dict[str, Any]:
     """
     Get credentials as a flat dict for template_vars resolution.
     Merges global + merchant-specific credentials (merchant overrides global).
     """
     try:
-        query_text, values = get_credentials_by_merchant_query(merchant_id)
+        query_text, values = get_credentials_by_merchant_query(reseller_id)
         result = await run_parameterized_query(query_text, values)
         return decode_credentials_as_dict(result)
     except Exception as e:
         logger.error(
-            f"Error getting credentials as template vars for merchant {merchant_id}: {e}"
+            f"Error getting credentials as template vars for merchant {reseller_id}: {e}"
         )
         return {}
 

@@ -6,6 +6,7 @@ import json
 from typing import List, Optional
 
 import asyncpg
+from fastapi import HTTPException, status
 
 from app.ai.voice.agents.breeze_buddy.template.types import (
     ConfigurationModel,
@@ -66,10 +67,22 @@ def decode_template(result: asyncpg.Record) -> Optional[TemplateModel]:
             secrets_data = json.loads(secrets_data)
         # If it's already a dict (from JSONB), use it directly
 
+    reseller_id = result.get("reseller_id") or result.get("merchant_id")
+
+    if not reseller_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="reseller (or merchant for backward compatibility) is required",
+        )
+
+    merchant_identifier = result.get("merchant_identifier") or result.get(
+        "shop_identifier"
+    )
+
     return TemplateModel(
         id=str(result["id"]),
-        merchant_id=result["merchant_id"],
-        shop_identifier=result["shop_identifier"],
+        reseller_id=reseller_id,
+        merchant_identifier=merchant_identifier,
         name=result["name"],
         flow=flow_data,
         expected_payload_schema=expected_payload_schema_data,

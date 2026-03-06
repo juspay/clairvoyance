@@ -62,9 +62,11 @@ def _decode_single_row(row: asyncpg.Record) -> CallExecutionConfig:
         call_end_time=row["call_end_time"],
         max_retry=row["max_retry"],
         calling_provider=CallProvider(row["calling_provider"]),
-        merchant_id=row["merchant_id"],
+        reseller_id=row["merchant_id"] or row["reseller_id"],
+        merchant_id=row["merchant_id"] or row["reseller_id"],  # Backward compatibility
         template=row["template"],
-        shop_identifier=row["shop_identifier"],
+        merchant_identifier=row["shop_identifier"] or row["merchant_identifier"],
+        shop_identifier=row["shop_identifier"] or row["merchant_identifier"],
         enable_international_call=row["enable_international_call"],
         enable_calling=row["enable_calling"],
         pre_checks=_decode_pre_checks(row.get("pre_checks")),

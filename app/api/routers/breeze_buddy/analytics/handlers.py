@@ -7,6 +7,8 @@ import json
 from datetime import datetime, timedelta
 from typing import Any, Dict
 
+from fastapi import HTTPException, status
+
 from app.database.accessor.breeze_buddy.analytics import (
     get_analytics_count_from_db,
     get_call_details_from_db,
@@ -232,14 +234,26 @@ async def get_call_details_analytics(
                 elif isinstance(transcription_data, str):
                     transcript = transcription_data
 
+        # Inline fallbacks for backward compatibility
+        reseller_id = tracker.get("reseller_id") or tracker.get("merchant_id")
+        if not reseller_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="reseller (or merchant for backward compatibility) is required",
+            )
+
+        merchant_identifier = tracker.get("merchant_identifier") or tracker.get(
+            "shop_identifier"
+        )
+
         results.append(
             CallDetailResult(
                 call_id=tracker.get("call_id") or tracker["id"],
                 lead_id=tracker["id"],
                 order_id=tracker.get("request_id"),
                 template=tracker["template"],
-                merchant_id=tracker["merchant_id"],
-                shop_identifier=tracker.get("shop_identifier"),
+                reseller_id=reseller_id,
+                merchant_identifier=merchant_identifier,
                 shop_name=payload.get("shop_name") if payload else None,
                 customer_name=payload.get("customer_name") if payload else None,
                 customer_phone=payload.get("phone") if payload else None,
@@ -689,10 +703,10 @@ async def get_lead_status_counts(
 ) -> Dict[str, Any]:
     """
     Get lead status counts with pagination and search.
-    Groups by merchant_id and shop_identifier, sorted by total_count DESC.
+    Groups by reseller_id and shop_identifier, sorted by total_count DESC.
 
     Args:
-        filters: Analytics filters (date range, merchant_id, shop_identifier for search)
+        filters: Analytics filters (date range, reseller_id, shop_identifier for search)
         options: Analytics options (page, limit)
         current_user: Current authenticated user info
 
@@ -709,20 +723,22 @@ async def get_lead_status_counts(
 
     # Extract search parameters from filters
     # These are partial text searches, not exact matches
-    search_merchant_id = filters.get("merchant_id")
-    search_shop_identifier = filters.get("shop_identifier")
+    search_reseller_id = filters.get("reseller_id")
+    search_merchant_identifier = filters.get("merchant_identifier")
 
     # Remove search fields from filters before passing to database
     # (they're handled separately as partial matches)
     db_filters = {
-        k: v for k, v in filters.items() if k not in ["merchant_id", "shop_identifier"]
+        k: v
+        for k, v in filters.items()
+        if k not in ["reseller_id", "merchant_identifier"]
     }
 
     # If user is not admin, automatically filter by their merchant_id
     if current_user.role != "admin":
-        # Use first merchant_id from the list (users typically have one)
-        db_filters["merchant_id"] = (
-            current_user.merchant_ids[0] if current_user.merchant_ids else None
+        # Use first reseller_id from the list (users typically have one)
+        db_filters["reseller_id"] = (
+            current_user.reseller_ids[0] if current_user.reseller_ids else None
         )
 
     # Get lead status counts from database with pagination
@@ -730,8 +746,8 @@ async def get_lead_status_counts(
         filters=db_filters,
         page=page,
         limit=limit,
-        search_merchant_id=search_merchant_id,
-        search_shop_identifier=search_shop_identifier,
+        search_reseller_id=search_reseller_id,
+        search_merchant_identifier=search_merchant_identifier,
     )
 
     # Format results
@@ -739,9 +755,11 @@ async def get_lead_status_counts(
     for row in result["results"]:
         formatted_results.append(
             {
-                "merchant_id": row.get("merchant_id"),
-                "shop_identifier": (
-                    row.get("shop_identifier") if row.get("shop_identifier") else None
+                "reseller_id": row.get("reseller_id"),
+                "merchant_identifier": (
+                    row.get("merchant_identifier")
+                    if row.get("merchant_identifier")
+                    else None
                 ),
                 "backlog_count": row.get("backlog_count", 0) or 0,
                 "processing_count": row.get("processing_count", 0) or 0,

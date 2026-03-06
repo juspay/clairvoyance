@@ -9,7 +9,8 @@ class PushLeadRequest(BaseModel):
     request_id: str
     payload: Dict[str, Any]
     template: str
-    merchant: str
+    reseller: Optional[str] = None
+    merchant: Optional[str] = None
     identifier: Optional[str] = None
     reporting_webhook_url: str | None = None
     execution_mode: Optional[ExecutionMode] = (

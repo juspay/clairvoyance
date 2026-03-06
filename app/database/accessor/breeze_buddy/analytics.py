@@ -257,7 +257,13 @@ async def get_inbound_count_from_db(
     )
 
     # Normalize group_by to prevent query/accessor divergence
-    allowed_group_by_fields = {"shop_identifier", "template", "merchant_id"}
+    allowed_group_by_fields = {
+        "shop_identifier",
+        "template",
+        "merchant_id",
+        "reseller_id",
+        "merchant_identifier",
+    }
     if group_by and group_by not in allowed_group_by_fields:
         logger.warning(
             f"[Analytics DB] Invalid group_by field '{group_by}', falling back to aggregate mode"
@@ -354,19 +360,19 @@ async def get_lead_status_counts_from_db(
     filters: Dict[str, Any],
     page: int = 1,
     limit: int = 10,
-    search_merchant_id: Optional[str] = None,
-    search_shop_identifier: Optional[str] = None,
+    search_reseller_id: Optional[str] = None,
+    search_merchant_identifier: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Get lead status counts with pagination and search.
-    Always groups by merchant_id and shop_identifier, sorted by total_count DESC.
+    Always groups by reseller and merchant_identifier, sorted by total_count DESC.
 
     Args:
-        filters: Analytics filters (merchant_id, merchant_ids, date range, etc.)
+        filters: Analytics filters (merchant_identifier, reseller_ids, date range, etc.)
         page: Page number (1-indexed)
         limit: Number of rows per page
-        search_merchant_id: Partial merchant_id to search for (case-insensitive)
-        search_shop_identifier: Partial shop_identifier to search for (case-insensitive)
+        search_reseller_id: Partial reseller_id to search for (case-insensitive)
+        search_merchant_identifier: Partial merchant_identifier to search for (case-insensitive)
 
     Returns:
         Dict with 'results' (list of counts) and 'pagination' (total, page, limit, total_pages)
@@ -374,19 +380,19 @@ async def get_lead_status_counts_from_db(
     logger.info(
         f"[Analytics DB] Getting lead status counts with filters: {filters}, "
         f"page: {page}, limit: {limit}, "
-        f"search_merchant_id: {search_merchant_id}, search_shop_identifier: {search_shop_identifier}"
+        f"search_reseller_id: {search_reseller_id}, search_merchant_identifier: {search_merchant_identifier}"
     )
 
     try:
         # Get paginated data
         query_text, values = get_analytics_lead_status_counts_query(
-            filters, page, limit, search_merchant_id, search_shop_identifier
+            filters, page, limit, search_reseller_id, search_merchant_identifier
         )
         result = await run_parameterized_query(query_text, values)
 
         # Get total count for pagination
         total_query_text, total_values = get_analytics_lead_status_counts_total_query(
-            filters, search_merchant_id, search_shop_identifier
+            filters, search_reseller_id, search_merchant_identifier
         )
         total_result = await run_parameterized_query(total_query_text, total_values)
         total_count = total_result[0]["total"] if total_result else 0

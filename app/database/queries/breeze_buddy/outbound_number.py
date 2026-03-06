@@ -20,11 +20,12 @@ def insert_outbound_number_query(
     status: OutboundNumberStatus,
     channels: Optional[int] = None,
     maximum_channels: Optional[int] = None,
-    merchant_id: Optional[str] = None,
-    shop_identifier: Optional[str] = None,
+    reseller_id: Optional[str] = None,
+    merchant_identifier: Optional[str] = None,
 ) -> Tuple[str, List[Any]]:
     """
     Generate query to insert outbound number record.
+    Populates both new and old columns for backward compatibility.
     """
     text = f"""
         INSERT INTO "{OUTBOUND_NUMBER_TABLE}"
@@ -36,11 +37,13 @@ def insert_outbound_number_query(
             "channels",
             "maximum_channels",
             "merchant_id",
+            "reseller_id",
             "shop_identifier",
+            "merchant_identifier",
             "created_at",
             "updated_at"
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *;
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING *;
     """
 
     values = [
@@ -50,8 +53,10 @@ def insert_outbound_number_query(
         status.value,
         channels,
         maximum_channels,
-        merchant_id,
-        shop_identifier,
+        reseller_id,  # merchant_id (for backward compatibility)
+        reseller_id,  # reseller_id
+        merchant_identifier,  # shop_identifier (for backward compatibility)
+        merchant_identifier,  # merchant_identifier
         datetime.now(),
         datetime.now(),
     ]
@@ -62,8 +67,15 @@ def insert_outbound_number_query(
 def get_outbound_number_by_id_query(outbound_number_id: str) -> Tuple[str, List[Any]]:
     """
     Generate query to get outbound number by ID.
+    Uses COALESCE for backward compatibility with old column names.
     """
-    text = f'SELECT * FROM "{OUTBOUND_NUMBER_TABLE}" WHERE "id" = $1;'
+    text = f"""
+        SELECT *,
+               COALESCE(reseller_id, merchant_id) AS reseller_id,
+               COALESCE(merchant_identifier, shop_identifier) AS merchant_identifier
+        FROM "{OUTBOUND_NUMBER_TABLE}"
+        WHERE "id" = $1;
+    """
     values = [outbound_number_id]
     return text, values
 
@@ -189,9 +201,13 @@ def get_outbound_number_based_on_status_and_provider_query(
 ) -> Tuple[str, List[Any]]:
     """
     Generate query to get outbound number by status and provider.
+    Uses COALESCE for backward compatibility with old column names.
     """
     text = f"""
-        SELECT * FROM "{OUTBOUND_NUMBER_TABLE}"
+        SELECT *,
+               COALESCE(reseller_id, merchant_id) AS reseller_id,
+               COALESCE(merchant_identifier, shop_identifier) AS merchant_identifier
+        FROM "{OUTBOUND_NUMBER_TABLE}"
         WHERE "status" = $1 AND "provider" = $2
         ORDER BY "created_at" DESC;
     """

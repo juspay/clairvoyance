@@ -80,8 +80,8 @@ def mask_template_secrets(template: TemplateModel) -> TemplateModel:
     # Create a copy with masked secrets
     return TemplateModel(
         id=template.id,
-        merchant_id=template.merchant_id,
-        shop_identifier=template.shop_identifier,
+        reseller_id=template.reseller_id,
+        merchant_identifier=template.merchant_identifier,
         name=template.name,
         flow=template.flow,
         expected_payload_schema=template.expected_payload_schema,

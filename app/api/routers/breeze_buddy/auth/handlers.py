@@ -80,8 +80,8 @@ async def login_handler(
             user_id=user.id,
             username=user.username,
             role=user.role,
-            merchant_ids=user.merchant_ids,
-            shop_identifiers=user.shop_identifiers,
+            reseller_ids=user.reseller_ids,
+            merchant_identifiers=user.merchant_identifiers,
             email=user.email,
         )
 
@@ -90,7 +90,7 @@ async def login_handler(
 
         logger.info(
             f"Successful login for database user: {user.username} "
-            f"(role: {user.role}, merchants: {user.merchant_ids}, shops: {user.shop_identifiers})"
+            f"(role: {user.role}, resellers: {user.reseller_ids}, shops: {user.merchant_identifiers})"
         )
 
         return TokenResponse(
@@ -119,8 +119,8 @@ async def login_handler(
             user_id="legacy_admin",
             username=login_request.username,
             role=UserRole.ADMIN,
-            merchant_ids=["*"],  # Admin has access to all merchants
-            shop_identifiers=["*"],  # Admin has access to all shops
+            reseller_ids=["*"],  # Admin has access to all resellers
+            merchant_identifiers=["*"],  # Admin has access to all merchants
             email=None,
         )
 
@@ -205,8 +205,8 @@ async def generate_s2s_token_handler(request: S2STokenRequest) -> S2STokenRespon
         user_id=user.id,
         username=user.username,
         role=user.role,
-        merchant_ids=user.merchant_ids,
-        shop_identifiers=user.shop_identifiers,
+        reseller_ids=user.reseller_ids,
+        merchant_identifiers=user.merchant_identifiers,
         email=user.email,
         expires_delta=expires_delta,
     )

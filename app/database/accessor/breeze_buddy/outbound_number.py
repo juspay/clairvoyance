@@ -40,8 +40,8 @@ async def create_outbound_number(
     number: str,
     provider: CallProvider,
     status: OutboundNumberStatus,
-    merchant_id: str,
-    shop_identifier: Optional[str] = None,
+    reseller_id: str,
+    merchant_identifier: Optional[str] = None,
     channels: Optional[int] = None,
     maximum_channels: Optional[int] = None,
 ) -> Optional[OutboundNumber]:
@@ -56,8 +56,8 @@ async def create_outbound_number(
             number=number,
             provider=provider,
             status=status,
-            merchant_id=merchant_id,
-            shop_identifier=shop_identifier,
+            reseller_id=reseller_id,
+            merchant_identifier=merchant_identifier,
             channels=channels,
             maximum_channels=maximum_channels,
         )

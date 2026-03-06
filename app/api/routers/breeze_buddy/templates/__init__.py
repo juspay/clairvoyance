@@ -6,7 +6,7 @@ Templates define the conversational flow for automated calls.
 
 Endpoints:
 - POST   /templates           - Create new template
-- GET    /templates           - Get templates (filtered by merchant/shop/name)
+- GET    /templates           - Get templates (filtered by reseller/shop/name)
 - PUT    /templates/{id}      - Replace existing template by ID
 - DELETE /templates/{id}      - Delete template by ID (admin only)
 
@@ -15,7 +15,7 @@ For backward compatibility, old endpoints are available in deprecated/template.p
 
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.ai.voice.agents.breeze_buddy.template.types import (
     CreateTemplateRequest,
@@ -37,7 +37,7 @@ from .handlers import (
     list_templates_handler,
     replace_template_handler,
 )
-from .rbac import require_admin_or_merchant_owner
+from .rbac import require_admin_or_reseller_owner
 
 router = APIRouter()
 
@@ -62,7 +62,7 @@ async def create_template(
 
     Request Body:
         {
-            "merchant_id": "shop_123",
+            "reseller_id": "shop_123",
             "name": "order-confirmation",
             "shop_identifier": "shop_123",
             "is_active": true,
@@ -88,9 +88,15 @@ async def create_template(
             "message": "Template 'order-confirmation' created successfully with 5 nodes"
         }
     """
-    # RBAC: Check permission to create template for this merchant
-    require_admin_or_merchant_owner(
-        current_user, template_data.merchant_id, operation="create templates"
+    reseller = template_data.reseller_id or template_data.merchant_id
+    if not reseller:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="reseller (or merchant for backward compatibility) is required",
+        )
+    # RBAC: Check permission to create template for this reseller
+    require_admin_or_reseller_owner(
+        current_user, reseller, operation="create templates"
     )
 
     return await create_template_handler(template_data, current_user)
@@ -99,8 +105,12 @@ async def create_template(
 @router.get("/templates/list", response_model=TemplateListResponse)
 async def list_templates(
     merchant_id: Optional[str] = Query(None, description="Filter by merchant ID"),
+    reseller_id: Optional[str] = Query(None, description="Filter by reseller ID"),
     shop_identifier: Optional[str] = Query(
         None, description="Filter by shop identifier"
+    ),
+    merchant_identifier: Optional[str] = Query(
+        None, description="Filter by merchant identifier"
     ),
     include_inactive: bool = Query(
         False, description="Include inactive templates (default: false)"
@@ -114,8 +124,8 @@ async def list_templates(
     Automatically filters based on user's RBAC permissions.
 
     Query Parameters:
-    - merchant_id: Optional filter by specific merchant ID
-    - shop_identifier: Optional filter by specific shop identifier
+    - reseller_id: Optional filter by specific reseller ID
+    - merchant_identifier: Optional filter by specific shop identifier
     - include_inactive: Include inactive templates (default: false)
 
     RBAC Behavior:
@@ -133,14 +143,16 @@ async def list_templates(
 
     Example Requests:
         GET /templates/list                                    # All accessible templates
-        GET /templates/list?merchant_id=shop_123              # Templates for specific merchant
+        GET /templates/list?reseller_id=reseller_123              # Templates for specific reseller
         GET /templates/list?include_inactive=true             # Include inactive templates
 
     Returns:
         TemplateListResponse with templates array and total count
     """
+    reseller = reseller_id or merchant_id
+    identifier = merchant_identifier or shop_identifier
     return await list_templates_handler(
-        merchant_id, shop_identifier, include_inactive, current_user
+        reseller, identifier, include_inactive, current_user
     )
 
 

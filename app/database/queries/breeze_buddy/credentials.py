@@ -10,7 +10,7 @@ CREDENTIALS_TABLE = "credentials"
 
 def insert_credential_query(
     id: str,
-    merchant_id: Optional[str],
+    reseller_id: Optional[str],
     name: str,
     credential_type: str,
     value: str,
@@ -20,14 +20,15 @@ def insert_credential_query(
     """Generate query to insert a credential record."""
     text = f"""
         INSERT INTO "{CREDENTIALS_TABLE}"
-        ("id", "merchant_id", "name", "credential_type", "value",
+        ("id", "reseller_id","merchant_id", "name", "credential_type", "value",
          "is_encrypted", "description", "is_active", "created_at", "updated_at")
         VALUES ($1, $2, $3, $4, $5, $6, $7, TRUE, $8, $9)
         RETURNING *;
     """
     values = [
         id,
-        merchant_id,
+        reseller_id,
+        reseller_id,
         name,
         credential_type,
         value,
@@ -46,25 +47,25 @@ def get_credential_by_id_query(credential_id: str) -> Tuple[str, List[Any]]:
 
 
 def get_credentials_by_merchant_query(
-    merchant_id: Optional[str],
+    reseller_id: Optional[str],
 ) -> Tuple[str, List[Any]]:
     """
     Generate query to get credentials for a merchant.
-    If merchant_id is provided, returns merchant-specific + global credentials.
-    If merchant_id is None, returns only global credentials.
+    If reseller is provided, returns reseller-specific + global credentials.
+    If reseller is None, returns only global credentials.
     """
-    if merchant_id:
+    if reseller_id:
         text = f"""
             SELECT * FROM "{CREDENTIALS_TABLE}"
-            WHERE ("merchant_id" = $1 OR "merchant_id" IS NULL)
+            WHERE (COALESCE("reseller_id", "merchant_id") = $1 OR COALESCE("reseller_id", "merchant_id") IS NULL)
             AND "is_active" = TRUE
-            ORDER BY "merchant_id" NULLS FIRST, "name" ASC;
+            ORDER BY COALESCE("reseller_id", "merchant_id") NULLS FIRST, "name" ASC;
         """
-        return text, [merchant_id]
+        return text, [reseller_id]
     else:
         text = f"""
             SELECT * FROM "{CREDENTIALS_TABLE}"
-            WHERE "merchant_id" IS NULL AND "is_active" = TRUE
+            WHERE COALESCE("reseller_id", "merchant_id") IS NULL AND "is_active" = TRUE
             ORDER BY "name" ASC;
         """
         return text, []
@@ -72,7 +73,7 @@ def get_credentials_by_merchant_query(
 
 def get_all_credentials_query() -> Tuple[str, List[Any]]:
     """Generate query to get all credentials."""
-    text = f'SELECT * FROM "{CREDENTIALS_TABLE}" where "is_active" = TRUE ORDER BY "merchant_id" NULLS FIRST, "name" ASC;'
+    text = f'SELECT * FROM "{CREDENTIALS_TABLE}" where "is_active" = TRUE ORDER BY (COALESCE("reseller_id", "merchant_id")) NULLS FIRST, "name" ASC;'
     return text, []
 
 

@@ -13,8 +13,8 @@ from app.services.redis.client import get_redis_service
 
 async def set_transfer_flag(
     call_sid: str,
-    merchant_id: str,
-    shop_identifier: str,
+    reseller_id: str,
+    merchant_identifier: str,
     transfer_number: Optional[str] = None,
     customer_phone_number: Optional[str] = None,
     ttl_seconds: int = 7200,  # 2 hours
@@ -27,8 +27,8 @@ async def set_transfer_flag(
 
     Args:
         call_sid: Call SID from telephony provider
-        merchant_id: Merchant identifier
-        shop_identifier: Shop identifier
+        reseller_id: Merchant identifier
+        merchant_identifier: Shop identifier
         agent_id: Optional pre-locked agent ID
         customer_phone_number: Optional customer phone number for Plivo dial-back
         ttl_seconds: Time to live in seconds (default: 86400 = 1 day)
@@ -39,8 +39,8 @@ async def set_transfer_flag(
     key = f"transfer:{call_sid}"
     value = json.dumps(
         {
-            "merchant_id": merchant_id,
-            "shop_identifier": shop_identifier,
+            "reseller_id": reseller_id,
+            "merchant_identifier": merchant_identifier,
             "transfer_number": transfer_number,
             "customer_phone_number": customer_phone_number,
         }
@@ -52,7 +52,7 @@ async def set_transfer_flag(
     if success:
         logger.info(
             f"[TRANSFER REDIS] Set flag for call {call_sid}: "
-            f"merchant={merchant_id}, shop={shop_identifier}, ttl={ttl_seconds}s"
+            f"reseller={reseller_id}, shop={merchant_identifier}, ttl={ttl_seconds}s"
         )
     else:
         logger.error(f"[TRANSFER REDIS] Failed to set flag for call {call_sid}")
@@ -68,7 +68,7 @@ async def get_transfer_flag(call_sid: str) -> Optional[Dict[str, Any]]:
         call_sid: Call SID from telephony provider
 
     Returns:
-        Dict with merchant_id, shop_identifier, agent_id or None if not found
+        Dict with reseller_id, merchant_identifier, agent_id or None if not found
     """
     key = f"transfer:{call_sid}"
     redis_service = await get_redis_service()

@@ -73,7 +73,7 @@ async def _build_resolution_context(
     1. Credentials from credentials table (by credential_id if provided)
     2. Template secrets (API keys, tokens, base URLs)
     3. Lead payload (customer data, order data)
-    4. Core lead fields (merchant_id, lead_id, etc.)
+    4. Core lead fields (reseller_id, lead_id, etc.)
     """
     context: Dict[str, Any] = {}
 
@@ -102,14 +102,16 @@ async def _build_resolution_context(
         context.update(lead.payload)
 
     # 4. Core lead fields available as placeholders
-    context["merchant_id"] = lead.merchant_id
+    context["reseller_id"] = lead.merchant_id or lead.reseller_id
     context["lead_id"] = lead.id
     if lead.request_id:
         context["request_id"] = lead.request_id
     if lead.template:
         context["template_name"] = lead.template
-    if lead.shop_identifier:
-        context["shop_identifier"] = lead.shop_identifier
+    if lead.merchant_identifier:
+        context["merchant_identifier"] = (
+            lead.shop_identifier or lead.merchant_identifier
+        )
 
     return context
 

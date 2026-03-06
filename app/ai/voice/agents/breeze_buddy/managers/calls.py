@@ -6,6 +6,8 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
+from fastapi import HTTPException, status
+
 from app.ai.voice.agents.breeze_buddy.managers.pre_checks import run_pre_checks
 from app.ai.voice.agents.breeze_buddy.managers.utils import (
     prepare_and_store_initial_greeting,
@@ -64,12 +66,21 @@ async def _get_lead_config(lead: LeadCallTracker) -> Optional[CallExecutionConfi
     """
     Retrieves the call execution configuration for a given lead.
     """
+    reseller_id = lead.reseller_id or lead.merchant_id
+    merchant_identifier = lead.merchant_identifier or lead.shop_identifier
+
+    if not reseller_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="reseller_id (or merchant_id for backward compatibility) is required",
+        )
+
     configs = await get_call_execution_config_by_merchant_id(
-        lead.merchant_id, lead.shop_identifier
+        reseller_id, merchant_identifier
     )
     if not configs:
         logger.warning(
-            f"No call execution config found for merchant: {lead.merchant_id} and shop: {lead.shop_identifier}"
+            f"No call execution config found for reseller: {reseller_id} and shop: {merchant_identifier}"
         )
         return None
 
@@ -172,7 +183,7 @@ async def _get_available_number(
     Finds an available outbound number for a given configuration.
 
     First tries the new approach (template with outbound_number_id).
-    Falls back to backward compatible approach (matching by merchant/shop).
+    Falls back to backward compatible approach (matching by reseller/shop).
     """
 
     number = None
@@ -197,9 +208,18 @@ async def _get_available_number(
                 number = outbound_number
 
     else:
+        reseller_id = config.reseller_id or config.merchant_id
+        merchant_identifier = config.merchant_identifier or config.shop_identifier
+
+        if not reseller_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="reseller (or merchant for backward compatibility) is required",
+            )
+
         logger.info(
             f"Using backward compatible approach: looking for outbound number "
-            f"matching merchant {config.merchant_id}, shop {config.shop_identifier}"
+            f"matching reseller {reseller_id}, shop {merchant_identifier}"
         )
 
         # Get all available numbers
@@ -207,11 +227,11 @@ async def _get_available_number(
             OutboundNumberStatus.AVAILABLE, config.calling_provider
         )
 
-        # Filter by merchant_id and shop_identifier as none for fallback
+        # Filter by reseller_id and merchant_identifier as none for fallback
         matching_numbers = [
             n
             for n in all_available_numbers
-            if n.merchant_id is None and n.shop_identifier is None
+            if n.reseller_id is None and n.merchant_identifier is None
         ]
 
         if matching_numbers:
@@ -229,15 +249,23 @@ async def _get_available_number(
                     break
 
     if not number:
+        # Support both new and old field names for config
+        config_reseller_id = config.reseller_id or config.merchant_id
+        config_merchant_identifier = (
+            config.merchant_identifier or config.shop_identifier
+        )
         logger.warning(
-            f"No outbound number found for merchant {config.merchant_id}, "
-            f"template {config.template}, shop {config.shop_identifier}"
+            f"No outbound number found for reseller {config_reseller_id}, "
+            f"template {config.template}, shop {config_merchant_identifier}"
         )
         return None
 
+    # Support both new and old field names for config
+    config_reseller_id = config.reseller_id or config.merchant_id
+    config_merchant_identifier = config.merchant_identifier or config.shop_identifier
     logger.info(
         f"Using outbound number {number.number} (provider: {number.provider}) "
-        f"for template {config.template}, merchant {config.merchant_id}, shop {config.shop_identifier}"
+        f"for template {config.template}, reseller {config_reseller_id}, shop {config_merchant_identifier}"
     )
     return number
 
@@ -326,11 +354,19 @@ async def _retry_call(
         next_attempt_at = datetime.now(timezone.utc) + timedelta(
             seconds=config.retry_offset
         )
+        reseller = lead.reseller_id or lead.merchant_id
+        if not reseller:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="reseller_id (or merchant_id for backward compatibility) is required",
+            )
+
+        identifier = lead.merchant_identifier or lead.shop_identifier
         await create_lead_call_tracker(
             id=str(uuid.uuid4()),
-            merchant_id=lead.merchant_id,
+            reseller_id=reseller,
             template=lead.template,
-            shop_identifier=lead.shop_identifier,
+            merchant_identifier=identifier,
             next_attempt_at=next_attempt_at,
             payload=lead.payload,
             attempt_count=lead.attempt_count + 1,
@@ -424,20 +460,20 @@ async def process_backlog_leads():
                 if not config:
                     await release_lock_on_lead_by_id(locked_lead.id)
                     continue
-
+                # Support both new and old field names for lead
+                lead_reseller_id = locked_lead.reseller_id or locked_lead.merchant_id
                 if not config.enable_calling:
                     logger.info(
-                        f"Skipping lead {locked_lead.id} - calling is disabled for merchant {locked_lead.merchant_id}, template {locked_lead.template}"
+                        f"Skipping lead {locked_lead.id} - calling is disabled for reseller {lead_reseller_id}, template {locked_lead.template}"
                     )
                     await release_lock_on_lead_by_id(locked_lead.id)
                     continue
-
                 # Check if customer phone number is blacklisted
                 blacklist_phone = (locked_lead.payload or {}).get(
                     "customer_mobile_number"
                 )
                 if blacklist_phone and await is_number_blacklisted(
-                    blacklist_phone, locked_lead.merchant_id
+                    blacklist_phone, lead_reseller_id
                 ):
                     logger.info(
                         f"Skipping lead {locked_lead.id} - phone number {blacklist_phone} is blacklisted"
@@ -460,10 +496,16 @@ async def process_backlog_leads():
                     )
                     await release_lock_on_lead_by_id(locked_lead.id)
                     continue
-
+                reseller = config.reseller_id or config.merchant_id
+                if not reseller:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="reseller (or merchant for backward compatibility) is required",
+                    )
                 template = await get_template_by_merchant(
-                    merchant_id=config.merchant_id,
-                    shop_identifier=config.shop_identifier,
+                    reseller_id=reseller,
+                    merchant_identifier=config.merchant_identifier
+                    or config.shop_identifier,
                     name=config.template,
                 )
 
@@ -525,7 +567,7 @@ async def process_backlog_leads():
                 call = call_provider.make_call(
                     customer_mobile,
                     number_to_use.number,
-                    merchant_id=locked_lead.merchant_id,
+                    reseller_id=lead_reseller_id,
                     template_name=locked_lead.template,
                 )
 
@@ -594,8 +636,12 @@ async def process_backlog_leads():
                         retry_calling_provider = CallProvider.EXOTEL
                     elif number_to_use.provider == CallProvider.EXOTEL:
                         if not config.enable_international_call:
+                            # Support both new and old field names for lead
+                            lead_reseller_id = (
+                                locked_lead.reseller_id or locked_lead.merchant_id
+                            )
                             logger.warning(
-                                f"International calls disabled for merchant {locked_lead.merchant_id}. Skipping retry with Twilio."
+                                f"International calls disabled for reseller {lead_reseller_id}. Skipping retry with Twilio."
                             )
                             await update_lead_call_completion_details(
                                 id=locked_lead.id,
@@ -654,8 +700,8 @@ async def process_backlog_leads():
                     if retry_numbers:
                         for number in retry_numbers:
                             if (
-                                number.merchant_id is None
-                                and number.shop_identifier is None
+                                number.reseller_id is None
+                                and number.merchant_identifier is None
                             ):
                                 if retry_calling_provider == CallProvider.EXOTEL:
                                     if (
@@ -708,7 +754,7 @@ async def process_backlog_leads():
                     retry_call = retry_call_provider.make_call(
                         retry_customer_mobile,
                         retry_number_to_use.number,
-                        merchant_id=locked_lead.merchant_id,
+                        reseller_id=lead_reseller_id,
                         template_name=locked_lead.template,
                     )
 

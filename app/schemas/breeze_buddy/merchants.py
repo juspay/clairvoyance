@@ -8,8 +8,8 @@ from pydantic import BaseModel
 class MerchantsResponse(BaseModel):
     """Response for listing all merchants.
 
-    Returns unique shop_identifiers from call_execution_config.
-    Each shop_identifier represents a distinct merchant in the system.
+    Returns unique merchant_identifiers from call_execution_config.
+    Each merchant_identifier represents a distinct merchant in the system.
     """
 
     merchants: List[str]

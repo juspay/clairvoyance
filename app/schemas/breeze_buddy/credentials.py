@@ -19,6 +19,10 @@ class CredentialType(str, Enum):
 class CreateCredentialRequest(BaseModel):
     """Request to create a credential"""
 
+    reseller_id: Optional[str] = Field(
+        default=None,
+        description="Reseller ID. NULL for global credentials available to all resellers.",
+    )
     merchant_id: Optional[str] = Field(
         default=None,
         description="Merchant ID. NULL for global credentials available to all merchants.",
@@ -50,6 +54,7 @@ class Credential(BaseModel):
     """Credential model returned from DB (value is always masked in API responses)"""
 
     id: str
+    reseller_id: Optional[str] = None
     merchant_id: Optional[str] = None
     name: str
     credential_type: CredentialType

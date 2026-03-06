@@ -16,9 +16,9 @@ OUTBOUND_NUMBER_TABLE = "outbound_number"
 # Lead call tracker queries
 def insert_lead_call_tracker_query(
     id: str,
-    merchant_id: str,
+    reseller_id: str,
     template: str,
-    shop_identifier: Optional[str],
+    merchant_identifier: Optional[str],
     next_attempt_at: Optional[datetime],
     payload: Optional[Dict[str, Any]],
     meta_data: Optional[Dict[str, Any]],
@@ -38,6 +38,7 @@ def insert_lead_call_tracker_query(
     Generate query to insert lead call tracker record.
 
     Args:
+        reseller_id: Reseller ID (also used as merchant_id for backward compatibility)
         template_id: UUID of the template (preferred, for referential integrity)
         template: Name of the template (kept for backward compatibility)
         execution_mode: Execution mode (TELEPHONY, TELEPHONY_TEST, DAILY, DAILY_TEST)
@@ -50,8 +51,10 @@ def insert_lead_call_tracker_query(
         (
             "id",
             "merchant_id",
+            "reseller_id",
             "template",
             "template_id",
+            "merchant_identifier",
             "shop_identifier",
             "request_id",
             "next_attempt_at",
@@ -69,15 +72,17 @@ def insert_lead_call_tracker_query(
             "created_at",
             "updated_at"
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20) RETURNING *;
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22) RETURNING *;
     """
 
     values = [
         id,
-        merchant_id,
+        reseller_id,  # merchant_id (for backward compatibility)
+        reseller_id,  # reseller_id
         template,
         template_id,
-        shop_identifier,
+        merchant_identifier,  # merchant_identifier
+        merchant_identifier,  # shop_identifier (for backward compatibility)
         request_id,
         next_attempt_at,
         json.dumps(payload) if payload else None,
@@ -169,9 +174,13 @@ def update_lead_call_details_query(
 def get_lead_by_call_id_query(call_id: str) -> Tuple[str, List[Any]]:
     """
     Generate query to get lead by call ID.
+    Uses COALESCE for backward compatibility with old column names.
     """
     text = f"""
-        SELECT * FROM "{LEAD_CALL_TRACKER_TABLE}"
+        SELECT *,
+               COALESCE(reseller_id, merchant_id) AS reseller_id,
+               COALESCE(merchant_identifier, shop_identifier) AS merchant_identifier
+        FROM "{LEAD_CALL_TRACKER_TABLE}"
         WHERE "call_id" = $1;
     """
     values = [call_id]
@@ -181,9 +190,13 @@ def get_lead_by_call_id_query(call_id: str) -> Tuple[str, List[Any]]:
 def get_lead_by_id_query(lead_id: str) -> Tuple[str, List[Any]]:
     """
     Generate query to get lead by ID.
+    Uses COALESCE for backward compatibility with old column names.
     """
     text = f"""
-        SELECT * FROM "{LEAD_CALL_TRACKER_TABLE}"
+        SELECT *,
+               COALESCE(reseller_id, merchant_id) AS reseller_id,
+               COALESCE(merchant_identifier, shop_identifier) AS merchant_identifier
+        FROM "{LEAD_CALL_TRACKER_TABLE}"
         WHERE "id" = $1;
     """
     values = [lead_id]
