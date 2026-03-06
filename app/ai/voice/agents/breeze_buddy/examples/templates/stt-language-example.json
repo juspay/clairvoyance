@@ -24,7 +24,7 @@
         "task_messages": [
           {
             "role": "system",
-            "content": "Greet the customer in Hindi: \"Namaste {customer_name} ji! Main aapke order #{order_id} ke baare mein baat karne ke liye call kar rahi hoon. Kya abhi baat kar sakte hain?\""
+            "content": "Greet the customer in Hindi: \"Namaste {{customer_name}} ji! Main aapke order #{{order_id}} ke baare mein baat karne ke liye call kar rahi hoon. Kya abhi baat kar sakte hain?\""
           }
         ],
         "role_messages": [
@@ -69,7 +69,7 @@
         "task_messages": [
           {
             "role": "system",
-            "content": "Thank the customer in Hindi: \"Dhanyavaad {customer_name} ji! Aapka order confirm ho gaya hai. Aapka din shubh ho!\""
+            "content": "Thank the customer in Hindi: \"Dhanyavaad {{customer_name}} ji! Aapka order confirm ho gaya hai. Aapka din shubh ho!\""
           }
         ],
         "role_messages": [
@@ -90,7 +90,7 @@
         "task_messages": [
           {
             "role": "system",
-            "content": "End the call politely in Hindi: \"Koi baat nahi, {customer_name} ji. Main aapko kab call karun?\" Wait for their response, confirm the callback time, thank them, and end the call."
+            "content": "End the call politely in Hindi: \"Koi baat nahi, {{customer_name}} ji. Main aapko kab call karun?\" Wait for their response, confirm the callback time, thank them, and end the call."
           }
         ],
         "role_messages": [
