@@ -62,9 +62,9 @@ async def service_callback(context: TemplateContext, args):
         }
 
         if expected_schema:
-            meta = (
-                context.lead.metaData if context.lead and context.lead.metaData else {}
-            )
+            meta = {}
+            if context.lead and context.lead.metaData:
+                meta = context.lead.metaData.get("outcome") or {}
             extracted_fields = {}
 
             # Check for required fields before processing
