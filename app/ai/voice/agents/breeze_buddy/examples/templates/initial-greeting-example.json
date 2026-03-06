@@ -17,7 +17,7 @@
   },
   "configurations": {
     "tts_voice_name": "rhea",
-    "initial_greeting": "Hi {customer_name}, I'm Rhea from {shop_name}. I'm calling to confirm your order. Is this a good time to talk?"
+    "initial_greeting": "Hi {{customer_name}}, I'm Rhea from {{shop_name}}. I'm calling to confirm your order. Is this a good time to talk?"
   },
   "flow": {
     "initial_node": "greeting",
@@ -27,13 +27,13 @@
         "task_messages": [
           {
             "role": "system",
-            "content": "The initial greeting has already been played: \"Hi {customer_name}, I'm Rhea from {shop_name}. I'm calling to confirm your order. Is this a good time to talk?\" Wait for the customer's response and continue the conversation naturally."
+            "content": "The initial greeting has already been played: \"Hi {{customer_name}}, I'm Rhea from {{shop_name}}. I'm calling to confirm your order. Is this a good time to talk?\" Wait for the customer's response and continue the conversation naturally."
           }
         ],
         "role_messages": [
           {
             "role": "system",
-            "content": "You are Rhea from {shop_name}. The customer already heard your pre-recorded greeting. Continue the conversation professionally based on their response."
+            "content": "You are Rhea from {{shop_name}}. The customer already heard your pre-recorded greeting. Continue the conversation professionally based on their response."
           }
         ],
         "pre_actions": [
@@ -72,7 +72,7 @@
         "task_messages": [
           {
             "role": "system",
-            "content": "Confirm the order: \"Thank you, {customer_name}! Your order #{order_id} is confirmed. Have a great day!\""
+            "content": "Confirm the order: \"Thank you, {{customer_name}}! Your order #{{order_id}} is confirmed. Have a great day!\""
           }
         ],
         "role_messages": [
@@ -93,7 +93,7 @@
         "task_messages": [
           {
             "role": "system",
-            "content": "End the call politely: \"No problem at all, {customer_name}. When would be a better time for me to call you back?\" Wait for their response, confirm the callback time, thank them, and end the call."
+            "content": "End the call politely: \"No problem at all, {{customer_name}}. When would be a better time for me to call you back?\" Wait for their response, confirm the callback time, thank them, and end the call."
           }
         ],
         "role_messages": [
