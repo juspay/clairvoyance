@@ -28,7 +28,7 @@
         "task_messages": [
           {
             "role": "system",
-            "content": "Greet the customer: \"Hi {customer_name}! This is regarding your order #{order_id}. I'm calling to confirm the details with you. Is now a good time to talk?\""
+            "content": "Greet the customer: \"Hi {{customer_name}}! This is regarding your order #{{order_id}}. I'm calling to confirm the details with you. Is now a good time to talk?\""
           }
         ],
         "role_messages": [
@@ -73,7 +73,7 @@
         "task_messages": [
           {
             "role": "system",
-            "content": "Confirm the order: \"Thank you, {customer_name}! Your order is confirmed. Have a great day!\""
+            "content": "Confirm the order: \"Thank you, {{customer_name}}! Your order is confirmed. Have a great day!\""
           }
         ],
         "role_messages": [
@@ -94,7 +94,7 @@
         "task_messages": [
           {
             "role": "system",
-            "content": "End the call politely: \"No problem at all, {customer_name}. When would be a better time for me to call you back?\" Wait for their response, confirm the callback time, thank them, and end the call."
+            "content": "End the call politely: \"No problem at all, {{customer_name}}. When would be a better time for me to call you back?\" Wait for their response, confirm the callback time, thank them, and end the call."
           }
         ],
         "role_messages": [
