@@ -10,6 +10,7 @@ from app.database.queries import run_parameterized_query
 from app.database.queries.breeze_buddy.analytics import (
     get_analytics_call_details_query,
     get_analytics_count_query,
+    get_analytics_inbound_count_query,
     get_analytics_lead_based_query,
     get_analytics_lead_based_trends_query,
     get_analytics_lead_status_counts_query,
@@ -235,6 +236,63 @@ async def get_lead_based_analytics_from_db(
 
     except Exception as e:
         logger.error(f"Error getting lead-based analytics: {e}", exc_info=True)
+        raise
+
+
+async def get_inbound_count_from_db(
+    filters: Dict[str, Any], group_by: Optional[str] = None
+) -> Any:
+    """
+    Get inbound call counts with database-level filtering.
+
+    Args:
+        filters: Analytics filters
+        group_by: Optional field to group by (returns list if provided, int otherwise)
+
+    Returns:
+        int (aggregate count) or List[Dict] (grouped counts)
+    """
+    logger.info(
+        f"[Analytics DB] Getting inbound count with filters: {filters}, group_by: {group_by}"
+    )
+
+    # Normalize group_by to prevent query/accessor divergence
+    allowed_group_by_fields = {"shop_identifier", "template", "merchant_id"}
+    if group_by and group_by not in allowed_group_by_fields:
+        logger.warning(
+            f"[Analytics DB] Invalid group_by field '{group_by}', falling back to aggregate mode"
+        )
+        group_by = None
+
+    try:
+        query_text, values = get_analytics_inbound_count_query(filters, group_by)
+        result = await run_parameterized_query(query_text, values)
+
+        if not result or len(result) == 0:
+            logger.warning("[Analytics DB] Inbound count query returned no results")
+            return [] if group_by else 0
+
+        if group_by:
+            # Return list of grouped results with inbound_calls count
+            grouped_results = [
+                {
+                    group_by: row[group_by],
+                    "inbound_calls": row["inbound_calls"] or 0,
+                }
+                for row in result
+            ]
+            logger.info(
+                f"[Analytics DB] Inbound count returned {len(grouped_results)} groups"
+            )
+            return grouped_results
+        else:
+            # Return single aggregate count
+            count = result[0]["inbound_calls"] or 0
+            logger.info(f"[Analytics DB] Inbound count result: {count}")
+            return count
+
+    except Exception as e:
+        logger.error(f"Error getting inbound count: {e}", exc_info=True)
         raise
 
 
