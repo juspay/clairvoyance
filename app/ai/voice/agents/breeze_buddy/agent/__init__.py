@@ -484,6 +484,13 @@ class Agent:
         @self.transport.event_handler("on_client_disconnected")
         async def on_client_disconnected(transport, client):
             logger.info(f"Client disconnected: {client}")
+            # Cancel post-greeting idle task if still running
+            if self._post_greeting_task and not self._post_greeting_task.done():
+                self._post_greeting_task.cancel()
+                self._post_greeting_task = None
+                logger.info(
+                    "Cancelling the post greeting task due to client disconnect"
+                )
             await self._handle_unexpected_disconnect("client_disconnected")
 
         @self.task.event_handler("on_idle_timeout")
