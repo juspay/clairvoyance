@@ -39,10 +39,12 @@ from app.ai.voice.agents.breeze_buddy.processors import (
     create_user_idle_processor,
 )
 from app.ai.voice.agents.breeze_buddy.stt import get_stt_service
-from app.ai.voice.agents.breeze_buddy.template.types import ConfigurationModel
+from app.ai.voice.agents.breeze_buddy.template.types import (
+    ConfigurationModel,
+    InterruptionMode,
+)
 from app.ai.voice.agents.breeze_buddy.tts import get_tts_service
 from app.core.config.dynamic import (
-    BB_ENABLE_RESPONSE_GATE,
     BREEZE_BUDDY_AZURE_MAX_COMPLETION_TOKENS,
     BREEZE_BUDDY_AZURE_TEMPERATURE,
 )
@@ -225,7 +227,11 @@ async def build_pipeline(
         ),
     )
 
-    response_gate = ResponseStateGate() if await BB_ENABLE_RESPONSE_GATE() else None
+    interruption_config = getattr(configurations, "interruption_config", None)
+    interruption_mode = (
+        interruption_config.mode if interruption_config else InterruptionMode.ENABLED
+    )
+    response_gate = ResponseStateGate(interruption_mode=interruption_mode)
 
     # TranscriptionGateProcessor is always in the pipeline.
     # It is a transparent passthrough when neither mute nor keyword filter is active.
@@ -276,8 +282,7 @@ async def build_pipeline(
     ]
 
     insert_idx = 3  # Position after transport.input(), stt, transcription_gate
-    if response_gate:
-        pipeline_parts.insert(insert_idx, response_gate)
+    pipeline_parts.insert(insert_idx, response_gate)
 
     # Insert user idle processor before user_aggregator to monitor user activity
     if user_idle:

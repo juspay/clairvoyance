@@ -2,7 +2,7 @@
 
 ## Overview
 
-`ResponseStateGate` is a pipecat processor that prevents **double-speaking** when users interrupt the bot mid-response. It sits between STT and the LLM aggregator, tracking the state of LLM/TTS processing and interrupting active responses when new user speech arrives.
+`ResponseStateGate` is a pipecat processor that controls how user speech is handled when the bot is actively responding. It sits between STT and the LLM aggregator, tracking the state of TTS playback and applying one of three configurable interruption modes: interrupt the bot, buffer user speech for later, or silently discard it.
 
 ---
 
@@ -21,11 +21,22 @@ User: "Wait..." → TranscriptionFrame → LLM Request 2
 `ResponseStateGate` tracks whether the bot is actively responding and interrupts the flow when new user speech arrives:
 
 ```
-User: "Hello" → TranscriptionFrame → LLM processing...
-User: "Wait..." → ResponseGate detects active state
-                 → Cancels LLM Request 1
-                 → Processes "Wait..." only
-                 → Single response ✅
+Mode: ENABLED (interrupt)
+  User: "Hello" → TranscriptionFrame → LLM processing...
+  User: "Wait..." → ResponseGate detects active state
+                   → Cancels LLM Request 1
+                   → Processes "Wait..." only
+                   → Single response ✅
+
+Mode: DISABLED_WITH_STORE (buffer)
+  User: "Hello" → TranscriptionFrame → LLM processing... → Bot speaking
+  User: "Wait..." → ResponseGate buffers it, bot keeps speaking
+                   → Bot finishes → flush "Wait..." → LLM processes → Single response ✅
+
+Mode: DISABLED_WITHOUT_STORE (discard)
+  User: "Hello" → TranscriptionFrame → LLM processing... → Bot speaking
+  User: "Wait..." → ResponseGate discards it, bot keeps speaking
+                   → Bot finishes → IDLE, no action
 ```
 
 ---
@@ -52,28 +63,36 @@ User: "Wait..." → ResponseGate detects active state
                     └──────────┬──────────┘                           │
                                │                                       │
                                │ TranscriptionFrame                    │
+                               │ (final only; interims dropped)        │
                                ▼                                       │
                     ┌─────────────────────┐                           │
-     ┌─────────────►│   LLM_PROCESSING    │                           │
-     │              │  (LLM received ctx) │                           │
-     │              └──────────┬──────────┘                           │
-     │                         │                                       │
-     │                         │ BotStartedSpeakingFrame               │
-     │                         ▼                                       │
-     │              ┌─────────────────────┐     TranscriptionFrame     │
-     │              │        BOTH         │─────(interrupt)────────────┘
-     │              │  (LLM + TTS active) │
-     │              └──────────┬──────────┘
-     │                         │
-     │                         │ BotStoppedSpeakingFrame
-     │                         ▼
-     │              ┌─────────────────────┐
-     │              │    TTS_SPEAKING     │◄────────────────────────────┘
-     │              │  (Audio playing)    │   TranscriptionFrame
-     │              └─────────────────────┘
-     │                         │
-     └─────────────────────────┘
+                    │   LLM_PROCESSING    │                           │
+                    │  (LLM received ctx) │                           │
+                    └──────────┬──────────┘                           │
+                               │                                       │
+                               │ BotStartedSpeakingFrame               │
+                               ▼                                       │
+                    ┌─────────────────────┐                           │
+                    │        BOTH         │───────────────────────────┘
+                    │  (LLM + TTS active) │   BotStoppedSpeakingFrame
+                    └──────────┬──────────┘
+                               │
+                               │ BotStartedSpeakingFrame
+                               │ (initial greeting, no LLM)
+                    ┌─────────────────────┐
+                    │    TTS_SPEAKING     │
+                    │  (Audio playing)    │
+                    └──────────┬──────────┘
+                               │
+                               │ BotStoppedSpeakingFrame
+                               ▼
+                         Back to IDLE
 ```
+
+> **Note:** `LLMFullResponseStartFrame` / `LLMFullResponseEndFrame` flow
+> **downstream** (toward TTS/Output) and never reach ResponseGate, which sits
+> upstream of the LLM. State transitions rely solely on
+> `BotStartedSpeakingFrame` / `BotStoppedSpeakingFrame` which flow upstream.
 
 ### State Descriptions
 
@@ -92,11 +111,10 @@ User: "Wait..." → ResponseGate detects active state
 
 | Frame | Effect on State |
 |-------|-----------------|
-| `TranscriptionFrame` | If state != IDLE → interrupt, buffer, flush |
-| `LLMFullResponseStartFrame` | IDLE → LLM_PROCESSING; TTS_SPEAKING → BOTH |
-| `LLMFullResponseEndFrame` | BOTH → TTS_SPEAKING |
+| `TranscriptionFrame` | At IDLE → LLM_PROCESSING (via `_handle_transcription_frame`). At non-IDLE → mode-dependent (interrupt / store / discard) |
+| `InterimTranscriptionFrame` | At IDLE → dropped. At non-IDLE → same mode-dependent logic as `TranscriptionFrame` |
 | `BotStartedSpeakingFrame` | IDLE → TTS_SPEAKING; LLM_PROCESSING → BOTH |
-| `BotStoppedSpeakingFrame` | TTS_SPEAKING → IDLE; BOTH → LLM_PROCESSING |
+| `BotStoppedSpeakingFrame` | TTS_SPEAKING → IDLE; BOTH → IDLE (flush stored transcription if DISABLED_WITH_STORE) |
 
 ### Frames that Pass Through Unchanged
 
@@ -110,12 +128,12 @@ User: "Wait..." → ResponseGate detects active state
 
 ## Interruption Logic
 
-### Step-by-Step Flow
+### Mode: ENABLED (default)
 
 ```
-1. TranscriptionFrame arrives
+1. TranscriptionFrame or InterimTranscriptionFrame arrives
 2. Is state == IDLE?
-   YES → Process normally, state = LLM_PROCESSING
+   YES → Drop if interim, otherwise process normally (state = LLM_PROCESSING)
    NO  → Continue to step 3
 3. Push InterruptionFrame upstream (cancels LLM/TTS)
 4. Wait for interruption to complete
@@ -125,39 +143,72 @@ User: "Wait..." → ResponseGate detects active state
    → Push frame downstream
 ```
 
+### Mode: DISABLED_WITH_STORE
+
+```
+1. TranscriptionFrame or InterimTranscriptionFrame arrives
+2. Is state == IDLE?
+   YES → Drop if interim, otherwise process normally (state = LLM_PROCESSING)
+   NO  → Continue to step 3
+3. Store frame in _buffered_transcription (overwrites previous — safe
+   because Soniox interims are cumulative)
+4. Return early — bot keeps speaking uninterrupted
+5. When BotStoppedSpeakingFrame arrives → state = IDLE
+6. Flush buffered transcription (only if it's a final TranscriptionFrame;
+   buffered interims are discarded, the final will arrive shortly)
+```
+
+### Mode: DISABLED_WITHOUT_STORE
+
+```
+1. TranscriptionFrame or InterimTranscriptionFrame arrives
+2. Is state == IDLE?
+   YES → Drop if interim, otherwise process normally (state = LLM_PROCESSING)
+   NO  → Continue to step 3
+3. Silently discard the frame
+4. Return early — bot keeps speaking, user speech is lost
+```
+
 ### Key Code Path
 
 ```python
 async def process_frame(self, frame: Frame, direction: FrameDirection):
     # 1. If interruption in progress, buffer transcriptions
-    if self._interruption_in_progress and isinstance(frame, TranscriptionFrame):
+    if self._interruption_in_progress and isinstance(
+        frame, (TranscriptionFrame, InterimTranscriptionFrame)
+    ):
         self._buffered_transcription = frame
         return  # Don't push, wait for interruption to finish
 
-    # 2. Track LLM/TTS state changes
-    if isinstance(frame, LLMFullResponseStartFrame):
-        self._state = ResponseState.LLM_PROCESSING
+    # 2. Track TTS/Bot speaking state (upstream frames only —
+    #    LLMFullResponse frames flow downstream and never reach here)
     if isinstance(frame, BotStartedSpeakingFrame):
-        self._state = ResponseState.BOTH
-    # ... etc
+        # IDLE → TTS_SPEAKING, LLM_PROCESSING → BOTH
+        ...
+    elif isinstance(frame, BotStoppedSpeakingFrame):
+        # TTS_SPEAKING → IDLE, BOTH → IDLE
+        # If DISABLED_WITH_STORE and buffered → flush
+        ...
 
-    # 3. Handle transcription with interruption logic
-    if isinstance(frame, TranscriptionFrame):
+    # 3. Handle transcription with mode-dependent logic
+    elif isinstance(frame, (TranscriptionFrame, InterimTranscriptionFrame)):
         if self._state != ResponseState.IDLE:
-            # Active response → interrupt!
-            self._interruption_in_progress = True
-            await self.push_interruption_task_frame_and_wait()
+            if self._interruption_mode == InterruptionMode.ENABLED:
+                # Interrupt, buffer, flush
+                ...
+            elif self._interruption_mode == InterruptionMode.DISABLED_WITH_STORE:
+                # Store, return (bot keeps speaking)
+                self._buffered_transcription = frame
+                return
+            else:
+                # DISABLED_WITHOUT_STORE — discard
+                return
 
-            # Buffer and flush immediately
-            self._buffered_transcription = frame
-            self._interruption_in_progress = False
-            self._state = ResponseState.IDLE
-            await self._flush_buffered_transcription(direction)
+        # State is IDLE — drop interims, process finals
+        if isinstance(frame, InterimTranscriptionFrame):
             return
-
-        # No active response
-        self._state = ResponseState.LLM_PROCESSING
-        await self.push_frame(frame, direction)
+        await self._handle_transcription_frame(frame, direction)
+        return
 ```
 
 ---
@@ -195,52 +246,55 @@ T1: push_frame(new_stt) ✅ ONLY NEW REQUEST
 
 ## Scenarios Handled
 
-| Scenario | State Before | Action | Result |
-|----------|--------------|--------|--------|
-| Normal flow | IDLE | Process normally | Single response |
-| LLM processing, new STT | `LLM_PROCESSING` | Cancel LLM, process new | New only |
-| TTS speaking, new STT | `TTS_SPEAKING` | Stop TTS, process new | New only |
-| Both LLM+TTS, new STT | `BOTH` | Cancel both, process new | New only |
-| Quick double STT | `LLM_PROCESSING` | Buffer 2nd, flush after 1st | Latest only |
+| Scenario | Mode | State Before | Action | Result |
+|----------|------|--------------|--------|--------|
+| Normal flow | Any | IDLE | Process final transcription normally | Single response |
+| Interim at IDLE | Any | IDLE | Dropped (final will follow) | No premature LLM call |
+| User speaks while bot active | ENABLED | BOTH / TTS_SPEAKING | Cancel LLM+TTS, process new | New response only |
+| Quick double STT | ENABLED | LLM_PROCESSING | Buffer 2nd, flush after 1st | Latest only |
+| User speaks while bot active | DISABLED_WITH_STORE | BOTH / TTS_SPEAKING | Buffer transcription, bot keeps speaking | Flushed when bot finishes |
+| User speaks while bot active | DISABLED_WITHOUT_STORE | BOTH / TTS_SPEAKING | Discard transcription, bot keeps speaking | User speech lost |
+| Bot stops with buffered interim | DISABLED_WITH_STORE | BOTH → IDLE | Discard interim, wait for final | No partial LLM call |
+| Bot stops with buffered final | DISABLED_WITH_STORE | BOTH → IDLE | Flush final transcription | Single response |
 
 ---
 
 ## Configuration
 
-### Redis Control
+### Template Configuration
 
-| Key | Type | Default | Description |
-|-----|------|---------|-------------|
-| `BB_ENABLE_RESPONSE_GATE` | bool | `True` | Enable/disable the response gate |
+Interruption behavior is controlled per-template via `interruption_config`:
 
-```bash
-# Enable (default)
-BB_ENABLE_RESPONSE_GATE=True
-
-# Disable
-BB_ENABLE_RESPONSE_GATE=False
-```
+| Mode | JSON value | Behavior |
+|------|------------|----------|
+| `ENABLED` (default) | `"enabled"` | Interrupt bot, buffer user speech, process after interruption |
+| `DISABLED_WITH_STORE` | `"disabled_with_store"` | Don't interrupt; buffer user speech, flush when bot finishes |
+| `DISABLED_WITHOUT_STORE` | `"disabled_without_store"` | Don't interrupt; silently discard user speech |
 
 ### Code Configuration
 
 ```python
 from app.ai.voice.agents.breeze_buddy.processors import ResponseStateGate
+from app.ai.voice.agents.breeze_buddy.template.types import InterruptionMode
 
-# In agent.py:
-response_gate = ResponseStateGate() if await BB_ENABLE_RESPONSE_GATE() else None
+# The response gate is always active, driven by the template's interruption_config.
+interruption_config = getattr(configurations, "interruption_config", None)
+interruption_mode = (
+    interruption_config.mode if interruption_config else InterruptionMode.ENABLED
+)
+response_gate = ResponseStateGate(interruption_mode=interruption_mode)
 
 pipeline_parts = [
     transport.input(),
     stt,
+    transcription_gate,
+    response_gate,
     context_aggregator.user(),
     llm,
     tts,
     transport.output(),
     context_aggregator.assistant(),
 ]
-
-if response_gate:
-    pipeline_parts.insert(2, response_gate)  # After stt
 
 pipeline = Pipeline(pipeline_parts)
 ```
@@ -278,16 +332,25 @@ logging.basicConfig(level=logging.DEBUG)
 ### Key Log Messages to Watch
 
 ```
-# Normal flow:
+# Normal flow (ENABLED or IDLE):
 ResponseGate: Processing transcription (id=..., length=...)
 ResponseGate: LLM_PROCESSING
 ResponseGate: BOTH
-ResponseGate: TTS_SPEAKING
-ResponseGate: IDLE
+ResponseGate: IDLE (bot finished speaking)
 
-# Interruption:
+# Interruption (ENABLED mode):
 ResponseGate: Interrupting state=BOTH for new transcription (id=..., length=...)
 ResponseGate: Processing transcription (id=..., length=...)
+
+# Store mode:
+ResponseGate: Storing transcription while bot active (mode=disabled_with_store, state=BOTH)
+ResponseGate: Bot finished speaking, flushing stored transcription
+
+# Discard mode:
+ResponseGate: Discarding transcription while bot active (mode=disabled_without_store, state=BOTH)
+
+# Interim handling:
+ResponseGate: Discarding buffered interim transcription, waiting for final
 ```
 
 ### Expected Behavior
@@ -312,29 +375,31 @@ ResponseGate: Processing transcription (id=..., length=...)
 
 ```python
 class ResponseStateGate(FrameProcessor):
-    def __init__(self, **kwargs):
+    def __init__(self, interruption_mode: InterruptionMode = InterruptionMode.ENABLED, **kwargs):
         self._state = ResponseState.IDLE
-        self._buffered_transcription = None
+        self._buffered_transcription: TranscriptionFrame | InterimTranscriptionFrame | None = None
         self._interruption_in_progress = False
+        self._interruption_mode = interruption_mode
 
     async def _handle_transcription_frame(
-        self, frame: TranscriptionFrame, direction: FrameDirection
+        self, frame: TranscriptionFrame | InterimTranscriptionFrame, direction: FrameDirection
     ):
         """Process a transcription frame (buffered or fresh)."""
         ...
 
     async def _flush_buffered_transcription(self, direction: FrameDirection):
-        """Flush any buffered transcription immediately."""
+        """Flush any buffered transcription. Discards InterimTranscriptionFrames
+        (the final will arrive shortly and be processed at IDLE)."""
         ...
 ```
 
 ### Methods
 
 | Method | Purpose |
-|--------|---------|
+|--------|---------| 
 | `process_frame()` | Main entry point, handles all frame types |
-| `_handle_transcription_frame()` | Unified handler for transcription frames |
-| `_flush_buffered_transcription()` | Process buffered frame after interruption |
+| `_handle_transcription_frame()` | Unified handler for final and interim transcription frames |
+| `_flush_buffered_transcription()` | Process buffered frame after bot stops speaking (skips interims) |
 
 ---
 
@@ -358,8 +423,8 @@ The response gate intercepts new transcriptions that would otherwise trigger sep
 
 ### Double Speaking Still Occurring
 
-1. Check `BB_ENABLE_RESPONSE_GATE=True` in Redis
-2. Verify response_gate is in the pipeline
+1. Verify response_gate is in the pipeline
+2. Check the template's `interruption_config.mode` is set correctly
 3. Check logs for "Interrupting state=..." messages
 4. Ensure no other processor is bypassing the gate
 
@@ -371,9 +436,11 @@ The response gate intercepts new transcriptions that would otherwise trigger sep
 
 ### Stalled Buffer
 
-Buffer should flush immediately after interruption. If not:
-1. Check `_flush_buffered_transcription()` is called
-2. Verify no exception in the flush path
+Buffer should flush when the bot finishes speaking. If not:
+1. Check `_flush_buffered_transcription()` is called on `BotStoppedSpeakingFrame`
+2. Verify the buffered frame is a final `TranscriptionFrame` (interims are intentionally discarded)
+3. Verify no exception in the flush path
+4. Check that mode is `DISABLED_WITH_STORE` (other modes don't flush)
 
 ---
 
@@ -382,6 +449,6 @@ Buffer should flush immediately after interruption. If not:
 | File | Purpose |
 |------|---------|
 | `app/ai/voice/agents/breeze_buddy/processors/response_gate.py` | Main processor implementation |
-| `app/ai/voice/agents/breeze_buddy/agent.py` | Pipeline integration |
-| `app/core/config/dynamic.py` | `BB_ENABLE_RESPONSE_GATE` config |
+| `app/ai/voice/agents/breeze_buddy/agent/pipeline.py` | Pipeline integration |
+| `app/ai/voice/agents/breeze_buddy/template/types.py` | `InterruptionMode` and `InterruptionConfig` definitions |
 | `docs/aggregation-timeout.md` | Related: aggregation timeout explanation |

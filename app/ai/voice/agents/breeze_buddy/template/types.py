@@ -180,6 +180,33 @@ class KeywordFilterConfig(BaseModel):
     )
 
 
+class InterruptionMode(str, Enum):
+    """Controls how user speech is handled while the bot is speaking.
+
+    - ENABLED: Interrupt the bot and process user speech immediately (default).
+    - DISABLED_WITH_STORE: Don't interrupt the bot; buffer user speech and
+      process it after the bot finishes speaking.
+    - DISABLED_WITHOUT_STORE: Don't interrupt the bot; discard user speech
+      entirely while the bot is speaking.
+    """
+
+    ENABLED = "enabled"
+    DISABLED_WITH_STORE = "disabled_with_store"
+    DISABLED_WITHOUT_STORE = "disabled_without_store"
+
+
+class InterruptionConfig(BaseModel):
+    """Per-template configuration for interruption behavior.
+
+    Example:
+        {
+            "mode": "disabled_with_store"
+        }
+    """
+
+    mode: InterruptionMode = InterruptionMode.ENABLED
+
+
 class UserIdleHandlingConfig(BaseModel):
     """Configuration for user idle detection and handling."""
 
@@ -253,6 +280,12 @@ class ConfigurationModel(BaseModel):
     keyword_filter: Optional[KeywordFilterConfig] = Field(
         None,
         description="Keyword filter to suppress specific transcriptions while bot is active",
+    )
+    interruption_config: Optional[InterruptionConfig] = Field(
+        None,
+        description="Per-template interruption behavior: enabled (interrupt bot), "
+        "disabled_with_store (buffer user speech, process after bot finishes), "
+        "or disabled_without_store (discard user speech while bot speaks)",
     )
 
 
