@@ -86,8 +86,10 @@ async def handle_call_transfer(
     if action == "dial-up":
         return await _handle_transfer_dial_up(request, provider_lower)
     elif action in ("conclude", "conference-end"):
-        # future scope: to be implemented
-        return Response(status_code=200)
+        return HTMLResponse(
+            content='<?xml version="1.0" encoding="UTF-8"?><Response><Hangup/></Response>',
+            media_type="application/xml",
+        )
     else:
         logger.warning(f"[TRANSFER] Unknown callback: {provider}/{action}")
         return Response(
