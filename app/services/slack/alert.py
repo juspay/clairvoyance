@@ -105,12 +105,18 @@ class Alert:
                     user.strip() for user in SLACK_TAG_USERS.split(",") if user.strip()
                 ]
                 if users:
-                    # Format users as proper Slack mentions with angle brackets
+                    # Format users as proper Slack mentions
                     mentions = []
                     for user in users:
-                        # Remove @ if present and wrap in Slack mention format
-                        clean_user = user.strip().lstrip("@")
-                        mentions.append(f"<@{clean_user}>")
+                        # Check if it's already a complete Slack mention format
+                        # (e.g., <!subteam^ID|@team-name> for user groups or <@U12345> for users)
+                        if user.startswith("<") and user.endswith(">"):
+                            # Already formatted, use as-is
+                            mentions.append(user)
+                        else:
+                            # Remove @ if present and wrap in Slack user mention format
+                            clean_user = user.lstrip("@")
+                            mentions.append(f"<@{clean_user}>")
 
                     # Join mentions with spaces
                     mentions_text = " ".join(mentions)

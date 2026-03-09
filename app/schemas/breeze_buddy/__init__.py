@@ -41,11 +41,25 @@ from app.schemas.breeze_buddy.core import (
     TelephonyConfig,
     UpdateCallExecutionConfigRequest,
 )
-from app.schemas.breeze_buddy.merchants import MerchantsResponse
+from app.schemas.breeze_buddy.merchants import (
+    MerchantCreate,
+    MerchantListResponse,
+    MerchantResponse,
+    MerchantUpdate,
+)
 from app.schemas.breeze_buddy.template import (
     TemplateListResponse,
     TemplateMetadata,
 )
+from app.schemas.breeze_buddy.users import (
+    DeleteUserResponse,
+)
+from app.schemas.breeze_buddy.users import UserCreate as UserAccountCreate
+from app.schemas.breeze_buddy.users import (
+    UserListResponse,
+    UserResponse,
+)
+from app.schemas.breeze_buddy.users import UserUpdate as UserAccountUpdate
 
 __all__ = [
     # Auth
@@ -89,6 +103,15 @@ __all__ = [
     # Template
     "TemplateListResponse",
     "TemplateMetadata",
-    # Merchants
-    "MerchantsResponse",
+    # Merchant Entities
+    "MerchantCreate",
+    "MerchantListResponse",
+    "MerchantResponse",
+    "MerchantUpdate",
+    # User Accounts
+    "UserAccountCreate",
+    "UserAccountUpdate",
+    "UserListResponse",
+    "UserResponse",
+    "DeleteUserResponse",
 ]

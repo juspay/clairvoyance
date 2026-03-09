@@ -23,6 +23,7 @@ from app.core.config.static import (
 )
 from app.core.logger import logger
 from app.core.security.password import verify_password
+from app.core.security.scope import resolve_merchant_ids, resolve_reseller_ids
 from app.database.queries.breeze_buddy.users import get_user_by_username
 from app.schemas import (
     LoginRequest,
@@ -75,14 +76,50 @@ async def login_handler(
                 detail="Invalid username or password",
             )
 
-        # Generate JWT token with RBAC data
+        # Resolve wildcard scopes to actual values before creating token.
+        # This ensures the frontend receives concrete reseller_ids and
+        # merchant_identifiers instead of ["*"] which it can't interpret.
+        resolved_reseller_ids = user.reseller_ids
+        resolved_merchant_identifiers = user.merchant_identifiers
+
+        if user.role != UserRole.ADMIN:
+            # Build a temporary UserInfo to use resolve functions
+            temp_user_info = UserInfo(
+                id=user.id,
+                username=user.username,
+                role=user.role,
+                email=user.email,
+                reseller_ids=user.reseller_ids,
+                merchant_ids=user.reseller_ids,
+                merchant_identifiers=user.merchant_identifiers,
+                shop_identifiers=user.merchant_identifiers,
+                permissions=[],
+                owner_id=user.owner_id,
+            )
+
+            # Resolve reseller_ids wildcards
+            resolved_r = await resolve_reseller_ids(temp_user_info)
+            if resolved_r is not None:
+                resolved_reseller_ids = resolved_r
+            # else: None means admin-created with truly unrestricted access,
+            # keep original ["*"] — only admin-created accounts can reach here
+
+            # Resolve merchant_identifiers wildcards
+            resolved_m = await resolve_merchant_ids(temp_user_info)
+            if resolved_m is not None:
+                resolved_merchant_identifiers = resolved_m
+            # else: None means admin-created with truly unrestricted access,
+            # keep original ["*"] — only admin-created accounts can reach here
+
+        # Generate JWT token with resolved RBAC data
         access_token = rbac_token_manager.create_access_token_with_rbac(
             user_id=user.id,
             username=user.username,
             role=user.role,
-            reseller_ids=user.reseller_ids,
-            merchant_identifiers=user.merchant_identifiers,
+            reseller_ids=resolved_reseller_ids,
+            merchant_identifiers=resolved_merchant_identifiers,
             email=user.email,
+            owner_id=user.owner_id,
         )
 
         # Calculate expires_in based on JWT_ACCESS_TOKEN_EXPIRE_MINUTES
@@ -201,13 +238,44 @@ async def generate_s2s_token_handler(request: S2STokenRequest) -> S2STokenRespon
     # Generate long-lived token
     expires_delta = timedelta(days=request.token_lifetime_days)
 
+    # Resolve wildcard scopes for S2S tokens too
+    resolved_reseller_ids = user.reseller_ids
+    resolved_merchant_identifiers = user.merchant_identifiers
+
+    if user.role != UserRole.ADMIN:
+        temp_user_info = UserInfo(
+            id=user.id,
+            username=user.username,
+            role=user.role,
+            email=user.email,
+            reseller_ids=user.reseller_ids,
+            merchant_ids=user.reseller_ids,
+            merchant_identifiers=user.merchant_identifiers,
+            shop_identifiers=user.merchant_identifiers,
+            permissions=[],
+            owner_id=user.owner_id,
+        )
+
+        resolved_r = await resolve_reseller_ids(temp_user_info)
+        if resolved_r is not None:
+            resolved_reseller_ids = resolved_r
+        else:
+            resolved_reseller_ids = ["*"]
+
+        resolved_m = await resolve_merchant_ids(temp_user_info)
+        if resolved_m is not None:
+            resolved_merchant_identifiers = resolved_m
+        else:
+            resolved_merchant_identifiers = ["*"]
+
     access_token = rbac_token_manager.create_access_token_with_rbac(
         user_id=user.id,
         username=user.username,
         role=user.role,
-        reseller_ids=user.reseller_ids,
-        merchant_identifiers=user.merchant_identifiers,
+        reseller_ids=resolved_reseller_ids,
+        merchant_identifiers=resolved_merchant_identifiers,
         email=user.email,
+        owner_id=user.owner_id,
         expires_delta=expires_delta,
     )
 
