@@ -1,6 +1,11 @@
 """
 Generic RBAC authorization utilities.
 Provides role and permission checking that can be used across all agents.
+
+Role hierarchy: admin > reseller > merchant > user
+
+Scope resolution (resolve_merchant_ids, resolve_reseller_ids, etc.)
+has been moved to app.core.security.scope.
 """
 
 from typing import List
@@ -132,14 +137,14 @@ def is_merchant(current_user: UserInfo) -> bool:
     return current_user.role == UserRole.MERCHANT
 
 
-def is_shop(current_user: UserInfo) -> bool:
+def is_user(current_user: UserInfo) -> bool:
     """
-    Check if user is a shop-level user.
+    Check if user is a user-level (shop) account.
 
     Args:
         current_user: Current authenticated user
 
     Returns:
-        True if user is shop, False otherwise
+        True if user is a regular user, False otherwise
     """
-    return current_user.role == UserRole.SHOP
+    return current_user.role == UserRole.USER

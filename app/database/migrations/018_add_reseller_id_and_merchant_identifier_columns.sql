@@ -1,5 +1,4 @@
--- filepath: /Users/sharifajahan.shaik/Desktop/clairvoyance/app/database/migrations/009_add_reseller_id_and_merchant_identifier_columns.sql
--- Migration: Add reseller_id and merchant_identifier columns (backward compatible)
+-- Migration 018: Add reseller_id and merchant_identifier columns (backward compatible)
 -- Description:
 --   1. Add reseller_id column to tables (copy from merchant_id)
 --   2. Add merchant_identifier column to tables (copy from shop_identifier)
@@ -10,6 +9,8 @@
 --   Standardizing naming convention while maintaining backward compatibility.
 --   Old columns (merchant_id, shop_identifier) are kept for backward compatibility.
 --   New columns (reseller_id, merchant_identifier) are added and populated.
+
+BEGIN;
 
 -- =====================================================
 -- 1. Add reseller_id to call_execution_config
@@ -139,11 +140,10 @@ CREATE INDEX IF NOT EXISTS idx_template_reseller_merchant_identifier_name
 -- 9. Add reseller_ids to users
 -- =====================================================
 ALTER TABLE users
-ADD COLUMN IF NOT EXISTS reseller_ids TEXT[];
+ADD COLUMN IF NOT EXISTS reseller_ids JSONB DEFAULT '[]'::jsonb;
 
 UPDATE users
-SET reseller_ids = merchant_ids
-WHERE reseller_ids IS NULL AND merchant_ids IS NOT NULL;
+SET reseller_ids = merchant_ids;
 
 CREATE INDEX IF NOT EXISTS idx_users_reseller_ids
     ON users USING GIN(reseller_ids);
@@ -152,11 +152,10 @@ CREATE INDEX IF NOT EXISTS idx_users_reseller_ids
 -- 10. Add merchant_identifiers to users
 -- =====================================================
 ALTER TABLE users
-ADD COLUMN IF NOT EXISTS merchant_identifiers TEXT[];
+ADD COLUMN IF NOT EXISTS merchant_identifiers JSONB DEFAULT '[]'::jsonb;
 
 UPDATE users
-SET merchant_identifiers = shop_identifiers
-WHERE merchant_identifiers IS NULL AND shop_identifiers IS NOT NULL;
+SET merchant_identifiers = shop_identifiers;
 
 CREATE INDEX IF NOT EXISTS idx_users_merchant_identifiers
     ON users USING GIN(merchant_identifiers);
@@ -175,7 +174,6 @@ WHERE reseller_id IS NULL AND merchant_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_credentials_reseller_id
     ON credentials(reseller_id);
 
-
 -- =====================================================
 -- 12. Add reseller_id to blacklisted_numbers
 -- =====================================================
@@ -189,3 +187,5 @@ WHERE reseller_id IS NULL AND merchant_id IS NOT NULL;
 -- Index for reseller-only queries
 CREATE INDEX IF NOT EXISTS idx_blacklisted_numbers_reseller_id
     ON blacklisted_numbers(reseller_id);
+
+COMMIT;

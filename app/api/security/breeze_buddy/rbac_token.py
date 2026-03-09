@@ -32,6 +32,7 @@ class BreezeBuddyRBACTokenManager:
         reseller_ids: List[str],
         merchant_identifiers: List[str],
         email: Optional[str] = None,
+        owner_id: Optional[str] = None,
         expires_delta: Optional[timedelta] = None,
     ) -> str:
         """
@@ -61,6 +62,7 @@ class BreezeBuddyRBACTokenManager:
             "reseller_ids": reseller_ids,
             "merchant_identifiers": merchant_identifiers,
             "permissions": permissions,
+            "owner_id": owner_id,
         }
 
         # Use the generic JWT manager to create the token
@@ -108,14 +110,22 @@ class BreezeBuddyRBACTokenManager:
                 )
 
             # Extract Breeze Buddy RBAC data
+            # Normalize legacy "shop" role to "user" for old JWTs still in circulation
+            role_str = payload.get("role")
+            if role_str == "shop":
+                role_str = "user"
+
             user_info = UserInfo(
                 id=user_id,
                 username=username,
-                role=UserRole(payload.get("role")),
+                role=UserRole(role_str),
                 email=payload.get("email"),
                 reseller_ids=payload.get("reseller_ids", []),
+                merchant_ids=payload.get("reseller_ids", []),
                 merchant_identifiers=payload.get("merchant_identifiers", []),
+                shop_identifiers=payload.get("merchant_identifiers", []),
                 permissions=payload.get("permissions", []),
+                owner_id=payload.get("owner_id"),
             )
 
             logger.info(
@@ -188,7 +198,7 @@ class BreezeBuddyRBACTokenManager:
                 "analytics:own",
                 "configurations:read",
             ]
-        elif role_str == "shop":
+        elif role_str == "user":
             return [
                 "read:own_data",
                 "analytics:own",

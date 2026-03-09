@@ -22,7 +22,7 @@ class UserRole(str, Enum):
     ADMIN = "admin"
     RESELLER = "reseller"
     MERCHANT = "merchant"
-    SHOP = "shop"
+    USER = "user"  # Renamed from SHOP
 
 
 class Permission(str, Enum):
@@ -116,6 +116,7 @@ class UserInfo(BaseModel):
         default_factory=list
     )  # Backward compatibility: same as merchant_identifiers (will be removed)
     permissions: List[str] = Field(default_factory=list)
+    owner_id: Optional[str] = None  # UUID of user who created this account
 
 
 class UserCreate(BaseModel):
@@ -170,6 +171,7 @@ class UserInDB(BaseModel):
         default_factory=list
     )  # Backward compatibility: same as merchant_identifiers (will be removed)
     is_active: bool = True
+    owner_id: Optional[str] = None  # UUID of user who created this account
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
@@ -190,6 +192,7 @@ class User(BaseModel):
         default_factory=list
     )  # Backward compatibility: same as merchant_identifiers (will be removed)
     is_active: bool = True
+    owner_id: Optional[str] = None  # UUID of user who created this account
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
