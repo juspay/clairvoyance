@@ -112,10 +112,7 @@ async def connect_to_live_agent(
     try:
         customer_phone_number = None
         if context.lead and context.lead.payload:
-            # Outbound calls use "customer_mobile_number"; inbound calls use "caller_number"
-            customer_phone_number = context.lead.payload.get(
-                "customer_mobile_number"
-            ) or context.lead.payload.get("caller_number")
+            customer_phone_number = context.lead.payload.get("customer_mobile_number")
             if customer_phone_number:
                 logger.info(f"Using customer phone number: {customer_phone_number}")
             else:
