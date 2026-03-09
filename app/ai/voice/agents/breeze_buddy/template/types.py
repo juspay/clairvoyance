@@ -432,6 +432,12 @@ class GlobalBuiltinFunction(BaseGlobalFunction):
         ...,
         description="Key in the builtin handler registry (e.g., 'connect_to_live_agent', 'get_current_time')",
     )
+    pre_tts_message: Optional[str] = Field(
+        None,
+        description="TTS message to speak and wait for completion BEFORE executing the handler. "
+        "Useful for handlers that terminate the pipeline (e.g., transfer) where the LLM's "
+        "generated text may get cut off.",
+    )
 
 
 class FlowNodeModel(BaseModel):
