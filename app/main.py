@@ -3,24 +3,35 @@ import json
 import subprocess
 import uuid
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict
 
 import uvicorn
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import JSONResponse
 from pipecat.transports.daily.utils import DailyRESTHelper
 
 from app import __version__
-from app.api.routers import automatic, breeze_buddy
-from app.core.config import (
+from app.ai.voice.agents.breeze_buddy.services.agent_router.client import (
+    close_smart_router_client,
+)
+from app.api.routers import automatic, breeze_buddy, devcycle, systems
+
+# Import background task scheduler
+from app.core.background_tasks import BackgroundTaskScheduler
+from app.core.config.dynamic import ENABLE_BACKGROUND_TASKS
+from app.core.config.static import (
+    BACKGROUND_TASKS_LOOP_INTERVAL_SECONDS,
+    BOT_MAX_DRAIN_SECONDS,
+    CORS_ALLOWED_ORIGINS,
     DAILY_API_KEY,
     DAILY_API_URL,
     DAILY_ROOM_MAX_POOL_SIZE,
     DAILY_ROOM_POOL_SIZE,
     ENABLE_AUTOMATIC_DAILY_RECORDING,
+    ENABLE_SIGTERM_HANDLER,
     HOST,
     MAX_DAILY_SESSION_LIMIT,
     PORT,
@@ -34,7 +45,7 @@ from app.core.security.jwt import validate_automatic_request
 from app.core.transport.http_client import create_aiohttp_session
 
 # Database imports
-from app.database import close_db_pool, get_db_connection, init_db_pool
+from app.database import close_db_pool, init_db_pool
 from app.helpers.automatic.daily_room_pool import (
     cleanup_room_pool,
     get_room_pool,
@@ -54,9 +65,21 @@ from app.helpers.automatic.session_manager import (
 from app.schemas import (
     AutomaticVoiceUserConnectRequest,
 )
+from app.services.langfuse.tasks.task import initialize_langfuse_tasks
+from app.services.redis import (
+    close_redis_connections,
+    get_redis_service,
+    is_redis_configured,
+)
 
 # Store Daily API helpers and room pool
 daily_helpers = {}
+
+# Flag to indicate if pod is draining (no new connections accepted)
+_is_draining = False
+
+# Background task scheduler
+_background_scheduler = None
 
 
 async def room_cleanup_callback(session_id: str):
@@ -75,6 +98,22 @@ async def lifespan(_app: FastAPI):
         await init_db_pool()
     except Exception as e:
         logger.error(f"Failed to initialize database: {e}")
+    # Initialize Redis client
+    try:
+        if is_redis_configured():
+            redis_service = await get_redis_service()
+            await redis_service.get_client()  # Initialize the client
+            logger.info("Redis client initialized successfully")
+        else:
+            logger.info("Redis not configured - skipping Redis initialization")
+    except Exception as e:
+        logger.error(f"Failed to initialize Redis client: {e}")
+
+    # DevCycle feature flags are initialized by parent process (run.py) before uvicorn starts
+    # Worker processes only need to read from Redis using get_config()
+    logger.info(
+        "Worker process: DevCycle flags pre-loaded by parent process, reading from Redis"
+    )
 
     # Initialize aiohttp session with proxy support for Daily API
     aiohttp_session = create_aiohttp_session()
@@ -116,9 +155,55 @@ async def lifespan(_app: FastAPI):
     except Exception as e:
         logger.error(f"Failed to initialize voice agent pool: {e}")
 
+    # Start background task scheduler if enabled
+    global _background_scheduler
+    if await ENABLE_BACKGROUND_TASKS():
+        try:
+            # Create scheduler instance with configurable loop interval
+            _background_scheduler = BackgroundTaskScheduler(
+                loop_interval_seconds=BACKGROUND_TASKS_LOOP_INTERVAL_SECONDS
+            )
+
+            # Initialize Langfuse tasks (if configured)
+            await initialize_langfuse_tasks(_background_scheduler)
+
+            ### Register new tasks here
+
+            # Start the scheduler only if tasks are registered
+            if _background_scheduler.tasks:
+                await _background_scheduler.start()
+                logger.info("Background task scheduler started")
+            else:
+                logger.info("No background tasks registered, scheduler not started")
+        except Exception as e:
+            logger.error(f"Failed to start background task scheduler: {e}")
+    else:
+        logger.info(
+            "Background task scheduler disabled (ENABLE_BACKGROUND_TASKS=false)"
+        )
+
     yield
 
     logger.info("Application shutdown event triggered...")
+
+    # Stop background task scheduler if running
+    if _background_scheduler:
+        logger.info("Stopping background task scheduler...")
+        await _background_scheduler.stop()
+
+    # Graceful drain period - wait for active sessions to complete if enabled
+    if ENABLE_SIGTERM_HANDLER and _is_draining:
+        logger.info(
+            f"Drain mode active. Waiting {BOT_MAX_DRAIN_SECONDS}s for active sessions to complete..."
+        )
+        await asyncio.sleep(BOT_MAX_DRAIN_SECONDS)
+        logger.info(
+            f"Drain period ({BOT_MAX_DRAIN_SECONDS}s) complete. Proceeding with cleanup."
+        )
+
+    # Close Smart Router client (release HTTP connection pool)
+    await close_smart_router_client()
+
     # Cleanup room pool
     await cleanup_room_pool()
     # Cleanup voice agent pool
@@ -127,6 +212,8 @@ async def lifespan(_app: FastAPI):
     await cleanup_bot_processes()
     # Close database pool
     await close_db_pool()
+    # Close Redis connections
+    await close_redis_connections()
     # Close aiohttp session
     await aiohttp_session.close()
     logger.info("Aiohttp session closed.")
@@ -137,14 +224,11 @@ app = FastAPI(title="Breeze Automatic Server", version=__version__, lifespan=lif
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allows all origins
+    allow_origins=CORS_ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],  # Allows all methods
     allow_headers=["*"],  # Allows all headers
 )
-
-# Mount static files directory
-app.mount("/static", StaticFiles(directory="static"), name="static")
 
 app.include_router(
     breeze_buddy.router, prefix="/agent/voice/breeze-buddy", tags=["Breeze Buddy"]
@@ -152,6 +236,10 @@ app.include_router(
 app.include_router(
     automatic.router, prefix="/agent/voice/automatic", tags=["Automatic Agent"]
 )
+app.include_router(devcycle.router, prefix="", tags=["DevCycle"])
+
+# System health endpoints
+app.include_router(systems.router, prefix="", tags=["Systems"])
 
 
 # Pipecat bot endpoint
@@ -188,6 +276,10 @@ async def bot_connect(
         "merchant_id": request.merchantId,
         "platform_integrations": request.platformIntegrations,
         "reseller_id": request.resellerId,
+        "customer_id": request.customerId,
+        "shopify_connected_shop": request.shopifyConnectedShop,
+        # BZ-601: Pass Meta ad account IDs so the voice agent can enrich tool context
+        "meta_ad_account_ids": request.metaAdAccountIds,
     }
 
     # 2. Get room from Daily room pool
@@ -228,6 +320,10 @@ async def bot_connect(
                 **session_params,
             }
 
+            if not voice_process.process.stdin:
+                logger.error("Process stdin is not available")
+                raise RuntimeError("Process stdin is not available")
+
             config_json = json.dumps(session_config) + "\n"
             voice_process.process.stdin.write(config_json.encode("utf-8"))
             await voice_process.process.stdin.drain()
@@ -260,7 +356,7 @@ async def bot_connect(
         )
 
         # 5. Fallback: Launch subprocess directly
-        bot_file = "app.agents.voice.automatic"
+        bot_file = "app.ai.voice.agents.automatic"
         cmd = [
             "python3",
             "-m",
@@ -290,13 +386,22 @@ async def bot_connect(
             "merchant_id": "--merchant-id",
             "platform_integrations": "--platform-integrations",
             "reseller_id": "--reseller-id",
+            "customer_id": "--customer-id",
+            "shopify_connected_shop": "--shopify-connected-shop",
+            "meta_ad_account_ids": "--meta-ad-account-ids",
         }
 
         for key, value in session_params.items():
             if value is not None:
                 arg_name = arg_map.get(key)
+                if arg_name is None:
+                    continue
                 if isinstance(value, list):
-                    cmd.extend([arg_name] + value)
+                    list_values = [str(v) for v in value if v is not None]
+                    if not list_values:
+                        continue
+                    cmd.extend([arg_name, *list_values])
+
                 else:
                     cmd.extend([arg_name, str(value)])
 
@@ -316,61 +421,30 @@ async def bot_connect(
         return {"room_url": room_url, "token": token, "session_id": session_id}
 
 
-# Serve client.html at the root
+# Root endpoint - health check
 @app.get("/")
-async def get_client_html():
-    return FileResponse("static/home.html")
-
-
-# Health check endpoint
-@app.get("/health")
 async def health_check():
-    logger.info("Health check endpoint called")
-    return JSONResponse({"status": "healthy"})
+    """
+    Root endpoint - health check.
+
+    Returns basic service information and status.
+    """
+    return {
+        "service": "Clairvoyance API",
+        "version": __version__,
+        "status": "healthy",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
 
 
-# Database health check endpoint
-@app.get("/health/database")
-async def database_health_check():
-    """Check database connectivity and health."""
-    logger.info("Database health check endpoint called")
-    try:
-        async for conn in get_db_connection():
-            result = await conn.fetchval("SELECT 1")
-            if result == 1:
-                return JSONResponse(
-                    {
-                        "status": "healthy",
-                        "database": "connected",
-                        "message": "Database connection is healthy",
-                    }
-                )
-            else:
-                return JSONResponse(
-                    status_code=400,
-                    content={
-                        "status": "unhealthy",
-                        "database": "error",
-                        "message": "Database query returned unexpected result",
-                    },
-                )
-    except Exception as e:
-        logger.error(f"Database health check failed: {e}")
-        return JSONResponse(
-            status_code=400,
-            content={
-                "status": "unhealthy",
-                "database": "disconnected",
-                "message": f"Database connection failed: {str(e)}",
-            },
-        )
-
-
-# Version endpoint
-@app.get("/version")
-async def get_version():
-    """Get application version."""
-    return JSONResponse({"version": __version__})
+# Drain endpoint for Kubernetes preStop hook
+@app.get("/drain")
+async def drain():
+    """Called by Kubernetes preStop hook before sending SIGTERM"""
+    global _is_draining
+    logger.info("Drain endpoint called by Kubernetes - marking pod as draining")
+    _is_draining = True
+    return JSONResponse({"status": "draining"})
 
 
 # The main block is now only for direct execution, which is not the recommended way.
