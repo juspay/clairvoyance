@@ -795,19 +795,19 @@ def get_analytics_lead_status_counts_query(
     filters: Dict[str, Any],
     page: int = 1,
     limit: int = 10,
-    search_merchant_id: Optional[str] = None,
-    search_shop_identifier: Optional[str] = None,
+    search_reseller_id: Optional[str] = None,
+    search_merchant_identifier: Optional[str] = None,
 ) -> Tuple[str, List[Any]]:
     """
     Generate query for lead status counts with pagination and search.
-    Returns counts grouped by merchant and shop, sorted by total_count DESC.
+    Returns counts grouped by reseller and merchant_identifier, sorted by total_count DESC.
 
     Args:
-        filters: Analytics filters (merchant_id, merchant_ids, date range, etc.)
+        filters: Analytics filters (reseller_id, reseller_ids, date range, etc.)
         page: Page number (1-indexed)
         limit: Number of rows per page
-        search_merchant_id: Partial merchant_id to search for (case-insensitive)
-        search_shop_identifier: Partial shop_identifier to search for (case-insensitive)
+        search_reseller_id: Partial reseller_id to search for (case-insensitive)
+        search_merchant_identifier: Partial merchant_identifier to search for (case-insensitive)
 
     Returns:
         Tuple of (query_string, values_list)
@@ -816,33 +816,37 @@ def get_analytics_lead_status_counts_query(
         filters, filter_execution_mode=False
     )
 
-    # Add search conditions for merchant_id
-    if search_merchant_id:
-        conditions.append(f"lct.merchant_id ILIKE ${len(values) + 1} ESCAPE '\\'")
-        values.append(f"%{escape_ilike_pattern(search_merchant_id)}%")
+    # Add search conditions for reseller_id
+    if search_reseller_id:
+        conditions.append(
+            f"COALESCE(lct.reseller_id, lct.merchant_id) ILIKE ${len(values) + 1} ESCAPE '\\'"
+        )
+        values.append(f"%{escape_ilike_pattern(search_reseller_id)}%")
 
-    # Add search conditions for shop_identifier
-    if search_shop_identifier:
-        conditions.append(f"lct.shop_identifier ILIKE ${len(values) + 1} ESCAPE '\\'")
-        values.append(f"%{escape_ilike_pattern(search_shop_identifier)}%")
+    # Add search conditions for merchant_identifier
+    if search_merchant_identifier:
+        conditions.append(
+            f"COALESCE(lct.merchant_identifier, lct.shop_identifier) ILIKE ${len(values) + 1} ESCAPE '\\'"
+        )
+        values.append(f"%{escape_ilike_pattern(search_merchant_identifier)}%")
 
     where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
 
     # Calculate offset (convert 1-indexed page to 0-indexed offset)
     offset = (page - 1) * limit
 
-    # Main query with pagination - always groups by merchant_id and shop_identifier
+    # Main query with pagination - groups by reseller_id and merchant_identifier
     text = f"""
         SELECT
-            lct.merchant_id,
-            lct.shop_identifier,
+            COALESCE(lct.reseller_id, lct.merchant_id) AS reseller_id,
+            COALESCE(lct.merchant_identifier, lct.shop_identifier) AS merchant_identifier,
             COUNT(*) FILTER (WHERE lct.status = 'BACKLOG') as backlog_count,
             COUNT(*) FILTER (WHERE lct.status = 'PROCESSING') as processing_count,
             COUNT(*) FILTER (WHERE lct.status = 'FINISHED') as finished_count,
             COUNT(*) as total_count
         FROM "{LEAD_CALL_TRACKER_TABLE}" lct
         {where_clause}
-        GROUP BY lct.merchant_id, lct.shop_identifier
+        GROUP BY COALESCE(lct.reseller_id, lct.merchant_id), COALESCE(lct.merchant_identifier, lct.shop_identifier)
         ORDER BY total_count DESC
         LIMIT ${len(values) + 1} OFFSET ${len(values) + 2};
     """
@@ -854,17 +858,17 @@ def get_analytics_lead_status_counts_query(
 
 def get_analytics_lead_status_counts_total_query(
     filters: Dict[str, Any],
-    search_merchant_id: Optional[str] = None,
-    search_shop_identifier: Optional[str] = None,
+    search_reseller_id: Optional[str] = None,
+    search_merchant_identifier: Optional[str] = None,
 ) -> Tuple[str, List[Any]]:
     """
     Generate query to get total count of lead status groups for pagination.
-    Returns the total number of merchant/shop combinations matching filters.
+    Returns the total number of reseller/merchant_identifier combinations matching filters.
 
     Args:
         filters: Analytics filters
-        search_merchant_id: Partial merchant_id to search for
-        search_shop_identifier: Partial shop_identifier to search for
+        search_reseller_id: Partial reseller_id to search for
+        search_merchant_identifier: Partial merchant_identifier to search for
 
     Returns:
         Tuple of (query_string, values_list)
@@ -873,15 +877,19 @@ def get_analytics_lead_status_counts_total_query(
         filters, filter_execution_mode=False
     )
 
-    # Add search conditions for merchant_id
-    if search_merchant_id:
-        conditions.append(f"lct.merchant_id ILIKE ${len(values) + 1} ESCAPE '\\'")
-        values.append(f"%{escape_ilike_pattern(search_merchant_id)}%")
+    # Add search conditions for reseller_id
+    if search_reseller_id:
+        conditions.append(
+            f"COALESCE(lct.reseller_id, lct.merchant_id) ILIKE ${len(values) + 1} ESCAPE '\\'"
+        )
+        values.append(f"%{escape_ilike_pattern(search_reseller_id)}%")
 
-    # Add search conditions for shop_identifier
-    if search_shop_identifier:
-        conditions.append(f"lct.shop_identifier ILIKE ${len(values) + 1} ESCAPE '\\'")
-        values.append(f"%{escape_ilike_pattern(search_shop_identifier)}%")
+    # Add search conditions for merchant_identifier
+    if search_merchant_identifier:
+        conditions.append(
+            f"COALESCE(lct.merchant_identifier, lct.shop_identifier) ILIKE ${len(values) + 1} ESCAPE '\\'"
+        )
+        values.append(f"%{escape_ilike_pattern(search_merchant_identifier)}%")
 
     where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
 
@@ -891,7 +899,7 @@ def get_analytics_lead_status_counts_total_query(
             SELECT 1
             FROM "{LEAD_CALL_TRACKER_TABLE}" lct
             {where_clause}
-            GROUP BY lct.merchant_id, lct.shop_identifier
+            GROUP BY COALESCE(lct.reseller_id, lct.merchant_id), COALESCE(lct.merchant_identifier, lct.shop_identifier)
         ) as grouped;
     """
 
