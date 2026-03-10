@@ -839,6 +839,8 @@ def get_analytics_lead_status_counts_query(
     text = f"""
         SELECT
             COALESCE(lct.reseller_id, lct.merchant_id) AS reseller_id,
+            COALESCE(lct.reseller_id, lct.merchant_id) AS merchant_id,
+            COALESCE(lct.merchant_identifier, lct.shop_identifier) AS shop_identifier,
             COALESCE(lct.merchant_identifier, lct.shop_identifier) AS merchant_identifier,
             COUNT(*) FILTER (WHERE lct.status = 'BACKLOG') as backlog_count,
             COUNT(*) FILTER (WHERE lct.status = 'PROCESSING') as processing_count,
