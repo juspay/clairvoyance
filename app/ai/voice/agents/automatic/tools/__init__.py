@@ -45,7 +45,7 @@ def initialize_tools(
     :param user_id: The user ID, if available.
     :param user_email: The user email, if available.
     :param reseller_id: The reseller ID, if available.
-    :param meta_ad_account_ids: Meta ad account IDs for Meta tools, if available.
+    :param meta_ad_account_ids: Meta ad account IDs for Meta tools (e.g. get_campaign).
     """
     providers = []
     if breeze_token:
