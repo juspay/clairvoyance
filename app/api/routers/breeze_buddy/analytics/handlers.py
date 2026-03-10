@@ -756,10 +756,16 @@ async def get_lead_status_counts(
         formatted_results.append(
             {
                 "reseller_id": row.get("reseller_id"),
+                "merchant_id": (
+                    row.get("merchant_id") if row.get("merchant_id") else None
+                ),
                 "merchant_identifier": (
                     row.get("merchant_identifier")
                     if row.get("merchant_identifier")
                     else None
+                ),
+                "shop_identifier": (
+                    row.get("shop_identifier") if row.get("shop_identifier") else None
                 ),
                 "backlog_count": row.get("backlog_count", 0) or 0,
                 "processing_count": row.get("processing_count", 0) or 0,
