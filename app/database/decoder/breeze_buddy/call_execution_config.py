@@ -11,6 +11,7 @@ from app.core.logger import logger
 from app.schemas import (
     CallExecutionConfig,
     CallProvider,
+    InboundBlockAction,
     PreCheckConfig,
     TelephonyConfig,
 )
@@ -69,6 +70,16 @@ def _decode_single_row(row: asyncpg.Record) -> CallExecutionConfig:
         shop_identifier=row["shop_identifier"] or row["merchant_identifier"],
         enable_international_call=row["enable_international_call"],
         enable_calling=row["enable_calling"],
+        enable_inbound=row.get("enable_inbound", True),
+        inbound_call_start_time=row.get("inbound_call_start_time"),
+        inbound_call_end_time=row.get("inbound_call_end_time"),
+        inbound_block_action=(
+            InboundBlockAction(row["inbound_block_action"])
+            if row.get("inbound_block_action")
+            else InboundBlockAction.REJECT
+        ),
+        inbound_redirect_number=row.get("inbound_redirect_number"),
+        inbound_block_message=row.get("inbound_block_message"),
         pre_checks=_decode_pre_checks(row.get("pre_checks")),
         telephony_config=(
             TelephonyConfig(**parsed)

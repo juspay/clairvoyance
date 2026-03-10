@@ -25,6 +25,12 @@ def insert_call_execution_config_query(
     merchant_identifier: Optional[str],
     enable_international_call: bool,
     enable_calling: bool = True,
+    enable_inbound: bool = True,
+    inbound_call_start_time: Optional[time] = None,
+    inbound_call_end_time: Optional[time] = None,
+    inbound_block_action: Optional[str] = None,
+    inbound_redirect_number: Optional[str] = None,
+    inbound_block_message: Optional[str] = None,
     template_id: Optional[str] = None,
     pre_checks: Optional[str] = None,
     telephony_config: Optional[str] = None,
@@ -56,12 +62,18 @@ def insert_call_execution_config_query(
             "merchant_identifier",
             "enable_international_call",
             "enable_calling",
+            "enable_inbound",
+            "inbound_call_start_time",
+            "inbound_call_end_time",
+            "inbound_block_action",
+            "inbound_redirect_number",
+            "inbound_block_message",
             "pre_checks",
             "telephony_config",
             "created_at",
             "updated_at"
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19) RETURNING *;
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25) RETURNING *;
     """
 
     values = [
@@ -75,11 +87,17 @@ def insert_call_execution_config_query(
         reseller_id,
         reseller_id,
         template,
-        template_id,  # NEW
+        template_id,
         merchant_identifier,
         merchant_identifier,
         enable_international_call,
         enable_calling,
+        enable_inbound,
+        inbound_call_start_time,
+        inbound_call_end_time,
+        inbound_block_action,
+        inbound_redirect_number,
+        inbound_block_message,
         pre_checks,
         telephony_config,
         datetime.now(),
@@ -162,6 +180,12 @@ def update_call_execution_config_query(
     calling_provider: Optional[CallProvider] = None,
     enable_international_call: Optional[bool] = None,
     enable_calling: Optional[bool] = None,
+    enable_inbound: Optional[bool] = None,
+    inbound_call_start_time: Optional[time] = None,
+    inbound_call_end_time: Optional[time] = None,
+    inbound_block_action: Optional[str] = None,
+    inbound_redirect_number: Optional[str] = None,
+    inbound_block_message: Optional[str] = None,
     template_id: Optional[str] = None,
     pre_checks: Optional[str] = None,
     telephony_config: Optional[str] = None,
@@ -217,6 +241,36 @@ def update_call_execution_config_query(
     if enable_calling is not None:
         updates.append(f'"enable_calling" = ${param_count}')
         values.append(enable_calling)
+        param_count += 1
+
+    if enable_inbound is not None:
+        updates.append(f'"enable_inbound" = ${param_count}')
+        values.append(enable_inbound)
+        param_count += 1
+
+    if inbound_call_start_time is not None:
+        updates.append(f'"inbound_call_start_time" = ${param_count}')
+        values.append(inbound_call_start_time)
+        param_count += 1
+
+    if inbound_call_end_time is not None:
+        updates.append(f'"inbound_call_end_time" = ${param_count}')
+        values.append(inbound_call_end_time)
+        param_count += 1
+
+    if inbound_block_action is not None:
+        updates.append(f'"inbound_block_action" = ${param_count}')
+        values.append(inbound_block_action)
+        param_count += 1
+
+    if inbound_redirect_number is not None:
+        updates.append(f'"inbound_redirect_number" = ${param_count}')
+        values.append(inbound_redirect_number)
+        param_count += 1
+
+    if inbound_block_message is not None:
+        updates.append(f'"inbound_block_message" = ${param_count}')
+        values.append(inbound_block_message)
         param_count += 1
 
     if template_id is not None:

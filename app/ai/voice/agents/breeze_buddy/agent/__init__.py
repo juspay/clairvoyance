@@ -52,6 +52,9 @@ from app.ai.voice.agents.breeze_buddy.handlers.internal.end_conversation import 
 from app.ai.voice.agents.breeze_buddy.observability.tracing_setup import (
     create_root_span,
 )
+from app.ai.voice.agents.breeze_buddy.services.inbound_policy import (
+    evaluate_inbound_policy,
+)
 from app.ai.voice.agents.breeze_buddy.services.telephony.base_provider import (
     VoiceCallProvider,
 )
@@ -70,16 +73,23 @@ from app.ai.voice.agents.breeze_buddy.utils.common import (
 from app.ai.voice.agents.breeze_buddy.utils.transport.websockets import (
     close_websocket_safely,
 )
-from app.core.config.static import ENABLE_BREEZE_BUDDY_TRACING
+from app.ai.voice.agents.breeze_buddy.utils.warm_transfer import set_transfer_flag
+from app.core.config.static import APP_BASE_URL, ENABLE_BREEZE_BUDDY_TRACING
 from app.core.logger import logger
 from app.core.logger.context import (
     clear_log_context,
     set_log_context,
     update_log_context,
 )
-from app.database.accessor import update_lead_call_initiated_time
+from app.database.accessor import (
+    get_outbound_number_by_id,
+    update_lead_call_initiated_time,
+)
 from app.database.accessor.breeze_buddy.lead_call_tracker import (
     update_lead_call_initiated_time_by_id,
+)
+from app.database.accessor.breeze_buddy.template import (
+    get_template_by_id,
 )
 from app.schemas import CallProvider
 from app.schemas.breeze_buddy.core import LeadCallTracker
@@ -306,12 +316,14 @@ class Agent:
         )
         if not self.lead:
             # Inbound call - extract template_id (handles IVR mode if enabled)
-            template_id_from_query, error_reason = await get_template_id_from_call(
-                ws=self.ws,
-                stream_sid=self.stream_sid,
-                call_sid=self.call_sid,
-                call_data=call_data,
-                provider=self.provider or "",
+            template_id_from_query, error_reason, was_ivr = (
+                await get_template_id_from_call(
+                    ws=self.ws,
+                    stream_sid=self.stream_sid,
+                    call_sid=self.call_sid,
+                    call_data=call_data,
+                    provider=self.provider or "",
+                )
             )
 
             # Check if there was an error (IVR failed or invalid template_id)
@@ -322,6 +334,20 @@ class Agent:
 
             # Extract URL query params for Plivo inbound (contains from_number, to_number)
             url_query_params = dict(self.ws.query_params) if self.ws else {}
+
+            # Deferred rate limit check for IVR mode.
+            # In IVR mode, rate limiting was skipped in the answer handler because the
+            # caller hadn't selected a template yet. Now that we know the template,
+            # evaluate the inbound call policy before creating a lead.
+            if was_ivr and template_id_from_query:
+                blocked = await self._evaluate_deferred_rate_limit(
+                    template_id=template_id_from_query,
+                    call_data=call_data,
+                    url_query_params=url_query_params,
+                )
+                if blocked:
+                    clear_log_context()
+                    return False
 
             # Handle inbound call - create lead on-the-fly
             if template_id_from_query:
@@ -460,6 +486,252 @@ class Agent:
 
         logger.info(f"Created transport: {self.transport.__class__.__name__}")
         return True
+
+    async def _evaluate_deferred_rate_limit(
+        self,
+        template_id: str,
+        call_data: Dict[str, Any],
+        url_query_params: Dict[str, str],
+    ) -> bool:
+        """Evaluate rate limit for IVR calls after template selection.
+
+        In IVR mode, rate limiting is deferred from the answer handler because
+        the caller hasn't selected a template yet. This method runs the deferred
+        check once the template is known.
+
+        If the policy action is ``redirect`` and a redirect number is configured,
+        the call is transferred to that number using the same mechanism as warm
+        transfer (Redis flag + provider conference service). Otherwise, a block
+        message is played and the WebSocket is closed.
+
+        Args:
+            template_id: The selected template ID from IVR.
+            call_data: Call data from the telephony provider.
+            url_query_params: URL query params (for Plivo inbound).
+
+        Returns:
+            True if the call was blocked/redirected (caller should not proceed),
+            False if the call is allowed.
+        """
+        try:
+            template = await get_template_by_id(template_id)
+            if not template:
+                logger.warning(
+                    f"[IVR-RateLimit] Template {template_id} not found, allowing call"
+                )
+                return False
+
+            policy = (
+                template.configurations.inbound_call_policy
+                if template.configurations
+                else None
+            )
+            if not policy:
+                return False
+
+            merchant_id = template.reseller_id or ""
+            transfer_number = (
+                template.configurations.transfer_number
+                if template.configurations
+                else None
+            )
+
+            # Extract caller number from call_data
+            start_data = call_data.get("start", {})
+            custom_params = call_data.get("custom_parameters") or start_data.get(
+                "custom_parameters", {}
+            )
+            from_number = (
+                start_data.get("from")
+                or call_data.get("from")
+                or custom_params.get("from_number")
+                or url_query_params.get("from_number", "unknown")
+            )
+
+            policy_result = await evaluate_inbound_policy(
+                policy=policy,
+                merchant_id=merchant_id,
+                template_id=template_id,
+                caller_number=from_number,
+                transfer_number=transfer_number,
+                skip_rate_limit=False,
+            )
+
+            if not policy_result.allowed:
+                logger.info(
+                    f"[IVR-RateLimit] Call blocked after IVR selection: "
+                    f"reason={policy_result.reason}, action={policy_result.action}, "
+                    f"call_sid={self.call_sid}"
+                )
+
+                # Attempt call transfer for redirect actions (same as warm transfer)
+                if policy_result.action == "redirect" and policy_result.redirect_number:
+                    transferred = await self._transfer_rate_limited_call(
+                        template=template,
+                        redirect_number=policy_result.redirect_number,
+                        from_number=from_number,
+                        block_message=policy_result.block_message,
+                    )
+                    if transferred:
+                        return True
+                    # Fall through to block if transfer failed
+
+                # Block: play message and close WebSocket
+                block_msg = (
+                    policy_result.block_message
+                    or "We are unable to take your call right now. Goodbye."
+                )
+                await self._play_message_and_close(block_msg, policy_result.reason)
+                return True
+
+            return False
+
+        except Exception as e:
+            # Fail-open: if rate limit check fails, allow the call through
+            logger.error(
+                f"[IVR-RateLimit] Deferred rate limit check failed (allowing call): {e}",
+                exc_info=True,
+            )
+            return False
+
+    async def _transfer_rate_limited_call(
+        self,
+        template: TemplateModel,
+        redirect_number: str,
+        from_number: str,
+        block_message: Optional[str] = None,
+    ) -> bool:
+        """Transfer a rate-limited call using the warm transfer mechanism.
+
+        Sets a Redis transfer flag and delegates to the provider's conference
+        service, identical to how ``connect_to_live_agent`` works.
+
+        Args:
+            template: The selected template (for outbound_number_id, reseller_id).
+            redirect_number: The phone number to redirect the call to.
+            from_number: The caller's phone number.
+            block_message: Optional message to play before transfer (not used
+                currently — provider handles bridging immediately).
+
+        Returns:
+            True if the transfer was initiated successfully, False otherwise.
+        """
+        if not self.telephony_service or not hasattr(
+            self.telephony_service, "conference_service"
+        ):
+            logger.warning(
+                f"[IVR-RateLimit] No telephony/conference service available for "
+                f"redirect on call {self.call_sid}, falling back to block"
+            )
+            return False
+
+        if not self.call_sid:
+            logger.warning("[IVR-RateLimit] No call_sid available, cannot redirect")
+            return False
+
+        if not template.outbound_number_id:
+            logger.warning(
+                f"[IVR-RateLimit] No outbound_number_id on template {template.id}, "
+                f"cannot redirect call {self.call_sid}"
+            )
+            return False
+
+        outbound_number_record = await get_outbound_number_by_id(
+            template.outbound_number_id
+        )
+        if not outbound_number_record:
+            logger.warning(
+                f"[IVR-RateLimit] Outbound number not found for "
+                f"id={template.outbound_number_id}, cannot redirect"
+            )
+            return False
+
+        outbound_number = outbound_number_record.number
+        conference_name = f"ratelimit-redirect-{self.call_sid}"
+
+        logger.info(
+            f"[IVR-RateLimit] Redirecting call {self.call_sid} to {redirect_number} "
+            f"via {conference_name}"
+        )
+
+        # Set Redis transfer flag (same pattern as warm transfer)
+        await set_transfer_flag(
+            call_sid=self.call_sid,
+            reseller_id=template.reseller_id or "",
+            merchant_identifier=template.merchant_identifier or "",
+            transfer_number=redirect_number,
+            customer_phone_number=from_number,
+        )
+
+        # Build status callback URL for conference events
+        provider_name = (self.provider or "").lower()
+        status_callback_url = (
+            f"{APP_BASE_URL}/agent/voice/breeze-buddy/"
+            f"{provider_name}/callback/transfer/conference-end"
+        )
+
+        try:
+            conference_result = (
+                await self.telephony_service.conference_service.handle_transfer(
+                    conference_name=conference_name,
+                    agent_phone_number=redirect_number,
+                    customer_call_sid=self.call_sid,
+                    outbound_number=outbound_number,
+                    callback=None,
+                    status_callback_url=status_callback_url,
+                    customer_phone_number=from_number,
+                )
+            )
+
+            if conference_result.get("success"):
+                logger.info(
+                    f"[IVR-RateLimit] Transfer initiated successfully for "
+                    f"call {self.call_sid} → {redirect_number}"
+                )
+                # Close WebSocket — provider now handles bridging
+                if self.ws:
+                    await close_websocket_safely(
+                        self.ws, code=1000, reason="Rate limit redirect"
+                    )
+                return True
+            else:
+                logger.warning(
+                    f"[IVR-RateLimit] Transfer failed: "
+                    f"{conference_result.get('reason')}, falling back to block"
+                )
+                return False
+
+        except Exception as e:
+            logger.error(
+                f"[IVR-RateLimit] Transfer exception for call {self.call_sid}: {e}",
+                exc_info=True,
+            )
+            return False
+
+    async def _play_message_and_close(
+        self, message: str, reason: Optional[str] = None
+    ) -> None:
+        """Play a TTS message over the WebSocket and close the connection."""
+        from app.ai.voice.agents.breeze_buddy.agent.ivr import (
+            _convert_audio_for_provider,
+            _generate_tts_audio_mulaw,
+            _send_audio,
+        )
+
+        provider = self.provider or ""
+        audio = await _generate_tts_audio_mulaw(message)
+        if audio and self.ws and self.stream_sid:
+            provider_audio = _convert_audio_for_provider(audio, provider)
+            await _send_audio(self.ws, self.stream_sid, provider_audio, provider)
+            # Wait for audio to finish playing before closing
+            await asyncio.sleep(4)
+
+        if self.ws:
+            await close_websocket_safely(
+                self.ws,
+                code=4000,
+                reason=f"Call blocked: {reason or 'rate_limited'}",
+            )
 
     def _register_event_handlers(self) -> None:
         """Register transport and task event handlers."""

@@ -18,8 +18,9 @@ INBOUND (customer calls us):
 1. Customer calls inbound number
 2. Provider calls /{provider}/answer endpoint
 3. Look up templates by outbound number
-4. Single template: return direct WebSocket connection
-5. Multiple templates: IVR mode (agent-side for both providers)
+4. Filter templates by CallExecutionConfig (enable_inbound, business hours)
+5. Single template: return direct WebSocket connection
+6. Multiple templates: IVR mode (agent-side for both providers)
    - Pre-generate audio with our TTS
    - Store IVR config in Redis
    - Return WebSocket URL with ivr_mode=true
@@ -28,8 +29,9 @@ INBOUND (customer calls us):
 
 import asyncio
 import json
+from datetime import datetime, timedelta, timezone
 from html import escape as html_escape
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional
 from urllib.parse import quote
 
 from fastapi import HTTPException, Request, Response, status
@@ -44,6 +46,9 @@ from app.ai.voice.agents.breeze_buddy.agent.ivr import (
 from app.ai.voice.agents.breeze_buddy.services.agent_router.client import (
     safe_allocate_pod,
 )
+from app.ai.voice.agents.breeze_buddy.services.inbound_policy import (
+    evaluate_inbound_policy,
+)
 from app.ai.voice.agents.breeze_buddy.services.telephony.plivo.recording import (
     start_call_recording,
 )
@@ -53,7 +58,10 @@ from app.core.config.dynamic import (
 )
 from app.core.config.static import APP_BASE_URL
 from app.core.logger import logger
-from app.database.accessor import get_lead_by_call_id
+from app.database.accessor import (
+    get_call_execution_config_by_merchant_id,
+    get_lead_by_call_id,
+)
 from app.database.accessor.breeze_buddy.outbound_number import (
     get_outbound_number_by_number,
 )
@@ -61,7 +69,105 @@ from app.database.accessor.breeze_buddy.template import (
     get_all_templates_by_outbound_number_id,
     get_template_by_merchant,
 )
+from app.schemas import CallExecutionConfig, InboundBlockAction
 from app.services.redis.client import get_redis_service
+
+
+def _check_config_inbound_policy(
+    config: CallExecutionConfig,
+) -> Dict[str, Any]:
+    """Check CallExecutionConfig inbound call blocking.
+
+    Checks:
+    1. enable_inbound master toggle
+    2. Business hours (inbound_call_start_time / inbound_call_end_time)
+
+    Returns:
+        Empty dict if allowed, or dict with block details if blocked.
+    """
+    # 1. Master toggle
+    if not config.enable_inbound:
+        logger.info(f"[Answer] Inbound disabled for config: template={config.template}")
+        return {
+            "blocked": True,
+            "block_action": config.inbound_block_action,
+            "block_message": config.inbound_block_message,
+            "redirect_number": config.inbound_redirect_number,
+        }
+
+    # 2. Business hours check
+    start_time = config.inbound_call_start_time
+    end_time = config.inbound_call_end_time
+    if start_time is not None and end_time is not None:
+        IST = timezone(timedelta(hours=5, minutes=30))
+        now = datetime.now(IST).time()
+        if start_time <= end_time:
+            # Same-day range (e.g., 09:00 - 18:00)
+            within_hours = start_time <= now <= end_time
+        else:
+            # Overnight range (e.g., 22:00 - 06:00)
+            within_hours = now >= start_time or now <= end_time
+
+        if not within_hours:
+            logger.info(
+                f"[Answer] Inbound call outside business hours for template={config.template}: "
+                f"current={now}, allowed={start_time}-{end_time}"
+            )
+            return {
+                "blocked": True,
+                "block_action": config.inbound_block_action,
+                "block_message": config.inbound_block_message,
+                "redirect_number": config.inbound_redirect_number,
+            }
+
+    return {}
+
+
+async def _filter_templates_by_execution_config(
+    templates: List[Any],
+    merchant_id: str,
+    shop_identifier: Optional[str],
+) -> tuple[List[Any], Optional[Dict[str, Any]]]:
+    """Filter templates by CallExecutionConfig (enable_inbound + business hours).
+
+    For each template, look up its CallExecutionConfig and check:
+    1. enable_inbound toggle
+    2. Business hours (inbound_call_start_time / inbound_call_end_time)
+
+    Templates without a config pass through (default allow).
+
+    Returns:
+        Tuple of (filtered_templates, block_info).
+        block_info is set when ALL templates are blocked, containing the block
+        action/message from the last rejected config.
+    """
+    configs = await get_call_execution_config_by_merchant_id(
+        merchant_id, shop_identifier
+    )
+    if not configs:
+        return templates, None
+
+    # Build lookup: template_name -> config
+    config_map: Dict[str, CallExecutionConfig] = {c.template: c for c in configs}
+
+    filtered = []
+    last_block_info: Optional[Dict[str, Any]] = None
+
+    for t in templates:
+        config = config_map.get(t.name)
+        if not config:
+            # No config for this template — allow by default
+            filtered.append(t)
+            continue
+
+        block = _check_config_inbound_policy(config)
+        if block.get("blocked"):
+            last_block_info = block
+            logger.info(f"[Answer] Template '{t.name}' filtered out by config policy")
+        else:
+            filtered.append(t)
+
+    return filtered, last_block_info
 
 
 async def resolve_call_templates(
@@ -72,9 +178,11 @@ async def resolve_call_templates(
 
     1. Check if lead exists for call_sid (outbound detection)
     2. If outbound: look up template from lead
-    3. If inbound: look up outbound_number by to_number, get all templates
-    4. Build template_list with IVR descriptions
-    5. Resolve voice_name and ivr_greeting from template configurations
+    3. If inbound: look up outbound_number by to_number
+    4. Get all inbound-enabled templates for this number
+    5. Filter templates by CallExecutionConfig (enable_inbound, business hours)
+    6. Build template_list with IVR descriptions
+    7. Resolve voice_name and ivr_greeting from template configurations
 
     Args:
         call_sid: Unique call identifier (Exotel CallSid / Plivo CallUUID)
@@ -92,6 +200,7 @@ async def resolve_call_templates(
             ivr_greeting: Optional[str]         (IVR greeting text)
             error: Optional[str]               (if lookup failed)
             error_status: Optional[int]        (HTTP status for error)
+            blocked: dict                       (if blocked by config policy)
     """
     # Check if lead exists (outbound call)
     lead = await get_lead_by_call_id(call_sid)
@@ -132,7 +241,7 @@ async def resolve_call_templates(
         logger.error(f"[Answer] No outbound number found for: {to_number}")
         return {"error": "Number not configured", "error_status": 404}
 
-    # Get all templates for this outbound number
+    # Get all templates for this outbound number (already filtered by configurations.enable_inbound)
     templates = await get_all_templates_by_outbound_number_id(outbound_number.id)
 
     if not templates:
@@ -140,6 +249,27 @@ async def resolve_call_templates(
             f"[Answer] No templates found for outbound_number_id: {outbound_number.id}"
         )
         return {"error": "No templates available", "error_status": 404}
+
+    # ── Filter by CallExecutionConfig (enable_inbound + business hours) ──
+    first_template = templates[0]
+    templates, block_info = await _filter_templates_by_execution_config(
+        templates,
+        merchant_id=first_template.reseller_id,
+        shop_identifier=first_template.merchant_identifier,
+    )
+
+    if not templates:
+        logger.info("[Answer] All templates filtered out by CallExecutionConfig policy")
+        return {
+            "is_outbound": False,
+            "blocked": block_info
+            or {
+                "blocked": True,
+                "block_action": InboundBlockAction.REJECT,
+                "block_message": None,
+                "redirect_number": None,
+            },
+        }
 
     # Build template list for IVR (only id and name needed)
     template_list = [
@@ -175,6 +305,13 @@ async def resolve_call_templates(
             f"for outbound_number: {to_number}"
         )
 
+    # Extract inbound call policy and transfer number from template configurations
+    inbound_call_policy = None
+    transfer_number = None
+    if first_template and first_template.configurations:
+        inbound_call_policy = first_template.configurations.inbound_call_policy
+        transfer_number = first_template.configurations.transfer_number
+
     return {
         "is_outbound": False,
         "templates": templates,
@@ -183,6 +320,8 @@ async def resolve_call_templates(
         "ivr_greeting": ivr_greeting,
         "ivr_goodbye": ivr_goodbye,
         "merchant_id": first_template.reseller_id if first_template else None,
+        "inbound_call_policy": inbound_call_policy,
+        "transfer_number": transfer_number,
     }
 
 
@@ -310,6 +449,38 @@ def _error_response(provider: str, message: str, status_code: int) -> Response:
     return HTMLResponse(content=xml, media_type="application/xml")
 
 
+def _build_redirect_response(
+    provider: str, redirect_number: str, call_id: str, to_number: str = ""
+) -> Response:
+    """Build a provider-specific response that redirects the call to a phone number.
+
+    Used when inbound policy dictates a redirect (e.g., to customer support)
+    instead of connecting to the AI agent.
+    """
+    if provider == "exotel":
+        # Exotel: return the redirect number as a dial target
+        return Response(
+            content=json.dumps(
+                {
+                    "redirect": True,
+                    "number": redirect_number,
+                    "reason": "rate_limited",
+                }
+            ),
+            media_type="application/json",
+        )
+    # Plivo: XML dial response to bridge caller to the redirect number
+    # Use to_number (our outbound number) as callerId so Plivo accepts the dial
+    caller_id = to_number or redirect_number
+    xml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Dial callerId="{html_escape(caller_id)}">
+        <Number>{html_escape(redirect_number)}</Number>
+    </Dial>
+</Response>"""
+    return HTMLResponse(content=xml, media_type="application/xml")
+
+
 def _build_json_response(ws_url: str) -> Response:
     """Build Exotel JSON response."""
     return Response(
@@ -339,6 +510,86 @@ async def _build_provider_response(
         if provider == "exotel":
             return _build_json_response(ws_url)
         return await _build_xml_response(ws_url)
+
+    # ── Config-level blocking ────────────────────────────────────────────
+    # Checked in resolve_call_templates: enable_inbound toggle, business hours,
+    # and all-templates-filtered-out. If blocked, result contains
+    # "blocked" dict with the configured action.
+    blocked = result.get("blocked")
+    if blocked:
+        block_action = blocked.get("block_action", InboundBlockAction.REJECT)
+        block_msg = (
+            blocked.get("block_message")
+            or "We are unable to take your call right now. Goodbye."
+        )
+
+        if block_action == InboundBlockAction.REDIRECT:
+            redirect_number = blocked.get("redirect_number")
+            if redirect_number:
+                logger.info(
+                    f"[{tag}] Inbound blocked by config policy, redirecting "
+                    f"call {call_id} to {redirect_number}"
+                )
+                return _build_redirect_response(
+                    provider, redirect_number, call_id, to_number
+                )
+            # No redirect number configured, fall back to reject
+            logger.warning(
+                f"[{tag}] Block action is REDIRECT but no redirect_number configured, "
+                f"falling back to REJECT for call {call_id}"
+            )
+
+        logger.info(
+            f"[{tag}] Inbound call rejected by config policy, call_id={call_id}"
+        )
+        return _error_response(provider, block_msg, 200)
+
+    # ── Inbound call policy enforcement (template-level) ─────────────────
+    # For inbound calls, evaluate the policy (blacklist, rate limiting)
+    # BEFORE allocating a pod to avoid wasting resources on blocked calls.
+    # NOTE: For IVR mode (multiple templates), rate limiting is deferred
+    # until after the caller selects a template, since we don't yet know
+    # which template's policy to apply. Blacklist checks still run here
+    # since they are template-agnostic.
+    if not result.get("is_outbound"):
+        inbound_policy = result.get("inbound_call_policy")
+        templates = result.get("templates", [])
+        first_template = templates[0] if templates else None
+        template_id_for_policy = str(first_template.id) if first_template else ""
+        merchant_id = result.get("merchant_id", "")
+        is_ivr_mode = len(templates) > 1
+
+        if inbound_policy or merchant_id:
+            policy_result = await evaluate_inbound_policy(
+                policy=inbound_policy,
+                merchant_id=merchant_id,
+                template_id=template_id_for_policy,
+                caller_number=from_number,
+                transfer_number=result.get("transfer_number"),
+                skip_rate_limit=is_ivr_mode,
+            )
+
+            if not policy_result.allowed:
+                logger.info(
+                    f"[{tag}] Inbound call blocked by policy: reason={policy_result.reason}, "
+                    f"action={policy_result.action}, call_id={call_id}"
+                )
+
+                if policy_result.action == "redirect" and policy_result.redirect_number:
+                    # Redirect to support via provider-native dial
+                    logger.info(
+                        f"[{tag}] Redirecting call {call_id} to {policy_result.redirect_number}"
+                    )
+                    return _build_redirect_response(
+                        provider, policy_result.redirect_number, call_id, to_number
+                    )
+
+                # Default: block with spoken message
+                block_msg = (
+                    policy_result.block_message
+                    or "We are unable to take your call right now. Goodbye."
+                )
+                return _error_response(provider, block_msg, 200)
 
     # ── Pod allocation (1-pod-1-call isolation) ──────────────────────────
     # Attempt to allocate a dedicated pod via Smart Router. This runs for

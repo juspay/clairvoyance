@@ -48,7 +48,7 @@ async def get_template_id_from_call(
     call_sid: str,
     call_data: dict,
     provider: str,
-) -> Tuple[Optional[str], Optional[str]]:
+) -> Tuple[Optional[str], Optional[str], bool]:
     """
     Extract template_id from call data, handling IVR mode if needed.
 
@@ -67,10 +67,10 @@ async def get_template_id_from_call(
         provider: "twilio", "exotel", or "plivo"
 
     Returns:
-        Tuple of (template_id, error_reason):
-        - (template_id, None) on success
-        - (None, None) if no template_id provided (valid for non-IVR inbound)
-        - (None, error_reason) on error (WebSocket already closed)
+        Tuple of (template_id, error_reason, was_ivr):
+        - (template_id, None, True/False) on success
+        - (None, None, False) if no template_id provided (valid for non-IVR inbound)
+        - (None, error_reason, True/False) on error (WebSocket already closed)
     """
     # Extract custom_params (Exotel: root level, Twilio: inside "start")
     start_data = call_data.get("start", {})
@@ -104,10 +104,10 @@ async def get_template_id_from_call(
         if not selected_template_id:
             logger.error("[IVR] No valid template selected, ending call")
             # WebSocket already closed by IVR menu after goodbye audio
-            return None, "IVR failed - no template selected"
+            return None, "IVR failed - no template selected", True
 
         logger.info(f"[IVR] Template selected via DTMF: {selected_template_id}")
-        return selected_template_id, None
+        return selected_template_id, None, True
 
     # Validate template_id UUID format (if provided)
     if template_id:
@@ -118,9 +118,9 @@ async def get_template_id_from_call(
             await close_websocket_safely(
                 ws, code=4000, reason="Invalid template_id format"
             )
-            return None, "Invalid template_id format"
+            return None, "Invalid template_id format", False
 
-    return template_id, None
+    return template_id, None, False
 
 
 async def _run_ivr_menu(
