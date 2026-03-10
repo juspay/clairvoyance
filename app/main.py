@@ -278,7 +278,6 @@ async def bot_connect(
         "reseller_id": request.resellerId,
         "customer_id": request.customerId,
         "shopify_connected_shop": request.shopifyConnectedShop,
-        # BZ-601: Pass Meta ad account IDs so the voice agent can enrich tool context
         "meta_ad_account_ids": request.metaAdAccountIds,
     }
 

@@ -45,7 +45,7 @@ def initialize_tools(
     :param user_id: The user ID, if available.
     :param user_email: The user email, if available.
     :param reseller_id: The reseller ID, if available.
-    :param meta_ad_account_ids: List of Meta ad account IDs for Meta tool context (BZ-601).
+    :param meta_ad_account_ids: Meta ad account IDs for Meta tools, if available.
     """
     providers = []
     if breeze_token:
@@ -55,9 +55,6 @@ def initialize_tools(
 
     logger.info(f"Initializing tools in '{mode}' mode with providers: {providers}")
     logger.info(f"Shop context: id={shop_id}, url={shop_url}, type={shop_type}")
-    logger.info(
-        f"Meta ad account IDs provided: {len(meta_ad_account_ids) if meta_ad_account_ids else 0}"
-    )
     all_tools = []
     all_tool_functions = {}
 
@@ -112,13 +109,14 @@ def initialize_tools(
             breeze.analytics.shop_type = shop_type
             breeze.analytics.sessionId = session_id
             breeze.analytics.reseller_id = reseller_id
-            # BZ-601: Wire Meta ad account IDs into breeze analytics context so
-            # Meta tools (e.g. get_campaign) have access to the correct account IDs.
             breeze.analytics.meta_ad_account_ids = meta_ad_account_ids or []
             all_tools.extend(breeze.tools.standard_tools)
             all_tool_functions.update(breeze.tool_functions)
             logger.info(
                 f"Loaded {len(breeze.tools.standard_tools)} real-time Breeze analytics tools."
+            )
+            logger.info(
+                f"Meta ad account IDs provided: {len(meta_ad_account_ids or [])}"
             )
         if (
             "breeze" in providers
