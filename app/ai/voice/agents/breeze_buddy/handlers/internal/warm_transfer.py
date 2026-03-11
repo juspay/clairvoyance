@@ -99,7 +99,10 @@ async def connect_to_live_agent(
             "message": "Telephony service not configured",
         }
 
-    if not hasattr(context.telephony_service, "conference_service"):
+    if (
+        not hasattr(context.telephony_service, "conference_service")
+        or context.telephony_service.conference_service is None
+    ):
         logger.error(
             f"Transfer failed for call {context.call_sid}: conference_service not available"
         )

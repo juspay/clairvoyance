@@ -21,6 +21,7 @@ class VoiceCallProvider(ABC):
         self.aiohttp_session = aiohttp_session
         self.telephony_config = telephony_config
         self.completion_callback = None
+        self.conference_service: Any = None
 
     @abstractmethod
     async def handle_websocket(self, websocket: WebSocket, provider: CallProvider):

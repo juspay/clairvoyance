@@ -56,19 +56,23 @@ async def create_call_execution_config(
     merchant_identifier: Optional[str],
     enable_international_call: bool,
     enable_calling: bool = True,
+    enable_inbound: bool = True,
+    inbound_call_start_time: Optional[time] = None,
+    inbound_call_end_time: Optional[time] = None,
+    inbound_call_timezone: Optional[str] = None,
+    inbound_block_action: Optional[str] = None,
+    inbound_redirect_number: Optional[str] = None,
+    inbound_block_message: Optional[str] = None,
+    enforce_blacklist: bool = True,
+    rate_limit_enabled: bool = False,
+    rate_limit_max_calls: Optional[int] = None,
+    rate_limit_window_seconds: Optional[int] = None,
+    rate_limit_whitelist: Optional[str] = None,
     template_id: Optional[str] = None,
     pre_checks: Optional[List[Any]] = None,
     telephony_config: Optional[TelephonyConfig] = None,
 ) -> Optional[CallExecutionConfig]:
-    """
-    Create a new call execution config record.
-
-    Args:
-        template_id: UUID of the template (preferred, for referential integrity)
-        template: Name of the template (kept for backward compatibility)
-        pre_checks: List of PreCheckConfig objects for call pre-validation
-        telephony_config: Optional telephony provider overrides
-    """
+    """Create a new call execution config record."""
     logger.info(f"Creating call execution config for reseller ID: {reseller_id}")
 
     try:
@@ -82,10 +86,22 @@ async def create_call_execution_config(
             calling_provider=calling_provider,
             reseller_id=reseller_id,
             template=template,
-            template_id=template_id,  # NEW
+            template_id=template_id,
             merchant_identifier=merchant_identifier,
             enable_international_call=enable_international_call,
             enable_calling=enable_calling,
+            enable_inbound=enable_inbound,
+            inbound_call_start_time=inbound_call_start_time,
+            inbound_call_end_time=inbound_call_end_time,
+            inbound_call_timezone=inbound_call_timezone,
+            inbound_block_action=inbound_block_action,
+            inbound_redirect_number=inbound_redirect_number,
+            inbound_block_message=inbound_block_message,
+            enforce_blacklist=enforce_blacklist,
+            rate_limit_enabled=rate_limit_enabled,
+            rate_limit_max_calls=rate_limit_max_calls,
+            rate_limit_window_seconds=rate_limit_window_seconds,
+            rate_limit_whitelist=rate_limit_whitelist,
             pre_checks=_serialize_pre_checks(pre_checks),
             telephony_config=(
                 json.dumps(telephony_config.model_dump()) if telephony_config else None
@@ -188,6 +204,18 @@ async def update_call_execution_config(
     calling_provider: Optional[CallProvider] = None,
     enable_international_call: Optional[bool] = None,
     enable_calling: Optional[bool] = None,
+    enable_inbound: Optional[bool] = None,
+    inbound_call_start_time: Optional[time] = None,
+    inbound_call_end_time: Optional[time] = None,
+    inbound_call_timezone: Optional[str] = None,
+    inbound_block_action: Optional[str] = None,
+    inbound_redirect_number: Optional[str] = None,
+    inbound_block_message: Optional[str] = None,
+    enforce_blacklist: Optional[bool] = None,
+    rate_limit_enabled: Optional[bool] = None,
+    rate_limit_max_calls: Optional[int] = None,
+    rate_limit_window_seconds: Optional[int] = None,
+    rate_limit_whitelist: Optional[str] = None,
     template_id: Optional[str] = None,
     pre_checks: Optional[List[Any]] = None,
     telephony_config: Optional[TelephonyConfig] = None,
@@ -235,6 +263,18 @@ async def update_call_execution_config(
             calling_provider=calling_provider,
             enable_international_call=enable_international_call,
             enable_calling=enable_calling,
+            enable_inbound=enable_inbound,
+            inbound_call_start_time=inbound_call_start_time,
+            inbound_call_end_time=inbound_call_end_time,
+            inbound_call_timezone=inbound_call_timezone,
+            inbound_block_action=inbound_block_action,
+            inbound_redirect_number=inbound_redirect_number,
+            inbound_block_message=inbound_block_message,
+            enforce_blacklist=enforce_blacklist,
+            rate_limit_enabled=rate_limit_enabled,
+            rate_limit_max_calls=rate_limit_max_calls,
+            rate_limit_window_seconds=rate_limit_window_seconds,
+            rate_limit_whitelist=rate_limit_whitelist,
             template_id=template_id,
             pre_checks=_serialize_pre_checks(pre_checks),
             telephony_config=serialized_telephony,

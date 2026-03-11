@@ -69,6 +69,36 @@ async def create_configuration_handler(
             template=config.template,
             merchant_identifier=merchant_identifier,
             enable_international_call=config.enable_international_call,
+            enable_inbound=(
+                config.enable_inbound if config.enable_inbound is not None else True
+            ),
+            inbound_call_start_time=config.inbound_call_start_time,
+            inbound_call_end_time=config.inbound_call_end_time,
+            inbound_call_timezone=config.inbound_call_timezone,
+            inbound_block_action=(
+                config.inbound_block_action.value
+                if config.inbound_block_action
+                else "REJECT"
+            ),
+            inbound_redirect_number=config.inbound_redirect_number,
+            inbound_block_message=config.inbound_block_message,
+            enforce_blacklist=(
+                config.enforce_blacklist
+                if config.enforce_blacklist is not None
+                else True
+            ),
+            rate_limit_enabled=(
+                config.rate_limit_enabled
+                if config.rate_limit_enabled is not None
+                else False
+            ),
+            rate_limit_max_calls=config.rate_limit_max_calls,
+            rate_limit_window_seconds=(
+                config.rate_limit_window_seconds
+                if config.rate_limit_window_seconds is not None
+                else 1800
+            ),
+            rate_limit_whitelist=config.rate_limit_whitelist,
             pre_checks=config.pre_checks,
             telephony_config=config.telephony_config,
         )
@@ -280,6 +310,22 @@ async def update_configuration_handler(
             max_retry=config.max_retry,
             calling_provider=config.calling_provider,
             enable_international_call=config.enable_international_call,
+            enable_inbound=config.enable_inbound,
+            inbound_call_start_time=config.inbound_call_start_time,
+            inbound_call_end_time=config.inbound_call_end_time,
+            inbound_call_timezone=config.inbound_call_timezone,
+            inbound_block_action=(
+                config.inbound_block_action.value
+                if config.inbound_block_action
+                else None
+            ),
+            inbound_redirect_number=config.inbound_redirect_number,
+            inbound_block_message=config.inbound_block_message,
+            enforce_blacklist=config.enforce_blacklist,
+            rate_limit_enabled=config.rate_limit_enabled,
+            rate_limit_max_calls=config.rate_limit_max_calls,
+            rate_limit_window_seconds=config.rate_limit_window_seconds,
+            rate_limit_whitelist=config.rate_limit_whitelist,
             pre_checks=config.pre_checks,
             telephony_config=config.telephony_config,
         )
