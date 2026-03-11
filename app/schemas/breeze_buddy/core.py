@@ -4,7 +4,7 @@ from datetime import datetime, time
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class OutboundNumberStatus(str, Enum):
@@ -13,6 +13,13 @@ class OutboundNumberStatus(str, Enum):
     AVAILABLE = "AVAILABLE"
     IN_USE = "IN_USE"
     DISABLED = "DISABLED"
+
+
+class InboundBlockAction(str, Enum):
+    """Action to take when an inbound call is blocked."""
+
+    REJECT = "REJECT"
+    REDIRECT = "REDIRECT"
 
 
 class CallProvider(str, Enum):
@@ -226,8 +233,42 @@ class CreateCallExecutionConfigRequest(BaseModel):
     shop_identifier: Optional[str] = None
     enable_international_call: bool = True
     enable_calling: Optional[bool] = True
+    enable_inbound: Optional[bool] = True
+    inbound_call_start_time: Optional[time] = None
+    inbound_call_end_time: Optional[time] = None
+    inbound_call_timezone: Optional[str] = None
+    inbound_block_action: Optional[InboundBlockAction] = None
+    inbound_redirect_number: Optional[str] = None
+    inbound_block_message: Optional[str] = None
+    enforce_blacklist: Optional[bool] = True
+    rate_limit_enabled: Optional[bool] = False
+    rate_limit_max_calls: Optional[int] = None
+    rate_limit_window_seconds: Optional[int] = None
+    rate_limit_whitelist: Optional[str] = None
     pre_checks: Optional[List[PreCheckConfig]] = None
     telephony_config: Optional[TelephonyConfig] = None
+
+    @model_validator(mode="after")
+    def validate_inbound_policy_consistency(self) -> "CreateCallExecutionConfigRequest":
+        # Business hours: both times must be provided together
+        if bool(self.inbound_call_start_time) != bool(self.inbound_call_end_time):
+            raise ValueError(
+                "inbound_call_start_time and inbound_call_end_time must both be set or both be empty"
+            )
+        # REDIRECT action requires a redirect number
+        if (
+            self.inbound_block_action == InboundBlockAction.REDIRECT
+            and not self.inbound_redirect_number
+        ):
+            raise ValueError(
+                "inbound_redirect_number is required when inbound_block_action is REDIRECT"
+            )
+        # Rate limit enabled requires max_calls
+        if self.rate_limit_enabled and not self.rate_limit_max_calls:
+            raise ValueError(
+                "rate_limit_max_calls is required when rate_limit_enabled is true"
+            )
+        return self
 
 
 class UpdateCallExecutionConfigRequest(BaseModel):
@@ -246,8 +287,44 @@ class UpdateCallExecutionConfigRequest(BaseModel):
     calling_provider: Optional[CallProvider] = None
     enable_international_call: Optional[bool] = None
     enable_calling: Optional[bool] = None
+    enable_inbound: Optional[bool] = None
+    inbound_call_start_time: Optional[time] = None
+    inbound_call_end_time: Optional[time] = None
+    inbound_call_timezone: Optional[str] = None
+    inbound_block_action: Optional[InboundBlockAction] = None
+    inbound_redirect_number: Optional[str] = None
+    inbound_block_message: Optional[str] = None
+    enforce_blacklist: Optional[bool] = None
+    rate_limit_enabled: Optional[bool] = None
+    rate_limit_max_calls: Optional[int] = None
+    rate_limit_window_seconds: Optional[int] = None
+    rate_limit_whitelist: Optional[str] = None
     pre_checks: Optional[List[PreCheckConfig]] = None
     telephony_config: Optional[TelephonyConfig] = None
+
+    @model_validator(mode="after")
+    def validate_inbound_policy_consistency(self) -> "UpdateCallExecutionConfigRequest":
+        # Business hours: if either time is explicitly set, both must be provided
+        if (self.inbound_call_start_time is None) != (
+            self.inbound_call_end_time is None
+        ):
+            raise ValueError(
+                "inbound_call_start_time and inbound_call_end_time must both be set or both be empty"
+            )
+        # REDIRECT action requires a redirect number
+        if (
+            self.inbound_block_action == InboundBlockAction.REDIRECT
+            and self.inbound_redirect_number is None
+        ):
+            raise ValueError(
+                "inbound_redirect_number is required when inbound_block_action is REDIRECT"
+            )
+        # Rate limit enabled requires max_calls
+        if self.rate_limit_enabled is True and not self.rate_limit_max_calls:
+            raise ValueError(
+                "rate_limit_max_calls is required when rate_limit_enabled is true"
+            )
+        return self
 
 
 class CallExecutionConfig(BaseModel):
@@ -267,6 +344,18 @@ class CallExecutionConfig(BaseModel):
     shop_identifier: Optional[str] = None
     enable_international_call: bool = True
     enable_calling: bool = True
+    enable_inbound: bool = True
+    inbound_call_start_time: Optional[time] = None
+    inbound_call_end_time: Optional[time] = None
+    inbound_call_timezone: Optional[str] = None
+    inbound_block_action: InboundBlockAction = InboundBlockAction.REJECT
+    inbound_redirect_number: Optional[str] = None
+    inbound_block_message: Optional[str] = None
+    enforce_blacklist: bool = True
+    rate_limit_enabled: bool = False
+    rate_limit_max_calls: Optional[int] = None
+    rate_limit_window_seconds: Optional[int] = None
+    rate_limit_whitelist: Optional[str] = None
     pre_checks: Optional[List[PreCheckConfig]] = None
     telephony_config: Optional[TelephonyConfig] = None
     created_at: Optional[datetime] = None

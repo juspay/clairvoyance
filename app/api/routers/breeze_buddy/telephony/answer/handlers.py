@@ -44,6 +44,10 @@ from app.ai.voice.agents.breeze_buddy.agent.ivr import (
 from app.ai.voice.agents.breeze_buddy.services.agent_router.client import (
     safe_allocate_pod,
 )
+from app.ai.voice.agents.breeze_buddy.services.inbound_policy import (
+    check_inbound_policy,
+    set_block_redirect,
+)
 from app.ai.voice.agents.breeze_buddy.services.telephony.plivo.recording import (
     start_call_recording,
 )
@@ -53,7 +57,10 @@ from app.core.config.dynamic import (
 )
 from app.core.config.static import APP_BASE_URL
 from app.core.logger import logger
-from app.database.accessor import get_lead_by_call_id
+from app.database.accessor import (
+    get_call_execution_config_by_merchant_id,
+    get_lead_by_call_id,
+)
 from app.database.accessor.breeze_buddy.outbound_number import (
     get_outbound_number_by_number,
 )
@@ -61,6 +68,7 @@ from app.database.accessor.breeze_buddy.template import (
     get_all_templates_by_outbound_number_id,
     get_template_by_merchant,
 )
+from app.schemas import InboundBlockAction
 from app.services.redis.client import get_redis_service
 
 
@@ -324,6 +332,49 @@ async def _build_xml_response(ws_url: str) -> HTMLResponse:
     return HTMLResponse(content=xml, media_type="application/xml")
 
 
+def _build_block_response(
+    provider: str,
+    message: str | None,
+    action: InboundBlockAction | None,
+    redirect_number: str | None,
+) -> Response:
+    """Build a blocking response for Plivo/Twilio: reject with TTS or redirect.
+
+    Note: Exotel is handled upstream via Redis + WS disconnect flow and should
+    never reach this function.
+    """
+    tts_message = (
+        message
+        or "Sorry, we are unable to take your call right now. Please try again later."
+    )
+
+    if provider == "plivo":
+        if action == InboundBlockAction.REDIRECT and redirect_number:
+            xml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Speak>{html_escape(tts_message)}</Speak>
+    <Dial>
+        <Number>{html_escape(redirect_number)}</Number>
+    </Dial>
+</Response>"""
+        else:
+            xml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Speak>{html_escape(tts_message)}</Speak>
+    <Hangup/>
+</Response>"""
+        return HTMLResponse(content=xml, media_type="application/xml")
+
+    # TODO: Twilio block response not yet implemented
+    logger.warning(
+        f"[BlockResponse] Unsupported provider '{provider}', returning generic error"
+    )
+    return Response(
+        content=json.dumps({"message": tts_message, "blocked": True}),
+        media_type="application/json",
+    )
+
+
 async def _build_provider_response(
     provider: str,
     result: dict,
@@ -480,6 +531,109 @@ async def handle_provider_answer(request: Request, provider: str) -> Response:
             else "Sorry, this number is not configured to receive calls. Goodbye."
         )
         return _error_response(provider, error_msg, result.get("error_status", 500))
+
+    # ── Inbound policy enforcement ────────────────────────────────────────
+    if not result.get("is_outbound"):
+        templates = result.get("templates", [])
+        is_ivr_mode = len(templates) > 1
+        merchant_id = result.get("merchant_id")
+
+        if merchant_id:
+            merchant_identifier = (
+                templates[0].merchant_identifier if templates else None
+            )
+            configs = await get_call_execution_config_by_merchant_id(
+                merchant_id, merchant_identifier
+            )
+            config_map = {c.template: c for c in configs}
+
+            allowed_templates = []
+            last_block_result = None
+
+            for t in templates:
+                config = config_map.get(t.name)
+                if not config:
+                    # No config for this template — allow by default
+                    allowed_templates.append(t)
+                    continue
+
+                policy = await check_inbound_policy(
+                    config,
+                    from_number,
+                    skip_rate_limit=is_ivr_mode,
+                )
+                if policy.allowed:
+                    allowed_templates.append(t)
+                else:
+                    last_block_result = policy
+                    logger.info(f"[{tag}] Template {t.name} blocked: {policy.reason}")
+
+            if not allowed_templates:
+                # All templates blocked
+                logger.info(f"[{tag}] All templates blocked for call {call_id}")
+
+                block_action = last_block_result.action if last_block_result else None
+                block_redirect = (
+                    last_block_result.redirect_number if last_block_result else None
+                )
+                is_redirect = (
+                    block_action == InboundBlockAction.REDIRECT and block_redirect
+                )
+
+                block_message = last_block_result.message if last_block_result else None
+
+                if provider == "exotel":
+                    # Exotel only accepts {"url": "wss://..."} at answer-time.
+                    # For both REDIRECT and REJECT: accept the call, store block
+                    # info in Redis. The WS agent plays the block message then
+                    # closes. For REDIRECT, Exotel applet → /dial-up → redirect.
+                    # For REJECT, /dial-up returns 404 → call ends.
+                    await set_block_redirect(
+                        call_sid=call_id,
+                        redirect_number=block_redirect or "",
+                        message=block_message,
+                        reseller_id=merchant_id,
+                        merchant_identifier=merchant_identifier,
+                    )
+                    ws_url = _build_websocket_url(
+                        provider,
+                        str(templates[0].id) if templates else "block",
+                        from_number,
+                        to_number,
+                    )
+                    action_label = (
+                        f"redirect to {block_redirect}"
+                        if is_redirect
+                        else "reject (play message then hang up)"
+                    )
+                    logger.info(
+                        f"[{tag}] Exotel block: accepting call {call_id}, "
+                        f"{action_label} via WS disconnect"
+                    )
+                    return _build_json_response(ws_url)
+                elif provider == "plivo":
+                    # Plivo handles both REDIRECT (Dial XML) and REJECT (Hangup XML)
+                    return _build_block_response(
+                        provider,
+                        block_message,
+                        block_action,
+                        block_redirect,
+                    )
+                else:
+                    # TODO: Twilio block handling not yet implemented
+                    return _build_block_response(
+                        provider,
+                        block_message,
+                        block_action,
+                        block_redirect,
+                    )
+
+            # Update result with filtered templates
+            if len(allowed_templates) != len(templates):
+                result["templates"] = allowed_templates
+                result["template_list"] = [
+                    {"id": str(t.id), "name": t.name} for t in allowed_templates
+                ]
 
     return await _build_provider_response(
         provider, result, call_id, from_number, to_number

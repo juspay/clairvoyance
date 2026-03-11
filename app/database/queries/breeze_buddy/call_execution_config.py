@@ -25,6 +25,18 @@ def insert_call_execution_config_query(
     merchant_identifier: Optional[str],
     enable_international_call: bool,
     enable_calling: bool = True,
+    enable_inbound: bool = True,
+    inbound_call_start_time: Optional[time] = None,
+    inbound_call_end_time: Optional[time] = None,
+    inbound_call_timezone: Optional[str] = None,
+    inbound_block_action: Optional[str] = None,
+    inbound_redirect_number: Optional[str] = None,
+    inbound_block_message: Optional[str] = None,
+    enforce_blacklist: bool = True,
+    rate_limit_enabled: bool = False,
+    rate_limit_max_calls: Optional[int] = None,
+    rate_limit_window_seconds: Optional[int] = None,
+    rate_limit_whitelist: Optional[str] = None,
     template_id: Optional[str] = None,
     pre_checks: Optional[str] = None,
     telephony_config: Optional[str] = None,
@@ -56,12 +68,24 @@ def insert_call_execution_config_query(
             "merchant_identifier",
             "enable_international_call",
             "enable_calling",
+            "enable_inbound",
+            "inbound_call_start_time",
+            "inbound_call_end_time",
+            "inbound_call_timezone",
+            "inbound_block_action",
+            "inbound_redirect_number",
+            "inbound_block_message",
+            "enforce_blacklist",
+            "rate_limit_enabled",
+            "rate_limit_max_calls",
+            "rate_limit_window_seconds",
+            "rate_limit_whitelist",
             "pre_checks",
             "telephony_config",
             "created_at",
             "updated_at"
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19) RETURNING *;
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31) RETURNING *;
     """
 
     values = [
@@ -75,11 +99,23 @@ def insert_call_execution_config_query(
         reseller_id,
         reseller_id,
         template,
-        template_id,  # NEW
+        template_id,
         merchant_identifier,
         merchant_identifier,
         enable_international_call,
         enable_calling,
+        enable_inbound,
+        inbound_call_start_time,
+        inbound_call_end_time,
+        inbound_call_timezone,
+        inbound_block_action,
+        inbound_redirect_number,
+        inbound_block_message,
+        enforce_blacklist,
+        rate_limit_enabled,
+        rate_limit_max_calls,
+        rate_limit_window_seconds,
+        rate_limit_whitelist,
         pre_checks,
         telephony_config,
         datetime.now(),
@@ -162,6 +198,18 @@ def update_call_execution_config_query(
     calling_provider: Optional[CallProvider] = None,
     enable_international_call: Optional[bool] = None,
     enable_calling: Optional[bool] = None,
+    enable_inbound: Optional[bool] = None,
+    inbound_call_start_time: Optional[time] = None,
+    inbound_call_end_time: Optional[time] = None,
+    inbound_call_timezone: Optional[str] = None,
+    inbound_block_action: Optional[str] = None,
+    inbound_redirect_number: Optional[str] = None,
+    inbound_block_message: Optional[str] = None,
+    enforce_blacklist: Optional[bool] = None,
+    rate_limit_enabled: Optional[bool] = None,
+    rate_limit_max_calls: Optional[int] = None,
+    rate_limit_window_seconds: Optional[int] = None,
+    rate_limit_whitelist: Optional[str] = None,
     template_id: Optional[str] = None,
     pre_checks: Optional[str] = None,
     telephony_config: Optional[str] = None,
@@ -169,60 +217,60 @@ def update_call_execution_config_query(
     """
     Generate query to update call execution config record based on reseller_id, template, and merchant_identifier.
     Only updates fields that are provided (not None).
-
-    Args:
-        template_id: UUID of the template (preferred, for referential integrity)
-        template: Name of the template (kept for backward compatibility)
-        pre_checks: JSON string of pre-check configurations
     """
     updates = []
     values: List[Any] = []
     param_count = 1
 
+    # Helper to append a simple field update
+    def _add(col: str, val: Any) -> None:
+        nonlocal param_count
+        updates.append(f'"{col}" = ${param_count}')
+        values.append(val)
+        param_count += 1
+
     if initial_offset is not None:
-        updates.append(f'"initial_offset" = ${param_count}')
-        values.append(initial_offset)
-        param_count += 1
-
+        _add("initial_offset", initial_offset)
     if retry_offset is not None:
-        updates.append(f'"retry_offset" = ${param_count}')
-        values.append(retry_offset)
-        param_count += 1
-
+        _add("retry_offset", retry_offset)
     if call_start_time is not None:
-        updates.append(f'"call_start_time" = ${param_count}')
-        values.append(call_start_time)
-        param_count += 1
-
+        _add("call_start_time", call_start_time)
     if call_end_time is not None:
-        updates.append(f'"call_end_time" = ${param_count}')
-        values.append(call_end_time)
-        param_count += 1
-
+        _add("call_end_time", call_end_time)
     if max_retry is not None:
-        updates.append(f'"max_retry" = ${param_count}')
-        values.append(max_retry)
-        param_count += 1
-
+        _add("max_retry", max_retry)
     if calling_provider is not None:
-        updates.append(f'"calling_provider" = ${param_count}')
-        values.append(calling_provider.value)
-        param_count += 1
-
+        _add("calling_provider", calling_provider.value)
     if enable_international_call is not None:
-        updates.append(f'"enable_international_call" = ${param_count}')
-        values.append(enable_international_call)
-        param_count += 1
-
+        _add("enable_international_call", enable_international_call)
     if enable_calling is not None:
-        updates.append(f'"enable_calling" = ${param_count}')
-        values.append(enable_calling)
-        param_count += 1
-
+        _add("enable_calling", enable_calling)
+    if enable_inbound is not None:
+        _add("enable_inbound", enable_inbound)
+    if inbound_call_start_time is not None:
+        _add("inbound_call_start_time", inbound_call_start_time)
+    if inbound_call_end_time is not None:
+        _add("inbound_call_end_time", inbound_call_end_time)
+    if inbound_call_timezone is not None:
+        _add("inbound_call_timezone", inbound_call_timezone)
+    if inbound_block_action is not None:
+        _add("inbound_block_action", inbound_block_action)
+    if inbound_redirect_number is not None:
+        _add("inbound_redirect_number", inbound_redirect_number)
+    if inbound_block_message is not None:
+        _add("inbound_block_message", inbound_block_message)
+    if enforce_blacklist is not None:
+        _add("enforce_blacklist", enforce_blacklist)
+    if rate_limit_enabled is not None:
+        _add("rate_limit_enabled", rate_limit_enabled)
+    if rate_limit_max_calls is not None:
+        _add("rate_limit_max_calls", rate_limit_max_calls)
+    if rate_limit_window_seconds is not None:
+        _add("rate_limit_window_seconds", rate_limit_window_seconds)
+    if rate_limit_whitelist is not None:
+        _add("rate_limit_whitelist", rate_limit_whitelist)
     if template_id is not None:
-        updates.append(f'"template_id" = ${param_count}')
-        values.append(template_id)
-        param_count += 1
+        _add("template_id", template_id)
 
     if pre_checks is not None:
         updates.append(f'"pre_checks" = ${param_count}::json')

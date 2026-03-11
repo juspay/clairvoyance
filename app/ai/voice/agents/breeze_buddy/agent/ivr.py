@@ -21,17 +21,30 @@ from typing import Dict, List, Optional, Tuple
 
 from fastapi import WebSocket
 
+from app.ai.voice.agents.breeze_buddy.services.call_redirect import redirect_call
+from app.ai.voice.agents.breeze_buddy.services.inbound_policy import (
+    check_inbound_policy,
+)
+from app.ai.voice.agents.breeze_buddy.services.telephony.base_provider import (
+    VoiceCallProvider,
+)
 from app.ai.voice.agents.breeze_buddy.tts import generate_audio
 from app.ai.voice.agents.breeze_buddy.utils.transport.websockets import (
     close_websocket_safely,
     send_message,
 )
 from app.core.logger import logger
+from app.database.accessor import get_call_execution_config_by_merchant_id
+from app.database.accessor.breeze_buddy.template import get_template_by_id
+from app.schemas import InboundBlockAction
 from app.services.redis.client import get_redis_service
 
 # Constants
 IVR_MAX_ATTEMPTS = 3
 IVR_TIMEOUT_SECONDS = 15  # Time to wait for DTMF after audio finishes (~6 sec audio + ~9 sec response time)
+BLOCK_MESSAGE_PLAY_SECONDS = (
+    4  # Wait time for TTS block message playback before closing WS
+)
 IVR_AUDIO_CACHE_PREFIX = "ivr_audio:menu:"
 IVR_GOODBYE_CACHE_PREFIX = "ivr_audio:goodbye:"
 IVR_AUDIO_CACHE_TTL = 86400  # 24 hours
@@ -48,7 +61,9 @@ async def get_template_id_from_call(
     call_sid: str,
     call_data: dict,
     provider: str,
-) -> Tuple[Optional[str], Optional[str]]:
+    telephony_service: Optional[VoiceCallProvider] = None,
+    from_number: str = "",
+) -> Tuple[Optional[str], Optional[str], bool]:
     """
     Extract template_id from call data, handling IVR mode if needed.
 
@@ -56,8 +71,9 @@ async def get_template_id_from_call(
     1. Extracting custom_params from correct location (Exotel vs Twilio)
     2. For Plivo: Extracting template_id from WebSocket URL query params
     3. Running IVR menu if ivr_mode is enabled
-    4. Validating template_id UUID format
-    5. Closing WebSocket on errors
+    4. Deferred rate limit check after IVR selection
+    5. Validating template_id UUID format
+    6. Closing WebSocket on errors
 
     Args:
         ws: WebSocket connection
@@ -65,12 +81,14 @@ async def get_template_id_from_call(
         call_sid: Call ID used as Redis key for IVR config
         call_data: Parsed call data from telephony provider
         provider: "twilio", "exotel", or "plivo"
+        telephony_service: Telephony service for redirect (optional, needed for IVR rate limit)
+        from_number: Caller phone number (optional, needed for IVR rate limit)
 
     Returns:
-        Tuple of (template_id, error_reason):
-        - (template_id, None) on success
-        - (None, None) if no template_id provided (valid for non-IVR inbound)
-        - (None, error_reason) on error (WebSocket already closed)
+        Tuple of (template_id, error_reason, was_ivr):
+        - (template_id, None, was_ivr) on success
+        - (None, None, False) if no template_id provided (valid for non-IVR inbound)
+        - (None, error_reason, was_ivr) on error (WebSocket already closed)
     """
     # Extract custom_params (Exotel: root level, Twilio: inside "start")
     start_data = call_data.get("start", {})
@@ -104,10 +122,24 @@ async def get_template_id_from_call(
         if not selected_template_id:
             logger.error("[IVR] No valid template selected, ending call")
             # WebSocket already closed by IVR menu after goodbye audio
-            return None, "IVR failed - no template selected"
+            return None, "IVR failed - no template selected", True
 
         logger.info(f"[IVR] Template selected via DTMF: {selected_template_id}")
-        return selected_template_id, None
+
+        # Deferred inbound policy check for IVR (rate limit was skipped at answer-time)
+        blocked = await _check_deferred_inbound_policy(
+            ws=ws,
+            stream_sid=stream_sid,
+            template_id=selected_template_id,
+            from_number=from_number,
+            provider=provider,
+            telephony_service=telephony_service,
+            call_sid=call_sid,
+        )
+        if blocked:
+            return None, "Rate limit exceeded after IVR selection", True
+
+        return selected_template_id, None, True
 
     # Validate template_id UUID format (if provided)
     if template_id:
@@ -118,9 +150,101 @@ async def get_template_id_from_call(
             await close_websocket_safely(
                 ws, code=4000, reason="Invalid template_id format"
             )
-            return None, "Invalid template_id format"
+            return None, "Invalid template_id format", False
 
-    return template_id, None
+    return template_id, None, False
+
+
+async def _check_deferred_inbound_policy(
+    ws: WebSocket,
+    stream_sid: str,
+    template_id: str,
+    from_number: str,
+    provider: str,
+    telephony_service: Optional[VoiceCallProvider],
+    call_sid: str,
+) -> bool:
+    """
+    Run deferred inbound policy check after IVR template selection.
+
+    At answer-time, rate limit is skipped for IVR mode (we don't know which
+    template the caller will pick yet). This runs the full policy check
+    (enable_inbound, business hours, blacklist, and rate limit) for the
+    selected template.
+
+    Returns True if the call was blocked (WebSocket closed).
+    """
+    try:
+        # Look up template to get name, reseller_id, and outbound_number_id
+        template = await get_template_by_id(template_id)
+        if not template:
+            return False  # Can't enforce without template info
+
+        reseller_id = template.reseller_id
+        if not reseller_id:
+            return False
+
+        configs = await get_call_execution_config_by_merchant_id(
+            reseller_id, template.merchant_identifier
+        )
+        config = next((c for c in configs if c.template == template.name), None)
+        if not config:
+            return False
+
+        policy = await check_inbound_policy(
+            config,
+            from_number,
+        )
+        if policy.allowed:
+            return False
+
+        logger.info(f"[IVR] Blocked after template selection: {policy.reason}")
+
+        # Play block message if available
+        if policy.message:
+            block_audio = await _generate_tts_audio_mulaw(policy.message)
+            if block_audio:
+                audio = _convert_audio_for_provider(block_audio, provider)
+                await _send_audio(ws, stream_sid, audio, provider)
+                await asyncio.sleep(BLOCK_MESSAGE_PLAY_SECONDS)
+
+        # Handle redirect if configured (fall back to template transfer_number)
+        redirect_number = policy.redirect_number or (
+            getattr(template.configurations, "transfer_number", None)
+            if template.configurations
+            else None
+        )
+        if (
+            policy.action == InboundBlockAction.REDIRECT
+            and redirect_number
+            and telephony_service
+            and template.outbound_number_id
+        ):
+            await redirect_call(
+                call_sid=call_sid,
+                redirect_number=redirect_number,
+                outbound_number_id=template.outbound_number_id,
+                reseller_id=reseller_id,
+                merchant_identifier=template.merchant_identifier,
+                telephony_service=telephony_service,
+                provider=provider,
+                customer_phone_number=from_number,
+            )
+
+        # Close WebSocket
+        await close_websocket_safely(ws, code=4003, reason=policy.reason or "blocked")
+        return True
+
+    except (OSError, ConnectionError, TimeoutError) as e:
+        # Network/Redis errors — fail open to avoid blocking calls on infra issues
+        logger.warning(f"[IVR] Deferred policy check infra error (fail open): {e}")
+        return False
+    except Exception as e:
+        # Unexpected errors — log with traceback but still fail open
+        logger.error(
+            f"[IVR] Deferred policy check unexpected error: {e}", exc_info=True
+        )
+        return False
 
 
 async def _run_ivr_menu(
