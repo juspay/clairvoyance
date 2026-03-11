@@ -15,6 +15,13 @@ class OutboundNumberStatus(str, Enum):
     DISABLED = "DISABLED"
 
 
+class InboundBlockAction(str, Enum):
+    """Action to take when an inbound call is blocked at the outbound_number level."""
+
+    REJECT = "REJECT"
+    REDIRECT = "REDIRECT"
+
+
 class CallProvider(str, Enum):
     """Supported telephony providers"""
 
@@ -226,6 +233,12 @@ class CreateCallExecutionConfigRequest(BaseModel):
     shop_identifier: Optional[str] = None
     enable_international_call: bool = True
     enable_calling: Optional[bool] = True
+    enable_inbound: Optional[bool] = True
+    inbound_call_start_time: Optional[time] = None
+    inbound_call_end_time: Optional[time] = None
+    inbound_block_action: Optional[InboundBlockAction] = None
+    inbound_redirect_number: Optional[str] = None
+    inbound_block_message: Optional[str] = None
     pre_checks: Optional[List[PreCheckConfig]] = None
     telephony_config: Optional[TelephonyConfig] = None
 
@@ -246,6 +259,12 @@ class UpdateCallExecutionConfigRequest(BaseModel):
     calling_provider: Optional[CallProvider] = None
     enable_international_call: Optional[bool] = None
     enable_calling: Optional[bool] = None
+    enable_inbound: Optional[bool] = None
+    inbound_call_start_time: Optional[time] = None
+    inbound_call_end_time: Optional[time] = None
+    inbound_block_action: Optional[InboundBlockAction] = None
+    inbound_redirect_number: Optional[str] = None
+    inbound_block_message: Optional[str] = None
     pre_checks: Optional[List[PreCheckConfig]] = None
     telephony_config: Optional[TelephonyConfig] = None
 
@@ -267,6 +286,12 @@ class CallExecutionConfig(BaseModel):
     shop_identifier: Optional[str] = None
     enable_international_call: bool = True
     enable_calling: bool = True
+    enable_inbound: bool = True
+    inbound_call_start_time: Optional[time] = None
+    inbound_call_end_time: Optional[time] = None
+    inbound_block_action: InboundBlockAction = InboundBlockAction.REJECT
+    inbound_redirect_number: Optional[str] = None
+    inbound_block_message: Optional[str] = None
     pre_checks: Optional[List[PreCheckConfig]] = None
     telephony_config: Optional[TelephonyConfig] = None
     created_at: Optional[datetime] = None

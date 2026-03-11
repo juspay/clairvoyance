@@ -69,6 +69,18 @@ async def create_configuration_handler(
             template=config.template,
             merchant_identifier=merchant_identifier,
             enable_international_call=config.enable_international_call,
+            enable_inbound=(
+                config.enable_inbound if config.enable_inbound is not None else True
+            ),
+            inbound_call_start_time=config.inbound_call_start_time,
+            inbound_call_end_time=config.inbound_call_end_time,
+            inbound_block_action=(
+                config.inbound_block_action.value
+                if config.inbound_block_action
+                else None
+            ),
+            inbound_redirect_number=config.inbound_redirect_number,
+            inbound_block_message=config.inbound_block_message,
             pre_checks=config.pre_checks,
             telephony_config=config.telephony_config,
         )
@@ -280,6 +292,17 @@ async def update_configuration_handler(
             max_retry=config.max_retry,
             calling_provider=config.calling_provider,
             enable_international_call=config.enable_international_call,
+            enable_calling=config.enable_calling,
+            enable_inbound=config.enable_inbound,
+            inbound_call_start_time=config.inbound_call_start_time,
+            inbound_call_end_time=config.inbound_call_end_time,
+            inbound_block_action=(
+                config.inbound_block_action.value
+                if config.inbound_block_action
+                else None
+            ),
+            inbound_redirect_number=config.inbound_redirect_number,
+            inbound_block_message=config.inbound_block_message,
             pre_checks=config.pre_checks,
             telephony_config=config.telephony_config,
         )

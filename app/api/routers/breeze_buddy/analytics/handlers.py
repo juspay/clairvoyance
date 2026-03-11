@@ -135,7 +135,7 @@ async def get_call_based_analytics(
             if isinstance(inbound_data, list):
                 for inbound_row in inbound_data:
                     key = inbound_row.get(group_by)
-                    if key:
+                    if key is not None:
                         inbound_map[key] = inbound_row.get("inbound_calls", 0)
 
             results = []
@@ -373,7 +373,7 @@ async def get_lead_based_analytics(
             if isinstance(inbound_data, list):
                 for inbound_row in inbound_data:
                     key = inbound_row.get(group_by)
-                    if key:
+                    if key is not None:
                         inbound_map[key] = inbound_row.get("inbound_calls", 0)
 
             results = []

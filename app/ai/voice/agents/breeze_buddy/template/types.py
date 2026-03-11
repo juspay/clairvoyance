@@ -180,6 +180,90 @@ class KeywordFilterConfig(BaseModel):
     )
 
 
+class InboundRateLimitAction(str, Enum):
+    """Action to take when inbound rate limit is exceeded."""
+
+    BLOCK = "block"  # Reject the call with a message
+    REDIRECT = "redirect"  # Warm transfer to a support number
+
+
+class InboundRateLimitConfig(BaseModel):
+    """Rate limiting configuration for inbound calls.
+
+    Uses a sliding window to count inbound calls per merchant+template.
+    When the limit is exceeded, the configured action is taken.
+
+    Example:
+        {
+            "enabled": true,
+            "max_calls": 10,
+            "window_seconds": 1800,
+            "action": "block",
+            "block_message": "We are experiencing high call volume. Please try again later.",
+            "redirect_number": null
+        }
+    """
+
+    enabled: bool = False
+    max_calls: int = Field(
+        10, ge=1, le=1000, description="Maximum calls allowed within the time window"
+    )
+    window_seconds: int = Field(
+        1800,
+        ge=60,
+        le=86400,
+        description="Sliding window duration in seconds (default: 30 minutes)",
+    )
+    action: InboundRateLimitAction = Field(
+        InboundRateLimitAction.BLOCK,
+        description="Action when rate limit exceeded: 'block' rejects call, 'redirect' transfers to support",
+    )
+    block_message: str = Field(
+        "We are experiencing high call volume. Please try again later. Goodbye.",
+        description="Message played to caller when call is blocked",
+    )
+    redirect_number: Optional[str] = Field(
+        None,
+        description="Phone number to redirect/warm-transfer to when action is 'redirect'. "
+        "Falls back to template's transfer_number if not set.",
+    )
+
+
+class InboundCallPolicy(BaseModel):
+    """Policy configuration for inbound call handling.
+
+    Controls rate limiting, blacklist enforcement, whitelist bypass,
+    and future inbound policies. Configured per-template in the
+    configurations JSON field.
+
+    Example:
+        {
+            "rate_limit": {
+                "enabled": true,
+                "max_calls": 10,
+                "window_seconds": 1800,
+                "action": "redirect",
+                "redirect_number": "+919876543210"
+            },
+            "enforce_blacklist": true,
+            "whitelisted_numbers": ["919876543210", "911234567890"]
+        }
+    """
+
+    rate_limit: Optional[InboundRateLimitConfig] = Field(
+        None, description="Rate limiting for inbound calls to this template"
+    )
+    enforce_blacklist: bool = Field(
+        True,
+        description="Whether to check caller against blacklist for inbound calls",
+    )
+    whitelisted_numbers: List[str] = Field(
+        default_factory=list,
+        description="Phone numbers that bypass all inbound policy checks (blacklist, rate limiting). "
+        "Numbers should include country code (e.g., '919876543210').",
+    )
+
+
 class UserIdleHandlingConfig(BaseModel):
     """Configuration for user idle detection and handling."""
 
@@ -244,6 +328,10 @@ class ConfigurationModel(BaseModel):
         None, description="Default VAD configuration for the template"
     )
     enable_inbound: bool = False  # Whether this template can handle inbound calls
+    inbound_call_policy: Optional[InboundCallPolicy] = Field(
+        None,
+        description="Policy for inbound call handling (rate limiting, blacklist enforcement, etc.)",
+    )
     user_idle_configuration: Optional[UserIdleHandlingConfig] = (
         None  # User idle handling config
     )
