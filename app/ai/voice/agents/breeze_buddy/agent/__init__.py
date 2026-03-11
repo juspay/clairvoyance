@@ -10,6 +10,7 @@ from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.vad.vad_analyzer import VADParams
 from pipecat.frames.frames import LLMMessagesAppendFrame
 from pipecat.pipeline.runner import PipelineRunner
+from pipecat.pipeline.service_switcher import ManuallySwitchServiceFrame
 from pipecat.pipeline.task import PipelineTask
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.runner.types import RunnerArguments
@@ -83,6 +84,7 @@ from app.database.accessor.breeze_buddy.lead_call_tracker import (
 )
 from app.schemas import CallProvider
 from app.schemas.breeze_buddy.core import LeadCallTracker
+from app.services.slack import slack_alert
 
 DEFAULT_OUTCOME = "BUSY"
 
@@ -143,6 +145,13 @@ class Agent:
 
         # Transcription gate processor (always present in pipeline)
         self.speech_gate: Any = None
+
+        # STT provider tracking (for mid-call error attribution)
+        self.stt_provider: str = "soniox"
+
+        # Mid-call STT fallback (ServiceSwitcher)
+        self.fallback_stt: Optional[Any] = None
+        self.stt_switched: bool = False
 
         # Error tracking
         self.errors: List[Dict[str, Any]] = []
@@ -216,6 +225,62 @@ class Agent:
         except asyncio.CancelledError:
             logger.debug("Post-greeting idle timer cancelled.")
             return
+
+    async def _send_mid_call_stt_alert(self, processor: str, error_msg: str) -> None:
+        """Send Slack alert for mid-call STT failure and gracefully end the call.
+
+        This is fire-and-forget: if the Slack call fails, the call still terminates.
+        """
+        call_sid = self.call_sid or "unknown"
+        lead_id = str(self.lead.id) if self.lead else "unknown"
+        try:
+            await slack_alert.send(
+                title="🚨 Mid-Call STT Failure (Breeze Buddy)",
+                fields=[
+                    {"name": "Provider", "value": self.stt_provider},
+                    {"name": "Processor", "value": str(processor)},
+                    {"name": "Call SID", "value": call_sid},
+                    {"name": "Lead ID", "value": lead_id},
+                ],
+                sections=[
+                    {"title": "Error Details", "text": f"```{error_msg[:500]}```"},
+                ],
+                fallback_text=f"Mid-call STT failure: {self.stt_provider} — call {call_sid}",
+            )
+        except Exception as alert_err:
+            logger.warning(f"Failed to send mid-call STT Slack alert: {alert_err}")
+
+    async def _send_stt_fallback_activated_alert(
+        self, failed_provider: str, processor: str, error_msg: str
+    ) -> None:
+        """Send Slack alert when mid-call STT fallback is activated.
+
+        Notifies that the call is continuing with the backup provider.
+        """
+        call_sid = self.call_sid or "unknown"
+        lead_id = str(self.lead.id) if self.lead else "unknown"
+        try:
+            await slack_alert.send(
+                title="⚠️ STT Fallback Activated (Breeze Buddy)",
+                fields=[
+                    {"name": "Failed Provider", "value": failed_provider},
+                    {"name": "Switched To", "value": "deepgram"},
+                    {"name": "Processor", "value": str(processor)},
+                    {"name": "Call SID", "value": call_sid},
+                    {"name": "Lead ID", "value": lead_id},
+                ],
+                sections=[
+                    {
+                        "title": "Status",
+                        "text": f"Call is continuing with Deepgram fallback.\n```{error_msg[:500]}```",
+                    },
+                ],
+                fallback_text=f"STT fallback activated: {failed_provider} → deepgram — call {call_sid}",
+            )
+        except Exception as alert_err:
+            logger.warning(
+                f"Failed to send STT fallback activation Slack alert: {alert_err}"
+            )
 
     async def _setup_daily_transport(self, runner_args: RunnerArguments) -> None:
         """Initialize transport for Daily mode."""
@@ -469,12 +534,92 @@ class Agent:
 
         @self.task.event_handler("on_pipeline_error")
         async def on_pipeline_error(task, error):
-            """Capture TTS/STT/LLM pipeline failures."""
+            """Capture TTS/STT/LLM pipeline failures.
+
+            For STT errors: if a fallback service is available and hasn't
+            been used yet, hot-swap to it via ServiceSwitcher. If the
+            fallback also fails (or none is available), end the call.
+            """
             processor = getattr(error, "processor", "unknown")
             error_msg = getattr(error, "error", str(error))
             detailed_msg = f"[PIPELINE] {processor}: {error_msg}"
             logger.info(f"[PIPELINE_ERROR] {detailed_msg}")
             track_error(self.errors, detailed_msg)
+
+            # Detect STT-specific failures by processor name
+            processor_name = str(processor).lower()
+            stt_keywords = ("soniox", "deepgram", "stt", "speech", "transcri")
+            if any(kw in processor_name for kw in stt_keywords):
+                failed_provider = self.stt_provider
+
+                # --- Attempt mid-call fallback via ServiceSwitcher ---
+                if self.fallback_stt and not self.stt_switched and self.task:
+                    logger.warning(
+                        f"Mid-call STT failure (provider={failed_provider}, "
+                        f"processor={processor}). Switching to Deepgram fallback."
+                    )
+                    # Push switch frame to ServiceSwitcher
+                    await self.task.queue_frame(
+                        ManuallySwitchServiceFrame(service=self.fallback_stt)
+                    )
+                    self.stt_provider = "deepgram"
+                    self.stt_switched = True
+
+                    # Fire-and-forget Slack alert (fallback activated)
+                    asyncio.create_task(
+                        self._send_stt_fallback_activated_alert(
+                            failed_provider, str(processor), str(error_msg)
+                        )
+                    )
+                    # Mark lead metadata for analytics
+                    if self.lead:
+                        if self.lead.metaData is None:
+                            self.lead.metaData = {}
+                        self.lead.metaData["stt_fallback_triggered"] = True
+                        self.lead.metaData["stt_original_provider"] = failed_provider
+                        self.lead.metaData["stt_provider"] = "deepgram"
+                    return  # Call continues with Deepgram
+
+                # --- Guard: ignore stale errors from the old provider ---
+                # After switching, Soniox may still emit queued errors
+                # (e.g. from a reconnect attempt that was in-flight).
+                # Only treat as "both failed" if the error comes from Deepgram.
+                if self.stt_switched and "deepgram" not in processor_name:
+                    logger.info(
+                        f"Ignoring stale STT error from old provider "
+                        f"(processor={processor}) — already switched to Deepgram."
+                    )
+                    return
+
+                # --- No fallback available or already exhausted ---
+                logger.error(
+                    f"Mid-call STT failure (provider={failed_provider}, "
+                    f"processor={processor}). "
+                    + (
+                        "Both providers failed."
+                        if self.stt_switched
+                        else "No fallback available."
+                    )
+                    + " Ending call gracefully."
+                )
+                # Fire-and-forget Slack alert (total failure)
+                asyncio.create_task(
+                    self._send_mid_call_stt_alert(str(processor), str(error_msg))
+                )
+                # Mark lead metadata for post-call analytics
+                if self.lead:
+                    if self.lead.metaData is None:
+                        self.lead.metaData = {}
+                    self.lead.metaData["call_ended_by"] = "system"
+                    self.lead.metaData["call_end_reason"] = (
+                        "stt_both_providers_failed"
+                        if self.stt_switched
+                        else "stt_mid_call_failure"
+                    )
+                    self.lead.metaData["stt_provider"] = self.stt_provider
+                # Gracefully end the conversation
+                context = TemplateContext(self)
+                await end_conversation(context, {})
 
         @self.transport.event_handler("on_client_connected")
         async def on_client_connected(transport, client):
@@ -616,22 +761,31 @@ class Agent:
             # Create services and pipeline
             # VAD analyzer is passed to build_pipeline where it's configured inside the
             # LLMUserAggregator. This enables UserTurnStrategies (VAD + Transcription fallback).
-            stt, llm, tts = await create_services(self.configurations)
+            stt_result, llm, tts = await create_services(self.configurations)
+            self.stt_provider = stt_result.provider
+            if stt_result.is_fallback:
+                logger.warning(
+                    f"Call starting with fallback STT provider: {stt_result.provider}"
+                )
             (
                 pipeline,
                 self.context,
                 context_aggregator,
                 user_idle_callback_handler,
                 self.speech_gate,
+                fallback_stt_ref,
             ) = await build_pipeline(
                 self.transport,
-                stt,
+                stt_result.service,
                 llm,
                 tts,
                 self.vad_analyzer,
                 self.configurations,
                 on_user_idle_timeout=self._handle_user_idle_timeout,
+                stt_provider=stt_result.provider,
+                fallback_stt=stt_result.fallback_service,
             )
+            self.fallback_stt = fallback_stt_ref
 
             # Store callback handler for resetting retry count on user activity
             self._user_idle_callback_handler = user_idle_callback_handler

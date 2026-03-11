@@ -459,6 +459,55 @@ BREEZE_BUDDY_SONIOX_MAX_ENDPOINT_DELAY_MS = int(
     os.environ.get("BREEZE_BUDDY_SONIOX_MAX_ENDPOINT_DELAY_MS", "500")
 )  # Max delay (ms) for Soniox native endpoint detection (500-3000, default 500)
 
+# --- Breeze Buddy STT Fallback Configuration ---
+# When enabled, pre-loads Deepgram alongside Soniox using ServiceSwitcher.
+# If Soniox fails mid-call, audio is hot-swapped to Deepgram with ~0ms delay.
+ENABLE_BREEZE_BUDDY_STT_FALLBACK = (
+    os.environ.get("ENABLE_BREEZE_BUDDY_STT_FALLBACK", "false").lower() == "true"
+)  # Gate for mid-call STT fallback via ServiceSwitcher
+
+# Deepgram STT configuration for Breeze Buddy fallback
+BREEZE_BUDDY_DEEPGRAM_MODEL = os.environ.get(
+    "BREEZE_BUDDY_DEEPGRAM_MODEL", "nova-3-general"
+)  # when model for Breeze Buddy fallback
+BREEZE_BUDDY_DEEPGRAM_LANGUAGE = os.environ.get(
+    "BREEZE_BUDDY_DEEPGRAM_LANGUAGE", "multi"
+)  # Language code ("multi" for auto-detection across Indian languages)
+BREEZE_BUDDY_DEEPGRAM_SMART_FORMAT = (
+    os.environ.get("BREEZE_BUDDY_DEEPGRAM_SMART_FORMAT", "true").lower() == "true"
+)
+BREEZE_BUDDY_DEEPGRAM_PUNCTUATE = (
+    os.environ.get("BREEZE_BUDDY_DEEPGRAM_PUNCTUATE", "true").lower() == "true"
+)
+BREEZE_BUDDY_DEEPGRAM_ENDPOINTING = int(
+    os.environ.get("BREEZE_BUDDY_DEEPGRAM_ENDPOINTING", "300")
+)  # Endpointing delay in ms (lower = faster turn detection)
+BREEZE_BUDDY_DEEPGRAM_VAD_EVENTS = (
+    os.environ.get("BREEZE_BUDDY_DEEPGRAM_VAD_EVENTS", "true").lower() == "true"
+)
+BREEZE_BUDDY_DEEPGRAM_UTTERANCE_END_MS = int(
+    os.environ.get("BREEZE_BUDDY_DEEPGRAM_UTTERANCE_END_MS", "1000")
+)
+BREEZE_BUDDY_DEEPGRAM_NO_DELAY = (
+    os.environ.get("BREEZE_BUDDY_DEEPGRAM_NO_DELAY", "true").lower() == "true"
+)
+BREEZE_BUDDY_DEEPGRAM_INTERIM_RESULTS = (
+    os.environ.get("BREEZE_BUDDY_DEEPGRAM_INTERIM_RESULTS", "true").lower() == "true"
+)
+BREEZE_BUDDY_DEEPGRAM_NUMERALS = (
+    os.environ.get("BREEZE_BUDDY_DEEPGRAM_NUMERALS", "true").lower() == "true"
+)
+BREEZE_BUDDY_DEEPGRAM_PROFANITY_FILTER = (
+    os.environ.get("BREEZE_BUDDY_DEEPGRAM_PROFANITY_FILTER", "false").lower() == "true"
+)
+BREEZE_BUDDY_DEEPGRAM_DIARIZE = (
+    os.environ.get("BREEZE_BUDDY_DEEPGRAM_DIARIZE", "false").lower() == "true"
+)
+BREEZE_BUDDY_DEEPGRAM_AUTO_DETECT_LANGUAGE = (
+    os.environ.get("BREEZE_BUDDY_DEEPGRAM_AUTO_DETECT_LANGUAGE", "true").lower()
+    == "true"
+)  # Auto language detection enabled by default for Breeze Buddy (multi-lingual calls)
+
 ENABLE_BREEZE_BUDDY_USER_INTERRUPTION = (
     os.environ.get("ENABLE_BREEZE_BUDDY_USER_INTERRUPTION", "false").lower() == "true"
 )

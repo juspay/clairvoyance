@@ -15,6 +15,10 @@ from pipecat.observers.loggers.user_bot_latency_log_observer import (
 )
 from pipecat.observers.turn_tracking_observer import TurnTrackingObserver
 from pipecat.pipeline.pipeline import Pipeline
+from pipecat.pipeline.service_switcher import (
+    ServiceSwitcher,
+    ServiceSwitcherStrategyManual,
+)
 from pipecat.pipeline.task import PipelineParams, PipelineTask
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import (
@@ -38,7 +42,7 @@ from app.ai.voice.agents.breeze_buddy.processors import (
     UserIdleCallbackHandler,
     create_user_idle_processor,
 )
-from app.ai.voice.agents.breeze_buddy.stt import get_stt_service
+from app.ai.voice.agents.breeze_buddy.stt import STTServiceResult, get_stt_service
 from app.ai.voice.agents.breeze_buddy.template.types import ConfigurationModel
 from app.ai.voice.agents.breeze_buddy.tts import get_tts_service
 from app.core.config.dynamic import (
@@ -82,14 +86,14 @@ def generate_conversation_id(payload: Optional[dict]) -> str:
 
 async def create_services(
     configurations: Optional[ConfigurationModel],
-) -> tuple[Any, AzureLLMService, Any]:
+) -> tuple[STTServiceResult, AzureLLMService, Any]:
     """Create STT, LLM, and TTS services.
 
     Args:
         configurations: Template configuration model
 
     Returns:
-        Tuple of (stt_service, llm_service, tts_service)
+        Tuple of (stt_result, llm_service, tts_service)
     """
     stt_language = getattr(configurations, "stt_language", None)
     soniox_context = getattr(configurations, "soniox_context", None)
@@ -98,9 +102,15 @@ async def create_services(
     if soniox_context:
         logger.info(f"Using Soniox context from template")
 
-    stt = await get_stt_service(
+    stt_result = await get_stt_service(
         language_hints=stt_language, soniox_context=soniox_context
     )
+    if stt_result.is_fallback:
+        logger.warning(f"Using fallback STT provider: {stt_result.provider}")
+    if stt_result.fallback_service:
+        logger.info(
+            f"Mid-call STT fallback ready: primary={stt_result.provider}, fallback=deepgram"
+        )
 
     # TODO: Add retry_on_timeout=True, retry_timeout_secs=3.0 to reduce P99 tail latency (500-1500ms).
     #       These are valid top-level params on BaseOpenAILLMService. Needs testing before enabling.
@@ -146,7 +156,7 @@ async def create_services(
         elevenlabs_voice_configurations=elevenlabs_voice_config,
     )
 
-    return stt, llm, tts
+    return stt_result, llm, tts
 
 
 async def build_pipeline(
@@ -157,21 +167,24 @@ async def build_pipeline(
     vad_analyzer: Optional[SileroVADAnalyzer] = None,
     configurations: Optional[ConfigurationModel] = None,
     on_user_idle_timeout: Optional[Callable[[int], Any]] = None,
+    stt_provider: str = "soniox",
+    fallback_stt: Optional[Any] = None,
 ) -> tuple[
     Pipeline,
     LLMContext,
     Any,
     Optional[UserIdleCallbackHandler],
     TranscriptionGateProcessor,
+    Optional[Any],
 ]:
     """Build the processing pipeline.
 
     Uses the universal LLMContextAggregatorPair with UserTurnStrategies:
     - Start: VADUserTurnStartStrategy (primary, ~100ms) + TranscriptionUserTurnStartStrategy
       (fallback for soft speech VAD misses, uses interim transcriptions)
-    - Stop: SpeechTimeoutUserTurnStopStrategy (user_speech_timeout=0.0) — triggers
-      immediately when Soniox sends a finalized transcript (after its own
-      max_endpoint_delay_ms semantic endpoint detection).
+    - Stop: SpeechTimeoutUserTurnStopStrategy — timeout depends on STT provider:
+      - Soniox (0.0s): triggers immediately on finalized transcript with semantic endpoint detection
+      - Deepgram/other (0.5s): needs a brief silence buffer since no native semantic endpointing
     - VAD runs inside the aggregator (not the transport)
 
     Args:
@@ -184,12 +197,13 @@ async def build_pipeline(
         on_user_idle_timeout: Async callback to handle user idle timeout (triggers full end_conversation flow)
 
     Returns:
-        5-tuple of (pipeline, context, context_aggregator, user_idle_callback_handler, transcription_gate)
+        6-tuple of (pipeline, context, context_aggregator, user_idle_callback_handler, transcription_gate, fallback_stt)
         - pipeline: the built Pipeline instance
         - context: the LLMContext for the conversation
         - context_aggregator: LLMContextAggregatorPair for managing user/assistant turns
         - user_idle_callback_handler: resets retry count on user activity; None if idle detection is disabled
         - transcription_gate: TranscriptionGateProcessor instance wired into the pipeline
+        - fallback_stt: the Deepgram fallback service ref for mid-call swap (None if fallback disabled)
     """
     # TODO: Add a breeze-buddy-specific context summarizer.
     # Pipecat does not provide built-in summarization; implement one under
@@ -203,8 +217,17 @@ async def build_pipeline(
     # 2. TranscriptionUserTurnStartStrategy: Used as sole start strategy when VAD is disabled,
     #    or as fallback for soft speech that VAD misses when VAD is enabled.
     #    With use_interim=True, triggers on any interim transcription from Soniox.
-    # 3. SpeechTimeoutUserTurnStopStrategy(0.0): Triggers immediately when Soniox
-    #    sends a finalized transcript with <end> token (native semantic endpoint detection).
+    # 3. SpeechTimeoutUserTurnStopStrategy: Timeout varies by STT provider:
+    #    - Soniox (0.0s): Triggers immediately on finalized transcript with <end> token
+    #      (native semantic endpoint detection via max_endpoint_delay_ms).
+    #    - Deepgram/other (0.5s): Needs a brief silence buffer since there's no
+    #      native semantic endpointing; 0.5s balances responsiveness vs. cut-offs.
+    speech_timeout = 0.0 if stt_provider == "soniox" else 0.5
+    if stt_provider != "soniox":
+        logger.info(
+            f"Using speech timeout {speech_timeout}s for non-Soniox STT provider: {stt_provider}"
+        )
+
     start_strategies: list[BaseUserTurnStartStrategy] = []
     if vad_analyzer is not None:
         start_strategies.append(VADUserTurnStartStrategy())
@@ -213,7 +236,7 @@ async def build_pipeline(
     user_turn_strategies = UserTurnStrategies(
         start=start_strategies,
         stop=[
-            SpeechTimeoutUserTurnStopStrategy(user_speech_timeout=0.0),
+            SpeechTimeoutUserTurnStopStrategy(user_speech_timeout=speech_timeout),
         ],
     )
 
@@ -261,12 +284,24 @@ async def build_pipeline(
     # Store reference to user aggregator for position lookup
     user_aggregator = context_aggregator.user()
 
+    # Wrap STT in ServiceSwitcher if mid-call fallback is available.
+    # ServiceSwitcher gates audio frames to only the active service;
+    # the inactive Deepgram service sits idle with a keepalive websocket.
+    if fallback_stt:
+        stt_node = ServiceSwitcher(
+            services=[stt, fallback_stt],
+            strategy_type=ServiceSwitcherStrategyManual,
+        )
+        logger.info("STT wrapped in ServiceSwitcher (primary + Deepgram fallback)")
+    else:
+        stt_node = stt
+
     # Order: stt → transcription_gate → response_gate → user_aggregator
     # transcription_gate must be before response_gate so dropped frames never
     # reach the interruption logic.
     pipeline_parts = [
         transport.input(),
-        stt,
+        stt_node,
         transcription_gate,
         user_aggregator,
         llm,
@@ -297,6 +332,7 @@ async def build_pipeline(
         context_aggregator,
         user_idle_callback_handler,
         transcription_gate,
+        fallback_stt,
     )
 
 
