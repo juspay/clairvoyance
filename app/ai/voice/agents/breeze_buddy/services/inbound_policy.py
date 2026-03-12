@@ -12,6 +12,7 @@ Also provides helpers for Exotel block-redirect flow:
 """
 
 import json
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, time
 from typing import Any, Dict, Optional
@@ -19,7 +20,16 @@ from zoneinfo import ZoneInfo
 
 from app.core.logger import logger
 from app.database.accessor import is_number_blacklisted
-from app.schemas import CallExecutionConfig, InboundBlockAction
+from app.database.accessor.breeze_buddy.lead_call_tracker import (
+    create_lead_call_tracker,
+)
+from app.schemas import (
+    CallDirection,
+    CallExecutionConfig,
+    ExecutionMode,
+    InboundBlockAction,
+    LeadCallStatus,
+)
 from app.services.redis.client import get_redis_service
 
 DEFAULT_TIMEZONE = "Asia/Kolkata"
@@ -189,3 +199,70 @@ async def get_block_redirect(call_sid: str) -> Optional[Dict[str, Any]]:
     except Exception as e:
         logger.error(f"[INBOUND_POLICY] Failed to get block redirect: {e}")
         return None
+
+
+async def log_blocked_call(
+    call_id: str,
+    from_number: str,
+    to_number: str,
+    provider: str,
+    reseller_id: str,
+    merchant_identifier: Optional[str],
+    template_name: str,
+    template_id: Optional[str],
+    outbound_number_id: Optional[str],
+    block_action: Optional[InboundBlockAction],
+    block_reason: Optional[str],
+    block_message: Optional[str] = None,
+    redirect_number: Optional[str] = None,
+) -> None:
+    """
+    Log a blocked inbound call to lead_call_tracker.
+
+    Fire-and-forget: callers should wrap this in asyncio.create_task().
+    Fails silently — never breaks call blocking behavior.
+
+    Outcome is set to BLOCKED_REJECT or BLOCKED_REDIRECT based on block_action.
+    Status is set to FINISHED since blocked calls are terminal.
+    """
+    try:
+        outcome = (
+            "BLOCKED_REDIRECT"
+            if block_action == InboundBlockAction.REDIRECT and redirect_number
+            else "BLOCKED_REJECT"
+        )
+
+        meta_data = {
+            "block_reason": block_reason,
+            "block_action": block_action.value if block_action else None,
+            "block_message": block_message,
+            "redirect_number": redirect_number,
+            "provider": provider,
+            "from_number": from_number,
+            "to_number": to_number,
+        }
+
+        await create_lead_call_tracker(
+            id=str(uuid.uuid4()),
+            reseller_id=reseller_id,
+            template=template_name,
+            template_id=template_id,
+            merchant_identifier=merchant_identifier,
+            next_attempt_at=None,
+            payload=None,
+            meta_data=meta_data,
+            call_initiated_time=datetime.now(),
+            call_end_time=datetime.now(),
+            status=LeadCallStatus.FINISHED,
+            call_id=call_id,
+            outbound_number_id=outbound_number_id,
+            call_direction=CallDirection.INBOUND,
+            execution_mode=ExecutionMode.TELEPHONY,
+            outcome=outcome,
+        )
+
+        logger.info(
+            f"[INBOUND_POLICY] Logged blocked call {call_id} with outcome={outcome}"
+        )
+    except Exception as e:
+        logger.warning(f"[INBOUND_POLICY] Failed to log blocked call {call_id}: {e}")

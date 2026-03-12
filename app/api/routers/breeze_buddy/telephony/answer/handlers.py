@@ -46,6 +46,7 @@ from app.ai.voice.agents.breeze_buddy.services.agent_router.client import (
 )
 from app.ai.voice.agents.breeze_buddy.services.inbound_policy import (
     check_inbound_policy,
+    log_blocked_call,
     set_block_redirect,
 )
 from app.ai.voice.agents.breeze_buddy.services.telephony.plivo.recording import (
@@ -581,6 +582,31 @@ async def handle_provider_answer(request: Request, provider: str) -> Response:
                 )
 
                 block_message = last_block_result.message if last_block_result else None
+
+                # Fire-and-forget: log blocked call to lead_call_tracker
+                asyncio.create_task(
+                    log_blocked_call(
+                        call_id=call_id,
+                        from_number=from_number,
+                        to_number=to_number,
+                        provider=provider,
+                        reseller_id=merchant_id,
+                        merchant_identifier=merchant_identifier,
+                        template_name=templates[0].name if templates else "unknown",
+                        template_id=str(templates[0].id) if templates else None,
+                        outbound_number_id=(
+                            str(templates[0].outbound_number_id)
+                            if templates and templates[0].outbound_number_id
+                            else None
+                        ),
+                        block_action=block_action,
+                        block_reason=(
+                            last_block_result.reason if last_block_result else None
+                        ),
+                        block_message=block_message,
+                        redirect_number=block_redirect,
+                    )
+                )
 
                 if provider == "exotel":
                     # Exotel only accepts {"url": "wss://..."} at answer-time.

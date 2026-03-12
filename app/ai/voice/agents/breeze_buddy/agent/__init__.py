@@ -32,10 +32,9 @@ from app.ai.voice.agents.breeze_buddy.agent.inbound import (
 )
 from app.ai.voice.agents.breeze_buddy.agent.ivr import (
     BLOCK_MESSAGE_PLAY_SECONDS,
-    _convert_audio_for_provider,
-    _generate_tts_audio_mulaw,
     _send_audio,
     get_template_id_from_call,
+    prepare_block_audio,
 )
 from app.ai.voice.agents.breeze_buddy.agent.pipeline import (
     build_pipeline,
@@ -329,16 +328,18 @@ class Agent:
             )
 
             # Inbound call - extract template_id (handles IVR mode if enabled)
-            template_id_from_query, error_reason, _was_ivr = (
-                await get_template_id_from_call(
-                    ws=self.ws,
-                    stream_sid=self.stream_sid,
-                    call_sid=self.call_sid,
-                    call_data=call_data,
-                    provider=self.provider or "",
-                    telephony_service=self.telephony_service,
-                    from_number=from_number,
-                )
+            (
+                template_id_from_query,
+                error_reason,
+                _was_ivr,
+            ) = await get_template_id_from_call(
+                ws=self.ws,
+                stream_sid=self.stream_sid,
+                call_sid=self.call_sid,
+                call_data=call_data,
+                provider=self.provider or "",
+                telephony_service=self.telephony_service,
+                from_number=from_number,
             )
 
             # Check if there was an error (IVR failed or invalid template_id)
@@ -512,16 +513,13 @@ class Agent:
             f"[BLOCK_REDIRECT] Call {self.call_sid} blocked with redirect to {redirect_number}"
         )
 
-        # Play block message if available
+        # Play block message if available (with caching)
         if block_message and self.ws and self.stream_sid:
             try:
-                audio = await _generate_tts_audio_mulaw(block_message)
+                audio = await prepare_block_audio(block_message, self.provider or "")
                 if audio:
-                    provider_audio = _convert_audio_for_provider(
-                        audio, self.provider or ""
-                    )
                     await _send_audio(
-                        self.ws, self.stream_sid, provider_audio, self.provider or ""
+                        self.ws, self.stream_sid, audio, self.provider or ""
                     )
                     await asyncio.sleep(BLOCK_MESSAGE_PLAY_SECONDS)
             except Exception as e:

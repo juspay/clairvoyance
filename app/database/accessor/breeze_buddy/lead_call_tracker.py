@@ -63,6 +63,9 @@ async def create_lead_call_tracker(
     call_id: Optional[str] = None,  # For inbound calls where call_sid is known upfront
     outbound_number_id: Optional[str] = None,  # For inbound calls
     call_direction: CallDirection = CallDirection.OUTBOUND,  # Direction of call
+    outcome: Optional[
+        str
+    ] = None,  # For blocked calls where outcome is known at insert time
 ) -> Optional[LeadCallTracker]:
     """
     Create a new lead call tracker record.
@@ -74,6 +77,7 @@ async def create_lead_call_tracker(
         call_id: Call SID (optional, used for inbound calls where call_sid is known upfront)
         outbound_number_id: Outbound number ID (optional, used for inbound calls)
         call_direction: Direction of call (INBOUND or OUTBOUND, defaults to OUTBOUND)
+        outcome: Call outcome (optional, e.g. BLOCKED_REJECT, BLOCKED_REDIRECT)
     """
     logger.info(f"Creating lead call tracker for reseller ID: {reseller_id}")
 
@@ -97,6 +101,7 @@ async def create_lead_call_tracker(
             call_id=call_id,
             outbound_number_id=outbound_number_id,
             call_direction=call_direction,
+            outcome=outcome,
         )
 
         result = await run_parameterized_query(query_text, values)
