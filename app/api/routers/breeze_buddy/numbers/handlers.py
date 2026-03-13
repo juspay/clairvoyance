@@ -55,7 +55,7 @@ async def create_number_handler(
             provider=number.provider,
             status=number.status,
             reseller_id=number.reseller_id,
-            merchant_identifier=number.merchant_identifier,
+            merchant_id=number.merchant_id,
             channels=0,
             maximum_channels=number.maximum_channels,
         )

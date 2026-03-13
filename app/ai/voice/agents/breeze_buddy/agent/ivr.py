@@ -187,7 +187,7 @@ async def _check_deferred_inbound_policy(
             return False
 
         configs = await get_call_execution_config_by_merchant_id(
-            reseller_id, template.merchant_identifier
+            reseller_id, template.merchant_id
         )
         config = next((c for c in configs if c.template == template.name), None)
         if not config:
@@ -226,7 +226,7 @@ async def _check_deferred_inbound_policy(
                 redirect_number=redirect_number,
                 outbound_number_id=template.outbound_number_id,
                 reseller_id=reseller_id,
-                merchant_identifier=template.merchant_identifier,
+                merchant_id=template.merchant_id,
                 telephony_service=telephony_service,
                 provider=provider,
                 customer_phone_number=from_number,
@@ -240,7 +240,7 @@ async def _check_deferred_inbound_policy(
                 to_number="",  # Not available in IVR context
                 provider=provider,
                 reseller_id=reseller_id,
-                merchant_identifier=template.merchant_identifier,
+                merchant_id=template.merchant_id,
                 template_name=template.name,
                 template_id=str(template.id),
                 outbound_number_id=(

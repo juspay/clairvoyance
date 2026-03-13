@@ -108,8 +108,8 @@ async def _build_resolution_context(
         context["request_id"] = lead.request_id
     if lead.template:
         context["template_name"] = lead.template
-    if lead.merchant_identifier:
-        context["merchant_identifier"] = lead.merchant_identifier
+    if lead.merchant_id:
+        context["merchant_id"] = lead.merchant_id
 
     return context
 

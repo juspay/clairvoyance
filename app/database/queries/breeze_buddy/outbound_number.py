@@ -21,7 +21,7 @@ def insert_outbound_number_query(
     channels: Optional[int] = None,
     maximum_channels: Optional[int] = None,
     reseller_id: Optional[str] = None,
-    merchant_identifier: Optional[str] = None,
+    merchant_id: Optional[str] = None,
 ) -> Tuple[str, List[Any]]:
     """
     Generate query to insert outbound number record.
@@ -37,7 +37,7 @@ def insert_outbound_number_query(
             "channels",
             "maximum_channels",
             "reseller_id",
-            "merchant_identifier",
+            "merchant_id",
             "created_at",
             "updated_at"
         )
@@ -52,7 +52,7 @@ def insert_outbound_number_query(
         channels,
         maximum_channels,
         reseller_id,
-        merchant_identifier,
+        merchant_id,
         datetime.now(),
         datetime.now(),
     ]

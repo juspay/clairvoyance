@@ -78,9 +78,9 @@ async def login_handler(
 
         # Resolve wildcard scopes to actual values before creating token.
         # This ensures the frontend receives concrete reseller_ids and
-        # merchant_identifiers instead of ["*"] which it can't interpret.
+        # merchant_ids instead of ["*"] which it can't interpret.
         resolved_reseller_ids = user.reseller_ids
-        resolved_merchant_identifiers = user.merchant_identifiers
+        resolved_merchant_ids = user.merchant_ids
 
         if user.role != UserRole.ADMIN:
             # Build a temporary UserInfo to use resolve functions
@@ -90,7 +90,7 @@ async def login_handler(
                 role=user.role,
                 email=user.email,
                 reseller_ids=user.reseller_ids,
-                merchant_identifiers=user.merchant_identifiers,
+                merchant_ids=user.merchant_ids,
                 permissions=[],
                 owner_id=user.owner_id,
             )
@@ -105,7 +105,7 @@ async def login_handler(
             # Resolve merchant_identifiers wildcards
             resolved_m = await resolve_merchant_ids(temp_user_info)
             if resolved_m is not None:
-                resolved_merchant_identifiers = resolved_m
+                resolved_merchant_ids = resolved_m
             # else: None means admin-created with truly unrestricted access,
             # keep original ["*"] — only admin-created accounts can reach here
 
@@ -115,7 +115,7 @@ async def login_handler(
             username=user.username,
             role=user.role,
             reseller_ids=resolved_reseller_ids,
-            merchant_identifiers=resolved_merchant_identifiers,
+            merchant_ids=resolved_merchant_ids,
             email=user.email,
             owner_id=user.owner_id,
         )
@@ -125,7 +125,7 @@ async def login_handler(
 
         logger.info(
             f"Successful login for database user: {user.username} "
-            f"(role: {user.role}, resellers: {user.reseller_ids}, shops: {user.merchant_identifiers})"
+            f"(role: {user.role}, resellers: {user.reseller_ids}, shops: {user.merchant_ids})"
         )
 
         return TokenResponse(
@@ -155,7 +155,7 @@ async def login_handler(
             username=login_request.username,
             role=UserRole.ADMIN,
             reseller_ids=["*"],  # Admin has access to all resellers
-            merchant_identifiers=["*"],  # Admin has access to all merchants
+            merchant_ids=["*"],  # Admin has access to all merchants
             email=None,
         )
 
@@ -238,7 +238,7 @@ async def generate_s2s_token_handler(request: S2STokenRequest) -> S2STokenRespon
 
     # Resolve wildcard scopes for S2S tokens too
     resolved_reseller_ids = user.reseller_ids
-    resolved_merchant_identifiers = user.merchant_identifiers
+    resolved_merchant_ids = user.merchant_ids
 
     if user.role != UserRole.ADMIN:
         temp_user_info = UserInfo(
@@ -247,7 +247,7 @@ async def generate_s2s_token_handler(request: S2STokenRequest) -> S2STokenRespon
             role=user.role,
             email=user.email,
             reseller_ids=user.reseller_ids,
-            merchant_identifiers=user.merchant_identifiers,
+            merchant_ids=user.merchant_ids,
             permissions=[],
             owner_id=user.owner_id,
         )
@@ -260,16 +260,16 @@ async def generate_s2s_token_handler(request: S2STokenRequest) -> S2STokenRespon
 
         resolved_m = await resolve_merchant_ids(temp_user_info)
         if resolved_m is not None:
-            resolved_merchant_identifiers = resolved_m
+            resolved_merchant_ids = resolved_m
         else:
-            resolved_merchant_identifiers = ["*"]
+            resolved_merchant_ids = ["*"]
 
     access_token = rbac_token_manager.create_access_token_with_rbac(
         user_id=user.id,
         username=user.username,
         role=user.role,
         reseller_ids=resolved_reseller_ids,
-        merchant_identifiers=resolved_merchant_identifiers,
+        merchant_ids=resolved_merchant_ids,
         email=user.email,
         owner_id=user.owner_id,
         expires_delta=expires_delta,

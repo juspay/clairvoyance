@@ -150,7 +150,7 @@ async def set_block_redirect(
     redirect_number: str,
     message: Optional[str] = None,
     reseller_id: Optional[str] = None,
-    merchant_identifier: Optional[str] = None,
+    merchant_id: Optional[str] = None,
 ) -> bool:
     """
     Store block info in Redis for Exotel answer-time blocking.
@@ -170,7 +170,7 @@ async def set_block_redirect(
                 "redirect_number": redirect_number,
                 "message": message,
                 "reseller_id": reseller_id,
-                "merchant_identifier": merchant_identifier,
+                "merchant_id": merchant_id,
             }
         )
         await redis.setex(key, value, BLOCK_REDIRECT_TTL)
@@ -207,7 +207,7 @@ async def log_blocked_call(
     to_number: str,
     provider: str,
     reseller_id: str,
-    merchant_identifier: Optional[str],
+    merchant_id: Optional[str],
     template_name: str,
     template_id: Optional[str],
     outbound_number_id: Optional[str],
@@ -247,7 +247,7 @@ async def log_blocked_call(
             reseller_id=reseller_id,
             template=template_name,
             template_id=template_id,
-            merchant_identifier=merchant_identifier,
+            merchant_id=merchant_id,
             next_attempt_at=None,
             payload=None,
             meta_data=meta_data,

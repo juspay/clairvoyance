@@ -458,7 +458,7 @@ class TemplateModel(BaseModel):
     # a GET response can be sent directly to PUT — extra fields are auto-stripped.
     id: str
     reseller_id: str
-    merchant_identifier: Optional[str] = None
+    merchant_id: Optional[str] = None
     created_at: Optional[Any] = None
     updated_at: Optional[Any] = None
 
@@ -496,7 +496,7 @@ class CreateTemplateRequest(BaseModel):
     # New field names
     reseller_id: str
     name: str
-    merchant_identifier: Optional[str] = None
+    merchant_id: Optional[str] = None
     outbound_number_id: Optional[str] = None
     is_active: bool = True
     flow: Dict[str, Any]
@@ -527,7 +527,7 @@ class ReplaceTemplateRequest(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     name: str
-    merchant_identifier: Optional[str] = None
+    merchant_id: Optional[str] = None
     outbound_number_id: Optional[str] = None
     is_active: bool
     flow: Dict[str, Any]

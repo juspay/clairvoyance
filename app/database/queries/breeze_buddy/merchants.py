@@ -12,15 +12,15 @@ MERCHANTS_TABLE = "merchants"
 
 
 def check_merchant_identifier_exists_query(
-    merchant_identifier: str,
+    merchant_id: str,
 ) -> Tuple[str, List[Any]]:
-    """Generate query to check if merchant_identifier exists."""
-    query = f"SELECT 1 FROM {MERCHANTS_TABLE} WHERE merchant_identifier = $1 LIMIT 1"
-    return query, [merchant_identifier]
+    """Generate query to check if merchant_id exists."""
+    query = f"SELECT 1 FROM {MERCHANTS_TABLE} WHERE merchant_id = $1 LIMIT 1"
+    return query, [merchant_id]
 
 
 def create_merchant_query(
-    merchant_identifier: str,
+    merchant_id: str,
     reseller_id: Optional[str] = None,
     name: Optional[str] = None,
     description: Optional[str] = None,
@@ -29,28 +29,28 @@ def create_merchant_query(
     """Generate query to create a new merchant entity."""
     query = f"""
         INSERT INTO {MERCHANTS_TABLE} (
-            merchant_identifier, name, description,
+            merchant_id, name, description,
             is_active, reseller_id, created_at, updated_at
         ) VALUES ($1, $2, $3, $4, $5, $6, $7)
-        RETURNING merchant_identifier, name, description,
+        RETURNING merchant_id, name, description,
                   is_active, reseller_id, created_at, updated_at
     """
     now = datetime.now(timezone.utc)
-    values = [merchant_identifier, name, description, is_active, reseller_id, now, now]
+    values = [merchant_id, name, description, is_active, reseller_id, now, now]
     return query, values
 
 
 def get_merchant_by_merchant_identifier_query(
-    merchant_identifier: str,
+    merchant_id: str,
 ) -> Tuple[str, List[Any]]:
-    """Generate query to get merchant by merchant_identifier."""
+    """Generate query to get merchant by merchant_id."""
     query = f"""
-        SELECT merchant_identifier, name, description,
+        SELECT merchant_id, name, description,
                is_active, reseller_id, created_at, updated_at
         FROM {MERCHANTS_TABLE}
-        WHERE merchant_identifier = $1
+        WHERE merchant_id = $1
     """
-    return query, [merchant_identifier]
+    return query, [merchant_id]
 
 
 def get_all_merchants_query(
@@ -76,7 +76,7 @@ def get_all_merchants_query(
     param_idx = 1
 
     if merchant_identifier_filter:
-        where_conditions.append(f"merchant_identifier ILIKE ${param_idx}")
+        where_conditions.append(f"merchant_id ILIKE ${param_idx}")
         escaped = merchant_identifier_filter.replace("%", "\\%").replace("_", "\\_")
         params.append(f"%{escaped}%")
         param_idx += 1
@@ -100,7 +100,7 @@ def get_all_merchants_query(
     where_clause = f"WHERE {' AND '.join(where_conditions)}" if where_conditions else ""
 
     # Validate sort fields
-    valid_sort_fields = {"merchant_identifier", "name", "created_at", "updated_at"}
+    valid_sort_fields = {"merchant_id", "name", "created_at", "updated_at"}
     if sort_by not in valid_sort_fields:
         sort_by = "created_at"
     if sort_order.lower() not in {"asc", "desc"}:
@@ -108,7 +108,7 @@ def get_all_merchants_query(
 
     # Build queries
     query = f"""
-        SELECT merchant_identifier, name, description,
+        SELECT merchant_id, name, description,
                is_active, reseller_id, created_at, updated_at
         FROM {MERCHANTS_TABLE}
         {where_clause}
@@ -136,7 +136,7 @@ def get_merchants_by_reseller_query(
     offset = (page - 1) * limit
 
     query = f"""
-        SELECT merchant_identifier, name, description,
+        SELECT merchant_id, name, description,
                is_active, reseller_id, created_at, updated_at
         FROM {MERCHANTS_TABLE}
         WHERE reseller_id = $1
@@ -154,7 +154,7 @@ def get_merchants_by_reseller_query(
 
 
 def update_merchant_query(
-    merchant_identifier: str,
+    merchant_id: str,
     name: Optional[str] = None,
     description: Optional[str] = None,
     is_active: Optional[bool] = None,
@@ -198,14 +198,14 @@ def update_merchant_query(
     params.append(datetime.now(timezone.utc))
     param_idx += 1
 
-    # Add merchant_identifier for WHERE clause
-    params.append(merchant_identifier)
+    # Add merchant_id for WHERE clause
+    params.append(merchant_id)
 
     query = f"""
         UPDATE {MERCHANTS_TABLE}
         SET {', '.join(set_clauses)}
-        WHERE merchant_identifier = ${param_idx}
-        RETURNING merchant_identifier, name, description,
+        WHERE merchant_id = ${param_idx}
+        RETURNING merchant_id, name, description,
                   is_active, reseller_id, created_at, updated_at
     """
 
@@ -230,12 +230,12 @@ def get_merchants_by_ids_query(
     offset = (page - 1) * limit
 
     # Build WHERE clause - always scoped to the given IDs
-    where_conditions = ["merchant_identifier = ANY($1)"]
+    where_conditions = ["merchant_id = ANY($1)"]
     params: list = [merchant_ids]
     param_idx = 2
 
     if merchant_identifier_filter:
-        where_conditions.append(f"merchant_identifier ILIKE ${param_idx}")
+        where_conditions.append(f"merchant_id ILIKE ${param_idx}")
         escaped = merchant_identifier_filter.replace("%", "\\%").replace("_", "\\_")
         params.append(f"%{escaped}%")
         param_idx += 1
@@ -254,14 +254,14 @@ def get_merchants_by_ids_query(
     where_clause = f"WHERE {' AND '.join(where_conditions)}"
 
     # Validate sort fields
-    valid_sort_fields = {"merchant_identifier", "name", "created_at", "updated_at"}
+    valid_sort_fields = {"merchant_id", "name", "created_at", "updated_at"}
     if sort_by not in valid_sort_fields:
         sort_by = "created_at"
     if sort_order.lower() not in {"asc", "desc"}:
         sort_order = "desc"
 
     query = f"""
-        SELECT merchant_identifier, name, description,
+        SELECT merchant_id, name, description,
                is_active, reseller_id, created_at, updated_at
         FROM {MERCHANTS_TABLE}
         {where_clause}
@@ -276,7 +276,7 @@ def get_merchants_by_ids_query(
     return query, count_query, params
 
 
-def delete_merchant_query(merchant_identifier: str) -> Tuple[str, List[Any]]:
+def delete_merchant_query(merchant_id: str) -> Tuple[str, List[Any]]:
     """Generate query to delete a merchant with dependency check.
 
     Uses atomic CTE to check dependencies and delete in a single operation.
@@ -285,16 +285,16 @@ def delete_merchant_query(merchant_identifier: str) -> Tuple[str, List[Any]]:
         WITH dependency_check AS (
             SELECT COUNT(*) as user_count
             FROM users
-            WHERE merchant_identifiers ? $1
+            WHERE merchant_ids ? $1
         ),
         delete_operation AS (
             DELETE FROM merchants
-            WHERE merchant_identifier = $1
+            WHERE merchant_id = $1
             AND (SELECT user_count FROM dependency_check) = 0
-            RETURNING merchant_identifier
+            RETURNING merchant_id
         )
         SELECT
             (SELECT user_count FROM dependency_check) as user_count,
             (SELECT COUNT(*) FROM delete_operation) as deleted_count
     """
-    return query, [merchant_identifier]
+    return query, [merchant_id]

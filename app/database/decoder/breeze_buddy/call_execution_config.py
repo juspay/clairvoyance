@@ -65,7 +65,7 @@ def _decode_single_row(row: asyncpg.Record) -> CallExecutionConfig:
         calling_provider=CallProvider(row["calling_provider"]),
         reseller_id=row["reseller_id"],
         template=row["template"],
-        merchant_identifier=row["merchant_identifier"],
+        merchant_id=row["merchant_id"],
         enable_international_call=row["enable_international_call"],
         enable_calling=row["enable_calling"],
         enable_inbound=row.get("enable_inbound", True),

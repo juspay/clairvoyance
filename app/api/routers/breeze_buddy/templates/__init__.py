@@ -99,9 +99,7 @@ async def create_template(
 @router.get("/templates/list", response_model=TemplateListResponse)
 async def list_templates(
     reseller_id: Optional[str] = Query(None, description="Filter by reseller ID"),
-    merchant_identifier: Optional[str] = Query(
-        None, description="Filter by merchant identifier"
-    ),
+    merchant_id: Optional[str] = Query(None, description="Filter by merchant_id"),
     include_inactive: bool = Query(
         False, description="Include inactive templates (default: false)"
     ),
@@ -115,7 +113,7 @@ async def list_templates(
 
     Query Parameters:
     - reseller_id: Optional filter by specific reseller ID
-    - merchant_identifier: Optional filter by specific shop identifier
+    - merchant_id: Optional filter by specific shop identifier
     - include_inactive: Include inactive templates (default: false)
 
     RBAC Behavior:
@@ -139,9 +137,8 @@ async def list_templates(
     Returns:
         TemplateListResponse with templates array and total count
     """
-    identifier = merchant_identifier
     return await list_templates_handler(
-        reseller_id, identifier, include_inactive, current_user
+        reseller_id, merchant_id, include_inactive, current_user
     )
 
 

@@ -21,7 +21,7 @@ async def redirect_call(
     redirect_number: str,
     outbound_number_id: str,
     reseller_id: str,
-    merchant_identifier: Optional[str],
+    merchant_id: Optional[str],
     telephony_service: VoiceCallProvider,
     provider: str,
     customer_phone_number: Optional[str] = None,
@@ -59,7 +59,7 @@ async def redirect_call(
             await set_transfer_flag(
                 call_sid=call_sid,
                 reseller_id=reseller_id,
-                merchant_identifier=merchant_identifier or "",
+                merchant_id=merchant_id or "",
                 transfer_number=redirect_number,
                 customer_phone_number=customer_phone_number,
             )

@@ -24,27 +24,27 @@ from app.database.queries.breeze_buddy.merchants import (
 from app.schemas.breeze_buddy.merchants import MerchantResponse
 
 
-async def check_merchant_identifier_exists(merchant_identifier: str) -> bool:
-    """Check if merchant_identifier already exists in merchants table.
+async def check_merchant_identifier_exists(merchant_id: str) -> bool:
+    """Check if merchant_id already exists in merchants table.
 
     Args:
-        merchant_identifier: The merchant identifier to check
+        merchant_id: The merchant identifier to check
 
     Returns:
         True if exists, False otherwise
     """
-    query, values = check_merchant_identifier_exists_query(merchant_identifier)
+    query, values = check_merchant_identifier_exists_query(merchant_id)
 
     try:
         result = await run_parameterized_query(query, values)
         return result is not None and len(result) > 0
     except Exception as e:
-        logger.error(f"Error checking merchant_identifier existence: {e}")
+        logger.error(f"Error checking merchant_id existence: {e}")
         raise
 
 
 async def create_merchant(
-    merchant_identifier: str,
+    merchant_id: str,
     reseller_id: Optional[str] = None,
     name: Optional[str] = None,
     description: Optional[str] = None,
@@ -53,7 +53,7 @@ async def create_merchant(
     """Create a new merchant entity (business entity).
 
     Args:
-        merchant_identifier: Unique business identifier (e.g., "redbus")
+        merchant_id: Unique business identifier (e.g., "redbus")
         reseller_id: Reseller user ID who owns this merchant (nullable)
         name: Optional display name
         description: Optional description
@@ -63,7 +63,7 @@ async def create_merchant(
         MerchantResponse if successful, None otherwise
     """
     query, values = create_merchant_query(
-        merchant_identifier=merchant_identifier,
+        merchant_id=merchant_id,
         reseller_id=reseller_id,
         name=name,
         description=description,
@@ -75,27 +75,27 @@ async def create_merchant(
         row = result[0] if result else None
 
         if row:
-            logger.info(f"Created merchant entity: {merchant_identifier}")
+            logger.info(f"Created merchant entity: {merchant_id}")
             return decode_merchant(row)
 
         return None
     except Exception as e:
-        logger.error(f"Error creating merchant entity {merchant_identifier}: {e}")
+        logger.error(f"Error creating merchant entity {merchant_id}: {e}")
         raise
 
 
 async def get_merchant_by_merchant_identifier(
-    merchant_identifier: str,
+    merchant_id: str,
 ) -> Optional[MerchantResponse]:
-    """Get merchant entity by merchant_identifier.
+    """Get merchant entity by merchant_id.
 
     Args:
-        merchant_identifier: The merchant identifier to look up
+        merchant_id: The merchant identifier to look up
 
     Returns:
         MerchantResponse if found, None otherwise
     """
-    query, values = get_merchant_by_merchant_identifier_query(merchant_identifier)
+    query, values = get_merchant_by_merchant_identifier_query(merchant_id)
 
     try:
         result = await run_parameterized_query(query, values)
@@ -106,7 +106,7 @@ async def get_merchant_by_merchant_identifier(
 
         return None
     except Exception as e:
-        logger.error(f"Error fetching merchant entity {merchant_identifier}: {e}")
+        logger.error(f"Error fetching merchant entity {merchant_id}: {e}")
         raise
 
 
@@ -125,11 +125,11 @@ async def get_all_merchants(
     Args:
         page: Page number (1-indexed)
         limit: Items per page
-        merchant_identifier_filter: Filter by merchant_identifier (partial match)
+        merchant_identifier_filter: Filter by merchant_id (partial match)
         name_filter: Filter by name (partial match, case-insensitive)
         reseller_id_filter: Filter by reseller_id (exact match)
         is_active_filter: Filter by active status
-        sort_by: Field to sort by (merchant_identifier, name, created_at, updated_at)
+        sort_by: Field to sort by (merchant_id, name, created_at, updated_at)
         sort_order: Sort direction (asc, desc)
 
     Returns:
@@ -178,10 +178,10 @@ async def get_merchants_by_ids(
         merchant_ids: List of merchant identifiers to filter by
         page: Page number (1-indexed)
         limit: Items per page
-        merchant_identifier_filter: Additional filter by merchant_identifier (partial match)
+        merchant_identifier_filter: Additional filter by merchant_id (partial match)
         name_filter: Filter by name (partial match, case-insensitive)
         is_active_filter: Filter by active status
-        sort_by: Field to sort by (merchant_identifier, name, created_at, updated_at)
+        sort_by: Field to sort by (merchant_id, name, created_at, updated_at)
         sort_order: Sort direction (asc, desc)
 
     Returns:
@@ -253,16 +253,16 @@ async def get_merchants_by_reseller(
 
 
 async def update_merchant(
-    merchant_identifier: str,
+    merchant_id: str,
     name: Optional[str] = None,
     description: Optional[str] = None,
     is_active: Optional[bool] = None,
     reseller_id: Optional[str] = None,
 ) -> Optional[MerchantResponse]:
-    """Update merchant entity (merchant_identifier cannot be changed).
+    """Update merchant entity (merchant_id cannot be changed).
 
     Args:
-        merchant_identifier: The merchant identifier to update
+        merchant_id: The merchant identifier to update
         name: New display name
         description: New description
         is_active: New active status
@@ -272,7 +272,7 @@ async def update_merchant(
         MerchantResponse if successful, None if not found
     """
     query, values = update_merchant_query(
-        merchant_identifier=merchant_identifier,
+        merchant_id=merchant_id,
         name=name,
         description=description,
         is_active=is_active,
@@ -281,39 +281,39 @@ async def update_merchant(
 
     if not values:
         # No fields to update, return current merchant
-        return await get_merchant_by_merchant_identifier(merchant_identifier)
+        return await get_merchant_by_merchant_identifier(merchant_id)
 
     try:
         result = await run_parameterized_query(query, values)
         row = result[0] if result else None
 
         if row:
-            logger.info(f"Updated merchant entity: {merchant_identifier}")
+            logger.info(f"Updated merchant entity: {merchant_id}")
             return decode_merchant(row)
 
         return None
     except Exception as e:
-        logger.error(f"Error updating merchant entity {merchant_identifier}: {e}")
+        logger.error(f"Error updating merchant entity {merchant_id}: {e}")
         raise
 
 
-async def delete_merchant(merchant_identifier: str) -> bool:
-    """Delete merchant entity by merchant_identifier.
+async def delete_merchant(merchant_id: str) -> bool:
+    """Delete merchant entity by merchant_id.
 
     Returns True if deleted, False if not found.
-    Raises ValueError if users still reference this merchant_identifier.
+    Raises ValueError if users still reference this merchant_id.
     Raises exception on database errors.
 
     Note: Uses atomic CTE to check dependencies and delete in a single
     operation to prevent TOCTOU race conditions.
 
     Args:
-        merchant_identifier: The merchant identifier to delete
+        merchant_id: The merchant identifier to delete
 
     Returns:
         True if deleted, False if not found
     """
-    query, values = delete_merchant_query(merchant_identifier)
+    query, values = delete_merchant_query(merchant_id)
 
     try:
         result = await run_parameterized_query(query, values)
@@ -325,16 +325,16 @@ async def delete_merchant(merchant_identifier: str) -> bool:
 
             if user_count > 0:
                 raise ValueError(
-                    f"Cannot delete merchant entity '{merchant_identifier}': {user_count} user(s) still reference it"
+                    f"Cannot delete merchant entity '{merchant_id}': {user_count} user(s) still reference it"
                 )
 
             if deleted_count > 0:
-                logger.info(f"Deleted merchant entity: {merchant_identifier}")
+                logger.info(f"Deleted merchant entity: {merchant_id}")
                 return True
 
             return False
 
         return False
     except Exception as e:
-        logger.error(f"Error deleting merchant entity {merchant_identifier}: {e}")
+        logger.error(f"Error deleting merchant entity {merchant_id}: {e}")
         raise

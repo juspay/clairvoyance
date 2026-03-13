@@ -39,18 +39,18 @@ async def create_user_account(
     Create a new user account (login account).
 
     **RBAC rules:**
-    - Admin: Can create any role with any merchant_identifiers
-    - Reseller: Can create user/merchant roles for their scoped merchant_identifiers
+    - Admin: Can create any role with any merchant_ids
+    - Reseller: Can create user/merchant roles for their scoped merchant_ids
     - Merchant: Can create user roles for their own merchant identifiers
 
     Args:
-        user_data: User account data (username, password, role, merchant_identifiers, etc.)
+        user_data: User account data (username, password, role, merchant_ids, etc.)
 
     Returns:
         Created user account with owner_id and timestamps
 
     Raises:
-        400: If merchant_identifiers missing for merchant/user roles
+        400: If merchant_ids missing for merchant/user roles
         403: If user doesn't have permission to create this account type
         409: If username already exists
         500: If there's an error creating the user
@@ -70,9 +70,9 @@ async def list_users(
         None,
         description="Filter by reseller ID (checks if in reseller_ids array)",
     ),
-    merchant_identifier: Optional[str] = Query(
+    merchant_id: Optional[str] = Query(
         None,
-        description="Filter by merchant identifier (checks if in merchant_identifiers array)",
+        description="Filter by merchant identifier (checks if in merchant_ids array)",
     ),
     is_active: Optional[bool] = Query(None, description="Filter by active status"),
     sort_by: str = Query(
@@ -88,8 +88,8 @@ async def list_users(
 
     **RBAC rules:**
     - Admin: See all user accounts
-    - Reseller: See only accounts with overlapping reseller_ids or merchant_identifiers
-    - Merchant: See only accounts with overlapping merchant_identifiers
+    - Reseller: See only accounts with overlapping reseller_ids or merchant_ids
+    - Merchant: See only accounts with overlapping merchant_ids
 
     Args:
         page: Page number (1-indexed)
@@ -97,7 +97,7 @@ async def list_users(
         username: Filter by username (partial match, case-insensitive)
         role: Filter by role (admin, reseller, merchant, user)
         reseller_id: Filter by reseller ID (checks if in reseller_ids array)
-        merchant_identifier: Filter by merchant identifier (checks if in merchant_identifiers array)
+        merchant_id: Filter by merchant identifier (checks if in merchant_ids array)
         is_active: Filter by active status
         sort_by: Sort field (username, role, created_at, updated_at)
         sort_order: Sort direction (asc, desc)
@@ -115,7 +115,7 @@ async def list_users(
         username_filter=username,
         role_filter=role,
         reseller_id_filter=reseller_id,
-        merchant_identifier_filter=merchant_identifier,
+        merchant_identifier_filter=merchant_id,
         is_active_filter=is_active,
         sort_by=sort_by,
         sort_order=sort_order,
@@ -133,7 +133,7 @@ async def get_user_account_by_id(
 
     **RBAC rules:**
     - Admin: Can view any account
-    - Reseller/Merchant: Can view accounts with overlapping merchant_identifiers or self
+    - Reseller/Merchant: Can view accounts with overlapping merchant_ids or self
     - User: Can view only self
 
     Args:
@@ -168,13 +168,13 @@ async def update_user_account(
 
     Args:
         user_id: UUID of user account
-        user_data: Fields to update (password, email, merchant_identifiers, is_active)
+        user_data: Fields to update (password, email, merchant_ids, is_active)
 
     Returns:
         Updated user account
 
     Raises:
-        400: If trying to remove merchant_identifiers from merchant/user accounts
+        400: If trying to remove merchant_ids from merchant/user accounts
         403: If user doesn't have permission to modify this account
         404: If user not found
         500: If there's an error updating the user

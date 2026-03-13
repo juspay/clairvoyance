@@ -69,7 +69,7 @@ def decode_template(result: asyncpg.Record) -> Optional[TemplateModel]:
     return TemplateModel(
         id=str(result["id"]),
         reseller_id=result["reseller_id"],
-        merchant_identifier=result["merchant_identifier"],
+        merchant_id=result["merchant_id"],
         name=result["name"],
         flow=flow_data,
         expected_payload_schema=expected_payload_schema_data,

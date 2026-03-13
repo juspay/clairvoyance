@@ -66,11 +66,11 @@ async def _get_lead_config(lead: LeadCallTracker) -> Optional[CallExecutionConfi
     """
 
     configs = await get_call_execution_config_by_merchant_id(
-        lead.reseller_id, lead.merchant_identifier
+        lead.reseller_id, lead.merchant_id
     )
     if not configs:
         logger.warning(
-            f"No call execution config found for reseller: {lead.reseller_id} and shop: {lead.merchant_identifier}"
+            f"No call execution config found for reseller: {lead.reseller_id} and shop: {lead.merchant_id}"
         )
         return None
 
@@ -201,7 +201,7 @@ async def _get_available_number(
 
         logger.info(
             f"Using backward compatible approach: looking for outbound number "
-            f"matching reseller {config.reseller_id}, shop {config.merchant_identifier}"
+            f"matching reseller {config.reseller_id}, shop {config.merchant_id}"
         )
 
         # Get all available numbers
@@ -209,11 +209,11 @@ async def _get_available_number(
             OutboundNumberStatus.AVAILABLE, config.calling_provider
         )
 
-        # Filter by reseller_id and merchant_identifier as none for fallback
+        # Filter by reseller_id and merchant_id as none for fallback
         matching_numbers = [
             n
             for n in all_available_numbers
-            if n.reseller_id is None and n.merchant_identifier is None
+            if n.reseller_id is None and n.merchant_id is None
         ]
 
         if matching_numbers:
@@ -233,16 +233,16 @@ async def _get_available_number(
     if not number:
         # Support both new and old field names for config
         config_reseller_id = config.reseller_id
-        config_merchant_identifier = config.merchant_identifier
+        config_merchant_id = config.merchant_id
         logger.warning(
             f"No outbound number found for reseller {config_reseller_id}, "
-            f"template {config.template}, shop {config_merchant_identifier}"
+            f"template {config.template}, shop {config_merchant_id}"
         )
         return None
 
     logger.info(
         f"Using outbound number {number.number} (provider: {number.provider}) "
-        f"for template {config.template}, reseller {config.reseller_id}, shop {config.merchant_identifier}"
+        f"for template {config.template}, reseller {config.reseller_id}, shop {config.merchant_id}"
     )
     return number
 
@@ -335,7 +335,7 @@ async def _retry_call(
             id=str(uuid.uuid4()),
             reseller_id=lead.reseller_id,
             template=lead.template,
-            merchant_identifier=lead.merchant_identifier,
+            merchant_id=lead.merchant_id,
             next_attempt_at=next_attempt_at,
             payload=lead.payload,
             attempt_count=lead.attempt_count + 1,
@@ -466,7 +466,7 @@ async def process_backlog_leads():
                     continue
                 template = await get_template_by_merchant(
                     reseller_id=config.reseller_id,
-                    merchant_identifier=config.merchant_identifier,
+                    merchant_id=config.merchant_id,
                     name=config.template,
                 )
 
@@ -660,7 +660,7 @@ async def process_backlog_leads():
                         for number in retry_numbers:
                             if (
                                 number.reseller_id is None
-                                and number.merchant_identifier is None
+                                and number.merchant_id is None
                             ):
                                 if retry_calling_provider == CallProvider.EXOTEL:
                                     if (

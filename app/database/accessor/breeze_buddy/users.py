@@ -53,7 +53,7 @@ async def create_user(
     owner_id: Optional[str] = None,
     email: Optional[str] = None,
     reseller_ids: Optional[List[str]] = None,
-    merchant_identifiers: Optional[List[str]] = None,
+    merchant_ids: Optional[List[str]] = None,
     is_active: bool = True,
 ) -> Optional[UserResponse]:
     """Create a new user account (login account).
@@ -66,7 +66,7 @@ async def create_user(
         owner_id: ID of the user creating this account (None for top-level resellers)
         email: Optional email address
         reseller_ids: List of reseller IDs for access control
-        merchant_identifiers: List of merchant identifiers for access control
+        merchant_ids: List of merchant IDs for access control
         is_active: Whether account is active
 
     Returns:
@@ -76,8 +76,8 @@ async def create_user(
 
     if reseller_ids is None:
         reseller_ids = []
-    if merchant_identifiers is None:
-        merchant_identifiers = []
+    if merchant_ids is None:
+        merchant_ids = []
 
     query, values = create_user_query(
         id=id,
@@ -87,7 +87,7 @@ async def create_user(
         owner_id=owner_id,
         email=email,
         reseller_ids=reseller_ids,
-        merchant_identifiers=merchant_identifiers,
+        merchant_ids=merchant_ids,
         is_active=is_active,
     )
 
@@ -198,7 +198,7 @@ async def update_user(
     password: Optional[str] = None,
     email: Optional[str] = None,
     reseller_ids: Optional[List[str]] = None,
-    merchant_identifiers: Optional[List[str]] = None,
+    merchant_ids: Optional[List[str]] = None,
     is_active: Optional[bool] = None,
 ) -> Optional[UserResponse]:
     """Update user account (username and role cannot be changed).
@@ -208,7 +208,7 @@ async def update_user(
         password: New password (will be hashed)
         email: New email
         reseller_ids: New reseller IDs list
-        merchant_identifiers: New merchant identifiers list
+        merchant_ids: New merchant identifiers list
         is_active: New active status
 
     Returns:
@@ -221,7 +221,7 @@ async def update_user(
         password_hash=password_hash,
         email=email,
         reseller_ids=reseller_ids,
-        merchant_identifiers=merchant_identifiers,
+        merchant_ids=merchant_ids,
         is_active=is_active,
     )
 

@@ -39,7 +39,7 @@ def get_row_count(result: Optional[list[asyncpg.Record]]) -> int:
 
 async def get_template_by_merchant(
     reseller_id: str,
-    merchant_identifier: Optional[str] = None,
+    merchant_id: Optional[str] = None,
     name: Optional[str] = None,
     should_prioritize_merchant_specific: bool = True,
 ) -> Optional[TemplateModel]:
@@ -47,9 +47,7 @@ async def get_template_by_merchant(
     logger.info(f"Getting template by reseller: {reseller_id}")
 
     try:
-        query, values = get_template_by_merchant_query(
-            reseller_id, merchant_identifier, name
-        )
+        query, values = get_template_by_merchant_query(reseller_id, merchant_id, name)
         result = await run_parameterized_query(query, values)
 
         if result and get_row_count(result) > 0:
@@ -60,10 +58,10 @@ async def get_template_by_merchant(
                 logger.info(f"Template decoding failed for reseller: {reseller_id}")
             return decoded_result
 
-        # If no template found with merchant_identifier, retry with merchant_identifier=None
-        if merchant_identifier is not None and should_prioritize_merchant_specific:
+        # If no template found with merchant_id, retry with merchant_id=None
+        if merchant_id is not None and should_prioritize_merchant_specific:
             logger.info(
-                f"No template found with merchant_identifier: {merchant_identifier}, retrying with merchant_identifier=None"
+                f"No template found with merchant_id: {merchant_id}, retrying with merchant_id=None"
             )
             query, values = get_template_by_merchant_query(reseller_id, None, name)
             result = await run_parameterized_query(query, values)
@@ -72,7 +70,7 @@ async def get_template_by_merchant(
                 decoded_result = decode_template(result[0])
                 if decoded_result:
                     logger.info(
-                        f"Template found: {decoded_result.id} with flow structure (merchant_identifier=None)"
+                        f"Template found: {decoded_result.id} with flow structure (merchant_id=None)"
                     )
                 else:
                     logger.info(f"Template decoding failed for reseller: {reseller_id}")
@@ -89,7 +87,7 @@ async def get_template_by_merchant(
 async def create_template(
     template_id: str,
     reseller_id: str,
-    identifier: Optional[str],
+    merchant_id: Optional[str],
     name: str,
     flow: dict,
     expected_payload_schema: Optional[dict],
@@ -128,7 +126,7 @@ async def create_template(
         query, values = create_template_query(
             template_id,
             reseller_id,
-            identifier,
+            merchant_id,
             name,
             flow_json,
             expected_payload_schema_json,
@@ -162,19 +160,19 @@ async def get_templates_list(filters: Dict[str, Any]) -> List[TemplateMetadata]:
     """
     Get list of templates (metadata only, no flow) based on filters.
 
-    Implements fallback mechanism: if searching by merchant_identifier and no results found,
-    falls back to reseller-level (generic) templates where merchant_identifier IS NULL.
+    Implements fallback mechanism: if searching by merchant_id and no results found,
+    falls back to reseller-level (generic) templates where merchant_id IS NULL.
 
-    Auto-detects when reseller_id looks like a merchant_identifier (contains domain) and
+    Auto-detects when reseller_id looks like a merchant_id (contains domain) and
     resolves it to the actual parent reseller_id.
 
     Args:
         filters: Dictionary containing:
             - reseller_ids (optional): List of reseller IDs to filter by
-            - merchant_identifiers (optional): List of shop identifiers to filter by
+            - merchant_ids (optional): List of shop identifiers to filter by
             - is_active (optional): Filter by active status
             - reseller_id (optional): Single reseller ID to filter by
-            - merchant_identifier (optional): Single shop identifier to filter by
+            - merchant_id (optional): Single shop identifier to filter by
 
     Returns:
         List of TemplateMetadata objects
@@ -182,7 +180,7 @@ async def get_templates_list(filters: Dict[str, Any]) -> List[TemplateMetadata]:
     logger.info(f"Getting templates list with filters: {filters}")
 
     try:
-        # Auto-detect if reseller_id is actually a merchant_identifier (contains domain-like pattern)
+        # Auto-detect if reseller_id is actually a merchant_id (contains domain-like pattern)
         if "reseller_id" in filters and filters["reseller_id"]:
             reseller_id_value = filters["reseller_id"]
             # Check if it looks like a shop identifier (contains domain patterns)
@@ -190,10 +188,10 @@ async def get_templates_list(filters: Dict[str, Any]) -> List[TemplateMetadata]:
                 "myshopify.com" in reseller_id_value or "http" in reseller_id_value
             ):
                 logger.info(
-                    f"Detected reseller_id '{reseller_id_value}' looks like merchant_identifier, resolving to actual reseller_id from call_execution_config"
+                    f"Detected reseller_id '{reseller_id_value}' looks like merchant_id, resolving to actual reseller_id from call_execution_config"
                 )
 
-                # Look up the actual reseller_id for this merchant_identifier from call_execution_config table
+                # Look up the actual reseller_id for this merchant_id from call_execution_config table
                 lookup_query, lookup_values = (
                     get_reseller_id_by_merchant_identifier_from_config_query(
                         reseller_id_value
@@ -209,35 +207,33 @@ async def get_templates_list(filters: Dict[str, Any]) -> List[TemplateMetadata]:
                         f"Resolved shop '{reseller_id_value}' to reseller_id '{actual_reseller_id}'"
                     )
 
-                    # Update filters: move reseller_id to merchant_identifier and use resolved reseller_id
+                    # Update filters: move reseller_id to merchant_id and use resolved reseller_id
                     filters = {k: v for k, v in filters.items() if k != "reseller_id"}
                     filters["reseller_id"] = actual_reseller_id
-                    filters["merchant_identifier"] = reseller_id_value
+                    filters["merchant_id"] = reseller_id_value
                 else:
                     logger.warning(
-                        f"Could not resolve merchant_identifier '{reseller_id_value}' to reseller_id"
+                        f"Could not resolve merchant_id '{reseller_id_value}' to reseller_id"
                     )
                     # Continue with original filters, will likely return empty
 
         query, values = get_templates_list_query(filters)
         result = await run_parameterized_query(query, values)
 
-        # If no results found and we're filtering by merchant_identifier, try fallback to generic templates
-        if not result and (
-            "merchant_identifier" in filters or "merchant_identifiers" in filters
-        ):
+        # If no results found and we're filtering by merchant_id, try fallback to generic templates
+        if not result and ("merchant_id" in filters or "merchant_ids" in filters):
             logger.info(
-                "No shop-specific templates found, falling back to generic reseller templates (merchant_identifier IS NULL)"
+                "No shop-specific templates found, falling back to generic reseller templates (merchant_id IS NULL)"
             )
 
-            # Create fallback filters without merchant_identifier
+            # Create fallback filters without merchant_id
             fallback_filters = {
                 k: v
                 for k, v in filters.items()
-                if k not in ["merchant_identifier", "merchant_identifiers"]
+                if k not in ["merchant_id", "merchant_ids"]
             }
 
-            # Query for generic templates (merchant_identifier IS NULL)
+            # Query for generic templates (merchant_id IS NULL)
             query, values = get_templates_list_query(fallback_filters)
             result = await run_parameterized_query(query, values)
 
@@ -252,7 +248,7 @@ async def get_templates_list(filters: Dict[str, Any]) -> List[TemplateMetadata]:
                 TemplateMetadata(
                     id=str(row["id"]),  # Convert UUID to string
                     reseller_id=row["reseller_id"],
-                    merchant_identifier=row.get("merchant_identifier"),
+                    merchant_id=row.get("merchant_id"),
                     name=row["name"],
                     is_active=row["is_active"],
                     created_at=row["created_at"],
@@ -310,7 +306,7 @@ async def replace_template(
     secrets: Optional[dict],
     outbound_number_id: Optional[str],
     is_active: bool,
-    merchant_identifier: Optional[str],
+    merchant_id: Optional[str],
     now,
 ) -> Optional[TemplateModel]:
     """
@@ -326,7 +322,7 @@ async def replace_template(
         secrets: Secrets and variables for HTTP functions (optional, set to NULL if not provided)
         outbound_number_id: Outbound number ID (optional, set to NULL if not provided)
         is_active: Whether template is active (required)
-        merchant_identifier: Shop identifier (optional, set to NULL if not provided)
+        merchant_id: Shop identifier (optional, set to NULL if not provided)
         now: Current timestamp
 
     Returns:
@@ -366,7 +362,7 @@ async def replace_template(
             secrets_json,
             outbound_number_id,
             is_active,
-            merchant_identifier,
+            merchant_id,
             now,
         )
 
@@ -481,7 +477,7 @@ async def delete_template_if_not_referenced(
             deleted = TemplateMetadata(
                 id=str(row["id"]),
                 reseller_id=row["reseller_id"],
-                merchant_identifier=row.get("merchant_identifier"),
+                merchant_id=row.get("merchant_id"),
                 name=row["name"],
                 is_active=row["is_active"],
                 created_at=row["created_at"],

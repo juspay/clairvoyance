@@ -260,7 +260,7 @@ async def get_inbound_count_from_db(
     allowed_group_by_fields = {
         "template",
         "reseller_id",
-        "merchant_identifier",
+        "merchant_id",
     }
     if group_by and group_by not in allowed_group_by_fields:
         logger.warning(
@@ -363,14 +363,14 @@ async def get_lead_status_counts_from_db(
 ) -> Dict[str, Any]:
     """
     Get lead status counts with pagination and search.
-    Always groups by reseller and merchant_identifier, sorted by total_count DESC.
+    Always groups by reseller and merchant, sorted by total_count DESC.
 
     Args:
-        filters: Analytics filters (merchant_identifier, reseller_ids, date range, etc.)
+        filters: Analytics filters (merchant_ids, reseller_ids, date range, etc.)
         page: Page number (1-indexed)
         limit: Number of rows per page
         search_reseller_id: Partial reseller_id to search for (case-insensitive)
-        search_merchant_identifier: Partial merchant_identifier to search for (case-insensitive)
+        search_merchant_identifier: Partial merchant_id to search for (case-insensitive)
 
     Returns:
         Dict with 'results' (list of counts) and 'pagination' (total, page, limit, total_pages)

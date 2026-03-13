@@ -34,10 +34,10 @@ class AnalyticsFilters(BaseModel):
         None, description="Filter by template name (e.g., 'order-confirmation')"
     )
     # New field names
-    merchant_identifier: Optional[str] = Field(
+    merchant_id: Optional[str] = Field(
         None, description="Filter by single merchant identifier"
     )
-    merchant_identifiers: Optional[List[str]] = Field(
+    merchant_ids: Optional[List[str]] = Field(
         None, description="Filter by multiple merchant identifiers"
     )
     reseller_id: Optional[str] = Field(None, description="Filter by reseller ID")
@@ -80,7 +80,7 @@ class AnalyticsOptions(BaseModel):
     limit: int = Field(default=50, ge=1, le=1000, description="Items per page")
     group_by: Optional[str] = Field(
         None,
-        description="Group results by field (template, merchant_identifier, date, etc.)",
+        description="Group results by field (template, merchant_id, date, etc.)",
     )
     time_granularity: Optional[TimeGranularity] = Field(
         None,
@@ -134,7 +134,7 @@ class CallDetailResult(BaseModel):
     order_id: Optional[str] = None
     template: str
     reseller_id: str
-    merchant_identifier: Optional[str] = None
+    merchant_id: Optional[str] = None
     shop_name: Optional[str] = None
     customer_name: Optional[str] = None
     customer_phone: Optional[str] = None
@@ -185,7 +185,7 @@ class LeadStatusCountResult(BaseModel):
     reseller_id: Optional[str] = Field(
         None, description="Reseller ID (null for aggregate/total)"
     )
-    merchant_identifier: Optional[str] = Field(
+    merchant_id: Optional[str] = Field(
         None, description="Merchant identifier (if available)"
     )
     backlog_count: int = Field(

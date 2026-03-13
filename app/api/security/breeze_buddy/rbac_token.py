@@ -30,7 +30,7 @@ class BreezeBuddyRBACTokenManager:
         username: str,
         role: UserRole,
         reseller_ids: List[str],
-        merchant_identifiers: List[str],
+        merchant_ids: List[str],
         email: Optional[str] = None,
         owner_id: Optional[str] = None,
         expires_delta: Optional[timedelta] = None,
@@ -43,7 +43,7 @@ class BreezeBuddyRBACTokenManager:
             username: Username
             role: User's role (admin, reseller, merchant, shop)
             reseller_ids: List of accessible merchant IDs (["*"] for all merchants)
-            merchant_identifiers: List of accessible shop identifiers (["*"] for all shops under the merchant(s))
+            merchant_ids: List of accessible shop identifiers (["*"] for all shops under the merchant(s))
             email: User's email (optional)
             expires_delta: Optional custom expiration time
 
@@ -60,7 +60,7 @@ class BreezeBuddyRBACTokenManager:
             "role": role.value if isinstance(role, UserRole) else role,
             "email": email,
             "reseller_ids": reseller_ids,
-            "merchant_identifiers": merchant_identifiers,
+            "merchant_ids": merchant_ids,
             "permissions": permissions,
             "owner_id": owner_id,
         }
@@ -121,14 +121,14 @@ class BreezeBuddyRBACTokenManager:
                 role=UserRole(role_str),
                 email=payload.get("email"),
                 reseller_ids=payload.get("reseller_ids", []),
-                merchant_identifiers=payload.get("merchant_identifiers", []),
+                merchant_ids=payload.get("merchant_ids", []),
                 permissions=payload.get("permissions", []),
                 owner_id=payload.get("owner_id"),
             )
 
             logger.info(
                 f"RBAC token verified for user: {user_info.username} "
-                f"(role: {user_info.role}, resellers: {user_info.reseller_ids}, shops: {user_info.merchant_identifiers})"
+                f"(role: {user_info.role}, resellers: {user_info.reseller_ids}, shops: {user_info.merchant_ids})"
             )
             return user_info
 

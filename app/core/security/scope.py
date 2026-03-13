@@ -1,7 +1,7 @@
 """
 Scope resolution utilities for RBAC wildcard handling.
 
-Resolves wildcard ["*"] in reseller_ids and merchant_identifiers
+Resolves wildcard ["*"] in reseller_ids and merchant_ids
 by walking the owner chain to determine effective access scope.
 
 Role hierarchy: admin > reseller > merchant > user
@@ -18,34 +18,34 @@ from app.schemas import UserInfo, UserRole
 
 
 async def _get_merchant_identifiers_by_reseller(reseller_id: str) -> List[str]:
-    """Fetch all merchant_identifiers under a reseller from the database."""
+    """Fetch all merchant_ids under a reseller from the database."""
 
     merchants, _ = await get_merchants_by_reseller(reseller_id, page=1, limit=1000)
-    return [m.merchant_identifier for m in merchants]
+    return [m.merchant_id for m in merchants]
 
 
 async def _resolve_user_scopes(
     reseller_ids: List[str],
-    merchant_identifiers: List[str],
+    merchant_ids: List[str],
     owner_id: Optional[str],
     username: str,
     depth: int = 0,
 ) -> Optional[List[str]]:
-    """Resolve effective merchant_identifiers by walking the owner chain.
+    """Resolve effective merchant_ids by walking the owner chain.
 
     Tries to resolve from the user's own scopes first. If wildcards are present,
     walks up the owner chain to inherit the creator's scope.
 
     Args:
         reseller_ids: User's reseller_ids (references users.id of reseller accounts)
-        merchant_identifiers: User's merchant_identifiers
+        merchant_ids: User's merchant_ids
         owner_id: User's owner_id (who created them — references users.id)
         username: For logging
         depth: Current chain depth (max 3 to prevent infinite loops)
 
     Returns:
         None only if an admin is reached (truly unrestricted)
-        List of specific merchant_identifiers otherwise
+        List of specific merchant_ids otherwise
     """
     if depth > 3:
         logger.warning(
@@ -53,11 +53,11 @@ async def _resolve_user_scopes(
         )
         return []
 
-    has_merchant_wildcard = "*" in merchant_identifiers
+    has_merchant_wildcard = "*" in merchant_ids
 
     # Case: No wildcard in merchants → return as-is
     if not has_merchant_wildcard:
-        return merchant_identifiers if merchant_identifiers else []
+        return merchant_ids if merchant_ids else []
 
     # Case: Wildcard merchants → walk up the owner chain to find scope
     if not owner_id:
@@ -82,21 +82,21 @@ async def _resolve_user_scopes(
 
     # Owner is reseller → query merchants they own (by their users.id)
     if owner.role == UserRole.RESELLER:
-        if "*" not in (owner.merchant_identifiers or []):
-            # Owner has specific merchant_identifiers → use them
-            return owner.merchant_identifiers or []
+        if "*" not in (owner.merchant_ids or []):
+            # Owner has specific merchant_ids → use them
+            return owner.merchant_ids or []
         # Owner also has wildcard → query merchants owned by this reseller
         merchants = await _get_merchant_identifiers_by_reseller(owner.id)
         return merchants if merchants else []
 
-    # Owner is merchant → use owner's merchant_identifiers if specific
-    if "*" not in (owner.merchant_identifiers or []):
-        return owner.merchant_identifiers or []
+    # Owner is merchant → use owner's merchant_ids if specific
+    if "*" not in (owner.merchant_ids or []):
+        return owner.merchant_ids or []
 
     # Owner also has wildcard → recurse up the chain
     return await _resolve_user_scopes(
         reseller_ids=owner.reseller_ids or [],
-        merchant_identifiers=owner.merchant_identifiers or [],
+        merchant_ids=owner.merchant_ids or [],
         owner_id=owner.owner_id,
         username=f"{username}->owner:{owner.username}",
         depth=depth + 1,
@@ -104,15 +104,15 @@ async def _resolve_user_scopes(
 
 
 async def resolve_merchant_ids(user: UserInfo) -> Optional[List[str]]:
-    """Resolve effective merchant_identifiers for a user, handling wildcard ["*"].
+    """Resolve effective merchant_ids for a user, handling wildcard ["*"].
 
     Returns:
         None if user has unrestricted access (admin is in the owner chain)
-        List of specific merchant_identifiers otherwise
+        List of specific merchant_ids otherwise
 
     Resolution rules (hierarchical):
     1. Admin: always returns None (unrestricted)
-    2. Specific merchant_identifiers (no wildcard): return as-is
+    2. Specific merchant_ids (no wildcard): return as-is
     3. Specific reseller_ids + wildcard merchants: resolve from DB
     4. Both wildcards: walk owner chain until a non-wildcard scope or admin is found
 
@@ -126,9 +126,9 @@ async def resolve_merchant_ids(user: UserInfo) -> Optional[List[str]]:
         return None  # Admin always unrestricted
 
     reseller_ids = user.reseller_ids or []
-    merchant_ids = user.merchant_identifiers or []
+    merchant_ids = user.merchant_ids or []
 
-    # If no wildcards in merchant_identifiers, return directly
+    # If no wildcards in merchant_ids, return directly
     if "*" not in merchant_ids:
         return merchant_ids if merchant_ids else []
 
@@ -142,7 +142,7 @@ async def resolve_merchant_ids(user: UserInfo) -> Optional[List[str]]:
     # Merchant/User with wildcard → walk owner chain
     return await _resolve_user_scopes(
         reseller_ids=reseller_ids,
-        merchant_identifiers=merchant_ids,
+        merchant_ids=merchant_ids,
         owner_id=user.owner_id,
         username=user.username,
     )

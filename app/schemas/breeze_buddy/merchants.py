@@ -13,7 +13,7 @@ class MerchantCreate(BaseModel):
     - Reseller: reseller_id is auto-set to their own user ID
     """
 
-    merchant_identifier: str = Field(
+    merchant_id: str = Field(
         ...,
         min_length=3,
         max_length=100,
@@ -32,7 +32,7 @@ class MerchantCreate(BaseModel):
 
 
 class MerchantUpdate(BaseModel):
-    """Update a merchant entity. merchant_identifier cannot be changed."""
+    """Update a merchant entity. merchant_id cannot be changed."""
 
     name: Optional[str] = Field(None, max_length=255)
     description: Optional[str] = None
@@ -45,7 +45,7 @@ class MerchantUpdate(BaseModel):
 class MerchantResponse(BaseModel):
     """Merchant entity response."""
 
-    merchant_identifier: str
+    merchant_id: str
     name: Optional[str] = None
     description: Optional[str] = None
     is_active: bool = True

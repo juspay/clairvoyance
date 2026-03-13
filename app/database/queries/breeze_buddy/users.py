@@ -32,7 +32,7 @@ async def get_user_by_username(username: str) -> Optional[UserInDB]:
             role,
             email,
             reseller_ids,
-            merchant_identifiers,
+            merchant_ids,
             is_active,
             owner_id,
             created_at,
@@ -59,10 +59,10 @@ async def get_user_by_username(username: str) -> Optional[UserInDB]:
                     if isinstance(row["reseller_ids"], list)
                     else json.loads(row["reseller_ids"])
                 ),
-                merchant_identifiers=(
-                    row["merchant_identifiers"]
-                    if isinstance(row["merchant_identifiers"], list)
-                    else json.loads(row["merchant_identifiers"])
+                merchant_ids=(
+                    row["merchant_ids"]
+                    if isinstance(row["merchant_ids"], list)
+                    else json.loads(row["merchant_ids"])
                 ),
                 is_active=row["is_active"],
                 owner_id=str(row["owner_id"]) if row.get("owner_id") else None,
@@ -89,21 +89,21 @@ def create_user_query(
     owner_id: Optional[str] = None,
     email: Optional[str] = None,
     reseller_ids: Optional[List[str]] = None,
-    merchant_identifiers: Optional[List[str]] = None,
+    merchant_ids: Optional[List[str]] = None,
     is_active: bool = True,
 ) -> Tuple[str, List[Any]]:
     """Generate query to create a new user account."""
     if reseller_ids is None:
         reseller_ids = []
-    if merchant_identifiers is None:
-        merchant_identifiers = []
+    if merchant_ids is None:
+        merchant_ids = []
 
     query = """
         INSERT INTO users (
-            id, username, password_hash, role, email, reseller_ids, merchant_identifiers,
+            id, username, password_hash, role, email, reseller_ids, merchant_ids,
             is_active, owner_id, created_at, updated_at
         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-        RETURNING id, username, role, email, reseller_ids, merchant_identifiers,
+        RETURNING id, username, role, email, reseller_ids, merchant_ids,
                   is_active, owner_id, created_at, updated_at
     """
 
@@ -115,7 +115,7 @@ def create_user_query(
         role,
         email,
         json.dumps(reseller_ids),
-        json.dumps(merchant_identifiers),
+        json.dumps(merchant_ids),
         is_active,
         owner_id,
         now,
@@ -168,7 +168,7 @@ def get_all_users_query(
         param_idx += 1
 
     if merchant_identifier_filter:
-        where_conditions.append(f"merchant_identifiers ? ${param_idx}")
+        where_conditions.append(f"merchant_ids ? ${param_idx}")
         params.append(merchant_identifier_filter)
         param_idx += 1
 
@@ -182,11 +182,11 @@ def get_all_users_query(
         params.append(is_active_filter)
         param_idx += 1
 
-    # RBAC filtering - filter by merchant_identifiers column
+    # RBAC filtering - filter by merchant_ids column
     # allowed_merchant_ids comes from resolve_merchant_ids() which already
-    # resolves reseller_ids → merchant_identifiers hierarchically
+    # resolves reseller_ids → merchant_ids hierarchically
     if allowed_merchant_ids is not None and "*" not in allowed_merchant_ids:
-        where_conditions.append(f"merchant_identifiers ?| ${param_idx}")
+        where_conditions.append(f"merchant_ids ?| ${param_idx}")
         params.append(allowed_merchant_ids)
         param_idx += 1
 
@@ -210,7 +210,7 @@ def get_all_users_query(
 
     # Build queries
     query = f"""
-        SELECT id, username, role, email, reseller_ids, merchant_identifiers,
+        SELECT id, username, role, email, reseller_ids, merchant_ids,
                is_active, owner_id, created_at, updated_at
         FROM users
         {where_clause}
@@ -228,7 +228,7 @@ def get_all_users_query(
 def get_user_by_id_query(user_id: str) -> Tuple[str, List[Any]]:
     """Generate query to get user account by ID."""
     query = """
-        SELECT id, username, role, email, reseller_ids, merchant_identifiers,
+        SELECT id, username, role, email, reseller_ids, merchant_ids,
                is_active, owner_id, created_at, updated_at
         FROM users
         WHERE id = $1
@@ -241,7 +241,7 @@ def update_user_query(
     password_hash: Optional[str] = None,
     email: Optional[str] = None,
     reseller_ids: Optional[List[str]] = None,
-    merchant_identifiers: Optional[List[str]] = None,
+    merchant_ids: Optional[List[str]] = None,
     is_active: Optional[bool] = None,
 ) -> Tuple[str, List[Any]]:
     """Generate query to update user account.
@@ -268,9 +268,9 @@ def update_user_query(
         params.append(json.dumps(reseller_ids))
         param_idx += 1
 
-    if merchant_identifiers is not None:
-        set_clauses.append(f"merchant_identifiers = ${param_idx}")
-        params.append(json.dumps(merchant_identifiers))
+    if merchant_ids is not None:
+        set_clauses.append(f"merchant_ids = ${param_idx}")
+        params.append(json.dumps(merchant_ids))
         param_idx += 1
 
     if is_active is not None:
@@ -291,7 +291,7 @@ def update_user_query(
         UPDATE users
         SET {', '.join(set_clauses)}
         WHERE id = ${param_idx}
-        RETURNING id, username, role, email, reseller_ids, merchant_identifiers,
+        RETURNING id, username, role, email, reseller_ids, merchant_ids,
                   is_active, owner_id, created_at, updated_at
     """
 

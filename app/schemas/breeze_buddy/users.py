@@ -34,7 +34,7 @@ class UserCreate(BaseModel):
         default_factory=list,
         description="List of reseller IDs for access control. Used for reseller role",
     )
-    merchant_identifiers: List[str] = Field(
+    merchant_ids: List[str] = Field(
         default_factory=list,
         description="List of merchant identifiers for access control. Required for merchant/user roles",
     )
@@ -54,7 +54,7 @@ class UserUpdate(BaseModel):
     password: Optional[str] = Field(None, min_length=8, description="New password")
     email: Optional[str] = Field(None, description="Email address")
     reseller_ids: Optional[List[str]] = Field(None, description="Updated reseller IDs")
-    merchant_identifiers: Optional[List[str]] = Field(
+    merchant_ids: Optional[List[str]] = Field(
         None, description="Updated merchant identifiers"
     )
     is_active: Optional[bool] = Field(None, description="Account status")
@@ -68,7 +68,7 @@ class UserResponse(BaseModel):
     email: Optional[str] = None
     role: UserRole
     reseller_ids: List[str] = Field(default_factory=list)
-    merchant_identifiers: List[str] = Field(default_factory=list)
+    merchant_ids: List[str] = Field(default_factory=list)
     is_active: bool = True
     owner_id: Optional[str] = None
     created_at: Optional[datetime] = None

@@ -145,7 +145,7 @@ class LeadCallTracker(BaseModel):
     outbound_number_id: Optional[str] = None
     reseller_id: str
     template: str
-    merchant_identifier: Optional[str] = None
+    merchant_id: Optional[str] = None
     request_id: Optional[str] = None
     attempt_count: int = 0
     next_attempt_at: Optional[datetime] = None
@@ -174,7 +174,7 @@ class CreateOutboundNumberRequest(BaseModel):
     status: OutboundNumberStatus = OutboundNumberStatus.AVAILABLE
     maximum_channels: Optional[int] = None
     reseller_id: Optional[str] = None
-    merchant_identifier: Optional[str] = None
+    merchant_id: Optional[str] = None
 
 
 class OutboundNumber(BaseModel):
@@ -187,7 +187,7 @@ class OutboundNumber(BaseModel):
     channels: Optional[int] = None
     maximum_channels: Optional[int] = None
     reseller_id: Optional[str] = None
-    merchant_identifier: Optional[str] = None
+    merchant_id: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
@@ -214,7 +214,7 @@ class CreateCallExecutionConfigRequest(BaseModel):
     calling_provider: CallProvider
     reseller_id: str
     template: str
-    merchant_identifier: Optional[str] = None
+    merchant_id: Optional[str] = None
     enable_international_call: bool = True
     enable_calling: Optional[bool] = True
     enable_inbound: Optional[bool] = True
@@ -260,7 +260,7 @@ class UpdateCallExecutionConfigRequest(BaseModel):
 
     reseller_id: str
     template: str
-    merchant_identifier: Optional[str] = None
+    merchant_id: Optional[str] = None
     initial_offset: Optional[int] = None
     retry_offset: Optional[int] = None
     call_start_time: Optional[time] = None
@@ -321,7 +321,7 @@ class CallExecutionConfig(BaseModel):
     calling_provider: CallProvider
     reseller_id: str
     template: str
-    merchant_identifier: Optional[str] = None
+    merchant_id: Optional[str] = None
     enable_international_call: bool = True
     enable_calling: bool = True
     enable_inbound: bool = True

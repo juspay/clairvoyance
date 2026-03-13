@@ -138,7 +138,7 @@ async def get_current_user_info(
             "role": "merchant",
             "email": "user@example.com",
             "reseller_ids": ["merchant_123"],
-            "merchant_identifiers": ["shop_456", "shop_789"],
+            "merchant_ids": ["shop_456", "shop_789"],
             "permissions": ["read:leads", "write:leads", ...]
         }
 
