@@ -81,7 +81,7 @@ def mask_template_secrets(template: TemplateModel) -> TemplateModel:
     return TemplateModel(
         id=template.id,
         reseller_id=template.reseller_id,
-        merchant_identifier=template.merchant_identifier,
+        merchant_id=template.merchant_id,
         name=template.name,
         flow=template.flow,
         expected_payload_schema=template.expected_payload_schema,

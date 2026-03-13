@@ -22,7 +22,7 @@ def insert_call_execution_config_query(
     calling_provider: CallProvider,
     reseller_id: str,
     template: str,
-    merchant_identifier: Optional[str],
+    merchant_id: Optional[str],
     enable_international_call: bool,
     enable_calling: bool = True,
     enable_inbound: bool = True,
@@ -63,7 +63,7 @@ def insert_call_execution_config_query(
             "reseller_id",
             "template",
             "template_id",
-            "merchant_identifier",
+            "merchant_id",
             "enable_international_call",
             "enable_calling",
             "enable_inbound",
@@ -97,7 +97,7 @@ def insert_call_execution_config_query(
         reseller_id,
         template,
         template_id,
-        merchant_identifier,
+        merchant_id,
         enable_international_call,
         enable_calling,
         enable_inbound,
@@ -123,19 +123,19 @@ def insert_call_execution_config_query(
 
 def get_call_execution_config_by_merchant_id_query(
     reseller_id: str,
-    merchant_identifier: Optional[str],
+    merchant_id: Optional[str],
 ) -> Tuple[str, List[Any]]:
     """
     Generate query to get call execution config by reseller ID and shop identifier.
     """
-    if merchant_identifier:
+    if merchant_id:
         text = f"""
             SELECT *
             FROM "{CALL_EXECUTION_CONFIG_TABLE}" 
             WHERE reseller_id = $1 
-            AND merchant_identifier = $2;
+            AND merchant_id = $2;
         """
-        values: List[Any] = [reseller_id, merchant_identifier]
+        values: List[Any] = [reseller_id, merchant_id]
     else:
         text = f"""
             SELECT *
@@ -182,7 +182,7 @@ def delete_call_execution_config_query(config_id: str) -> Tuple[str, List[Any]]:
 def update_call_execution_config_query(
     reseller_id: str,
     template: str,
-    merchant_identifier: Optional[str] = None,
+    merchant_id: Optional[str] = None,
     initial_offset: Optional[int] = None,
     retry_offset: Optional[int] = None,
     call_start_time: Optional[time] = None,
@@ -208,7 +208,7 @@ def update_call_execution_config_query(
     telephony_config: Optional[str] = None,
 ) -> Tuple[str, List[Any]]:
     """
-    Generate query to update call execution config record based on reseller_id, template, and merchant_identifier.
+    Generate query to update call execution config record based on reseller_id, template, and merchant_id.
     Only updates fields that are provided (not None).
     """
     updates = []
@@ -283,7 +283,7 @@ def update_call_execution_config_query(
     values.append(datetime.now())
     param_count += 1
 
-    # Build WHERE clause based on reseller_id, template, and merchant_identifier
+    # Build WHERE clause based on reseller_id, template, and merchant_id
     values.append(reseller_id)
     reseller_id_param = param_count
     param_count += 1
@@ -292,12 +292,12 @@ def update_call_execution_config_query(
     template_param = param_count
     param_count += 1
 
-    if merchant_identifier:
-        values.append(merchant_identifier)
+    if merchant_id:
+        values.append(merchant_id)
         merchant_identifier_param = param_count
-        where_clause = f'reseller_id = ${reseller_id_param} AND "template" = ${template_param} AND merchant_identifier = ${merchant_identifier_param}'
+        where_clause = f'reseller_id = ${reseller_id_param} AND "template" = ${template_param} AND merchant_id = ${merchant_identifier_param}'
     else:
-        where_clause = f'reseller_id = ${reseller_id_param} AND "template" = ${template_param} AND merchant_identifier IS NULL'
+        where_clause = f'reseller_id = ${reseller_id_param} AND "template" = ${template_param} AND merchant_id IS NULL'
 
     text = f"""
         UPDATE "{CALL_EXECUTION_CONFIG_TABLE}"
@@ -312,13 +312,13 @@ def update_call_execution_config_query(
 def calling_activation_for_merchant_query(
     enable_calling: bool,
     reseller_id: Optional[str] = None,
-    merchant_identifier: Optional[str] = None,
+    merchant_id: Optional[str] = None,
 ) -> Tuple[str, List[Any]]:
     """
     Generate query to toggle enable_calling for configs.
     - If reseller_id is None: All configs across all resellers are updated
-    - If reseller_id is provided but merchant_identifier is None: All configs for that reseller are updated
-    - If both reseller_id and merchant_identifier are provided: Only that specific config is updated
+    - If reseller_id is provided but merchant_id is None: All configs for that reseller are updated
+    - If both reseller_id and merchant_id are provided: Only that specific config is updated
     """
     values: List[Any] = [enable_calling, datetime.now()]
 
@@ -329,17 +329,17 @@ def calling_activation_for_merchant_query(
             SET "enable_calling" = $1, "updated_at" = $2
             RETURNING *;
         """
-    elif merchant_identifier:
+    elif merchant_id:
         # Update specific shop for specific reseller
         text = f"""
             UPDATE "{CALL_EXECUTION_CONFIG_TABLE}"
             SET "enable_calling" = $1, "updated_at" = $2
             WHERE reseller_id = $3 
-            AND merchant_identifier = $4
+            AND merchant_id = $4
             RETURNING *;
         """
         values.append(reseller_id)
-        values.append(merchant_identifier)
+        values.append(merchant_id)
     else:
         # Update all configs for specific reseller
         text = f"""
@@ -355,34 +355,34 @@ def calling_activation_for_merchant_query(
 
 def get_all_merchants_query() -> Tuple[str, List[Any]]:
     """
-    Generate query to get all unique resellers (merchant_identifiers).
+    Generate query to get all unique resellers (merchant_ids).
 
-    Returns all unique merchant_identifier values from call_execution_config.
-    Each merchant_identifier represents a distinct reseller in the system.
+    Returns all unique merchant_id values from call_execution_config.
+    Each merchant_id represents a distinct reseller in the system.
 
     Returns:
         Tuple of (query string, empty values list)
     """
     query = f"""
-        SELECT DISTINCT merchant_identifier
+        SELECT DISTINCT merchant_id
         FROM {CALL_EXECUTION_CONFIG_TABLE}
-        WHERE merchant_identifier IS NOT NULL
-        ORDER BY merchant_identifier ASC
+        WHERE merchant_id IS NOT NULL
+        ORDER BY merchant_id ASC
     """
 
     return query, []
 
 
 def get_reseller_id_by_merchant_identifier_from_config_query(
-    merchant_identifier: str,
+    merchant_id: str,
 ) -> Tuple[str, List[Any]]:
     """
-    Generate query to get reseller_id for a given merchant_identifier from call_execution_config.
+    Generate query to get reseller_id for a given merchant_id from call_execution_config.
 
     Looks up the parent reseller_id for a shop from call execution config table.
 
     Args:
-        merchant_identifier: Shop identifier to look up
+        merchant_id: Shop identifier to look up
 
     Returns:
         Tuple of (query string, values list)
@@ -390,8 +390,8 @@ def get_reseller_id_by_merchant_identifier_from_config_query(
     query = f"""
         SELECT DISTINCT reseller_id
         FROM {CALL_EXECUTION_CONFIG_TABLE}
-        WHERE merchant_identifier = $1
+        WHERE merchant_id = $1
         LIMIT 1
     """
 
-    return query, [merchant_identifier]
+    return query, [merchant_id]

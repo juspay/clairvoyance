@@ -507,7 +507,7 @@ class Agent:
         redirect_number = redirect_info.get("redirect_number")
         block_message = redirect_info.get("message")
         reseller_id = redirect_info.get("reseller_id")
-        merchant_identifier = redirect_info.get("merchant_identifier")
+        merchant_id = redirect_info.get("merchant_id")
 
         logger.info(
             f"[BLOCK_REDIRECT] Call {self.call_sid} blocked with redirect to {redirect_number}"
@@ -530,7 +530,7 @@ class Agent:
             await set_transfer_flag(
                 call_sid=self.call_sid,
                 reseller_id=reseller_id or "",
-                merchant_identifier=merchant_identifier or "",
+                merchant_id=merchant_id or "",
                 transfer_number=redirect_number,
             )
 

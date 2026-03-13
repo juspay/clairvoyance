@@ -109,7 +109,7 @@ async def resolve_call_templates(
         logger.info(f"[Answer] Outbound call detected, lead: {lead.id}")
         template = await get_template_by_merchant(
             reseller_id=lead.reseller_id,
-            merchant_identifier=lead.merchant_identifier,
+            merchant_id=lead.merchant_id,
             name=lead.template,
         )
         if not template:
@@ -119,7 +119,7 @@ async def resolve_call_templates(
         return {
             "is_outbound": True,
             "template_id": str(template.id),
-            "merchant_id": lead.reseller_id,
+            "reseller_id": lead.reseller_id,
         }
 
     # Inbound call - look up templates by outbound number
@@ -185,7 +185,7 @@ async def resolve_call_templates(
         "voice_name": voice_name,
         "ivr_greeting": ivr_greeting,
         "ivr_goodbye": ivr_goodbye,
-        "merchant_id": first_template.reseller_id if first_template else None,
+        "reseller_id": first_template.reseller_id if first_template else None,
     }
 
 
@@ -531,14 +531,12 @@ async def handle_provider_answer(request: Request, provider: str) -> Response:
     if not result.get("is_outbound"):
         templates = result.get("templates", [])
         is_ivr_mode = len(templates) > 1
-        merchant_id = result.get("merchant_id")
+        reseller_id = result.get("reseller_id")
 
-        if merchant_id:
-            merchant_identifier = (
-                templates[0].merchant_identifier if templates else None
-            )
+        if reseller_id:
+            merchant_id = templates[0].merchant_id if templates else None
             configs = await get_call_execution_config_by_merchant_id(
-                merchant_id, merchant_identifier
+                reseller_id, merchant_id
             )
             config_map = {c.template: c for c in configs}
 
@@ -584,8 +582,8 @@ async def handle_provider_answer(request: Request, provider: str) -> Response:
                         from_number=from_number,
                         to_number=to_number,
                         provider=provider,
-                        reseller_id=merchant_id,
-                        merchant_identifier=merchant_identifier,
+                        reseller_id=reseller_id,
+                        merchant_id=merchant_id,
                         template_name=templates[0].name if templates else "unknown",
                         template_id=str(templates[0].id) if templates else None,
                         outbound_number_id=(
@@ -612,8 +610,8 @@ async def handle_provider_answer(request: Request, provider: str) -> Response:
                         call_sid=call_id,
                         redirect_number=block_redirect or "",
                         message=block_message,
-                        reseller_id=merchant_id,
-                        merchant_identifier=merchant_identifier,
+                        reseller_id=reseller_id,
+                        merchant_id=merchant_id,
                     )
                     ws_url = _build_websocket_url(
                         provider,

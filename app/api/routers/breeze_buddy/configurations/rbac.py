@@ -14,7 +14,7 @@ from app.schemas import UserInfo
 def validate_config_access(
     current_user: UserInfo,
     reseller_id: Optional[str],
-    merchant_identifier: Optional[str],
+    merchant_id: Optional[str],
     operation: str = "access",
 ) -> None:
     """
@@ -23,7 +23,7 @@ def validate_config_access(
     Args:
         current_user: Current authenticated user with RBAC info
         reseller_id: Reseller ID to validate access for
-        merchant_identifier: Shop identifier to validate access for (optional)
+        merchant_id: Shop identifier to validate access for (optional)
         operation: Operation being performed (for logging)
 
     Raises:
@@ -47,19 +47,19 @@ def validate_config_access(
             detail=f"Access denied to reseller {reseller_id}",
         )
 
-    # Check merchant identifier access (only if merchant_identifier is provided)
+    # Check merchant identifier access (only if merchant_id is provided)
     if (
-        merchant_identifier
-        and merchant_identifier not in current_user.merchant_identifiers
-        and "*" not in current_user.merchant_identifiers
+        merchant_id
+        and merchant_id not in current_user.merchant_ids
+        and "*" not in current_user.merchant_ids
     ):
         logger.warning(
             f"User {current_user.username} attempted to {operation} configuration "
-            f"for unauthorized merchant: {merchant_identifier}"
+            f"for unauthorized merchant: {merchant_id}"
         )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"Access denied to merchant {merchant_identifier}",
+            detail=f"Access denied to merchant {merchant_id}",
         )
 
 
@@ -78,19 +78,19 @@ def filter_configs_by_rbac(configs: List, current_user: UserInfo) -> List:
     if current_user.role == "admin":
         return configs
 
-    if "*" in current_user.reseller_ids and "*" in current_user.merchant_identifiers:
+    if "*" in current_user.reseller_ids and "*" in current_user.merchant_ids:
         return configs
 
     filtered = []
     for config in configs:
         # Support both new and old field names for config
         config_reseller_id = config.reseller_id
-        config_merchant_identifier = config.merchant_identifier
+        config_merchant_id = config.merchant_id
         has_reseller_access = ("*" in current_user.reseller_ids) or (
             config_reseller_id in current_user.reseller_ids
         )
-        has_merchant_access = ("*" in current_user.merchant_identifiers) or (
-            config_merchant_identifier in current_user.merchant_identifiers
+        has_merchant_access = ("*" in current_user.merchant_ids) or (
+            config_merchant_id in current_user.merchant_ids
         )
         if has_reseller_access and has_merchant_access:
             filtered.append(config)

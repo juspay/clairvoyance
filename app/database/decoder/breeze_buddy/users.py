@@ -22,7 +22,7 @@ def decode_user(row) -> UserResponse:
         email=row.get("email"),
         role=UserRole(row["role"]),
         reseller_ids=parse_json_field(row.get("reseller_ids")),
-        merchant_identifiers=parse_json_field(row.get("merchant_identifiers")),
+        merchant_ids=parse_json_field(row.get("merchant_ids")),
         is_active=row["is_active"],
         owner_id=str(row["owner_id"]) if row.get("owner_id") else None,
         created_at=row["created_at"],

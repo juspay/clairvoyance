@@ -62,7 +62,7 @@ async def create_configuration(
         {
             "reseller_id": "shop_123",
             "template": "order-confirmation",
-            "merchant_identifier": "merchant_123",
+            "merchant_id": "merchant_123",
             "initial_offset": 0,
             "retry_offset": 300,
             "call_start_time": "09:00",
@@ -75,15 +75,11 @@ async def create_configuration(
     Returns:
         Created configuration object with generated ID
     """
-    # Support both new (reseller_id, merchant_identifier) and old (merchant_id, shop_identifier) field names
-    reseller_id = config.reseller_id
-    merchant_identifier = config.merchant_identifier
-
     # RBAC: Check if user has permission to create config for this reseller/shop
     validate_config_access(
         current_user,
-        reseller_id,
-        merchant_identifier,
+        config.reseller_id,
+        config.merchant_id,
         operation="create configuration for",
     )
 
@@ -96,18 +92,16 @@ async def list_configurations(
     template: Optional[str] = Query(
         None, description="Filter by template name (e.g., 'order-confirmation')"
     ),
-    merchant_identifier: Optional[str] = Query(
-        None, description="Filter by merchant identifier"
-    ),
+    merchant_id: Optional[str] = Query(None, description="Filter by merchant_id"),
     current_user: UserInfo = Depends(get_current_user_with_rbac),
 ):
     """
     List all call execution configurations with optional filters.
 
     Query Parameters:
-    - reseller_id: Filter configurations by reseller (or merchant_id for backward compatibility)
+    - reseller_id: Filter configurations by reseller
     - template: Filter by template name (order-confirmation, appointment-reminder, etc.)
-    - merchant_identifier: Filter by specific shop (or shop_identifier for backward compatibility)
+    - merchant_id: Filter by specific shop
 
     RBAC Filtering:
     - Admin: Sees all configurations (or filtered by query params)
@@ -117,7 +111,7 @@ async def list_configurations(
         GET /configurations                                    # All accessible configs
         GET /configurations?template=order-confirmation        # Filter by template
         GET /configurations?reseller_id=shop_123               # Filter by reseller
-        GET /configurations?merchant_identifier=shop_456       # Filter by shop
+        GET /configurations?merchant_id=shop_456                # Filter by shop
 
     Returns:
         List of configuration objects matching filters and user permissions
@@ -135,7 +129,7 @@ async def list_configurations(
             )
     # Get configurations
     configs = await list_configurations_handler(
-        reseller_id, template, merchant_identifier, current_user
+        reseller_id, template, merchant_id, current_user
     )
 
     # Apply RBAC filtering
@@ -171,7 +165,7 @@ async def get_configuration(
         validate_config_access(
             current_user,
             config.reseller_id,
-            config.merchant_identifier,
+            config.merchant_id,
             operation="access configuration for",
         )
     except HTTPException:
@@ -206,7 +200,7 @@ async def update_configuration(
         {
             "reseller_id": "shop_123",
             "template": "order-confirmation",
-            "merchant_identifier": "shop_123",
+            "merchant_id": "shop_123",
             "initial_offset": 0,
             "retry_offset": 600,
             "call_start_time": "10:00",
@@ -258,9 +252,7 @@ async def delete_configuration(
 async def calling_activation(
     enable_calling: bool,
     reseller_id: Optional[str] = Query(None, description="Filter by reseller ID"),
-    merchant_identifier: Optional[str] = Query(
-        None, description="Filter by merchant identifier"
-    ),
+    merchant_id: Optional[str] = Query(None, description="Filter by merchant_id"),
     current_user: UserInfo = Depends(get_current_user_with_rbac),
 ):
     """
@@ -269,12 +261,12 @@ async def calling_activation(
     Query Parameters:
     - enable_calling: Boolean to enable or disable calling
     - reseller_id: Optional reseller ID filter (or merchant_id for backward compatibility)
-    - merchant_identifier: Optional shop identifier filter (or shop_identifier for backward compatibility)
+    - merchant_id: Optional shop identifier filter (or shop_identifier for backward compatibility)
 
     Behavior:
     - If reseller_id is None: All configs across all resellers are updated (admin only)
-    - If reseller_id is provided but merchant_identifier is None: All configs for that reseller are updated
-    - If both reseller_id and merchant_identifier are provided: Only that specific config is updated
+    - If reseller_id is provided but merchant_id is None: All configs for that reseller are updated
+    - If both reseller_id and merchant_id are provided: Only that specific config is updated
 
     Permissions:
     - Admin: Can toggle calling for any merchant/shop or globally
@@ -283,7 +275,7 @@ async def calling_activation(
     Example Requests:
         PATCH /configurations/toggle-calling?enable_calling=false                           # Global disable (admin only)
         PATCH /configurations/toggle-calling?enable_calling=true&reseller_id=shop_123       # Enable for reseller
-        PATCH /configurations/toggle-calling?enable_calling=false&reseller_id=shop_123&merchant_identifier=shop_456  # Disable for specific shop
+        PATCH /configurations/toggle-calling?enable_calling=false&reseller_id=shop_123&merchant_id=shop_456  # Disable for specific shop
 
     Returns:
         {
@@ -306,14 +298,14 @@ async def calling_activation(
         validate_config_access(
             current_user,
             reseller_id,
-            merchant_identifier,
+            merchant_id,
             operation="toggle calling for",
         )
 
     result = await calling_activation_handler(
         enable_calling=enable_calling,
         reseller_id=reseller_id,
-        merchant_identifier=merchant_identifier,
+        merchant_id=merchant_id,
         current_user=current_user,
     )
 

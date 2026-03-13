@@ -27,7 +27,7 @@ from app.services.redis.client import get_redis_service
 # --------------------------------------------------------------------------- #
 
 DEMO_RESELLER_ID = "website-demo"
-DEMO_MERCHANT_IDENTIFIER = "website-demo"
+DEMO_MERCHANT_ID = "website-demo"
 DEMO_TEMPLATE = "order-confirmation-demo-agent"
 DEMO_RATE_LIMIT_HOURLY = 10
 DEMO_RATE_LIMIT_DAILY = 50
@@ -200,7 +200,7 @@ async def breeze_buddy_demo_connect_handler(
     # Ensure template exists for this merchant/shop before proceeding
     template = await get_template_by_merchant(
         reseller_id=DEMO_RESELLER_ID,
-        merchant_identifier=DEMO_MERCHANT_IDENTIFIER,
+        merchant_id=DEMO_MERCHANT_ID,
         name=body.agent,
     )
     if not template:
@@ -218,7 +218,7 @@ async def breeze_buddy_demo_connect_handler(
         reseller_id=DEMO_RESELLER_ID,
         template=body.agent,
         template_id=str(template.id),
-        merchant_identifier=DEMO_MERCHANT_IDENTIFIER,
+        merchant_id=DEMO_MERCHANT_ID,
         next_attempt_at=None,
         payload=payload,
         attempt_count=0,

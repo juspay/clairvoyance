@@ -9,8 +9,8 @@ class PushLeadRequest(BaseModel):
     request_id: str
     payload: Dict[str, Any]
     template: str
-    reseller: str
-    identifier: Optional[str] = None
+    reseller_id: str
+    merchant_id: Optional[str] = None
     reporting_webhook_url: str | None = None
     execution_mode: Optional[ExecutionMode] = (
         None  # Defaults to TELEPHONY if not provided

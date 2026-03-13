@@ -60,9 +60,9 @@ async def push_lead(
 
     Request Body:
         {
-            "reseller": "shop_123",
+            "reseller_id": "shop_123",
             "template": "order-confirmation",
-            "identifier": "shop_123",
+            "merchant_id": "shop_123",
             "request_id": "order_456",
             "reporting_webhook_url": "https://example.com/webhook",
             "payload": {
@@ -83,14 +83,14 @@ async def push_lead(
         }
     """
 
-    if not req.reseller:
+    if not req.reseller_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="reseller (or merchant for backward compatibility) is required",
+            detail="reseller_id is required",
         )
     # RBAC: Check permission to push leads for this reseller/shop
     validate_lead_access(
-        current_user, req.reseller, req.identifier, operation="push leads for"
+        current_user, req.reseller_id, req.merchant_id, operation="push leads for"
     )
 
     return await push_lead_handler(req, current_user)

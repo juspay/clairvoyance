@@ -108,7 +108,7 @@ class UserInfo(BaseModel):
     role: UserRole
     email: Optional[str] = None
     reseller_ids: List[str] = Field(default_factory=list)
-    merchant_identifiers: List[str] = Field(default_factory=list)
+    merchant_ids: List[str] = Field(default_factory=list)
     permissions: List[str] = Field(default_factory=list)
     owner_id: Optional[str] = None  # UUID of user who created this account
 
@@ -121,7 +121,7 @@ class UserCreate(BaseModel):
     role: UserRole
     email: Optional[str] = None
     reseller_ids: List[str] = Field(default_factory=list)
-    merchant_identifiers: List[str] = Field(default_factory=list)
+    merchant_ids: List[str] = Field(default_factory=list)
     is_active: bool = True
 
 
@@ -132,7 +132,7 @@ class UserUpdate(BaseModel):
     role: Optional[UserRole] = None
     email: Optional[str] = None
     reseller_ids: Optional[List[str]] = None
-    merchant_identifiers: Optional[List[str]] = None
+    merchant_ids: Optional[List[str]] = None
     is_active: Optional[bool] = None
 
 
@@ -145,7 +145,7 @@ class UserInDB(BaseModel):
     role: UserRole
     email: Optional[str] = None
     reseller_ids: List[str] = Field(default_factory=list)
-    merchant_identifiers: List[str] = Field(default_factory=list)
+    merchant_ids: List[str] = Field(default_factory=list)
     is_active: bool = True
     owner_id: Optional[str] = None  # UUID of user who created this account
     created_at: Optional[datetime] = None
@@ -160,7 +160,7 @@ class User(BaseModel):
     role: UserRole
     email: Optional[str] = None
     reseller_ids: List[str] = Field(default_factory=list)
-    merchant_identifiers: List[str] = Field(default_factory=list)
+    merchant_ids: List[str] = Field(default_factory=list)
     is_active: bool = True
     owner_id: Optional[str] = None  # UUID of user who created this account
     created_at: Optional[datetime] = None
@@ -175,7 +175,7 @@ class AuthTokenData(BaseModel):
     role: UserRole
     email: Optional[str] = None
     reseller_ids: List[str] = Field(default_factory=list)
-    merchant_identifiers: List[str] = Field(default_factory=list)
+    merchant_ids: List[str] = Field(default_factory=list)
     permissions: List[str] = Field(default_factory=list)
     iat: Optional[int] = None  # issued at
     exp: Optional[int] = None  # expiration

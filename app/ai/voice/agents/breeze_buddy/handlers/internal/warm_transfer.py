@@ -127,7 +127,7 @@ async def connect_to_live_agent(
         await set_transfer_flag(
             call_sid=context.call_sid,
             reseller_id=context.lead.reseller_id,
-            merchant_identifier=context.lead.merchant_identifier,
+            merchant_id=context.lead.merchant_id,
             transfer_number=agent_phone_number,
             customer_phone_number=customer_phone_number,
         )

@@ -15,7 +15,7 @@ class TemplateMetadata(BaseModel):
 
     id: str
     reseller_id: str
-    merchant_identifier: Optional[str] = None
+    merchant_id: Optional[str] = None
     name: str
     is_active: bool
     created_at: datetime

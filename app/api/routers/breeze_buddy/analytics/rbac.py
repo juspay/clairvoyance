@@ -37,7 +37,7 @@ def get_accessible_merchants_and_shops(
     reseller_ids = current_user.reseller_ids
 
     # Get merchant identifiers
-    merchant_identifiers = current_user.merchant_identifiers
+    merchant_ids = current_user.merchant_ids
 
     # Check merchant access
     # Distinguish between:
@@ -51,12 +51,10 @@ def get_accessible_merchants_and_shops(
 
     # Check shop access
     # Same logic as merchant access
-    if "*" in merchant_identifiers:
+    if "*" in merchant_ids:
         accessible_shops = None  # Wildcard access
     else:
-        accessible_shops = (
-            merchant_identifiers  # Specific access (or empty for no access)
-        )
+        accessible_shops = merchant_ids  # Specific access (or empty for no access)
 
     return accessible_merchants, accessible_shops
 
@@ -67,7 +65,7 @@ def apply_hierarchical_filters(
     """
     Apply hierarchical merchant + shop filtering based on user's JWT token.
 
-    CRITICAL SECURITY: Always use reseller_ids and merchant_identifiers from JWT token,
+    CRITICAL SECURITY: Always use reseller_ids and merchant_ids from JWT token,
     NEVER from request parameters.
 
     Args:
@@ -141,32 +139,30 @@ def apply_hierarchical_filters(
         if len(accessible_shops) == 0:
             # User has no shop access - should not be able to access any data
             logger.warning(
-                f"User {current_user.username} has no shop access (empty merchant_identifiers)"
+                f"User {current_user.username} has no shop access (empty merchant_ids)"
             )
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Access denied: user has no shop assignments",
             )
 
-        # Support both new (merchant_identifier/merchant_identifiers) and old (shop_identifier/shop_identifiers) field names
-        filter_merchant_identifier = filters.get("merchant_identifier")
-        filter_merchant_identifiers = filters.get("merchant_identifiers")
+        # Support both new (merchant_id/merchant_ids) and old (shop_id/shop_ids) field names
+        filter_merchant_id = filters.get("merchant_id")
+        filter_merchant_ids = filters.get("merchant_ids")
 
-        if filter_merchant_identifier:
+        if filter_merchant_id:
             # Validate user has access to requested shop
-            if filter_merchant_identifier not in accessible_shops:
+            if filter_merchant_id not in accessible_shops:
                 logger.warning(
-                    f"User {current_user.username} attempted to access unauthorized shop: {filter_merchant_identifier}"
+                    f"User {current_user.username} attempted to access unauthorized shop: {filter_merchant_id}"
                 )
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
-                    detail=f"Access denied to shop {filter_merchant_identifier}",
+                    detail=f"Access denied to shop {filter_merchant_id}",
                 )
-        elif filter_merchant_identifiers:
+        elif filter_merchant_ids:
             # Validate user has access to all requested shops
-            if not all(
-                shop in accessible_shops for shop in filter_merchant_identifiers
-            ):
+            if not all(shop in accessible_shops for shop in filter_merchant_ids):
                 logger.warning(
                     f"User {current_user.username} attempted to access unauthorized shops"
                 )
@@ -176,6 +172,6 @@ def apply_hierarchical_filters(
                 )
         else:
             # No shop filter - apply user's accessible shops
-            filters["merchant_identifiers"] = accessible_shops
+            filters["merchant_ids"] = accessible_shops
 
     return filters

@@ -32,31 +32,31 @@ from app.schemas.breeze_buddy.users import (
 
 
 async def _get_reseller_merchants(reseller_id: str) -> List[str]:
-    """Get all merchant_identifiers for a given reseller_id.
+    """Get all merchant_ids for a given reseller_id.
 
     Args:
         reseller_id: The reseller ID to look up
 
     Returns:
-        List of merchant_identifiers for that reseller
+        List of merchant_ids for that reseller
     """
 
     merchants, _ = await get_merchants_by_reseller(reseller_id)
-    return [m.merchant_identifier for m in merchants]
+    return [m.merchant_id for m in merchants]
 
 
 async def _check_create_access(
     current_user: UserInfo,
     target_role: UserRole,
     reseller_ids: List[str],
-    merchant_identifiers: List[str],
+    merchant_ids: List[str],
 ):
     """
     Check if user can create accounts with target role and access identifiers.
 
     Validation flow:
     1. First validate reseller_ids (user must have access to those resellers).
-    2. Then validate merchant_identifiers against what those resellers have.
+    2. Then validate merchant_ids against what those resellers have.
     Rules:
     - Admin: Can create any role with any identifiers
     - Reseller: Can create merchant/user roles only
@@ -84,10 +84,10 @@ async def _check_create_access(
                         detail=f"Cannot create accounts for reseller '{rid}' outside your scope",
                     )
 
-        # Step 2: Validate merchant_identifiers
+        # Step 2: Validate merchant_ids
         # If wildcard ["*"], grant access to all merchants of the specified resellers
         # Otherwise, validate specific merchants are allowed
-        if merchant_identifiers and merchant_identifiers != ["*"]:
+        if merchant_ids and merchant_ids != ["*"]:
             # Get all merchants under the specified resellers
             allowed_merchants = []
             for rid in reseller_ids:
@@ -95,9 +95,7 @@ async def _check_create_access(
                 allowed_merchants.extend(reseller_merchants)
 
             # Validate all requested merchants are in the allowed list
-            invalid_merchants = [
-                m for m in merchant_identifiers if m not in allowed_merchants
-            ]
+            invalid_merchants = [m for m in merchant_ids if m not in allowed_merchants]
             if invalid_merchants:
                 raise HTTPException(
                     status_code=403,
@@ -113,15 +111,15 @@ async def _check_create_access(
                 status_code=403, detail="Merchants can only create user accounts"
             )
 
-        # Validate merchant_identifiers are within merchant's scope
-        # If merchant has wildcard merchant_identifiers, they can assign wildcard to users
-        if "*" in current_user.merchant_identifiers:
+        # Validate merchant_ids are within merchant's scope
+        # If merchant has wildcard merchant_ids, they can assign wildcard to users
+        if "*" in current_user.merchant_ids:
             # Merchant with wildcard can assign specific merchants or wildcard
             return
 
         allowed = await resolve_merchant_ids(current_user)
         validate_merchant_ids_subset(
-            merchant_identifiers,
+            merchant_ids,
             allowed,
             "Can only create user accounts for your own merchant identifiers",
         )
@@ -167,8 +165,8 @@ async def _check_update_delete_access(
         # Check merchant_ids scope (resolves wildcard through owner chain)
         allowed = await resolve_merchant_ids(current_user)
         if allowed is not None:
-            # Reseller must have access to ALL of target's merchant_identifiers (subset check)
-            if not all(mid in allowed for mid in target_user.merchant_identifiers):
+            # Reseller must have access to ALL of target's merchant_ids (subset check)
+            if not all(mid in allowed for mid in target_user.merchant_ids):
                 raise HTTPException(
                     status_code=403, detail="Target user is outside your merchant scope"
                 )
@@ -179,11 +177,11 @@ async def _check_update_delete_access(
         if target_user.role != UserRole.USER:
             raise HTTPException(status_code=403, detail="Can only modify user accounts")
 
-        # Check merchant_identifiers scope (resolves wildcard through owner chain)
+        # Check merchant_ids scope (resolves wildcard through owner chain)
         allowed = await resolve_merchant_ids(current_user)
         if allowed is not None:
-            # Merchant must have access to ALL of target's merchant_identifiers (subset check)
-            if not all(mid in allowed for mid in target_user.merchant_identifiers):
+            # Merchant must have access to ALL of target's merchant_ids (subset check)
+            if not all(mid in allowed for mid in target_user.merchant_ids):
                 raise HTTPException(
                     status_code=403, detail="Target user is outside your merchant scope"
                 )
@@ -220,27 +218,27 @@ async def create_user_handler(
     user_data: UserCreate, current_user: UserInfo
 ) -> UserResponse:
     """Create a new user account."""
-    # Validate merchant_identifiers requirement for merchant/user roles
+    # Validate merchant_ids requirement for merchant/user roles
     if user_data.role in {UserRole.MERCHANT, UserRole.USER}:
-        if not user_data.merchant_identifiers:
+        if not user_data.merchant_ids:
             raise HTTPException(
                 status_code=400,
-                detail="merchant_identifiers are required for merchant/user roles",
+                detail="merchant_ids are required for merchant/user roles",
             )
 
-    # For reseller role: merchant_identifiers is always ["*"] (resolved at
+    # For reseller role: merchant_ids is always ["*"] (resolved at
     # query time to merchants they own), and reseller_ids is always [own id].
     # These are not configurable — a reseller's scope is defined by ownership.
     if user_data.role == UserRole.RESELLER:
-        user_data.merchant_identifiers = ["*"]
+        user_data.merchant_ids = ["*"]
         user_data.reseller_ids = [user_data.id]
 
-    # Check creation permissions (validates both reseller_ids and merchant_identifiers)
+    # Check creation permissions (validates both reseller_ids and merchant_ids)
     await _check_create_access(
         current_user,
         user_data.role,
         user_data.reseller_ids,
-        user_data.merchant_identifiers,
+        user_data.merchant_ids,
     )
 
     try:
@@ -266,7 +264,7 @@ async def create_user_handler(
             role=user_data.role,
             email=user_data.email,
             reseller_ids=user_data.reseller_ids,
-            merchant_identifiers=user_data.merchant_identifiers,
+            merchant_ids=user_data.merchant_ids,
             is_active=user_data.is_active,
             owner_id=owner_id,
         )
@@ -368,7 +366,7 @@ async def get_user_by_id_handler(user_id: str, current_user: UserInfo) -> UserRe
                 allowed = await resolve_merchant_ids(current_user)
                 if allowed is not None:
                     # Must have at least one overlapping merchant_id
-                    if not any(mid in allowed for mid in user.merchant_identifiers):
+                    if not any(mid in allowed for mid in user.merchant_ids):
                         raise HTTPException(
                             status_code=403, detail="Access denied to this user"
                         )
@@ -402,23 +400,23 @@ async def update_user_handler(
         # Check update permissions (returns resolved merchant_ids to avoid duplicate DB calls)
         allowed = await _check_update_delete_access(current_user, user)
 
-        # Validate merchant_identifiers update for merchant/user roles
-        if user_data.merchant_identifiers is not None:
+        # Validate merchant_ids update for merchant/user roles
+        if user_data.merchant_ids is not None:
             if (
                 user.role in {UserRole.MERCHANT, UserRole.USER}
-                and not user_data.merchant_identifiers
+                and not user_data.merchant_ids
             ):
                 raise HTTPException(
                     status_code=400,
-                    detail="Cannot remove all merchant_identifiers from merchant/user accounts",
+                    detail="Cannot remove all merchant_ids from merchant/user accounts",
                 )
 
             # Check scope for reseller/merchant using already-resolved merchant_ids
             if current_user.role in {UserRole.RESELLER, UserRole.MERCHANT}:
                 validate_merchant_ids_subset(
-                    user_data.merchant_identifiers,
+                    user_data.merchant_ids,
                     allowed,
-                    "Cannot assign merchant_identifiers outside your scope",
+                    "Cannot assign merchant_ids outside your scope",
                 )
 
         # Validate reseller_ids update
@@ -435,7 +433,7 @@ async def update_user_handler(
             password=user_data.password,
             email=user_data.email,
             reseller_ids=user_data.reseller_ids,
-            merchant_identifiers=user_data.merchant_identifiers,
+            merchant_ids=user_data.merchant_ids,
             is_active=user_data.is_active,
         )
 

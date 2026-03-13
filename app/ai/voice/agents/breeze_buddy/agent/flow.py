@@ -37,7 +37,7 @@ async def load_template_config(
     template, template_vars = await flow_loader.load_template(
         reseller_id=lead.reseller_id,
         template=lead.template,
-        merchant_identifier=lead.merchant_identifier if lead else None,
+        merchant_id=lead.merchant_id if lead else None,
         call_payload=lead.payload,
     )
 

@@ -14,7 +14,7 @@ from app.schemas import UserInfo
 def validate_lead_access(
     current_user: UserInfo,
     reseller_id: str,
-    merchant_identifier: Optional[str],
+    merchant_id: Optional[str],
     operation: str = "access",
 ) -> None:
     """
@@ -23,7 +23,7 @@ def validate_lead_access(
     Args:
         current_user: Current authenticated user with RBAC info
         reseller_id: Reseller ID to validate access for
-        merchant_identifier: Merchant identifier to validate access for (optional)
+        merchant_id: Merchant identifier to validate access for (optional)
         operation: Operation being performed (for logging)
 
     Raises:
@@ -47,19 +47,19 @@ def validate_lead_access(
             detail=f"Access denied to reseller {reseller_id}",
         )
 
-    # Check merchant access (if merchant_identifier is specified)
-    if merchant_identifier:
+    # Check merchant access (if merchant_id is specified)
+    if merchant_id:
         if (
-            merchant_identifier not in current_user.merchant_identifiers
-            and "*" not in current_user.merchant_identifiers
+            merchant_id not in current_user.merchant_ids
+            and "*" not in current_user.merchant_ids
         ):
             logger.warning(
                 f"User {current_user.username} attempted to {operation} leads "
-                f"for unauthorized merchant: {merchant_identifier}"
+                f"for unauthorized merchant: {merchant_id}"
             )
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Access denied to merchant {merchant_identifier}",
+                detail=f"Access denied to merchant {merchant_id}",
             )
 
 
@@ -95,14 +95,14 @@ def validate_lead_read_access(
         )
 
     # Check shop access
-    if lead.merchant_identifier:
+    if lead.merchant_id:
         if (
-            lead.merchant_identifier not in current_user.merchant_identifiers
-            and "*" not in current_user.merchant_identifiers
+            lead.merchant_id not in current_user.merchant_ids
+            and "*" not in current_user.merchant_ids
         ):
             logger.warning(
                 f"User {current_user.username} attempted to {operation} lead {lead.id} "
-                f"for unauthorized merchant: {lead.merchant_identifier}"
+                f"for unauthorized merchant: {lead.merchant_id}"
             )
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, detail=f"Lead not found"
@@ -113,7 +113,7 @@ def validate_recording_access(
     current_user: UserInfo,
     call_sid: str,
     reseller_id: str,
-    merchant_identifier: Optional[str],
+    merchant_id: Optional[str],
 ) -> None:
     """
     Validate user has access to a call recording.
@@ -123,7 +123,7 @@ def validate_recording_access(
         current_user: Current authenticated user with RBAC info
         call_sid: Call SID being accessed (for logging)
         reseller_id: Reseller ID of the call
-        merchant_identifier: Shop identifier of the call (optional)
+        merchant_id: Shop identifier of the call (optional)
 
     Raises:
         HTTPException: 404 if user lacks permission (to avoid leaking existence)
@@ -146,15 +146,15 @@ def validate_recording_access(
             detail=f"Recording not found for call_sid: {call_sid}",
         )
 
-    # Check merchant access (if merchant_identifier is specified)
-    if merchant_identifier:
+    # Check merchant access (if merchant_id is specified)
+    if merchant_id:
         if (
-            merchant_identifier not in current_user.merchant_identifiers
-            and "*" not in current_user.merchant_identifiers
+            merchant_id not in current_user.merchant_ids
+            and "*" not in current_user.merchant_ids
         ):
             logger.warning(
                 f"User {current_user.username} attempted to access recording "
-                f"for unauthorized merchant: {merchant_identifier} (call_sid: {call_sid})"
+                f"for unauthorized merchant: {merchant_id} (call_sid: {call_sid})"
             )
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,

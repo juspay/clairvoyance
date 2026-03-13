@@ -50,7 +50,7 @@ def _check_update_access(current_user: UserInfo, reseller_id: Optional[str]):
     )
 
 
-async def _check_merchant_view_access(current_user: UserInfo, merchant_identifier: str):
+async def _check_merchant_view_access(current_user: UserInfo, merchant_id: str):
     """Check if user can view a specific merchant entity.
 
     Resolves wildcard through owner chain for proper scoping.
@@ -63,7 +63,7 @@ async def _check_merchant_view_access(current_user: UserInfo, merchant_identifie
     if allowed is None:
         return  # Unrestricted access (admin, reseller with *)
 
-    if merchant_identifier not in allowed:
+    if merchant_id not in allowed:
         raise HTTPException(
             status_code=403, detail="You don't have access to this merchant entity"
         )
@@ -79,14 +79,14 @@ async def create_merchant_handler(
     """
     _check_create_merchant_access(current_user)
 
-    # Check if merchant_identifier already exists
+    # Check if merchant_id already exists
     exists = await merchant_accessors.check_merchant_identifier_exists(
-        merchant_data.merchant_identifier
+        merchant_data.merchant_id
     )
     if exists:
         raise HTTPException(
             status_code=409,
-            detail=f"Merchant ID '{merchant_data.merchant_identifier}' already exists",
+            detail=f"Merchant ID '{merchant_data.merchant_id}' already exists",
         )
 
     # Determine reseller_id:
@@ -100,7 +100,7 @@ async def create_merchant_handler(
 
     try:
         merchant = await merchant_accessors.create_merchant(
-            merchant_identifier=merchant_data.merchant_identifier,
+            merchant_id=merchant_data.merchant_id,
             name=merchant_data.name,
             description=merchant_data.description,
             is_active=(
@@ -119,7 +119,7 @@ async def create_merchant_handler(
     except asyncpg.UniqueViolationError:
         raise HTTPException(
             status_code=409,
-            detail=f"Merchant ID '{merchant_data.merchant_identifier}' already exists",
+            detail=f"Merchant ID '{merchant_data.merchant_id}' already exists",
         )
     except HTTPException:
         raise
@@ -185,15 +185,15 @@ async def get_all_merchants_handler(
 
 
 async def get_merchant_by_merchant_identifier_handler(
-    merchant_identifier: str, current_user: UserInfo
+    merchant_id: str, current_user: UserInfo
 ) -> MerchantResponse:
-    """Get merchant entity by merchant_identifier."""
+    """Get merchant entity by merchant_id."""
     try:
         # Check view access BEFORE DB fetch to avoid leaking resource existence
-        await _check_merchant_view_access(current_user, merchant_identifier)
+        await _check_merchant_view_access(current_user, merchant_id)
 
         merchant = await merchant_accessors.get_merchant_by_merchant_identifier(
-            merchant_identifier
+            merchant_id
         )
 
         if not merchant:
@@ -204,12 +204,12 @@ async def get_merchant_by_merchant_identifier_handler(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error fetching merchant entity {merchant_identifier}: {e}")
+        logger.error(f"Error fetching merchant entity {merchant_id}: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
 async def update_merchant_handler(
-    merchant_identifier: str,
+    merchant_id: str,
     merchant_data: MerchantUpdate,
     current_user: UserInfo,
 ) -> MerchantResponse:
@@ -217,7 +217,7 @@ async def update_merchant_handler(
     try:
         # Get existing merchant first
         merchant = await merchant_accessors.get_merchant_by_merchant_identifier(
-            merchant_identifier
+            merchant_id
         )
         if not merchant:
             raise HTTPException(status_code=404, detail="Merchant entity not found")
@@ -236,7 +236,7 @@ async def update_merchant_handler(
             reseller_id = merchant_data.reseller_id
 
         updated_merchant = await merchant_accessors.update_merchant(
-            merchant_identifier=merchant_identifier,
+            merchant_id=merchant_id,
             name=merchant_data.name,
             description=merchant_data.description,
             is_active=merchant_data.is_active,
@@ -251,12 +251,12 @@ async def update_merchant_handler(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error updating merchant entity {merchant_identifier}: {e}")
+        logger.error(f"Error updating merchant entity {merchant_id}: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
 async def delete_merchant_handler(
-    merchant_identifier: str, current_user: UserInfo
+    merchant_id: str, current_user: UserInfo
 ) -> DeleteUserResponse:
     """Delete merchant entity (admin or reseller who owns it)."""
     # Only admin and reseller can delete
@@ -269,7 +269,7 @@ async def delete_merchant_handler(
     try:
         # Get the merchant first to check ownership
         merchant = await merchant_accessors.get_merchant_by_merchant_identifier(
-            merchant_identifier
+            merchant_id
         )
         if not merchant:
             raise HTTPException(status_code=404, detail="Merchant entity not found")
@@ -282,15 +282,15 @@ async def delete_merchant_handler(
                     detail="You can only delete merchant entities you own",
                 )
 
-        deleted = await merchant_accessors.delete_merchant(merchant_identifier)
+        deleted = await merchant_accessors.delete_merchant(merchant_id)
 
         if not deleted:
             raise HTTPException(status_code=404, detail="Merchant entity not found")
 
         return DeleteUserResponse(
             success=True,
-            message=f"Merchant entity '{merchant_identifier}' deleted",
-            deleted_id=merchant_identifier,
+            message=f"Merchant entity '{merchant_id}' deleted",
+            deleted_id=merchant_id,
         )
 
     except ValueError as e:
@@ -299,5 +299,5 @@ async def delete_merchant_handler(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error deleting merchant entity {merchant_identifier}: {e}")
+        logger.error(f"Error deleting merchant entity {merchant_id}: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")

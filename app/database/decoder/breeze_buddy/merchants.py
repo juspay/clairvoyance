@@ -15,7 +15,7 @@ def decode_merchant(row) -> MerchantResponse:
         MerchantResponse instance
     """
     return MerchantResponse(
-        merchant_identifier=row["merchant_identifier"],
+        merchant_id=row["merchant_id"],
         name=row.get("name"),
         description=row.get("description"),
         is_active=row.get("is_active", True),
