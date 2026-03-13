@@ -121,9 +121,7 @@ class BreezeBuddyRBACTokenManager:
                 role=UserRole(role_str),
                 email=payload.get("email"),
                 reseller_ids=payload.get("reseller_ids", []),
-                merchant_ids=payload.get("reseller_ids", []),
                 merchant_identifiers=payload.get("merchant_identifiers", []),
-                shop_identifiers=payload.get("merchant_identifiers", []),
                 permissions=payload.get("permissions", []),
                 owner_id=payload.get("owner_id"),
             )

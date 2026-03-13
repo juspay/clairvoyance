@@ -494,11 +494,9 @@ class RequestFlowNode(BaseModel):
 
 class CreateTemplateRequest(BaseModel):
     # New field names
-    reseller_id: Optional[str] = None
-    merchant_id: Optional[str] = None
+    reseller_id: str
     name: str
     merchant_identifier: Optional[str] = None
-    shop_identifier: Optional[str] = None
     outbound_number_id: Optional[str] = None
     is_active: bool = True
     flow: Dict[str, Any]

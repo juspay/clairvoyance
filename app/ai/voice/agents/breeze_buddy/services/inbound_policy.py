@@ -83,7 +83,7 @@ async def check_inbound_policy(
     3. Blacklist
     4. Rate limit (unless skip_rate_limit=True)
     """
-    reseller_id = config.reseller_id or config.merchant_id
+    reseller_id = config.reseller_id
 
     # 1. Master toggle
     if not config.enable_inbound:

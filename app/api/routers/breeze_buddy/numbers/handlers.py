@@ -42,13 +42,10 @@ async def create_number_handler(
         f"Admin {current_user.username} creating outbound number: {number.number}"
     )
 
-    reseller = number.reseller_id or number.merchant_id
-    identifier = number.merchant_identifier or number.shop_identifier
-
-    if not reseller:
+    if not number.reseller_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="merchant_id or reseller_id is required",
+            detail="reseller_id is required",
         )
 
     try:
@@ -57,8 +54,8 @@ async def create_number_handler(
             number=number.number,
             provider=number.provider,
             status=number.status,
-            reseller_id=reseller,
-            merchant_identifier=identifier,
+            reseller_id=number.reseller_id,
+            merchant_identifier=number.merchant_identifier,
             channels=0,
             maximum_channels=number.maximum_channels,
         )

@@ -2,7 +2,6 @@
 
 from typing import Any, Dict, List, Optional, cast
 
-from fastapi import HTTPException, status
 from pipecat.services.azure.llm import AzureLLMService
 from pipecat_flows import FlowManager, NodeConfig
 from pipecat_flows.types import FlowsDirectFunction, FlowsFunctionSchema
@@ -34,19 +33,11 @@ async def load_template_config(
         Tuple of (template, configurations, template_vars)
     """
     flow_loader = FlowConfigLoader()
-    reseller_id = lead.reseller_id or lead.merchant_id  # Support backward compatibility
-    merchant_identifier = lead.merchant_identifier or lead.shop_identifier
-
-    if not reseller_id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="reseller (or merchant for backward compatibility) is required",
-        )
 
     template, template_vars = await flow_loader.load_template(
-        reseller_id=reseller_id,
+        reseller_id=lead.reseller_id,
         template=lead.template,
-        merchant_identifier=merchant_identifier if lead else None,
+        merchant_identifier=lead.merchant_identifier if lead else None,
         call_payload=lead.payload,
     )
 

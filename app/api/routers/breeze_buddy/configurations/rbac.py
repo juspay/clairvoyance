@@ -33,14 +33,11 @@ def validate_config_access(
     if current_user.role == "admin":
         return
 
-    # Support both new (reseller_ids) and old (merchant_ids) field names
-    user_reseller_ids = current_user.reseller_ids or current_user.merchant_ids or []
-    user_merchant_identifiers = (
-        current_user.merchant_identifiers or current_user.shop_identifiers or []
-    )
-
     # Check reseller access
-    if reseller_id not in user_reseller_ids and "*" not in user_reseller_ids:
+    if (
+        reseller_id not in current_user.reseller_ids
+        and "*" not in current_user.reseller_ids
+    ):
         logger.warning(
             f"User {current_user.username} attempted to {operation} configuration "
             f"for unauthorized reseller: {reseller_id}"
@@ -53,8 +50,8 @@ def validate_config_access(
     # Check merchant identifier access (only if merchant_identifier is provided)
     if (
         merchant_identifier
-        and merchant_identifier not in user_merchant_identifiers
-        and "*" not in user_merchant_identifiers
+        and merchant_identifier not in current_user.merchant_identifiers
+        and "*" not in current_user.merchant_identifiers
     ):
         logger.warning(
             f"User {current_user.username} attempted to {operation} configuration "
@@ -81,27 +78,19 @@ def filter_configs_by_rbac(configs: List, current_user: UserInfo) -> List:
     if current_user.role == "admin":
         return configs
 
-    # Support both new (reseller_ids) and old (merchant_ids) field names
-    user_reseller_ids = current_user.reseller_ids or current_user.merchant_ids or []
-    user_merchant_identifiers = (
-        current_user.merchant_identifiers or current_user.shop_identifiers or []
-    )
-
-    if "*" in user_reseller_ids and "*" in user_merchant_identifiers:
+    if "*" in current_user.reseller_ids and "*" in current_user.merchant_identifiers:
         return configs
 
     filtered = []
     for config in configs:
         # Support both new and old field names for config
-        config_reseller_id = config.reseller_id or config.merchant_id
-        config_merchant_identifier = (
-            config.merchant_identifier or config.shop_identifier
+        config_reseller_id = config.reseller_id
+        config_merchant_identifier = config.merchant_identifier
+        has_reseller_access = ("*" in current_user.reseller_ids) or (
+            config_reseller_id in current_user.reseller_ids
         )
-        has_reseller_access = ("*" in user_reseller_ids) or (
-            config_reseller_id in user_reseller_ids
-        )
-        has_merchant_access = ("*" in user_merchant_identifiers) or (
-            config_merchant_identifier in user_merchant_identifiers
+        has_merchant_access = ("*" in current_user.merchant_identifiers) or (
+            config_merchant_identifier in current_user.merchant_identifiers
         )
         if has_reseller_access and has_merchant_access:
             filtered.append(config)

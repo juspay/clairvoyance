@@ -52,18 +52,10 @@ async def create_template_handler(
     Raises:
         HTTPException: 409 if template exists, 400/500 on error
     """
-    # Get reseller_id - support both 'reseller' and 'merchant' for backward compatibility
-    reseller = template_data.reseller_id or template_data.merchant_id
-    identifier = template_data.merchant_identifier or template_data.shop_identifier
-    if not reseller:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="reseller (or merchant for backward compatibility) is required",
-        )
 
     logger.info(
         f"User {current_user.username} (role: {current_user.role}) creating template "
-        f"for reseller: {reseller}, name: {template_data.name}"
+        f"for reseller: {template_data.reseller_id}, name: {template_data.name}"
     )
 
     try:
@@ -80,8 +72,8 @@ async def create_template_handler(
 
         # Check if template already exists
         existing = await get_template_by_merchant(
-            reseller,
-            identifier,
+            template_data.reseller_id,
+            template_data.merchant_identifier,
             template_data.name,
             should_prioritize_merchant_specific=False,
         )
@@ -89,7 +81,7 @@ async def create_template_handler(
         if existing:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail=f"Template already exists for reseller {reseller} "
+                detail=f"Template already exists for reseller {template_data.reseller_id} "
                 f"and template name: {template_data.name}",
             )
 
@@ -114,8 +106,8 @@ async def create_template_handler(
 
         template = await create_template(
             template_id=str(uuid4()),
-            reseller_id=reseller,
-            identifier=identifier,
+            reseller_id=template_data.reseller_id,
+            identifier=template_data.merchant_identifier,
             name=template_data.name,
             flow=flow,
             expected_payload_schema=template_data.expected_payload_schema,
