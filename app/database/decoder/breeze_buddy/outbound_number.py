@@ -18,11 +18,6 @@ def decode_outbound_number(result: List[asyncpg.Record]) -> Optional[OutboundNum
 
     row = result[0]
 
-    # Explicit None check (safe)
-    reseller_id = row["reseller_id"] or row["merchant_id"]
-
-    merchant_identifier = row["merchant_identifier"] or row["shop_identifier"]
-
     return OutboundNumber(
         id=row["id"],
         number=row["number"],
@@ -30,8 +25,8 @@ def decode_outbound_number(result: List[asyncpg.Record]) -> Optional[OutboundNum
         status=OutboundNumberStatus(row["status"]),
         channels=row["channels"],
         maximum_channels=row["maximum_channels"],
-        reseller_id=reseller_id,
-        merchant_identifier=merchant_identifier,
+        reseller_id=row["reseller_id"],
+        merchant_identifier=row["merchant_identifier"],
         created_at=row["created_at"],
         updated_at=row["updated_at"],
     )
@@ -44,12 +39,7 @@ def decode_outbound_number_list(result: List[asyncpg.Record]) -> List[OutboundNu
     if not result:
         return []
 
-    row = result[0]
-
-    # Explicit None check (safe)
-    reseller_id = row["reseller_id"] or row["merchant_id"]
-
-    merchant_identifier = row["merchant_identifier"] or row["shop_identifier"]
+    result[0]
 
     return [
         OutboundNumber(
@@ -59,8 +49,8 @@ def decode_outbound_number_list(result: List[asyncpg.Record]) -> List[OutboundNu
             status=OutboundNumberStatus(row["status"]),
             channels=row["channels"],
             maximum_channels=row["maximum_channels"],
-            reseller_id=reseller_id,
-            merchant_identifier=merchant_identifier,
+            reseller_id=row["reseller_id"],
+            merchant_identifier=row["merchant_identifier"],
             created_at=row["created_at"],
             updated_at=row["updated_at"],
         )

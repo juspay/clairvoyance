@@ -14,14 +14,8 @@ class TemplateMetadata(BaseModel):
     """
 
     id: str
-    reseller_id: str  # New field (required)
-    merchant_id: (
-        str  # Backward compatibility: same as reseller_id (required, will be removed)
-    )
-    merchant_identifier: Optional[str] = None  # New field (optional)
-    shop_identifier: Optional[str] = (
-        None  # Backward compatibility: same as merchant_identifier (will be removed)
-    )
+    reseller_id: str
+    merchant_identifier: Optional[str] = None
     name: str
     is_active: bool
     created_at: datetime

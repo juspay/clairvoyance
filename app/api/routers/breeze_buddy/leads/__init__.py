@@ -82,17 +82,15 @@ async def push_lead(
             "message": "Call request added to queue for processing"
         }
     """
-    # Get reseller_id with backward compatibility
-    reseller_id = req.reseller or req.merchant
 
-    if not reseller_id:
+    if not req.reseller:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="reseller (or merchant for backward compatibility) is required",
         )
     # RBAC: Check permission to push leads for this reseller/shop
     validate_lead_access(
-        current_user, reseller_id, req.identifier, operation="push leads for"
+        current_user, req.reseller, req.identifier, operation="push leads for"
     )
 
     return await push_lead_handler(req, current_user)

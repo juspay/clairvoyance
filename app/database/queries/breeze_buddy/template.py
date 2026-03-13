@@ -14,16 +14,14 @@ def get_template_by_merchant_query(
     name: Optional[str] = None,
 ) -> Tuple[str, List[Any]]:
     """Generate query to get a template by reseller ID and optional filters."""
-    conditions = ["COALESCE(reseller_id, merchant_id) = $1"]
+    conditions = ["reseller_id = $1"]
     values = [reseller_id]
 
     if merchant_identifier:
-        conditions.append(
-            f"COALESCE(merchant_identifier, shop_identifier) = ${len(values) + 1}"
-        )
+        conditions.append(f"merchant_identifier = ${len(values) + 1}")
         values.append(merchant_identifier)
     else:
-        conditions.append("COALESCE(merchant_identifier, shop_identifier) IS NULL")
+        conditions.append("merchant_identifier IS NULL")
 
     if name:
         conditions.append(f"name = ${len(values) + 1}")
@@ -31,8 +29,8 @@ def get_template_by_merchant_query(
 
     query = f"""
         SELECT id, 
-               COALESCE(reseller_id, merchant_id) AS reseller_id, 
-               COALESCE(merchant_identifier, shop_identifier) AS merchant_identifier, 
+               reseller_id, 
+               merchant_identifier, 
                name, flow, expected_payload_schema, expected_callback_response_schema, configurations, secrets, outbound_number_id, is_active, created_at, updated_at
         FROM {TEMPLATE_TABLE}
         WHERE {" AND ".join(conditions)}
@@ -68,16 +66,14 @@ def create_template_query(
 ) -> Tuple[str, List[Any]]:
     """Generate query to create a new template."""
     query = f"""
-        INSERT INTO {TEMPLATE_TABLE} (id, reseller_id, merchant_id, shop_identifier, merchant_identifier, name, flow, expected_payload_schema, expected_callback_response_schema, configurations, secrets, outbound_number_id, is_active, created_at, updated_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9::jsonb, $10::jsonb, $11::jsonb, $12, $13, $14, $15)
+        INSERT INTO {TEMPLATE_TABLE} (id, reseller_id, merchant_identifier, name, flow, expected_payload_schema, expected_callback_response_schema, configurations, secrets, outbound_number_id, is_active, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7::jsonb, $8::jsonb, $9::jsonb, $10, $11, $12, $13)
         RETURNING id, reseller_id, merchant_identifier, name, flow, expected_payload_schema, expected_callback_response_schema, configurations, secrets, outbound_number_id, is_active, created_at, updated_at
     """
 
     return query, [
         template_id,
         reseller_id,
-        reseller_id,
-        merchant_identifier,
         merchant_identifier,
         name,
         flow,
@@ -110,7 +106,7 @@ def delete_template_if_not_referenced_query(template_id: str) -> tuple[str, list
         )
         DELETE FROM {TEMPLATE_TABLE}
         WHERE id IN (SELECT id FROM can_delete)
-        RETURNING id, COALESCE(merchant_id,reseller_id) as reseller_id, COALESCE(shop_identifier,merchant_identifier) as merchant_identifier, name, is_active, created_at, updated_at
+        RETURNING id, reseller_id, merchant_identifier, name, is_active, created_at, updated_at
     """
     return query, [template_id]
 
@@ -135,25 +131,21 @@ def get_templates_list_query(filters: Dict[str, Any]) -> Tuple[str, List[Any]]:
     conditions = []
     values = []
 
-    # Handle reseller filtering (supports both single and multiple) with COALESCE for backward compatibility
+    # Handle reseller filtering (supports both single and multiple)
     if "reseller_ids" in filters and filters["reseller_ids"]:
         values.append(filters["reseller_ids"])
-        conditions.append(f"COALESCE(reseller_id, merchant_id) = ANY(${len(values)})")
+        conditions.append(f"reseller_id = ANY(${len(values)})")
     elif "reseller_id" in filters and filters["reseller_id"]:
         values.append(filters["reseller_id"])
-        conditions.append(f"COALESCE(reseller_id, merchant_id) = ${len(values)}")
+        conditions.append(f"reseller_id = ${len(values)}")
 
-    # Handle shop filtering (supports both single and multiple) with COALESCE for backward compatibility
+    # Handle shop filtering (supports both single and multiple)
     if "merchant_identifiers" in filters and filters["merchant_identifiers"]:
         values.append(filters["merchant_identifiers"])
-        conditions.append(
-            f"COALESCE(merchant_identifier, shop_identifier) = ANY(${len(values)})"
-        )
+        conditions.append(f"merchant_identifier = ANY(${len(values)})")
     elif "merchant_identifier" in filters and filters["merchant_identifier"]:
         values.append(filters["merchant_identifier"])
-        conditions.append(
-            f"COALESCE(merchant_identifier, shop_identifier) = ${len(values)}"
-        )
+        conditions.append(f"merchant_identifier = ${len(values)}")
 
     # Handle is_active filter
     if "is_active" in filters:
@@ -163,11 +155,10 @@ def get_templates_list_query(filters: Dict[str, Any]) -> Tuple[str, List[Any]]:
     where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
 
     # Select only metadata columns (exclude flow and schema fields for performance)
-    # Use COALESCE for backward compatibility
     query = f"""
         SELECT id, 
-               COALESCE(reseller_id, merchant_id) AS reseller_id, 
-               COALESCE(merchant_identifier, shop_identifier) AS merchant_identifier, 
+               reseller_id, 
+               merchant_identifier, 
                name, is_active, created_at, updated_at
         FROM {TEMPLATE_TABLE}
         {where_clause}
@@ -189,8 +180,8 @@ def get_template_by_id_query(template_id: str) -> Tuple[str, List[Any]]:
     """
     query = f"""
         SELECT id, 
-               COALESCE(reseller_id, merchant_id) AS reseller_id, 
-               COALESCE(merchant_identifier, shop_identifier) AS merchant_identifier, 
+               reseller_id, 
+               merchant_identifier, 
                name, flow, expected_payload_schema, expected_callback_response_schema, configurations, secrets, outbound_number_id, is_active, created_at, updated_at
         FROM {TEMPLATE_TABLE}
         WHERE id = $1
@@ -223,8 +214,8 @@ def get_template_by_outbound_number_id_query(
 
     query = f"""
         SELECT id, 
-               COALESCE(reseller_id, merchant_id) AS reseller_id, 
-               COALESCE(merchant_identifier, shop_identifier) AS merchant_identifier, 
+               reseller_id, 
+               merchant_identifier, 
                name, flow, expected_payload_schema, expected_callback_response_schema, configurations, secrets, outbound_number_id, is_active, created_at, updated_at
         FROM {TEMPLATE_TABLE}
         WHERE {' AND '.join(conditions)}
@@ -252,8 +243,8 @@ def get_all_templates_by_outbound_number_id_query(
     """
     query = f"""
         SELECT id, 
-               COALESCE(reseller_id, merchant_id) AS reseller_id, 
-               COALESCE(merchant_identifier, shop_identifier) AS merchant_identifier, 
+               reseller_id, 
+               merchant_identifier, 
                name, flow, expected_payload_schema, expected_callback_response_schema, configurations, outbound_number_id, is_active, created_at, updated_at
         FROM {TEMPLATE_TABLE}
         WHERE outbound_number_id = $1
@@ -340,12 +331,11 @@ def replace_template_query(
             outbound_number_id = $7,
             is_active = $8,
             merchant_identifier = $9,
-            shop_identifier = $10,
-            updated_at = $11
-        WHERE id = $12
+            updated_at = $10
+        WHERE id = $11
         RETURNING id, 
-                  COALESCE(reseller_id, merchant_id) AS reseller_id, 
-                  COALESCE(merchant_identifier, shop_identifier) AS merchant_identifier, 
+                  reseller_id, 
+                  merchant_identifier, 
                   name, flow, expected_payload_schema, expected_callback_response_schema, configurations, secrets, outbound_number_id, is_active, created_at, updated_at
     """
 
@@ -358,7 +348,6 @@ def replace_template_query(
         secrets,
         outbound_number_id,
         is_active,
-        merchant_identifier,
         merchant_identifier,
         updated_at,
         template_id,

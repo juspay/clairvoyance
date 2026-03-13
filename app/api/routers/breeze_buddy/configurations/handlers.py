@@ -44,16 +44,9 @@ async def create_configuration_handler(
     Raises:
         HTTPException: 400 if creation fails
     """
-    reseller_id = config.reseller_id or config.merchant_id
-    if not reseller_id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="reseller (or merchant for backward compatibility) is required",
-        )
-    merchant_identifier = config.merchant_identifier or config.shop_identifier
     logger.info(
         f"User {current_user.username} (role: {current_user.role}) creating configuration "
-        f"for reseller: {reseller_id}, template: {config.template}"
+        f"for reseller: {config.reseller_id}, template: {config.template}"
     )
 
     try:
@@ -65,9 +58,9 @@ async def create_configuration_handler(
             call_end_time=config.call_end_time,
             max_retry=config.max_retry,
             calling_provider=config.calling_provider,
-            reseller_id=reseller_id,
+            reseller_id=config.reseller_id,
             template=config.template,
-            merchant_identifier=merchant_identifier,
+            merchant_identifier=config.merchant_identifier,
             enable_international_call=config.enable_international_call,
             enable_inbound=(
                 config.enable_inbound if config.enable_inbound is not None else True
@@ -106,7 +99,7 @@ async def create_configuration_handler(
         if call_execution_config:
             logger.info(
                 f"Configuration created successfully: ID={call_execution_config.id}, "
-                f"reseller={reseller_id}, template={config.template}"
+                f"reseller={config.reseller_id}, template={config.template}"
             )
             return call_execution_config
         else:
@@ -163,9 +156,7 @@ async def list_configurations_handler(
         if merchant_identifier:
             # Support both new (merchant_identifier) and old (shop_identifier) field names
             configs = [
-                c
-                for c in configs
-                if (c.merchant_identifier or c.shop_identifier) == merchant_identifier
+                c for c in configs if c.merchant_identifier == merchant_identifier
             ]
 
         logger.info(f"Found {len(configs)} configurations before RBAC filtering")
@@ -251,39 +242,20 @@ async def update_configuration_handler(
                 detail=f"Configuration {config_id} not found",
             )
 
-        # Support both new and old field names for existing config
-        existing_reseller_id = (
-            existing_config.reseller_id or existing_config.merchant_id
-        )
-        existing_merchant_identifier = (
-            existing_config.merchant_identifier or existing_config.shop_identifier
-        )
-
-        # Support both new and old field names for request config
-        request_reseller_id = config.reseller_id or config.merchant_id
-        request_merchant_identifier = (
-            config.merchant_identifier or config.shop_identifier
-        )
-        if not request_reseller_id:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="reseller (or merchant for backward compatibility) is required",
-            )
-
         # RBAC: Validate access against existing configuration (not request body)
         validate_config_access(
             current_user,
-            existing_reseller_id,
-            existing_merchant_identifier,
+            existing_config.reseller_id,
+            existing_config.merchant_identifier,
             operation="update configuration for",
         )
 
         # Validate that identity fields match the existing configuration
         # This prevents accidentally updating a different record
-        if existing_reseller_id != request_reseller_id:
+        if existing_config.reseller_id != config.reseller_id:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Cannot change reseller_id from {existing_reseller_id} to {request_reseller_id}",
+                detail=f"Cannot change reseller_id from {existing_config.reseller_id} to {config.reseller_id}",
             )
 
         if existing_config.template != config.template:
@@ -292,17 +264,17 @@ async def update_configuration_handler(
                 detail=f"Cannot change template from {existing_config.template} to {config.template}",
             )
 
-        if existing_merchant_identifier != request_merchant_identifier:
+        if existing_config.merchant_identifier != config.merchant_identifier:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Cannot change merchant_identifier from {existing_merchant_identifier} to {request_merchant_identifier}",
+                detail=f"Cannot change merchant_identifier from {existing_config.merchant_identifier} to {config.merchant_identifier}",
             )
 
         # Update configuration
         updated_config = await update_call_execution_config(
-            reseller_id=request_reseller_id,
+            reseller_id=config.reseller_id,
             template=config.template,
-            merchant_identifier=request_merchant_identifier,
+            merchant_identifier=config.merchant_identifier,
             initial_offset=config.initial_offset,
             retry_offset=config.retry_offset,
             call_start_time=config.call_start_time,

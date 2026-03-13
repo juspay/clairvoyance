@@ -44,23 +44,6 @@ class AnalyticsFilters(BaseModel):
     reseller_ids: Optional[List[str]] = Field(
         None, description="Filter by multiple reseller IDs"
     )
-    # Old field names for backward compatibility
-    shop_identifier: Optional[str] = Field(
-        None,
-        description="Filter by single shop identifier (backward compatibility, use merchant_identifier)",
-    )
-    shop_identifiers: Optional[List[str]] = Field(
-        None,
-        description="Filter by multiple shop identifiers (backward compatibility, use merchant_identifiers)",
-    )
-    merchant_id: Optional[str] = Field(
-        None,
-        description="Filter by merchant ID (backward compatibility, use reseller_id)",
-    )
-    merchant_ids: Optional[List[str]] = Field(
-        None,
-        description="Filter by multiple merchant IDs (backward compatibility, use reseller_ids)",
-    )
     status: Optional[str] = Field(
         None, description="Filter by call status (completed, failed, etc.)"
     )
@@ -197,13 +180,13 @@ class OutboundNumberStat(BaseModel):
 
 
 class LeadStatusCountResult(BaseModel):
-    """Lead status count result - counts by status for a merchant or overall"""
+    """Lead status count result - counts by status for a reseller or overall"""
 
-    merchant_id: Optional[str] = Field(
-        None, description="Merchant ID (null for aggregate/total)"
+    reseller_id: Optional[str] = Field(
+        None, description="Reseller ID (null for aggregate/total)"
     )
-    shop_identifier: Optional[str] = Field(
-        None, description="Shop identifier (if available)"
+    merchant_identifier: Optional[str] = Field(
+        None, description="Merchant identifier (if available)"
     )
     backlog_count: int = Field(
         default=0, description="Number of leads in BACKLOG status"

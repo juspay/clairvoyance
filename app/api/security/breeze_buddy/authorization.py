@@ -61,10 +61,7 @@ def validate_shop_access(
     Raises:
         HTTPException: 403 Forbidden if user doesn't have access
     """
-    identifier = (
-        current_user.merchant_identifiers or current_user.shop_identifiers or []
-    )
-    accessible_shops = get_accessible_shops(identifier)
+    accessible_shops = get_accessible_shops(current_user.merchant_identifiers)
 
     # User has access to all shops (admin/reseller with wildcard)
     if accessible_shops is None:
@@ -181,7 +178,7 @@ def filter_by_shop_access(
     Returns:
         Filtered list containing only accessible shops
     """
-    identifier = current_user.merchant_identifiers or current_user.shop_identifiers
+    identifier = current_user.merchant_identifiers
     accessible_shops = get_accessible_shops(identifier)
 
     # User has access to all shops
@@ -206,7 +203,7 @@ def has_wildcard_access(current_user: UserInfo) -> bool:
     Returns:
         True if user has wildcard access, False otherwise
     """
-    return "*" in (current_user.merchant_identifiers or current_user.shop_identifiers)
+    return "*" in current_user.merchant_identifiers
 
 
 def has_wildcard_merchant_access(current_user: UserInfo) -> bool:
@@ -219,7 +216,7 @@ def has_wildcard_merchant_access(current_user: UserInfo) -> bool:
     Returns:
         True if user has wildcard reseller access, False otherwise
     """
-    return "*" in (current_user.reseller_ids or current_user.merchant_ids)
+    return "*" in current_user.reseller_ids
 
 
 def validate_merchant_access(
@@ -238,8 +235,7 @@ def validate_merchant_access(
     Raises:
         HTTPException: 403 Forbidden if user doesn't have access
     """
-    reseller = current_user.reseller_ids or current_user.merchant_ids or []
-    accessible_resellers = get_accessible_merchants(reseller)
+    accessible_resellers = get_accessible_merchants(current_user.reseller_ids)
 
     # User has access to all resellers (admin/reseller with wildcard)
     if accessible_resellers is None:

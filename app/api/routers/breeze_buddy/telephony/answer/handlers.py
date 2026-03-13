@@ -32,7 +32,7 @@ from html import escape as html_escape
 from typing import Any, Dict
 from urllib.parse import quote
 
-from fastapi import HTTPException, Request, Response, status
+from fastapi import Request, Response
 from starlette.responses import HTMLResponse
 
 from app.ai.voice.agents.breeze_buddy.agent.ivr import (
@@ -105,16 +105,10 @@ async def resolve_call_templates(
     # Check if lead exists (outbound call)
     lead = await get_lead_by_call_id(call_sid)
     if lead:
-        reseller = lead.reseller_id or lead.merchant_id
-        if not reseller:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="reseller (or merchant for backward compatibility) is required",
-            )
         # Outbound call - look up template using merchant info from lead
         logger.info(f"[Answer] Outbound call detected, lead: {lead.id}")
         template = await get_template_by_merchant(
-            reseller_id=reseller,
+            reseller_id=lead.reseller_id,
             merchant_identifier=lead.merchant_identifier,
             name=lead.template,
         )
@@ -125,7 +119,7 @@ async def resolve_call_templates(
         return {
             "is_outbound": True,
             "template_id": str(template.id),
-            "merchant_id": reseller,
+            "merchant_id": lead.reseller_id,
         }
 
     # Inbound call - look up templates by outbound number
@@ -403,7 +397,7 @@ async def _build_provider_response(
     allocation = await safe_allocate_pod(
         call_sid=call_id,
         provider=provider,
-        reseller_id=result.get("merchant_id") or result.get("reseller_id"),
+        reseller_id=result.get("merchant_id"),
         template="ws",
     )
     if allocation:

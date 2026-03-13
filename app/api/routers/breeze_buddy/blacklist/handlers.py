@@ -31,7 +31,7 @@ async def add_blacklist_handler(
         result = await add_blacklisted_number(
             id=str(uuid4()),
             phone_number=request.phone_number,
-            reseller_id=request.reseller_id or request.merchant_id,
+            reseller_id=request.reseller_id,
             reason=request.reason,
             created_by=current_user.username,
         )

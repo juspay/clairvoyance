@@ -33,14 +33,11 @@ def validate_lead_access(
     if current_user.role == "admin":
         return
 
-    # Support both new (reseller_ids) and old (merchant_ids) field names
-    user_reseller_ids = current_user.reseller_ids or current_user.merchant_ids or []
-    user_merchant_identifiers = (
-        current_user.merchant_identifiers or current_user.shop_identifiers or []
-    )
-
     # Check reseller access
-    if reseller_id not in user_reseller_ids and "*" not in user_reseller_ids:
+    if (
+        reseller_id not in current_user.reseller_ids
+        and "*" not in current_user.reseller_ids
+    ):
         logger.warning(
             f"User {current_user.username} attempted to {operation} leads "
             f"for unauthorized reseller: {reseller_id}"
@@ -53,8 +50,8 @@ def validate_lead_access(
     # Check merchant access (if merchant_identifier is specified)
     if merchant_identifier:
         if (
-            merchant_identifier not in user_merchant_identifiers
-            and "*" not in user_merchant_identifiers
+            merchant_identifier not in current_user.merchant_identifiers
+            and "*" not in current_user.merchant_identifiers
         ):
             logger.warning(
                 f"User {current_user.username} attempted to {operation} leads "
@@ -84,37 +81,28 @@ def validate_lead_read_access(
     if current_user.role == "admin":
         return
 
-    # Support both new (reseller_ids) and old (merchant_ids) field names
-    user_reseller_ids = current_user.reseller_ids or current_user.merchant_ids or []
-    user_merchant_identifiers = (
-        current_user.merchant_identifiers or current_user.shop_identifiers or []
-    )
-
-    # Support both new and old field names for lead
-    lead_reseller_id = lead.reseller_id or getattr(lead, "merchant_id", None)
-    lead_merchant_identifier = lead.merchant_identifier or getattr(
-        lead, "shop_identifier", None
-    )
-
     # Check reseller access
-    if lead_reseller_id not in user_reseller_ids and "*" not in user_reseller_ids:
+    if (
+        lead.reseller_id not in current_user.reseller_ids
+        and "*" not in current_user.reseller_ids
+    ):
         logger.warning(
             f"User {current_user.username} attempted to {operation} lead {lead.id} "
-            f"for unauthorized reseller: {lead_reseller_id}"
+            f"for unauthorized reseller: {lead.reseller_id}"
         )
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=f"Lead not found"
         )
 
     # Check shop access
-    if lead_merchant_identifier:
+    if lead.merchant_identifier:
         if (
-            lead_merchant_identifier not in user_merchant_identifiers
-            and "*" not in user_merchant_identifiers
+            lead.merchant_identifier not in current_user.merchant_identifiers
+            and "*" not in current_user.merchant_identifiers
         ):
             logger.warning(
                 f"User {current_user.username} attempted to {operation} lead {lead.id} "
-                f"for unauthorized merchant: {lead_merchant_identifier}"
+                f"for unauthorized merchant: {lead.merchant_identifier}"
             )
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, detail=f"Lead not found"
@@ -144,14 +132,11 @@ def validate_recording_access(
     if current_user.role == "admin":
         return
 
-    # Support both new (reseller_ids) and old (merchant_ids) field names
-    user_reseller_ids = current_user.reseller_ids or current_user.merchant_ids or []
-    user_merchant_identifiers = (
-        current_user.merchant_identifiers or current_user.shop_identifiers or []
-    )
-
     # Check reseller access
-    if reseller_id not in user_reseller_ids and "*" not in user_reseller_ids:
+    if (
+        reseller_id not in current_user.reseller_ids
+        and "*" not in current_user.reseller_ids
+    ):
         logger.warning(
             f"User {current_user.username} attempted to access recording "
             f"for unauthorized reseller: {reseller_id} (call_sid: {call_sid})"
@@ -164,8 +149,8 @@ def validate_recording_access(
     # Check merchant access (if merchant_identifier is specified)
     if merchant_identifier:
         if (
-            merchant_identifier not in user_merchant_identifiers
-            and "*" not in user_merchant_identifiers
+            merchant_identifier not in current_user.merchant_identifiers
+            and "*" not in current_user.merchant_identifiers
         ):
             logger.warning(
                 f"User {current_user.username} attempted to access recording "

@@ -33,13 +33,11 @@ def get_accessible_merchants_and_shops(
         Shop: (["m1"], ["shop_123"]) - single merchant, single shop
         Unscoped: ([], []) - no access to any merchants or shops
     """
-    # Get reseller/merchant IDs - support both new (reseller_ids) and old (merchant_ids) field names
-    reseller_ids = current_user.reseller_ids or current_user.merchant_ids or []
+    # Get reseller IDs
+    reseller_ids = current_user.reseller_ids
 
-    # Get merchant/shop identifiers - support both new (merchant_identifiers) and old (shop_identifiers) field names
-    merchant_identifiers = (
-        current_user.merchant_identifiers or current_user.shop_identifiers or []
-    )
+    # Get merchant identifiers
+    merchant_identifiers = current_user.merchant_identifiers
 
     # Check merchant access
     # Distinguish between:
@@ -105,8 +103,8 @@ def apply_hierarchical_filters(
             )
 
         # Support both new (reseller_id/reseller_ids) and old (merchant_id/merchant_ids) field names
-        filter_reseller_id = filters.get("reseller_id") or filters.get("merchant_id")
-        filter_reseller_ids = filters.get("reseller_ids") or filters.get("merchant_ids")
+        filter_reseller_id = filters.get("reseller_id")
+        filter_reseller_ids = filters.get("reseller_ids")
 
         if filter_reseller_id:
             # Validate user has access to requested reseller
@@ -151,12 +149,8 @@ def apply_hierarchical_filters(
             )
 
         # Support both new (merchant_identifier/merchant_identifiers) and old (shop_identifier/shop_identifiers) field names
-        filter_merchant_identifier = filters.get("merchant_identifier") or filters.get(
-            "shop_identifier"
-        )
-        filter_merchant_identifiers = filters.get(
-            "merchant_identifiers"
-        ) or filters.get("shop_identifiers")
+        filter_merchant_identifier = filters.get("merchant_identifier")
+        filter_merchant_identifiers = filters.get("merchant_identifiers")
 
         if filter_merchant_identifier:
             # Validate user has access to requested shop

@@ -76,14 +76,8 @@ async def create_configuration(
         Created configuration object with generated ID
     """
     # Support both new (reseller_id, merchant_identifier) and old (merchant_id, shop_identifier) field names
-    reseller_id = config.reseller_id or config.merchant_id
-    merchant_identifier = config.merchant_identifier or config.shop_identifier
-
-    if not reseller_id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Either 'reseller_id' or 'merchant_id' field is required",
-        )
+    reseller_id = config.reseller_id
+    merchant_identifier = config.merchant_identifier
 
     # RBAC: Check if user has permission to create config for this reseller/shop
     validate_config_access(
@@ -99,16 +93,8 @@ async def create_configuration(
 @router.get("/configurations", response_model=List[CallExecutionConfig])
 async def list_configurations(
     reseller_id: Optional[str] = Query(None, description="Filter by reseller ID"),
-    merchant_id: Optional[str] = Query(
-        None,
-        description="Filter by merchant ID (backward compatibility, use reseller_id)",
-    ),
     template: Optional[str] = Query(
         None, description="Filter by template name (e.g., 'order-confirmation')"
-    ),
-    shop_identifier: Optional[str] = Query(
-        None,
-        description="Filter by shop identifier (backward compatibility, use merchant_identifier)",
     ),
     merchant_identifier: Optional[str] = Query(
         None, description="Filter by merchant identifier"
@@ -136,25 +122,20 @@ async def list_configurations(
     Returns:
         List of configuration objects matching filters and user permissions
     """
-    # Support both new and old field names for backward compatibility
-    effective_reseller_id = reseller_id or merchant_id
-    effective_merchant_identifier = merchant_identifier or shop_identifier
 
     # Validate reseller access if filter provided
-    if effective_reseller_id and current_user.role != "admin":
-        # Support both new (reseller_ids) and old (merchant_ids) field names in user info
-        user_reseller_ids = current_user.reseller_ids or current_user.merchant_ids
+    if reseller_id and current_user.role != "admin":
         if (
-            effective_reseller_id not in user_reseller_ids
-            and "*" not in user_reseller_ids
+            reseller_id not in current_user.reseller_ids
+            and "*" not in current_user.reseller_ids
         ):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Access denied to reseller {effective_reseller_id}",
+                detail=f"Access denied to reseller {reseller_id}",
             )
     # Get configurations
     configs = await list_configurations_handler(
-        effective_reseller_id, template, effective_merchant_identifier, current_user
+        reseller_id, template, merchant_identifier, current_user
     )
 
     # Apply RBAC filtering
@@ -185,16 +166,12 @@ async def get_configuration(
     # Get configuration
     config = await get_configuration_handler(config_id, current_user)
 
-    # Support both new (reseller_id, merchant_identifier) and old (merchant_id, shop_identifier) field names
-    config_reseller_id = config.reseller_id or config.merchant_id
-    config_merchant_identifier = config.merchant_identifier or config.shop_identifier
-
     # RBAC: Check access (return 404 to avoid leaking existence)
     try:
         validate_config_access(
             current_user,
-            config_reseller_id,
-            config_merchant_identifier,
+            config.reseller_id,
+            config.merchant_identifier,
             operation="access configuration for",
         )
     except HTTPException:
@@ -281,16 +258,8 @@ async def delete_configuration(
 async def calling_activation(
     enable_calling: bool,
     reseller_id: Optional[str] = Query(None, description="Filter by reseller ID"),
-    merchant_id: Optional[str] = Query(
-        None,
-        description="Filter by merchant ID (backward compatibility, use reseller_id)",
-    ),
     merchant_identifier: Optional[str] = Query(
         None, description="Filter by merchant identifier"
-    ),
-    shop_identifier: Optional[str] = Query(
-        None,
-        description="Filter by shop identifier (backward compatibility, use merchant_identifier)",
     ),
     current_user: UserInfo = Depends(get_current_user_with_rbac),
 ):
@@ -323,12 +292,9 @@ async def calling_activation(
             "configs": [...]
         }
     """
-    # Support both new and old field names for backward compatibility
-    effective_reseller_id = reseller_id or merchant_id
-    effective_merchant_identifier = merchant_identifier or shop_identifier
 
     # RBAC: Check permissions
-    if effective_reseller_id is None:
+    if reseller_id is None:
         # Global toggle - only admins allowed
         if current_user.role != "admin":
             raise HTTPException(
@@ -339,15 +305,15 @@ async def calling_activation(
         # Reseller-specific toggle - validate access
         validate_config_access(
             current_user,
-            effective_reseller_id,
-            effective_merchant_identifier,
+            reseller_id,
+            merchant_identifier,
             operation="toggle calling for",
         )
 
     result = await calling_activation_handler(
         enable_calling=enable_calling,
-        reseller_id=effective_reseller_id,
-        merchant_identifier=effective_merchant_identifier,
+        reseller_id=reseller_id,
+        merchant_identifier=merchant_identifier,
         current_user=current_user,
     )
 

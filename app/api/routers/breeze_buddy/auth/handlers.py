@@ -90,9 +90,7 @@ async def login_handler(
                 role=user.role,
                 email=user.email,
                 reseller_ids=user.reseller_ids,
-                merchant_ids=user.reseller_ids,
                 merchant_identifiers=user.merchant_identifiers,
-                shop_identifiers=user.merchant_identifiers,
                 permissions=[],
                 owner_id=user.owner_id,
             )
@@ -249,9 +247,7 @@ async def generate_s2s_token_handler(request: S2STokenRequest) -> S2STokenRespon
             role=user.role,
             email=user.email,
             reseller_ids=user.reseller_ids,
-            merchant_ids=user.reseller_ids,
             merchant_identifiers=user.merchant_identifiers,
-            shop_identifiers=user.merchant_identifiers,
             permissions=[],
             owner_id=user.owner_id,
         )

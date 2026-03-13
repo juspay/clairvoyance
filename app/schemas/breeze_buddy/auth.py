@@ -108,13 +108,7 @@ class UserInfo(BaseModel):
     role: UserRole
     email: Optional[str] = None
     reseller_ids: List[str] = Field(default_factory=list)
-    merchant_ids: List[str] = Field(
-        default_factory=list
-    )  # Backward compatibility: same as reseller_ids (will be removed)
     merchant_identifiers: List[str] = Field(default_factory=list)
-    shop_identifiers: List[str] = Field(
-        default_factory=list
-    )  # Backward compatibility: same as merchant_identifiers (will be removed)
     permissions: List[str] = Field(default_factory=list)
     owner_id: Optional[str] = None  # UUID of user who created this account
 
@@ -127,13 +121,7 @@ class UserCreate(BaseModel):
     role: UserRole
     email: Optional[str] = None
     reseller_ids: List[str] = Field(default_factory=list)
-    merchant_ids: List[str] = Field(
-        default_factory=list
-    )  # Backward compatibility: same as reseller_ids (will be removed)
     merchant_identifiers: List[str] = Field(default_factory=list)
-    shop_identifiers: List[str] = Field(
-        default_factory=list
-    )  # Backward compatibility: same as merchant_identifiers (will be removed)
     is_active: bool = True
 
 
@@ -144,13 +132,7 @@ class UserUpdate(BaseModel):
     role: Optional[UserRole] = None
     email: Optional[str] = None
     reseller_ids: Optional[List[str]] = None
-    merchant_ids: Optional[List[str]] = (
-        None  # Backward compatibility: same as reseller_ids
-    )
     merchant_identifiers: Optional[List[str]] = None
-    shop_identifiers: Optional[List[str]] = (
-        None  # Backward compatibility: same as merchant_identifiers
-    )
     is_active: Optional[bool] = None
 
 
@@ -163,13 +145,7 @@ class UserInDB(BaseModel):
     role: UserRole
     email: Optional[str] = None
     reseller_ids: List[str] = Field(default_factory=list)
-    merchant_ids: List[str] = Field(
-        default_factory=list
-    )  # Backward compatibility: same as reseller_ids (will be removed)
     merchant_identifiers: List[str] = Field(default_factory=list)
-    shop_identifiers: List[str] = Field(
-        default_factory=list
-    )  # Backward compatibility: same as merchant_identifiers (will be removed)
     is_active: bool = True
     owner_id: Optional[str] = None  # UUID of user who created this account
     created_at: Optional[datetime] = None
@@ -184,13 +160,7 @@ class User(BaseModel):
     role: UserRole
     email: Optional[str] = None
     reseller_ids: List[str] = Field(default_factory=list)
-    merchant_ids: List[str] = Field(
-        default_factory=list
-    )  # Backward compatibility: same as reseller_ids (will be removed)
     merchant_identifiers: List[str] = Field(default_factory=list)
-    shop_identifiers: List[str] = Field(
-        default_factory=list
-    )  # Backward compatibility: same as merchant_identifiers (will be removed)
     is_active: bool = True
     owner_id: Optional[str] = None  # UUID of user who created this account
     created_at: Optional[datetime] = None
@@ -205,13 +175,7 @@ class AuthTokenData(BaseModel):
     role: UserRole
     email: Optional[str] = None
     reseller_ids: List[str] = Field(default_factory=list)
-    merchant_ids: List[str] = Field(
-        default_factory=list
-    )  # Backward compatibility: same as reseller_ids (will be removed)
     merchant_identifiers: List[str] = Field(default_factory=list)
-    shop_identifiers: List[str] = Field(
-        default_factory=list
-    )  # Backward compatibility: same as merchant_identifiers (will be removed)
     permissions: List[str] = Field(default_factory=list)
     iat: Optional[int] = None  # issued at
     exp: Optional[int] = None  # expiration

@@ -258,9 +258,7 @@ async def get_inbound_count_from_db(
 
     # Normalize group_by to prevent query/accessor divergence
     allowed_group_by_fields = {
-        "shop_identifier",
         "template",
-        "merchant_id",
         "reseller_id",
         "merchant_identifier",
     }

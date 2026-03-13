@@ -143,10 +143,8 @@ class LeadCallTracker(BaseModel):
 
     id: str
     outbound_number_id: Optional[str] = None
-    reseller_id: Optional[str] = None
-    merchant_id: Optional[str] = None
+    reseller_id: str
     template: str
-    shop_identifier: Optional[str] = None
     merchant_identifier: Optional[str] = None
     request_id: Optional[str] = None
     attempt_count: int = 0
@@ -176,13 +174,7 @@ class CreateOutboundNumberRequest(BaseModel):
     status: OutboundNumberStatus = OutboundNumberStatus.AVAILABLE
     maximum_channels: Optional[int] = None
     reseller_id: Optional[str] = None
-    merchant_id: Optional[str] = (
-        None  # Backward compatibility: same as reseller_id (will be removed)
-    )
     merchant_identifier: Optional[str] = None
-    shop_identifier: Optional[str] = (
-        None  # Backward compatibility: same as merchant_identifier (will be removed)
-    )
 
 
 class OutboundNumber(BaseModel):
@@ -195,13 +187,7 @@ class OutboundNumber(BaseModel):
     channels: Optional[int] = None
     maximum_channels: Optional[int] = None
     reseller_id: Optional[str] = None
-    merchant_id: Optional[str] = (
-        None  # Backward compatibility: same as reseller_id (will be removed)
-    )
     merchant_identifier: Optional[str] = None
-    shop_identifier: Optional[str] = (
-        None  # Backward compatibility: same as merchant_identifier (will be removed)
-    )
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
@@ -226,11 +212,9 @@ class CreateCallExecutionConfigRequest(BaseModel):
     call_end_time: time
     max_retry: int
     calling_provider: CallProvider
-    reseller_id: Optional[str] = None
-    merchant_id: Optional[str] = None  # Backward compatibility: same as reseller_id
+    reseller_id: str
     template: str
     merchant_identifier: Optional[str] = None
-    shop_identifier: Optional[str] = None
     enable_international_call: bool = True
     enable_calling: Optional[bool] = True
     enable_inbound: Optional[bool] = True
@@ -274,10 +258,8 @@ class CreateCallExecutionConfigRequest(BaseModel):
 class UpdateCallExecutionConfigRequest(BaseModel):
     """Request to update call execution configuration"""
 
-    reseller_id: Optional[str] = None
-    merchant_id: Optional[str] = None
+    reseller_id: str
     template: str
-    shop_identifier: Optional[str] = None
     merchant_identifier: Optional[str] = None
     initial_offset: Optional[int] = None
     retry_offset: Optional[int] = None
@@ -337,11 +319,9 @@ class CallExecutionConfig(BaseModel):
     call_end_time: time
     max_retry: int
     calling_provider: CallProvider
-    reseller_id: Optional[str] = None
-    merchant_id: Optional[str] = None  # Backward compatibility: same as reseller_id
+    reseller_id: str
     template: str
     merchant_identifier: Optional[str] = None
-    shop_identifier: Optional[str] = None
     enable_international_call: bool = True
     enable_calling: bool = True
     enable_inbound: bool = True
@@ -368,7 +348,6 @@ class BlacklistedNumber(BaseModel):
     id: str
     phone_number: str
     reseller_id: Optional[str] = None
-    merchant_id: Optional[str] = None
     reason: Optional[str] = None
     created_by: Optional[str] = None
     created_at: Optional[datetime] = None
@@ -380,5 +359,4 @@ class CreateBlacklistNumberRequest(BaseModel):
 
     phone_number: str = Field(min_length=4, max_length=20)
     reseller_id: Optional[str] = None
-    merchant_id: Optional[str] = None
     reason: Optional[str] = Field(default=None, max_length=500)

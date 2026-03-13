@@ -54,12 +54,10 @@ def insert_lead_call_tracker_query(
         INSERT INTO "{LEAD_CALL_TRACKER_TABLE}"
         (
             "id",
-            "merchant_id",
             "reseller_id",
             "template",
             "template_id",
             "merchant_identifier",
-            "shop_identifier",
             "request_id",
             "next_attempt_at",
             "payload",
@@ -77,17 +75,15 @@ def insert_lead_call_tracker_query(
             "created_at",
             "updated_at"
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23) RETURNING *;
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21) RETURNING *;
     """
 
     values = [
         id,
-        reseller_id,  # merchant_id (for backward compatibility)
-        reseller_id,  # reseller_id
+        reseller_id,
         template,
         template_id,
-        merchant_identifier,  # merchant_identifier
-        merchant_identifier,  # shop_identifier (for backward compatibility)
+        merchant_identifier,
         request_id,
         next_attempt_at,
         json.dumps(payload) if payload else None,
@@ -180,12 +176,9 @@ def update_lead_call_details_query(
 def get_lead_by_call_id_query(call_id: str) -> Tuple[str, List[Any]]:
     """
     Generate query to get lead by call ID.
-    Uses COALESCE for backward compatibility with old column names.
     """
     text = f"""
-        SELECT *,
-               COALESCE(reseller_id, merchant_id) AS reseller_id,
-               COALESCE(merchant_identifier, shop_identifier) AS merchant_identifier
+        SELECT *
         FROM "{LEAD_CALL_TRACKER_TABLE}"
         WHERE "call_id" = $1;
     """
@@ -196,12 +189,9 @@ def get_lead_by_call_id_query(call_id: str) -> Tuple[str, List[Any]]:
 def get_lead_by_id_query(lead_id: str) -> Tuple[str, List[Any]]:
     """
     Generate query to get lead by ID.
-    Uses COALESCE for backward compatibility with old column names.
     """
     text = f"""
-        SELECT *,
-               COALESCE(reseller_id, merchant_id) AS reseller_id,
-               COALESCE(merchant_identifier, shop_identifier) AS merchant_identifier
+        SELECT *
         FROM "{LEAD_CALL_TRACKER_TABLE}"
         WHERE "id" = $1;
     """

@@ -138,52 +138,22 @@ def build_analytics_where_clause(
     # Reseller ID filter with backward compatibility
     if "reseller_id" in filters and filters["reseller_id"]:
         values.append(filters["reseller_id"])
-        conditions.append(
-            f"COALESCE(lct.reseller_id, lct.merchant_id) = ${len(values) + value_offset}"
-        )
-    elif "merchant_id" in filters and filters["merchant_id"]:
-        # Backward compatibility: accept merchant_id as alias for reseller_id
-        values.append(filters["merchant_id"])
-        conditions.append(
-            f"COALESCE(lct.reseller_id, lct.merchant_id) = ${len(values) + value_offset}"
-        )
+        conditions.append(f"lct.reseller_id = ${len(values) + value_offset}")
 
     if "reseller_ids" in filters and filters["reseller_ids"]:
         # Use ANY for array matching
         values.append(filters["reseller_ids"])
-        conditions.append(
-            f"COALESCE(lct.reseller_id, lct.merchant_id) = ANY(${len(values) + value_offset})"
-        )
-    elif "merchant_ids" in filters and filters["merchant_ids"]:
-        # Backward compatibility: accept merchant_ids as alias for reseller_ids
-        values.append(filters["merchant_ids"])
-        conditions.append(
-            f"COALESCE(lct.reseller_id, lct.merchant_id) = ANY(${len(values) + value_offset})"
-        )
+        conditions.append(f"lct.reseller_id = ANY(${len(values) + value_offset})")
 
     # Merchant identifier filter with backward compatibility
     if "merchant_identifier" in filters and filters["merchant_identifier"]:
         values.append(filters["merchant_identifier"])
-        conditions.append(
-            f"COALESCE(lct.merchant_identifier, lct.shop_identifier) = ${len(values) + value_offset}"
-        )
-    elif "shop_identifier" in filters and filters["shop_identifier"]:
-        # Backward compatibility: accept shop_identifier as alias for merchant_identifier
-        values.append(filters["shop_identifier"])
-        conditions.append(
-            f"COALESCE(lct.merchant_identifier, lct.shop_identifier) = ${len(values) + value_offset}"
-        )
+        conditions.append(f"lct.merchant_identifier = ${len(values) + value_offset}")
 
     if "merchant_identifiers" in filters and filters["merchant_identifiers"]:
         values.append(filters["merchant_identifiers"])
         conditions.append(
-            f"COALESCE(lct.merchant_identifier, lct.shop_identifier) = ANY(${len(values) + value_offset})"
-        )
-    elif "shop_identifiers" in filters and filters["shop_identifiers"]:
-        # Backward compatibility: accept shop_identifiers as alias for merchant_identifiers
-        values.append(filters["shop_identifiers"])
-        conditions.append(
-            f"COALESCE(lct.merchant_identifier, lct.shop_identifier) = ANY(${len(values) + value_offset})"
+            f"lct.merchant_identifier = ANY(${len(values) + value_offset})"
         )
 
     if "status" in filters and filters["status"]:
@@ -248,8 +218,6 @@ def get_analytics_summary_query(
         "merchant_identifier",
         "template",
         "reseller_id",
-        "merchant_id",
-        "shop_identifier",
     ]
     if group_by and group_by not in allowed_group_by_fields:
         group_by = None
@@ -264,9 +232,8 @@ def get_analytics_summary_query(
                     lct.call_initiated_time,
                     lct.call_end_time,
                     lct.template,
-                    lct.shop_identifier,
-                    COALESCE(lct.merchant_identifier, lct.shop_identifier) as merchant_identifier,
-                    COALESCE(lct.reseller_id, lct.merchant_id) as reseller_id,
+                    lct.merchant_identifier,
+                    lct.reseller_id,
                     lct.payload
                 FROM "{LEAD_CALL_TRACKER_TABLE}" lct
                 {join_clause}
@@ -313,7 +280,7 @@ def get_analytics_summary_query(
                     lct.call_initiated_time,
                     lct.call_end_time,
                     lct.template,
-                    COALESCE(lct.merchant_identifier, lct.shop_identifier) as merchant_identifier
+                    lct.merchant_identifier
                 FROM "{LEAD_CALL_TRACKER_TABLE}" lct
                 {join_clause}
                 {where_clause}
@@ -554,8 +521,6 @@ def get_analytics_lead_based_query(
         "merchant_identifier",
         "template",
         "reseller_id",
-        "merchant_id",
-        "shop_identifier",
     ]
     if group_by and group_by not in allowed_group_by_fields:
         group_by = None
@@ -818,15 +783,13 @@ def get_analytics_lead_status_counts_query(
 
     # Add search conditions for reseller_id
     if search_reseller_id:
-        conditions.append(
-            f"COALESCE(lct.reseller_id, lct.merchant_id) ILIKE ${len(values) + 1} ESCAPE '\\'"
-        )
+        conditions.append(f"lct.reseller_id ILIKE ${len(values) + 1} ESCAPE '\\'")
         values.append(f"%{escape_ilike_pattern(search_reseller_id)}%")
 
     # Add search conditions for merchant_identifier
     if search_merchant_identifier:
         conditions.append(
-            f"COALESCE(lct.merchant_identifier, lct.shop_identifier) ILIKE ${len(values) + 1} ESCAPE '\\'"
+            f"lct.merchant_identifier ILIKE ${len(values) + 1} ESCAPE '\\'"
         )
         values.append(f"%{escape_ilike_pattern(search_merchant_identifier)}%")
 
@@ -838,17 +801,15 @@ def get_analytics_lead_status_counts_query(
     # Main query with pagination - groups by reseller_id and merchant_identifier
     text = f"""
         SELECT
-            COALESCE(lct.reseller_id, lct.merchant_id) AS reseller_id,
-            COALESCE(lct.reseller_id, lct.merchant_id) AS merchant_id,
-            COALESCE(lct.merchant_identifier, lct.shop_identifier) AS shop_identifier,
-            COALESCE(lct.merchant_identifier, lct.shop_identifier) AS merchant_identifier,
+            lct.reseller_id,
+            lct.merchant_identifier,
             COUNT(*) FILTER (WHERE lct.status = 'BACKLOG') as backlog_count,
             COUNT(*) FILTER (WHERE lct.status = 'PROCESSING') as processing_count,
             COUNT(*) FILTER (WHERE lct.status = 'FINISHED') as finished_count,
             COUNT(*) as total_count
         FROM "{LEAD_CALL_TRACKER_TABLE}" lct
         {where_clause}
-        GROUP BY COALESCE(lct.reseller_id, lct.merchant_id), COALESCE(lct.merchant_identifier, lct.shop_identifier)
+        GROUP BY lct.reseller_id, lct.merchant_identifier
         ORDER BY total_count DESC
         LIMIT ${len(values) + 1} OFFSET ${len(values) + 2};
     """
@@ -881,15 +842,13 @@ def get_analytics_lead_status_counts_total_query(
 
     # Add search conditions for reseller_id
     if search_reseller_id:
-        conditions.append(
-            f"COALESCE(lct.reseller_id, lct.merchant_id) ILIKE ${len(values) + 1} ESCAPE '\\'"
-        )
+        conditions.append(f"lct.reseller_id ILIKE ${len(values) + 1} ESCAPE '\\'")
         values.append(f"%{escape_ilike_pattern(search_reseller_id)}%")
 
     # Add search conditions for merchant_identifier
     if search_merchant_identifier:
         conditions.append(
-            f"COALESCE(lct.merchant_identifier, lct.shop_identifier) ILIKE ${len(values) + 1} ESCAPE '\\'"
+            f"lct.merchant_identifier ILIKE ${len(values) + 1} ESCAPE '\\'"
         )
         values.append(f"%{escape_ilike_pattern(search_merchant_identifier)}%")
 
@@ -901,7 +860,7 @@ def get_analytics_lead_status_counts_total_query(
             SELECT 1
             FROM "{LEAD_CALL_TRACKER_TABLE}" lct
             {where_clause}
-            GROUP BY COALESCE(lct.reseller_id, lct.merchant_id), COALESCE(lct.merchant_identifier, lct.shop_identifier)
+            GROUP BY lct.reseller_id, lct.merchant_identifier
         ) as grouped;
     """
 
@@ -951,9 +910,7 @@ def get_analytics_inbound_count_query(
 
     # Validate and sanitize group_by to prevent SQL injection
     allowed_group_by_fields = [
-        "shop_identifier",
         "template",
-        "merchant_id",
         "reseller_id",
         "merchant_identifier",
     ]

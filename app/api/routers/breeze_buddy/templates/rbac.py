@@ -32,9 +32,11 @@ def validate_template_access(
     # Admin has full access
     if current_user.role == "admin":
         return
-    reseller = current_user.reseller_ids or current_user.merchant_ids
     # Check reseller access
-    if reseller_id not in reseller and "*" not in reseller:
+    if (
+        reseller_id not in current_user.reseller_ids
+        and "*" not in current_user.reseller_ids
+    ):
         logger.warning(
             f"User {current_user.username} attempted to {operation} template "
             f"for unauthorized reseller: {reseller_id}"
@@ -45,8 +47,10 @@ def validate_template_access(
         )
     # Check shop access (if merchant_identifier is specified)
     if merchant_identifier:
-        identifier = current_user.merchant_identifiers or current_user.shop_identifiers
-        if merchant_identifier not in identifier and "*" not in identifier:
+        if (
+            merchant_identifier not in current_user.merchant_identifiers
+            and "*" not in current_user.merchant_identifiers
+        ):
             logger.warning(
                 f"User {current_user.username} attempted to {operation} template "
                 f"for unauthorized shop: {merchant_identifier}"
@@ -71,21 +75,24 @@ def filter_templates_by_rbac(templates: List, current_user: UserInfo) -> List:
     # Admin sees all
     if current_user.role == "admin":
         return templates
-    reseller = current_user.reseller_ids or current_user.merchant_ids
-    identifier = current_user.merchant_identifiers or current_user.shop_identifiers
+
     # Wildcard access
-    if "*" in reseller and "*" in identifier:
+    if "*" in current_user.reseller_ids and "*" in current_user.merchant_identifiers:
         return templates
 
     filtered = []
     for template in templates:
         # Check reseller access
-        has_reseller_access = "*" in reseller or template.reseller_id in reseller
+        has_reseller_access = (
+            "*" in current_user.reseller_ids
+            or template.reseller_id in current_user.reseller_ids
+        )
 
         # Check shop access (templates might not have merchant_identifier)
         if template.merchant_identifier:
             has_shop_access = (
-                "*" in identifier or template.merchant_identifier in identifier
+                "*" in current_user.merchant_identifiers
+                or template.merchant_identifier in current_user.merchant_identifiers
             )
         else:
             # Templates without merchant_identifier are accessible if reseller access granted
@@ -116,10 +123,9 @@ def require_admin_or_reseller_owner(
     # Admin has full access
     if current_user.role == "admin":
         return
-    reseller = current_user.reseller_ids or current_user.merchant_ids
-    current_user.merchant_identifiers or current_user.shop_identifiers
+
     # Reseller owners can manage their own templates
-    if reseller_id in reseller or "*" in reseller:
+    if reseller_id in current_user.reseller_ids or "*" in current_user.reseller_ids:
         return
 
     logger.warning(
@@ -157,19 +163,17 @@ def apply_hierarchical_template_filters(
     Raises:
         HTTPException: 403 if user tries to access unauthorized resellers/shops
     """
-    reseller = current_user.reseller_ids or current_user.merchant_ids
-    identifier = current_user.merchant_identifiers or current_user.shop_identifiers
     # Determine accessible resellers
-    if "*" in reseller:
+    if "*" in current_user.reseller_ids:
         accessible_resellers = None  # Wildcard access (admin)
     else:
-        accessible_resellers = reseller
+        accessible_resellers = current_user.reseller_ids
 
     # Determine accessible shops
-    if "*" in identifier:
+    if "*" in current_user.merchant_identifiers:
         accessible_shops = None  # Wildcard access
     else:
-        accessible_shops = identifier
+        accessible_shops = current_user.merchant_identifiers
 
     # Apply reseller filtering
     if accessible_resellers is None:

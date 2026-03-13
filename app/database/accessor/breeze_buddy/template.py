@@ -6,7 +6,6 @@ import json
 from typing import Any, Dict, List, Optional
 
 import asyncpg
-from fastapi import HTTPException, status
 
 from app.ai.voice.agents.breeze_buddy.template.types import (
     TemplateModel,
@@ -249,27 +248,11 @@ async def get_templates_list(filters: Dict[str, Any]) -> List[TemplateMetadata]:
         # Convert database records to TemplateMetadata objects
         templates = []
         for row in result:
-            # Backward compatibility: use reseller_id if present, fallback to merchant_id
-            reseller_id_value = row.get("reseller_id") or row.get("merchant_id")
-
-            if not reseller_id_value:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="reseller (or merchant for backward compatibility) is required",
-                )
-            # RBAC:
-            # Backward compatibility: use merchant_identifier if present, fallback to shop_identifier
-            merchant_identifier_value = row.get("merchant_identifier") or row.get(
-                "shop_identifier"
-            )
-
             templates.append(
                 TemplateMetadata(
                     id=str(row["id"]),  # Convert UUID to string
-                    reseller_id=reseller_id_value,
-                    merchant_id=reseller_id_value,  # Backward compat: same as reseller_id
-                    merchant_identifier=merchant_identifier_value,
-                    shop_identifier=merchant_identifier_value,
+                    reseller_id=row["reseller_id"],
+                    merchant_identifier=row.get("merchant_identifier"),
                     name=row["name"],
                     is_active=row["is_active"],
                     created_at=row["created_at"],
@@ -498,9 +481,7 @@ async def delete_template_if_not_referenced(
             deleted = TemplateMetadata(
                 id=str(row["id"]),
                 reseller_id=row["reseller_id"],
-                merchant_id=row["reseller_id"],
                 merchant_identifier=row.get("merchant_identifier"),
-                shop_identifier=row.get("merchant_identifier"),
                 name=row["name"],
                 is_active=row["is_active"],
                 created_at=row["created_at"],

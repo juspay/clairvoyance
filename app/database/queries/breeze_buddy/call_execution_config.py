@@ -60,11 +60,9 @@ def insert_call_execution_config_query(
             "call_end_time",
             "max_retry",
             "calling_provider",
-            "merchant_id",
             "reseller_id",
             "template",
             "template_id",
-            "shop_identifier",
             "merchant_identifier",
             "enable_international_call",
             "enable_calling",
@@ -85,7 +83,7 @@ def insert_call_execution_config_query(
             "created_at",
             "updated_at"
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31) RETURNING *;
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29) RETURNING *;
     """
 
     values = [
@@ -97,10 +95,8 @@ def insert_call_execution_config_query(
         max_retry,
         calling_provider.value,
         reseller_id,
-        reseller_id,
         template,
         template_id,
-        merchant_identifier,
         merchant_identifier,
         enable_international_call,
         enable_calling,
@@ -131,21 +127,20 @@ def get_call_execution_config_by_merchant_id_query(
 ) -> Tuple[str, List[Any]]:
     """
     Generate query to get call execution config by reseller ID and shop identifier.
-    Uses COALESCE for backward compatibility with old column names.
     """
     if merchant_identifier:
         text = f"""
             SELECT *
             FROM "{CALL_EXECUTION_CONFIG_TABLE}" 
-            WHERE COALESCE(reseller_id, merchant_id) = $1 
-            AND COALESCE(merchant_identifier, shop_identifier) = $2;
+            WHERE reseller_id = $1 
+            AND merchant_identifier = $2;
         """
         values: List[Any] = [reseller_id, merchant_identifier]
     else:
         text = f"""
             SELECT *
             FROM "{CALL_EXECUTION_CONFIG_TABLE}" 
-            WHERE COALESCE(reseller_id, merchant_id) = $1;
+            WHERE reseller_id = $1;
         """
         values = [reseller_id]
     return text, values
@@ -154,7 +149,6 @@ def get_call_execution_config_by_merchant_id_query(
 def get_all_call_execution_configs_query() -> Tuple[str, List[Any]]:
     """
     Generate query to get all call execution configs.
-    Uses COALESCE for backward compatibility with old column names.
     """
     text = f"""
         SELECT *
@@ -167,7 +161,6 @@ def get_all_call_execution_configs_query() -> Tuple[str, List[Any]]:
 def get_call_execution_config_by_id_query(config_id: str) -> Tuple[str, List[Any]]:
     """
     Generate query to get call execution config by ID.
-    Uses COALESCE for backward compatibility with old column names.
     """
     text = f"""
         SELECT *
@@ -302,9 +295,9 @@ def update_call_execution_config_query(
     if merchant_identifier:
         values.append(merchant_identifier)
         merchant_identifier_param = param_count
-        where_clause = f'COALESCE(reseller_id, merchant_id) = ${reseller_id_param} AND "template" = ${template_param} AND COALESCE(merchant_identifier, shop_identifier) = ${merchant_identifier_param}'
+        where_clause = f'reseller_id = ${reseller_id_param} AND "template" = ${template_param} AND merchant_identifier = ${merchant_identifier_param}'
     else:
-        where_clause = f'COALESCE(reseller_id, merchant_id) = ${reseller_id_param} AND "template" = ${template_param} AND COALESCE(merchant_identifier, shop_identifier) IS NULL'
+        where_clause = f'reseller_id = ${reseller_id_param} AND "template" = ${template_param} AND merchant_identifier IS NULL'
 
     text = f"""
         UPDATE "{CALL_EXECUTION_CONFIG_TABLE}"
@@ -323,7 +316,6 @@ def calling_activation_for_merchant_query(
 ) -> Tuple[str, List[Any]]:
     """
     Generate query to toggle enable_calling for configs.
-    Uses COALESCE for backward compatibility with old column names.
     - If reseller_id is None: All configs across all resellers are updated
     - If reseller_id is provided but merchant_identifier is None: All configs for that reseller are updated
     - If both reseller_id and merchant_identifier are provided: Only that specific config is updated
@@ -342,8 +334,8 @@ def calling_activation_for_merchant_query(
         text = f"""
             UPDATE "{CALL_EXECUTION_CONFIG_TABLE}"
             SET "enable_calling" = $1, "updated_at" = $2
-            WHERE COALESCE(reseller_id, merchant_id) = $3 
-            AND COALESCE(merchant_identifier, shop_identifier) = $4
+            WHERE reseller_id = $3 
+            AND merchant_identifier = $4
             RETURNING *;
         """
         values.append(reseller_id)
@@ -353,7 +345,7 @@ def calling_activation_for_merchant_query(
         text = f"""
             UPDATE "{CALL_EXECUTION_CONFIG_TABLE}"
             SET "enable_calling" = $1, "updated_at" = $2
-            WHERE COALESCE(reseller_id, merchant_id) = $3
+            WHERE reseller_id = $3
             RETURNING *;
         """
         values.append(reseller_id)
@@ -364,7 +356,6 @@ def calling_activation_for_merchant_query(
 def get_all_merchants_query() -> Tuple[str, List[Any]]:
     """
     Generate query to get all unique resellers (merchant_identifiers).
-    Uses COALESCE for backward compatibility with old column names.
 
     Returns all unique merchant_identifier values from call_execution_config.
     Each merchant_identifier represents a distinct reseller in the system.
@@ -373,9 +364,9 @@ def get_all_merchants_query() -> Tuple[str, List[Any]]:
         Tuple of (query string, empty values list)
     """
     query = f"""
-        SELECT DISTINCT COALESCE(merchant_identifier, shop_identifier) AS merchant_identifier
+        SELECT DISTINCT merchant_identifier
         FROM {CALL_EXECUTION_CONFIG_TABLE}
-        WHERE COALESCE(merchant_identifier, shop_identifier) IS NOT NULL
+        WHERE merchant_identifier IS NOT NULL
         ORDER BY merchant_identifier ASC
     """
 
@@ -387,7 +378,6 @@ def get_reseller_id_by_merchant_identifier_from_config_query(
 ) -> Tuple[str, List[Any]]:
     """
     Generate query to get reseller_id for a given merchant_identifier from call_execution_config.
-    Uses COALESCE for backward compatibility with old column names.
 
     Looks up the parent reseller_id for a shop from call execution config table.
 
@@ -398,9 +388,9 @@ def get_reseller_id_by_merchant_identifier_from_config_query(
         Tuple of (query string, values list)
     """
     query = f"""
-        SELECT DISTINCT COALESCE(reseller_id, merchant_id) AS reseller_id
+        SELECT DISTINCT reseller_id
         FROM {CALL_EXECUTION_CONFIG_TABLE}
-        WHERE COALESCE(merchant_identifier, shop_identifier) = $1
+        WHERE merchant_identifier = $1
         LIMIT 1
     """
 

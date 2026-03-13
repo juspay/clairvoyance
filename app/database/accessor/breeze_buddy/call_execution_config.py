@@ -180,7 +180,6 @@ async def get_all_call_execution_configs() -> List[CallExecutionConfig]:
 
         if result:
             decoded_result = decode_call_execution_config_list(result)
-            logger.info(f"decoded_result: {decoded_result}")
             logger.info(f"Found {len(decoded_result)} call execution configs")
             return decoded_result
 
