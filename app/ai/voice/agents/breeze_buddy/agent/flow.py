@@ -51,6 +51,7 @@ def setup_flow_manager(
     transport: Any,
     flow_builder: FlowConfigBuilder,
     template: TemplateModel,
+    bot_instance: Any = None,
 ) -> FlowManager:
     """Set up the flow manager with global functions.
 
@@ -61,11 +62,14 @@ def setup_flow_manager(
         transport: Transport instance
         flow_builder: Flow config builder
         template: Template model
+        bot_instance: Bot instance for post-action context creation
 
     Returns:
         Configured FlowManager
     """
-    global_functions = flow_builder.build_global_functions(flow=template.flow)
+    global_functions = flow_builder.build_global_functions(
+        flow=template.flow, bot_instance=bot_instance
+    )
     if global_functions:
         logger.info(
             f"Registering {len(global_functions)} global functions with FlowManager"

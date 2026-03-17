@@ -18,6 +18,7 @@ from app.database.queries.breeze_buddy.analytics import (
     get_analytics_outbound_numbers_query,
     get_analytics_summary_query,
     get_analytics_trends_query,
+    get_call_details_records_query,
 )
 
 
@@ -158,6 +159,38 @@ async def get_call_details_from_db(
 
     except Exception as e:
         logger.error(f"Error getting call details: {e}", exc_info=True)
+        raise
+
+
+async def get_call_detail_records(
+    filters: Dict[str, Any],
+    sort_by: str = "call_initiated_time",
+    sort_order: str = "desc",
+    limit: int = 0,
+    offset: int = 0,
+) -> List[Dict[str, Any]]:
+    """
+    Get call details matching filters for CSV download.
+    When limit > 0, fetches a single batch (for streaming).
+    When limit == 0, fetches all matching records.
+
+    Returns:
+        List of matching call detail records
+    """
+    logger.info(f"[Analytics DB] Getting call details download with filters: {filters}")
+
+    try:
+        query_text, values = get_call_details_records_query(
+            filters, sort_by, sort_order, limit, offset
+        )
+        result = await run_parameterized_query(query_text, values)
+        logger.info(
+            f"[Analytics DB] Call details download returned {len(result) if result else 0} records"
+        )
+        return [dict(row) for row in result] if result else []
+
+    except Exception as e:
+        logger.error(f"Error getting call details download: {e}", exc_info=True)
         raise
 
 
