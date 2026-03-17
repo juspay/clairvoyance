@@ -50,7 +50,6 @@ async def add_to_blacklist(
 
 @router.get("/blacklist", response_model=List[BlacklistedNumber])
 async def list_blacklisted_numbers(
-    merchant_id: Optional[str] = Query(None, description="Filter by merchant ID"),
     reseller_id: Optional[str] = Query(None, description="Filter by reseller ID"),
     current_user: UserInfo = Depends(get_current_user_with_rbac),
 ):
@@ -63,7 +62,7 @@ async def list_blacklisted_numbers(
     Permissions:
     - Admin only
     """
-    reseller = reseller_id or merchant_id
+    reseller = reseller_id
     require_admin_access(current_user, "view blacklisted numbers")
     return await list_blacklist_handler(reseller, current_user)
 
@@ -91,9 +90,6 @@ async def remove_from_blacklist(
     reseller_id: Optional[str] = Query(
         None, description="Reseller ID (omit to remove global blacklist entry)"
     ),
-    merchant_id: Optional[str] = Query(
-        None, description="Merchant ID (omit to remove global blacklist entry)"
-    ),
     current_user: UserInfo = Depends(get_current_user_with_rbac),
 ):
     """
@@ -106,6 +102,6 @@ async def remove_from_blacklist(
     Permissions:
     - Admin only
     """
-    reseller = reseller_id or merchant_id
+    reseller = reseller_id
     require_admin_access(current_user, "remove numbers from blacklist")
     return await remove_blacklist_handler(phone_number, reseller, current_user)

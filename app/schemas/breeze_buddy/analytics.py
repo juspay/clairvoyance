@@ -34,32 +34,15 @@ class AnalyticsFilters(BaseModel):
         None, description="Filter by template name (e.g., 'order-confirmation')"
     )
     # New field names
-    merchant_identifier: Optional[str] = Field(
+    merchant_id: Optional[str] = Field(
         None, description="Filter by single merchant identifier"
     )
-    merchant_identifiers: Optional[List[str]] = Field(
+    merchant_ids: Optional[List[str]] = Field(
         None, description="Filter by multiple merchant identifiers"
     )
     reseller_id: Optional[str] = Field(None, description="Filter by reseller ID")
     reseller_ids: Optional[List[str]] = Field(
         None, description="Filter by multiple reseller IDs"
-    )
-    # Old field names for backward compatibility
-    shop_identifier: Optional[str] = Field(
-        None,
-        description="Filter by single shop identifier (backward compatibility, use merchant_identifier)",
-    )
-    shop_identifiers: Optional[List[str]] = Field(
-        None,
-        description="Filter by multiple shop identifiers (backward compatibility, use merchant_identifiers)",
-    )
-    merchant_id: Optional[str] = Field(
-        None,
-        description="Filter by merchant ID (backward compatibility, use reseller_id)",
-    )
-    merchant_ids: Optional[List[str]] = Field(
-        None,
-        description="Filter by multiple merchant IDs (backward compatibility, use reseller_ids)",
     )
     status: Optional[str] = Field(
         None, description="Filter by call status (completed, failed, etc.)"
@@ -97,7 +80,7 @@ class AnalyticsOptions(BaseModel):
     limit: int = Field(default=50, ge=1, le=1000, description="Items per page")
     group_by: Optional[str] = Field(
         None,
-        description="Group results by field (template, merchant_identifier, date, etc.)",
+        description="Group results by field (template, merchant_id, date, etc.)",
     )
     time_granularity: Optional[TimeGranularity] = Field(
         None,
@@ -151,7 +134,7 @@ class CallDetailResult(BaseModel):
     order_id: Optional[str] = None
     template: str
     reseller_id: str
-    merchant_identifier: Optional[str] = None
+    merchant_id: Optional[str] = None
     shop_name: Optional[str] = None
     customer_name: Optional[str] = None
     customer_phone: Optional[str] = None
@@ -197,13 +180,13 @@ class OutboundNumberStat(BaseModel):
 
 
 class LeadStatusCountResult(BaseModel):
-    """Lead status count result - counts by status for a merchant or overall"""
+    """Lead status count result - counts by status for a reseller or overall"""
 
-    merchant_id: Optional[str] = Field(
-        None, description="Merchant ID (null for aggregate/total)"
+    reseller_id: Optional[str] = Field(
+        None, description="Reseller ID (null for aggregate/total)"
     )
-    shop_identifier: Optional[str] = Field(
-        None, description="Shop identifier (if available)"
+    merchant_id: Optional[str] = Field(
+        None, description="Merchant identifier (if available)"
     )
     backlog_count: int = Field(
         default=0, description="Number of leads in BACKLOG status"

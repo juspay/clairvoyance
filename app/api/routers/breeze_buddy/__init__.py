@@ -21,6 +21,7 @@ from app.api.routers.breeze_buddy.merchants import router as merchants_router
 from app.api.routers.breeze_buddy.numbers import router as numbers_router
 from app.api.routers.breeze_buddy.telephony import router as telephony_router
 from app.api.routers.breeze_buddy.templates import router as templates_router
+from app.api.routers.breeze_buddy.users import router as users_router
 from app.api.routers.breeze_buddy.websocket import router as websocket_router
 
 router = APIRouter()
@@ -55,6 +56,9 @@ router.include_router(blacklist_router, prefix="", tags=["blacklist"])
 
 # Merchants (shop identifiers - admin only)
 router.include_router(merchants_router, prefix="", tags=["merchants"])
+
+# User Accounts (login accounts with RBAC)
+router.include_router(users_router, prefix="", tags=["users"])
 
 # Leads (call requests/trackers)
 router.include_router(leads_router, prefix="", tags=["leads"])

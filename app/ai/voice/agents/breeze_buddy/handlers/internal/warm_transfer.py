@@ -99,7 +99,10 @@ async def connect_to_live_agent(
             "message": "Telephony service not configured",
         }
 
-    if not hasattr(context.telephony_service, "conference_service"):
+    if (
+        not hasattr(context.telephony_service, "conference_service")
+        or context.telephony_service.conference_service is None
+    ):
         logger.error(
             f"Transfer failed for call {context.call_sid}: conference_service not available"
         )
@@ -112,10 +115,7 @@ async def connect_to_live_agent(
     try:
         customer_phone_number = None
         if context.lead and context.lead.payload:
-            # Outbound calls use "customer_mobile_number"; inbound calls use "caller_number"
-            customer_phone_number = context.lead.payload.get(
-                "customer_mobile_number"
-            ) or context.lead.payload.get("caller_number")
+            customer_phone_number = context.lead.payload.get("customer_mobile_number")
             if customer_phone_number:
                 logger.info(f"Using customer phone number: {customer_phone_number}")
             else:
@@ -126,9 +126,8 @@ async def connect_to_live_agent(
         # Set transfer flag in Redis (includes customer phone for Plivo dial-back)
         await set_transfer_flag(
             call_sid=context.call_sid,
-            reseller_id=context.lead.reseller_id or context.lead.merchant_id,
-            merchant_identifier=context.lead.shop_identifier
-            or context.lead.merchant_identifier,
+            reseller_id=context.lead.reseller_id,
+            merchant_id=context.lead.merchant_id,
             transfer_number=agent_phone_number,
             customer_phone_number=customer_phone_number,
         )

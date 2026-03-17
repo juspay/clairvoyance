@@ -44,14 +44,13 @@ def insert_blacklisted_number_query(
     """
     text = f"""
         INSERT INTO "{BLACKLISTED_NUMBERS_TABLE}"
-        ("id", "phone_number", "reseller_id", "merchant_id", "reason", "created_by", "created_at", "updated_at")
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        ("id", "phone_number", "reseller_id", "reason", "created_by", "created_at", "updated_at")
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
         RETURNING *;
     """
     values = [
         id,
         normalize_phone_number(phone_number),
-        reseller_id,
         reseller_id,
         reason,
         created_by,
@@ -76,7 +75,7 @@ def is_number_blacklisted_query(
             SELECT EXISTS(
                 SELECT 1 FROM "{BLACKLISTED_NUMBERS_TABLE}"
                 WHERE "phone_number" = $1
-                AND (COALESCE("merchant_id", "reseller_id") = $2 OR COALESCE("reseller_id", "merchant_id") IS NULL)
+                AND ("reseller_id" = $2 OR "reseller_id" IS NULL)
             ) AS is_blacklisted;
         """
         values: List[Any] = [normalized, reseller_id]
@@ -95,7 +94,6 @@ def is_number_blacklisted_query(
 def delete_blacklisted_number_query(
     phone_number: str,
     reseller_id: Optional[str] = None,
-    merchant_id: Optional[str] = None,
 ) -> Tuple[str, List[Any]]:
     """
     Generate query to delete a blacklisted number.
@@ -122,7 +120,6 @@ def delete_blacklisted_number_query(
 
 def get_all_blacklisted_numbers_query(
     reseller_id: Optional[str] = None,
-    merchant_id: Optional[str] = None,
 ) -> Tuple[str, List[Any]]:
     """
     Generate query to get all blacklisted numbers with optional merchant filter.
@@ -130,7 +127,7 @@ def get_all_blacklisted_numbers_query(
     if reseller_id:
         text = f"""
             SELECT * FROM "{BLACKLISTED_NUMBERS_TABLE}"
-            WHERE COALESCE("reseller_id", "merchant_id") = $1 OR COALESCE("merchant_id", "reseller_id") IS NULL
+            WHERE "reseller_id" = $1 OR "reseller_id" IS NULL
             ORDER BY "created_at" DESC;
         """
         values: List[Any] = [reseller_id]

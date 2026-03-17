@@ -52,18 +52,10 @@ async def create_template_handler(
     Raises:
         HTTPException: 409 if template exists, 400/500 on error
     """
-    # Get reseller_id - support both 'reseller' and 'merchant' for backward compatibility
-    reseller = template_data.reseller_id or template_data.merchant_id
-    identifier = template_data.merchant_identifier or template_data.shop_identifier
-    if not reseller:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="reseller (or merchant for backward compatibility) is required",
-        )
 
     logger.info(
         f"User {current_user.username} (role: {current_user.role}) creating template "
-        f"for reseller: {reseller}, name: {template_data.name}"
+        f"for reseller: {template_data.reseller_id}, name: {template_data.name}"
     )
 
     try:
@@ -80,8 +72,8 @@ async def create_template_handler(
 
         # Check if template already exists
         existing = await get_template_by_merchant(
-            reseller,
-            identifier,
+            template_data.reseller_id,
+            template_data.merchant_id,
             template_data.name,
             should_prioritize_merchant_specific=False,
         )
@@ -89,7 +81,7 @@ async def create_template_handler(
         if existing:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail=f"Template already exists for reseller {reseller} "
+                detail=f"Template already exists for reseller {template_data.reseller_id} "
                 f"and template name: {template_data.name}",
             )
 
@@ -114,8 +106,8 @@ async def create_template_handler(
 
         template = await create_template(
             template_id=str(uuid4()),
-            reseller_id=reseller,
-            identifier=identifier,
+            reseller_id=template_data.reseller_id,
+            merchant_id=template_data.merchant_id,
             name=template_data.name,
             flow=flow,
             expected_payload_schema=template_data.expected_payload_schema,
@@ -160,7 +152,7 @@ async def create_template_handler(
 
 async def get_template_handler(
     reseller_id: str,
-    merchant_identifier: Optional[str],
+    merchant_id: Optional[str],
     name: Optional[str],
     current_user: UserInfo,
 ):
@@ -169,7 +161,7 @@ async def get_template_handler(
 
     Args:
         reseller_id: Reseller ID
-        merchant_identifier: Optional shop identifier
+        merchant_id: Optional shop identifier
         name: Optional template name
         current_user: Current authenticated user
 
@@ -178,13 +170,13 @@ async def get_template_handler(
     """
     logger.info(
         f"User {current_user.username} (role: {current_user.role}) requesting template "
-        f"for reseller: {reseller_id}, shop: {merchant_identifier}, name: {name}"
+        f"for reseller: {reseller_id}, shop: {merchant_id}, name: {name}"
     )
 
     try:
         template = await get_template_by_merchant(
             reseller_id=reseller_id,
-            merchant_identifier=merchant_identifier,
+            merchant_id=merchant_id,
             name=name,
         )
 
@@ -194,7 +186,7 @@ async def get_template_handler(
         else:
             logger.info(
                 f"No template found for reseller: {reseller_id}, "
-                f"merchant_identifier: {merchant_identifier}, name: {name}"
+                f"merchant_id: {merchant_id}, name: {name}"
             )
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -211,7 +203,7 @@ async def get_template_handler(
 
 async def list_templates_handler(
     reseller_id: Optional[str],
-    merchant_identifier: Optional[str],
+    merchant_id: Optional[str],
     include_inactive: bool,
     current_user: UserInfo,
 ) -> TemplateListResponse:
@@ -222,7 +214,7 @@ async def list_templates_handler(
 
     Args:
         reseller_id: Optional reseller ID to filter by
-        merchant_identifier: Optional merchant identifier to filter by
+        merchant_id: Optional merchant identifier to filter by
         include_inactive: Whether to include inactive templates
         current_user: Current authenticated user
 
@@ -234,7 +226,7 @@ async def list_templates_handler(
     """
     logger.info(
         f"User {current_user.username} (role: {current_user.role}) requesting templates list: "
-        f"reseller_id={reseller_id}, merchant_identifier={merchant_identifier}, include_inactive={include_inactive}"
+        f"reseller_id={reseller_id}, merchant_id={merchant_id}, include_inactive={include_inactive}"
     )
 
     try:
@@ -242,8 +234,8 @@ async def list_templates_handler(
         filters: Dict[str, Any] = {}
         if reseller_id:
             filters["reseller_id"] = reseller_id
-        if merchant_identifier:
-            filters["merchant_identifier"] = merchant_identifier
+        if merchant_id:
+            filters["merchant_id"] = merchant_id
         if not include_inactive:
             filters["is_active"] = True
 
@@ -304,7 +296,7 @@ async def get_template_by_id_handler(template_id: str, current_user: UserInfo):
         validate_template_access(
             current_user,
             template.reseller_id,
-            template.merchant_identifier,
+            template.merchant_id,
             operation="access template",
         )
 
@@ -359,7 +351,7 @@ async def replace_template_handler(
         validate_template_access(
             current_user,
             existing_template.reseller_id,
-            existing_template.merchant_identifier,
+            existing_template.merchant_id,
             operation="access template",
         )
 
@@ -409,7 +401,7 @@ async def replace_template_handler(
             secrets=merged_secrets,
             outbound_number_id=template_data.outbound_number_id,
             is_active=template_data.is_active,
-            merchant_identifier=template_data.merchant_identifier,
+            merchant_id=template_data.merchant_id,
             now=now,
         )
 

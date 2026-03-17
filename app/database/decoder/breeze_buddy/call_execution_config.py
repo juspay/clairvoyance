@@ -11,6 +11,7 @@ from app.core.logger import logger
 from app.schemas import (
     CallExecutionConfig,
     CallProvider,
+    InboundBlockAction,
     PreCheckConfig,
     TelephonyConfig,
 )
@@ -62,13 +63,27 @@ def _decode_single_row(row: asyncpg.Record) -> CallExecutionConfig:
         call_end_time=row["call_end_time"],
         max_retry=row["max_retry"],
         calling_provider=CallProvider(row["calling_provider"]),
-        reseller_id=row["merchant_id"] or row["reseller_id"],
-        merchant_id=row["merchant_id"] or row["reseller_id"],  # Backward compatibility
+        reseller_id=row["reseller_id"],
         template=row["template"],
-        merchant_identifier=row["shop_identifier"] or row["merchant_identifier"],
-        shop_identifier=row["shop_identifier"] or row["merchant_identifier"],
+        merchant_id=row["merchant_id"],
         enable_international_call=row["enable_international_call"],
         enable_calling=row["enable_calling"],
+        enable_inbound=row.get("enable_inbound", True),
+        inbound_call_start_time=row.get("inbound_call_start_time"),
+        inbound_call_end_time=row.get("inbound_call_end_time"),
+        inbound_call_timezone=row.get("inbound_call_timezone"),
+        inbound_block_action=(
+            InboundBlockAction(row["inbound_block_action"])
+            if row.get("inbound_block_action")
+            else InboundBlockAction.REJECT
+        ),
+        inbound_redirect_number=row.get("inbound_redirect_number"),
+        inbound_block_message=row.get("inbound_block_message"),
+        enforce_blacklist=row.get("enforce_blacklist", True),
+        rate_limit_enabled=row.get("rate_limit_enabled", False),
+        rate_limit_max_calls=row.get("rate_limit_max_calls"),
+        rate_limit_window_seconds=row.get("rate_limit_window_seconds"),
+        rate_limit_whitelist=row.get("rate_limit_whitelist"),
         pre_checks=_decode_pre_checks(row.get("pre_checks")),
         telephony_config=(
             TelephonyConfig(**parsed)

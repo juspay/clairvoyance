@@ -5,7 +5,6 @@ Decoder functions for lead call tracker.
 from typing import Optional
 
 import asyncpg
-from fastapi import HTTPException, status
 
 from app.schemas import (
     CallDirection,
@@ -23,22 +22,12 @@ def decode_lead_call_tracker(row: asyncpg.Record) -> Optional[LeadCallTracker]:
     if not row:
         return None
 
-    reseller_id = row.get("reseller_id") or row.get("merchant_id")
-
-    if not reseller_id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="reseller (or merchant for backward compatibility) is required",
-        )
-
-    merchant_identifier = row.get("merchant_identifier") or row.get("shop_identifier")
-
     return LeadCallTracker(
         id=row["id"],
         outbound_number_id=row["outbound_number_id"],
-        reseller_id=reseller_id,
+        reseller_id=row["reseller_id"],
         template=row["template"],
-        merchant_identifier=merchant_identifier,
+        merchant_id=row["merchant_id"],
         request_id=row.get("request_id"),
         attempt_count=row["attempt_count"],
         next_attempt_at=row["next_attempt_at"],

@@ -20,14 +20,13 @@ def insert_credential_query(
     """Generate query to insert a credential record."""
     text = f"""
         INSERT INTO "{CREDENTIALS_TABLE}"
-        ("id", "reseller_id","merchant_id", "name", "credential_type", "value",
+        ("id", "reseller_id", "name", "credential_type", "value",
          "is_encrypted", "description", "is_active", "created_at", "updated_at")
         VALUES ($1, $2, $3, $4, $5, $6, $7, TRUE, $8, $9)
         RETURNING *;
     """
     values = [
         id,
-        reseller_id,
         reseller_id,
         name,
         credential_type,
@@ -57,15 +56,15 @@ def get_credentials_by_merchant_query(
     if reseller_id:
         text = f"""
             SELECT * FROM "{CREDENTIALS_TABLE}"
-            WHERE (COALESCE("reseller_id", "merchant_id") = $1 OR COALESCE("reseller_id", "merchant_id") IS NULL)
+            WHERE ("reseller_id" = $1 OR "reseller_id" IS NULL)
             AND "is_active" = TRUE
-            ORDER BY COALESCE("reseller_id", "merchant_id") NULLS FIRST, "name" ASC;
+            ORDER BY "reseller_id" NULLS FIRST, "name" ASC;
         """
         return text, [reseller_id]
     else:
         text = f"""
             SELECT * FROM "{CREDENTIALS_TABLE}"
-            WHERE COALESCE("reseller_id", "merchant_id") IS NULL AND "is_active" = TRUE
+            WHERE "reseller_id" IS NULL AND "is_active" = TRUE
             ORDER BY "name" ASC;
         """
         return text, []
@@ -73,7 +72,7 @@ def get_credentials_by_merchant_query(
 
 def get_all_credentials_query() -> Tuple[str, List[Any]]:
     """Generate query to get all credentials."""
-    text = f'SELECT * FROM "{CREDENTIALS_TABLE}" where "is_active" = TRUE ORDER BY (COALESCE("reseller_id", "merchant_id")) NULLS FIRST, "name" ASC;'
+    text = f'SELECT * FROM "{CREDENTIALS_TABLE}" where "is_active" = TRUE ORDER BY "reseller_id" NULLS FIRST, "name" ASC;'
     return text, []
 
 

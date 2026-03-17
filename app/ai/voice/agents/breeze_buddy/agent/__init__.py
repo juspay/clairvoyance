@@ -31,7 +31,12 @@ from app.ai.voice.agents.breeze_buddy.agent.inbound import (
     create_lead_from_template_id,
     handle_inbound_call,
 )
-from app.ai.voice.agents.breeze_buddy.agent.ivr import get_template_id_from_call
+from app.ai.voice.agents.breeze_buddy.agent.ivr import (
+    BLOCK_MESSAGE_PLAY_SECONDS,
+    _send_audio,
+    get_template_id_from_call,
+    prepare_block_audio,
+)
 from app.ai.voice.agents.breeze_buddy.agent.pipeline import (
     build_pipeline,
     create_pipeline_task,
@@ -53,6 +58,9 @@ from app.ai.voice.agents.breeze_buddy.handlers.internal.end_conversation import 
 from app.ai.voice.agents.breeze_buddy.observability.tracing_setup import (
     create_root_span,
 )
+from app.ai.voice.agents.breeze_buddy.services.inbound_policy import (
+    get_block_redirect,
+)
 from app.ai.voice.agents.breeze_buddy.services.telephony.base_provider import (
     VoiceCallProvider,
 )
@@ -71,6 +79,7 @@ from app.ai.voice.agents.breeze_buddy.utils.common import (
 from app.ai.voice.agents.breeze_buddy.utils.transport.websockets import (
     close_websocket_safely,
 )
+from app.ai.voice.agents.breeze_buddy.utils.warm_transfer import set_transfer_flag
 from app.core.config.static import ENABLE_BREEZE_BUDDY_TRACING
 from app.core.logger import logger
 from app.core.logger.context import (
@@ -366,17 +375,36 @@ class Agent:
             f"call_sid: {self.call_sid}, stream_sid: {self.stream_sid}"
         )
 
+        # Check for Exotel block-redirect (set at answer-time when inbound
+        # policy blocks with REDIRECT action). Play message, set transfer
+        # flag, close WS. Exotel applet handles the redirect via /dial-up.
+        if await self._handle_block_redirect(transport_type):
+            clear_log_context()
+            return False
+
         self.lead = await update_lead_call_initiated_time(
             self.call_sid, call_initiated_time
         )
         if not self.lead:
+            # Extract URL query params for Plivo inbound (contains from_number, to_number)
+            url_query_params = dict(self.ws.query_params) if self.ws else {}
+            from_number = call_data.get("from") or url_query_params.get(
+                "from_number", ""
+            )
+
             # Inbound call - extract template_id (handles IVR mode if enabled)
-            template_id_from_query, error_reason = await get_template_id_from_call(
+            (
+                template_id_from_query,
+                error_reason,
+                _was_ivr,
+            ) = await get_template_id_from_call(
                 ws=self.ws,
                 stream_sid=self.stream_sid,
                 call_sid=self.call_sid,
                 call_data=call_data,
                 provider=self.provider or "",
+                telephony_service=self.telephony_service,
+                from_number=from_number,
             )
 
             # Check if there was an error (IVR failed or invalid template_id)
@@ -384,9 +412,6 @@ class Agent:
                 # WebSocket already closed by get_template_id_from_call
                 clear_log_context()
                 return False
-
-            # Extract URL query params for Plivo inbound (contains from_number, to_number)
-            url_query_params = dict(self.ws.query_params) if self.ws else {}
 
             # Handle inbound call - create lead on-the-fly
             if template_id_from_query:
@@ -524,6 +549,59 @@ class Agent:
         )
 
         logger.info(f"Created transport: {self.transport.__class__.__name__}")
+        return True
+
+    async def _handle_block_redirect(self, transport_type: str) -> bool:
+        """Handle Exotel block-redirect set at answer-time.
+
+        When inbound policy blocks a call with REDIRECT action on Exotel,
+        the answer handler accepts the call but stores redirect info in Redis.
+        This method detects that, plays the block message, sets the transfer
+        flag (so Exotel /dial-up callback returns the redirect number), and
+        closes the WebSocket.
+
+        Returns True if the call was handled (caller should return False from setup).
+        """
+        if not self.call_sid:
+            return False
+
+        redirect_info = await get_block_redirect(self.call_sid)
+        if not redirect_info:
+            return False
+
+        redirect_number = redirect_info.get("redirect_number")
+        block_message = redirect_info.get("message")
+        reseller_id = redirect_info.get("reseller_id")
+        merchant_id = redirect_info.get("merchant_id")
+
+        logger.info(
+            f"[BLOCK_REDIRECT] Call {self.call_sid} blocked with redirect to {redirect_number}"
+        )
+
+        # Play block message if available (with caching)
+        if block_message and self.ws and self.stream_sid:
+            try:
+                audio = await prepare_block_audio(block_message, self.provider or "")
+                if audio:
+                    await _send_audio(
+                        self.ws, self.stream_sid, audio, self.provider or ""
+                    )
+                    await asyncio.sleep(BLOCK_MESSAGE_PLAY_SECONDS)
+            except Exception as e:
+                logger.warning(f"[BLOCK_REDIRECT] Failed to play block message: {e}")
+
+        # Set transfer flag so Exotel /dial-up callback returns the redirect number
+        if redirect_number:
+            await set_transfer_flag(
+                call_sid=self.call_sid,
+                reseller_id=reseller_id or "",
+                merchant_id=merchant_id or "",
+                transfer_number=redirect_number,
+            )
+
+        # Close WebSocket — Exotel applet detects stream end and calls /dial-up
+        if self.ws:
+            await close_websocket_safely(self.ws, code=1000, reason="Block redirect")
         return True
 
     def _register_event_handlers(self) -> None:

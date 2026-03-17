@@ -26,7 +26,7 @@ class FlowConfigLoader:
         self,
         reseller_id: str,
         name: str = "order-confirmation",
-        merchant_identifier: Optional[str] = None,
+        merchant_id: Optional[str] = None,
     ) -> Optional[TemplateModel]:
         """
         Load complete template from database.
@@ -34,20 +34,18 @@ class FlowConfigLoader:
         Args:
             reseller_id: Reseller identifier
             name: Template name (defaults to "order-confirmation")
-            merchant_identifier: Optional merchant-specific identifier
+            merchant_id: Optional merchant-specific identifier
 
         Returns:
             TemplateModel if found, None otherwise
         """
         logger.info(
             f"Loading template for reseller={reseller_id}, name={name}, "
-            f"merchant={merchant_identifier}"
+            f"merchant={merchant_id}"
         )
 
         # Load from database using accessor
-        template = await get_template_by_merchant(
-            reseller_id, merchant_identifier, name
-        )
+        template = await get_template_by_merchant(reseller_id, merchant_id, name)
 
         if template:
             nodes_count = len(template.flow.get("nodes", []))
@@ -93,7 +91,7 @@ class FlowConfigLoader:
         self,
         reseller_id: str,
         template: str,
-        merchant_identifier: Optional[str] = None,
+        merchant_id: Optional[str] = None,
         call_payload: Optional[Dict[str, str]] = None,
     ) -> Tuple[TemplateModel, Dict[str, str]]:
         """
@@ -103,7 +101,7 @@ class FlowConfigLoader:
             reseller_id: Reseller identifier
             template: str type
             template_vars: Variables for template rendering
-            merchant_identifier: Optional merchant-specific identifier
+            merchant_id: Optional merchant-specific identifier
 
         Returns:
             TemplateModel with rendered task messages, and dictionary of template variables
@@ -114,7 +112,7 @@ class FlowConfigLoader:
 
         # Load template from database
         template_obj = await self._load_template_from_db(
-            reseller_id, template, merchant_identifier
+            reseller_id, template, merchant_id
         )
 
         if not template_obj:

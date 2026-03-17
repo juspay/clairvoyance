@@ -39,11 +39,9 @@ from app.schemas.breeze_buddy.auth import (
     TokenData,
     TokenResponse,
     User,
-    UserCreate,
     UserInDB,
     UserInfo,
     UserRole,
-    UserUpdate,
 )
 from app.schemas.breeze_buddy.connection import BreezeBuddyDailyConnectRequest
 from app.schemas.breeze_buddy.core import (
@@ -55,6 +53,7 @@ from app.schemas.breeze_buddy.core import (
     CreateCallExecutionConfigRequest,
     CreateOutboundNumberRequest,
     ExecutionMode,
+    InboundBlockAction,
     LeadCallStatus,
     LeadCallTracker,
     OutboundNumber,
@@ -72,6 +71,14 @@ from app.schemas.breeze_buddy.credentials import (
     Credential,
     CredentialType,
     UpdateCredentialRequest,
+)
+
+# Import UserCreate/UserUpdate from users.py (with proper validation)
+# Note: auth.py has legacy versions without validation - use these instead
+from app.schemas.breeze_buddy.users import (
+    DeleteUserResponse,
+    UserCreate,
+    UserUpdate,
 )
 
 __all__ = [
@@ -111,6 +118,7 @@ __all__ = [
     "CreateCallExecutionConfigRequest",
     "CreateOutboundNumberRequest",
     "ExecutionMode",
+    "InboundBlockAction",
     "LeadCallStatus",
     "LeadCallTracker",
     "OutboundNumber",
@@ -132,4 +140,6 @@ __all__ = [
     # Automatic Voice
     "AutomaticVoiceTTSServiceConfig",
     "AutomaticVoiceUserConnectRequest",
+    # User Management
+    "DeleteUserResponse",
 ]

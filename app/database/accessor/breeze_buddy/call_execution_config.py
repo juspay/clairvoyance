@@ -53,22 +53,26 @@ async def create_call_execution_config(
     calling_provider: CallProvider,
     reseller_id: str,
     template: str,
-    merchant_identifier: Optional[str],
+    merchant_id: Optional[str],
     enable_international_call: bool,
     enable_calling: bool = True,
+    enable_inbound: bool = True,
+    inbound_call_start_time: Optional[time] = None,
+    inbound_call_end_time: Optional[time] = None,
+    inbound_call_timezone: Optional[str] = None,
+    inbound_block_action: Optional[str] = None,
+    inbound_redirect_number: Optional[str] = None,
+    inbound_block_message: Optional[str] = None,
+    enforce_blacklist: bool = True,
+    rate_limit_enabled: bool = False,
+    rate_limit_max_calls: Optional[int] = None,
+    rate_limit_window_seconds: Optional[int] = None,
+    rate_limit_whitelist: Optional[str] = None,
     template_id: Optional[str] = None,
     pre_checks: Optional[List[Any]] = None,
     telephony_config: Optional[TelephonyConfig] = None,
 ) -> Optional[CallExecutionConfig]:
-    """
-    Create a new call execution config record.
-
-    Args:
-        template_id: UUID of the template (preferred, for referential integrity)
-        template: Name of the template (kept for backward compatibility)
-        pre_checks: List of PreCheckConfig objects for call pre-validation
-        telephony_config: Optional telephony provider overrides
-    """
+    """Create a new call execution config record."""
     logger.info(f"Creating call execution config for reseller ID: {reseller_id}")
 
     try:
@@ -82,10 +86,22 @@ async def create_call_execution_config(
             calling_provider=calling_provider,
             reseller_id=reseller_id,
             template=template,
-            template_id=template_id,  # NEW
-            merchant_identifier=merchant_identifier,
+            template_id=template_id,
+            merchant_id=merchant_id,
             enable_international_call=enable_international_call,
             enable_calling=enable_calling,
+            enable_inbound=enable_inbound,
+            inbound_call_start_time=inbound_call_start_time,
+            inbound_call_end_time=inbound_call_end_time,
+            inbound_call_timezone=inbound_call_timezone,
+            inbound_block_action=inbound_block_action,
+            inbound_redirect_number=inbound_redirect_number,
+            inbound_block_message=inbound_block_message,
+            enforce_blacklist=enforce_blacklist,
+            rate_limit_enabled=rate_limit_enabled,
+            rate_limit_max_calls=rate_limit_max_calls,
+            rate_limit_window_seconds=rate_limit_window_seconds,
+            rate_limit_whitelist=rate_limit_whitelist,
             pre_checks=_serialize_pre_checks(pre_checks),
             telephony_config=(
                 json.dumps(telephony_config.model_dump()) if telephony_config else None
@@ -108,7 +124,7 @@ async def create_call_execution_config(
 
 async def get_call_execution_config_by_merchant_id(
     reseller_id: str,
-    merchant_identifier: Optional[str] = None,
+    merchant_id: Optional[str] = None,
 ) -> List[CallExecutionConfig]:
     """
     Get call execution config by reseller ID.
@@ -117,7 +133,7 @@ async def get_call_execution_config_by_merchant_id(
 
     try:
         query_text, values = get_call_execution_config_by_merchant_id_query(
-            reseller_id, merchant_identifier
+            reseller_id, merchant_id
         )
         result = await run_parameterized_query(query_text, values)
 
@@ -128,10 +144,10 @@ async def get_call_execution_config_by_merchant_id(
             )
             return decoded_result
 
-        if merchant_identifier:
-            # If no config is found for the specific merchant_identifier, try with NULL
+        if merchant_id:
+            # If no config is found for the specific merchant_id, try with NULL
             logger.info(
-                f"No config found for merchant_identifier {merchant_identifier}, trying generic config."
+                f"No config found for merchant_id {merchant_id}, trying generic config."
             )
             query_text, values = get_call_execution_config_by_merchant_id_query(
                 reseller_id, None
@@ -164,7 +180,6 @@ async def get_all_call_execution_configs() -> List[CallExecutionConfig]:
 
         if result:
             decoded_result = decode_call_execution_config_list(result)
-            logger.info(f"decoded_result: {decoded_result}")
             logger.info(f"Found {len(decoded_result)} call execution configs")
             return decoded_result
 
@@ -179,7 +194,7 @@ async def get_all_call_execution_configs() -> List[CallExecutionConfig]:
 async def update_call_execution_config(
     reseller_id: str,
     template: str,
-    merchant_identifier: Optional[str] = None,
+    merchant_id: Optional[str] = None,
     initial_offset: Optional[int] = None,
     retry_offset: Optional[int] = None,
     call_start_time: Optional[time] = None,
@@ -188,12 +203,24 @@ async def update_call_execution_config(
     calling_provider: Optional[CallProvider] = None,
     enable_international_call: Optional[bool] = None,
     enable_calling: Optional[bool] = None,
+    enable_inbound: Optional[bool] = None,
+    inbound_call_start_time: Optional[time] = None,
+    inbound_call_end_time: Optional[time] = None,
+    inbound_call_timezone: Optional[str] = None,
+    inbound_block_action: Optional[str] = None,
+    inbound_redirect_number: Optional[str] = None,
+    inbound_block_message: Optional[str] = None,
+    enforce_blacklist: Optional[bool] = None,
+    rate_limit_enabled: Optional[bool] = None,
+    rate_limit_max_calls: Optional[int] = None,
+    rate_limit_window_seconds: Optional[int] = None,
+    rate_limit_whitelist: Optional[str] = None,
     template_id: Optional[str] = None,
     pre_checks: Optional[List[Any]] = None,
     telephony_config: Optional[TelephonyConfig] = None,
 ) -> Optional[CallExecutionConfig]:
     """
-    Update an existing call execution config record based on reseller_id, template, and merchant_identifier.
+    Update an existing call execution config record based on reseller_id, template, and merchant_id.
     Only updates fields that are provided (not None).
 
     Args:
@@ -203,7 +230,7 @@ async def update_call_execution_config(
         telephony_config: Optional telephony provider overrides
     """
     logger.info(
-        f"Updating call execution config for reseller: {reseller_id}, template: {template}, merchant_identifier: {merchant_identifier}"
+        f"Updating call execution config for reseller: {reseller_id}, template: {template}, merchant_id: {merchant_id}"
     )
 
     try:
@@ -226,7 +253,7 @@ async def update_call_execution_config(
         query_text, values = update_call_execution_config_query(
             reseller_id=reseller_id,
             template=template,
-            merchant_identifier=merchant_identifier,
+            merchant_id=merchant_id,
             initial_offset=initial_offset,
             retry_offset=retry_offset,
             call_start_time=call_start_time,
@@ -235,6 +262,18 @@ async def update_call_execution_config(
             calling_provider=calling_provider,
             enable_international_call=enable_international_call,
             enable_calling=enable_calling,
+            enable_inbound=enable_inbound,
+            inbound_call_start_time=inbound_call_start_time,
+            inbound_call_end_time=inbound_call_end_time,
+            inbound_call_timezone=inbound_call_timezone,
+            inbound_block_action=inbound_block_action,
+            inbound_redirect_number=inbound_redirect_number,
+            inbound_block_message=inbound_block_message,
+            enforce_blacklist=enforce_blacklist,
+            rate_limit_enabled=rate_limit_enabled,
+            rate_limit_max_calls=rate_limit_max_calls,
+            rate_limit_window_seconds=rate_limit_window_seconds,
+            rate_limit_whitelist=rate_limit_whitelist,
             template_id=template_id,
             pre_checks=_serialize_pre_checks(pre_checks),
             telephony_config=serialized_telephony,
@@ -247,7 +286,7 @@ async def update_call_execution_config(
             return decoded_result
 
         logger.error(
-            f"Failed to update call execution config for reseller: {reseller_id}, template: {template}, merchant_identifier: {merchant_identifier}"
+            f"Failed to update call execution config for reseller: {reseller_id}, template: {template}, merchant_id: {merchant_id}"
         )
         return None
 
@@ -307,23 +346,23 @@ async def delete_call_execution_config(config_id: str) -> bool:
 async def calling_activation_for_merchant(
     enable_calling: bool,
     reseller_id: Optional[str] = None,
-    merchant_identifier: Optional[str] = None,
+    merchant_id: Optional[str] = None,
 ) -> List[CallExecutionConfig]:
     """
     Toggle enable_calling for configs.
     - If reseller_id is None: All configs across all resellers are updated
-    - If reseller_id is provided but merchant_identifier is None: All configs for that reseller are updated
-    - If both reseller_id and merchant_identifier are provided: Only that specific config is updated
+    - If reseller_id is provided but merchant_id is None: All configs for that reseller are updated
+    - If both reseller_id and merchant_id are provided: Only that specific config is updated
     """
     logger.info(
-        f"Toggling calling to {enable_calling} for reseller: {reseller_id}, merchant_identifier: {merchant_identifier}"
+        f"Toggling calling to {enable_calling} for reseller: {reseller_id}, merchant_id: {merchant_id}"
     )
 
     try:
         query_text, values = calling_activation_for_merchant_query(
             reseller_id=reseller_id,
             enable_calling=enable_calling,
-            merchant_identifier=merchant_identifier,
+            merchant_id=merchant_id,
         )
 
         result = await run_parameterized_query(query_text, values)
@@ -333,7 +372,7 @@ async def calling_activation_for_merchant(
             return decoded_result
 
         logger.info(
-            f"No configs found for reseller {reseller_id} with merchant_identifier {merchant_identifier}"
+            f"No configs found for reseller {reseller_id} with merchant_id {merchant_id}"
         )
         return []
 
@@ -344,23 +383,23 @@ async def calling_activation_for_merchant(
 
 async def get_all_merchants() -> List[str]:
     """
-    Get all unique resellers (merchant_identifiers).
+    Get all unique resellers (merchant_ids).
 
-    Each merchant_identifier represents a distinct reseller in the system.
+    Each merchant_id represents a distinct reseller in the system.
     This assumes every merchant has at least one call execution config.
 
     Returns:
-        List of unique merchant_identifier strings
+        List of unique merchant_id strings
     """
-    logger.info("Getting all resellers (merchant_identifiers)")
+    logger.info("Getting all resellers (merchant_ids)")
 
     try:
         query_text, values = get_all_merchants_query()
         result = await run_parameterized_query(query_text, values)
 
         if result:
-            # Extract merchant_identifier from each row
-            resellers = [row["merchant_identifier"] for row in result]
+            # Extract merchant_id from each row
+            resellers = [row["merchant_id"] for row in result]
             logger.info(f"Found {len(resellers)} unique resellers")
             return resellers
 

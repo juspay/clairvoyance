@@ -109,39 +109,31 @@ async def push_lead_handler(req: PushLeadRequest, current_user: UserInfo) -> Dic
         HTTPException: 404 if template/config not found, 400 on validation error
     """
 
-    reseller_id = req.reseller or req.merchant
-
     logger.info(
         f"User {current_user.username} (role: {current_user.role}) pushing lead "
-        f"for reseller: {reseller_id}, template: {req.template}"
+        f"for reseller: {req.reseller_id}, template: {req.template}"
     )
 
     try:
-
-        if not reseller_id:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="reseller (or merchant for backward compatibility) is required",
-            )
         # RBAC:
         # Fetch template to get expected payload schema
         template = await get_template_by_merchant(
-            reseller_id, req.identifier, req.template
+            req.reseller_id, req.merchant_id, req.template
         )
 
         if not template:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Template '{req.template}' not found for reseller: {reseller_id}",
+                detail=f"Template '{req.template}' not found for reseller: {req.reseller_id}",
             )
 
         # Check if customer phone number is blacklisted
         customer_mobile = req.payload.get("customer_mobile_number")
         if customer_mobile and await is_number_blacklisted(
-            customer_mobile, reseller_id
+            customer_mobile, req.reseller_id
         ):
             logger.warning(
-                f"Blacklisted number {customer_mobile} rejected for reseller {reseller_id}"
+                f"Blacklisted number {customer_mobile} rejected for reseller {req.reseller_id}"
             )
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -157,24 +149,24 @@ async def push_lead_handler(req: PushLeadRequest, current_user: UserInfo) -> Dic
             if not is_valid:
                 error_message = get_validation_error_message(validation_errors)
                 logger.warning(
-                    f"Payload validation failed for reseller {reseller_id}: {error_message}"
+                    f"Payload validation failed for reseller {req.reseller_id}: {error_message}"
                 )
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=error_message,
                 )
 
-            logger.info(f"Payload validation successful for reseller {reseller_id}")
+            logger.info(f"Payload validation successful for reseller {req.reseller_id}")
 
         # Get call execution config
         call_execution_configs = await get_call_execution_config_by_merchant_id(
-            reseller_id, req.identifier
+            req.reseller_id, req.merchant_id
         )
 
         if not call_execution_configs:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Call execution config not found for reseller_id: {reseller_id}",
+                detail=f"Call execution config not found for reseller_id: {req.reseller_id}",
             )
 
         config = next(
@@ -221,10 +213,10 @@ async def push_lead_handler(req: PushLeadRequest, current_user: UserInfo) -> Dic
         # Insert lead call tracker record with both template name and template_id
         lead_call_tracker = await create_lead_call_tracker(
             id=uuid,
-            reseller_id=reseller_id,
+            reseller_id=req.reseller_id,
             template=req.template,
             template_id=str(template.id),
-            merchant_identifier=req.identifier,
+            merchant_id=req.merchant_id,
             next_attempt_at=next_attempt_at,
             payload=lead_payload,
             attempt_count=0,
@@ -264,7 +256,7 @@ async def get_call_recording_handler(call_sid: str, current_user: UserInfo) -> B
     Get call recording audio file for a given call SID.
 
     This handler:
-    1. Fetches lead by call_id to get reseller_id and merchant_identifier
+    1. Fetches lead by call_id to get reseller_id and merchant_id
     2. Validates RBAC access (fails fast before fetching recording)
     3. Gets provider from outbound number
     4. Downloads audio from the appropriate provider (Twilio/Exotel)
@@ -302,7 +294,7 @@ async def get_call_recording_handler(call_sid: str, current_user: UserInfo) -> B
         )
 
     validate_recording_access(
-        current_user, call_sid, lead.reseller_id, lead.merchant_identifier
+        current_user, call_sid, lead.reseller_id, lead.merchant_id
     )
 
     # Step 3: Check if recording URL exists

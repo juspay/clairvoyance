@@ -15,7 +15,7 @@ For backward compatibility, old endpoints are available in deprecated/template.p
 
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Query, status
 
 from app.ai.voice.agents.breeze_buddy.template.types import (
     CreateTemplateRequest,
@@ -88,15 +88,9 @@ async def create_template(
             "message": "Template 'order-confirmation' created successfully with 5 nodes"
         }
     """
-    reseller = template_data.reseller_id or template_data.merchant_id
-    if not reseller:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="reseller (or merchant for backward compatibility) is required",
-        )
     # RBAC: Check permission to create template for this reseller
     require_admin_or_reseller_owner(
-        current_user, reseller, operation="create templates"
+        current_user, template_data.reseller_id, operation="create templates"
     )
 
     return await create_template_handler(template_data, current_user)
@@ -104,14 +98,8 @@ async def create_template(
 
 @router.get("/templates/list", response_model=TemplateListResponse)
 async def list_templates(
-    merchant_id: Optional[str] = Query(None, description="Filter by merchant ID"),
     reseller_id: Optional[str] = Query(None, description="Filter by reseller ID"),
-    shop_identifier: Optional[str] = Query(
-        None, description="Filter by shop identifier"
-    ),
-    merchant_identifier: Optional[str] = Query(
-        None, description="Filter by merchant identifier"
-    ),
+    merchant_id: Optional[str] = Query(None, description="Filter by merchant_id"),
     include_inactive: bool = Query(
         False, description="Include inactive templates (default: false)"
     ),
@@ -125,7 +113,7 @@ async def list_templates(
 
     Query Parameters:
     - reseller_id: Optional filter by specific reseller ID
-    - merchant_identifier: Optional filter by specific shop identifier
+    - merchant_id: Optional filter by specific shop identifier
     - include_inactive: Include inactive templates (default: false)
 
     RBAC Behavior:
@@ -149,10 +137,8 @@ async def list_templates(
     Returns:
         TemplateListResponse with templates array and total count
     """
-    reseller = reseller_id or merchant_id
-    identifier = merchant_identifier or shop_identifier
     return await list_templates_handler(
-        reseller, identifier, include_inactive, current_user
+        reseller_id, merchant_id, include_inactive, current_user
     )
 
 

@@ -7,8 +7,6 @@ import json
 from datetime import datetime, timedelta
 from typing import Any, Dict
 
-from fastapi import HTTPException, status
-
 from app.database.accessor.breeze_buddy.analytics import (
     get_analytics_count_from_db,
     get_call_details_from_db,
@@ -234,26 +232,14 @@ async def get_call_details_analytics(
                 elif isinstance(transcription_data, str):
                     transcript = transcription_data
 
-        # Inline fallbacks for backward compatibility
-        reseller_id = tracker.get("reseller_id") or tracker.get("merchant_id")
-        if not reseller_id:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="reseller (or merchant for backward compatibility) is required",
-            )
-
-        merchant_identifier = tracker.get("merchant_identifier") or tracker.get(
-            "shop_identifier"
-        )
-
         results.append(
             CallDetailResult(
                 call_id=tracker.get("call_id") or tracker["id"],
                 lead_id=tracker["id"],
                 order_id=tracker.get("request_id"),
                 template=tracker["template"],
-                reseller_id=reseller_id,
-                merchant_identifier=merchant_identifier,
+                reseller_id=tracker["reseller_id"],
+                merchant_id=tracker.get("merchant_id"),
                 shop_name=payload.get("shop_name") if payload else None,
                 customer_name=payload.get("customer_name") if payload else None,
                 customer_phone=payload.get("phone") if payload else None,
@@ -724,14 +710,12 @@ async def get_lead_status_counts(
     # Extract search parameters from filters
     # These are partial text searches, not exact matches
     search_reseller_id = filters.get("reseller_id")
-    search_merchant_identifier = filters.get("merchant_identifier")
+    search_merchant_identifier = filters.get("merchant_id")
 
     # Remove search fields from filters before passing to database
     # (they're handled separately as partial matches)
     db_filters = {
-        k: v
-        for k, v in filters.items()
-        if k not in ["reseller_id", "merchant_identifier"]
+        k: v for k, v in filters.items() if k not in ["reseller_id", "merchant_id"]
     }
 
     # If user is not admin, automatically filter by their merchant_id
@@ -756,10 +740,8 @@ async def get_lead_status_counts(
         formatted_results.append(
             {
                 "reseller_id": row.get("reseller_id"),
-                "merchant_identifier": (
-                    row.get("merchant_identifier")
-                    if row.get("merchant_identifier")
-                    else None
+                "merchant_id": (
+                    row.get("merchant_id") if row.get("merchant_id") else None
                 ),
                 "backlog_count": row.get("backlog_count", 0) or 0,
                 "processing_count": row.get("processing_count", 0) or 0,

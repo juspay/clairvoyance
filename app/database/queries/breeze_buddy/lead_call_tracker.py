@@ -18,7 +18,7 @@ def insert_lead_call_tracker_query(
     id: str,
     reseller_id: str,
     template: str,
-    merchant_identifier: Optional[str],
+    merchant_id: Optional[str],
     next_attempt_at: Optional[datetime],
     payload: Optional[Dict[str, Any]],
     meta_data: Optional[Dict[str, Any]],
@@ -33,6 +33,9 @@ def insert_lead_call_tracker_query(
     call_id: Optional[str] = None,  # For inbound calls where call_sid is known upfront
     outbound_number_id: Optional[str] = None,  # For inbound calls
     call_direction: CallDirection = CallDirection.OUTBOUND,  # Direction of call
+    outcome: Optional[
+        str
+    ] = None,  # For blocked calls where outcome is known at insert time
 ) -> Tuple[str, List[Any]]:
     """
     Generate query to insert lead call tracker record.
@@ -45,17 +48,16 @@ def insert_lead_call_tracker_query(
         call_id: Call SID (optional, used for inbound calls where call_sid is known upfront)
         outbound_number_id: Outbound number ID (optional, used for inbound calls)
         call_direction: Direction of call (INBOUND or OUTBOUND)
+        outcome: Call outcome (optional, used for blocked calls e.g. BLOCKED_REJECT, BLOCKED_REDIRECT)
     """
     text = f"""
         INSERT INTO "{LEAD_CALL_TRACKER_TABLE}"
         (
             "id",
-            "merchant_id",
             "reseller_id",
             "template",
             "template_id",
-            "merchant_identifier",
-            "shop_identifier",
+            "merchant_id",
             "request_id",
             "next_attempt_at",
             "payload",
@@ -69,20 +71,19 @@ def insert_lead_call_tracker_query(
             "call_id",
             "outbound_number_id",
             "call_direction",
+            "outcome",
             "created_at",
             "updated_at"
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22) RETURNING *;
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21) RETURNING *;
     """
 
     values = [
         id,
-        reseller_id,  # merchant_id (for backward compatibility)
-        reseller_id,  # reseller_id
+        reseller_id,
         template,
         template_id,
-        merchant_identifier,  # merchant_identifier
-        merchant_identifier,  # shop_identifier (for backward compatibility)
+        merchant_id,
         request_id,
         next_attempt_at,
         json.dumps(payload) if payload else None,
@@ -96,6 +97,7 @@ def insert_lead_call_tracker_query(
         call_id,
         outbound_number_id,
         call_direction.value,
+        outcome,
         datetime.now(),
         datetime.now(),
     ]
@@ -174,12 +176,9 @@ def update_lead_call_details_query(
 def get_lead_by_call_id_query(call_id: str) -> Tuple[str, List[Any]]:
     """
     Generate query to get lead by call ID.
-    Uses COALESCE for backward compatibility with old column names.
     """
     text = f"""
-        SELECT *,
-               COALESCE(reseller_id, merchant_id) AS reseller_id,
-               COALESCE(merchant_identifier, shop_identifier) AS merchant_identifier
+        SELECT *
         FROM "{LEAD_CALL_TRACKER_TABLE}"
         WHERE "call_id" = $1;
     """
@@ -190,12 +189,9 @@ def get_lead_by_call_id_query(call_id: str) -> Tuple[str, List[Any]]:
 def get_lead_by_id_query(lead_id: str) -> Tuple[str, List[Any]]:
     """
     Generate query to get lead by ID.
-    Uses COALESCE for backward compatibility with old column names.
     """
     text = f"""
-        SELECT *,
-               COALESCE(reseller_id, merchant_id) AS reseller_id,
-               COALESCE(merchant_identifier, shop_identifier) AS merchant_identifier
+        SELECT *
         FROM "{LEAD_CALL_TRACKER_TABLE}"
         WHERE "id" = $1;
     """
@@ -291,7 +287,7 @@ def update_lead_call_completion_details_query(
 
     text = f"""
         UPDATE "{LEAD_CALL_TRACKER_TABLE}"
-        SET {', '.join(set_clauses)}
+        SET {", ".join(set_clauses)}
         WHERE {where_clause}
         RETURNING *;
     """
