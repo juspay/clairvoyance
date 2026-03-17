@@ -517,3 +517,31 @@ def abort_lead_by_id_query(
         LeadCallStatus.RETRY.value,
     ]
     return text, values
+
+
+def update_lead_payload_query(
+    lead_id: str, payload_updates: Dict[str, Any]
+) -> Tuple[str, List[Any]]:
+    """
+    Update specific fields in the payload JSON column for a lead.
+
+    Uses jsonb merge (||) to update only the specified fields without
+    overwriting existing payload data.
+
+    Args:
+        lead_id: Lead UUID
+        payload_updates: Dictionary of fields to merge into the existing payload
+
+    Returns:
+        Tuple of (query_text, values)
+    """
+    text = f"""
+        UPDATE "{LEAD_CALL_TRACKER_TABLE}"
+        SET
+            "payload" = COALESCE("payload", '{{}}')::jsonb || $1::jsonb,
+            "updated_at" = NOW()
+        WHERE "id" = $2
+        RETURNING *;
+    """
+    values = [json.dumps(payload_updates), lead_id]
+    return text, values

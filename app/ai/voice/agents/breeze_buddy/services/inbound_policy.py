@@ -249,7 +249,7 @@ async def log_blocked_call(
             template_id=template_id,
             merchant_id=merchant_id,
             next_attempt_at=None,
-            payload=None,
+            payload={"customer_mobile_number": from_number},
             meta_data=meta_data,
             call_initiated_time=datetime.now(),
             call_end_time=datetime.now(),

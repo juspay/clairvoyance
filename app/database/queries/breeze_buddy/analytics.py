@@ -326,7 +326,7 @@ def get_analytics_call_details_query(
     filters: Dict[str, Any],
     limit: int = 50,
     offset: int = 0,
-    sort_by: str = "created_at",
+    sort_by: str = "call_initiated_time",
     sort_order: str = "desc",
 ) -> Tuple[str, List[Any]]:
     """
@@ -348,9 +348,9 @@ def get_analytics_call_details_query(
     ]
     if sort_by not in allowed_sort_columns:
         logger.warning(
-            f"[Analytics Query] Invalid sort column '{sort_by}', defaulting to 'created_at'"
+            f"[Analytics Query] Invalid sort column '{sort_by}', defaulting to 'call_initiated_time'"
         )
-        sort_by = "created_at"
+        sort_by = "call_initiated_time"
 
     sort_direction = "DESC" if sort_order.lower() == "desc" else "ASC"
 
@@ -367,6 +367,60 @@ def get_analytics_call_details_query(
     """
 
     values.extend([limit, offset])
+
+    return text, values
+
+
+def get_call_details_records_query(
+    filters: Dict[str, Any],
+    sort_by: str = "call_initiated_time",
+    sort_order: str = "desc",
+    limit: int = 0,
+    offset: int = 0,
+) -> Tuple[str, List[Any]]:
+    """
+    Generate query for call details download.
+    When limit > 0, applies LIMIT/OFFSET for batched streaming.
+    When limit == 0, returns all matching records.
+    """
+    conditions, values = build_analytics_where_clause(
+        filters, filter_execution_mode=True
+    )
+    where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
+
+    # Validate sort column to prevent SQL injection
+    allowed_sort_columns = [
+        "created_at",
+        "call_initiated_time",
+        "call_end_time",
+        "updated_at",
+    ]
+    if sort_by not in allowed_sort_columns:
+        sort_by = "call_initiated_time"
+
+    sort_direction = "DESC" if sort_order.lower() == "desc" else "ASC"
+
+    pagination_clause = ""
+    if limit > 0:
+        pagination_clause = f"LIMIT ${len(values) + 1} OFFSET ${len(values) + 2}"
+        values.extend([limit, offset])
+
+    text = f"""
+        SELECT
+            lct.id,
+            lct.call_id,
+            lct.template,
+            lct.payload,
+            lct.call_initiated_time,
+            lct.call_end_time,
+            lct.outcome,
+            ou.provider as calling_provider
+        FROM "{LEAD_CALL_TRACKER_TABLE}" lct
+        LEFT JOIN "{OUTBOUND_NUMBER_TABLE}" ou ON lct.outbound_number_id = ou.id
+        {where_clause}
+        ORDER BY lct.{sort_by} {sort_direction}
+        {pagination_clause};
+    """
 
     return text, values
 

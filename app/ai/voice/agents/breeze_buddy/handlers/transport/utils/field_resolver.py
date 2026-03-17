@@ -2,7 +2,7 @@
 Field Resolver for Hooks and Global Functions
 
 Resolves field values from different sources for hooks and global HTTP functions.
-Supports simplified field resolution with STATIC and LLM sources only.
+Supports field resolution with STATIC, LLM, and COMPUTED sources.
 
 Example:
     # Static value (literal)
@@ -16,11 +16,18 @@ Example:
     # LLM value
     config = FieldConfig(source="llm", value="order_id")
     resolver.resolve_value(config)  # Returns args["order_id"]
+
+    # Computed value (dynamic at invocation time)
+    config = FieldConfig(source="computed", value="utc_now_minus_hours:1")
+    resolver.resolve_value(config)  # Returns "2026-03-17T09:30:00Z"
 """
 
 import re
 from typing import Any, Dict, List, Optional
 
+from app.ai.voice.agents.breeze_buddy.handlers.transport.utils.computed_fields import (
+    resolve_computed_value,
+)
 from app.ai.voice.agents.breeze_buddy.template.context import TemplateContext
 from app.ai.voice.agents.breeze_buddy.template.types import (
     FieldConfig,
@@ -133,10 +140,12 @@ class FieldResolver:
             return self._resolve_static(config)
         elif config.source == FieldSource.LLM:
             return self._resolve_llm(config, field_name=field_name)
+        elif config.source == FieldSource.COMPUTED:
+            return self._resolve_computed(config)
         else:
             raise ValueError(
                 f"Unsupported field source: {config.source}. "
-                f"Only STATIC and LLM sources are supported."
+                f"Supported sources: STATIC, LLM, COMPUTED."
             )
 
     def resolve_dict(self, template: Dict[str, Any]) -> Dict[str, Any]:
@@ -246,3 +255,43 @@ class FieldResolver:
             logger.debug(f"Resolved LLM field '{arg_name}' successfully")
 
         return value
+
+    def _resolve_computed(self, config: FieldConfig) -> str:
+        """
+        Resolve a computed value that is dynamically generated at invocation time.
+
+        Computed values use a function expression syntax:
+            - "utc_now" -> current UTC timestamp
+            - "utc_now_minus_hours:1" -> UTC timestamp minus 1 hour
+            - "ist_now" -> current IST timestamp
+
+        Args:
+            config: Field configuration where config.value is the computed expression
+
+        Returns:
+            The computed string value
+
+        Raises:
+            ValueError: If the computed expression is invalid or function is unknown
+        """
+        expression = config.value
+
+        if not expression:
+            raise ValueError(
+                "COMPUTED source requires a 'value' field with the function expression"
+            )
+
+        if not isinstance(expression, str):
+            raise ValueError(
+                f"COMPUTED source value must be a string expression, got {type(expression).__name__}"
+            )
+
+        logger.debug(f"Resolving COMPUTED field with expression: '{expression}'")
+
+        try:
+            result = resolve_computed_value(expression)
+            logger.debug(f"Resolved COMPUTED expression '{expression}' -> '{result}'")
+            return result
+        except ValueError as e:
+            logger.error(f"Failed to resolve COMPUTED expression '{expression}': {e}")
+            raise

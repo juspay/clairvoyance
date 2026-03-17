@@ -15,6 +15,9 @@ from typing import Any, Dict, Optional
 from app.ai.voice.agents.breeze_buddy.handlers.transport.http_requester import (
     HttpRequestExecutor,
 )
+from app.ai.voice.agents.breeze_buddy.handlers.transport.utils.computed_fields import (
+    resolve_computed_value,
+)
 from app.ai.voice.agents.breeze_buddy.handlers.transport.utils.field_resolver import (
     FieldResolver,
 )
@@ -129,14 +132,12 @@ class UpdateOutcomeInDatabaseHook(Hook):
         if expected_fields:
             for field_name, field_config in expected_fields.items():
                 if field_config.source == FieldSource.STATIC:
-                    # Use the enforced value from configuration
                     final_data[field_name] = field_config.value
                     logger.debug(
                         f"Field '{field_name}': using enforced value '{field_config.value}' "
                         f"for function '{function_name}'"
                     )
                 elif field_config.source == FieldSource.LLM:
-                    # Use the value from LLM arguments
                     value = args.get(field_name)
                     if value is not None:
                         final_data[field_name] = value
@@ -148,6 +149,25 @@ class UpdateOutcomeInDatabaseHook(Hook):
                         logger.warning(
                             f"Field '{field_name}': type is 'llm' but no value found in args "
                             f"for function '{function_name}'. Args: {args}"
+                        )
+                elif field_config.source == FieldSource.COMPUTED:
+                    if field_config.value:
+                        try:
+                            computed_value = resolve_computed_value(field_config.value)
+                            final_data[field_name] = computed_value
+                            logger.debug(
+                                f"Field '{field_name}': using computed value '{computed_value}' "
+                                f"for function '{function_name}'"
+                            )
+                        except ValueError as e:
+                            logger.error(
+                                f"Field '{field_name}': failed to resolve computed value "
+                                f"'{field_config.value}' for function '{function_name}': {e}"
+                            )
+                    else:
+                        logger.warning(
+                            f"Field '{field_name}': COMPUTED source requires 'value' field "
+                            f"for function '{function_name}'"
                         )
         else:
             # Fallback to old behavior if no expected_fields provided
@@ -211,6 +231,17 @@ class UpdateOutcomeInDatabaseHook(Hook):
                 logger.debug(
                     f"No additional properties found in final data for lead {context.lead.id}"
                 )
+
+            # Guard: if a transfer is in progress, preserve "transferred" outcome
+            # instead of the LLM's value (e.g., "RESOLVED") to avoid a race
+            # condition with handle_call_completion's transfer override.
+            if meta_data.get("transfer", {}).get("status") == "success":
+                logger.info(
+                    f"Transfer detected for lead {context.lead.id}. "
+                    f"Overriding outcome from '{outcome}' to 'transferred' "
+                    f"(function: '{function_name}')"
+                )
+                outcome = "transferred"
 
             # Update lead in database with outcome
             logger.info(

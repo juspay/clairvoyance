@@ -3,12 +3,17 @@ Analytics handlers for different analytics types.
 All handlers use database-level filtering for optimal scalability.
 """
 
+import csv
+import io
 import json
 from datetime import datetime, timedelta
 from typing import Any, Dict
 
+from starlette.responses import StreamingResponse
+
 from app.database.accessor.breeze_buddy.analytics import (
     get_analytics_count_from_db,
+    get_call_detail_records,
     get_call_details_from_db,
     get_inbound_count_from_db,
     get_lead_based_analytics_from_db,
@@ -180,7 +185,7 @@ async def get_call_details_analytics(
     """
     page = options.get("page", 1)
     limit = options.get("limit", 50)
-    sort_by = options.get("sort_by", "created_at")
+    sort_by = options.get("sort_by", "call_initiated_time")
     sort_order = options.get("sort_order", "desc")
 
     offset = (page - 1) * limit
@@ -756,3 +761,116 @@ async def get_lead_status_counts(
         "pagination": result["pagination"],
         "results": formatted_results,
     }
+
+
+async def download_call_details(
+    filters: Dict[str, Any], options: Dict[str, Any], current_user: UserInfo
+) -> StreamingResponse:
+    """
+    Generate a CSV file download of all call details matching the filters.
+    Returns a StreamingResponse that streams CSV rows in batches to avoid
+    loading the entire result set into memory.
+    """
+    sort_by = options.get("sort_by", "call_initiated_time")
+    sort_order = options.get("sort_order", "desc")
+
+    BATCH_SIZE = 1000
+
+    async def generate_csv():
+        output = io.StringIO()
+        writer = csv.writer(output)
+
+        # Write header row
+        headers = [
+            "Call ID",
+            "Lead ID",
+            "Template",
+            "Driver Name",
+            "Caller Number",
+            "Start Time",
+            "End Time",
+            "Duration (seconds)",
+            "Outcome",
+        ]
+        writer.writerow(headers)
+        yield output.getvalue()
+        output.seek(0)
+        output.truncate(0)
+
+        offset = 0
+        while True:
+            trackers = await get_call_detail_records(
+                filters=filters,
+                sort_by=sort_by,
+                sort_order=sort_order,
+                limit=BATCH_SIZE,
+                offset=offset,
+            )
+
+            if not trackers:
+                break
+
+            for tracker in trackers:
+                payload = parse_json(tracker, "payload")
+
+                # Calculate duration
+                duration = None
+                if tracker.get("call_initiated_time") and tracker.get("call_end_time"):
+                    duration = int(
+                        (
+                            tracker["call_end_time"] - tracker["call_initiated_time"]
+                        ).total_seconds()
+                    )
+
+                # Format timestamps
+                start_time = (
+                    tracker["call_initiated_time"].strftime("%Y-%m-%d %H:%M:%S")
+                    if tracker.get("call_initiated_time")
+                    else ""
+                )
+                end_time = (
+                    tracker["call_end_time"].strftime("%Y-%m-%d %H:%M:%S")
+                    if tracker.get("call_end_time")
+                    else ""
+                )
+
+                # Extract caller number from payload
+                caller_number = ""
+                if payload:
+                    caller_number = (
+                        payload.get("customer_mobile_number")
+                        or payload.get("phone")
+                        or ""
+                    )
+
+                writer.writerow(
+                    [
+                        tracker.get("call_id", ""),
+                        tracker.get("id", ""),
+                        tracker.get("template", ""),
+                        payload.get("customer_name", "") if payload else "",
+                        caller_number,
+                        start_time,
+                        end_time,
+                        duration if duration is not None else "",
+                        tracker.get("outcome") or "N/A",
+                    ]
+                )
+
+            yield output.getvalue()
+            output.seek(0)
+            output.truncate(0)
+
+            if len(trackers) < BATCH_SIZE:
+                break
+
+            offset += BATCH_SIZE
+
+    # Generate filename with current date
+    filename = f"call_details_{datetime.now().strftime('%Y-%m-%d')}.csv"
+
+    return StreamingResponse(
+        generate_csv(),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )

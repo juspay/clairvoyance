@@ -17,6 +17,7 @@ class AnalyticsType(str, Enum):
     OUTBOUND_NUMBERS = "outbound-numbers"
     CONVERSION = "conversion"
     PERFORMANCE = "performance"
+    CALL_DETAILS_DOWNLOAD = "call-details-download"
 
 
 class TimeGranularity(str, Enum):

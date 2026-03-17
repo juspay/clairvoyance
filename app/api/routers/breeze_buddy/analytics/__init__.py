@@ -15,6 +15,7 @@ from app.schemas import (
 )
 
 from .handlers import (
+    download_call_details,
     get_call_based_analytics,
     get_call_details_analytics,
     get_conversion_analytics,
@@ -28,7 +29,11 @@ from .rbac import apply_hierarchical_filters
 router = APIRouter()
 
 
-@router.post("/analytics", response_model=AnalyticsResponse)
+@router.post(
+    "/analytics",
+    response_model=AnalyticsResponse,
+    responses={200: {"content": {"text/csv": {}}}},
+)
 async def get_analytics(
     request: AnalyticsRequest,
     current_user: UserInfo = Depends(get_current_user_with_rbac),
@@ -82,6 +87,8 @@ async def get_analytics(
             data = await get_call_based_analytics(filters, options, current_user)
         elif request.type == AnalyticsType.CALL_DETAILS:
             data = await get_call_details_analytics(filters, options, current_user)
+        elif request.type == AnalyticsType.CALL_DETAILS_DOWNLOAD:
+            return await download_call_details(filters, options, current_user)
         elif request.type == AnalyticsType.LEAD_BASED:
             data = await get_lead_based_analytics(filters, options, current_user)
         elif request.type == AnalyticsType.LEAD_STATUS_COUNTS:
