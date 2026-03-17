@@ -55,6 +55,7 @@ from .breeze_buddy.outbound_number import (
     get_outbound_number_based_on_status_and_provider,
     get_outbound_number_by_id,
     increment_outbound_number_channels,
+    reconcile_outbound_channels,
     update_outbound_number_status,
 )
 from .breeze_buddy.template import (
@@ -80,6 +81,7 @@ __all__ = [
     "get_all_outbound_numbers",
     "get_all_outbound_numbers_with_call_count",
     "get_outbound_number_based_on_status_and_provider",
+    "reconcile_outbound_channels",
     "create_call_execution_config",
     "get_call_execution_config_by_id",
     "get_call_execution_config_by_merchant_id",

@@ -23,6 +23,7 @@ from app.database.queries.breeze_buddy.outbound_number import (
     get_outbound_number_by_number_query,
     increment_outbound_number_channels_query,
     insert_outbound_number_query,
+    reconcile_outbound_number_channels_query,
     update_outbound_number_status_query,
 )
 from app.schemas import CallProvider, OutboundNumber, OutboundNumberStatus
@@ -318,3 +319,30 @@ async def get_outbound_number_by_number(number: str) -> Optional[OutboundNumber]
     except Exception as e:
         logger.error(f"Error getting outbound number by number: {e}")
         return None
+
+
+async def reconcile_outbound_channels() -> List[OutboundNumber]:
+    """
+    Reconciles the 'channels' count on all outbound numbers with the actual
+    number of 'PROCESSING' leads in the lead_call_tracker table.
+    Returns the list of outbound numbers that were repaired (drift > 0).
+    """
+    logger.info("Reconciling outbound number channels for drifted counts")
+
+    try:
+        query_text, values = reconcile_outbound_number_channels_query()
+        result = await run_parameterized_query(query_text, values)
+
+        if result:
+            decoded_result = decode_outbound_number_list(result)
+            logger.info(
+                f"Successfully reconciled {len(decoded_result)} outbound numbers"
+            )
+            return decoded_result
+
+        logger.info("No drifted outbound numbers found. Channels are accurate.")
+        return []
+
+    except Exception as e:
+        logger.error(f"Error executing channel reconciliation: {e}", exc_info=True)
+        raise

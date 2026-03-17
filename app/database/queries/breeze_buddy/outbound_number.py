@@ -212,3 +212,29 @@ def get_outbound_number_by_number_query(number: str) -> Tuple[str, List[Any]]:
     text = f'SELECT * FROM "{OUTBOUND_NUMBER_TABLE}" WHERE "number" = $1;'
     values = [number]
     return text, values
+
+
+def reconcile_outbound_number_channels_query() -> Tuple[str, List[Any]]:
+    """
+    Generate query to reconcile outbound number channels with the actual count of PROCESSING leads.
+    Uses point-in-time calculation to prevent race conditions with active cron workers.
+    """
+    text = f"""
+        UPDATE "{OUTBOUND_NUMBER_TABLE}" ou
+        SET "channels" = (
+            SELECT COUNT(*)
+            FROM lead_call_tracker lct
+            WHERE lct.outbound_number_id = ou.id
+              AND lct.status = 'PROCESSING'
+        ),
+        "updated_at" = NOW()
+        WHERE "channels" > (
+            SELECT COUNT(*)
+            FROM lead_call_tracker lct
+            WHERE lct.outbound_number_id = ou.id
+              AND lct.status = 'PROCESSING'
+        )
+        RETURNING ou.*;
+    """
+    values = []
+    return text, values

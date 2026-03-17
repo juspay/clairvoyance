@@ -562,6 +562,10 @@ BACKGROUND_TASKS_LOOP_INTERVAL_SECONDS = int(
     os.environ.get("BACKGROUND_TASKS_LOOP_INTERVAL_SECONDS", "60")
 )  # How often the scheduler checks tasks (in seconds)
 
+RECONCILE_CHANNELS_COOLDOWN_SECONDS = int(
+    os.environ.get("RECONCILE_CHANNELS_COOLDOWN_SECONDS", "60")
+)  # Cooldown between channel reconciliation runs (in seconds)
+
 # Langfuse Score Monitoring Configuration
 ENABLE_BB_LANGFUSE_MONITORING_LOOP = (
     os.environ.get("ENABLE_BB_LANGFUSE_MONITORING_LOOP", "false").lower() == "true"
