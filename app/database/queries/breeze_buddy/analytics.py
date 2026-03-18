@@ -830,7 +830,7 @@ def get_analytics_lead_status_counts_query(
         Tuple of (query_string, values_list)
     """
     conditions, values = build_analytics_where_clause(
-        filters, filter_execution_mode=False
+        filters, filter_execution_mode=True
     )
 
     # Add search conditions for reseller_id
@@ -887,7 +887,7 @@ def get_analytics_lead_status_counts_total_query(
         Tuple of (query_string, values_list)
     """
     conditions, values = build_analytics_where_clause(
-        filters, filter_execution_mode=False
+        filters, filter_execution_mode=True
     )
 
     # Add search conditions for reseller_id
@@ -913,6 +913,184 @@ def get_analytics_lead_status_counts_total_query(
     """
 
     return text, values
+
+
+def get_distinct_outcomes_query(
+    filters: Dict[str, Any],
+) -> Tuple[str, List[Any]]:
+    """
+    Returns a list of distinct outcome values from lead_call_tracker,
+    filtered by date range and RBAC constraints.
+    Used by the frontend to populate the dynamic outcome filter dropdown.
+    """
+    conditions, values = build_analytics_where_clause(
+        filters, filter_execution_mode=True
+    )
+    conditions.append("lct.outcome IS NOT NULL")
+
+    where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
+
+    # Add LEFT JOIN only if provider filter is present
+    join_clause = (
+        f'LEFT JOIN "{OUTBOUND_NUMBER_TABLE}" ou ON lct.outbound_number_id = ou.id'
+        if "provider" in filters and filters["provider"]
+        else ""
+    )
+
+    query = f"""
+        SELECT DISTINCT lct.outcome
+        FROM "{LEAD_CALL_TRACKER_TABLE}" lct
+        {join_clause}
+        {where_clause}
+        ORDER BY lct.outcome ASC;
+    """
+
+    return query, values
+
+
+def get_outcome_counts_query(
+    filters: Dict[str, Any],
+    page: int = 1,
+    limit: int = 10,
+) -> Tuple[str, List[Any]]:
+    """
+    Returns outcome values with their call counts from lead_call_tracker.
+    Counts ALL rows (not unique leads). Grouped by outcome.
+    Paginated with LIMIT/OFFSET.
+    Used by the Outcome Analytics table on the analytics page.
+    """
+    conditions, values = build_analytics_where_clause(
+        filters, filter_execution_mode=True
+    )
+    conditions.append("lct.outcome IS NOT NULL")
+
+    where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
+
+    # Add LEFT JOIN only if provider filter is present
+    join_clause = (
+        f'LEFT JOIN "{OUTBOUND_NUMBER_TABLE}" ou ON lct.outbound_number_id = ou.id'
+        if "provider" in filters and filters["provider"]
+        else ""
+    )
+
+    offset = (page - 1) * limit
+    limit_param = f"${len(values) + 1}"
+    offset_param = f"${len(values) + 2}"
+
+    query = f"""
+        SELECT
+            lct.outcome,
+            COUNT(*) as call_count
+        FROM "{LEAD_CALL_TRACKER_TABLE}" lct
+        {join_clause}
+        {where_clause}
+        GROUP BY lct.outcome
+        ORDER BY call_count DESC
+        LIMIT {limit_param} OFFSET {offset_param};
+    """
+
+    values.append(limit)
+    values.append(offset)
+
+    return query, values
+
+
+def get_outcome_counts_total_query(
+    filters: Dict[str, Any],
+) -> Tuple[str, List[Any]]:
+    """
+    Returns the total number of distinct outcomes matching the filters.
+    Used for pagination metadata (total_pages calculation).
+    """
+    conditions, values = build_analytics_where_clause(
+        filters, filter_execution_mode=True
+    )
+    conditions.append("lct.outcome IS NOT NULL")
+
+    where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
+
+    # Add LEFT JOIN only if provider filter is present
+    join_clause = (
+        f'LEFT JOIN "{OUTBOUND_NUMBER_TABLE}" ou ON lct.outbound_number_id = ou.id'
+        if "provider" in filters and filters["provider"]
+        else ""
+    )
+
+    query = f"""
+        SELECT COUNT(*) as total
+        FROM (
+            SELECT 1
+            FROM "{LEAD_CALL_TRACKER_TABLE}" lct
+            {join_clause}
+            {where_clause}
+            GROUP BY lct.outcome
+        ) as grouped;
+    """
+
+    return query, values
+
+
+def get_distinct_resellers_query(
+    filters: Dict[str, Any],
+) -> Tuple[str, List[Any]]:
+    """
+    Returns distinct reseller_ids from lead_call_tracker.
+    Used for the Reseller filter dropdown on the Records page.
+    """
+    conditions, values = build_analytics_where_clause(
+        filters, filter_execution_mode=True
+    )
+    conditions.append("lct.reseller_id IS NOT NULL")
+
+    where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
+
+    join_clause = (
+        f'LEFT JOIN "{OUTBOUND_NUMBER_TABLE}" ou ON lct.outbound_number_id = ou.id'
+        if "provider" in filters and filters["provider"]
+        else ""
+    )
+
+    query = f"""
+        SELECT DISTINCT lct.reseller_id as reseller_id
+        FROM "{LEAD_CALL_TRACKER_TABLE}" lct
+        {join_clause}
+        {where_clause}
+        ORDER BY reseller_id ASC;
+    """
+
+    return query, values
+
+
+def get_distinct_merchant_ids_query(
+    filters: Dict[str, Any],
+) -> Tuple[str, List[Any]]:
+    """
+    Returns distinct merchant_ids from lead_call_tracker.
+    Optionally scoped to a specific reseller via reseller_id filter.
+    Used for the Merchant ID filter dropdown on the Records page.
+    """
+    conditions, values = build_analytics_where_clause(
+        filters, filter_execution_mode=True
+    )
+    conditions.append("lct.merchant_id IS NOT NULL")
+
+    where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
+
+    join_clause = (
+        f'LEFT JOIN "{OUTBOUND_NUMBER_TABLE}" ou ON lct.outbound_number_id = ou.id'
+        if "provider" in filters and filters["provider"]
+        else ""
+    )
+
+    query = f"""
+        SELECT DISTINCT lct.merchant_id as merchant_id
+        FROM "{LEAD_CALL_TRACKER_TABLE}" lct
+        {join_clause}
+        {where_clause}
+        ORDER BY merchant_id ASC;
+    """
+
+    return query, values
 
 
 def get_analytics_inbound_count_query(

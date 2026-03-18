@@ -19,6 +19,11 @@ from app.database.queries.breeze_buddy.analytics import (
     get_analytics_summary_query,
     get_analytics_trends_query,
     get_call_details_records_query,
+    get_distinct_merchant_ids_query,
+    get_distinct_outcomes_query,
+    get_distinct_resellers_query,
+    get_outcome_counts_query,
+    get_outcome_counts_total_query,
 )
 
 
@@ -447,4 +452,97 @@ async def get_lead_status_counts_from_db(
 
     except Exception as e:
         logger.error(f"Error getting lead status counts: {e}", exc_info=True)
+        raise
+
+
+async def get_distinct_outcomes_from_db(
+    filters: Dict[str, Any],
+) -> List[str]:
+    """Fetch distinct outcome values matching the given filters."""
+    logger.info(f"[Analytics DB] Fetching distinct outcomes with filters: {filters}")
+    try:
+        query, values = get_distinct_outcomes_query(filters)
+        result = await run_parameterized_query(query, values)
+
+        if not result:
+            return []
+
+        return [row["outcome"] for row in result]
+    except Exception as e:
+        logger.error(f"[Analytics DB] Error fetching distinct outcomes: {str(e)}")
+        raise
+
+
+async def get_outcome_counts_from_db(
+    filters: Dict[str, Any],
+    page: int = 1,
+    limit: int = 10,
+) -> Dict[str, Any]:
+    """Fetch outcome counts matching the given filters, with pagination."""
+    logger.info(
+        f"[Analytics DB] Fetching outcome counts with filters: {filters}, page: {page}, limit: {limit}"
+    )
+    try:
+        query, values = get_outcome_counts_query(filters, page, limit)
+        result = await run_parameterized_query(query, values)
+
+        results = [dict(row) for row in result] if result else []
+
+        total_query, total_values = get_outcome_counts_total_query(filters)
+        total_result = await run_parameterized_query(total_query, total_values)
+        total = total_result[0]["total"] if total_result else 0
+        total_pages = -(-total // limit) if limit > 0 else 0
+
+        page_total_calls = sum(r["call_count"] for r in results)
+
+        return {
+            "results": results,
+            "page_total_calls": page_total_calls,
+            "pagination": {
+                "page": page,
+                "limit": limit,
+                "total": total,
+                "total_pages": total_pages,
+            },
+        }
+    except Exception as e:
+        logger.error(f"[Analytics DB] Error fetching outcome counts: {str(e)}")
+        raise
+
+
+async def get_distinct_resellers_from_db(
+    filters: Dict[str, Any],
+) -> List[str]:
+    """Fetch distinct reseller_ids from the database."""
+    logger.info(f"[Analytics DB] Fetching distinct resellers with filters: {filters}")
+    try:
+        query, values = get_distinct_resellers_query(filters)
+        result = await run_parameterized_query(query, values)
+
+        if not result:
+            return []
+
+        return [row["reseller_id"] for row in result if row["reseller_id"]]
+    except Exception as e:
+        logger.error(f"[Analytics DB] Error fetching distinct resellers: {str(e)}")
+        raise
+
+
+async def get_distinct_merchant_ids_from_db(
+    filters: Dict[str, Any],
+) -> List[str]:
+    """Fetch distinct merchant_ids from the database."""
+    logger.info(
+        f"[Analytics DB] Fetching distinct merchant ids with filters: {filters}"
+    )
+    try:
+        query, values = get_distinct_merchant_ids_query(filters)
+        result = await run_parameterized_query(query, values)
+
+        if not result:
+            return []
+
+        return [row["merchant_id"] for row in result if row["merchant_id"]]
+    except Exception as e:
+        logger.error(f"[Analytics DB] Error fetching distinct merchant ids: {str(e)}")
         raise

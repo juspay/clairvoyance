@@ -18,6 +18,10 @@ class AnalyticsType(str, Enum):
     CONVERSION = "conversion"
     PERFORMANCE = "performance"
     CALL_DETAILS_DOWNLOAD = "call-details-download"
+    DISTINCT_OUTCOMES = "distinct-outcomes"
+    OUTCOME_COUNTS = "outcome-counts"
+    DISTINCT_RESELLERS = "distinct-resellers"
+    DISTINCT_MERCHANT_IDS = "distinct-merchant-ids"
 
 
 class TimeGranularity(str, Enum):
