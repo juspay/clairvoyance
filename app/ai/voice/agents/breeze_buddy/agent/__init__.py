@@ -891,6 +891,7 @@ class Agent:
                 transport=self.transport,
                 flow_builder=self.flow_builder,
                 template=self.template,
+                bot_instance=self,
             )
             self._register_event_handlers()
 

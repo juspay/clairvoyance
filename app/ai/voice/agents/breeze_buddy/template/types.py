@@ -274,10 +274,12 @@ class FieldSource(str, Enum):
     Used by both hooks (fire-and-forget) and global HTTP functions (wait for response).
     - STATIC: Value is a literal or contains {template_var} placeholders
     - LLM: Value comes from LLM function arguments
+    - COMPUTED: Value is dynamically computed at invocation time (e.g., timestamps)
     """
 
     STATIC = "static"
     LLM = "llm"
+    COMPUTED = "computed"
 
 
 class HttpMethod(str, Enum):
@@ -332,12 +334,13 @@ class FieldConfig(BaseModel):
     """Configuration for a single field in hooks or global HTTP functions.
 
     Defines how to resolve a field value:
-    - source: Where the value comes from (STATIC or LLM)
+    - source: Where the value comes from (STATIC, LLM, or COMPUTED)
     - value: For STATIC, the literal value or {template_var} placeholder.
              For LLM, the name of the argument from LLM function call.
+             For COMPUTED, the function expression (e.g., "utc_now_minus_hours:1").
     """
 
-    source: FieldSource  # "static" or "llm"
+    source: FieldSource
     value: Optional[Any] = None
 
 
@@ -370,13 +373,21 @@ class BaseGlobalFunction(BaseModel):
     """Base model for all global function types.
 
     Subclasses should define their specific configuration fields.
+
+    Note: func_pre_actions / func_post_actions use aliases so that existing
+    JSON templates with 'pre_actions' / 'post_actions' keys on global functions
+    continue to work. In Python code, always use the func_ prefixed names.
     """
+
+    model_config = ConfigDict(populate_by_name=True)
 
     type: GlobalFunctionType
     name: str
     description: str
     properties: Dict[str, Any] = {}
     required: List[str] = []
+    func_pre_actions: List[FlowAction] = Field(default=[], alias="pre_actions")
+    func_post_actions: List[FlowAction] = Field(default=[], alias="post_actions")
 
 
 class GlobalHttpFunction(BaseGlobalFunction):

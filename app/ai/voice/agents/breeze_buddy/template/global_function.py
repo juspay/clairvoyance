@@ -10,10 +10,14 @@ The adapters follow the same context injection pattern as normal functions:
 - This eliminates the need for _bot_instance storage in flow_manager.state
 """
 
+import asyncio
 from typing import Any, Callable, Dict, List, Optional, Protocol, runtime_checkable
 
 from pipecat_flows import FlowsFunctionSchema
 
+from app.ai.voice.agents.breeze_buddy.template.func_action_handlers import (
+    execute_func_post_actions,
+)
 from app.ai.voice.agents.breeze_buddy.template.types import (
     GlobalBuiltinFunction,
     GlobalFunctionType,
@@ -62,6 +66,7 @@ class GlobalFunctionAdapter(Protocol):
         self,
         config: Dict[str, Any],
         wrapped_handler: Callable,
+        bot_instance: Any = None,
     ) -> FlowsFunctionSchema:
         """
         Build a FlowsFunctionSchema from the config.
@@ -69,6 +74,7 @@ class GlobalFunctionAdapter(Protocol):
         Args:
             config: Raw function configuration dict
             wrapped_handler: Handler already wrapped with with_context(bot_instance)
+            bot_instance: Bot instance for creating TemplateContext in func_post_actions
 
         Returns:
             FlowsFunctionSchema ready for FlowManager
@@ -125,6 +131,7 @@ class HttpGlobalFunctionAdapter:
         self,
         config: Dict[str, Any],
         wrapped_handler: Callable,
+        bot_instance: Any = None,
     ) -> FlowsFunctionSchema:
         """
         Build FlowsFunctionSchema for HTTP global function.
@@ -132,6 +139,7 @@ class HttpGlobalFunctionAdapter:
         Args:
             config: Raw function configuration dict
             wrapped_handler: http_function_handler wrapped with with_context(bot_instance)
+            bot_instance: Bot instance for creating TemplateContext in func_post_actions
 
         Returns:
             FlowsFunctionSchema with handler that passes function_config via kwargs
@@ -153,7 +161,9 @@ class HttpGlobalFunctionAdapter:
 
         # Create outer wrapper that passes function_config via kwargs
         # This follows the same pattern as normal functions passing transition_to, hooks, etc.
-        def create_wrapper(captured_func: GlobalHttpFunction):
+        def create_wrapper(
+            captured_func: GlobalHttpFunction, captured_bot_instance: Any
+        ):
             async def wrapper_handler(llm_args, flow_manager):
                 """
                 Outer wrapper for global HTTP function.
@@ -162,17 +172,27 @@ class HttpGlobalFunctionAdapter:
                 via kwargs. The with_context wrapper will extract function_config and
                 pass it to http_function_handler.
                 """
-                return await wrapped_handler(
+                result = await wrapped_handler(
                     llm_args,
                     function_config=captured_func,
                 )
+                if captured_func.func_post_actions and captured_bot_instance:
+                    asyncio.create_task(
+                        execute_func_post_actions(
+                            captured_bot_instance,
+                            result,
+                            captured_func.func_post_actions,
+                            captured_func.name,
+                        )
+                    )
+                return result
 
             return wrapper_handler
 
         return FlowsFunctionSchema(
             name=func.name,
             description=enhanced_description,
-            handler=create_wrapper(func),
+            handler=create_wrapper(func, bot_instance),
             properties=func.properties,
             required=func.required,
         )
@@ -217,6 +237,7 @@ class BuiltinGlobalFunctionAdapter:
         self,
         config: Dict[str, Any],
         wrapped_handler: Callable,
+        bot_instance: Any = None,
     ) -> FlowsFunctionSchema:
         """
         Build FlowsFunctionSchema for a built-in global function.
@@ -224,6 +245,7 @@ class BuiltinGlobalFunctionAdapter:
         Args:
             config: Raw function configuration dict with 'handler' field
             wrapped_handler: builtin_function_dispatcher wrapped with with_context
+            bot_instance: Bot instance for creating TemplateContext in func_post_actions
 
         Returns:
             FlowsFunctionSchema with handler that passes function_config to dispatcher
@@ -240,7 +262,9 @@ class BuiltinGlobalFunctionAdapter:
             f"Building builtin global function: {func.name}, handler={func.handler}"
         )
 
-        def create_wrapper(captured_func: GlobalBuiltinFunction):
+        def create_wrapper(
+            captured_func: GlobalBuiltinFunction, captured_bot_instance: Any
+        ):
             async def wrapper_handler(llm_args, flow_manager):
                 """
                 Outer wrapper for built-in global function.
@@ -249,17 +273,27 @@ class BuiltinGlobalFunctionAdapter:
                 The with_context wrapper extracts function_config and passes
                 it to builtin_function_dispatcher.
                 """
-                return await wrapped_handler(
+                result = await wrapped_handler(
                     llm_args,
                     function_config=captured_func,
                 )
+                if captured_func.func_post_actions and captured_bot_instance:
+                    asyncio.create_task(
+                        execute_func_post_actions(
+                            captured_bot_instance,
+                            result,
+                            captured_func.func_post_actions,
+                            captured_func.name,
+                        )
+                    )
+                return result
 
             return wrapper_handler
 
         return FlowsFunctionSchema(
             name=func.name,
             description=enhanced_description,
-            handler=create_wrapper(func),
+            handler=create_wrapper(func, bot_instance),
             properties=func.properties,
             required=func.required,
         )
@@ -322,6 +356,7 @@ class GlobalFunctionRegistry:
         cls,
         flow: Dict[str, Any],
         handler_map: Dict[str, Callable],
+        bot_instance: Any = None,
     ) -> List[FlowsFunctionSchema]:
         """
         Build all global functions from flow config using registered adapters.
@@ -334,6 +369,7 @@ class GlobalFunctionRegistry:
             handler_map: Dictionary mapping handler names to wrapped handlers.
                         Handlers should already be wrapped with with_context(bot_instance).
                         Example: {"http_function_handler": wrapped_http_handler, ...}
+            bot_instance: Bot instance for creating TemplateContext in func_post_actions
 
         Returns:
             List of FlowsFunctionSchema objects to pass to FlowManager
@@ -348,7 +384,7 @@ class GlobalFunctionRegistry:
         result: List[FlowsFunctionSchema] = []
 
         for func_config in global_functions_config:
-            schema = cls._build_one(func_config, handler_map)
+            schema = cls._build_one(func_config, handler_map, bot_instance)
             if schema:
                 result.append(schema)
 
@@ -360,6 +396,7 @@ class GlobalFunctionRegistry:
         cls,
         func_config: Dict[str, Any],
         handler_map: Dict[str, Callable],
+        bot_instance: Any = None,
     ) -> Optional[FlowsFunctionSchema]:
         """
         Build a single global function using matching adapter.
@@ -367,6 +404,7 @@ class GlobalFunctionRegistry:
         Args:
             func_config: Raw function configuration from template JSON
             handler_map: Dictionary of handler_name -> wrapped_handler
+            bot_instance: Bot instance for creating TemplateContext in func_post_actions
 
         Returns:
             FlowsFunctionSchema or None if no adapter found or build failed
@@ -384,7 +422,9 @@ class GlobalFunctionRegistry:
                     return None
 
                 try:
-                    return adapter.build_schema(func_config, handler)
+                    return adapter.build_schema(
+                        func_config, handler, bot_instance=bot_instance
+                    )
                 except Exception as e:
                     logger.error(
                         f"Failed to build global function from config: {str(e)}",

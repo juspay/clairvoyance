@@ -145,7 +145,9 @@ class FlowConfigBuilder:
             "expected_callback_response_schema": template.expected_callback_response_schema,
         }
 
-    def build_global_functions(self, flow: Dict[str, Any]) -> List[FlowsFunctionSchema]:
+    def build_global_functions(
+        self, flow: Dict[str, Any], bot_instance: Any = None
+    ) -> List[FlowsFunctionSchema]:
         """
         Build global functions from template flow config using registered adapters.
 
@@ -159,13 +161,16 @@ class FlowConfigBuilder:
 
         Args:
             flow: Flow configuration dict containing optional 'global_functions' array
+            bot_instance: Bot instance for post-action context creation
 
         Returns:
             List of FlowsFunctionSchema objects to pass to FlowManager(global_functions=[...])
         """
         # Pass entire handler_map - each adapter will pick the handler it needs
         # All handlers are already wrapped with with_context(bot_instance) in agent.py
-        return GlobalFunctionRegistry.build(flow, handler_map=self.handler_map)
+        return GlobalFunctionRegistry.build(
+            flow, handler_map=self.handler_map, bot_instance=bot_instance
+        )
 
     def _build_node(self, node: FlowNodeModel) -> NodeConfig:
         """

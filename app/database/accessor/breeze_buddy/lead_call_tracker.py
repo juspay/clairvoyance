@@ -28,6 +28,7 @@ from app.database.queries.breeze_buddy.lead_call_tracker import (
     update_lead_call_initiated_time_by_id_query,
     update_lead_call_initiated_time_query,
     update_lead_call_recording_url_query,
+    update_lead_payload_query,
 )
 from app.schemas import (
     CallDirection,
@@ -542,4 +543,33 @@ async def handle_lead_abort(
 
     except Exception as e:
         logger.error(f"Error aborting lead {lead_id}: {e}")
+        return None
+
+
+async def update_lead_payload(
+    lead_id: str, payload_updates: Dict[str, Any]
+) -> Optional[LeadCallTracker]:
+    """
+    Update specific fields in the payload JSON column for a lead.
+    Merges the provided updates into the existing payload without
+    overwriting other fields.
+    """
+    logger.info(
+        f"Updating lead payload for ID: {lead_id}, keys: {list(payload_updates.keys())}"
+    )
+
+    try:
+        query_text, values = update_lead_payload_query(lead_id, payload_updates)
+        result = await run_parameterized_query(query_text, values)
+
+        if result and get_row_count(result) > 0:
+            decoded_result = decode_lead_call_tracker(result[0])
+            logger.info(f"Lead payload updated successfully for ID: {lead_id}")
+            return decoded_result
+
+        logger.error(f"Failed to update lead payload for ID: {lead_id}")
+        return None
+
+    except Exception as e:
+        logger.error(f"Error updating lead payload for ID {lead_id}: {e}")
         return None
