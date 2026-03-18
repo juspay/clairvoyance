@@ -39,7 +39,9 @@ dev = [
     "black",
     "isort",
     "autoflake",
-    "pyrefly"
+    "pyrefly",
+    "pytest",
+    "pytest-asyncio"
 ]
 
 [build-system]

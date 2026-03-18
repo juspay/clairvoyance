@@ -218,6 +218,8 @@ SARVAM_API_KEY = os.getenv("SARVAM_API_KEY")
 SONIOX_API_KEY = os.getenv(
     "SONIOX_API_KEY"
 )  # Required API key for Soniox authentication
+
+
 SONIOX_MODEL = os.environ.get(
     "SONIOX_MODEL", "stt-rt-v4"
 )  # Soniox model optimized for real-time conversation
@@ -469,7 +471,7 @@ ENABLE_BREEZE_BUDDY_STT_FALLBACK = (
 # Deepgram STT configuration for Breeze Buddy fallback
 BREEZE_BUDDY_DEEPGRAM_MODEL = os.environ.get(
     "BREEZE_BUDDY_DEEPGRAM_MODEL", "nova-3-general"
-)  # when model for Breeze Buddy fallback
+)  # Deepgram model for Breeze Buddy fallback
 BREEZE_BUDDY_DEEPGRAM_LANGUAGE = os.environ.get(
     "BREEZE_BUDDY_DEEPGRAM_LANGUAGE", "multi"
 )  # Language code ("multi" for auto-detection across Indian languages)
@@ -507,6 +509,28 @@ BREEZE_BUDDY_DEEPGRAM_AUTO_DETECT_LANGUAGE = (
     os.environ.get("BREEZE_BUDDY_DEEPGRAM_AUTO_DETECT_LANGUAGE", "true").lower()
     == "true"
 )  # Auto language detection enabled by default for Breeze Buddy (multi-lingual calls)
+
+# --- STT Circuit Breaker Configuration ---
+# Redis-backed circuit breaker that tracks Soniox failures across pods.
+# After FAILURE_THRESHOLD failures within FAILURE_WINDOW_SECS, the circuit
+# trips OPEN for OPEN_DURATION_SECS — all calls use Deepgram directly.
+# After cooldown, a single probe call (protected by ServiceSwitcher) tests
+# Soniox. If it fails, re-trips with RETRIP_THRESHOLD.
+STT_CIRCUIT_BREAKER_FAILURE_THRESHOLD = int(
+    os.environ.get("STT_CIRCUIT_BREAKER_FAILURE_THRESHOLD", "2")
+)  # Number of failures within window to trip the circuit
+STT_CIRCUIT_BREAKER_RETRIP_THRESHOLD = int(
+    os.environ.get("STT_CIRCUIT_BREAKER_RETRIP_THRESHOLD", "1")
+)  # Failures to re-trip from HALF-OPEN (1 = single probe failure re-trips)
+STT_CIRCUIT_BREAKER_OPEN_DURATION_SECS = int(
+    os.environ.get("STT_CIRCUIT_BREAKER_OPEN_DURATION_SECS", "1800")
+)  # Cooldown period in OPEN state (default 30 minutes)
+STT_CIRCUIT_BREAKER_FAILURE_WINDOW_SECS = int(
+    os.environ.get("STT_CIRCUIT_BREAKER_FAILURE_WINDOW_SECS", "240")
+)  # Sliding window for failure counter TTL (default 4 minutes)
+STT_CIRCUIT_BREAKER_PROBE_LOCK_TTL_SECS = int(
+    os.environ.get("STT_CIRCUIT_BREAKER_PROBE_LOCK_TTL_SECS", "420")
+)  # NX lock TTL for HALF-OPEN probe call (default 7 min, > max call duration)
 
 ENABLE_BREEZE_BUDDY_USER_INTERRUPTION = (
     os.environ.get("ENABLE_BREEZE_BUDDY_USER_INTERRUPTION", "false").lower() == "true"
