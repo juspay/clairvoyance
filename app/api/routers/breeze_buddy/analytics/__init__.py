@@ -19,9 +19,13 @@ from .handlers import (
     get_call_based_analytics,
     get_call_details_analytics,
     get_conversion_analytics,
+    get_distinct_merchant_ids,
+    get_distinct_outcomes,
+    get_distinct_resellers,
     get_lead_based_analytics,
     get_lead_status_counts,
     get_outbound_numbers_analytics,
+    get_outcome_counts,
     get_performance_analytics,
 )
 from .rbac import apply_hierarchical_filters
@@ -99,6 +103,14 @@ async def get_analytics(
             data = await get_conversion_analytics(filters, options, current_user)
         elif request.type == AnalyticsType.PERFORMANCE:
             data = await get_performance_analytics(filters, options, current_user)
+        elif request.type == AnalyticsType.DISTINCT_OUTCOMES:
+            data = await get_distinct_outcomes(filters, options, current_user)
+        elif request.type == AnalyticsType.OUTCOME_COUNTS:
+            data = await get_outcome_counts(filters, options, current_user)
+        elif request.type == AnalyticsType.DISTINCT_RESELLERS:
+            data = await get_distinct_resellers(filters, options, current_user)
+        elif request.type == AnalyticsType.DISTINCT_MERCHANT_IDS:
+            data = await get_distinct_merchant_ids(filters, options, current_user)
         else:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,

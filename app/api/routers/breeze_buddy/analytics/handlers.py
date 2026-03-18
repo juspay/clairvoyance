@@ -15,11 +15,15 @@ from app.database.accessor.breeze_buddy.analytics import (
     get_analytics_count_from_db,
     get_call_detail_records,
     get_call_details_from_db,
+    get_distinct_merchant_ids_from_db,
+    get_distinct_outcomes_from_db,
+    get_distinct_resellers_from_db,
     get_inbound_count_from_db,
     get_lead_based_analytics_from_db,
     get_lead_based_trends_from_db,
     get_lead_status_counts_from_db,
     get_outbound_numbers_analytics_from_db,
+    get_outcome_counts_from_db,
     get_summary_analytics_from_db,
     get_trends_analytics_from_db,
 )
@@ -874,3 +878,74 @@ async def download_call_details(
         media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+async def get_distinct_outcomes(
+    filters: Dict[str, Any],
+    options: Dict[str, Any],
+    current_user: UserInfo,
+) -> Dict[str, Any]:
+    """Handler for distinct-outcomes analytics type."""
+    outcomes = await get_distinct_outcomes_from_db(filters)
+
+    return {
+        "type": "distinct-outcomes",
+        "filters_applied": filters,
+        "results": {
+            "outcomes": outcomes,
+        },
+    }
+
+
+async def get_outcome_counts(
+    filters: Dict[str, Any],
+    options: Dict[str, Any],
+    current_user: UserInfo,
+) -> Dict[str, Any]:
+    """Handler for outcome-counts analytics type."""
+    page = max(1, min(options.get("page", 1), 1000))
+    limit = max(1, min(options.get("limit", 10), 100))
+
+    data = await get_outcome_counts_from_db(filters, page, limit)
+
+    return {
+        "type": "outcome-counts",
+        "filters_applied": filters,
+        "pagination": data["pagination"],
+        "results": data["results"],
+        "page_total_calls": data["page_total_calls"],
+    }
+
+
+async def get_distinct_resellers(
+    filters: Dict[str, Any],
+    options: Dict[str, Any],
+    current_user: UserInfo,
+) -> Dict[str, Any]:
+    """Handler for distinct-resellers analytics type."""
+    resellers = await get_distinct_resellers_from_db(filters)
+
+    return {
+        "type": "distinct-resellers",
+        "filters_applied": filters,
+        "results": {
+            "resellers": resellers,
+        },
+    }
+
+
+async def get_distinct_merchant_ids(
+    filters: Dict[str, Any],
+    options: Dict[str, Any],
+    current_user: UserInfo,
+) -> Dict[str, Any]:
+    """Handler for distinct-merchant-ids analytics type."""
+    merchant_ids = await get_distinct_merchant_ids_from_db(filters)
+
+    return {
+        "type": "distinct-merchant-ids",
+        "filters_applied": filters,
+        "results": {
+            "merchant_ids": merchant_ids,
+        },
+    }
