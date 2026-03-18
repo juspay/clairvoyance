@@ -69,7 +69,8 @@ from app.ai.voice.agents.breeze_buddy.template.context import with_context
 from app.ai.voice.agents.breeze_buddy.template.types import (
     ConfigurationModel,
     TemplateModel,
-    TTSVoiceName,
+    TTSProvider,
+    VoiceConfig,
 )
 from app.ai.voice.agents.breeze_buddy.utils.common import (
     create_background_sound_mixer,
@@ -676,19 +677,30 @@ class Agent:
                 if not await self._setup_telephony_transport():
                     return
 
-            # Override TTS voice name if LLM-based selection was done at lead push time
+            # Override TTS provider if LLM-based selection was done at lead push time.
+            # resolve_voice_config() will pick per-provider settings from
+            # voice_config_overrides if available, else Redis defaults.
             if self.lead and self.lead.payload:
-                payload_voice = self.lead.payload.get("tts_voice_name")
-                if payload_voice and self.configurations:
+                payload_provider = self.lead.payload.get("tts_provider")
+                if payload_provider and self.configurations:
                     try:
-                        voice_enum = TTSVoiceName(payload_voice)
+                        provider_enum = TTSProvider(payload_provider)
                         logger.info(
-                            f"Overriding TTS voice from payload: {voice_enum.value}"
+                            f"Overriding TTS provider from payload: {provider_enum.value}"
                         )
-                        self.configurations.tts_voice_name = voice_enum
+                        existing = self.configurations.voice_config
+                        if existing and existing.provider == provider_enum:
+                            # Same provider — keep existing template settings
+                            pass
+                        else:
+                            # Different provider — create minimal config;
+                            # resolve_voice_config will fill from overrides/defaults
+                            self.configurations.voice_config = VoiceConfig(
+                                provider=provider_enum
+                            )
                     except ValueError:
                         logger.warning(
-                            f"Invalid TTS voice '{payload_voice}' in payload, keeping existing config"
+                            f"Invalid TTS provider '{payload_provider}' in payload, keeping existing config"
                         )
 
             # Create services and pipeline

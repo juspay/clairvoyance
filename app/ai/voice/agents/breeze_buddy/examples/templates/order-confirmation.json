@@ -202,14 +202,16 @@
     }
   },
   "configurations": {
-    "tts_voice_name": "mira",
-    "mira_voice_id": null,
-    "cartesia_voice_configurations": null,
-    "elevenlabs_voice_configurations": {
-      "voice_id": "81xnrLNObbKDEs179emP",
-      "model_id": "eleven_flash_v2_5",
-      "speed": 1.0,
-      "language": "en"
+    "voice_config": {
+      "provider": "cartesia"
+    },
+    "voice_config_overrides": {
+      "elevenlabs": {
+        "voice_id": "81xnrLNObbKDEs179emP",
+        "model": "eleven_flash_v2_5",
+        "speed": 1.0,
+        "language": "en"
+      }
     },
     "tts_selection_config": {
       "enabled": true,
@@ -222,9 +224,7 @@
     "stt_language": null,
     "payload_based_language_selection": false,
     "initial_greeting": "Hi {customer_name}, I'm Priyanka from {shop_name}. Um, I'm calling to confirm your order. Is this a good time to talk?",
-    "ivr_greeting": null,
-    "ivr_goodbye": null,
-    "ivr_priority": null,
+    "ivr_config": null,
     "vad_config": null,
     "enable_inbound": false,
     "user_idle_configuration": {

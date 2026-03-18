@@ -25,7 +25,9 @@
         }
     },
     "configurations": {
-        "tts_voice_name": "rhea",
+        "voice_config": {
+            "provider": "elevenlabs"
+        },
         "vad_config": {
             "confidence": 0.5,
             "start_secs": 0.1,

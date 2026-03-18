@@ -7,11 +7,7 @@ import httpx
 from pipecat.services.cartesia.tts import CartesiaTTSService, GenerationConfig
 from pipecat.transcriptions.language import Language
 
-from app.core.config.dynamic import (
-    BB_CARTESIA_LANGUAGE,
-    BB_CARTESIA_MODEL,
-    BB_CARTESIA_VOICE_ID,
-)
+from app.core.config.dynamic import BB_VOICE_PROVIDER_DEFAULTS
 from app.core.config.static import CARTESIA_API_KEY
 from app.core.logger import logger
 
@@ -89,12 +85,10 @@ async def _generate_cartesia_audio(
         raise ValueError("CARTESIA_API_KEY is required for Mira voice")
 
     # Use provided values or fall back to defaults
-    default_voice_id = await BB_CARTESIA_VOICE_ID()
-    default_model = await BB_CARTESIA_MODEL()
-    language = await BB_CARTESIA_LANGUAGE()
-
-    final_voice_id = voice_id if voice_id else default_voice_id
-    final_model = model if model else default_model
+    defaults = await BB_VOICE_PROVIDER_DEFAULTS("cartesia")
+    final_voice_id = voice_id if voice_id else defaults.get("voice_id", "")
+    final_model = model if model else defaults.get("model", "sonic-3")
+    language = defaults.get("language")
 
     url = "https://api.cartesia.ai/tts/bytes"
     headers = {

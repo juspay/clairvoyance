@@ -25,7 +25,9 @@
         }
     },
     "configurations": {
-        "tts_voice_name": "rhea",
+        "voice_config": {
+            "provider": "elevenlabs"
+        },
         "keyword_filter": {
             "enabled": true,
             "keywords": ["hello", "hmm", "okay", "ok", "haan", "ha", "ji"],

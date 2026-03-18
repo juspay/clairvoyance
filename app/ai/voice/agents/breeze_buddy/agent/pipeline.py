@@ -40,7 +40,7 @@ from app.ai.voice.agents.breeze_buddy.processors import (
 )
 from app.ai.voice.agents.breeze_buddy.stt import get_stt_service
 from app.ai.voice.agents.breeze_buddy.template.types import ConfigurationModel
-from app.ai.voice.agents.breeze_buddy.tts import get_tts_service
+from app.ai.voice.agents.breeze_buddy.tts import get_tts_service, resolve_voice_config
 from app.core.config.dynamic import (
     BB_ENABLE_RESPONSE_GATE,
     BREEZE_BUDDY_AZURE_MAX_COMPLETION_TOKENS,
@@ -118,33 +118,13 @@ async def create_services(
         ),
     )
 
-    # Extract Cartesia voice configurations from template
-    cartesia_voice_config = getattr(
-        configurations, "cartesia_voice_configurations", None
+    template_voice_config = getattr(configurations, "voice_config", None)
+    voice_config_overrides = getattr(configurations, "voice_config_overrides", None)
+    voice_config = await resolve_voice_config(
+        template_voice_config, voice_config_overrides
     )
-    legacy_mira_voice_id = getattr(configurations, "mira_voice_id", None)
-
-    if cartesia_voice_config:
-        logger.info(
-            f"Using Cartesia voice configurations from template: {cartesia_voice_config}"
-        )
-
-    # Extract ElevenLabs voice configurations from template
-    elevenlabs_voice_config = getattr(
-        configurations, "elevenlabs_voice_configurations", None
-    )
-
-    if elevenlabs_voice_config:
-        logger.info(
-            f"Using ElevenLabs voice configurations from template: {elevenlabs_voice_config}"
-        )
-
-    tts = await get_tts_service(
-        voice_name=getattr(configurations, "tts_voice_name", None),
-        mira_voice_id=legacy_mira_voice_id,
-        cartesia_voice_configurations=cartesia_voice_config,
-        elevenlabs_voice_configurations=elevenlabs_voice_config,
-    )
+    logger.info(f"Resolved voice config: provider={voice_config.provider.value}")
+    tts = await get_tts_service(voice_config)
 
     return stt, llm, tts
 

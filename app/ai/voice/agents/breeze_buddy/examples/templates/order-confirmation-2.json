@@ -36,7 +36,9 @@
     }
   },
   "configurations": {
-    "tts_voice_name": "rhea",
+    "voice_config": {
+      "provider": "elevenlabs"
+    },
     "stt_language": "en",
     "payload_based_language_selection": true
   },

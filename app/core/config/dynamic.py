@@ -1,4 +1,9 @@
+import json
+import logging
+
 from app.services.live_config.store import get_config
+
+logger = logging.getLogger(__name__)
 
 # -----------------------
 # Dynamic runtime configs
@@ -107,29 +112,59 @@ async def BB_SARVAM_STT_HIGH_VAD_SENSITIVITY() -> bool:
     return await get_config("BB_SARVAM_STT_HIGH_VAD_SENSITIVITY", False, bool)
 
 
-async def BB_SARVAM_TTS_MODEL() -> str:
-    """Returns BB_SARVAM_TTS_MODEL from Redis"""
-    return await get_config("BB_SARVAM_TTS_MODEL", "bulbul:v2", str)
+async def BB_TTS_SERVICE() -> str:
+    """Returns BREEZE_BUDDY_TTS_SERVICE from Redis (default provider name)"""
+    return await get_config("BREEZE_BUDDY_TTS_SERVICE", "elevenlabs", str)
 
 
-async def BB_SARVAM_TTS_VOICE_ID() -> str:
-    """Returns BB_SARVAM_TTS_VOICE_ID from Redis"""
-    return await get_config("BB_SARVAM_TTS_VOICE_ID", "manisha", str)
+# --- Per-provider voice defaults (Redis-backed, overridable at runtime) ---
+# Each provider has a dict of defaults. Template-level VoiceConfig fields
+# override these; fields left as None in VoiceConfig fall back here.
+
+BB_PROVIDER_DEFAULTS: dict[str, dict] = {
+    "elevenlabs": {
+        "voice_id": "fG9s0SXJb213f4UxVHyG",
+        "model": "eleven_flash_v2_5",
+        "speed": 1.15,
+        "language": "en",
+    },
+    "cartesia": {
+        "voice_id": "bec003e2-3cb3-429c-8468-206a393c67ad",
+        "model": "sonic-3",
+        "speed": 1.0,
+        "volume": 1.5,
+        "emotion": "neutral",
+        "language": None,
+    },
+    "sarvam": {
+        "voice_id": "manisha",
+        "model": "bulbul:v2",
+        "language": "en-IN",
+        "speed": 0.9,
+        "pitch": 0.0,
+    },
+}
 
 
-async def BB_SARVAM_TTS_LANGUAGE_CODE() -> str:
-    """Returns BB_SARVAM_TTS_LANGUAGE_CODE from Redis"""
-    return await get_config("BB_SARVAM_TTS_LANGUAGE_CODE", "en-IN", str)
+async def BB_VOICE_PROVIDER_DEFAULTS(provider: str) -> dict:
+    """Returns merged provider defaults: Redis overrides > hardcoded defaults.
 
-
-async def BB_SARVAM_TTS_PITCH() -> float:
-    """Returns BB_SARVAM_TTS_PITCH from Redis"""
-    return await get_config("BB_SARVAM_TTS_PITCH", 0.0, float)
-
-
-async def BB_SARVAM_TTS_PACE() -> float:
-    """Returns BB_SARVAM_TTS_PACE from Redis"""
-    return await get_config("BB_SARVAM_TTS_PACE", 0.9, float)
+    Redis key: BB_VOICE_DEFAULTS_<PROVIDER> (JSON string).
+    Falls back to BB_PROVIDER_DEFAULTS[provider] for any missing keys.
+    Null values in Redis are treated as "unset" and filtered out.
+    """
+    hardcoded = BB_PROVIDER_DEFAULTS.get(provider, {})
+    redis_key = f"BB_VOICE_DEFAULTS_{provider.upper()}"
+    redis_json = await get_config(redis_key, None, str)
+    if redis_json:
+        try:
+            redis_overrides = json.loads(redis_json)
+            # Filter out None values — treat them as "unset, use hardcoded default"
+            filtered = {k: v for k, v in redis_overrides.items() if v is not None}
+            return {**hardcoded, **filtered}
+        except (json.JSONDecodeError, TypeError) as e:
+            logger.warning(f"Failed to parse {redis_key} from Redis: {e}")
+    return dict(hardcoded)
 
 
 async def BB_SARVAM_TTS_ENABLE_PREPROCESSING() -> bool:
@@ -137,47 +172,10 @@ async def BB_SARVAM_TTS_ENABLE_PREPROCESSING() -> bool:
     return await get_config("BB_SARVAM_TTS_ENABLE_PREPROCESSING", True, bool)
 
 
-async def BB_TTS_SERVICE() -> str:
-    """Returns BREEZE_BUDDY_TTS_SERVICE from Redis"""
-    return await get_config("BREEZE_BUDDY_TTS_SERVICE", "elevenlabs", str)
-
-
-# --- Breeze Buddy Cartesia TTS Configuration ---
-async def BB_CARTESIA_VOICE_ID() -> str:
-    """Returns BB_CARTESIA_VOICE_ID from Redis"""
-    return await get_config(
-        "BB_CARTESIA_VOICE_ID", "bec003e2-3cb3-429c-8468-206a393c67ad", str
-    )
-
-
-async def BB_CARTESIA_MODEL() -> str:
-    """Returns BB_CARTESIA_MODEL from Redis"""
-    return await get_config("BB_CARTESIA_MODEL", "sonic-3", str)
-
-
-async def BB_CARTESIA_LANGUAGE() -> str:
-    """Returns BB_CARTESIA_LANGUAGE from Redis (language code like 'en', 'es', 'hi')"""
-    return await get_config("BB_CARTESIA_LANGUAGE", None, str)
-
-
-async def BB_CARTESIA_GENERATION_VOLUME() -> float:
-    """Returns BB_CARTESIA_GENERATION_VOLUME from Redis (range: 0.5-2.0)"""
-    return await get_config("BB_CARTESIA_GENERATION_VOLUME", 1.5, float)
-
-
-async def BB_CARTESIA_GENERATION_SPEED() -> float:
-    """Returns BB_CARTESIA_GENERATION_SPEED from Redis (range: 0.6-1.5)"""
-    return await get_config("BB_CARTESIA_GENERATION_SPEED", 1.0, float)
-
-
-async def BB_CARTESIA_GENERATION_EMOTION() -> str:
-    """Returns BB_CARTESIA_GENERATION_EMOTION from Redis"""
-    return await get_config("BB_CARTESIA_GENERATION_EMOTION", "neutral", str)
-
-
-async def BB_CARTESIA_AGGREGATE_SENTENCES() -> bool:
-    """Returns BB_CARTESIA_AGGREGATE_SENTENCES from Redis"""
-    return await get_config("BB_CARTESIA_AGGREGATE_SENTENCES", True, bool)
+async def BB_AGGREGATE_SENTENCES(provider: str) -> bool:
+    """Returns aggregate_sentences setting for a provider from Redis."""
+    key = f"BB_{provider.upper()}_AGGREGATE_SENTENCES"
+    return await get_config(key, True, bool)
 
 
 async def SHOPS_FOR_TEMPLATE_FLOW() -> list[str]:
@@ -282,22 +280,6 @@ async def BB_ENABLE_ELEVENLABS_INDIAN_RESIDENCY() -> bool:
     return await get_config("BB_ENABLE_ELEVENLABS_INDIAN_RESIDENCY", True, bool)
 
 
-# --- Breeze Buddy ElevenLabs TTS Configuration ---
-async def BB_ELEVENLABS_VOICE_ID() -> str:
-    """Returns BB_ELEVENLABS_VOICE_ID from Redis"""
-    return await get_config("BB_ELEVENLABS_VOICE_ID", "fG9s0SXJb213f4UxVHyG", str)
-
-
-async def BB_ELEVENLABS_MODEL_ID() -> str:
-    """Returns BB_ELEVENLABS_MODEL_ID from Redis"""
-    return await get_config("BB_ELEVENLABS_MODEL_ID", "eleven_flash_v2_5", str)
-
-
-async def BB_ELEVENLABS_VOICE_SPEED() -> float:
-    """Returns BB_ELEVENLABS_VOICE_SPEED from Redis"""
-    return await get_config("BB_ELEVENLABS_VOICE_SPEED", 1.15, float)
-
-
 # --- Breeze Buddy Transfer Configuration ---
 async def BB_TRANSFER_CONFERENCE_TIMEOUT() -> int:
     """Seconds to wait for agent to join conference"""
@@ -317,11 +299,6 @@ async def BB_TRANSFER_MAX_RETRIES() -> int:
 async def BB_TRANSFER_RETRY_DELAY() -> float:
     """Seconds between retries"""
     return await get_config("BB_TRANSFER_RETRY_DELAY", 2.0, float)
-
-
-async def BB_ELEVENLABS_AGGREGATE_SENTENCES() -> bool:
-    """Returns BB_ELEVENLABS_AGGREGATE_SENTENCES from Redis (True = wait for full sentence, False = stream tokens immediately)"""
-    return await get_config("BB_ELEVENLABS_AGGREGATE_SENTENCES", True, bool)
 
 
 async def BREEZE_BUDDY_ENABLE_VAD() -> bool:

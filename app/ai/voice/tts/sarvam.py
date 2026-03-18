@@ -14,11 +14,7 @@ from pipecat.transcriptions.language import Language
 
 from app.core.config.dynamic import (
     BB_SARVAM_TTS_ENABLE_PREPROCESSING,
-    BB_SARVAM_TTS_LANGUAGE_CODE,
-    BB_SARVAM_TTS_MODEL,
-    BB_SARVAM_TTS_PACE,
-    BB_SARVAM_TTS_PITCH,
-    BB_SARVAM_TTS_VOICE_ID,
+    BB_VOICE_PROVIDER_DEFAULTS,
 )
 from app.core.config.static import SARVAM_API_KEY
 from app.core.logger import logger
@@ -202,16 +198,33 @@ class LanguageAwareSarvamTTS(SarvamTTSService):
             yield frame
 
 
-async def _generate_sarvam_audio(text: str) -> bytes:
-    """Synthesize audio using Sarvam TTS API."""
+async def _generate_sarvam_audio(
+    text: str,
+    voice_id: str | None = None,
+    model: str | None = None,
+    language: str | None = None,
+    speed: float | None = None,
+    pitch: float | None = None,
+) -> bytes:
+    """Synthesize audio using Sarvam TTS API.
+
+    Args:
+        text: The text to synthesize
+        voice_id: Optional voice ID override.
+        model: Optional model override.
+        language: Optional language code override.
+        speed: Optional pace override.
+        pitch: Optional pitch override.
+    """
     if not SARVAM_API_KEY:
         raise ValueError("SARVAM_API_KEY is required for Sara voice")
 
-    model = await BB_SARVAM_TTS_MODEL()
-    voice_id = await BB_SARVAM_TTS_VOICE_ID()
-    language_code = await BB_SARVAM_TTS_LANGUAGE_CODE()
-    pitch = await BB_SARVAM_TTS_PITCH()
-    pace = await BB_SARVAM_TTS_PACE()
+    defaults = await BB_VOICE_PROVIDER_DEFAULTS("sarvam")
+    model = model or defaults.get("model", "bulbul:v2")
+    voice_id = voice_id or defaults.get("voice_id", "manisha")
+    language_code = language or defaults.get("language", "en-IN")
+    pitch = pitch if pitch is not None else defaults.get("pitch", 0.0)
+    pace = speed if speed is not None else defaults.get("speed", 0.9)
     enable_preprocessing = await BB_SARVAM_TTS_ENABLE_PREPROCESSING()
 
     url = "https://api.sarvam.ai/text-to-speech"

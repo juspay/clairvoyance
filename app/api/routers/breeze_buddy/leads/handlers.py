@@ -31,7 +31,7 @@ from app.ai.voice.agents.breeze_buddy.utils.language_utils.language_detector imp
     determine_language_for_call,
 )
 from app.ai.voice.agents.breeze_buddy.utils.tts_utils.tts_provider_selector import (
-    determine_tts_voice_for_call,
+    determine_tts_provider_for_call,
 )
 from app.core.logger import logger
 from app.database.accessor import (
@@ -201,14 +201,14 @@ async def push_lead_handler(req: PushLeadRequest, current_user: UserInfo) -> Dic
         # Add language name to payload for use during call (agent.py uses this)
         lead_payload["language_name"] = language_name
 
-        # Determine TTS voice using LLM if payload-based selection is enabled
-        tts_voice_name = await determine_tts_voice_for_call(
+        # Determine TTS provider using LLM if payload-based selection is enabled
+        tts_provider = await determine_tts_provider_for_call(
             template.configurations if template else None,
             lead_payload,
             req.request_id,
         )
-        if tts_voice_name:
-            lead_payload["tts_voice_name"] = tts_voice_name.value
+        if tts_provider:
+            lead_payload["tts_provider"] = tts_provider.value
 
         # Insert lead call tracker record with both template name and template_id
         lead_call_tracker = await create_lead_call_tracker(

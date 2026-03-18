@@ -4,7 +4,11 @@ import base64
 import json
 from typing import Optional
 
-from app.ai.voice.agents.breeze_buddy.template.types import TemplateModel, TTSVoiceName
+from app.ai.voice.agents.breeze_buddy.template.types import (
+    TemplateModel,
+    TTSProvider,
+    VoiceConfig,
+)
 from app.ai.voice.agents.breeze_buddy.tts import generate_audio
 from app.ai.voice.agents.breeze_buddy.utils.common import greeting_has_variables
 from app.core.logger import logger
@@ -70,37 +74,30 @@ async def prepare_and_store_initial_greeting(
                         placeholder, str(value)
                     )
 
-            # Get voice name: check payload first (set during push lead), then template config, then default
-            voice_name = None
-            payload_voice = (payload or {}).get("tts_voice_name")
-            if payload_voice:
+            # Build voice config: check payload override first, then template config
+            voice_config = None
+            payload_provider = (payload or {}).get("tts_provider")
+            if payload_provider:
                 try:
-                    voice_name = TTSVoiceName(payload_voice).value
+                    voice_config = VoiceConfig(provider=TTSProvider(payload_provider))
                     logger.info(
-                        f"Using TTS voice '{voice_name}' from payload for greeting (lead {lead_id})"
+                        f"Using TTS provider '{payload_provider}' from payload for greeting (lead {lead_id})"
                     )
                 except ValueError:
                     logger.warning(
-                        f"Invalid TTS voice '{payload_voice}' in payload, falling back to template config"
+                        f"Invalid TTS provider '{payload_provider}' in payload, falling back to template config"
                     )
 
-            # Fall back to template config or default
-            if not voice_name:
-                if template.configurations.tts_voice_name:
-                    voice_name = (
-                        template.configurations.tts_voice_name.value
-                        if hasattr(template.configurations.tts_voice_name, "value")
-                        else str(template.configurations.tts_voice_name)
-                    )
-                else:
-                    voice_name = "rhea"
+            # Fall back to template voice_config (resolve_voice_config handles None)
+            if not voice_config and template.configurations.voice_config:
+                voice_config = template.configurations.voice_config
 
             logger.info(
                 f"Synthesizing dynamic greeting for lead {lead_id}: {resolved_greeting[:50]}..."
             )
             greeting_audio = await generate_audio(
                 text=resolved_greeting,
-                voice_name=voice_name,
+                voice_config=voice_config,
                 configurations=template.configurations,
             )
 
@@ -128,21 +125,12 @@ async def prepare_and_store_initial_greeting(
                 # For static greetings, the greeting text is the initial_greeting itself
                 return initial_greeting
 
-            # Synthesize and store as template audio (persistent, not deleted after use)
-            voice_name = "rhea"
-            if template.configurations.tts_voice_name:
-                voice_name = (
-                    template.configurations.tts_voice_name.value
-                    if hasattr(template.configurations.tts_voice_name, "value")
-                    else str(template.configurations.tts_voice_name)
-                )
-
             logger.info(
                 f"Synthesizing static greeting for template {template.id}: {initial_greeting[:50]}..."
             )
             greeting_audio = await generate_audio(
                 text=initial_greeting,
-                voice_name=voice_name,
+                voice_config=template.configurations.voice_config,
                 configurations=template.configurations,
             )
             await redis.set(

@@ -13,15 +13,15 @@
     }
   },
   "configurations": {
-    "tts_voice_name": "mira",
-    "stt_language": "en",
-    "cartesia_voice_configurations": {
+    "voice_config": {
+      "provider": "cartesia",
       "voice_id": "248be419-c632-4f23-adf1-5324ed7dbf1d",
       "volume": 1.8,
       "speed": 1.2,
       "emotion": "excited",
       "language": "hi"
     },
+    "stt_language": "en",
     "enable_background_sound": false,
     "background_sound_volume": 2.0
   },

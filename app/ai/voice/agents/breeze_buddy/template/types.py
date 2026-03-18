@@ -5,7 +5,7 @@ Pydantic models for the dynamic workflow engine.
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, SecretStr
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
 
 
 class ActionType(str, Enum):
@@ -46,70 +46,71 @@ class NoiseFilterConfig(BaseModel):
     )
 
 
-class CartesiaVoiceConfiguration(BaseModel):
-    """Cartesia voice configuration parameters for template-level customization.
-
-    Allows per-template override of Cartesia TTS parameters.
-    Values specified here take precedence over global Redis defaults.
-
-    TODO: Add validation for emotion strings against known Cartesia emotions
-    TODO: Add validation for language codes
-    """
-
-    voice_id: Optional[str] = Field(None, description="Cartesia voice ID (e.g., UUID)")
-    volume: Optional[float] = Field(
-        None,
-        ge=0.5,
-        le=2.0,
-        description="Volume multiplier (Cartesia range: 0.5-2.0)",
-    )
-    speed: Optional[float] = Field(
-        None,
-        ge=0.6,
-        le=1.5,
-        description="Speed multiplier (Cartesia range: 0.6-1.5)",
-    )
-    emotion: Optional[str] = Field(
-        None, description="Voice emotion (e.g., 'neutral', 'excited', 'happy')"
-    )
-    language: Optional[str] = Field(
-        None, description="TTS language code (e.g., 'en', 'hi')"
-    )
-
-
-class ElevenLabsVoiceConfiguration(BaseModel):
-    """ElevenLabs voice configuration parameters for template-level customization.
-
-    Allows per-template override of ElevenLabs TTS parameters.
-    Values specified here take precedence over global Redis defaults.
-    """
-
-    voice_id: Optional[str] = Field(None, description="ElevenLabs voice ID")
-    model_id: Optional[str] = Field(
-        None, description="ElevenLabs model ID (e.g., 'eleven_flash_v2_5')"
-    )
-    speed: Optional[float] = Field(
-        None,
-        ge=0.7,
-        le=1.2,
-        description="Speed multiplier (ElevenLabs range: 0.7-1.2, where 1.0 is default)",
-    )
-    language: Optional[str] = Field(
-        None, description="TTS language code (e.g., 'en', 'hi')"
-    )
-
-
-class TTSVoiceName(str, Enum):
-    RHEA = "rhea"
-    SARA = "sara"
-    MIRA = "mira"
-
-
 class TTSProvider(str, Enum):
-    """Supported TTS providers for intelligent selection."""
+    """Supported TTS providers."""
 
     ELEVENLABS = "elevenlabs"
     CARTESIA = "cartesia"
+    SARVAM = "sarvam"
+
+
+class VoiceConfig(BaseModel):
+    """Unified voice configuration — provider + provider-specific settings.
+
+    Template-level values override global Redis defaults.
+    Provider-specific fields (e.g. emotion for Cartesia, pitch for Sarvam)
+    are silently ignored when irrelevant to the chosen provider.
+
+    Example (Cartesia):
+        {
+            "provider": "cartesia",
+            "voice_id": "248be419-c632-4f23-adf1-5324ed7dbf1d",
+            "volume": 1.8,
+            "speed": 1.2,
+            "emotion": "excited",
+            "language": "hi"
+        }
+
+    Example (ElevenLabs):
+        {
+            "provider": "elevenlabs",
+            "voice_id": "fG9s0SXJb213f4UxVHyG",
+            "model": "eleven_flash_v2_5",
+            "speed": 1.2,
+            "language": "en"
+        }
+
+    Example (Sarvam):
+        {
+            "provider": "sarvam",
+            "voice_id": "manisha",
+            "model": "bulbul:v2",
+            "language": "en-IN",
+            "speed": 0.9,
+            "pitch": 0.0
+        }
+    """
+
+    provider: TTSProvider = Field(
+        ..., description="TTS provider (elevenlabs, cartesia, sarvam)"
+    )
+    voice_id: Optional[str] = Field(None, description="Provider-specific voice ID")
+    model: Optional[str] = Field(
+        None,
+        description="Provider model (e.g. 'eleven_flash_v2_5', 'sonic-3', 'bulbul:v2')",
+    )
+    language: Optional[str] = Field(
+        None, description="TTS language code (e.g. 'en', 'hi', 'en-IN')"
+    )
+    speed: Optional[float] = Field(None, description="Speed/pace multiplier")
+    volume: Optional[float] = Field(
+        None, description="Volume multiplier (Cartesia only, range 0.5-2.0)"
+    )
+    emotion: Optional[str] = Field(
+        None,
+        description="Voice emotion (Cartesia only, e.g. 'neutral', 'excited', 'happy')",
+    )
+    pitch: Optional[float] = Field(None, description="Pitch adjustment (Sarvam only)")
 
 
 class TTSSelectionConfig(BaseModel):
@@ -200,17 +201,82 @@ class UserIdleHandlingConfig(BaseModel):
     )
 
 
+class IvrConfig(BaseModel):
+    """IVR-specific configuration — voice, greeting, goodbye, priority.
+
+    When a template is part of an inbound IVR menu, these settings control
+    the IVR experience. voice_config overrides the main voice_config for
+    IVR audio only (greeting, goodbye, block messages).
+
+    Example:
+        {
+            "voice_config": {"provider": "sarvam", "language": "hi"},
+            "greeting": "Welcome. Press 1 for billing, press 2 for support.",
+            "goodbye": "We didn't receive your input. Goodbye.",
+            "priority": 1
+        }
+    """
+
+    voice_config: Optional[VoiceConfig] = Field(
+        None,
+        description="Voice config for IVR audio. Falls back to the template's main voice_config if not set.",
+    )
+    greeting: Optional[str] = Field(
+        None,
+        description="Full IVR audio text including greeting and menu options.",
+    )
+    goodbye: Optional[str] = Field(
+        None,
+        description="Goodbye message when no input received.",
+    )
+    priority: Optional[int] = Field(
+        None,
+        ge=1,
+        description="Priority order for IVR menu (lower = earlier). Gaps allowed.",
+    )
+
+
 class ConfigurationModel(BaseModel):
-    tts_voice_name: Optional[TTSVoiceName] = None
-    mira_voice_id: Optional[str] = (
-        None  # DEPRECATED: Use cartesia_voice_configurations.voice_id instead
+    voice_config: Optional[VoiceConfig] = None  # Unified voice configuration
+    voice_config_overrides: Optional[Dict[str, VoiceConfig]] = Field(
+        None,
+        description="Per-provider voice overrides keyed by provider name. "
+        "Provider is auto-filled from the key — no need to repeat it. "
+        'E.g. {"elevenlabs": {"voice_id": "...", "speed": 1.0}}',
     )
-    cartesia_voice_configurations: Optional[CartesiaVoiceConfiguration] = (
-        None  # Cartesia voice configuration (overrides global defaults)
-    )
-    elevenlabs_voice_configurations: Optional[ElevenLabsVoiceConfiguration] = (
-        None  # ElevenLabs voice configuration (overrides global defaults)
-    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _pre_validate(cls, data: Any) -> Any:
+        """Pre-validation: auto-fill override providers + migrate flat IVR fields."""
+        if not isinstance(data, dict):
+            return data
+
+        # Auto-set provider on each voice_config_overrides entry from its key
+        overrides = data.get("voice_config_overrides")
+        if overrides and isinstance(overrides, dict):
+            for key, cfg in overrides.items():
+                if isinstance(cfg, dict):
+                    cfg.setdefault("provider", key)
+
+        # Migrate flat ivr_* fields into ivr_config (backward compatibility)
+        if not data.get("ivr_config"):
+            greeting = data.get("ivr_greeting")
+            goodbye = data.get("ivr_goodbye")
+            priority = data.get("ivr_priority")
+            if greeting or goodbye or priority:
+                data["ivr_config"] = {
+                    k: v
+                    for k, v in [
+                        ("greeting", greeting),
+                        ("goodbye", goodbye),
+                        ("priority", priority),
+                    ]
+                    if v is not None
+                }
+
+        return data
+
     tts_selection_config: Optional[TTSSelectionConfig] = (
         None  # LLM-based TTS provider selection config
     )
@@ -226,17 +292,11 @@ class ConfigurationModel(BaseModel):
     initial_greeting: Optional[str] = (
         None  # Initial greeting text template with variables (e.g., "Hi {customer_name}")
     )
-    ivr_greeting: Optional[str] = (
-        None  # Full IVR audio text including greeting and menu options (e.g., "Welcome to support. Press 1 for billing, press 2 for technical support")
-    )
-    ivr_goodbye: Optional[str] = (
-        None  # Goodbye message when no input received (default: "We didn't receive your input. Goodbye.")
-    )
-    ivr_priority: Optional[int] = Field(
-        None,
-        ge=1,
-        description="Priority order for IVR menu (lower number = earlier in menu). Gaps allowed (e.g., 1, 3, 4).",
-    )
+    ivr_config: Optional[IvrConfig] = None  # IVR-specific configuration
+    # DEPRECATED: Use ivr_config.greeting / ivr_config.goodbye / ivr_config.priority
+    ivr_greeting: Optional[str] = None
+    ivr_goodbye: Optional[str] = None
+    ivr_priority: Optional[int] = Field(None, ge=1)
     transfer_number: Optional[str] = Field(
         None, description="Phone number to transfer the call to"
     )
