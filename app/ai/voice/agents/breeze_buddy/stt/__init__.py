@@ -55,6 +55,16 @@ from app.core.config.static import (
 from app.core.logger import logger
 from app.services.slack import slack_alert
 
+# Background task references to prevent premature GC of fire-and-forget tasks
+_background_tasks: set[asyncio.Task] = set()
+
+
+def _fire_and_forget(coro) -> None:
+    """Schedule a coroutine as a fire-and-forget task, preventing GC."""
+    task = asyncio.create_task(coro)
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+
 
 @dataclass
 class STTServiceResult:
@@ -65,13 +75,16 @@ class STTServiceResult:
         provider: Name of the active STT provider ("soniox", "deepgram", "sarvam", "openai", "google")
         is_fallback: True if this provider was selected as a fallback due to primary provider failure
         fallback_service: Pre-built Deepgram STT for mid-call hot-swap via ServiceSwitcher.
-                         Only populated when ENABLE_BREEZE_BUDDY_STT_FALLBACK=true and primary is Soniox.
+                         Only populated for HALF-OPEN probe calls.
+        is_probe_call: True if this call is a HALF-OPEN circuit breaker probe.
+                      The agent must call record_success()/release_probe() on completion.
     """
 
     service: object
     provider: str
     is_fallback: bool = False
     fallback_service: Optional[object] = None
+    is_probe_call: bool = False
 
 
 def _build_deepgram_fallback(*, vad_events: Optional[bool] = None) -> object:
@@ -116,31 +129,73 @@ def _build_deepgram_fallback(*, vad_events: Optional[bool] = None) -> object:
     )
 
 
+def _build_soniox(
+    language_hints: Optional[str] = None,
+    soniox_context: Optional[str] = None,
+) -> object:
+    """Build Soniox STT service using Breeze Buddy-specific config.
+
+    Extracted to avoid duplication between CLOSED and HALF-OPEN probe paths.
+    Disables reconnect_on_error when fallback is enabled so a single error
+    triggers immediate circuit breaker recording instead of 3× retry (12s dead air).
+    """
+    effective_context = (
+        soniox_context if soniox_context is not None else BREEZE_BUDDY_SONIOX_CONTEXT
+    )
+    if soniox_context:
+        logger.info("Using template-specific Soniox context")
+
+    # SONIOX_API_KEY is validated by the caller before invoking _build_soniox,
+    # but assert here for type narrowing (pyrefly/mypy).
+    assert SONIOX_API_KEY is not None, "SONIOX_API_KEY must be set"
+
+    return build_soniox_stt(
+        SonioxConfig(
+            api_key=SONIOX_API_KEY,
+            model=BREEZE_BUDDY_SONIOX_MODEL,
+            vad_force_turn_endpoint=BREEZE_BUDDY_SONIOX_VAD_FORCE_TURN_ENDPOINT,
+            language_hints=(
+                language_hints
+                if language_hints is not None
+                else BREEZE_BUDDY_SONIOX_LANGUAGE_HINTS
+            ),
+            context_json=effective_context,
+            enable_non_final_tokens=BREEZE_BUDDY_SONIOX_ENABLE_NON_FINAL_TOKENS,
+            max_non_final_tokens_duration_ms=BREEZE_BUDDY_SONIOX_MAX_NON_FINAL_TOKENS_DURATION_MS,
+            max_endpoint_delay_ms=BREEZE_BUDDY_SONIOX_MAX_ENDPOINT_DELAY_MS,
+            log_context="Breeze Buddy",
+            language_hints_strict=True if language_hints else False,
+            # Disable auto-reconnect when fallback is enabled AND Deepgram
+            # is actually configured, so a single error triggers immediate
+            # recording instead of retrying 3× (12s dead air) before a
+            # fatal ErrorFrame. If DEEPGRAM_API_KEY is missing, keep
+            # Soniox resilient with auto-reconnect.
+            reconnect_on_error=not (
+                ENABLE_BREEZE_BUDDY_STT_FALLBACK and DEEPGRAM_API_KEY
+            ),
+        )
+    )
+
+
 async def _send_soniox_failure_alert(error: Exception, fallback_used: str) -> None:
-    """Send Slack alert when Soniox STT fails at init time. Fire-and-forget."""
+    """Send Slack alert when Soniox STT fails at startup. Fire-and-forget."""
     try:
         await slack_alert.send(
-            title="🚨 Soniox STT Init Failure — Breeze Buddy",
+            title="🚨 Soniox Failed at Startup (Breeze Buddy)",
             fields=[
-                {"name": "Error", "value": str(error)[:500]},
-                {"name": "Fallback Provider", "value": fallback_used},
-                {
-                    "name": "Impact",
-                    "value": "This call using Deepgram as sole STT provider",
-                },
+                {"name": "Fallback", "value": fallback_used.capitalize()},
             ],
             sections=[
                 {
-                    "title": "Action Required",
+                    "title": "What Happened",
                     "text": (
-                        "Soniox failed during STT construction for a Breeze Buddy call. "
-                        "Deepgram is being used as fallback.\n"
-                        "• Check Soniox API key validity and service status\n"
-                        "• If sustained, investigate Soniox outage"
+                        f"Soniox STT failed to initialize for a Breeze Buddy call. "
+                        f"This call is using {fallback_used.capitalize()} instead.\n"
+                        f"```{str(error)[:500]}```"
                     ),
                 }
             ],
-            fallback_text="Soniox STT init failure — Deepgram fallback active for Breeze Buddy",
+            fallback_text=f"Soniox startup failure — {fallback_used} used for this call",
         )
     except Exception as alert_err:
         logger.warning(f"Failed to send Soniox failure Slack alert: {alert_err}")
@@ -213,64 +268,93 @@ async def get_stt_service(
                 "SONIOX_API_KEY is required when BREEZE_BUDDY_STT_SERVICE=soniox"
             )
 
-        # Try Soniox first, fall back to Deepgram on failure
-        try:
-            # Priority: Template context > Env context > None
-            effective_context = (
-                soniox_context
-                if soniox_context is not None
-                else BREEZE_BUDDY_SONIOX_CONTEXT
-            )
-            if soniox_context:
-                logger.info("Using template-specific Soniox context")
-
-            stt_service = build_soniox_stt(
-                SonioxConfig(
-                    api_key=SONIOX_API_KEY,
-                    model=BREEZE_BUDDY_SONIOX_MODEL,
-                    vad_force_turn_endpoint=BREEZE_BUDDY_SONIOX_VAD_FORCE_TURN_ENDPOINT,
-                    language_hints=(
-                        language_hints
-                        if language_hints is not None
-                        else BREEZE_BUDDY_SONIOX_LANGUAGE_HINTS
-                    ),
-                    context_json=effective_context,
-                    enable_non_final_tokens=BREEZE_BUDDY_SONIOX_ENABLE_NON_FINAL_TOKENS,
-                    max_non_final_tokens_duration_ms=BREEZE_BUDDY_SONIOX_MAX_NON_FINAL_TOKENS_DURATION_MS,
-                    max_endpoint_delay_ms=BREEZE_BUDDY_SONIOX_MAX_ENDPOINT_DELAY_MS,
-                    log_context="Breeze Buddy",
-                    language_hints_strict=True if language_hints else False,
-                    # Disable auto-reconnect when fallback is enabled so a single
-                    # error triggers an immediate swap to Deepgram instead of
-                    # retrying 3× (12 s dead air) and then emitting a fatal
-                    # ErrorFrame that kills the entire pipeline.
-                    # When fallback is disabled, reconnect stays True (default)
-                    # giving Soniox 3 retry attempts as the only self-healing path.
-                    reconnect_on_error=not ENABLE_BREEZE_BUDDY_STT_FALLBACK,
-                )
+        # ── Circuit breaker routing (when fallback is enabled) ────────────
+        # OPEN     → Deepgram only (skip Soniox entirely)
+        # HALF-OPEN → probe call gets ServiceSwitcher; others get Deepgram
+        # CLOSED   → Soniox only (no idle Deepgram WS)
+        if ENABLE_BREEZE_BUDDY_STT_FALLBACK:
+            from app.ai.voice.agents.breeze_buddy.stt.fallback import (
+                CircuitState,
+                stt_circuit_breaker,
             )
 
-            # Pre-build Deepgram fallback for mid-call hot-swap via ServiceSwitcher.
-            # vad_events=False prevents Deepgram's server-side VAD from emitting
-            # UserStartedSpeakingFrame → InterruptionTaskFrame that would cancel
-            # the LLM greeting right after the switch. Turn detection is handled
-            # by the pipeline's own LLMUserAggregator + TranscriptionGateProcessor.
-            fallback = None
-            if ENABLE_BREEZE_BUDDY_STT_FALLBACK:
+            circuit_state = await stt_circuit_breaker.get_state()
+            logger.info(f"STT circuit breaker state: {circuit_state.value}")
+
+            # ── OPEN: Deepgram only, skip Soniox entirely ─────────────
+            if circuit_state == CircuitState.OPEN:
+                logger.info("Circuit breaker OPEN — using Deepgram as primary STT")
                 try:
-                    fallback = _build_deepgram_fallback(vad_events=False)
-                    logger.info(
-                        "Pre-built Deepgram STT fallback for mid-call ServiceSwitcher (vad_events=False)"
+                    return STTServiceResult(
+                        service=_build_deepgram_fallback(vad_events=False),
+                        provider="deepgram",
+                        is_fallback=True,
                     )
                 except Exception as dg_err:
-                    logger.warning(
-                        f"Failed to pre-build Deepgram fallback (Soniox will run without fallback): {dg_err}"
+                    logger.error(f"Deepgram init failed while circuit OPEN: {dg_err}")
+                    raise
+
+            # ── HALF-OPEN: single probe call with ServiceSwitcher ─────
+            if circuit_state == CircuitState.HALF_OPEN:
+                probe_acquired = await stt_circuit_breaker.try_acquire_probe()
+                if not probe_acquired:
+                    # Another call is already probing — use Deepgram
+                    logger.info(
+                        "Circuit breaker HALF-OPEN but probe lock held — "
+                        "using Deepgram for this call"
                     )
+                    try:
+                        return STTServiceResult(
+                            service=_build_deepgram_fallback(vad_events=False),
+                            provider="deepgram",
+                            is_fallback=True,
+                        )
+                    except Exception as dg_err:
+                        logger.error(f"Deepgram init failed during HALF-OPEN: {dg_err}")
+                        raise
+
+                # Probe call: Soniox primary + Deepgram fallback in ServiceSwitcher
+                logger.info(
+                    "Circuit breaker HALF-OPEN probe — building Soniox + Deepgram"
+                )
+                try:
+                    stt_service = _build_soniox(language_hints, soniox_context)
+                    fallback = _build_deepgram_fallback(vad_events=False)
+                    logger.info(
+                        "Probe call: Soniox primary + Deepgram fallback "
+                        "(ServiceSwitcher, vad_events=False)"
+                    )
+                    return STTServiceResult(
+                        service=stt_service,
+                        provider="soniox",
+                        fallback_service=fallback,
+                        is_probe_call=True,
+                    )
+                except Exception as probe_err:
+                    logger.error(
+                        f"Probe call Soniox init failed: {probe_err}. "
+                        f"Recording failure and falling back to Deepgram."
+                    )
+                    # Init-time failure during probe: record + release lock
+                    _fire_and_forget(_send_soniox_failure_alert(probe_err, "deepgram"))
+                    await stt_circuit_breaker.record_failure()
+                    await stt_circuit_breaker.release_probe()
+                    try:
+                        return STTServiceResult(
+                            service=_build_deepgram_fallback(vad_events=False),
+                            provider="deepgram",
+                            is_fallback=True,
+                        )
+                    except Exception as dg_err:
+                        raise probe_err from dg_err
+
+        # ── CLOSED (or fallback disabled): Soniox only ────────────────
+        try:
+            stt_service = _build_soniox(language_hints, soniox_context)
 
             return STTServiceResult(
                 service=stt_service,
                 provider="soniox",
-                fallback_service=fallback,
             )
 
         except Exception as soniox_err:
@@ -279,11 +363,19 @@ async def get_stt_service(
             )
 
             # Fire-and-forget Slack alert
-            asyncio.create_task(_send_soniox_failure_alert(soniox_err, "deepgram"))
+            _fire_and_forget(_send_soniox_failure_alert(soniox_err, "deepgram"))
+
+            # Record failure in circuit breaker (may trip for future calls)
+            if ENABLE_BREEZE_BUDDY_STT_FALLBACK:
+                from app.ai.voice.agents.breeze_buddy.stt.fallback import (
+                    stt_circuit_breaker,
+                )
+
+                await stt_circuit_breaker.record_failure()
 
             # Fallback to Deepgram
             try:
-                deepgram_service = _build_deepgram_fallback()
+                deepgram_service = _build_deepgram_fallback(vad_events=False)
                 logger.info(
                     "Successfully initialized Deepgram STT as fallback for Soniox failure"
                 )
@@ -304,7 +396,7 @@ async def get_stt_service(
         # Direct Deepgram selection (not as fallback)
         logger.info("Using Deepgram STT service for Breeze Buddy voice")
         return STTServiceResult(
-            service=_build_deepgram_fallback(),
+            service=_build_deepgram_fallback(vad_events=False),
             provider="deepgram",
         )
     else:
