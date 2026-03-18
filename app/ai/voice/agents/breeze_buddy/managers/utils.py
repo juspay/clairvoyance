@@ -2,13 +2,33 @@
 
 import base64
 import json
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from app.ai.voice.agents.breeze_buddy.template.types import TemplateModel, TTSVoiceName
 from app.ai.voice.agents.breeze_buddy.tts import generate_audio
 from app.ai.voice.agents.breeze_buddy.utils.common import greeting_has_variables
 from app.core.logger import logger
+from app.schemas import CallExecutionConfig
 from app.services.redis.client import get_redis_service
+
+
+def is_within_calling_hours(config: CallExecutionConfig) -> bool:
+    """
+    Checks if the current time is within the allowed calling hours.
+    """
+    IST = timezone(timedelta(hours=5, minutes=30))
+    current_time = datetime.now(IST).time()
+
+    if config.call_start_time <= config.call_end_time:
+        # Normal case (e.g., 09:00-17:00)
+        return config.call_start_time <= current_time <= config.call_end_time
+    else:
+        # Overnight case (e.g., 22:00-06:00)
+        return (
+            current_time >= config.call_start_time
+            or current_time <= config.call_end_time
+        )
 
 
 async def prepare_and_store_initial_greeting(

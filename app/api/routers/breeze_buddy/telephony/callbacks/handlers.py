@@ -15,7 +15,7 @@ from fastapi import BackgroundTasks, HTTPException, Request, Response
 from starlette.responses import HTMLResponse
 from twilio.twiml.voice_response import Connect, Stream, VoiceResponse
 
-from app.ai.voice.agents.breeze_buddy.managers.calls import (
+from app.ai.voice.agents.breeze_buddy.managers import (
     handle_unanswered_calls,
     update_call_recording,
 )
@@ -272,19 +272,21 @@ async def handle_callback_status(request: Request, provider: str) -> Response:
             extra={"call_sid": call_sid, "status": call_status, "provider": provider},
         )
 
-        # Backup release: notify Smart Router when call ends.
-        # Idempotent — safe even if WebSocket already released the pod.
-        if call_status.lower() in ended_statuses:
-            await safe_release_pod(
-                call_sid=str(call_sid), reason=f"status_{call_status}"
-            )
-
-        # Handle failed calls for retry logic
+        # Handle failed calls for retry logic first
+        # Note: handle_unanswered_calls releases the pod internally
         if call_status.lower() in ("no-answer", "failed", "busy"):
             logger.info(f"Call with SID {call_sid} failed with status: {call_status}")
             # Convert to string for the handler
             if isinstance(call_sid, str):
-                await handle_unanswered_calls(call_sid)
+                await handle_unanswered_calls(call_sid, call_status)
+        # For other terminal statuses (completed, canceled, etc.), release pod here
+        # These statuses don't trigger handle_unanswered_calls
+        elif call_status.lower() in ended_statuses:
+            # Backup release: notify Smart Router when call ends.
+            # Idempotent — safe even if WebSocket already released the pod.
+            await safe_release_pod(
+                call_sid=str(call_sid), reason=f"status_{call_status}"
+            )
 
     return Response(status_code=200)
 

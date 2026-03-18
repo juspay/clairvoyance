@@ -1,7 +1,7 @@
 from fastapi import APIRouter, WebSocket
 from starlette.websockets import WebSocketDisconnect
 
-from app.ai.voice.agents.breeze_buddy.managers.calls import handle_call_completion
+from app.ai.voice.agents.breeze_buddy.managers import handle_call_completion
 from app.ai.voice.agents.breeze_buddy.services.telephony.utils import get_voice_provider
 from app.core.logger import logger
 from app.core.transport.http_client import create_aiohttp_session

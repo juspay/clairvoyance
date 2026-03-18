@@ -5,7 +5,7 @@ Handles scheduled tasks and background job triggers.
 
 from fastapi import APIRouter, BackgroundTasks, Depends
 
-from app.ai.voice.agents.breeze_buddy.managers.calls import process_backlog_leads
+from app.ai.voice.agents.breeze_buddy.managers import initiate_calls
 from app.core.logger import logger
 from app.core.security.jwt import get_current_user
 from app.schemas import TokenData
@@ -22,5 +22,5 @@ async def initiate_cron(
     Initiates the cron job to process backlog leads.
     """
     logger.info(f"Authenticated user {current_user.user_id} initiating cron job")
-    background_tasks.add_task(process_backlog_leads)
+    background_tasks.add_task(initiate_calls)
     return {"status": "success", "message": "Lead processing initiated"}
