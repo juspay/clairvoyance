@@ -1,5 +1,8 @@
 """Breeze Buddy custom processors for pipeline control."""
 
+from app.ai.voice.agents.breeze_buddy.processors.interruption_context import (
+    InterruptionContextProcessor,
+)
 from app.ai.voice.agents.breeze_buddy.processors.response_gate import (
     ResponseStateGate,
 )
@@ -12,6 +15,7 @@ from app.ai.voice.agents.breeze_buddy.processors.user_idle import (
 )
 
 __all__ = [
+    "InterruptionContextProcessor",
     "TranscriptionGateProcessor",
     "ResponseStateGate",
     "UserIdleCallbackHandler",
