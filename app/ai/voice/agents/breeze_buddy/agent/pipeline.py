@@ -33,7 +33,6 @@ from pipecat.turns.user_turn_strategies import UserTurnStrategies
 
 from app.ai.voice.agents.breeze_buddy.observability.tracing_setup import setup_tracing
 from app.ai.voice.agents.breeze_buddy.processors import (
-    ResponseStateGate,
     TranscriptionGateProcessor,
     UserIdleCallbackHandler,
     create_user_idle_processor,
@@ -42,7 +41,6 @@ from app.ai.voice.agents.breeze_buddy.stt import get_stt_service
 from app.ai.voice.agents.breeze_buddy.template.types import ConfigurationModel
 from app.ai.voice.agents.breeze_buddy.tts import get_tts_service
 from app.core.config.dynamic import (
-    BB_ENABLE_RESPONSE_GATE,
     BREEZE_BUDDY_AZURE_MAX_COMPLETION_TOKENS,
     BREEZE_BUDDY_AZURE_TEMPERATURE,
 )
@@ -225,8 +223,6 @@ async def build_pipeline(
         ),
     )
 
-    response_gate = ResponseStateGate() if await BB_ENABLE_RESPONSE_GATE() else None
-
     # TranscriptionGateProcessor is always in the pipeline.
     # It is a transparent passthrough when neither mute nor keyword filter is active.
     keyword_filter_config = getattr(configurations, "keyword_filter", None)
@@ -261,9 +257,9 @@ async def build_pipeline(
     # Store reference to user aggregator for position lookup
     user_aggregator = context_aggregator.user()
 
-    # Order: stt → transcription_gate → response_gate → user_aggregator
-    # transcription_gate must be before response_gate so dropped frames never
-    # reach the interruption logic.
+    # Order: stt → transcription_gate → user_aggregator → llm → tts
+    # Pipecat's LLMUserAggregator natively handles interruptions via
+    # UserTurnStrategies — no custom response gate needed.
     pipeline_parts = [
         transport.input(),
         stt,
@@ -274,10 +270,6 @@ async def build_pipeline(
         transport.output(),
         context_aggregator.assistant(),
     ]
-
-    insert_idx = 3  # Position after transport.input(), stt, transcription_gate
-    if response_gate:
-        pipeline_parts.insert(insert_idx, response_gate)
 
     # Insert user idle processor before user_aggregator to monitor user activity
     if user_idle:

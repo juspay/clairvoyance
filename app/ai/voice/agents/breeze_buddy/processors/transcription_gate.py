@@ -18,11 +18,10 @@ suppression modes:
 
 Both modes can be active simultaneously — either condition causes a drop.
 
-Pipeline position (must be BEFORE ResponseStateGate):
+Pipeline position:
     transport.input()
     → stt
     → TranscriptionGateProcessor   ← here
-    → ResponseStateGate
     → user_aggregator (VAD / turn strategies)
     → llm
     ...

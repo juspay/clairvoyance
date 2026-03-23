@@ -63,21 +63,19 @@ Add `keyword_filter` to the template's `configurations` object:
 
 ## How It Works
 
-The `KeywordFilterProcessor` sits in the pipeline **before** the `ResponseStateGate`:
+The `KeywordFilterProcessor` sits in the pipeline **before** the user aggregator:
 
 ```
 transport.input()
   → stt
   → KeywordFilterProcessor    ← filters here
-  → ResponseStateGate         ← interruption logic never sees filtered frames
   → user_aggregator (VAD / turn strategies)
   → llm
   → tts
   → transport.output()
 ```
 
-The processor independently tracks bot state by listening to the same Pipecat frames that the
-`ResponseStateGate` uses:
+The processor independently tracks bot state by listening to Pipecat frames:
 
 | Frame | Effect on filter |
 |-------|-----------------|
