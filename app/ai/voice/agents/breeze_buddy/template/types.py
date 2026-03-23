@@ -505,6 +505,10 @@ class FlowNodeModel(BaseModel):
     vad_config: Optional[VadConfig] = Field(
         None, description="Node-specific VAD configuration (overrides template VAD)"
     )
+    interruption: Optional[InterruptionConfig] = Field(
+        None,
+        description="Node-specific interruption configuration (overrides template interruption)",
+    )
 
 
 class TemplateModel(BaseModel):

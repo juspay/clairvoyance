@@ -68,6 +68,7 @@ from app.ai.voice.agents.breeze_buddy.template.builder import FlowConfigBuilder
 from app.ai.voice.agents.breeze_buddy.template.context import with_context
 from app.ai.voice.agents.breeze_buddy.template.types import (
     ConfigurationModel,
+    InterruptionConfig,
     TemplateModel,
     TTSVoiceName,
 )
@@ -141,6 +142,7 @@ class Agent:
             None  # Resolved greeting text for LLM context
         )
         self.default_vad_params: Optional[VADParams] = None
+        self.default_interruption_config: Optional[InterruptionConfig] = None
 
         # User idle handling
         self._user_idle_callback_handler: Any = None
@@ -715,7 +717,14 @@ class Agent:
             self._user_idle_callback_handler = user_idle_callback_handler
 
             # Store context aggregator for user turn event registration
+            # and dynamic strategy switching during node transitions (Phase 2)
             self._context_aggregator = context_aggregator
+
+            # Store default interruption config for reset-on-transition
+            self.default_interruption_config = (
+                getattr(self.configurations, "interruption", None)
+                or InterruptionConfig()
+            )
 
             # Generate conversation ID and update context
             lead_payload = self.lead.payload if self.lead else None
