@@ -39,7 +39,10 @@ from app.ai.voice.agents.breeze_buddy.processors import (
     create_user_idle_processor,
 )
 from app.ai.voice.agents.breeze_buddy.stt import get_stt_service
-from app.ai.voice.agents.breeze_buddy.template.types import ConfigurationModel
+from app.ai.voice.agents.breeze_buddy.template.types import (
+    ConfigurationModel,
+    InterruptionMode,
+)
 from app.ai.voice.agents.breeze_buddy.tts import get_tts_service
 from app.core.config.dynamic import (
     BB_ENABLE_RESPONSE_GATE,
@@ -163,6 +166,7 @@ async def build_pipeline(
     Any,
     Optional[UserIdleCallbackHandler],
     TranscriptionGateProcessor,
+    Optional[ResponseStateGate],
 ]:
     """Build the processing pipeline.
 
@@ -184,12 +188,13 @@ async def build_pipeline(
         on_user_idle_timeout: Async callback to handle user idle timeout (triggers full end_conversation flow)
 
     Returns:
-        5-tuple of (pipeline, context, context_aggregator, user_idle_callback_handler, transcription_gate)
+        6-tuple of (pipeline, context, context_aggregator, user_idle_callback_handler, transcription_gate, response_gate)
         - pipeline: the built Pipeline instance
         - context: the LLMContext for the conversation
         - context_aggregator: LLMContextAggregatorPair for managing user/assistant turns
         - user_idle_callback_handler: resets retry count on user activity; None if idle detection is disabled
         - transcription_gate: TranscriptionGateProcessor instance wired into the pipeline
+        - response_gate: ResponseStateGate instance (None if BB_ENABLE_RESPONSE_GATE is False)
     """
     # TODO: Add a breeze-buddy-specific context summarizer.
     # Pipecat does not provide built-in summarization; implement one under
@@ -225,7 +230,15 @@ async def build_pipeline(
         ),
     )
 
-    response_gate = ResponseStateGate() if await BB_ENABLE_RESPONSE_GATE() else None
+    # Resolve template-level interruption mode (defaults to INTERRUPT)
+    template_interruption_mode = getattr(
+        configurations, "interruption_mode", InterruptionMode.INTERRUPT
+    )
+    response_gate = (
+        ResponseStateGate(mode=template_interruption_mode)
+        if await BB_ENABLE_RESPONSE_GATE()
+        else None
+    )
 
     # TranscriptionGateProcessor is always in the pipeline.
     # It is a transparent passthrough when neither mute nor keyword filter is active.
@@ -297,6 +310,7 @@ async def build_pipeline(
         context_aggregator,
         user_idle_callback_handler,
         transcription_gate,
+        response_gate,
     )
 
 

@@ -8,6 +8,20 @@ from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
 
+class InterruptionMode(str, Enum):
+    """Controls how the ResponseStateGate handles user speech while the bot is active.
+
+    - INTERRUPT: (default) Cancel current LLM/TTS and process new user speech immediately.
+    - BUFFER:    Let the bot finish speaking; buffer the latest transcription and
+                 flush it once the bot becomes idle.
+    - IGNORE:    Let the bot finish speaking; silently drop user transcriptions.
+    """
+
+    INTERRUPT = "interrupt"
+    BUFFER = "buffer"
+    IGNORE = "ignore"
+
+
 class ActionType(str, Enum):
     TTS_SAY = "tts_say"
     END_CONVERSATION = "end_conversation"
@@ -254,6 +268,13 @@ class ConfigurationModel(BaseModel):
         None,
         description="Keyword filter to suppress specific transcriptions while bot is active",
     )
+    interruption_mode: InterruptionMode = Field(
+        InterruptionMode.INTERRUPT,
+        description="Default interruption mode for all nodes in this template. "
+        "INTERRUPT: cancel bot and process user speech immediately. "
+        "BUFFER: let bot finish, then process latest buffered user speech. "
+        "IGNORE: let bot finish, drop user speech silently.",
+    )
 
 
 class FlowAction(BaseModel):
@@ -460,6 +481,11 @@ class FlowNodeModel(BaseModel):
     functions: List[FlowFunction] = []
     vad_config: Optional[VadConfig] = Field(
         None, description="Node-specific VAD configuration (overrides template VAD)"
+    )
+    interruption_mode: Optional[InterruptionMode] = Field(
+        None,
+        description="Node-specific interruption mode (overrides template-level default). "
+        "When None, the template-level default is used.",
     )
 
 

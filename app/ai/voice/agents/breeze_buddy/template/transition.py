@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional
 from app.ai.voice.agents.breeze_buddy.observability.tracing_setup import auto_trace
 from app.ai.voice.agents.breeze_buddy.template.context import TemplateContext
 from app.ai.voice.agents.breeze_buddy.template.hooks import HookRegistry
-from app.ai.voice.agents.breeze_buddy.template.types import HookConfig
+from app.ai.voice.agents.breeze_buddy.template.types import HookConfig, InterruptionMode
 from app.ai.voice.agents.breeze_buddy.template.vad import (
     apply_node_vad_config,
     reset_vad_to_default,
@@ -76,6 +76,9 @@ async def transition_handler(
 
         # Get node-specific VAD config and apply it
         apply_node_vad_config(context, transition_to)
+
+        # Apply node-level interruption mode (or reset to template default)
+        _apply_node_interruption_mode(context, transition_to)
 
         next_node = context.create_node_from_template(transition_to)
 
@@ -144,3 +147,45 @@ async def _execute_hooks_async(
     logger.info(
         f"Completed async execution of {len(hook_configs)} hook(s) for function '{function_name}'"
     )
+
+
+def _apply_node_interruption_mode(context: TemplateContext, node_name: str) -> None:
+    """Apply node-level interruption mode, falling back to template default.
+
+    If the target node specifies an ``interruption_mode``, apply it to the
+    ResponseStateGate.  Otherwise reset to the template-level default so that
+    a node-specific override from a *previous* node does not leak.
+    """
+    gate = context.response_gate
+    if gate is None:
+        return  # ResponseStateGate not in pipeline (BB_ENABLE_RESPONSE_GATE=False)
+
+    bot = context.bot
+
+    # Look up node-level override from flow config
+    node_mode = None
+    if hasattr(bot, "flow_config") and bot.flow_config:
+        nodes = bot.flow_config.get("nodes", {})
+        node_config = nodes.get(node_name)
+        if node_config is not None:
+            node_mode = node_config.get("interruption_mode")
+
+    if node_mode is not None:
+        # Node-level override takes precedence
+        gate.mode = node_mode
+        logger.info(
+            f"Interruption mode set to {node_mode.value} for node '{node_name}' "
+            f"(node-level override)"
+        )
+    else:
+        # Reset to template-level default
+        template_mode = getattr(
+            getattr(bot, "configurations", None),
+            "interruption_mode",
+            InterruptionMode.INTERRUPT,
+        )
+        gate.mode = template_mode
+        logger.debug(
+            f"Interruption mode reset to {template_mode.value} for node '{node_name}' "
+            f"(template default)"
+        )

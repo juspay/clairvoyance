@@ -56,6 +56,16 @@ class TemplateContext:
         return getattr(self.bot, "speech_gate", None)
 
     @property
+    def response_gate(self):
+        """Get ResponseStateGate instance.
+
+        Returns None if BB_ENABLE_RESPONSE_GATE is False or if the pipeline
+        has not been built yet. Callers should guard with
+        ``if context.response_gate:`` before use.
+        """
+        return getattr(self.bot, "response_gate", None)
+
+    @property
     def aiohttp_session(self):
         """Get AIO Http Session instance"""
         return self.bot.aiohttp_session

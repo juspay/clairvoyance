@@ -17,3 +17,8 @@ __all__ = [
     "UserIdleCallbackHandler",
     "create_user_idle_processor",
 ]
+
+# Re-export InterruptionMode for convenience
+from app.ai.voice.agents.breeze_buddy.template.types import (  # noqa: E402, F401
+    InterruptionMode,
+)
