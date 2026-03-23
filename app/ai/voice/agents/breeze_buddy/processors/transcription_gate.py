@@ -32,8 +32,9 @@ it is a transparent passthrough with negligible overhead.
 """
 
 import asyncio
+import time
 import unicodedata
-from typing import Optional
+from typing import Any, Dict, List, Optional
 
 from pipecat.frames.frames import (
     BotStartedSpeakingFrame,
@@ -57,6 +58,10 @@ class TranscriptionGateProcessor(FrameProcessor):
     """Controls which TranscriptionFrames reach the LLM via two independent modes:
     hard mute and keyword filtering. Both modes drop frames silently — no frame
     is ever pushed downstream when either suppression condition is met.
+
+    Also captures user transcriptions in real-time for recovery on abrupt disconnect.
+    Assistant transcriptions are captured separately by AssistantTranscriptionObserver
+    which writes to the same shared transcription storage.
     """
 
     def __init__(
@@ -89,6 +94,14 @@ class TranscriptionGateProcessor(FrameProcessor):
         # (TTS stops but LLM still running) keeps the filter active.
         self._llm_active: bool = False
         self._tts_active: bool = False
+
+        # --- Real-time transcription collection ---
+        # Captures user transcriptions as they flow through for recovery on abrupt disconnect.
+        # Each entry: {"role": "user"|"assistant", "content": str, "timestamp": float}
+        # Assistant transcriptions are added by AssistantTranscriptionObserver to the same list.
+        self._real_time_transcriptions: List[Dict[str, Any]] = []
+        # Track pending interim so we capture partial speech if call drops mid-utterance
+        self._pending_user_interim: Optional[Dict[str, Any]] = None
 
     # ------------------------------------------------------------------
     # Hard mute API
@@ -140,6 +153,29 @@ class TranscriptionGateProcessor(FrameProcessor):
         return self._muted
 
     # ------------------------------------------------------------------
+    # Real-time transcription collection API
+    # ------------------------------------------------------------------
+
+    @property
+    def collected_transcriptions(self) -> List[Dict[str, Any]]:
+        """Get all transcriptions collected in real-time.
+
+        Returns a list of dicts with keys: role, content, timestamp.
+        This includes both user transcriptions (from STT) and assistant responses
+        (from LLM output, not post-TTS — may differ from actual spoken audio).
+        """
+        return self._real_time_transcriptions.copy()
+
+    @property
+    def transcription_storage(self) -> List[Dict[str, Any]]:
+        """Get the shared transcription storage list.
+
+        Returns the actual list (not a copy) for use by AssistantTranscriptionObserver
+        to append assistant transcriptions to the same storage.
+        """
+        return self._real_time_transcriptions
+
+    # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
 
@@ -185,6 +221,8 @@ class TranscriptionGateProcessor(FrameProcessor):
 
         elif isinstance(frame, BotStoppedSpeakingFrame):
             self._tts_active = False
+            # Note: Assistant transcriptions are captured by AssistantTranscriptionObserver
+            # which writes to the same shared transcription storage.
 
         # ---- Transcription suppression logic -------------------------
         elif isinstance(frame, (TranscriptionFrame, InterimTranscriptionFrame)):
@@ -212,6 +250,47 @@ class TranscriptionGateProcessor(FrameProcessor):
                     f"(keyword match, match_type={self._match_type.value}, bot_active=True)"
                 )
                 return  # Silently drop
+
+            # ---- Real-time transcription capture ----
+            # Track interim transcriptions as pending so we capture partial speech
+            # if the call drops mid-utterance (before STT emits a final frame).
+            if isinstance(frame, InterimTranscriptionFrame) and frame.text.strip():
+                entry = {
+                    "role": "user",
+                    "content": frame.text.strip(),
+                    "timestamp": time.time(),
+                    "interim": True,
+                }
+                if self._pending_user_interim is None:
+                    # First interim for this utterance - append to list
+                    self._real_time_transcriptions.append(entry)
+                    self._pending_user_interim = entry
+                else:
+                    # Update existing pending entry in-place
+                    self._pending_user_interim["content"] = frame.text.strip()
+                    self._pending_user_interim["timestamp"] = time.time()
+
+            elif isinstance(frame, TranscriptionFrame) and frame.text.strip():
+                # Final frame - finalize the pending interim or append new entry
+                if self._pending_user_interim is not None:
+                    # Replace interim content with final
+                    self._pending_user_interim["content"] = frame.text.strip()
+                    self._pending_user_interim["timestamp"] = time.time()
+                    self._pending_user_interim.pop("interim", None)
+                    self._pending_user_interim = None
+                else:
+                    # No pending interim - append new final entry
+                    self._real_time_transcriptions.append(
+                        {
+                            "role": "user",
+                            "content": frame.text.strip(),
+                            "timestamp": time.time(),
+                        }
+                    )
+                logger.debug(
+                    f"TranscriptionGate: captured user transcription "
+                    f"({len(frame.text)} chars)"
+                )
 
         # Pass everything else (and non-suppressed transcriptions) downstream
         await self.push_frame(frame, direction)

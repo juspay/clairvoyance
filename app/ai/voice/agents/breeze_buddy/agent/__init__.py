@@ -722,7 +722,9 @@ class Agent:
             self.conversation_id = generate_conversation_id(lead_payload)
             update_log_context(conversation_id=self.conversation_id)
 
-            self.task = await create_pipeline_task(pipeline, self.conversation_id)
+            self.task = await create_pipeline_task(
+                pipeline, self.conversation_id, transcription_gate=self.speech_gate
+            )
 
             # Validate required attributes for flow setup
             if not self.template:

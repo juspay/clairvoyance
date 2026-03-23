@@ -31,6 +31,9 @@ from pipecat.turns.user_start import (
 from pipecat.turns.user_stop import SpeechTimeoutUserTurnStopStrategy
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 
+from app.ai.voice.agents.breeze_buddy.observability.assistant_transcription_observer import (
+    AssistantTranscriptionObserver,
+)
 from app.ai.voice.agents.breeze_buddy.observability.tracing_setup import setup_tracing
 from app.ai.voice.agents.breeze_buddy.processors import (
     ResponseStateGate,
@@ -303,21 +306,31 @@ async def build_pipeline(
 async def create_pipeline_task(
     pipeline: Pipeline,
     conversation_id: str,
+    transcription_gate: Optional[TranscriptionGateProcessor] = None,
 ) -> PipelineTask:
     """Create and configure the pipeline task.
 
     Args:
         pipeline: The built pipeline
         conversation_id: Unique conversation identifier
+        transcription_gate: TranscriptionGateProcessor for capturing assistant transcriptions.
 
     Returns:
         Configured PipelineTask
     """
+    observers = get_observers()
+
+    # Add observer to capture assistant (LLM) speech in real-time
+    if transcription_gate is not None:
+        observers.append(
+            AssistantTranscriptionObserver(transcription_gate.transcription_storage)
+        )
+
     task_params: dict[str, Any] = {
         "params": PipelineParams(
             enable_metrics=True,
             enable_usage_metrics=True,
-            observers=get_observers(),
+            observers=observers,
         ),
     }
 

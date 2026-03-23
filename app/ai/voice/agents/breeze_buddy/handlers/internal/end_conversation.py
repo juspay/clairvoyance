@@ -51,39 +51,44 @@ async def end_conversation(context: TemplateContext, args, transition_to=None):
         logger.debug(f"Initialized empty metaData for call {context.call_sid}")
 
     try:
-        # Collect transcription
+        # Collect transcription from real-time transcription collector (preferred)
+        # Falls back to LLM context messages if speech_gate unavailable
         transcription = []
-        filtered_transcript = []
-        if context.context:
-            history = context.context.messages
+        if context.speech_gate:
+            real_time_transcriptions = context.speech_gate.collected_transcriptions
             logger.debug(
-                f"Collecting transcription from {len(history)} messages for call {context.call_sid}"
+                f"Retrieved {len(real_time_transcriptions)} real-time transcriptions for call {context.call_sid}"
             )
+            # Convert to standard format (strip timestamp/interim flags, keep role and content)
+            transcription = [
+                {"role": entry["role"], "content": entry["content"]}
+                for entry in real_time_transcriptions
+                if entry.get("role") and entry.get("content")
+            ]
 
-            for msg in history:
-                if (
-                    isinstance(msg, dict)
-                    and "role" in msg
-                    and "content" in msg
-                    and isinstance(msg["content"], str)
-                ):
-                    transcription.append(
-                        {"role": msg["role"], "content": msg["content"]}
-                    )
-                    if msg["role"] in ("user", "assistant"):
-                        filtered_transcript.append(
-                            {"role": msg["role"], "content": msg["content"]}
-                        )
+        # Fallback to LLM context messages if speech_gate unavailable or empty
+        # This preserves robustness when pipeline wasn't fully built or errors occurred
+        if not transcription and context.context and context.context.messages:
+            logger.debug(
+                f"Falling back to LLM context messages for call {context.call_sid}"
+            )
+            transcription = [
+                {"role": msg["role"], "content": msg["content"]}
+                for msg in context.context.messages
+                if msg.get("role") in ("user", "assistant") and msg.get("content")
+            ]
 
+        if transcription:
             context.lead.metaData["transcription"] = transcription
+            user_assistant_count = sum(
+                1 for t in transcription if t["role"] in ("user", "assistant")
+            )
             logger.info(
                 f"Collected {len(transcription)} total messages "
-                f"({len(filtered_transcript)} user/assistant) for call {context.call_sid}"
+                f"({user_assistant_count} user/assistant) for call {context.call_sid}"
             )
         else:
-            logger.warning(
-                f"No context found for transcription collection in call {context.call_sid}"
-            )
+            logger.warning(f"No transcriptions captured for call {context.call_sid}")
 
         # Set call_ended_by if not already set (e.g., by _handle_unexpected_disconnect)
         if "call_ended_by" not in context.lead.metaData:
