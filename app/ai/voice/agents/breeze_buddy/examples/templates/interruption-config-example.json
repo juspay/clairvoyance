@@ -1,0 +1,96 @@
+{
+  "merchant": "breeze",
+  "template_name": "interruption-config-example",
+  "identifier": "interruption-demo",
+  "is_active": true,
+  "description": "Demonstrates interruption control modes. Mode 'enabled' (default) allows normal interruptions. Mode 'disabled_discard' prevents interruptions and discards user speech while the bot is speaking. The optional 'min_words' setting requires the user to speak N words before an interruption triggers (only with mode='enabled').",
+  "expected_payload_schema": {
+    "customer_name": {
+      "type": "string"
+    },
+    "order_id": {
+      "type": "string"
+    }
+  },
+  "configurations": {
+    "tts_voice_name": "rhea",
+    "interruption": {
+      "mode": "enabled",
+      "min_words": 3
+    }
+  },
+  "flow": {
+    "initial_node": "greeting",
+    "nodes": [
+      {
+        "node_name": "greeting",
+        "task_messages": [
+          {
+            "role": "system",
+            "content": "Greet the customer: \"Hi {customer_name}! This is regarding your order #{order_id}. I'm calling to confirm the details with you. Is now a good time to talk?\""
+          }
+        ],
+        "role_messages": [
+          {
+            "role": "system",
+            "content": "You are a friendly customer service representative. Interruption is configured with min_words=3, so single-word fillers like 'hmm' or 'ok' won't interrupt you, but a full sentence like 'yes I can talk' will."
+          }
+        ],
+        "functions": [
+          {
+            "function_name": "confirm_order",
+            "description": "Call when user confirms the order details",
+            "properties": {},
+            "required": [],
+            "transition_to": "closing",
+            "hooks": []
+          },
+          {
+            "function_name": "user_busy",
+            "description": "Call when user doesn't want to continue",
+            "properties": {},
+            "required": [],
+            "transition_to": "end_call",
+            "hooks": []
+          }
+        ]
+      },
+      {
+        "node_name": "closing",
+        "task_messages": [
+          {
+            "role": "system",
+            "content": "Thank the customer and confirm: \"Great, your order #{order_id} is confirmed. Thank you, {customer_name}! Have a wonderful day.\""
+          }
+        ],
+        "role_messages": [
+          {
+            "role": "system",
+            "content": "Deliver the closing message clearly."
+          }
+        ],
+        "post_actions": [
+          {
+            "type": "end_conversation"
+          }
+        ],
+        "functions": []
+      },
+      {
+        "node_name": "end_call",
+        "task_messages": [
+          {
+            "role": "system",
+            "content": "End politely: \"No problem, {customer_name}. We'll reach out again at a better time. Goodbye!\""
+          }
+        ],
+        "post_actions": [
+          {
+            "type": "end_conversation"
+          }
+        ],
+        "functions": []
+      }
+    ]
+  }
+}

@@ -23,8 +23,10 @@ from pipecat.processors.aggregators.llm_response_universal import (
 )
 from pipecat.services.azure.llm import AzureLLMService
 from pipecat.services.openai.base_llm import BaseOpenAILLMService
+from pipecat.turns.user_mute import AlwaysUserMuteStrategy, BaseUserMuteStrategy
 from pipecat.turns.user_start import (
     BaseUserTurnStartStrategy,
+    MinWordsUserTurnStartStrategy,
     TranscriptionUserTurnStartStrategy,
     VADUserTurnStartStrategy,
 )
@@ -38,7 +40,11 @@ from app.ai.voice.agents.breeze_buddy.processors import (
     create_user_idle_processor,
 )
 from app.ai.voice.agents.breeze_buddy.stt import get_stt_service
-from app.ai.voice.agents.breeze_buddy.template.types import ConfigurationModel
+from app.ai.voice.agents.breeze_buddy.template.types import (
+    ConfigurationModel,
+    InterruptionConfig,
+    InterruptionMode,
+)
 from app.ai.voice.agents.breeze_buddy.tts import get_tts_service
 from app.core.config.dynamic import (
     BREEZE_BUDDY_AZURE_MAX_COMPLETION_TOKENS,
@@ -194,19 +200,44 @@ async def build_pipeline(
     # app/ai/voice/agents/breeze_buddy/ to manage long conversation contexts.
     context = LLMContext()
 
-    # User turn strategies:
+    # --- Interruption configuration ---
+    # Reads template-level interruption config to select PipeCat strategies:
+    #   mode=enabled (default): normal interruptions via VAD + Transcription
+    #   mode=enabled + min_words: MinWordsUserTurnStartStrategy replaces Transcription
+    #   mode=disabled_discard: AlwaysUserMuteStrategy drops all user frames while bot speaks
+    interruption_config = (
+        getattr(configurations, "interruption", None) or InterruptionConfig()
+    )
+
+    # User turn start strategies:
     # 1. VADUserTurnStartStrategy: Primary detector, fires on VAD speech detection (~100ms).
     #    Only included when vad_analyzer is provided (BREEZE_BUDDY_ENABLE_VAD=true).
     #    First-one-wins semantics — if VAD fires first, transcription fallback is skipped.
     # 2. TranscriptionUserTurnStartStrategy: Used as sole start strategy when VAD is disabled,
     #    or as fallback for soft speech that VAD misses when VAD is enabled.
     #    With use_interim=True, triggers on any interim transcription from Soniox.
-    # 3. SpeechTimeoutUserTurnStopStrategy(0.0): Triggers immediately when Soniox
+    # 3. MinWordsUserTurnStartStrategy: Replaces Transcription strategy when min_words is set.
+    #    Requires N words before triggering interruption while bot speaks; 1 word when bot is silent.
+    # 4. SpeechTimeoutUserTurnStopStrategy(0.0): Triggers immediately when Soniox
     #    sends a finalized transcript with <end> token (native semantic endpoint detection).
     start_strategies: list[BaseUserTurnStartStrategy] = []
     if vad_analyzer is not None:
         start_strategies.append(VADUserTurnStartStrategy())
-    start_strategies.append(TranscriptionUserTurnStartStrategy(use_interim=True))
+
+    if (
+        interruption_config.min_words
+        and interruption_config.mode == InterruptionMode.ENABLED
+    ):
+        start_strategies.append(
+            MinWordsUserTurnStartStrategy(
+                min_words=interruption_config.min_words, use_interim=True
+            )
+        )
+        logger.info(
+            f"Interruption: min_words={interruption_config.min_words} strategy enabled"
+        )
+    else:
+        start_strategies.append(TranscriptionUserTurnStartStrategy(use_interim=True))
 
     user_turn_strategies = UserTurnStrategies(
         start=start_strategies,
@@ -215,10 +246,23 @@ async def build_pipeline(
         ],
     )
 
+    # User mute strategies:
+    # disabled_discard → AlwaysUserMuteStrategy: drops all user frames while bot speaks,
+    # including InterruptionFrame, VAD frames, transcription frames, and raw audio.
+    user_mute_strategies: list[BaseUserMuteStrategy] = []
+    if interruption_config.mode == InterruptionMode.DISABLED_DISCARD:
+        user_mute_strategies.append(AlwaysUserMuteStrategy())
+        logger.info("Interruption: mode=disabled_discard — user muted while bot speaks")
+    else:
+        logger.info(
+            f"Interruption: mode={interruption_config.mode.value} — interruptions enabled"
+        )
+
     context_aggregator = LLMContextAggregatorPair(
         context,
         user_params=LLMUserAggregatorParams(
             user_turn_strategies=user_turn_strategies,
+            user_mute_strategies=user_mute_strategies,
             vad_analyzer=vad_analyzer,
         ),
     )

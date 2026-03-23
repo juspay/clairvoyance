@@ -180,6 +180,46 @@ class KeywordFilterConfig(BaseModel):
     )
 
 
+class InterruptionMode(str, Enum):
+    """Interruption handling modes for template or node-level control.
+
+    ENABLED: Default. User can interrupt the bot at any time while it's speaking.
+    DISABLED_DISCARD: User cannot interrupt. Any speech during bot's turn is discarded.
+    """
+
+    ENABLED = "enabled"
+    DISABLED_DISCARD = "disabled_discard"
+
+
+class InterruptionConfig(BaseModel):
+    """Configuration for interruption handling at template or node level.
+
+    Controls how user speech is handled while the bot is speaking.
+
+    Examples:
+        Default (interruptions on):
+            {"mode": "enabled"}
+
+        No interruptions, discard speech:
+            {"mode": "disabled_discard"}
+
+        Interruptions with minimum word threshold:
+            {"mode": "enabled", "min_words": 3}
+    """
+
+    mode: InterruptionMode = Field(
+        InterruptionMode.ENABLED,
+        description="Interruption mode: 'enabled' (default) or 'disabled_discard'",
+    )
+    min_words: Optional[int] = Field(
+        None,
+        ge=1,
+        description="Minimum words user must speak to trigger interruption. "
+        "Only applies when mode='enabled'. Prevents accidental interruptions "
+        "from short utterances like 'hmm' or 'ok'.",
+    )
+
+
 class UserIdleHandlingConfig(BaseModel):
     """Configuration for user idle detection and handling."""
 
@@ -253,6 +293,10 @@ class ConfigurationModel(BaseModel):
     keyword_filter: Optional[KeywordFilterConfig] = Field(
         None,
         description="Keyword filter to suppress specific transcriptions while bot is active",
+    )
+    interruption: Optional[InterruptionConfig] = Field(
+        None,
+        description="Interruption handling configuration (mode, min_words threshold)",
     )
 
 
