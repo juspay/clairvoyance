@@ -397,7 +397,7 @@ async def _build_provider_response(
     allocation = await safe_allocate_pod(
         call_sid=call_id,
         provider=provider,
-        reseller_id=result.get("merchant_id"),
+        reseller_id=result.get("reseller_id"),
         template="ws",
     )
     if allocation:

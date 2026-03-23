@@ -4,6 +4,9 @@ import base64
 import json
 from typing import Optional
 
+from app.ai.voice.agents.breeze_buddy.template.transformation_function import (
+    TEMPLATE_FUNCTION_REGISTRY,
+)
 from app.ai.voice.agents.breeze_buddy.template.types import TemplateModel, TTSVoiceName
 from app.ai.voice.agents.breeze_buddy.tts import generate_audio
 from app.ai.voice.agents.breeze_buddy.utils.common import greeting_has_variables
@@ -62,8 +65,51 @@ async def prepare_and_store_initial_greeting(
                     return None
 
             # Synthesize per lead with resolved variables
-            resolved_greeting = initial_greeting
+            # Apply transformation functions from payload schema if available
+            resolved_payload = {}
+            expected_schema = template.expected_payload_schema or {}
+
             for key, value in (payload or {}).items():
+                resolved_value = value
+
+                # Check if there are transformation functions for this field
+                if key in expected_schema and isinstance(expected_schema[key], dict):
+                    field_schema = expected_schema[key]
+                    function_names = None
+                    raw = field_schema.get("function")
+                    if isinstance(raw, list):
+                        function_names = raw
+                    elif isinstance(raw, str):
+                        function_names = [raw]
+
+                    if function_names:
+                        for fn_name in function_names:
+                            if fn_name not in TEMPLATE_FUNCTION_REGISTRY:
+                                logger.warning(
+                                    f"Unknown transformation function '{fn_name}' "
+                                    f"for field '{key}', skipping"
+                                )
+                                continue
+                            try:
+                                func = TEMPLATE_FUNCTION_REGISTRY[fn_name]
+                                if resolved_value is None or resolved_value == "":
+                                    resolved_value = func()
+                                else:
+                                    resolved_value = func(resolved_value)
+                                logger.info(
+                                    f"Applied function '{fn_name}' to field '{key}', "
+                                    f"result: '{resolved_value}'"
+                                )
+                            except Exception as e:
+                                logger.warning(
+                                    f"Error applying function '{fn_name}' to field '{key}': {e}"
+                                )
+
+                resolved_payload[key] = resolved_value
+
+            # Resolve greeting with transformed values
+            resolved_greeting = initial_greeting
+            for key, value in resolved_payload.items():
                 placeholder = f"{{{key}}}"
                 if value is not None and isinstance(value, (str, int, float, bool)):
                     resolved_greeting = resolved_greeting.replace(

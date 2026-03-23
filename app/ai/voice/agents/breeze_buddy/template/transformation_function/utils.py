@@ -1,3 +1,6 @@
+import re
+
+
 def indian_number_to_speech(number: int) -> str:
     if number <= 0:
         return "0 rupees"
@@ -130,3 +133,47 @@ def date_to_speech(value: str) -> str:
             except (ValueError, IndexError):
                 continue
     return text
+
+
+# Dictionary mapping abbreviations to their expanded forms
+# Add more mappings here as needed
+ABBREVIATION_MAP = {
+    r"\b[Pp]vt\.?\s*[Ll]td\.?\b": "Private Limited",
+    r"\b[Ii]nc\.?\b": "Incorporated",
+    r"\b[Cc]orp\.?\b": "Corporation",
+    r"\b[Ll]td\.?\b": "Limited",
+    r"\b[Cc]o\.?\b": "Company",
+}
+
+
+def expand_shorthand(value: str) -> str:
+    """
+    Expands common abbreviations in text using ABBREVIATION_MAP.
+
+    Supports:
+      - Pvt Ltd / Pvt. Ltd. → Private Limited
+      - Inc. → Incorporated
+      - Corp. → Corporation
+      - Ltd. → Limited
+      - Co. → Company
+
+    Args:
+        value: The input string
+
+    Returns:
+        String with abbreviations expanded
+
+    Examples:
+        >>> expand_shorthand("ABC Travels Pvt Ltd")
+        'ABC Travels Private Limited'
+        >>> expand_shorthand("XYZ Corp.")
+        'XYZ Corporation'
+    """
+    if not isinstance(value, str):
+        return str(value)
+
+    result = value
+    for pattern, replacement in ABBREVIATION_MAP.items():
+        result = re.sub(pattern, replacement, result)
+
+    return result
