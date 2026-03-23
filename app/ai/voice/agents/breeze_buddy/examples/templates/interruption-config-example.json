@@ -3,7 +3,7 @@
   "template_name": "interruption-config-example",
   "identifier": "interruption-demo",
   "is_active": true,
-  "description": "Demonstrates interruption control modes. Mode 'enabled' (default) allows normal interruptions. Mode 'disabled_discard' prevents interruptions and discards user speech while the bot is speaking. The optional 'min_words' setting requires the user to speak N words before an interruption triggers (only with mode='enabled').",
+  "description": "Demonstrates interruption control at template and node level. Template-level 'min_words=3' is the default. The 'closing' node overrides with 'disabled_discard' so the confirmation message cannot be interrupted. On transition back to other nodes, strategies reset to template defaults.",
   "expected_payload_schema": {
     "customer_name": {
       "type": "string"
@@ -57,6 +57,9 @@
       },
       {
         "node_name": "closing",
+        "interruption": {
+          "mode": "disabled_discard"
+        },
         "task_messages": [
           {
             "role": "system",
@@ -66,7 +69,7 @@
         "role_messages": [
           {
             "role": "system",
-            "content": "Deliver the closing message clearly."
+            "content": "Deliver the closing message clearly. Interruptions are disabled on this node so the confirmation is always heard in full."
           }
         ],
         "post_actions": [

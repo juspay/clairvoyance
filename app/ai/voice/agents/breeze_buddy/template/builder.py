@@ -241,6 +241,14 @@ class FlowConfigBuilder:
             cast(Dict[str, Any], node_config)["vad_config"] = node.vad_config
             logger.info(f"Attached VAD config to node {node.node_name}")
 
+        # Attach node-specific interruption config for transition handler to use
+        if node.interruption:
+            cast(Dict[str, Any], node_config)["interruption"] = node.interruption
+            logger.info(
+                f"Attached interruption config to node {node.node_name}: "
+                f"mode={node.interruption.mode.value}, min_words={node.interruption.min_words}"
+            )
+
         return node_config
 
     def _build_function_schema(self, func: FlowFunction) -> FlowsFunctionSchema:

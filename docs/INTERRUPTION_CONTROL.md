@@ -166,22 +166,24 @@ def __init__(self, *, enable_interruptions=True, enable_user_speaking_frames=Tru
 2. `app/ai/voice/agents/breeze_buddy/agent/pipeline.py` — wire strategies based on config
 3. Example templates — add examples showing new config
 
-### Phase 2: Node-Level Switching
+### Phase 2: Node-Level Switching ✅
 
 **Scope:**
-- Add `interruption_mode` and `min_words` to `FlowNodeModel`
+- Add `interruption` (InterruptionConfig) to `FlowNodeModel`
 - On node transition, dynamically switch mute strategies and turn start strategies
 - Hook into existing node transition system (`template/transition.py`)
 
-**Challenge:**
-- PipeCat strategies are set at pipeline creation
-- Need to dynamically add/remove `AlwaysUserMuteStrategy` and swap turn start strategies at runtime
-- Options: (a) use PipeCat's `update_settings()` if available, (b) create a custom wrapper processor that gates based on current node config
+**Approach — PipeCat runtime strategy switching:**
+- **Turn start/stop strategies**: `UserTurnController.update_strategies()` replaces all start/stop strategies at runtime (cleanup → replace → setup lifecycle)
+- **Mute strategies**: Direct manipulation of `LLMUserAggregator._params.user_mute_strategies` list with proper cleanup/setup lifecycle calls
+- **Reset pattern**: Same as VAD — reset to template defaults first, then apply node override
 
-**Files to modify:**
-1. `app/ai/voice/agents/breeze_buddy/template/types.py` — add fields to `FlowNodeModel`
-2. `app/ai/voice/agents/breeze_buddy/template/transition.py` — apply config on transition
-3. New processor or extend existing one for dynamic strategy switching
+**Files modified:**
+1. `app/ai/voice/agents/breeze_buddy/template/types.py` — added `interruption` field to `FlowNodeModel`
+2. `app/ai/voice/agents/breeze_buddy/template/builder.py` — attach interruption config to NodeConfig
+3. `app/ai/voice/agents/breeze_buddy/template/interruption.py` — **new** dynamic strategy switching module
+4. `app/ai/voice/agents/breeze_buddy/template/transition.py` — call reset + apply on transitions
+5. `app/ai/voice/agents/breeze_buddy/agent/__init__.py` — store `default_interruption_config` on bot
 
 ### Phase 3: Mode 2 — Buffered Speech
 
@@ -291,3 +293,87 @@ context_aggregator = LLMContextAggregatorPair(
   }
 }
 ```
+
+---
+
+## Phase 2 — Detailed Design
+
+### Node-Level Config
+
+`FlowNodeModel` gains an optional `interruption` field:
+```python
+class FlowNodeModel(BaseModel):
+    # ... existing fields ...
+    interruption: Optional[InterruptionConfig] = Field(
+        None,
+        description="Node-specific interruption configuration (overrides template interruption)",
+    )
+```
+
+### Template Example (Node-Level)
+
+```json
+{
+  "configurations": {
+    "interruption": { "mode": "enabled", "min_words": 3 }
+  },
+  "flow": {
+    "initial_node": "greeting",
+    "nodes": [
+      {
+        "node_name": "greeting",
+        "task_messages": [...]
+      },
+      {
+        "node_name": "legal_disclaimer",
+        "interruption": { "mode": "disabled_discard" },
+        "task_messages": [...]
+      },
+      {
+        "node_name": "conversation",
+        "interruption": { "mode": "enabled", "min_words": 1 },
+        "task_messages": [...]
+      }
+    ]
+  }
+}
+```
+
+- `greeting` — inherits template default (`enabled`, min_words=3)
+- `legal_disclaimer` — node override disables interruption, discards speech
+- `conversation` — node override re-enables with min_words=1
+
+### Dynamic Switching Module (`template/interruption.py`)
+
+**Reset → Apply pattern** (mirrors `template/vad.py`):
+
+```
+transition_handler()
+  ├─ reset_vad_to_default(context)
+  ├─ apply_node_vad_config(context, node_name)
+  ├─ await reset_interruption_to_default(context)   ← NEW
+  └─ await apply_node_interruption_config(context, node_name)  ← NEW
+```
+
+**`reset_interruption_to_default(context)`**:
+1. Reads `bot.default_interruption_config` (stored at pipeline creation)
+2. Calls `_apply_interruption_config()` with template defaults
+
+**`apply_node_interruption_config(context, node_name)`**:
+1. Looks up `nodes[node_name]["interruption"]` from `flow_config`
+2. If present, calls `_apply_interruption_config()` with node override
+
+**`_apply_interruption_config(user_aggregator, config, ...)`**:
+1. Rebuilds `UserTurnStrategies` (start + stop) from config
+2. Calls `user_aggregator._user_turn_controller.update_strategies(new_strategies)`
+   - PipeCat handles cleanup → replace → setup lifecycle internally
+3. Cleans up existing mute strategies, clears the list
+4. If `disabled_discard` → creates new `AlwaysUserMuteStrategy`, calls `setup()`, appends
+5. If switching to unmuted → explicitly sets `_user_is_muted = False`
+
+### Lifecycle Considerations
+
+- **Async**: Strategy switching is async (setup/cleanup are coroutines), so transition_handler `await`s
+- **Race safety**: `_user_is_muted` is explicitly cleared when removing mute strategies to prevent stale mute state
+- **No-op on same config**: When node has no override, reset to default is the only operation (effectively a no-op if already at default)
+- **VAD independence**: VAD reset/apply is synchronous; interruption reset/apply is async — they don't interfere
