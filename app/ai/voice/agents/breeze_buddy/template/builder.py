@@ -249,6 +249,17 @@ class FlowConfigBuilder:
                 f"mode={node.interruption.mode.value}, min_words={node.interruption.min_words}"
             )
 
+        # Attach node-specific input collection config for transition handler to use
+        if node.input_collection:
+            cast(Dict[str, Any], node_config)[
+                "input_collection"
+            ] = node.input_collection
+            logger.info(
+                f"Attached input collection config to node {node.node_name}: "
+                f"enabled={node.input_collection.enabled}, "
+                f"user_speech_timeout={node.input_collection.user_speech_timeout}s"
+            )
+
         return node_config
 
     def _build_function_schema(self, func: FlowFunction) -> FlowsFunctionSchema:
