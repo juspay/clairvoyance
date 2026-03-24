@@ -19,6 +19,9 @@ from pipecat.frames.frames import (
     TTSSpeakFrame,
 )
 
+from app.ai.voice.agents.breeze_buddy.handlers.internal.end_conversation_global import (
+    end_conversation_global,
+)
 from app.ai.voice.agents.breeze_buddy.handlers.internal.get_current_time import (
     get_current_time,
 )
@@ -38,6 +41,7 @@ from app.core.logger import logger
 # To add a new built-in function, import it and add an entry here.
 BUILTIN_HANDLERS: Dict[str, Callable] = {
     "connect_to_live_agent": connect_to_live_agent,
+    "end_conversation": end_conversation_global,
     "get_current_time": get_current_time,
 }
 

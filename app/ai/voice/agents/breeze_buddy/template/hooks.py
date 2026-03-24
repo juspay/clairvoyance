@@ -232,16 +232,16 @@ class UpdateOutcomeInDatabaseHook(Hook):
                     f"No additional properties found in final data for lead {context.lead.id}"
                 )
 
-            # Guard: if a transfer is in progress, preserve "transferred" outcome
+            # Guard: if a transfer is in progress, preserve "TRANSFERRED" outcome
             # instead of the LLM's value (e.g., "RESOLVED") to avoid a race
             # condition with handle_call_completion's transfer override.
             if meta_data.get("transfer", {}).get("status") == "success":
                 logger.info(
                     f"Transfer detected for lead {context.lead.id}. "
-                    f"Overriding outcome from '{outcome}' to 'transferred' "
+                    f"Overriding outcome from '{outcome}' to 'TRANSFERRED' "
                     f"(function: '{function_name}')"
                 )
-                outcome = "transferred"
+                outcome = "TRANSFERRED"
 
             # Update lead in database with outcome
             logger.info(
