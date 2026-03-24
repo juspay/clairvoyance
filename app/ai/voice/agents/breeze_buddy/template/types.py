@@ -220,6 +220,44 @@ class InterruptionConfig(BaseModel):
     )
 
 
+class InputCollectionConfig(BaseModel):
+    """Configuration for multi-segment input collection at node level.
+
+    When enabled on a node, increases the user_speech_timeout so that multiple
+    speech segments separated by natural pauses are accumulated into a single
+    user turn before triggering the LLM. This is essential for nodes where
+    users dictate sequences (phone numbers, addresses, account numbers) with
+    pauses between segments.
+
+    Without this, each pause triggers a Soniox endpoint → finalized transcript
+    → immediate turn end → premature LLM response ("I got 3 digits, what about
+    the rest?"). With input collection, the turn stays open for
+    user_speech_timeout seconds after each segment, accumulating all segments
+    into one LLM message.
+
+    Examples:
+        Phone number collection (wait 3s between segments):
+            {"enabled": true, "user_speech_timeout": 3.0}
+
+        Address dictation (wait longer):
+            {"enabled": true, "user_speech_timeout": 4.0}
+    """
+
+    enabled: bool = Field(
+        False,
+        description="Whether input collection mode is active for this node.",
+    )
+    user_speech_timeout: float = Field(
+        0.0,
+        ge=0.0,
+        description="Seconds to wait after the last finalized transcript before "
+        "ending the user's turn. Higher values allow more natural pauses between "
+        "segments. In no-VAD mode (production), the timer resets on each new "
+        "transcript, so segments within this window are accumulated into one turn. "
+        "Total silence before bot responds = Soniox max_endpoint_delay_ms + this value.",
+    )
+
+
 class UserIdleHandlingConfig(BaseModel):
     """Configuration for user idle detection and handling."""
 
@@ -508,6 +546,12 @@ class FlowNodeModel(BaseModel):
     interruption: Optional[InterruptionConfig] = Field(
         None,
         description="Node-specific interruption configuration (overrides template interruption)",
+    )
+    input_collection: Optional[InputCollectionConfig] = Field(
+        None,
+        description="Node-specific input collection configuration for multi-segment "
+        "input (e.g., phone numbers, addresses). Increases user_speech_timeout "
+        "so natural pauses don't prematurely end the user's turn.",
     )
 
 
