@@ -1,14 +1,14 @@
 # Dual Pool Optimization Implementation
 
-## 🎯 Objective
+## Objective
 Reduce voice agent connection time from **~8 seconds to 3-4 seconds** by implementing dual pools that eliminate both Daily room creation and process initialization delays.
 
-## 📊 Performance Impact
+## Performance Impact
 - **Before**: ~8 seconds (1s Daily + 6s process initialization + 1s overhead)
 - **After**: **~3-4 seconds** (0.05s room assignment + 0.05s process assignment + remaining model loading)
 - **Improvement**: ~50-62.5% reduction in connection time
 
-## 🏗️ Architecture Changes
+## Architecture Changes
 
 ### 1. Voice Agent Process Pool (`app/helpers/automatic/process_pool.py`)
 - **VoiceAgentPool**: Manages pre-warmed voice agent processes.
@@ -35,7 +35,7 @@ Reduce voice agent connection time from **~8 seconds to 3-4 seconds** by impleme
 - **Session Handling**: Processes wait for session assignments via `stdin`.
 - **Configuration**: Dynamic session configuration without a restart.
 
-## 🚀 How It Works
+## How It Works
 
 ### Dual Pool Initialization (Startup)
 ```
@@ -93,7 +93,7 @@ Background:
             └─────────────────┘
 ```
 
-## 🔧 Configuration
+## Configuration
 
 ### Environment Variables
 The pool sizes are now configurable via environment variables. You can set them in your `.env` file or your deployment environment.
@@ -118,7 +118,7 @@ DAILY_ROOM_MAX_POOL_SIZE=5
 - **Overflow handling**: Pool caps at these values; extra demand falls back to on-demand creation.
 - **Resource predictable**: Known memory footprint per pod.
 
-## 🧪 Testing & Monitoring
+## Testing & Monitoring
 
 ### 1. Start Application
 ```bash
@@ -146,7 +146,7 @@ curl -X POST http://localhost:8000/agent/voice/automatic \
   }'
 ```
 
-## 📈 Monitoring
+## Monitoring
 
 ### Dual Pool Status Endpoint
 `GET /agent/voice/automatic/pool/status`
@@ -183,7 +183,7 @@ curl -X POST http://localhost:8000/agent/voice/automatic \
 - **`active_processes` / `active_rooms`**: Number of ongoing sessions.
 - **`is_creating_process` / `is_creating_room`**: Indicates if background replenishment is active.
 
-## 🔍 Troubleshooting
+## Troubleshooting
 
 ### Common Issues
 1.  **Pool initialization fails**:
@@ -218,9 +218,9 @@ curl http://localhost:8000/health
 curl -X POST http://localhost:8000/agent/voice/automatic/cleanup/{session_id}
 ```
 
-## 🚧 Implementation Status
+## Implementation Status
 
-### ✅ Completed
+### Completed
 - [x] Process pool manager implementation.
 - [x] Daily room pool manager implementation.
 - [x] Dual pool integration in the main API.
@@ -232,13 +232,13 @@ curl -X POST http://localhost:8000/agent/voice/automatic/cleanup/{session_id}
 - [x] **Separate tracking of room and token expiry times**.
 - [x] **Graceful token refresh without user disruption**.
 
-### 🎯 Performance Achievements
+### Performance Achievements
 - [x] **~50-62.5% reduction** in connection time (from ~8s to ~3-4s).
 - [x] Eliminated Daily room creation delay from the user-facing path.
 - [x] Eliminated Python process initialization delay from the user-facing path.
 - [x] Background resource replenishment to maintain pool health.
 
-### 🔄 Future Enhancements
+### Future Enhancements
 - [ ] **Model Pre-warming**: Investigate pre-loading heavy models (like STT, VAD) into memory when a process is created, rather than on the first session assignment. This could further reduce the initial session delay.
 - [ ] **Shared Model Cache**: For multi-process setups, explore using a shared memory cache (e.g., Redis, Memcached) for models to reduce the overall memory footprint.
 - [ ] **Asynchronous Model Loading**: Load non-critical models asynchronously after the primary connection is established to improve perceived performance.
@@ -246,7 +246,7 @@ curl -X POST http://localhost:8000/agent/voice/automatic/cleanup/{session_id}
 - [ ] **Advanced Health Checks**: Implement more sophisticated health checks that not only verify if a process is running but also check its responsiveness and resource consumption.
 - [ ] **Performance Metrics Dashboard**: Create a dedicated dashboard (e.g., using Grafana) to visualize pool statistics, connection times, and resource utilization over time.
 
-## 🔧 Token Expiry Fix (Latest Update)
+## Token Expiry Fix (Latest Update)
 
 ### Problem Solved
 The original implementation had a critical token expiry mismatch:
@@ -274,7 +274,7 @@ The original implementation had a critical token expiry mismatch:
 - **Better monitoring**: Track both room availability and token health
 - **Robust fallback**: Failed refreshes are handled gracefully
 
-## 📝 Notes
+## Notes
 
 ### Scalability
 - Works perfectly in multi-pod environments (e.g., Kubernetes).
