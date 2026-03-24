@@ -15,9 +15,9 @@ from app.database.decoder.breeze_buddy.outbound_number import (
 from app.database.queries import run_parameterized_query
 from app.database.queries.breeze_buddy.outbound_number import (
     decrement_outbound_number_channels_query,
-    disable_outbound_number_query,
     get_all_outbound_numbers_query,
     get_all_outbound_numbers_with_call_count_query,
+    get_available_outbound_numbers_query,
     get_outbound_number_based_on_status_and_provider_query,
     get_outbound_number_by_id_query,
     get_outbound_number_by_number_query,
@@ -197,27 +197,34 @@ async def decrement_outbound_number_channels(
         return None
 
 
-async def disable_outbound_number(outbound_number_id: str) -> Optional[OutboundNumber]:
+async def acquire_outbound_number(number: OutboundNumber) -> bool:
     """
-    Disable outbound number by ID.
+    Marks an outbound number as in use.
+    For channel-tracked providers (EXOTEL/PLIVO): atomically increments channels.
+    For status-based providers (TWILIO): sets status to IN_USE.
+    Returns True if acquisition succeeded, False if at capacity or failed.
     """
-    logger.info(f"Disabling outbound number with ID: {outbound_number_id}")
+    logger.info(f"Acquiring outbound number {number.id} (provider: {number.provider})")
+    if number.uses_channel_tracking:
+        result = await increment_outbound_number_channels(number.id)
+    else:
+        result = await update_outbound_number_status(
+            number.id, OutboundNumberStatus.IN_USE
+        )
+    return result is not None
 
-    try:
-        query_text, values = disable_outbound_number_query(outbound_number_id)
-        result = await run_parameterized_query(query_text, values)
 
-        if result and get_row_count(result) > 0:
-            decoded_result = decode_outbound_number(result)
-            logger.info(f"Outbound number disabled successfully: {decoded_result}")
-            return decoded_result
-
-        logger.error(f"Failed to disable outbound number with ID: {outbound_number_id}")
-        return None
-
-    except Exception as e:
-        logger.error(f"Error disabling outbound number: {e}")
-        return None
+async def release_outbound_number(number_id: str, provider: CallProvider) -> None:
+    """
+    Releases an outbound number, making it available for other calls.
+    For channel-tracked providers (EXOTEL/PLIVO): atomically decrements channels.
+    For status-based providers (TWILIO): sets status back to AVAILABLE.
+    """
+    logger.info(f"Releasing outbound number {number_id} (provider: {provider})")
+    if provider in (CallProvider.EXOTEL, CallProvider.PLIVO):
+        await decrement_outbound_number_channels(number_id)
+    else:
+        await update_outbound_number_status(number_id, OutboundNumberStatus.AVAILABLE)
 
 
 async def get_all_outbound_numbers() -> List[OutboundNumber]:
@@ -263,6 +270,31 @@ async def get_all_outbound_numbers_with_call_count(
         logger.error(
             f"Error getting outbound numbers with call counts: {e}", exc_info=True
         )
+        return []
+
+
+async def get_available_outbound_numbers(
+    status: OutboundNumberStatus,
+) -> List[OutboundNumber]:
+    """
+    Get all outbound numbers by status, across all providers.
+    """
+    logger.info(f"Getting all outbound numbers with status: {status}")
+
+    try:
+        query_text, values = get_available_outbound_numbers_query(status)
+        result = await run_parameterized_query(query_text, values)
+
+        if result:
+            decoded_result = decode_outbound_number_list(result)
+            logger.info(f"Found {len(decoded_result)} outbound numbers")
+            return decoded_result
+
+        logger.info(f"No outbound numbers found with status: {status}")
+        return []
+
+    except Exception as e:
+        logger.error(f"Error getting outbound numbers: {e}")
         return []
 
 

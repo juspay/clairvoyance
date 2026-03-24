@@ -127,20 +127,6 @@ def decrement_outbound_number_channels_query(
     return text, values
 
 
-def disable_outbound_number_query(outbound_number_id: str) -> Tuple[str, List[Any]]:
-    """
-    Generate query to disable outbound number by ID.
-    """
-    text = f"""
-        UPDATE "{OUTBOUND_NUMBER_TABLE}"
-        SET "status" = $2, "updated_at" = NOW()
-        WHERE "id" = $1
-        RETURNING *;
-    """
-    values = [outbound_number_id, OutboundNumberStatus.DISABLED.value]
-    return text, values
-
-
 def get_all_outbound_numbers_query() -> Tuple[str, List[Any]]:
     """
     Generate query to get all outbound numbers.
@@ -202,6 +188,22 @@ def get_outbound_number_based_on_status_and_provider_query(
         ORDER BY "created_at" DESC;
     """
     values = [status.value, provider.value]
+    return text, values
+
+
+def get_available_outbound_numbers_query(
+    status: OutboundNumberStatus,
+) -> Tuple[str, List[Any]]:
+    """
+    Generate query to get all outbound numbers by status, across all providers.
+    """
+    text = f"""
+        SELECT *
+        FROM "{OUTBOUND_NUMBER_TABLE}"
+        WHERE "status" = $1
+        ORDER BY "created_at" DESC;
+    """
+    values = [status.value]
     return text, values
 
 

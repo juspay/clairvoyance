@@ -11,13 +11,14 @@ from fastapi import HTTPException, status
 from app.core.logger import logger
 from app.database.accessor import (
     create_outbound_number,
-    disable_outbound_number,
     get_all_outbound_numbers,
     get_outbound_number_by_id,
+    update_outbound_number_status,
 )
 from app.schemas import (
     CreateOutboundNumberRequest,
     OutboundNumber,
+    OutboundNumberStatus,
     UserInfo,
 )
 
@@ -180,7 +181,9 @@ async def delete_number_handler(
     logger.info(f"Admin {current_user.username} disabling outbound number: {number_id}")
 
     try:
-        outbound_number = await disable_outbound_number(number_id)
+        outbound_number = await update_outbound_number_status(
+            number_id, OutboundNumberStatus.DISABLED
+        )
 
         if outbound_number:
             logger.info(f"Outbound number {number_id} disabled successfully")

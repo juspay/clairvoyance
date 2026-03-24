@@ -191,6 +191,24 @@ class OutboundNumber(BaseModel):
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
+    @property
+    def uses_channel_tracking(self) -> bool:
+        """Whether this provider uses channel-based capacity (EXOTEL/PLIVO) vs status-based (TWILIO)."""
+        return self.provider in (CallProvider.EXOTEL, CallProvider.PLIVO)
+
+    @property
+    def has_available_capacity(self) -> bool:
+        """Whether this number can accept another call right now."""
+        if self.status != OutboundNumberStatus.AVAILABLE:
+            return False
+        if self.uses_channel_tracking:
+            # Mirror DB semantics: COALESCE(channels, 0) treats NULL as 0.
+            if self.maximum_channels is None:
+                return False
+            current_channels = self.channels or 0
+            return current_channels < self.maximum_channels
+        return True
+
 
 class TelephonyConfig(BaseModel):
     """Per-merchant telephony provider overrides.
