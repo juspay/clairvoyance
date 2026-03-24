@@ -816,9 +816,9 @@ async def handle_call_completion(
     if not config:
         return
 
-    # Override outcome to "transferred" for transfer calls
+    # Override outcome to "TRANSFERRED" for transfer calls
     if is_transfer:
-        outcome = "transferred"
+        outcome = "TRANSFERRED"
 
     updated_lead = await update_lead_call_completion_details(
         id=lead.id,
