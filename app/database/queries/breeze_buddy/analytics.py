@@ -78,6 +78,7 @@ def build_analytics_where_clause(
     filters: Dict[str, Any],
     value_offset: int = 0,
     filter_execution_mode: bool = True,
+    date_column: str = "call_initiated_time",
 ) -> Tuple[List[str], List[Any]]:
     """
     Build WHERE clause conditions and values from generic filters.
@@ -86,6 +87,8 @@ def build_analytics_where_clause(
         filters: Dictionary of filter key-value pairs
         value_offset: Starting index for parameterized query values
         filter_execution_mode: If True, only include TELEPHONY execution_mode (exclude tests)
+        date_column: Column to use for date range filtering (default: call_initiated_time).
+                     Use "created_at" for queries that need to include leads without calls (e.g. BACKLOG).
 
     Returns:
         Tuple of (conditions list, values list)
@@ -104,7 +107,7 @@ def build_analytics_where_clause(
             values.append(date_from)
         else:
             values.append(datetime.combine(date_from, datetime.min.time()))
-        conditions.append(f"lct.call_initiated_time >= ${len(values) + value_offset}")
+        conditions.append(f"lct.{date_column} >= ${len(values) + value_offset}")
 
     if "date_to" in filters and filters["date_to"]:
         date_to = filters["date_to"]
@@ -112,7 +115,7 @@ def build_analytics_where_clause(
             values.append(date_to)
         else:
             values.append(datetime.combine(date_to, datetime.max.time()))
-        conditions.append(f"lct.call_initiated_time < ${len(values) + value_offset}")
+        conditions.append(f"lct.{date_column} < ${len(values) + value_offset}")
 
     # Standard column filters
     # Template filter - supports BOTH template name and template_id for backward compatibility
@@ -830,7 +833,7 @@ def get_analytics_lead_status_counts_query(
         Tuple of (query_string, values_list)
     """
     conditions, values = build_analytics_where_clause(
-        filters, filter_execution_mode=True
+        filters, filter_execution_mode=True, date_column="created_at"
     )
 
     # Add search conditions for reseller_id
@@ -887,7 +890,7 @@ def get_analytics_lead_status_counts_total_query(
         Tuple of (query_string, values_list)
     """
     conditions, values = build_analytics_where_clause(
-        filters, filter_execution_mode=True
+        filters, filter_execution_mode=True, date_column="created_at"
     )
 
     # Add search conditions for reseller_id
