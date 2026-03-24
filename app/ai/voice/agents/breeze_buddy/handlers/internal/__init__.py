@@ -18,6 +18,9 @@ from app.ai.voice.agents.breeze_buddy.handlers.internal.stt import (
     mute_stt,
     unmute_stt,
 )
+from app.ai.voice.agents.breeze_buddy.handlers.internal.update_outcome import (
+    update_outcome,
+)
 from app.ai.voice.agents.breeze_buddy.handlers.internal.warm_transfer import (
     connect_to_live_agent,
 )
@@ -30,4 +33,5 @@ __all__ = [
     "mute_stt",
     "play_audio_sound",
     "unmute_stt",
+    "update_outcome",
 ]

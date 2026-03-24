@@ -29,6 +29,9 @@ from app.ai.voice.agents.breeze_buddy.handlers.internal.stt import (
     mute_stt,
     unmute_stt,
 )
+from app.ai.voice.agents.breeze_buddy.handlers.internal.update_outcome import (
+    update_outcome,
+)
 from app.ai.voice.agents.breeze_buddy.handlers.internal.warm_transfer import (
     connect_to_live_agent,
 )
@@ -43,6 +46,7 @@ BUILTIN_HANDLERS: Dict[str, Callable] = {
     "connect_to_live_agent": connect_to_live_agent,
     "end_conversation": end_conversation_global,
     "get_current_time": get_current_time,
+    "update_outcome": update_outcome,
 }
 
 
