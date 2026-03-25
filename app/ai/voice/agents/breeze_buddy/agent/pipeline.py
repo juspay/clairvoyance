@@ -34,6 +34,7 @@ from pipecat.turns.user_turn_strategies import UserTurnStrategies
 
 from app.ai.voice.agents.breeze_buddy.observability.tracing_setup import setup_tracing
 from app.ai.voice.agents.breeze_buddy.processors import (
+    BackChannelProcessor,
     TranscriptionGateProcessor,
     UserIdleCallbackHandler,
     create_user_idle_processor,
@@ -169,6 +170,7 @@ async def build_pipeline(
     Any,
     Optional[UserIdleCallbackHandler],
     TranscriptionGateProcessor,
+    BackChannelProcessor,
 ]:
     """Build the processing pipeline.
 
@@ -282,6 +284,10 @@ async def build_pipeline(
             f"match_type={keyword_filter_config.match_type.value}"
         )
 
+    # BackChannelProcessor is always in the pipeline.
+    # It is a transparent passthrough when not enabled for the current node.
+    back_channel = BackChannelProcessor()
+
     # Create user idle processor from template configuration
     user_idle_config = getattr(configurations, "user_idle_configuration", None)
     user_idle_result = (
@@ -303,13 +309,14 @@ async def build_pipeline(
     # Store reference to user aggregator for position lookup
     user_aggregator = context_aggregator.user()
 
-    # Order: stt → transcription_gate → user_aggregator → llm → tts
+    # Order: stt → transcription_gate → back_channel → user_aggregator → llm → tts
     # Pipecat's LLMUserAggregator natively handles interruptions via
     # UserTurnStrategies — no custom response gate needed.
     pipeline_parts = [
         transport.input(),
         stt,
         transcription_gate,
+        back_channel,
         user_aggregator,
         llm,
         tts,
@@ -335,6 +342,7 @@ async def build_pipeline(
         context_aggregator,
         user_idle_callback_handler,
         transcription_gate,
+        back_channel,
     )
 
 

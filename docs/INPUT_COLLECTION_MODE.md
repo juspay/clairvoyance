@@ -561,7 +561,7 @@ if node.input_collection:
 
 ---
 
-### Phase 2: Back-Channeling During Accumulation
+### Phase 2: Back-Channeling During Accumulation ✅ IMPLEMENTED
 
 **Goal:** During the `user_speech_timeout` wait window, give soft audio acknowledgments so the user knows the agent is listening.
 
@@ -575,13 +575,16 @@ A lightweight `FrameProcessor` inserted in the pipeline that:
 2. Starts a short timer (`back_channel_delay`, e.g., 1.5s — less than `user_speech_timeout`)
 3. If timer fires (user paused but not done), pushes `TTSSpeakFrame("okay", append_to_context=False)`
 4. If user resumes speaking (new interim transcript), cancels the timer
-5. Limits frequency via `min_interval_secs` to avoid rapid-fire acknowledgments
+5. If `LLMFullResponseStartFrame` arrives (turn ended), cancels the timer
+6. Limits frequency via `min_interval_secs` to avoid rapid-fire acknowledgments
 
 #### Pipeline Position
 
 ```
-stt → TranscriptionGate → [BackChannelProcessor] → [InputCollectionProcessor if needed] → user_aggregator
+stt → TranscriptionGate → BackChannelProcessor → [UserIdleProcessor] → user_aggregator → llm → tts
 ```
+
+TTSSpeakFrame pushed downstream flows through user_aggregator and llm (both pass it through) to tts where it is spoken.
 
 #### Config Extension
 
@@ -605,11 +608,18 @@ stt → TranscriptionGate → [BackChannelProcessor] → [InputCollectionProcess
 - `append_to_context=False` — back-channels don't pollute LLM context
 - Back-channel audio may overlap with user's next segment — this is natural and expected (like human back-channeling)
 - Timer is always less than `user_speech_timeout` to fire during accumulation, not after
+- No STT muting during back-channel — overlap is natural
+- Random message selection from the configured pool
+- Timer cleanup via three paths: `disable()` on node transition, `LLMFullResponseStartFrame` detection, `cleanup()` on pipeline shutdown
 
-#### Estimated Scope
-- ~80-100 lines for BackChannelProcessor
-- Config model additions (~10 lines)
-- Pipeline wiring (~5 lines)
+#### Implementation Files
+- `processors/back_channel.py` — BackChannelProcessor (~90 lines)
+- `template/types.py` — BackChannelConfig model nested under InputCollectionConfig
+- `template/input_collection.py` — `get_node_back_channel_config()` helper
+- `agent/pipeline.py` — Processor wiring and 6-tuple return
+- `agent/__init__.py` — `self.back_channel` storage
+- `template/context.py` — `back_channel` property
+- `template/transition.py` — Enable/disable on node transitions
 
 ---
 

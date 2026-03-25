@@ -17,7 +17,13 @@
         ],
         "input_collection": {
           "enabled": true,
-          "user_speech_timeout": 3.0
+          "user_speech_timeout": 3.0,
+          "back_channel": {
+            "enabled": true,
+            "delay_secs": 1.5,
+            "min_interval_secs": 3.0,
+            "messages": ["okay", "got it", "go on"]
+          }
         },
         "functions": [
           {
@@ -67,5 +73,5 @@
       }
     ]
   },
-  "_comment": "This template demonstrates input collection mode for multi-segment input. The collect_number node has input_collection.enabled=true with user_speech_timeout=3.0s, meaning the system waits 3 seconds after the last speech segment before ending the user's turn. This allows users to dictate numbers naturally with pauses (e.g., '9 8 7 ... 6 5 4 ... 3 2 1 0') without the agent interrupting after each segment. The LLM receives all segments as a single accumulated message."
+  "_comment": "This template demonstrates input collection mode for multi-segment input. The collect_number node has input_collection.enabled=true with user_speech_timeout=3.0s, meaning the system waits 3 seconds after the last speech segment before ending the user's turn. This allows users to dictate numbers naturally with pauses (e.g., '9 8 7 ... 6 5 4 ... 3 2 1 0') without the agent interrupting after each segment. The LLM receives all segments as a single accumulated message. Back-channel acknowledgments ('okay', 'got it', 'go on') are sent via direct TTS after 1.5s of silence between segments so the user knows the agent is still listening."
 }
