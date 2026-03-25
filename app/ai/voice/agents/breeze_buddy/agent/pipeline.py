@@ -30,7 +30,6 @@ from pipecat.turns.user_start import (
     TranscriptionUserTurnStartStrategy,
     VADUserTurnStartStrategy,
 )
-from pipecat.turns.user_stop import SpeechTimeoutUserTurnStopStrategy
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 
 from app.ai.voice.agents.breeze_buddy.observability.tracing_setup import setup_tracing
@@ -40,6 +39,9 @@ from app.ai.voice.agents.breeze_buddy.processors import (
     create_user_idle_processor,
 )
 from app.ai.voice.agents.breeze_buddy.stt import get_stt_service
+from app.ai.voice.agents.breeze_buddy.template.interruption import (
+    AccumulatingSpeechTimeoutStrategy,
+)
 from app.ai.voice.agents.breeze_buddy.template.types import (
     ConfigurationModel,
     InterruptionConfig,
@@ -173,7 +175,7 @@ async def build_pipeline(
     Uses the universal LLMContextAggregatorPair with UserTurnStrategies:
     - Start: VADUserTurnStartStrategy (primary, ~100ms) + TranscriptionUserTurnStartStrategy
       (fallback for soft speech VAD misses, uses interim transcriptions)
-    - Stop: SpeechTimeoutUserTurnStopStrategy (user_speech_timeout=0.0) — triggers
+    - Stop: AccumulatingSpeechTimeoutStrategy (user_speech_timeout=0.0) — triggers
       immediately when Soniox sends a finalized transcript (after its own
       max_endpoint_delay_ms semantic endpoint detection).
     - VAD runs inside the aggregator (not the transport)
@@ -218,7 +220,7 @@ async def build_pipeline(
     #    With use_interim=True, triggers on any interim transcription from Soniox.
     # 3. MinWordsUserTurnStartStrategy: Replaces Transcription strategy when min_words is set.
     #    Requires N words before triggering interruption while bot speaks; 1 word when bot is silent.
-    # 4. SpeechTimeoutUserTurnStopStrategy(0.0): Triggers immediately when Soniox
+    # 4. AccumulatingSpeechTimeoutStrategy(0.0): Triggers immediately when Soniox
     #    sends a finalized transcript with <end> token (native semantic endpoint detection).
     start_strategies: list[BaseUserTurnStartStrategy] = []
     if vad_analyzer is not None:
@@ -242,7 +244,7 @@ async def build_pipeline(
     user_turn_strategies = UserTurnStrategies(
         start=start_strategies,
         stop=[
-            SpeechTimeoutUserTurnStopStrategy(user_speech_timeout=0.0),
+            AccumulatingSpeechTimeoutStrategy(user_speech_timeout=0.0),
         ],
     )
 
