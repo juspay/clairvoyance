@@ -3,6 +3,8 @@ Analytics router with RBAC enforcement.
 Single flexible POST endpoint for all analytics queries with hierarchical merchant + shop access control.
 """
 
+from typing import Awaitable, Callable, Dict
+
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.api.security.breeze_buddy.rbac_token import get_current_user_with_rbac
@@ -31,6 +33,22 @@ from .handlers import (
 from .rbac import apply_hierarchical_filters
 
 router = APIRouter()
+
+# Dispatch registry: maps analytics type to its handler function.
+# CALL_DETAILS_DOWNLOAD is excluded — it returns StreamingResponse directly.
+_ANALYTICS_HANDLERS: Dict[AnalyticsType, Callable[..., Awaitable]] = {
+    AnalyticsType.CALL_BASED: get_call_based_analytics,
+    AnalyticsType.CALL_DETAILS: get_call_details_analytics,
+    AnalyticsType.LEAD_BASED: get_lead_based_analytics,
+    AnalyticsType.LEAD_STATUS_COUNTS: get_lead_status_counts,
+    AnalyticsType.OUTBOUND_NUMBERS: get_outbound_numbers_analytics,
+    AnalyticsType.CONVERSION: get_conversion_analytics,
+    AnalyticsType.PERFORMANCE: get_performance_analytics,
+    AnalyticsType.DISTINCT_OUTCOMES: get_distinct_outcomes,
+    AnalyticsType.OUTCOME_COUNTS: get_outcome_counts,
+    AnalyticsType.DISTINCT_RESELLERS: get_distinct_resellers,
+    AnalyticsType.DISTINCT_MERCHANT_IDS: get_distinct_merchant_ids,
+}
 
 
 @router.post(
@@ -87,35 +105,17 @@ async def get_analytics(
         )
 
         # Route to appropriate handler based on analytics type
-        if request.type == AnalyticsType.CALL_BASED:
-            data = await get_call_based_analytics(filters, options, current_user)
-        elif request.type == AnalyticsType.CALL_DETAILS:
-            data = await get_call_details_analytics(filters, options, current_user)
-        elif request.type == AnalyticsType.CALL_DETAILS_DOWNLOAD:
+        if request.type == AnalyticsType.CALL_DETAILS_DOWNLOAD:
             return await download_call_details(filters, options, current_user)
-        elif request.type == AnalyticsType.LEAD_BASED:
-            data = await get_lead_based_analytics(filters, options, current_user)
-        elif request.type == AnalyticsType.LEAD_STATUS_COUNTS:
-            data = await get_lead_status_counts(filters, options, current_user)
-        elif request.type == AnalyticsType.OUTBOUND_NUMBERS:
-            data = await get_outbound_numbers_analytics(filters, options, current_user)
-        elif request.type == AnalyticsType.CONVERSION:
-            data = await get_conversion_analytics(filters, options, current_user)
-        elif request.type == AnalyticsType.PERFORMANCE:
-            data = await get_performance_analytics(filters, options, current_user)
-        elif request.type == AnalyticsType.DISTINCT_OUTCOMES:
-            data = await get_distinct_outcomes(filters, options, current_user)
-        elif request.type == AnalyticsType.OUTCOME_COUNTS:
-            data = await get_outcome_counts(filters, options, current_user)
-        elif request.type == AnalyticsType.DISTINCT_RESELLERS:
-            data = await get_distinct_resellers(filters, options, current_user)
-        elif request.type == AnalyticsType.DISTINCT_MERCHANT_IDS:
-            data = await get_distinct_merchant_ids(filters, options, current_user)
-        else:
+
+        handler = _ANALYTICS_HANDLERS.get(request.type)
+        if not handler:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Unknown analytics type: {request.type}",
             )
+
+        data = await handler(filters, options, current_user)
 
         return AnalyticsResponse(success=True, data=data)
 
