@@ -202,9 +202,6 @@ def get_analytics_summary_query(
     """
     conditions, values = build_analytics_where_clause(filters)
 
-    # Filter for OUTBOUND calls only
-    conditions.append("lct.call_direction = 'OUTBOUND'")
-
     where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
 
     # Add LEFT JOIN only if provider filter is present
@@ -232,6 +229,7 @@ def get_analytics_summary_query(
                     lct.outcome,
                     lct.call_initiated_time,
                     lct.call_end_time,
+                    lct.call_direction,
                     lct.template,
                     lct.merchant_id,
                     lct.reseller_id,
@@ -252,6 +250,8 @@ def get_analytics_summary_query(
                 fd.{group_by},
                 (SELECT payload->>'shop_name' FROM filtered_data WHERE {group_by} = fd.{group_by} LIMIT 1) as shop_name,
                 COUNT(*) as total_calls,
+                COUNT(*) FILTER (WHERE fd.call_direction = 'OUTBOUND') as outbound_calls,
+                COUNT(*) FILTER (WHERE fd.call_direction = 'INBOUND') as inbound_calls,
                 COUNT(*) FILTER (WHERE fd.status = 'FINISHED') as completed_calls,
                 COUNT(*) FILTER (WHERE fd.status != 'FINISHED' OR fd.status IS NULL) as failed_calls,
                 AVG(
@@ -280,6 +280,7 @@ def get_analytics_summary_query(
                     lct.outcome,
                     lct.call_initiated_time,
                     lct.call_end_time,
+                    lct.call_direction,
                     lct.template,
                     lct.merchant_id
                 FROM "{LEAD_CALL_TRACKER_TABLE}" lct
@@ -289,6 +290,8 @@ def get_analytics_summary_query(
             base_stats AS (
                 SELECT
                     COUNT(*) as total_calls,
+                    COUNT(*) FILTER (WHERE call_direction = 'OUTBOUND') as outbound_calls,
+                    COUNT(*) FILTER (WHERE call_direction = 'INBOUND') as inbound_calls,
                     COUNT(*) FILTER (WHERE status = 'FINISHED') as completed_calls,
                     COUNT(*) FILTER (WHERE status != 'FINISHED' OR status IS NULL) as failed_calls,
                     AVG(
@@ -428,11 +431,15 @@ def get_call_details_records_query(
     return text, values
 
 
-def get_analytics_count_query(filters: Dict[str, Any]) -> Tuple[str, List[Any]]:
+def get_analytics_count_query(
+    filters: Dict[str, Any], filter_execution_mode: bool = True
+) -> Tuple[str, List[Any]]:
     """
     Generate query to count records matching filters.
     """
-    conditions, values = build_analytics_where_clause(filters)
+    conditions, values = build_analytics_where_clause(
+        filters, filter_execution_mode=filter_execution_mode
+    )
     where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
 
     # Add LEFT JOIN only if provider filter is present
@@ -589,6 +596,7 @@ def get_analytics_lead_based_query(
                     lct.{group_by},
                     lct.status,
                     lct.outcome,
+                    lct.call_direction,
                     lct.payload
                 FROM "{LEAD_CALL_TRACKER_TABLE}" lct
                 {join_clause}
@@ -613,6 +621,8 @@ def get_analytics_lead_based_query(
                 ul.{group_by},
                 (SELECT payload->>'shop_name' FROM filtered_data WHERE {group_by} = ul.{group_by} LIMIT 1) as shop_name,
                 COUNT(DISTINCT ul.request_id) as total_leads,
+                COUNT(DISTINCT CASE WHEN fd.call_direction = 'OUTBOUND' THEN ul.request_id END) as outbound_leads,
+                COUNT(DISTINCT CASE WHEN fd.call_direction = 'INBOUND' THEN ul.request_id END) as inbound_leads,
                 COUNT(DISTINCT CASE WHEN fd.outcome IS NOT NULL AND fd.outcome != 'NO_ANSWER' THEN ul.request_id END) as picked_calls,
                 (
                     SELECT jsonb_object_agg(outcome, outcome_count)
@@ -625,13 +635,14 @@ def get_analytics_lead_based_query(
             ORDER BY total_leads DESC;
         """
     else:
-        # Aggregate lead-based analytics (original behavior)
+        # Aggregate lead-based analytics — pre-aggregated in SQL (returns 1 row)
         text = f"""
             WITH filtered_data AS (
                 SELECT
                     lct.request_id,
                     lct.status,
-                    lct.outcome
+                    lct.outcome,
+                    lct.call_direction
                 FROM "{LEAD_CALL_TRACKER_TABLE}" lct
                 {join_clause}
                 {where_clause}
@@ -639,39 +650,45 @@ def get_analytics_lead_based_query(
             base_leads AS (
                 SELECT
                     request_id,
-                    COUNT(*) as total_calls,
                     COUNT(*) FILTER (WHERE status = 'FINISHED') as finished_calls,
                     COUNT(*) FILTER (WHERE outcome = 'NO_ANSWER') as no_answer_calls,
-                    COUNT(*) FILTER (WHERE outcome IS NOT NULL) as calls_with_outcome
+                    MAX(CASE WHEN call_direction = 'OUTBOUND' THEN 1 ELSE 0 END) as has_outbound,
+                    MAX(CASE WHEN call_direction = 'INBOUND' THEN 1 ELSE 0 END) as has_inbound
                 FROM filtered_data
                 GROUP BY request_id
             ),
-            outcome_leads AS (
+            lead_aggregates AS (
                 SELECT
-                    request_id,
-                    jsonb_object_agg(
-                        COALESCE(outcome, 'N/A'),
-                        outcome_count
-                    ) as outcome_breakdown
-                FROM (
-                    SELECT
-                        request_id,
-                        outcome,
-                        COUNT(*) as outcome_count
-                    FROM filtered_data
-                    GROUP BY request_id, outcome
-                ) grouped_outcomes
-                GROUP BY request_id
+                    COUNT(*) as total_leads,
+                    COUNT(*) FILTER (WHERE has_outbound = 1) as outbound_leads,
+                    COUNT(*) FILTER (WHERE has_inbound = 1) as inbound_leads,
+                    COUNT(*) FILTER (WHERE finished_calls > no_answer_calls) as picked_calls
+                FROM base_leads
+            ),
+            outcome_counts AS (
+                SELECT
+                    outcome,
+                    COUNT(DISTINCT request_id) as lead_count
+                FROM filtered_data
+                WHERE outcome IS NOT NULL
+                GROUP BY outcome
+            ),
+            outcome_agg AS (
+                SELECT
+                    COALESCE(
+                        jsonb_object_agg(outcome, lead_count),
+                        '{{}}'::jsonb
+                    ) as outcome_counts
+                FROM outcome_counts
             )
             SELECT
-                base_leads.request_id,
-                base_leads.total_calls,
-                base_leads.finished_calls,
-                base_leads.no_answer_calls,
-                base_leads.calls_with_outcome,
-                COALESCE(outcome_leads.outcome_breakdown, '{{}}'::jsonb) as outcome_breakdown
-            FROM base_leads
-            LEFT JOIN outcome_leads ON base_leads.request_id = outcome_leads.request_id;
+                lead_aggregates.total_leads,
+                lead_aggregates.outbound_leads,
+                lead_aggregates.inbound_leads,
+                lead_aggregates.picked_calls,
+                outcome_agg.outcome_counts
+            FROM lead_aggregates
+            CROSS JOIN outcome_agg;
         """
 
     return text, values
@@ -1094,78 +1111,3 @@ def get_distinct_merchant_ids_query(
     """
 
     return query, values
-
-
-def get_analytics_inbound_count_query(
-    filters: Dict[str, Any], group_by: Optional[str] = None
-) -> Tuple[str, List[Any]]:
-    """
-    Generate query to count inbound calls with same RBAC filters as outbound queries.
-
-    This query is completely separate from outbound lead queries. It counts raw inbound
-    call records (not deduplicated) because inbound calls typically don't have request_id.
-
-    Args:
-        filters: Analytics filters (merchant_id, shop_identifier, dates, etc.)
-        group_by: Optional grouping field (shop_identifier, template, or merchant_id)
-
-    Returns:
-        Tuple of (query_string, values_list)
-
-    Examples:
-        Aggregate (no grouping):
-            Returns single row: {"inbound_calls": 42}
-
-        Grouped by shop:
-            Returns multiple rows: [
-                {"merchant_id": "shop1", "inbound_calls": 10},
-                {"merchant_id": "shop2", "inbound_calls": 32}
-            ]
-    """
-    # Use existing filter builder - ensures RBAC consistency with outbound queries
-    conditions, values = build_analytics_where_clause(filters)
-
-    # Add inbound direction filter
-    conditions.append("lct.call_direction = 'INBOUND'")
-
-    where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
-
-    # Add LEFT JOIN only if provider filter is present
-    join_clause = (
-        f'LEFT JOIN "{OUTBOUND_NUMBER_TABLE}" ou ON lct.outbound_number_id = ou.id'
-        if "provider" in filters and filters["provider"]
-        else ""
-    )
-
-    # Validate and sanitize group_by to prevent SQL injection
-    allowed_group_by_fields = [
-        "template",
-        "reseller_id",
-        "merchant_id",
-    ]
-    if group_by and group_by not in allowed_group_by_fields:
-        logger.warning(f"Invalid group_by field '{group_by}', ignoring grouping")
-        group_by = None
-
-    if group_by:
-        # Grouped inbound count - returns one row per group
-        text = f"""
-            SELECT 
-                lct.{group_by},
-                COUNT(*) as inbound_calls
-            FROM "{LEAD_CALL_TRACKER_TABLE}" lct
-            {join_clause}
-            {where_clause}
-            GROUP BY lct.{group_by}
-            ORDER BY inbound_calls DESC;
-        """
-    else:
-        # Aggregate inbound count - returns single count
-        text = f"""
-            SELECT COUNT(*) as inbound_calls
-            FROM "{LEAD_CALL_TRACKER_TABLE}" lct
-            {join_clause}
-            {where_clause};
-        """
-
-    return text, values

@@ -10,7 +10,6 @@ from app.database.queries import run_parameterized_query
 from app.database.queries.breeze_buddy.analytics import (
     get_analytics_call_details_query,
     get_analytics_count_query,
-    get_analytics_inbound_count_query,
     get_analytics_lead_based_query,
     get_analytics_lead_based_trends_query,
     get_analytics_lead_status_counts_query,
@@ -26,6 +25,8 @@ from app.database.queries.breeze_buddy.analytics import (
     get_outcome_counts_total_query,
 )
 
+ALLOWED_GROUP_BY = {"merchant_id", "template", "reseller_id"}
+
 
 async def get_summary_analytics_from_db(
     filters: Dict[str, Any], group_by: Optional[str] = None
@@ -40,6 +41,12 @@ async def get_summary_analytics_from_db(
     Returns:
         List of dicts if group_by is provided, single dict otherwise
     """
+    if group_by and group_by not in ALLOWED_GROUP_BY:
+        logger.warning(
+            f"[Analytics DB] Invalid group_by '{group_by}', falling back to aggregate"
+        )
+        group_by = None
+
     logger.info(
         f"[Analytics DB] Getting summary analytics with filters: {filters}, group_by: {group_by}"
     )
@@ -58,6 +65,8 @@ async def get_summary_analytics_from_db(
                 return []
             return {
                 "total_calls": 0,
+                "outbound_calls": 0,
+                "inbound_calls": 0,
                 "completed_calls": 0,
                 "failed_calls": 0,
                 "success_rate": 0.0,
@@ -83,6 +92,8 @@ async def get_summary_analytics_from_db(
                         group_by: row[group_by],
                         "shop_name": row.get("shop_name"),
                         "total_calls": total_calls,
+                        "outbound_calls": row["outbound_calls"] or 0,
+                        "inbound_calls": row["inbound_calls"] or 0,
                         "completed_calls": completed_calls,
                         "failed_calls": failed_calls,
                         "success_rate": round(success_rate, 2),
@@ -117,6 +128,8 @@ async def get_summary_analytics_from_db(
 
             return {
                 "total_calls": total_calls,
+                "outbound_calls": row["outbound_calls"] or 0,
+                "inbound_calls": row["inbound_calls"] or 0,
                 "completed_calls": completed_calls,
                 "failed_calls": failed_calls,
                 "success_rate": round(success_rate, 2),
@@ -199,7 +212,9 @@ async def get_call_detail_records(
         raise
 
 
-async def get_analytics_count_from_db(filters: Dict[str, Any]) -> int:
+async def get_analytics_count_from_db(
+    filters: Dict[str, Any], filter_execution_mode: bool = True
+) -> int:
     """
     Get count of records matching filters.
 
@@ -209,7 +224,7 @@ async def get_analytics_count_from_db(filters: Dict[str, Any]) -> int:
     logger.debug(f"[Analytics DB] Getting analytics count with filters: {filters}")
 
     try:
-        query_text, values = get_analytics_count_query(filters)
+        query_text, values = get_analytics_count_query(filters, filter_execution_mode)
         result = await run_parameterized_query(query_text, values)
 
         count = result[0]["count"] if result and len(result) > 0 else 0
@@ -249,17 +264,24 @@ async def get_trends_analytics_from_db(
 
 async def get_lead_based_analytics_from_db(
     filters: Dict[str, Any], group_by: Optional[str] = None
-) -> List[Dict[str, Any]]:
+) -> Any:
     """
-    Get lead-based analytics (one row per unique lead/request_id).
+    Get lead-based analytics.
 
     Args:
         filters: Analytics filters
-        group_by: Optional field to group by (returns grouped results if provided)
+        group_by: Optional field to group by
 
     Returns:
-        List of lead analytics records
+        - If group_by: List[Dict] (one row per group, aggregated in SQL)
+        - If no group_by: Dict with total_leads, picked_calls, outcome_counts (single pre-aggregated row)
     """
+    if group_by and group_by not in ALLOWED_GROUP_BY:
+        logger.warning(
+            f"[Analytics DB] Invalid group_by '{group_by}', falling back to aggregate"
+        )
+        group_by = None
+
     logger.info(
         f"[Analytics DB] Getting lead-based analytics with filters: {filters}, group_by: {group_by}"
     )
@@ -267,74 +289,41 @@ async def get_lead_based_analytics_from_db(
     try:
         query_text, values = get_analytics_lead_based_query(filters, group_by)
         result = await run_parameterized_query(query_text, values)
-        logger.info(
-            f"[Analytics DB] Lead-based analytics returned {len(result) if result else 0} {'groups' if group_by else 'leads'}"
-        )
-        return [dict(row) for row in result] if result else []
+
+        if group_by:
+            logger.info(
+                f"[Analytics DB] Lead-based analytics returned {len(result) if result else 0} groups"
+            )
+            return [dict(row) for row in result] if result else []
+        else:
+            # Aggregate mode: single pre-aggregated row
+            if not result or len(result) == 0:
+                logger.warning(
+                    "[Analytics DB] Lead-based aggregate query returned no results"
+                )
+                return {
+                    "total_leads": 0,
+                    "outbound_leads": 0,
+                    "inbound_leads": 0,
+                    "picked_calls": 0,
+                    "outcome_counts": {},
+                }
+            row = result[0]
+            aggregate = {
+                "total_leads": row["total_leads"] or 0,
+                "outbound_leads": row["outbound_leads"] or 0,
+                "inbound_leads": row["inbound_leads"] or 0,
+                "picked_calls": row["picked_calls"] or 0,
+                "outcome_counts": row["outcome_counts"] or {},
+            }
+            logger.info(
+                f"[Analytics DB] Lead-based aggregate: {aggregate['total_leads']} leads, "
+                f"{aggregate['picked_calls']} picked"
+            )
+            return aggregate
 
     except Exception as e:
         logger.error(f"Error getting lead-based analytics: {e}", exc_info=True)
-        raise
-
-
-async def get_inbound_count_from_db(
-    filters: Dict[str, Any], group_by: Optional[str] = None
-) -> Any:
-    """
-    Get inbound call counts with database-level filtering.
-
-    Args:
-        filters: Analytics filters
-        group_by: Optional field to group by (returns list if provided, int otherwise)
-
-    Returns:
-        int (aggregate count) or List[Dict] (grouped counts)
-    """
-    logger.info(
-        f"[Analytics DB] Getting inbound count with filters: {filters}, group_by: {group_by}"
-    )
-
-    # Normalize group_by to prevent query/accessor divergence
-    allowed_group_by_fields = {
-        "template",
-        "reseller_id",
-        "merchant_id",
-    }
-    if group_by and group_by not in allowed_group_by_fields:
-        logger.warning(
-            f"[Analytics DB] Invalid group_by field '{group_by}', falling back to aggregate mode"
-        )
-        group_by = None
-
-    try:
-        query_text, values = get_analytics_inbound_count_query(filters, group_by)
-        result = await run_parameterized_query(query_text, values)
-
-        if not result or len(result) == 0:
-            logger.warning("[Analytics DB] Inbound count query returned no results")
-            return [] if group_by else 0
-
-        if group_by:
-            # Return list of grouped results with inbound_calls count
-            grouped_results = [
-                {
-                    group_by: row[group_by],
-                    "inbound_calls": row["inbound_calls"] or 0,
-                }
-                for row in result
-            ]
-            logger.info(
-                f"[Analytics DB] Inbound count returned {len(grouped_results)} groups"
-            )
-            return grouped_results
-        else:
-            # Return single aggregate count
-            count = result[0]["inbound_calls"] or 0
-            logger.info(f"[Analytics DB] Inbound count result: {count}")
-            return count
-
-    except Exception as e:
-        logger.error(f"Error getting inbound count: {e}", exc_info=True)
         raise
 
 

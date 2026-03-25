@@ -1,6 +1,6 @@
 """
-Analytics handlers for different analytics types.
-All handlers use database-level filtering for optimal scalability.
+Analytics service layer — all business logic for analytics endpoints.
+Database access is delegated to the accessor layer.
 """
 
 import csv
@@ -18,7 +18,6 @@ from app.database.accessor.breeze_buddy.analytics import (
     get_distinct_merchant_ids_from_db,
     get_distinct_outcomes_from_db,
     get_distinct_resellers_from_db,
-    get_inbound_count_from_db,
     get_lead_based_analytics_from_db,
     get_lead_based_trends_from_db,
     get_lead_status_counts_from_db,
@@ -44,11 +43,9 @@ def parse_outcome_breakdown(outcome_breakdown: Any) -> Dict[str, int]:
     if not outcome_breakdown:
         return {}
 
-    # If it's already a dict, return it
     if isinstance(outcome_breakdown, dict):
         return outcome_breakdown
 
-    # If it's a string (JSON), parse it
     if isinstance(outcome_breakdown, str):
         try:
             parsed = json.loads(outcome_breakdown)
@@ -57,8 +54,25 @@ def parse_outcome_breakdown(outcome_breakdown: Any) -> Dict[str, int]:
         except (json.JSONDecodeError, TypeError):
             pass
 
-    # Default to empty dict if we can't parse it
     return {}
+
+
+def _format_time_bucket(
+    data_point: Dict[str, Any], time_bucket, time_granularity: str
+) -> None:
+    """Apply day/week/month formatting to a time-series data point (mutates in place)."""
+    if time_granularity == "day":
+        data_point["date"] = time_bucket.date().isoformat()
+    elif time_granularity == "week":
+        week_start = time_bucket.date()
+        week_end = week_start + timedelta(days=6)
+        iso_cal = week_start.isocalendar()
+        data_point["week"] = f"{iso_cal[0]}-W{iso_cal[1]:02d}"
+        data_point["week_start"] = week_start.isoformat()
+        data_point["week_end"] = week_end.isoformat()
+    elif time_granularity == "month":
+        data_point["month"] = time_bucket.strftime("%Y-%m")
+        data_point["month_name"] = time_bucket.strftime("%B %Y")
 
 
 async def get_call_based_analytics(
@@ -67,24 +81,16 @@ async def get_call_based_analytics(
     """
     Get call-based analytics with outcome breakdowns.
     Supports both aggregate (no time_granularity) and time-series (with time_granularity).
-    All aggregations done at database level.
-
-    Response structure:
-    - If time_granularity is None: Returns single aggregate in results array
-    - If time_granularity is provided: Returns time-series buckets in results array
     """
     time_granularity = options.get("time_granularity")
 
     if time_granularity:
-        # Time-series mode: Get trends data
         trend_data_from_db = await get_trends_analytics_from_db(
             filters, time_granularity
         )
 
-        # Format results for response
         results = []
         for row in trend_data_from_db:
-            time_bucket = row["time_bucket"]
             total_calls = row["total_calls"] or 0
             completed_calls = row["completed_calls"] or 0
             failed_calls = total_calls - completed_calls
@@ -107,20 +113,7 @@ async def get_call_based_analytics(
                 ),
             }
 
-            if time_granularity == "day":
-                data_point["date"] = time_bucket.date().isoformat()
-            elif time_granularity == "week":
-                # Calculate week start (already truncated to Monday by PostgreSQL)
-                week_start = time_bucket.date()
-                week_end = week_start + timedelta(days=6)
-                iso_cal = week_start.isocalendar()
-                data_point["week"] = f"{iso_cal[0]}-W{iso_cal[1]:02d}"
-                data_point["week_start"] = week_start.isoformat()
-                data_point["week_end"] = week_end.isoformat()
-            elif time_granularity == "month":
-                data_point["month"] = time_bucket.strftime("%Y-%m")
-                data_point["month_name"] = time_bucket.strftime("%B %Y")
-
+            _format_time_bucket(data_point, row["time_bucket"], time_granularity)
             results.append(data_point)
 
         return {
@@ -130,48 +123,13 @@ async def get_call_based_analytics(
             "results": results,
         }
     else:
-        # Aggregate mode: Get summary data
         group_by = options.get("group_by")
         summary = await get_summary_analytics_from_db(filters, group_by)
-        inbound_data = await get_inbound_count_from_db(filters, group_by)
 
-        # If group_by is used, summary is already a list; otherwise wrap in array
         if isinstance(summary, list):
-            # Grouped mode: Match inbound counts by group_by key
-            inbound_map = {}
-            if isinstance(inbound_data, list):
-                for inbound_row in inbound_data:
-                    key = inbound_row.get(group_by)
-                    if key:
-                        inbound_map[key] = inbound_row.get("inbound_calls", 0)
-
-            results = []
-            for row in summary:
-                group_key = row[group_by]
-                outbound_calls = row["total_calls"]
-                inbound_calls = inbound_map.get(group_key, 0)
-
-                results.append(
-                    {
-                        **row,
-                        "outbound_calls": outbound_calls,
-                        "inbound_calls": inbound_calls,
-                        "total_calls": outbound_calls + inbound_calls,
-                    }
-                )
+            results = summary
         else:
-            # Aggregate mode: Simple addition
-            outbound_calls = summary["total_calls"]
-            inbound_calls = inbound_data if isinstance(inbound_data, int) else 0
-
-            results = [
-                {
-                    **summary,
-                    "outbound_calls": outbound_calls,
-                    "inbound_calls": inbound_calls,
-                    "total_calls": outbound_calls + inbound_calls,
-                }
-            ]
+            results = [summary]
 
         return {
             "type": "call-based",
@@ -184,9 +142,7 @@ async def get_call_based_analytics(
 async def get_call_details_analytics(
     filters: Dict[str, Any], options: Dict[str, Any], current_user: UserInfo
 ) -> Dict[str, Any]:
-    """
-    Get paginated call details with database-level filtering and pagination.
-    """
+    """Get paginated call details with database-level filtering and pagination."""
     page = options.get("page", 1)
     limit = options.get("limit", 50)
     sort_by = options.get("sort_by", "call_initiated_time")
@@ -194,10 +150,8 @@ async def get_call_details_analytics(
 
     offset = (page - 1) * limit
 
-    # Get total count from database
-    total = await get_analytics_count_from_db(filters)
+    total = await get_analytics_count_from_db(filters, filter_execution_mode=False)
 
-    # Get paginated call details from database
     trackers = await get_call_details_from_db(
         filters=filters,
         limit=limit,
@@ -208,10 +162,8 @@ async def get_call_details_analytics(
 
     total_pages = (total + limit - 1) // limit if limit > 0 else 0
 
-    # Convert to CallDetailResult
     results = []
     for tracker in trackers:
-        # Calculate duration
         duration = None
         if tracker.get("call_initiated_time") and tracker.get("call_end_time"):
             duration = int(
@@ -220,19 +172,14 @@ async def get_call_details_analytics(
                 ).total_seconds()
             )
 
-        # Parse payload and metadata (handles both string and dict)
         payload = parse_json(tracker, "payload")
         metadata = parse_json(tracker, "meta_data")
 
-        # Extract transcription - it might be nested in metadata
         transcript = None
         if metadata:
-            # Try to get transcription field
             transcription_data = metadata.get("transcription")
             if transcription_data:
-                # If it's a dict, try to extract the actual transcript text
                 if isinstance(transcription_data, dict):
-                    # Look for common transcript field names
                     transcript = (
                         transcription_data.get("transcript")
                         or transcription_data.get("text")
@@ -289,30 +236,21 @@ async def get_lead_based_analytics(
     """
     Get lead-based analytics (counts by unique lead).
     Supports both aggregate (no time_granularity) and time-series (with time_granularity).
-    All aggregations done at database level.
-
-    Response structure:
-    - If time_granularity is None: Returns single aggregate in results array
-    - If time_granularity is provided: Returns time-series buckets in results array
     """
     time_granularity = options.get("time_granularity")
 
     if time_granularity:
-        # Time-series mode: Get lead-based trends data
         trend_data_from_db = await get_lead_based_trends_from_db(
             filters, time_granularity
         )
 
-        # Format results for response
         results = []
         for row in trend_data_from_db:
-            time_bucket = row["time_bucket"]
             total_leads = row["total_leads"] or 0
-            total_calls = row["total_calls"] or 0
-            finished_calls = row["finished_calls"] or 0
+            total_calls = int(row["total_calls"] or 0)
+            finished_calls = int(row["finished_calls"] or 0)
             outcome_breakdown = parse_outcome_breakdown(row.get("outcome_breakdown"))
 
-            # Calculate picked_calls (leads that answered)
             no_answer_count = 0
             for outcome, count in outcome_breakdown.items():
                 outcome_lower = str(outcome).lower()
@@ -333,20 +271,7 @@ async def get_lead_based_analytics(
                 "outcome_counts": outcome_breakdown,
             }
 
-            if time_granularity == "day":
-                data_point["date"] = time_bucket.date().isoformat()
-            elif time_granularity == "week":
-                # Calculate week start (already truncated to Monday by PostgreSQL)
-                week_start = time_bucket.date()
-                week_end = week_start + timedelta(days=6)
-                iso_cal = week_start.isocalendar()
-                data_point["week"] = f"{iso_cal[0]}-W{iso_cal[1]:02d}"
-                data_point["week_start"] = week_start.isoformat()
-                data_point["week_end"] = week_end.isoformat()
-            elif time_granularity == "month":
-                data_point["month"] = time_bucket.strftime("%Y-%m")
-                data_point["month_name"] = time_bucket.strftime("%B %Y")
-
+            _format_time_bucket(data_point, row["time_bucket"], time_granularity)
             results.append(data_point)
 
         return {
@@ -356,36 +281,19 @@ async def get_lead_based_analytics(
             "results": results,
         }
     else:
-        # Aggregate mode: Get lead-based summary data
         group_by = options.get("group_by")
         lead_data = await get_lead_based_analytics_from_db(filters, group_by)
-        inbound_data = await get_inbound_count_from_db(filters, group_by)
 
         if group_by:
-            # Grouped results - data is already aggregated by database
-            # Create a map of inbound counts by group_by key
-            inbound_map = {}
-            if isinstance(inbound_data, list):
-                for inbound_row in inbound_data:
-                    key = inbound_row.get(group_by)
-                    if key:
-                        inbound_map[key] = inbound_row.get("inbound_calls", 0)
-
             results = []
             for row in lead_data:
-                group_key = row[group_by]
-                # Note: row["total_leads"] from the query contains only outbound leads
-                # (filtered by request_id IS NOT NULL). The field name is misleading
-                # but kept for backward compatibility with the query structure.
-                outbound_count = row["total_leads"] or 0
-                inbound_count = inbound_map.get(group_key, 0)
                 results.append(
                     {
-                        group_by: group_key,
+                        group_by: row[group_by],
                         "shop_name": row.get("shop_name"),
-                        "outbound_leads": outbound_count,
-                        "inbound_leads": inbound_count,
-                        "total_leads": outbound_count + inbound_count,
+                        "outbound_leads": row.get("outbound_leads", 0),
+                        "inbound_leads": row.get("inbound_leads", 0),
+                        "total_leads": row["total_leads"] or 0,
                         "picked_calls": row["picked_calls"] or 0,
                         "outcome_counts": parse_outcome_breakdown(
                             row.get("outcome_counts")
@@ -400,56 +308,28 @@ async def get_lead_based_analytics(
                 "results": results,
             }
         else:
-            # Aggregate (original behavior)
-            # Calculate high-level metrics
-            total_leads = len(lead_data)
-
-            # Dynamic outcome counting (template-agnostic)
-            outcome_counts = {}
-            picked_calls = 0
-            for lead in lead_data:
-                # Get finished_calls and no_answer_calls from the query result
-                finished_calls = lead.get("finished_calls", 0) or 0
-                no_answer_calls = lead.get("no_answer_calls", 0) or 0
-
-                # A lead is "picked" if finished_calls > no_answer_calls
-                if finished_calls > no_answer_calls:
-                    picked_calls += 1
-
-                outcome_breakdown = parse_outcome_breakdown(
-                    lead.get("outcome_breakdown")
-                )
-                for outcome, count in outcome_breakdown.items():
-                    if count > 0:
-                        outcome_counts[outcome] = outcome_counts.get(outcome, 0) + 1
-
-            # Get inbound count (should be int in aggregate mode)
-            inbound_count = inbound_data if isinstance(inbound_data, int) else 0
-
             lead_based = {
-                "outbound_leads": total_leads,
-                "inbound_leads": inbound_count,
-                "total_leads": total_leads + inbound_count,
-                "picked_calls": picked_calls,
-                "outcome_counts": outcome_counts,
+                "outbound_leads": lead_data.get("outbound_leads", 0),
+                "inbound_leads": lead_data.get("inbound_leads", 0),
+                "total_leads": lead_data.get("total_leads", 0),
+                "picked_calls": lead_data.get("picked_calls", 0),
+                "outcome_counts": parse_outcome_breakdown(
+                    lead_data.get("outcome_counts")
+                ),
             }
 
             return {
                 "type": "lead-based",
                 "filters_applied": filters,
                 "time_granularity": None,
-                "results": [lead_based],  # Wrap in array for consistency
+                "results": [lead_based],
             }
 
 
 async def get_outbound_numbers_analytics(
     filters: Dict[str, Any], options: Dict[str, Any], current_user: UserInfo
 ) -> Dict[str, Any]:
-    """
-    Get analytics grouped by outbound number.
-    All aggregations done at database level.
-    """
-    # Get outbound numbers analytics from database
+    """Get analytics grouped by outbound number."""
     outbound_data = await get_outbound_numbers_analytics_from_db(filters)
 
     outbound_analytics = []
@@ -480,22 +360,15 @@ async def get_conversion_analytics(
 ) -> Dict[str, Any]:
     """
     Get conversion funnel analytics.
-
     Analyzes the conversion funnel from call initiation to completion.
-    Shows drop-off points and conversion rates at each stage.
     """
-    # Get summary analytics for conversion calculation
     summary = await get_summary_analytics_from_db(filters)
 
-    # Define conversion funnel stages using actual fields from summary
     total_initiated = summary.get("total_calls", 0)
     completed_calls = summary.get("completed_calls", 0)
-    summary.get("failed_calls", 0)
 
-    # Get outcome breakdown to extract specific outcome counts
     outcome_breakdown = parse_outcome_breakdown(summary.get("outcome_breakdown"))
 
-    # Extract calls_no_answer from outcome_breakdown (case-insensitive lookup)
     calls_no_answer = 0
     for outcome, count in outcome_breakdown.items():
         outcome_lower = str(outcome).lower()
@@ -506,12 +379,9 @@ async def get_conversion_analytics(
         ):
             calls_no_answer += count
 
-    # Calculate funnel stages
-    # Connected = completed + no_answer (calls that reached the customer)
     total_connected = completed_calls + calls_no_answer
     total_completed = completed_calls
 
-    # Build funnel stages
     funnel_stages = [
         {"stage": "initiated", "count": total_initiated, "percentage": 100.0},
         {
@@ -534,7 +404,6 @@ async def get_conversion_analytics(
         },
     ]
 
-    # Add outcome-based stages
     for outcome, count in outcome_breakdown.items():
         if count > 0:
             funnel_stages.append(
@@ -547,15 +416,12 @@ async def get_conversion_analytics(
                 }
             )
 
-    # Calculate conversion rate (initiated to completed)
     conversion_rate = (
         (total_completed / total_initiated * 100) if total_initiated > 0 else 0.0
     )
 
-    # Calculate drop-off points
     drop_off_points = []
 
-    # Drop-off from initiated to connected
     initiated_to_connected_dropoff = total_initiated - total_connected
     if initiated_to_connected_dropoff > 0:
         drop_off_points.append(
@@ -570,7 +436,6 @@ async def get_conversion_analytics(
             }
         )
 
-    # Drop-off from connected to completed
     connected_to_completed_dropoff = total_connected - total_completed
     if connected_to_completed_dropoff > 0:
         drop_off_points.append(
@@ -606,20 +471,16 @@ async def get_performance_analytics(
 ) -> Dict[str, Any]:
     """
     Get performance metrics analytics.
-
     Provides performance metrics including success rates, average duration,
     cost efficiency, and outcome distribution.
     """
-    # Get summary analytics for performance calculation
     summary = await get_summary_analytics_from_db(filters)
 
     total_calls = summary.get("total_calls", 0)
     failed_calls = summary.get("failed_calls", 0)
 
-    # Get outcome breakdown to extract specific outcome counts
     outcome_breakdown = parse_outcome_breakdown(summary.get("outcome_breakdown"))
 
-    # Extract specific outcomes from breakdown (case-insensitive lookup)
     calls_no_answer = 0
     calls_busy = 0
     for outcome, count in outcome_breakdown.items():
@@ -633,34 +494,26 @@ async def get_performance_analytics(
         elif "busy" in outcome_lower:
             calls_busy += count
 
-    # calls_picked = total_calls - NO_ANSWER
     calls_picked = total_calls - calls_no_answer
 
-    # Use success_rate from summary (already calculated)
     success_rate = summary.get("success_rate", 0.0)
 
-    # Calculate answer rate (calls picked + no answer / total calls)
     answer_rate = (
         ((calls_picked + calls_no_answer) / total_calls * 100)
         if total_calls > 0
         else 0.0
     )
 
-    # Calculate failure rate
     failure_rate = (failed_calls / total_calls * 100) if total_calls > 0 else 0.0
 
-    # Get average duration from summary
     avg_duration = summary.get("average_duration")
 
-    # Get total cost if available (not currently provided by summary)
     total_cost = summary.get("total_cost", 0)
 
-    # Calculate cost per successful call
     cost_per_success = (
         (total_cost / calls_picked) if calls_picked > 0 and total_cost > 0 else 0.0
     )
 
-    # Calculate outcome distribution percentages
     outcome_distribution = {}
     for outcome, count in outcome_breakdown.items():
         outcome_distribution[outcome] = {
@@ -668,7 +521,6 @@ async def get_performance_analytics(
             "percentage": (count / total_calls * 100) if total_calls > 0 else 0.0,
         }
 
-    # Build performance metrics
     performance_data = {
         "total_calls": total_calls,
         "success_rate": round(success_rate, 2),
@@ -696,45 +548,25 @@ async def get_performance_analytics(
 async def get_lead_status_counts(
     filters: Dict[str, Any], options: Dict[str, Any], current_user: UserInfo
 ) -> Dict[str, Any]:
-    """
-    Get lead status counts with pagination and search.
-    Groups by reseller_id and shop_identifier, sorted by total_count DESC.
-
-    Args:
-        filters: Analytics filters (date range, reseller_id, shop_identifier for search)
-        options: Analytics options (page, limit)
-        current_user: Current authenticated user info
-
-    Returns:
-        Dict with pagination info and lead status counts
-    """
-    # Extract pagination parameters from options (default: page 1, limit 10)
+    """Get lead status counts with pagination and search."""
     page = options.get("page", 1)
     limit = options.get("limit", 10)
 
-    # Ensure valid pagination values
     page = max(1, page)
-    limit = max(1, min(limit, 100))  # Cap at 100 rows per page
+    limit = max(1, min(limit, 100))
 
-    # Extract search parameters from filters
-    # These are partial text searches, not exact matches
     search_reseller_id = filters.get("reseller_id")
     search_merchant_identifier = filters.get("merchant_id")
 
-    # Remove search fields from filters before passing to database
-    # (they're handled separately as partial matches)
     db_filters = {
         k: v for k, v in filters.items() if k not in ["reseller_id", "merchant_id"]
     }
 
-    # If user is not admin, automatically filter by their merchant_id
     if current_user.role != "admin":
-        # Use first reseller_id from the list (users typically have one)
         db_filters["reseller_id"] = (
             current_user.reseller_ids[0] if current_user.reseller_ids else None
         )
 
-    # Get lead status counts from database with pagination
     result = await get_lead_status_counts_from_db(
         filters=db_filters,
         page=page,
@@ -743,7 +575,6 @@ async def get_lead_status_counts(
         search_merchant_identifier=search_merchant_identifier,
     )
 
-    # Format results
     formatted_results = []
     for row in result["results"]:
         formatted_results.append(
@@ -772,19 +603,18 @@ async def download_call_details(
 ) -> StreamingResponse:
     """
     Generate a CSV file download of all call details matching the filters.
-    Returns a StreamingResponse that streams CSV rows in batches to avoid
-    loading the entire result set into memory.
+    Streams CSV rows in batches to avoid loading everything into memory.
     """
     sort_by = options.get("sort_by", "call_initiated_time")
     sort_order = options.get("sort_order", "desc")
 
     BATCH_SIZE = 1000
+    MAX_CSV_ROWS = 100_000
 
     async def generate_csv():
         output = io.StringIO()
         writer = csv.writer(output)
 
-        # Write header row
         headers = [
             "Call ID",
             "Lead ID",
@@ -802,12 +632,18 @@ async def download_call_details(
         output.truncate(0)
 
         offset = 0
+        total_rows_written = 0
         while True:
+            remaining = MAX_CSV_ROWS - total_rows_written
+            if remaining <= 0:
+                break
+
+            batch_limit = min(BATCH_SIZE, remaining)
             trackers = await get_call_detail_records(
                 filters=filters,
                 sort_by=sort_by,
                 sort_order=sort_order,
-                limit=BATCH_SIZE,
+                limit=batch_limit,
                 offset=offset,
             )
 
@@ -817,7 +653,6 @@ async def download_call_details(
             for tracker in trackers:
                 payload = parse_json(tracker, "payload")
 
-                # Calculate duration
                 duration = None
                 if tracker.get("call_initiated_time") and tracker.get("call_end_time"):
                     duration = int(
@@ -826,7 +661,6 @@ async def download_call_details(
                         ).total_seconds()
                     )
 
-                # Format timestamps
                 start_time = (
                     tracker["call_initiated_time"].strftime("%Y-%m-%d %H:%M:%S")
                     if tracker.get("call_initiated_time")
@@ -838,7 +672,6 @@ async def download_call_details(
                     else ""
                 )
 
-                # Extract caller number from payload
                 caller_number = ""
                 if payload:
                     caller_number = (
@@ -865,12 +698,13 @@ async def download_call_details(
             output.seek(0)
             output.truncate(0)
 
-            if len(trackers) < BATCH_SIZE:
+            total_rows_written += len(trackers)
+
+            if len(trackers) < batch_limit:
                 break
 
-            offset += BATCH_SIZE
+            offset += len(trackers)
 
-    # Generate filename with current date
     filename = f"call_details_{datetime.now().strftime('%Y-%m-%d')}.csv"
 
     return StreamingResponse(
@@ -885,7 +719,7 @@ async def get_distinct_outcomes(
     options: Dict[str, Any],
     current_user: UserInfo,
 ) -> Dict[str, Any]:
-    """Handler for distinct-outcomes analytics type."""
+    """Get distinct outcome values."""
     outcomes = await get_distinct_outcomes_from_db(filters)
 
     return {
@@ -902,18 +736,33 @@ async def get_outcome_counts(
     options: Dict[str, Any],
     current_user: UserInfo,
 ) -> Dict[str, Any]:
-    """Handler for outcome-counts analytics type."""
+    """Get paginated outcome counts."""
     page = max(1, min(options.get("page", 1), 1000))
     limit = max(1, min(options.get("limit", 10), 100))
 
     data = await get_outcome_counts_from_db(filters, page, limit)
 
+    page_total_calls = data["page_total_calls"]
+    results = []
+    for row in data["results"]:
+        call_count = row.get("call_count", 0)
+        percentage = round(
+            (call_count / page_total_calls * 100) if page_total_calls > 0 else 0.0, 2
+        )
+        results.append(
+            {
+                "outcome": row["outcome"],
+                "count": call_count,
+                "percentage": percentage,
+            }
+        )
+
     return {
         "type": "outcome-counts",
         "filters_applied": filters,
         "pagination": data["pagination"],
-        "results": data["results"],
-        "page_total_calls": data["page_total_calls"],
+        "results": results,
+        "page_total_calls": page_total_calls,
     }
 
 
@@ -922,7 +771,7 @@ async def get_distinct_resellers(
     options: Dict[str, Any],
     current_user: UserInfo,
 ) -> Dict[str, Any]:
-    """Handler for distinct-resellers analytics type."""
+    """Get distinct reseller IDs."""
     resellers = await get_distinct_resellers_from_db(filters)
 
     return {
@@ -939,7 +788,7 @@ async def get_distinct_merchant_ids(
     options: Dict[str, Any],
     current_user: UserInfo,
 ) -> Dict[str, Any]:
-    """Handler for distinct-merchant-ids analytics type."""
+    """Get distinct merchant IDs."""
     merchant_ids = await get_distinct_merchant_ids_from_db(filters)
 
     return {
