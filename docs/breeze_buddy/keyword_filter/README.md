@@ -63,12 +63,16 @@ Add `keyword_filter` to the template's `configurations` object:
 
 ## How It Works
 
-The `KeywordFilterProcessor` sits in the pipeline **before** the user aggregator:
+The `TranscriptionGateProcessor` sits in the pipeline **before** the user aggregator. In addition
+to the keyword filter, it supports a **hard mute** mode (`mute()` / `unmute()` / `mute_for(duration)`)
+that drops ALL transcription frames unconditionally — regardless of bot activity state or keyword
+matching. Hard mute is typically engaged from a node pre-action when VAD is disabled. Both modes
+can be active simultaneously; either condition causes a drop.
 
 ```
 transport.input()
   → stt
-  → KeywordFilterProcessor    ← filters here
+  → TranscriptionGateProcessor    ← filters here
   → user_aggregator (VAD / turn strategies)
   → llm
   → tts
@@ -81,10 +85,14 @@ The processor independently tracks bot state by listening to Pipecat frames:
 |-------|-----------------|
 | `LLMFullResponseStartFrame` | Bot becomes active — filter engages |
 | `BotStartedSpeakingFrame` | Bot becomes active — filter engages |
+| `LLMFullResponseEndFrame` | LLM finished processing — deactivates LLM-active flag |
 | `BotStoppedSpeakingFrame` | Bot becomes idle — filter disengages |
 
-A matching `TranscriptionFrame` is silently dropped (`return` without `push_frame`). No interruption
-is triggered, and the text never reaches the LLM context.
+A matching `TranscriptionFrame` or `InterimTranscriptionFrame` is silently dropped (`return` without
+`push_frame`). Interim frames must also be filtered because `TranscriptionUserTurnStartStrategy`
+with `use_interim=True` fires on interim frames, which would trigger an interruption even when the
+final `TranscriptionFrame` would have been suppressed. No interruption is triggered, and the text
+never reaches the LLM context.
 
 ---
 
@@ -161,12 +169,13 @@ for a complete working template that uses the keyword filter.
 | File | Change |
 |------|--------|
 | `app/ai/voice/agents/breeze_buddy/template/types.py` | Added `KeywordMatchType` enum, `KeywordFilterConfig` model, and `keyword_filter` field on `ConfigurationModel` |
-| `app/ai/voice/agents/breeze_buddy/processors/keyword_filter.py` | New `KeywordFilterProcessor` (Pipecat `FrameProcessor`) |
-| `app/ai/voice/agents/breeze_buddy/processors/__init__.py` | Exports `KeywordFilterProcessor` |
+| `app/ai/voice/agents/breeze_buddy/processors/transcription_gate.py` | New `TranscriptionGateProcessor` (Pipecat `FrameProcessor`) |
+| `app/ai/voice/agents/breeze_buddy/processors/__init__.py` | Exports `TranscriptionGateProcessor` |
 | `app/ai/voice/agents/breeze_buddy/agent/pipeline.py` | Instantiates and inserts the processor into the pipeline |
 
 ### Backward Compatibility
 
 - Field is optional on `ConfigurationModel` — existing templates are unaffected.
-- When `keyword_filter` is absent or `enabled: false`, no processor is inserted and the pipeline
-  behaves exactly as before.
+- `TranscriptionGateProcessor` is always inserted in the pipeline. When `keyword_filter` is absent
+  or `enabled: false`, the processor acts as a transparent passthrough with negligible overhead —
+  the pipeline behaves exactly as before.

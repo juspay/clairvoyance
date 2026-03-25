@@ -19,13 +19,13 @@ Connection time reduced from ~8s to 3-4s via two pre-warmed pools:
 
 ### Database-First Configuration
 - PostgreSQL stores templates, call configs, sessions (`app/database/migrations/`)
-- Templates define conversation flows as JSON with node-based navigation (`docs/BREEZE_BUDDY_ARCHITECTURE.md`)
+- Templates define conversation flows as JSON with node-based navigation (`docs/breeze_buddy/architecture/`)
 - Use `python -m scripts.create_tables create` to initialize schema
 
 ### Redis for State & Caching
 - Feature flags cached in Redis, refreshed from DevCycle (`app/services/redis/`)
-- Auto-refresh worker pattern: register keys with callbacks to fetch fresh data before expiry
-- Namespace isolation: `feature_flags`, `sessions`, `users`, etc.
+- Flags stored in Redis as single JSON blob (`devcycle:flags` key)
+- Fallback chain: Redis → Environment → Default
 
 ## Development Workflows
 
@@ -92,8 +92,8 @@ Never bypass pools for new connections—fallback only if exhausted. Pools maint
 ### Database Migrations
 Apply SQL migrations manually in sequence (`app/database/migrations/`). No ORM—raw SQL via `asyncpg`.
 
-### Redis Namespace Collisions
-Always use `namespace` parameter in `redis_get`/`redis_set` to avoid key conflicts across services.
+### Redis Key Management
+Use descriptive key prefixes to avoid conflicts (e.g., `devcycle:flags`, `background:task:`, `alerts:`).
 
 ## Testing & Debugging
 
@@ -108,7 +108,7 @@ Always use `namespace` parameter in `redis_get`/`redis_set` to avoid key conflic
 - Scores stored in `langfuse_scores` column (migration 010)
 
 ### Agent Connection Flow
-See `docs/AGENT_CONNECTION_FLOW.md` for WebSocket handshake and subprocess lifecycle details.
+See `docs/automatic/connection_flow/` for WebRTC transport and subprocess lifecycle details.
 
 ## Key Files Reference
 - **Entry point**: `run.py` (loads .env, initializes DevCycle, starts Uvicorn)
@@ -116,7 +116,7 @@ See `docs/AGENT_CONNECTION_FLOW.md` for WebSocket handshake and subprocess lifec
 - **Pool implementations**: `app/helpers/automatic/{process_pool,daily_room_pool}.py`
 - **Redis service**: `app/services/redis/client.py` (get/set/refresh patterns)
 - **Background tasks**: `app/core/background_tasks/scheduler.py`
-- **Breeze Buddy templates**: `docs/BREEZE_BUDDY_ARCHITECTURE.md` (comprehensive guide)
+- **Breeze Buddy templates**: `docs/breeze_buddy/architecture/` (comprehensive guide)
 
 ## Docker Deployment
 - Multi-stage build with audio processing deps (`Dockerfile`)
