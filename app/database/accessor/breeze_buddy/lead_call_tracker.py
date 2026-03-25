@@ -143,14 +143,22 @@ async def get_leads_based_on_status_and_next_attempt(
         return []
 
 
-async def acquire_lock_on_lead_by_id(lead_id: str) -> Optional[LeadCallTracker]:
+async def acquire_lock_on_lead_by_id(
+    lead_id: str, expected_status: Optional[LeadCallStatus] = None
+) -> Optional[LeadCallTracker]:
     """
-    Atomically acquire lock on a lead by ID. Returns the locked lead if successful, None if already locked.
+    Atomically acquire lock on a lead by ID.
+    If expected_status is provided, only acquires when the lead's status matches —
+    combining lock + status check in one DB round-trip instead of three (lock, check, release).
+    Returns the locked lead if successful, None if already locked or status mismatched.
     """
-    logger.info(f"Attempting to acquire lock on lead with ID: {lead_id}")
+    logger.info(
+        f"Attempting to acquire lock on lead with ID: {lead_id}"
+        + (f" (expected_status={expected_status.value})" if expected_status else "")
+    )
 
     try:
-        query_text, values = acquire_lock_on_lead_by_id_query(lead_id)
+        query_text, values = acquire_lock_on_lead_by_id_query(lead_id, expected_status)
         result = await run_parameterized_query(query_text, values)
         if result and get_row_count(result) > 0:
             decoded_result = decode_lead_call_tracker(result[0])
@@ -202,6 +210,8 @@ async def update_lead_call_details(
 ) -> Optional[LeadCallTracker]:
     """
     Update lead call details.
+    Returns None (zero rows) if the lead was already moved out of BACKLOG
+    by a concurrent invocation — this is an expected concurrency outcome.
     """
     logger.info(f"Updating lead {id} with status {status} and call ID {call_id}")
 
@@ -215,7 +225,7 @@ async def update_lead_call_details(
             logger.info(f"Lead updated successfully: {decoded_result}")
             return decoded_result
 
-        logger.error("Failed to update lead")
+        logger.warning(f"Lead {id} not updated — status may have changed concurrently")
         return None
 
     except Exception as e:

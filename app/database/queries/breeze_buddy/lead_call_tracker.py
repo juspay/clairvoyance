@@ -123,19 +123,26 @@ def get_leads_based_on_status_and_next_attempt_query(
     return text, values
 
 
-def acquire_lock_on_lead_by_id_query(lead_id: str) -> Tuple[str, List[Any]]:
+def acquire_lock_on_lead_by_id_query(
+    lead_id: str, expected_status: Optional[LeadCallStatus] = None
+) -> Tuple[str, List[Any]]:
     """
     Generate query to atomically acquire lock on a lead by ID.
-    Returns the lead if successfully locked, None if already locked.
+    If expected_status is provided, only acquires the lock when the lead's current
+    status matches — combining lock + status verification in a single atomic query.
+    Returns the lead if successfully locked, empty result if already locked or status mismatched.
     """
     text = f"""
         UPDATE "{LEAD_CALL_TRACKER_TABLE}"
         SET "is_locked" = TRUE, "updated_at" = NOW()
         WHERE "id" = $1
         AND "is_locked" = FALSE
-        RETURNING *;
     """
-    values = [lead_id]
+    values: List[Any] = [lead_id]
+    if expected_status is not None:
+        text += f'        AND "status" = ${len(values) + 1}\n'
+        values.append(expected_status.value)
+    text += "        RETURNING *;\n    "
     return text, values
 
 
@@ -162,14 +169,24 @@ def update_lead_call_details_query(
 ) -> Tuple[str, List[Any]]:
     """
     Generate query to update lead call details.
+    Only updates if lead is still in BACKLOG status to prevent concurrent
+    process_backlog_leads invocations from overwriting an active call's details.
+    Returns zero rows if the lead was already moved to PROCESSING/FINISHED by another invocation.
     """
     text = f"""
         UPDATE "{LEAD_CALL_TRACKER_TABLE}"
         SET "status" = $1, "call_id" = $2, "updated_at" = NOW(), "call_initiated_time" = $3, "outbound_number_id" = $4
-        WHERE "id" = $5
+        WHERE "id" = $5 AND "status" = $6
         RETURNING *;
     """
-    values = [status.value, call_id, call_initiated_time, outbound_number_id, id]
+    values = [
+        status.value,
+        call_id,
+        call_initiated_time,
+        outbound_number_id,
+        id,
+        LeadCallStatus.BACKLOG.value,
+    ]
     return text, values
 
 
