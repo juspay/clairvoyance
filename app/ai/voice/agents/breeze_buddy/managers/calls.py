@@ -360,8 +360,10 @@ async def _cleanup_stuck_leads():
     for lead in stale_leads:
         locked_lead = None
         try:
-            # Try to acquire lock on this stuck lead to prevent race conditions
-            locked_lead = await acquire_lock_on_lead_by_id(lead.id)
+            # Atomically acquire lock AND verify still in PROCESSING (single DB trip)
+            locked_lead = await acquire_lock_on_lead_by_id(
+                lead.id, expected_status=LeadCallStatus.PROCESSING
+            )
             if not locked_lead:
                 logger.info(
                     f"Stuck lead {lead.id} is already locked by another process, skipping cleanup."
@@ -414,15 +416,18 @@ async def process_backlog_leads():
     async with create_aiohttp_session() as session:
         for lead in leads:
             try:
-                # Try to acquire lock for this lead atomically
-                locked_lead = await acquire_lock_on_lead_by_id(lead.id)
+                # Atomically acquire lock AND verify status is still BACKLOG in one DB trip.
+                # Multiple concurrent process_backlog_leads invocations hold stale snapshots
+                # of BACKLOG leads — by the time we reach this lead, another invocation may
+                # have already processed it. The expected_status guard prevents locking a
+                # lead that's already in PROCESSING or FINISHED.
+                locked_lead = await acquire_lock_on_lead_by_id(
+                    lead.id, expected_status=LeadCallStatus.BACKLOG
+                )
                 if not locked_lead:
-                    logger.info(
-                        f"Lead {lead.id} is already locked by another process, skipping."
-                    )
                     continue
 
-                # Now we have exclusive access to this lead
+                # Now we have exclusive access to this BACKLOG lead
                 logger.info(f"Successfully locked lead {lead.id} for processing.")
 
                 config = await _get_lead_config(locked_lead)
@@ -535,13 +540,29 @@ async def process_backlog_leads():
                 if call and call.get("sid"):
                     actual_call_sid = str(call.get("sid"))
 
-                    await update_lead_call_details(
+                    updated = await update_lead_call_details(
                         locked_lead.id,
                         LeadCallStatus.PROCESSING,
                         actual_call_sid,
                         datetime.now(timezone.utc),
                         number_to_use.id,
                     )
+                    if not updated:
+                        # Another invocation already moved this lead out of BACKLOG.
+                        # The call was placed but the lead is no longer ours — release resources.
+                        logger.warning(
+                            f"Lead {locked_lead.id} was already processed by another invocation "
+                            f"(status changed from BACKLOG). Releasing number. "
+                            f"Call {actual_call_sid} may be orphaned."
+                        )
+                        await _release_number(number_to_use.id, number_to_use.provider)
+                        try:
+                            redis = await get_redis_service()
+                            await redis.delete(f"greeting:{locked_lead.id}")
+                        except Exception:
+                            pass
+                        await release_lock_on_lead_by_id(locked_lead.id)
+                        continue
                 else:
                     logger.error(
                         f"Failed to initiate call for lead {locked_lead.id}. Call response: {call}"
@@ -719,13 +740,29 @@ async def process_backlog_leads():
 
                     if retry_call and retry_call.get("sid"):
                         retry_call_sid = str(retry_call.get("sid"))
-                        await update_lead_call_details(
+                        retry_updated = await update_lead_call_details(
                             locked_lead.id,
                             LeadCallStatus.PROCESSING,
                             retry_call_sid,
                             datetime.now(timezone.utc),
                             retry_number_to_use.id,
                         )
+                        if not retry_updated:
+                            logger.warning(
+                                f"Lead {locked_lead.id} was already processed by another invocation "
+                                f"during retry call. Releasing retry number. "
+                                f"Call {retry_call_sid} may be orphaned."
+                            )
+                            await _release_number(
+                                retry_number_to_use.id, retry_number_to_use.provider
+                            )
+                            try:
+                                redis = await get_redis_service()
+                                await redis.delete(f"greeting:{locked_lead.id}")
+                            except Exception:
+                                pass
+                            await release_lock_on_lead_by_id(locked_lead.id)
+                            continue
                     else:
                         logger.error(
                             f"Failed to initiate retry call for lead {locked_lead.id}. Call response: {retry_call}"
@@ -857,7 +894,8 @@ async def handle_unanswered_calls(call_id: str):
         logger.error(f"Could not find lead for call_id: {call_id}")
         return
 
-    # Clean up greeting audio from Redis if it exists for unanswered calls
+    # Clean up greeting audio from Redis if it exists — do this regardless of status
+    # since the delete is idempotent and prevents Redis key leaks from orphaned calls.
     try:
         redis = await get_redis_service()
         greeting_key = f"greeting:{lead.id}"
@@ -867,6 +905,15 @@ async def handle_unanswered_calls(call_id: str):
         logger.warning(
             f"Failed to delete greeting audio from Redis for lead {lead.id}: {e}"
         )
+
+    # Guard: if another callback already finished this lead, skip to avoid duplicate retries.
+    # This happens when the lock race causes multiple calls for the same lead — each call's
+    # callback arrives independently and would otherwise each create a retry entry.
+    if lead.status == LeadCallStatus.FINISHED:
+        logger.info(
+            f"Lead {lead.id} is already FINISHED for call_id: {call_id}, skipping unanswered handler."
+        )
+        return
 
     if lead.outbound_number_id:
         outbound_number = await get_outbound_number_by_id(lead.outbound_number_id)
