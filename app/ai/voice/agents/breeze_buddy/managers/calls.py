@@ -821,9 +821,18 @@ async def handle_call_completion(
     Handles call completion events.
     """
     logger.info(f"Call completed for call_id: {call_id} with outcome: {outcome}")
+
+    # Release pod early — even if the lead lookup fails (orphaned call_id),
+    # the pod must be freed to avoid pod leaks when pod isolation is enabled.
+    await safe_release_pod(call_sid=call_id, reason="call_completed")
+
     lead = await get_lead_by_call_id(call_id)
     if not lead:
-        logger.error(f"Could not find lead for call_id: {call_id}")
+        logger.error(
+            f"Could not find lead for call_id: {call_id}. "
+            f"Outbound number channel may be leaked — manual cleanup required. "
+            f"This can happen when a prior duplicate-call bug overwrote the call_id on the lead."
+        )
         return
 
     # Always release outbound number (including transfers — bot leaves, cleanup happens here)
@@ -837,8 +846,6 @@ async def handle_call_completion(
             )
     else:
         logger.info(f"No outbound number id for lead: {lead.id}")
-
-    await safe_release_pod(call_sid=call_id, reason="call_completed")
 
     # Check if this is a transfer — for outcome override only
     is_transfer = (
@@ -891,7 +898,11 @@ async def handle_unanswered_calls(call_id: str):
 
     lead = await get_lead_by_call_id(call_id)
     if not lead:
-        logger.error(f"Could not find lead for call_id: {call_id}")
+        logger.error(
+            f"Could not find lead for call_id: {call_id}. "
+            f"Outbound number channel may be leaked — manual cleanup required. "
+            f"This can happen when a prior duplicate-call bug overwrote the call_id on the lead."
+        )
         return
 
     # Clean up greeting audio from Redis if it exists — do this regardless of status
@@ -906,15 +917,9 @@ async def handle_unanswered_calls(call_id: str):
             f"Failed to delete greeting audio from Redis for lead {lead.id}: {e}"
         )
 
-    # Guard: if another callback already finished this lead, skip to avoid duplicate retries.
-    # This happens when the lock race causes multiple calls for the same lead — each call's
-    # callback arrives independently and would otherwise each create a retry entry.
-    if lead.status == LeadCallStatus.FINISHED:
-        logger.info(
-            f"Lead {lead.id} is already FINISHED for call_id: {call_id}, skipping unanswered handler."
-        )
-        return
-
+    # Release outbound number channel — do this before the FINISHED guard because the
+    # channel must be freed regardless of lead status. _release_number is idempotent
+    # (SQL uses GREATEST(0, ...)), so duplicate releases are safe.
     if lead.outbound_number_id:
         outbound_number = await get_outbound_number_by_id(lead.outbound_number_id)
         if outbound_number:
@@ -925,6 +930,15 @@ async def handle_unanswered_calls(call_id: str):
             )
     else:
         logger.info(f"No outbound number id for lead: {lead.id}")
+
+    # Guard: if another callback already finished this lead, skip to avoid duplicate retries.
+    # This happens when the lock race causes multiple calls for the same lead — each call's
+    # callback arrives independently and would otherwise each create a retry entry.
+    if lead.status == LeadCallStatus.FINISHED:
+        logger.info(
+            f"Lead {lead.id} is already FINISHED for call_id: {call_id}, skipping unanswered handler."
+        )
+        return
 
     config = await _get_lead_config(lead)
     if not config:
