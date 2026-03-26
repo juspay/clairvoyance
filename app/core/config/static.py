@@ -496,6 +496,13 @@ REDIS_PORT = os.getenv("REDIS_PORT", "")
 REDIS_CLUSTER_NODES = os.getenv("REDIS_CLUSTER_NODES", "")
 REDIS_TTL = int(os.getenv("REDIS_TTL", "3600"))  # Default TTL in seconds (1 hour)
 BLACKLIST_CACHE_TTL = int(os.getenv("BLACKLIST_CACHE_TTL", "300"))  # 5 minutes
+
+# Channel release idempotency guard TTL (seconds).
+# After a call ends, a Redis SET-NX key prevents duplicate channel decrements.
+# Calls should never last this long; after TTL the key expires safely.
+CHANNEL_RELEASE_GUARD_TTL = int(
+    os.getenv("CHANNEL_RELEASE_GUARD_TTL", "3600")
+)  # 1 hour
 # ─────────────────────────────────────────────────────────────────────────────
 # Voice Agent Pod Isolation Configuration (1-pod-1-call architecture)
 # ─────────────────────────────────────────────────────────────────────────────

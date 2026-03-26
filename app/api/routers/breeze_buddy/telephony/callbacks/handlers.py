@@ -17,6 +17,7 @@ from twilio.twiml.voice_response import Connect, Stream, VoiceResponse
 
 from app.ai.voice.agents.breeze_buddy.managers.calls import (
     handle_unanswered_calls,
+    release_channel_for_call,
     update_call_recording,
 )
 from app.ai.voice.agents.breeze_buddy.services.agent_router.client import (
@@ -279,12 +280,30 @@ async def handle_callback_status(request: Request, provider: str) -> Response:
                 call_sid=str(call_sid), reason=f"status_{call_status}"
             )
 
-        # Handle failed calls for retry logic
+        # Handle failed calls — updates lead to FINISHED/NO_ANSWER and schedules
+        # retry.  Wrapped in try/except so that the backup channel release below
+        # always executes even if this throws.
         if call_status.lower() in ("no-answer", "failed", "busy"):
             logger.info(f"Call with SID {call_sid} failed with status: {call_status}")
-            # Convert to string for the handler
             if isinstance(call_sid, str):
-                await handle_unanswered_calls(call_sid)
+                try:
+                    await handle_unanswered_calls(call_sid)
+                except Exception as e:
+                    logger.error(
+                        f"handle_unanswered_calls failed for call_id {call_sid}: {e}",
+                        exc_info=True,
+                    )
+
+        # Backup channel release for ALL terminal statuses.
+        # This ensures the channel counter is decremented even if the
+        # WebSocket close handler (handle_call_completion) didn't fire
+        # (pod crash, network drop, race condition).
+        # Safe to call unconditionally: _release_number_once() uses a
+        # Redis SET-NX guard so the channel is decremented at most once
+        # per call, regardless of how many code-paths trigger the release.
+        if call_status.lower() in ended_statuses:
+            if isinstance(call_sid, str):
+                await release_channel_for_call(call_sid)
 
     return Response(status_code=200)
 

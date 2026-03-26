@@ -25,7 +25,10 @@ from app.ai.voice.agents.breeze_buddy.services.telephony.twilio.recording import
 from app.ai.voice.agents.breeze_buddy.services.telephony.utils import get_voice_provider
 from app.ai.voice.agents.breeze_buddy.template.types import TemplateModel
 from app.ai.voice.agents.breeze_buddy.utils.common import send_webhook_with_retry
-from app.core.config.static import UPLOAD_BREEZE_BUDDY_CALL_RECORDINGS_TO_CLOUD
+from app.core.config.static import (
+    CHANNEL_RELEASE_GUARD_TTL,
+    UPLOAD_BREEZE_BUDDY_CALL_RECORDINGS_TO_CLOUD,
+)
 from app.core.logger import logger
 from app.core.transport.http_client import create_aiohttp_session
 from app.database.accessor import (
@@ -198,7 +201,6 @@ async def _get_available_number(
                 number = outbound_number
 
     else:
-
         logger.info(
             f"Using backward compatible approach: looking for outbound number "
             f"matching reseller {config.reseller_id}, shop {config.merchant_id}"
@@ -279,6 +281,44 @@ async def _release_number(number_id: str, provider: CallProvider):
         await decrement_outbound_number_channels(number_id)
     elif provider == CallProvider.PLIVO:
         await decrement_outbound_number_channels(number_id)
+
+
+async def _release_number_once(call_id: str, number_id: str, provider: CallProvider):
+    """
+    Idempotent wrapper around ``_release_number``.
+
+    Uses a Redis SET-NX guard keyed by *call_id* so that the channel is
+    decremented at most once per call, regardless of how many code-paths
+    attempt the release (WS close handler, status callback, cleanup cron,
+    etc.).
+
+    If Redis is unavailable the call falls through to the raw
+    ``_release_number`` (better to risk a rare double-decrement than to
+    guarantee a leak).
+    """
+    guard_key = f"channel_released:{call_id}"
+    try:
+        redis = await get_redis_service()
+        client = await redis.get_client()
+        result = await client.set(guard_key, "1", nx=True, ex=CHANNEL_RELEASE_GUARD_TTL)
+        if not result:
+            logger.info(
+                f"Channel already released for call_id: {call_id} "
+                f"(outbound_number: {number_id}), skipping duplicate decrement"
+            )
+            return
+    except Exception as e:
+        # Redis down or transient error — fall through to release anyway
+        # to avoid permanent leak.
+        logger.warning(
+            f"Redis guard check failed for call_id: {call_id}, "
+            f"proceeding with channel release: {e}"
+        )
+
+    await _release_number(number_id, provider)
+    logger.info(
+        f"Channel released for call_id: {call_id} (outbound_number: {number_id})"
+    )
 
 
 async def _retry_call(
@@ -386,7 +426,18 @@ async def _cleanup_stuck_leads():
                     locked_lead.outbound_number_id
                 )
                 if outbound_number:
-                    await _release_number(outbound_number.id, outbound_number.provider)
+                    if locked_lead.call_id:
+                        # Use idempotent release when call_id is available
+                        await _release_number_once(
+                            locked_lead.call_id,
+                            outbound_number.id,
+                            outbound_number.provider,
+                        )
+                    else:
+                        # No call_id (call was never initiated) — raw release is safe
+                        await _release_number(
+                            outbound_number.id, outbound_number.provider
+                        )
 
             # Only retry outbound calls - inbound calls should not be retried
             config = await _get_lead_config(locked_lead)
@@ -415,6 +466,8 @@ async def process_backlog_leads():
 
     async with create_aiohttp_session() as session:
         for lead in leads:
+            number_to_use = None  # Track acquired number for cleanup on exception
+            number_acquired = False  # Only True after _acquire_number succeeds
             try:
                 # Atomically acquire lock AND verify status is still BACKLOG in one DB trip.
                 # Multiple concurrent process_backlog_leads invocations hold stale snapshots
@@ -509,6 +562,7 @@ async def process_backlog_leads():
                     number_to_use = None
                     await release_lock_on_lead_by_id(locked_lead.id)
                     continue
+                number_acquired = True
 
                 call_provider = get_voice_provider(
                     number_to_use.provider,
@@ -808,7 +862,28 @@ async def process_backlog_leads():
                 await release_lock_on_lead_by_id(locked_lead.id)
 
             except Exception as e:
-                logger.error(f"Error processing lead {lead.id}: {e}")
+                logger.error(f"Error processing lead {lead.id}: {e}", exc_info=True)
+                # Release the channel only if _acquire_number actually succeeded.
+                # number_to_use is set before acquisition, so checking it alone
+                # would incorrectly decrement if _acquire_number raised.
+                try:
+                    if number_to_use and number_acquired:
+                        await _release_number(number_to_use.id, number_to_use.provider)
+                        logger.info(
+                            f"Released channel for outbound_number {number_to_use.id} "
+                            f"after exception in lead {lead.id}"
+                        )
+                except Exception as release_err:
+                    logger.error(
+                        f"Failed to release channel for lead {lead.id} during error cleanup: {release_err}"
+                    )
+                # Always release the lock so the lead can be retried by the next cron run
+                try:
+                    await release_lock_on_lead_by_id(lead.id)
+                except Exception as lock_err:
+                    logger.error(
+                        f"Failed to release lock for lead {lead.id} during error cleanup: {lock_err}"
+                    )
 
 
 async def handle_call_completion(
@@ -830,7 +905,9 @@ async def handle_call_completion(
     if lead.outbound_number_id:
         outbound_number = await get_outbound_number_by_id(lead.outbound_number_id)
         if outbound_number:
-            await _release_number(outbound_number.id, outbound_number.provider)
+            await _release_number_once(
+                call_id, outbound_number.id, outbound_number.provider
+            )
         else:
             logger.error(
                 f"Could not find outbound number with id: {lead.outbound_number_id} to release."
@@ -873,6 +950,48 @@ async def handle_call_completion(
         await _retry_call(lead, config, outcome)
 
     return updated_lead
+
+
+async def release_channel_for_call(call_id: str):
+    """
+    Release the outbound number channel for a call.
+
+    This is a lightweight backup release called from the status callback for
+    ALL terminal call statuses (completed, busy, failed, no-answer, etc.).
+    It only decrements the channel counter — it does NOT update lead status,
+    outcome, or schedule retries.
+
+    Safe to call even if the channel was already released by the WebSocket
+    close handler (handle_call_completion) or handle_unanswered_calls,
+    because ``_release_number_once`` uses a Redis SET-NX guard to ensure the
+    channel is decremented at most once per call.
+    """
+    logger.info(f"Backup channel release for call_id: {call_id}")
+
+    lead = await get_lead_by_call_id(call_id)
+    if not lead:
+        logger.warning(
+            f"Could not find lead for call_id: {call_id} during backup channel release"
+        )
+        return
+
+    if lead.outbound_number_id:
+        outbound_number = await get_outbound_number_by_id(lead.outbound_number_id)
+        if outbound_number:
+            await _release_number_once(
+                call_id, outbound_number.id, outbound_number.provider
+            )
+            logger.info(
+                f"Backup channel release: decremented channel for outbound_number "
+                f"{outbound_number.id} (call_id: {call_id})"
+            )
+        else:
+            logger.error(
+                f"Could not find outbound number with id: {lead.outbound_number_id} "
+                f"for backup channel release."
+            )
+    else:
+        logger.info(f"No outbound_number_id for lead: {lead.id}, no channel to release")
 
 
 async def handle_unanswered_calls(call_id: str):
@@ -918,7 +1037,9 @@ async def handle_unanswered_calls(call_id: str):
     if lead.outbound_number_id:
         outbound_number = await get_outbound_number_by_id(lead.outbound_number_id)
         if outbound_number:
-            await _release_number(outbound_number.id, outbound_number.provider)
+            await _release_number_once(
+                call_id, outbound_number.id, outbound_number.provider
+            )
         else:
             logger.error(
                 f"Could not find outbound number with id: {lead.outbound_number_id} to release."
