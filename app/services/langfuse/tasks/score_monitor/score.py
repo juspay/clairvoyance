@@ -254,6 +254,7 @@ class ScoreMonitor:
         evaluator_name: str,
         score: Dict[str, Any],
         trace_details: Optional[Dict[str, Any]] = None,
+        include_tags: bool = True,
     ) -> bool:
         """
         Send a Slack alert for a score below threshold (failure).
@@ -263,6 +264,9 @@ class ScoreMonitor:
             evaluator_name: Name of the evaluator that produced the score
             score: Score dictionary with details
             trace_details: Optional trace metadata
+            include_tags: Whether to include @mentions in the Slack message.
+                Defaults to True. Set to False to suppress tagging (e.g., after
+                the first alert in a batch to reduce notification noise).
 
         Returns:
             True if alert was sent successfully, False otherwise
@@ -342,6 +346,7 @@ class ScoreMonitor:
             sections=sections if sections else None,
             links=links,
             fallback_text=f"LLM Judge Failure: {evaluator_name} - Score {score_value}",
+            include_tags=include_tags,
         )
 
         # Track alert count in Redis after successful Slack send
@@ -910,6 +915,8 @@ class ScoreMonitor:
         )
 
         # Send individual alerts for each failing score using cached trace details
+        # Only tag @mentions on the first alert per check cycle to reduce Slack noise
+        is_first_alert = True
         for evaluator_name, failing_scores in failing_scores_by_evaluator.items():
             for score in failing_scores:
                 try:
@@ -919,12 +926,18 @@ class ScoreMonitor:
                         trace_details_cache.get(trace_id) if trace_id else None
                     )
 
-                    # Send Slack alert
-                    await self.send_score_alert(
-                        evaluator_name=evaluator_name,
-                        score=score,
-                        trace_details=trace_details,
-                    )
+                    # Send Slack alert (only tag users on the first alert)
+                    try:
+                        await self.send_score_alert(
+                            evaluator_name=evaluator_name,
+                            score=score,
+                            trace_details=trace_details,
+                            include_tags=is_first_alert,
+                        )
+                    finally:
+                        # Always flip after the first attempt (success or failure)
+                        # so later alerts in the same cycle never include @mentions
+                        is_first_alert = False
 
                 except Exception as alert_error:
                     logger.error(

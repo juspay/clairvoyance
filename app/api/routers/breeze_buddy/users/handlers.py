@@ -165,8 +165,25 @@ async def _check_update_delete_access(
         # Check merchant_ids scope (resolves wildcard through owner chain)
         allowed = await resolve_merchant_ids(current_user)
         if allowed is not None:
-            # Reseller must have access to ALL of target's merchant_ids (subset check)
-            if not all(mid in allowed for mid in target_user.merchant_ids):
+            # Resolve target's effective merchant_ids (handles wildcard via owner chain)
+            # to prevent cross-tenant access when target has ["*"] scope.
+            if "*" in (target_user.merchant_ids or []):
+                target_info = UserInfo(
+                    id=target_user.id,
+                    username=target_user.username,
+                    role=target_user.role,
+                    reseller_ids=target_user.reseller_ids,
+                    merchant_ids=target_user.merchant_ids,
+                    owner_id=target_user.owner_id,
+                )
+                effective = await resolve_merchant_ids(target_info)
+                # effective=None means admin-owned scope — deny for non-admin callers
+                if effective is None or not all(mid in allowed for mid in effective):
+                    raise HTTPException(
+                        status_code=403,
+                        detail="Target user is outside your merchant scope",
+                    )
+            elif not all(mid in allowed for mid in target_user.merchant_ids):
                 raise HTTPException(
                     status_code=403, detail="Target user is outside your merchant scope"
                 )
@@ -180,8 +197,25 @@ async def _check_update_delete_access(
         # Check merchant_ids scope (resolves wildcard through owner chain)
         allowed = await resolve_merchant_ids(current_user)
         if allowed is not None:
-            # Merchant must have access to ALL of target's merchant_ids (subset check)
-            if not all(mid in allowed for mid in target_user.merchant_ids):
+            # Resolve target's effective merchant_ids (handles wildcard via owner chain)
+            # to prevent cross-tenant access when target has ["*"] scope.
+            if "*" in (target_user.merchant_ids or []):
+                target_info = UserInfo(
+                    id=target_user.id,
+                    username=target_user.username,
+                    role=target_user.role,
+                    reseller_ids=target_user.reseller_ids,
+                    merchant_ids=target_user.merchant_ids,
+                    owner_id=target_user.owner_id,
+                )
+                effective = await resolve_merchant_ids(target_info)
+                # effective=None means admin-owned scope — deny for non-admin callers
+                if effective is None or not all(mid in allowed for mid in effective):
+                    raise HTTPException(
+                        status_code=403,
+                        detail="Target user is outside your merchant scope",
+                    )
+            elif not all(mid in allowed for mid in target_user.merchant_ids):
                 raise HTTPException(
                     status_code=403, detail="Target user is outside your merchant scope"
                 )
@@ -290,6 +324,7 @@ async def get_all_users_handler(
     role_filter: Optional[str],
     reseller_id_filter: Optional[str],
     merchant_identifier_filter: Optional[str],
+    owner_id_filter: Optional[str],
     is_active_filter: Optional[bool],
     sort_by: str,
     sort_order: str,
@@ -320,6 +355,7 @@ async def get_all_users_handler(
             role_filter=role_filter,
             reseller_id_filter=reseller_id_filter,
             merchant_identifier_filter=merchant_identifier_filter,
+            owner_id_filter=owner_id_filter,
             is_active_filter=is_active_filter,
             allowed_merchant_ids=allowed_merchant_ids,
             excluded_roles=excluded_roles,
@@ -365,8 +401,26 @@ async def get_user_by_id_handler(user_id: str, current_user: UserInfo) -> UserRe
                 # Resolve wildcard through owner chain for proper scoping
                 allowed = await resolve_merchant_ids(current_user)
                 if allowed is not None:
-                    # Must have at least one overlapping merchant_id
-                    if not any(mid in allowed for mid in user.merchant_ids):
+                    # Resolve target's effective merchant_ids (handles wildcard via owner
+                    # chain) to prevent cross-tenant exposure when target has ["*"] scope.
+                    if "*" in (user.merchant_ids or []):
+                        target_info = UserInfo(
+                            id=user.id,
+                            username=user.username,
+                            role=user.role,
+                            reseller_ids=user.reseller_ids,
+                            merchant_ids=user.merchant_ids,
+                            owner_id=user.owner_id,
+                        )
+                        effective = await resolve_merchant_ids(target_info)
+                        # effective=None means admin-owned scope — deny for non-admin callers
+                        if effective is None or not any(
+                            mid in allowed for mid in effective
+                        ):
+                            raise HTTPException(
+                                status_code=403, detail="Access denied to this user"
+                            )
+                    elif not any(mid in allowed for mid in user.merchant_ids):
                         raise HTTPException(
                             status_code=403, detail="Access denied to this user"
                         )

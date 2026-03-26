@@ -45,6 +45,7 @@ from app.database.accessor import (
     get_lead_by_call_id,
     get_lead_by_id,
     get_outbound_number_by_id,
+    get_template_by_id,
     get_template_by_merchant,
     handle_lead_abort,
     is_number_blacklisted,
@@ -116,20 +117,66 @@ async def push_lead_handler(req: PushLeadRequest, current_user: UserInfo) -> Dic
 
     logger.info(
         f"User {current_user.username} (role: {current_user.role}) pushing lead "
-        f"for reseller: {req.reseller_id}, template: {req.template}"
+        f"for reseller: {req.reseller_id}, template: {req.template}, template_id: {req.template_id}"
     )
 
     try:
-        # RBAC:
-        # Fetch template to get expected payload schema
-        template = await get_template_by_merchant(
-            req.reseller_id, req.merchant_id, req.template
-        )
+        # Fetch template: prefer template_id (direct UUID lookup), fall back to name-based
+        template = None
+        if req.template_id:
+            template = await get_template_by_id(req.template_id)
+            if template:
+                # Enforce that the template belongs to the requested reseller/merchant
+                if template.reseller_id != req.reseller_id:
+                    logger.warning(
+                        "Template ID %s does not belong to reseller %s (found reseller_id=%s)",
+                        req.template_id,
+                        req.reseller_id,
+                        template.reseller_id,
+                    )
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail=f"Template not found for reseller: {req.reseller_id} "
+                        f"(template_id={req.template_id}, template={req.template})",
+                    )
+                if (
+                    req.merchant_id is not None
+                    and template.merchant_id is not None
+                    and template.merchant_id != req.merchant_id
+                ):
+                    logger.warning(
+                        "Template ID %s does not belong to merchant %s "
+                        "(found merchant_id=%s, reseller_id=%s)",
+                        req.template_id,
+                        req.merchant_id,
+                        template.merchant_id,
+                        template.reseller_id,
+                    )
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail=f"Template not found for reseller: {req.reseller_id} "
+                        f"(template_id={req.template_id}, template={req.template})",
+                    )
+                # If the template is merchant-specific but request omits merchant_id,
+                # inherit the template's merchant_id so downstream config lookup and
+                # lead creation are consistent with the resolved template's scope.
+                if template.merchant_id is not None and req.merchant_id is None:
+                    logger.info(
+                        "Inheriting merchant_id=%s from template %s (not provided in request)",
+                        template.merchant_id,
+                        req.template_id,
+                    )
+                    req = req.model_copy(update={"merchant_id": template.merchant_id})
+        if not template and req.template:
+            template = await get_template_by_merchant(
+                req.reseller_id, req.merchant_id, req.template
+            )
 
         if not template:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Template '{req.template}' not found for reseller: {req.reseller_id}",
+                detail=f"Template not found for reseller: {req.reseller_id} "
+                f"(template_id={req.template_id}, template={req.template})",
             )
 
         # Check if customer phone number is blacklisted
@@ -174,14 +221,34 @@ async def push_lead_handler(req: PushLeadRequest, current_user: UserInfo) -> Dic
                 detail=f"Call execution config not found for reseller_id: {req.reseller_id}",
             )
 
-        config = next(
-            (c for c in call_execution_configs if c.template == req.template), None
-        )
+        # Two-step config match: prefer exact template_id, fall back to name
+        # (only consider name-match for configs that have no template_id set,
+        #  to avoid accidentally picking a config with a conflicting template_id)
+        config = None
+        if template.id:
+            config = next(
+                (
+                    c
+                    for c in call_execution_configs
+                    if c.template_id and c.template_id == str(template.id)
+                ),
+                None,
+            )
+        if not config:
+            config = next(
+                (
+                    c
+                    for c in call_execution_configs
+                    if c.template == template.name
+                    and (not template.id or not c.template_id)
+                ),
+                None,
+            )
 
         if not config:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Call execution config not found for template: {req.template}",
+                detail=f"Call execution config not found for template: {template.name}",
             )
 
         uuid = str(uuid4())
@@ -239,7 +306,7 @@ async def push_lead_handler(req: PushLeadRequest, current_user: UserInfo) -> Dic
         lead_call_tracker = await create_lead_call_tracker(
             id=uuid,
             reseller_id=req.reseller_id,
-            template=req.template,
+            template=template.name,
             template_id=str(template.id),
             merchant_id=req.merchant_id,
             next_attempt_at=next_attempt_at,

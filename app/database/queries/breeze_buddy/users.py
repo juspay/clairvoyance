@@ -184,7 +184,9 @@ def get_all_users_query(
 
     # RBAC filtering - filter by merchant_ids column
     # allowed_merchant_ids comes from resolve_merchant_ids() which already
-    # resolves reseller_ids → merchant_ids hierarchically
+    # resolves reseller_ids → merchant_ids hierarchically (wildcards resolved).
+    # Only match rows with an explicit merchant_id overlap — wildcard merchant_ids
+    # in target rows are NOT treated as universal allow to prevent cross-tenant leaks.
     if allowed_merchant_ids is not None and "*" not in allowed_merchant_ids:
         where_conditions.append(f"merchant_ids ?| ${param_idx}")
         params.append(allowed_merchant_ids)

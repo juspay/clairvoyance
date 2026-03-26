@@ -48,7 +48,7 @@ from app.database.accessor import (
     get_leads_by_status_and_time_before,
     get_outbound_number_based_on_status_and_provider,
     get_outbound_number_by_id,
-    get_template_by_merchant,
+    get_template_by_id_with_fallback,
     increment_outbound_number_channels,
     is_number_blacklisted,
     release_lock_on_lead_by_id,
@@ -85,9 +85,29 @@ async def _get_lead_config(lead: LeadCallTracker) -> Optional[CallExecutionConfi
         )
         return None
 
-    config = next((c for c in configs if c.template == lead.template), None)
+    # Two-step: prefer exact template_id match; fall back to name only when
+    # no template_id match exists or the config has no template_id of its own
+    # (prevents accidentally picking a config with a conflicting template_id).
+    config: Optional[CallExecutionConfig] = None
+    if lead.template_id:
+        config = next(
+            (c for c in configs if c.template_id and c.template_id == lead.template_id),
+            None,
+        )
     if not config:
-        logger.warning(f"No call execution config found for template: {lead.template}")
+        config = next(
+            (
+                c
+                for c in configs
+                if c.template == lead.template
+                and (not lead.template_id or not c.template_id)
+            ),
+            None,
+        )
+    if not config:
+        logger.warning(
+            f"No call execution config found for template: {lead.template} (template_id={lead.template_id})"
+        )
     return config
 
 
@@ -345,6 +365,7 @@ async def _retry_call(
             id=str(uuid.uuid4()),
             reseller_id=lead.reseller_id,
             template=lead.template,
+            template_id=lead.template_id,
             merchant_id=lead.merchant_id,
             next_attempt_at=next_attempt_at,
             payload=lead.payload,
@@ -489,7 +510,8 @@ async def process_backlog_leads():
                     )
                     await release_lock_on_lead_by_id(locked_lead.id)
                     continue
-                template = await get_template_by_merchant(
+                template = await get_template_by_id_with_fallback(
+                    template_id=locked_lead.template_id,
                     reseller_id=config.reseller_id,
                     merchant_id=config.merchant_id,
                     name=config.template,
