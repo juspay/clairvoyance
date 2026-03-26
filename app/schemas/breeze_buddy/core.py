@@ -146,6 +146,7 @@ class LeadCallTracker(BaseModel):
     outbound_number_id: Optional[str] = None
     reseller_id: str
     template: str
+    template_id: Optional[str] = None
     merchant_id: Optional[str] = None
     request_id: Optional[str] = None
     attempt_count: int = 0
@@ -322,6 +323,7 @@ class CallExecutionConfig(BaseModel):
     calling_provider: CallProvider
     reseller_id: str
     template: str
+    template_id: Optional[str] = None
     merchant_id: Optional[str] = None
     enable_international_call: bool = True
     enable_calling: bool = True

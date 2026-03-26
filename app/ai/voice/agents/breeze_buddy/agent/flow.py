@@ -42,6 +42,7 @@ async def load_template_config(
         template=lead.template,
         merchant_id=lead.merchant_id if lead else None,
         call_payload=lead.payload,
+        template_id=lead.template_id,
     )
 
     apply_playground_config_overrides(lead, template)

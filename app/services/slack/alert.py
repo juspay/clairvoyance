@@ -28,6 +28,7 @@ class Alert:
         sections: Optional[List[Dict[str, str]]] = None,
         links: Optional[List[Dict[str, str]]] = None,
         fallback_text: Optional[str] = None,
+        include_tags: bool = True,
     ) -> bool:
         """
         Generic function to send Slack alerts with customizable content.
@@ -38,6 +39,8 @@ class Alert:
             sections: Optional list of section dicts with 'title' and 'text' keys
             links: Optional list of link dicts with 'text' and 'url' keys
             fallback_text: Optional fallback text for notifications (defaults to title)
+            include_tags: Whether to include @mention tags (default True).
+                Set to False to suppress tagging and reduce Slack notification noise.
 
         Returns:
             True if sent successfully, False otherwise
@@ -99,7 +102,7 @@ class Alert:
                     )
 
             # Add notifications section if users are configured for tagging
-            if SLACK_TAG_USERS:
+            if include_tags and SLACK_TAG_USERS:
                 # Parse comma-separated usernames and filter out empty ones
                 users = [
                     user.strip() for user in SLACK_TAG_USERS.split(",") if user.strip()

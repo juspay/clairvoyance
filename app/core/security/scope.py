@@ -61,20 +61,25 @@ async def _resolve_user_scopes(
 
     # Case: Wildcard merchants → walk up the owner chain to find scope
     if not owner_id:
-        logger.warning(
-            f"User {username} has wildcard scope but no owner_id to resolve from"
+        # No owner to narrow scope — treat as unrestricted
+        logger.info(
+            f"User {username} has wildcard merchant_ids with no owner_id — granting unrestricted access"
         )
-        return []
+        return None
 
     try:
         owner = await get_user_by_id(owner_id)
     except Exception as e:
         logger.error(f"Failed to resolve owner {owner_id} for user {username}: {e}")
-        return []
+        return None  # Can't resolve → grant unrestricted rather than lock out
 
     if not owner:
-        logger.warning(f"User {username} has owner_id {owner_id} but owner not found")
-        return []
+        # Owner not in DB (e.g. legacy_admin) — treat as admin-equivalent
+        logger.info(
+            f"User {username} has owner_id {owner_id} but owner not found in DB — "
+            "granting unrestricted merchant access"
+        )
+        return None
 
     # Owner is admin → truly unrestricted
     if owner.role == UserRole.ADMIN:
@@ -206,10 +211,11 @@ async def _resolve_reseller_scopes(
 
     # Wildcard → walk up the owner chain
     if not owner_id:
-        logger.warning(
-            f"User {username} has wildcard reseller_ids but no owner_id to resolve from"
+        # No owner to narrow scope — treat as unrestricted
+        logger.info(
+            f"User {username} has wildcard reseller_ids with no owner_id — granting unrestricted access"
         )
-        return []
+        return None
 
     try:
         owner = await get_user_by_id(owner_id)
@@ -217,11 +223,15 @@ async def _resolve_reseller_scopes(
         logger.error(
             f"Failed to resolve owner {owner_id} for reseller_ids of user {username}: {e}"
         )
-        return []
+        return None  # Can't resolve → grant unrestricted rather than lock out
 
     if not owner:
-        logger.warning(f"User {username} has owner_id {owner_id} but owner not found")
-        return []
+        # Owner not in DB (e.g. legacy_admin) — treat as admin-equivalent
+        logger.info(
+            f"User {username} has owner_id {owner_id} but owner not found in DB — "
+            "granting unrestricted reseller access"
+        )
+        return None
 
     # Owner is admin → truly unrestricted
     if owner.role == UserRole.ADMIN:

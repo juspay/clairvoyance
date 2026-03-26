@@ -74,6 +74,10 @@ async def list_users(
         None,
         description="Filter by merchant identifier (checks if in merchant_ids array)",
     ),
+    owner_id: Optional[str] = Query(
+        None,
+        description="Filter by owner_id (exact match - the creator's user ID)",
+    ),
     is_active: Optional[bool] = Query(None, description="Filter by active status"),
     sort_by: str = Query(
         "created_at",
@@ -116,6 +120,7 @@ async def list_users(
         role_filter=role,
         reseller_id_filter=reseller_id,
         merchant_identifier_filter=merchant_id,
+        owner_id_filter=owner_id,
         is_active_filter=is_active,
         sort_by=sort_by,
         sort_order=sort_order,
