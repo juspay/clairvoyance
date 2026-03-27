@@ -10,6 +10,9 @@ from uuid import uuid4
 
 from fastapi import HTTPException, status
 
+from app.ai.voice.agents.breeze_buddy.managers.lead_dispatcher import (
+    get_lead_dispatcher,
+)
 from app.ai.voice.agents.breeze_buddy.services.telephony.exotel.recording import (
     download_call_recording as download_call_recording_exotel,
 )
@@ -233,6 +236,13 @@ async def push_lead_handler(req: PushLeadRequest, current_user: UserInfo) -> Dic
             )
 
         logger.info(f"Lead call tracker {req.request_id} added to queue with ID {uuid}")
+
+        # Notify dispatcher about the new lead (event-driven processing)
+        dispatcher = get_lead_dispatcher()
+        if dispatcher:
+            execution_mode = req.execution_mode or ExecutionMode.TELEPHONY
+            if execution_mode == ExecutionMode.TELEPHONY:
+                await dispatcher.on_lead_created(uuid, next_attempt_at)
 
         return {
             "status": "queued",

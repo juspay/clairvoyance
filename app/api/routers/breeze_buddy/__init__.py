@@ -6,12 +6,11 @@ from app.api.routers.breeze_buddy.agent_router.health import router as pod_route
 # Modern RESTful routers
 from app.api.routers.breeze_buddy.analytics import router as analytics_router
 
-# Auth, telephony, cron, websocket
+# Auth, telephony, websocket
 from app.api.routers.breeze_buddy.auth import router as auth_router
 from app.api.routers.breeze_buddy.blacklist import router as blacklist_router
 from app.api.routers.breeze_buddy.configurations import router as configurations_router
 from app.api.routers.breeze_buddy.credentials import router as credentials_router
-from app.api.routers.breeze_buddy.cron import router as cron_router
 
 # Daily transport (web/mobile clients via Daily.co)
 from app.api.routers.breeze_buddy.daily import router as daily_router
@@ -65,9 +64,6 @@ router.include_router(leads_router, prefix="", tags=["leads"])
 
 # Telephony (webhook handlers for call providers)
 router.include_router(telephony_router, prefix="", tags=["telephony"])
-
-# Cron (scheduled tasks)
-router.include_router(cron_router, prefix="", tags=["cron"])
 
 # WebSocket (real-time communication)
 router.include_router(websocket_router, prefix="", tags=["websocket"])

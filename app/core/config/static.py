@@ -562,6 +562,14 @@ BACKGROUND_TASKS_LOOP_INTERVAL_SECONDS = int(
     os.environ.get("BACKGROUND_TASKS_LOOP_INTERVAL_SECONDS", "60")
 )  # How often the scheduler checks tasks (in seconds)
 
+# Lead Dispatcher Configuration
+BACKLOG_WORKER_COUNT = int(
+    os.environ.get("BACKLOG_WORKER_COUNT", "20")
+)  # Number of concurrent lead processing workers
+CHANNEL_RECONCILIATION_INTERVAL_SECONDS = int(
+    os.environ.get("CHANNEL_RECONCILIATION_INTERVAL_SECONDS", "300")
+)  # How often to reconcile channel counts (in seconds)
+
 # Langfuse Score Monitoring Configuration
 ENABLE_BB_LANGFUSE_MONITORING_LOOP = (
     os.environ.get("ENABLE_BB_LANGFUSE_MONITORING_LOOP", "false").lower() == "true"

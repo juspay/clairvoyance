@@ -1,14 +1,22 @@
 """
-Cron manager for handling background tasks.
+Call lifecycle manager — handles lead processing, call initiation, and completion.
 """
 
+import asyncio
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
+import aiohttp
+
+from app.ai.voice.agents.breeze_buddy.managers.lead_dispatcher import (
+    get_lead_dispatcher,
+)
 from app.ai.voice.agents.breeze_buddy.managers.pre_checks import run_pre_checks
-from app.ai.voice.agents.breeze_buddy.managers.utils import (
-    prepare_and_store_initial_greeting,
+from app.ai.voice.agents.breeze_buddy.managers.resource_manager import (
+    CallResourceManager,
+    _acquire_number,
+    _release_number,
 )
 from app.ai.voice.agents.breeze_buddy.services.agent_router.client import (
     safe_release_pod,
@@ -31,21 +39,18 @@ from app.core.transport.http_client import create_aiohttp_session
 from app.database.accessor import (
     acquire_lock_on_lead_by_id,
     create_lead_call_tracker,
-    decrement_outbound_number_channels,
     get_call_execution_config_by_merchant_id,
     get_lead_by_call_id,
-    get_leads_based_on_status_and_next_attempt,
     get_leads_by_status_and_time_before,
     get_outbound_number_based_on_status_and_provider,
     get_outbound_number_by_id,
     get_template_by_merchant,
-    increment_outbound_number_channels,
     is_number_blacklisted,
     release_lock_on_lead_by_id,
     update_lead_call_completion_details,
     update_lead_call_details,
     update_lead_call_recording_url,
-    update_outbound_number_status,
+    update_lead_next_attempt_at,
 )
 from app.schemas import (
     CallDirection,
@@ -165,122 +170,6 @@ async def _run_pre_checks_for_lead(
     return False
 
 
-async def _get_available_number(
-    config: CallExecutionConfig,
-    template: Optional[TemplateModel],
-) -> Optional[OutboundNumber]:
-    """
-    Finds an available outbound number for a given configuration.
-
-    First tries the new approach (template with outbound_number_id).
-    Falls back to backward compatible approach (matching by reseller/shop).
-    """
-
-    number = None
-
-    if template and template.outbound_number_id:
-        logger.info(
-            f"Using new approach: template {config.template} has outbound_number_id {template.outbound_number_id}"
-        )
-        outbound_number = await get_outbound_number_by_id(template.outbound_number_id)
-
-        if outbound_number and outbound_number.status == OutboundNumberStatus.AVAILABLE:
-            if outbound_number.provider == CallProvider.EXOTEL:
-                if (
-                    outbound_number.channels is not None
-                    and outbound_number.maximum_channels is not None
-                    and outbound_number.channels < outbound_number.maximum_channels
-                ):
-                    number = outbound_number
-            elif outbound_number.provider == CallProvider.TWILIO:
-                number = outbound_number
-            elif outbound_number.provider == CallProvider.PLIVO:
-                number = outbound_number
-
-    else:
-
-        logger.info(
-            f"Using backward compatible approach: looking for outbound number "
-            f"matching reseller {config.reseller_id}, shop {config.merchant_id}"
-        )
-
-        # Get all available numbers
-        all_available_numbers = await get_outbound_number_based_on_status_and_provider(
-            OutboundNumberStatus.AVAILABLE, config.calling_provider
-        )
-
-        # Filter by reseller_id and merchant_id as none for fallback
-        matching_numbers = [
-            n
-            for n in all_available_numbers
-            if n.reseller_id is None and n.merchant_id is None
-        ]
-
-        if matching_numbers:
-            for num in matching_numbers:
-                if num.provider == CallProvider.EXOTEL:
-                    if (
-                        num.channels is not None
-                        and num.maximum_channels is not None
-                        and num.channels < num.maximum_channels
-                    ):
-                        number = num
-                        break
-                else:
-                    number = num
-                    break
-
-    if not number:
-        # Support both new and old field names for config
-        config_reseller_id = config.reseller_id
-        config_merchant_id = config.merchant_id
-        logger.warning(
-            f"No outbound number found for reseller {config_reseller_id}, "
-            f"template {config.template}, shop {config_merchant_id}"
-        )
-        return None
-
-    logger.info(
-        f"Using outbound number {number.number} (provider: {number.provider}) "
-        f"for template {config.template}, reseller {config.reseller_id}, shop {config.merchant_id}"
-    )
-    return number
-
-
-async def _acquire_number(number: OutboundNumber) -> bool:
-    """
-    Marks an outbound number as in use.
-    Uses atomic increment to avoid race conditions.
-    For Exotel, only succeeds if channels < maximum_channels.
-    Returns True if acquisition succeeded, False if at capacity.
-    """
-    if number.provider == CallProvider.TWILIO:
-        result = await update_outbound_number_status(
-            number.id, OutboundNumberStatus.IN_USE
-        )
-        return result is not None
-    elif number.provider == CallProvider.EXOTEL:
-        result = await increment_outbound_number_channels(number.id)
-        return result is not None
-    elif number.provider == CallProvider.PLIVO:
-        result = await increment_outbound_number_channels(number.id)
-        return result is not None
-    return False
-
-
-async def _release_number(number_id: str, provider: CallProvider):
-    """
-    Releases an outbound number, making it available for other calls.
-    Uses atomic decrement to avoid race conditions.
-    """
-    if provider == CallProvider.TWILIO:
-        await update_outbound_number_status(number_id, OutboundNumberStatus.AVAILABLE)
-    elif provider == CallProvider.EXOTEL:
-        await decrement_outbound_number_channels(number_id)
-    elif provider == CallProvider.PLIVO:
-        await decrement_outbound_number_channels(number_id)
-
-
 async def _retry_call(
     lead: LeadCallTracker, config: CallExecutionConfig, outcome: Optional[str] = None
 ):
@@ -331,8 +220,9 @@ async def _retry_call(
         next_attempt_at = datetime.now(timezone.utc) + timedelta(
             seconds=config.retry_offset
         )
+        new_lead_id = str(uuid.uuid4())
         await create_lead_call_tracker(
-            id=str(uuid.uuid4()),
+            id=new_lead_id,
             reseller_id=lead.reseller_id,
             template=lead.template,
             merchant_id=lead.merchant_id,
@@ -343,11 +233,16 @@ async def _retry_call(
             meta_data={},
             call_direction=lead.call_direction,  # Inherit call direction from parent lead
         )
+        # Notify dispatcher about the new retry lead
+        dispatcher = get_lead_dispatcher()
+        if dispatcher:
+            await dispatcher.on_lead_created(new_lead_id, next_attempt_at)
 
 
-async def _cleanup_stuck_leads():
+async def cleanup_stuck_leads():
     """
-    Cleans up leads that are stuck in the PROCESSING state.
+    Cleans up leads that are stuck in the PROCESSING state for >10 minutes.
+    Releases all resources (pod, number, greeting) and optionally retries.
     """
     logger.info("Cleaning up stuck leads...")
     stale_time = datetime.now(timezone.utc) - timedelta(minutes=10)
@@ -360,19 +255,36 @@ async def _cleanup_stuck_leads():
     for lead in stale_leads:
         locked_lead = None
         try:
-            # Atomically acquire lock AND verify still in PROCESSING (single DB trip)
             locked_lead = await acquire_lock_on_lead_by_id(
                 lead.id, expected_status=LeadCallStatus.PROCESSING
             )
             if not locked_lead:
-                logger.info(
-                    f"Stuck lead {lead.id} is already locked by another process, skipping cleanup."
-                )
                 continue
 
-            logger.info(f"Successfully locked stuck lead {lead.id} for cleanup.")
+            logger.info(f"Cleaning up stuck lead {locked_lead.id}")
 
-            # Close the stuck record so it won't be picked again
+            # Release pod if call_id exists (idempotent)
+            if locked_lead.call_id:
+                await safe_release_pod(
+                    call_sid=locked_lead.call_id, reason="stuck_timeout"
+                )
+
+            # Release outbound number
+            if locked_lead.outbound_number_id:
+                outbound_number = await get_outbound_number_by_id(
+                    locked_lead.outbound_number_id
+                )
+                if outbound_number:
+                    await _release_number(outbound_number.id, outbound_number.provider)
+
+            # Delete greeting from Redis (idempotent)
+            try:
+                redis = await get_redis_service()
+                await redis.delete(f"greeting:{locked_lead.id}")
+            except Exception:
+                pass
+
+            # Mark FINISHED
             await update_lead_call_completion_details(
                 id=locked_lead.id,
                 status=LeadCallStatus.FINISHED,
@@ -381,17 +293,15 @@ async def _cleanup_stuck_leads():
                 call_end_time=datetime.now(timezone.utc),
             )
 
-            if locked_lead.outbound_number_id:
-                outbound_number = await get_outbound_number_by_id(
-                    locked_lead.outbound_number_id
-                )
-                if outbound_number:
-                    await _release_number(outbound_number.id, outbound_number.provider)
-
-            # Only retry outbound calls - inbound calls should not be retried
+            # Retry outbound calls
             config = await _get_lead_config(locked_lead)
             if config and locked_lead.call_direction == CallDirection.OUTBOUND:
                 await _retry_call(locked_lead, config)
+
+            # Signal channel freed
+            dispatcher = get_lead_dispatcher()
+            if dispatcher:
+                await dispatcher.on_channel_freed()
 
         except Exception as e:
             logger.error(f"Error cleaning up stuck lead {lead.id}: {e}")
@@ -401,560 +311,440 @@ async def _cleanup_stuck_leads():
                 await release_lock_on_lead_by_id(locked_lead.id)
 
 
-async def process_backlog_leads():
-    """
-    Processes backlog leads and initiates calls.
-    """
-    await _cleanup_stuck_leads()
+async def process_single_lead(lead_id: str, session: aiohttp.ClientSession) -> None:
+    """Process a single BACKLOG lead end-to-end.
 
-    logger.info("Processing backlog leads...")
-    leads = await get_leads_based_on_status_and_next_attempt(
-        LeadCallStatus.BACKLOG, datetime.now(timezone.utc)
+    Grabs the lead atomically (SKIP LOCKED), validates, acquires resources,
+    makes the call, and cleans up on any failure via CallResourceManager.
+
+    Called by LeadDispatcher workers. The lead may already be locked by
+    grab_next_backlog_lead (on_channel_freed path) or may need locking
+    (on_lead_created / startup recovery path).
+    """
+    # Try to lock the lead. If already locked by grab_next_backlog_lead,
+    # this will return the already-locked lead. If it was enqueued by ID
+    # (from on_lead_created), we need to lock it now.
+    locked_lead = await acquire_lock_on_lead_by_id(
+        lead_id, expected_status=LeadCallStatus.BACKLOG
     )
-    logger.info(f"Found {len(leads)} leads to process.")
+    if not locked_lead:
+        logger.debug(f"Lead {lead_id} already processed or locked, skipping")
+        return
 
-    async with create_aiohttp_session() as session:
-        for lead in leads:
-            try:
-                # Atomically acquire lock AND verify status is still BACKLOG in one DB trip.
-                # Multiple concurrent process_backlog_leads invocations hold stale snapshots
-                # of BACKLOG leads — by the time we reach this lead, another invocation may
-                # have already processed it. The expected_status guard prevents locking a
-                # lead that's already in PROCESSING or FINISHED.
-                locked_lead = await acquire_lock_on_lead_by_id(
-                    lead.id, expected_status=LeadCallStatus.BACKLOG
-                )
-                if not locked_lead:
-                    continue
-
-                # Now we have exclusive access to this BACKLOG lead
-                logger.info(f"Successfully locked lead {lead.id} for processing.")
-
-                config = await _get_lead_config(locked_lead)
-                if not config:
-                    await release_lock_on_lead_by_id(locked_lead.id)
-                    continue
-                # Support both new and old field names for lead
-                if not config.enable_calling:
-                    logger.info(
-                        f"Skipping lead {locked_lead.id} - calling is disabled for reseller {locked_lead.reseller_id}, template {locked_lead.template}"
-                    )
-                    await release_lock_on_lead_by_id(locked_lead.id)
-                    continue
-                # Check if customer phone number is blacklisted
-                blacklist_phone = (locked_lead.payload or {}).get(
-                    "customer_mobile_number"
-                )
-                if blacklist_phone and await is_number_blacklisted(
-                    blacklist_phone, locked_lead.reseller_id
-                ):
-                    logger.info(
-                        f"Skipping lead {locked_lead.id} - phone number {blacklist_phone} is blacklisted"
-                    )
-                    await update_lead_call_completion_details(
-                        id=locked_lead.id,
-                        status=LeadCallStatus.FINISHED,
-                        outcome="BLACKLISTED",
-                        meta_data={"reason": "Phone number is blacklisted"},
-                        call_end_time=datetime.now(timezone.utc),
-                    )
-                    await release_lock_on_lead_by_id(locked_lead.id)
-                    continue
-
-                if not _is_within_calling_hours(config):
-                    logger.info(
-                        f"Skipping lead {locked_lead.id} - outside calling hours. "
-                        f"Current time: {datetime.now(timezone(timedelta(hours=5, minutes=30))).time()}, "
-                        f"Allowed window: {config.call_start_time} - {config.call_end_time}"
-                    )
-                    await release_lock_on_lead_by_id(locked_lead.id)
-                    continue
-                template = await get_template_by_merchant(
-                    reseller_id=config.reseller_id,
-                    merchant_id=config.merchant_id,
-                    name=config.template,
-                )
-
+    try:
+        async with CallResourceManager(locked_lead) as resources:
+            # --- Validate ---
+            config = await _get_lead_config(locked_lead)
+            if not config or not config.enable_calling:
                 logger.info(
-                    f"Lead {locked_lead.id} , template found: {template is not None}"
+                    f"Lead {locked_lead.id}: config missing or calling disabled, skipping"
                 )
+                return
 
-                # Run pre-checks before committing resources
-                if not await _run_pre_checks_for_lead(
-                    config, locked_lead, template, session
-                ):
-                    await release_lock_on_lead_by_id(locked_lead.id)
-                    continue
+            blacklist_phone = (locked_lead.payload or {}).get("customer_mobile_number")
+            if blacklist_phone and await is_number_blacklisted(
+                blacklist_phone, locked_lead.reseller_id
+            ):
+                logger.info(
+                    f"Lead {locked_lead.id}: phone {blacklist_phone} is blacklisted"
+                )
+                await update_lead_call_completion_details(
+                    id=locked_lead.id,
+                    status=LeadCallStatus.FINISHED,
+                    outcome="BLACKLISTED",
+                    meta_data={"reason": "Phone number is blacklisted"},
+                    call_end_time=datetime.now(timezone.utc),
+                )
+                return
 
-                # Synthesize initial greeting audio and store in Redis
-                if template:
-                    await prepare_and_store_initial_greeting(
-                        lead_id=locked_lead.id,
-                        payload=locked_lead.payload or {},
-                        template=template,
-                    )
+            if not _is_within_calling_hours(config):
+                logger.info(
+                    f"Lead {locked_lead.id}: outside calling hours, rescheduling"
+                )
+                # Re-schedule this lead for the start of next calling window.
+                # Without this, the lead sits in BACKLOG with no event to wake it.
+                IST = timezone(timedelta(hours=5, minutes=30))
+                now_ist = datetime.now(IST)
+                # Schedule for start of next calling window (today or tomorrow)
+                start = datetime.combine(
+                    now_ist.date(), config.call_start_time, tzinfo=IST
+                )
+                if start <= now_ist:
+                    start += timedelta(days=1)
+                next_window_utc = start.astimezone(timezone.utc)
+                # Persist to DB so the lead survives Redis flush
+                await update_lead_next_attempt_at(locked_lead.id, next_window_utc)
+                dispatcher = get_lead_dispatcher()
+                if dispatcher:
+                    await dispatcher.on_lead_created(locked_lead.id, next_window_utc)
+                return
 
-                number_to_use = await _get_available_number(config, template)
-                if not number_to_use:
-                    await release_lock_on_lead_by_id(locked_lead.id)
-                    continue
+            template = await get_template_by_merchant(
+                reseller_id=config.reseller_id,
+                merchant_id=config.merchant_id,
+                name=config.template,
+            )
 
-                acquired = await _acquire_number(number_to_use)
-                if not acquired:
-                    logger.warning(
-                        f"Failed to acquire number {number_to_use.id} for lead {locked_lead.id} - "
-                        "number may be at maximum capacity"
-                    )
-                    # Reset number_to_use as the number was not acquired and must not be used
-                    number_to_use = None
-                    await release_lock_on_lead_by_id(locked_lead.id)
-                    continue
+            if not await _run_pre_checks_for_lead(
+                config, locked_lead, template, session
+            ):
+                return  # already marked FINISHED
 
-                call_provider = get_voice_provider(
-                    number_to_use.provider,
+            # --- Acquire Resources ---
+            await resources.store_greeting(locked_lead.payload or {}, template)
+
+            number = await resources.acquire_number(config, template)
+            if not number:
+                logger.info(f"Lead {locked_lead.id}: no outbound number available")
+                return
+
+            # --- Make Call ---
+            call_provider = get_voice_provider(
+                number.provider, session, config.telephony_config
+            )
+            customer_mobile = (locked_lead.payload or {}).get("customer_mobile_number")
+            if not customer_mobile or not isinstance(customer_mobile, str):
+                logger.error(
+                    f"Invalid customer_mobile_number for lead {locked_lead.id}"
+                )
+                await update_lead_call_completion_details(
+                    id=locked_lead.id,
+                    status=LeadCallStatus.FINISHED,
+                    outcome="INVALID_PAYLOAD",
+                    meta_data={"reason": "Missing or invalid customer_mobile_number"},
+                    call_end_time=datetime.now(timezone.utc),
+                )
+                return  # __aexit__ cleans up resources
+
+            call = call_provider.make_call(
+                customer_mobile,
+                number.number,
+                reseller_id=locked_lead.reseller_id,
+                template_name=locked_lead.template,
+            )
+
+            if call and call.get("sid"):
+                actual_call_sid = str(call.get("sid"))
+                logger.info(
+                    f"Lead {locked_lead.id}: primary call initiated, sid={actual_call_sid}, "
+                    f"provider={number.provider.value}, number={number.number}"
+                )
+                updated = await update_lead_call_details(
+                    locked_lead.id,
+                    LeadCallStatus.PROCESSING,
+                    actual_call_sid,
+                    datetime.now(timezone.utc),
+                    number.id,
+                )
+                if not updated:
+                    # Another process moved this lead — cleanup
+                    await resources.cleanup()
+                    return
+                # Success! Transfer resource ownership to callback handler
+                resources.transfer_ownership()
+                return
+
+            # --- Primary call failed: try alternate provider ---
+            logger.warning(
+                f"Lead {locked_lead.id}: primary call failed with provider={number.provider.value}"
+            )
+            # Release number only — keep greeting for retry (same lead_id, same greeting)
+            await resources.release_number()
+
+            if template and template.outbound_number_id:
+                # Fixed number — no retry with alternate provider
+                await update_lead_call_completion_details(
+                    id=locked_lead.id,
+                    status=LeadCallStatus.FINISHED,
+                    outcome="UNKNOWN",
+                    meta_data={
+                        "failure_reason": "Failed to initiate call, no retry due to fixed outbound number."
+                    },
+                    call_end_time=datetime.now(timezone.utc),
+                )
+                _send_failure_webhook_bg(
                     session,
-                    config.telephony_config,
+                    locked_lead,
+                    "Failed to initiate call, no retry due to fixed outbound number.",
                 )
+                return
 
-                # Pod allocation now happens at webhook time (when customer answers)
-                # via provider-specific answer webhooks. No pre-allocation needed.
-                # merchant_id is passed for tiered pod allocation.
-
-                customer_mobile = (locked_lead.payload or {}).get(
-                    "customer_mobile_number"
+            retry_provider = _get_retry_provider(number.provider)
+            if not retry_provider:
+                logger.info(
+                    f"Lead {locked_lead.id}: no retry provider available for {number.provider.value}"
                 )
-                if not customer_mobile or not isinstance(customer_mobile, str):
-                    logger.error(
-                        f"Invalid customer_mobile_number for lead {locked_lead.id}"
-                    )
-                    await _release_number(number_to_use.id, number_to_use.provider)
-                    await release_lock_on_lead_by_id(locked_lead.id)
-                    continue
-                call = call_provider.make_call(
+                return
+
+            if (
+                number.provider == CallProvider.EXOTEL
+                and not config.enable_international_call
+            ):
+                await update_lead_call_completion_details(
+                    id=locked_lead.id,
+                    status=LeadCallStatus.FINISHED,
+                    outcome="UNKNOWN",
+                    meta_data={
+                        "failure_reason": "Failed to initiate call with EXOTEL, international calling disabled."
+                    },
+                    call_end_time=datetime.now(timezone.utc),
+                )
+                _send_failure_webhook_bg(
+                    session,
+                    locked_lead,
+                    "Failed to initiate call due to NCPR, international calling disabled.",
+                )
+                return
+
+            # Find and acquire retry number
+            retry_number = await _find_retry_number(retry_provider)
+            if not retry_number:
+                logger.info(
+                    f"Lead {locked_lead.id}: no retry number available for {retry_provider.value}"
+                )
+                return
+
+            retry_acquired = await _acquire_number(retry_number)
+            if not retry_acquired:
+                logger.info(
+                    f"Lead {locked_lead.id}: failed to acquire retry number {retry_number.id}"
+                )
+                return
+
+            retry_number_owned = True
+            try:
+                retry_call_provider = get_voice_provider(
+                    retry_provider, session, config.telephony_config
+                )
+                retry_call = retry_call_provider.make_call(
                     customer_mobile,
-                    number_to_use.number,
+                    retry_number.number,
                     reseller_id=locked_lead.reseller_id,
                     template_name=locked_lead.template,
                 )
 
-                if call and call.get("sid"):
-                    actual_call_sid = str(call.get("sid"))
-
-                    updated = await update_lead_call_details(
+                if retry_call and retry_call.get("sid"):
+                    retry_sid = str(retry_call.get("sid"))
+                    logger.info(
+                        f"Lead {locked_lead.id}: retry call initiated, sid={retry_sid}, "
+                        f"provider={retry_provider.value}, number={retry_number.number}"
+                    )
+                    retry_updated = await update_lead_call_details(
                         locked_lead.id,
                         LeadCallStatus.PROCESSING,
-                        actual_call_sid,
+                        retry_sid,
                         datetime.now(timezone.utc),
-                        number_to_use.id,
+                        retry_number.id,
                     )
-                    if not updated:
-                        # Another invocation already moved this lead out of BACKLOG.
-                        # The call was placed but the lead is no longer ours — release resources.
-                        logger.warning(
-                            f"Lead {locked_lead.id} was already processed by another invocation "
-                            f"(status changed from BACKLOG). Releasing number. "
-                            f"Call {actual_call_sid} may be orphaned."
-                        )
-                        await _release_number(number_to_use.id, number_to_use.provider)
-                        try:
-                            redis = await get_redis_service()
-                            await redis.delete(f"greeting:{locked_lead.id}")
-                        except Exception:
-                            pass
-                        await release_lock_on_lead_by_id(locked_lead.id)
-                        continue
-                else:
-                    logger.error(
-                        f"Failed to initiate call for lead {locked_lead.id}. Call response: {call}"
-                    )
-                    await _release_number(number_to_use.id, number_to_use.provider)
+                    if retry_updated:
+                        retry_number_owned = False  # callback handler owns it now
+                        return
 
-                    if template and template.outbound_number_id:
-                        logger.info(
-                            f"Not retrying call for lead {locked_lead.id} as outbound_number_id is set in template."
-                        )
-                        await update_lead_call_completion_details(
-                            id=locked_lead.id,
-                            status=LeadCallStatus.FINISHED,
-                            outcome="UNKNOWN",
-                            meta_data={
-                                "failure_reason": "Failed to initiate call, no retry due to fixed outbound number."
-                            },
-                            call_end_time=datetime.now(timezone.utc),
-                        )
+                    # Another process moved this lead — we still own the number
+                    return
 
-                        # Send webhook for failed call
-                        reporting_webhook_url = (
-                            locked_lead.payload.get("reporting_webhook_url")
-                            if locked_lead.payload
-                            else None
-                        )
-                        if reporting_webhook_url:
-                            webhook_data = {
-                                "outcome": "FAILED",
-                                "attemptCount": locked_lead.attempt_count + 1,
-                                "failureReason": "Failed to initiate call, no retry due to fixed outbound number.",
-                                "orderId": locked_lead.request_id,
-                            }
-                            logger.info(
-                                f"Sending failure webhook for lead {locked_lead.id} to {reporting_webhook_url}"
-                            )
-                            try:
-                                await send_webhook_with_retry(
-                                    session, reporting_webhook_url, webhook_data
-                                )
-                            except Exception as e:
-                                logger.error(
-                                    f"Error sending failure webhook for lead {locked_lead.id}: {e}"
-                                )
+                # Retry also failed
+                await update_lead_call_completion_details(
+                    id=locked_lead.id,
+                    status=LeadCallStatus.FINISHED,
+                    outcome="UNKNOWN",
+                    meta_data={
+                        "failure_reason": f"Failed to initiate call using {retry_provider.value} after {config.calling_provider.value} failed."
+                    },
+                    call_end_time=datetime.now(timezone.utc),
+                )
+                _send_failure_webhook_bg(
+                    session, locked_lead, "Failed to initiate call with both providers."
+                )
+            finally:
+                if retry_number_owned:
+                    await _release_number(retry_number.id, retry_number.provider)
 
-                        await release_lock_on_lead_by_id(locked_lead.id)
+    finally:
+        await release_lock_on_lead_by_id(lead_id)
 
-                        continue
 
-                    retry_calling_provider = None
+def _get_retry_provider(primary_provider: CallProvider) -> Optional[CallProvider]:
+    """Determine which provider to retry with after primary fails."""
+    if primary_provider == CallProvider.TWILIO:
+        return CallProvider.EXOTEL
+    elif primary_provider == CallProvider.EXOTEL:
+        return CallProvider.TWILIO
+    return None
 
-                    if number_to_use.provider == CallProvider.TWILIO:
-                        retry_calling_provider = CallProvider.EXOTEL
-                    elif number_to_use.provider == CallProvider.EXOTEL:
-                        if not config.enable_international_call:
-                            # Support both new and old field names for lead
-                            locked_lead.reseller_id
-                            logger.warning(
-                                f"International calls disabled for reseller {locked_lead.reseller_id}. Skipping retry with Twilio."
-                            )
-                            await update_lead_call_completion_details(
-                                id=locked_lead.id,
-                                status=LeadCallStatus.FINISHED,
-                                outcome="UNKNOWN",
-                                meta_data={
-                                    "failure_reason": "Failed to initiate call with EXOTEL, international calling disabled."
-                                },
-                                call_end_time=datetime.now(timezone.utc),
-                            )
 
-                            # Send webhook for failed call
-                            reporting_webhook_url = (
-                                locked_lead.payload.get("reporting_webhook_url")
-                                if locked_lead.payload
-                                else None
-                            )
-                            if reporting_webhook_url:
-                                webhook_data = {
-                                    "outcome": "FAILED",
-                                    "attemptCount": locked_lead.attempt_count + 1,
-                                    "failureReason": "Failed to initiate call due to NCPR, international calling disabled.",
-                                    "orderId": locked_lead.request_id,
-                                }
-                                logger.info(
-                                    f"Sending failure webhook for lead {locked_lead.id} to {reporting_webhook_url}"
-                                )
-                                try:
-                                    await send_webhook_with_retry(
-                                        session, reporting_webhook_url, webhook_data
-                                    )
-                                except Exception as e:
-                                    logger.error(
-                                        f"Error sending failure webhook for lead {locked_lead.id}: {e}"
-                                    )
-
-                            await release_lock_on_lead_by_id(locked_lead.id)
-
-                            continue
-                        retry_calling_provider = CallProvider.TWILIO
-
-                    if not retry_calling_provider:
-                        # No retry provider available, skip retry
-                        await release_lock_on_lead_by_id(locked_lead.id)
-                        continue
-
-                    retry_number_to_use = None
-
-                    # First, get all available numbers with the retry provider
-                    retry_numbers = (
-                        await get_outbound_number_based_on_status_and_provider(
-                            OutboundNumberStatus.AVAILABLE, retry_calling_provider
-                        )
-                    )
-
-                    if retry_numbers:
-                        for number in retry_numbers:
-                            if (
-                                number.reseller_id is None
-                                and number.merchant_id is None
-                            ):
-                                if retry_calling_provider == CallProvider.EXOTEL:
-                                    if (
-                                        number.channels is not None
-                                        and number.maximum_channels is not None
-                                        and number.channels < number.maximum_channels
-                                    ):
-                                        retry_number_to_use = number
-                                        break
-                                else:
-                                    retry_number_to_use = number
-                                    break
-
-                    if not retry_number_to_use:
-                        await release_lock_on_lead_by_id(locked_lead.id)
-                        continue
-
-                    retry_acquired = await _acquire_number(retry_number_to_use)
-                    if not retry_acquired:
-                        logger.warning(
-                            f"Failed to acquire retry number {retry_number_to_use.id} for lead {locked_lead.id} - "
-                            "number may be at maximum capacity"
-                        )
-                        retry_number_to_use = None
-                        await release_lock_on_lead_by_id(locked_lead.id)
-                        continue
-
-                    retry_call_provider = get_voice_provider(
-                        retry_calling_provider,
-                        session,
-                        config.telephony_config,
-                    )
-
-                    # Pod allocation happens at webhook time (when customer answers)
-                    # via provider-specific answer webhooks.
-                    retry_customer_mobile = (locked_lead.payload or {}).get(
-                        "customer_mobile_number"
-                    )
-                    if not retry_customer_mobile or not isinstance(
-                        retry_customer_mobile, str
+async def _find_retry_number(provider: CallProvider) -> Optional[OutboundNumber]:
+    """Find an available number for the retry provider."""
+    numbers = await get_outbound_number_based_on_status_and_provider(
+        OutboundNumberStatus.AVAILABLE, provider
+    )
+    if numbers:
+        for number in numbers:
+            if number.reseller_id is None and number.merchant_id is None:
+                if provider in (CallProvider.EXOTEL, CallProvider.PLIVO):
+                    if (
+                        number.channels is not None
+                        and number.maximum_channels is not None
+                        and number.channels < number.maximum_channels
                     ):
-                        logger.error(
-                            f"Invalid customer_mobile_number for retry lead {locked_lead.id}"
-                        )
-                        await _release_number(
-                            retry_number_to_use.id, retry_number_to_use.provider
-                        )
-                        await release_lock_on_lead_by_id(locked_lead.id)
-                        continue
-                    retry_call = retry_call_provider.make_call(
-                        retry_customer_mobile,
-                        retry_number_to_use.number,
-                        reseller_id=locked_lead.reseller_id,
-                        template_name=locked_lead.template,
-                    )
-
-                    if retry_call and retry_call.get("sid"):
-                        retry_call_sid = str(retry_call.get("sid"))
-                        retry_updated = await update_lead_call_details(
-                            locked_lead.id,
-                            LeadCallStatus.PROCESSING,
-                            retry_call_sid,
-                            datetime.now(timezone.utc),
-                            retry_number_to_use.id,
-                        )
-                        if not retry_updated:
-                            logger.warning(
-                                f"Lead {locked_lead.id} was already processed by another invocation "
-                                f"during retry call. Releasing retry number. "
-                                f"Call {retry_call_sid} may be orphaned."
-                            )
-                            await _release_number(
-                                retry_number_to_use.id, retry_number_to_use.provider
-                            )
-                            try:
-                                redis = await get_redis_service()
-                                await redis.delete(f"greeting:{locked_lead.id}")
-                            except Exception:
-                                pass
-                            await release_lock_on_lead_by_id(locked_lead.id)
-                            continue
-                    else:
-                        logger.error(
-                            f"Failed to initiate retry call for lead {locked_lead.id}. Call response: {retry_call}"
-                        )
-                        await update_lead_call_completion_details(
-                            id=locked_lead.id,
-                            status=LeadCallStatus.FINISHED,
-                            outcome="UNKNOWN",
-                            meta_data={
-                                "failure_reason": f"Failed to initiate call using {retry_calling_provider.value} after {config.calling_provider.value} failed."
-                            },
-                            call_end_time=datetime.now(timezone.utc),
-                        )
-                        await _release_number(
-                            retry_number_to_use.id, retry_number_to_use.provider
-                        )
-
-                        # Send webhook for failed call
-                        reporting_webhook_url = (
-                            locked_lead.payload.get("reporting_webhook_url")
-                            if locked_lead.payload
-                            else None
-                        )
-                        if reporting_webhook_url:
-                            webhook_data = {
-                                "outcome": "FAILED",
-                                "attemptCount": locked_lead.attempt_count + 1,
-                                "failureReason": "Failed to initiate call with both providers.",
-                                "orderId": locked_lead.request_id,
-                            }
-                            logger.info(
-                                f"Sending failure webhook for lead {locked_lead.id} to {reporting_webhook_url}"
-                            )
-                            try:
-                                await send_webhook_with_retry(
-                                    session, reporting_webhook_url, webhook_data
-                                )
-                            except Exception as e:
-                                logger.error(
-                                    f"Error sending failure webhook for lead {locked_lead.id}: {e}"
-                                )
-
-                await release_lock_on_lead_by_id(locked_lead.id)
-
-            except Exception as e:
-                logger.error(f"Error processing lead {lead.id}: {e}")
+                        return number
+                else:
+                    return number
+    return None
 
 
-async def handle_call_completion(
+def _send_failure_webhook_bg(session, lead: LeadCallTracker, reason: str) -> None:
+    """Fire-and-forget failure webhook (best effort)."""
+    url = (lead.payload or {}).get("reporting_webhook_url")
+    if not url:
+        return
+    data = {
+        "outcome": "FAILED",
+        "attemptCount": lead.attempt_count + 1,
+        "failureReason": reason,
+        "orderId": lead.request_id,
+    }
+    asyncio.create_task(
+        send_webhook_with_retry(session, url, data),
+        name=f"webhook-{lead.id}",
+    )
+
+
+async def handle_call_ended(
     call_id: str,
     outcome: str | None = None,
     call_end_time: datetime | None = None,
     meta_data: dict | None = None,
+    call_status: str = "completed",
 ) -> Optional[LeadCallTracker]:
-    """
-    Handles call completion events.
-    """
-    logger.info(f"Call completed for call_id: {call_id} with outcome: {outcome}")
+    """Unified handler for ALL call termination paths.
 
-    # Release pod early — even if the lead lookup fails (orphaned call_id),
-    # the pod must be freed to avoid pod leaks when pod isolation is enabled.
-    await safe_release_pod(call_sid=call_id, reason="call_completed")
+    Called from:
+      - WebSocket close (provider completion callback): outcome set by agent
+      - Status callback (no-answer/busy/failed/completed): call_status from provider
+      - Stuck lead cleanup: outcome="UNKNOWN", call_status="stuck_timeout"
 
+    Handles the complete resource release lifecycle in one place:
+      1. Release pod (idempotent)
+      2. Find lead
+      3. FINISHED guard (race protection)
+      4. Release outbound number
+      5. Delete greeting from Redis
+      6. Determine final outcome
+      7. Update lead → FINISHED
+      8. Retry if needed
+      9. Signal on_channel_freed
+
+    Args:
+        call_id: Provider call SID (or lead ID for Daily mode)
+        outcome: Explicit outcome from agent (e.g., "COMPLETED", "TRANSFERRED").
+                 If None, derived from call_status.
+        call_end_time: When the call ended (defaults to now)
+        meta_data: Call metadata from agent (transcription, transfer info, etc.)
+        call_status: Raw provider status (e.g., "no-answer", "busy", "completed").
+                     Used for pod release reason and outcome fallback.
+    """
+    logger.info(
+        f"Call ended: call_id={call_id}, outcome={outcome}, status={call_status}"
+    )
+
+    # --- 1. Release pod (idempotent, always safe to call) ---
+    await safe_release_pod(call_sid=call_id, reason=call_status)
+
+    # --- 2. Find lead ---
     lead = await get_lead_by_call_id(call_id)
     if not lead:
         logger.error(
             f"Could not find lead for call_id: {call_id}. "
-            f"Outbound number channel may be leaked — manual cleanup required. "
-            f"This can happen when a prior duplicate-call bug overwrote the call_id on the lead."
+            "Channel will be corrected by reconciliation."
         )
-        return
+        dispatcher = get_lead_dispatcher()
+        if dispatcher:
+            await dispatcher.on_channel_freed()
+        return None
 
-    # Always release outbound number (including transfers — bot leaves, cleanup happens here)
+    # --- 3. Release resources BEFORE the FINISHED guard ---
+    # These must happen regardless of lead status to prevent channel/greeting leaks.
+    # In a race (WebSocket close + status callback), both handlers release resources,
+    # but only the first one proceeds past the FINISHED guard to update state/retry.
     if lead.outbound_number_id:
         outbound_number = await get_outbound_number_by_id(lead.outbound_number_id)
         if outbound_number:
             await _release_number(outbound_number.id, outbound_number.provider)
         else:
             logger.error(
-                f"Could not find outbound number with id: {lead.outbound_number_id} to release."
+                f"Could not find outbound number {lead.outbound_number_id} to release."
             )
-    else:
-        logger.info(f"No outbound number id for lead: {lead.id}")
 
-    # Check if this is a transfer — for outcome override only
+    try:
+        redis = await get_redis_service()
+        await redis.delete(f"greeting:{lead.id}")
+    except Exception:
+        pass  # TTL will clean it up
+
+    # --- 4. FINISHED guard (prevents duplicate retries and status updates) ---
+    if lead.status == LeadCallStatus.FINISHED:
+        logger.info(
+            f"Lead {lead.id} already FINISHED for call_id: {call_id}, skipping."
+        )
+        dispatcher = get_lead_dispatcher()
+        if dispatcher:
+            await dispatcher.on_channel_freed()
+        return None
+
+    # --- 5. Determine final outcome ---
+    if not outcome:
+        # Map provider status to outcome: "no-answer" → "NO_ANSWER", "busy" → "BUSY"
+        outcome = call_status.upper().replace("-", "_")
+
+    # Transfer override: if transfer metadata indicates success, override outcome
     is_transfer = (
-        meta_data
-        and "transfer" in meta_data
-        and meta_data.get("transfer", {}).get("status") == "success"
+        meta_data and meta_data.get("transfer", {}).get("status") == "success"
     ) or (
         lead.metaData and lead.metaData.get("transfer", {}).get("status") == "success"
     )
-
-    config = await _get_lead_config(lead)
-    if not config:
-        return
-
-    # Override outcome to "TRANSFERRED" for transfer calls
     if is_transfer:
         outcome = "TRANSFERRED"
 
+    # --- 7. Update lead → FINISHED (atomic: only succeeds if not already FINISHED) ---
     updated_lead = await update_lead_call_completion_details(
         id=lead.id,
         status=LeadCallStatus.FINISHED,
         outcome=outcome,
         meta_data=meta_data,
-        call_end_time=call_end_time,
+        call_end_time=call_end_time or datetime.now(timezone.utc),
+        guard_not_status=LeadCallStatus.FINISHED,
     )
 
-    # Only retry outbound calls - inbound calls should not be retried
+    if not updated_lead:
+        # Another concurrent callback already marked this lead FINISHED
+        logger.info(
+            f"Lead {lead.id} was concurrently finished by another callback, skipping retry."
+        )
+        dispatcher = get_lead_dispatcher()
+        if dispatcher:
+            await dispatcher.on_channel_freed()
+        return None
+
+    # --- 8. Retry if needed (outbound only, retryable outcomes) ---
     if (
-        outcome in ["BUSY", "NO_ANSWER"]
+        outcome in ("BUSY", "NO_ANSWER", "FAILED")
         and lead.call_direction == CallDirection.OUTBOUND
     ):
-        await _retry_call(lead, config, outcome)
+        config = await _get_lead_config(lead)
+        if config:
+            await _retry_call(lead, config, outcome)
+
+    # --- 9. Channel freed — trigger next waiting lead ---
+    dispatcher = get_lead_dispatcher()
+    if dispatcher:
+        await dispatcher.on_channel_freed()
 
     return updated_lead
 
 
-async def handle_unanswered_calls(call_id: str):
-    """
-    Handles unanswered call events.
-
-    This is called when a call fails to connect (no-answer, busy, failed).
-    It releases the allocated pod (if pod isolation is enabled), cleans up
-    resources, and schedules a retry if configured.
-    """
-    logger.info(f"Handling unanswered call for call_id: {call_id}")
-
-    # Release the allocated pod — critical for unanswered calls since
-    # the WebSocket never connected, so the pod won't release itself.
-    await safe_release_pod(call_sid=call_id, reason="status_unanswered")
-
-    lead = await get_lead_by_call_id(call_id)
-    if not lead:
-        logger.error(
-            f"Could not find lead for call_id: {call_id}. "
-            f"Outbound number channel may be leaked — manual cleanup required. "
-            f"This can happen when a prior duplicate-call bug overwrote the call_id on the lead."
-        )
-        return
-
-    # Clean up greeting audio from Redis if it exists — do this regardless of status
-    # since the delete is idempotent and prevents Redis key leaks from orphaned calls.
-    try:
-        redis = await get_redis_service()
-        greeting_key = f"greeting:{lead.id}"
-        await redis.delete(greeting_key)
-        logger.info(f"Deleted greeting audio from Redis for lead {lead.id}")
-    except Exception as e:
-        logger.warning(
-            f"Failed to delete greeting audio from Redis for lead {lead.id}: {e}"
-        )
-
-    # Release outbound number channel — do this before the FINISHED guard because the
-    # channel must be freed regardless of lead status. _release_number is idempotent
-    # (SQL uses GREATEST(0, ...)), so duplicate releases are safe.
-    if lead.outbound_number_id:
-        outbound_number = await get_outbound_number_by_id(lead.outbound_number_id)
-        if outbound_number:
-            await _release_number(outbound_number.id, outbound_number.provider)
-        else:
-            logger.error(
-                f"Could not find outbound number with id: {lead.outbound_number_id} to release."
-            )
-    else:
-        logger.info(f"No outbound number id for lead: {lead.id}")
-
-    # Guard: if another callback already finished this lead, skip to avoid duplicate retries.
-    # This happens when the lock race causes multiple calls for the same lead — each call's
-    # callback arrives independently and would otherwise each create a retry entry.
-    if lead.status == LeadCallStatus.FINISHED:
-        logger.info(
-            f"Lead {lead.id} is already FINISHED for call_id: {call_id}, skipping unanswered handler."
-        )
-        return
-
-    config = await _get_lead_config(lead)
-    if not config:
-        return
-
-    await update_lead_call_completion_details(
-        id=lead.id,
-        status=LeadCallStatus.FINISHED,
-        outcome="NO_ANSWER",
-        meta_data={},
-        call_end_time=datetime.now(timezone.utc),
-    )
-
-    # Only retry outbound calls - inbound calls should not be retried
-    if lead.call_direction == CallDirection.OUTBOUND:
-        await _retry_call(lead, config, "NO_ANSWER")
+# Backward-compatible alias for provider completion callbacks
+handle_call_completion = handle_call_ended
 
 
 async def update_call_recording(

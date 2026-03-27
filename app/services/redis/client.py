@@ -290,6 +290,63 @@ class RedisService:
             logger.error(f"Redis EXPIRE error for key {key}: {e}")
             return False
 
+    # --- Sorted Set Operations (for delayed lead scheduling) ---
+
+    async def zadd(self, key: str, mapping: Dict[str, float]) -> int:
+        """Add members with scores to a sorted set. mapping = {member: score}.
+
+        Raises on error so callers can implement fallback logic
+        (e.g., immediate enqueue instead of scheduling).
+        """
+        client = await self.get_client()
+        result = await client.zadd(key, mapping)  # type: ignore[arg-type]
+        return int(result)
+
+    async def zrangebyscore(
+        self,
+        key: str,
+        min_score: float,
+        max_score: float,
+        start: int = 0,
+        num: int = 10,
+        withscores: bool = False,
+    ) -> List[Any]:
+        """Return members in sorted set with scores between min and max."""
+        try:
+            client = await self.get_client()
+            result = await client.zrangebyscore(
+                key,
+                min=min_score,
+                max=max_score,
+                start=start,
+                num=num,
+                withscores=withscores,
+            )
+            return list(result) if result else []
+        except RedisError as e:
+            logger.error(f"Redis ZRANGEBYSCORE error for key {key}: {e}")
+            return []
+
+    async def zrem(self, key: str, *members: str) -> int:
+        """Remove members from a sorted set."""
+        try:
+            client = await self.get_client()
+            result = await client.zrem(key, *members)
+            return int(result)
+        except RedisError as e:
+            logger.error(f"Redis ZREM error for key {key}: {e}")
+            return 0
+
+    async def zcard(self, key: str) -> int:
+        """Return the number of members in a sorted set."""
+        try:
+            client = await self.get_client()
+            result = await client.zcard(key)
+            return int(result)
+        except RedisError as e:
+            logger.error(f"Redis ZCARD error for key {key}: {e}")
+            return 0
+
     async def close(self) -> None:
         """Close Redis connections"""
         if self._factory:

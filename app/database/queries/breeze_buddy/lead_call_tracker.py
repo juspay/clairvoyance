@@ -123,6 +123,23 @@ def get_leads_based_on_status_and_next_attempt_query(
     return text, values
 
 
+def update_lead_next_attempt_at_query(
+    lead_id: str, next_attempt_at: datetime
+) -> Tuple[str, List[Any]]:
+    """
+    Update next_attempt_at for a lead. Used when rescheduling (e.g., calling hours).
+    Persists the schedule to the DB so the lead survives Redis flush.
+    """
+    text = f"""
+        UPDATE "{LEAD_CALL_TRACKER_TABLE}"
+        SET "next_attempt_at" = $1, "updated_at" = NOW()
+        WHERE "id" = $2
+        RETURNING *;
+    """
+    values = [next_attempt_at, lead_id]
+    return text, values
+
+
 def acquire_lock_on_lead_by_id_query(
     lead_id: str, expected_status: Optional[LeadCallStatus] = None
 ) -> Tuple[str, List[Any]]:
@@ -187,6 +204,29 @@ def update_lead_call_details_query(
         id,
         LeadCallStatus.BACKLOG.value,
     ]
+    return text, values
+
+
+def grab_next_backlog_lead_query(time: datetime) -> Tuple[str, List[Any]]:
+    """
+    Find one eligible BACKLOG lead using FOR UPDATE SKIP LOCKED.
+
+    Does NOT set is_locked — that's done by process_single_lead via
+    acquire_lock_on_lead_by_id, which is the single locking authority.
+    FOR UPDATE SKIP LOCKED prevents concurrent callers from selecting the
+    same row within overlapping transactions (brief window in auto-commit).
+    """
+    text = f"""
+        SELECT * FROM "{LEAD_CALL_TRACKER_TABLE}"
+        WHERE "status" = 'BACKLOG'
+        AND "is_locked" = FALSE
+        AND "next_attempt_at" <= $1
+        AND "execution_mode" = 'TELEPHONY'
+        ORDER BY "next_attempt_at" ASC
+        LIMIT 1
+        FOR UPDATE SKIP LOCKED;
+    """
+    values = [time]
     return text, values
 
 
@@ -271,10 +311,15 @@ def update_lead_call_completion_details_query(
     outcome: Optional[str] = None,
     meta_data: Optional[Dict[str, Any]] = None,
     call_end_time: Optional[datetime] = None,
+    guard_not_status: Optional[LeadCallStatus] = None,
 ) -> Tuple[str, List[Any]]:
     """
     Generate query to update lead call completion details.
     Only updates fields that are not None.
+
+    guard_not_status: if provided, adds AND "status" != $N to the WHERE clause.
+    This makes the update atomic — only succeeds if the lead is NOT already in
+    that status, preventing duplicate updates from concurrent callbacks.
     """
     set_clauses: List[str] = []
     values: List[Any] = []
@@ -301,6 +346,10 @@ def update_lead_call_completion_details_query(
     # Add id for WHERE clause
     values.append(id)
     where_clause = f'"id" = ${len(values)}'
+
+    if guard_not_status is not None:
+        values.append(guard_not_status.value)
+        where_clause += f' AND "status" != ${len(values)}'
 
     text = f"""
         UPDATE "{LEAD_CALL_TRACKER_TABLE}"

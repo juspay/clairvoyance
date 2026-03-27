@@ -14,6 +14,17 @@ from fastapi.responses import JSONResponse
 from pipecat.transports.daily.utils import DailyRESTHelper
 
 from app import __version__
+from app.ai.voice.agents.breeze_buddy.managers.calls import (
+    cleanup_stuck_leads,
+    process_single_lead,
+)
+from app.ai.voice.agents.breeze_buddy.managers.lead_dispatcher import (
+    initialize_lead_dispatcher,
+    shutdown_lead_dispatcher,
+)
+from app.ai.voice.agents.breeze_buddy.managers.reconciliation import (
+    reconcile_outbound_channels,
+)
 from app.ai.voice.agents.breeze_buddy.services.agent_router.client import (
     close_smart_router_client,
 )
@@ -24,7 +35,9 @@ from app.core.background_tasks import BackgroundTaskScheduler
 from app.core.config.dynamic import ENABLE_BACKGROUND_TASKS
 from app.core.config.static import (
     BACKGROUND_TASKS_LOOP_INTERVAL_SECONDS,
+    BACKLOG_WORKER_COUNT,
     BOT_MAX_DRAIN_SECONDS,
+    CHANNEL_RECONCILIATION_INTERVAL_SECONDS,
     CORS_ALLOWED_ORIGINS,
     DAILY_API_KEY,
     DAILY_API_URL,
@@ -169,6 +182,20 @@ async def lifespan(_app: FastAPI):
 
             ### Register new tasks here
 
+            # Stuck lead cleanup: periodic safety net for leads stuck in PROCESSING
+            _background_scheduler.register_task(
+                name="cleanup_stuck_leads",
+                func=cleanup_stuck_leads,
+                interval_seconds=600,  # every 10 minutes
+            )
+
+            # Channel reconciliation: periodic safety net for leaked channels
+            _background_scheduler.register_task(
+                name="reconcile_outbound_channels",
+                func=reconcile_outbound_channels,
+                interval_seconds=CHANNEL_RECONCILIATION_INTERVAL_SECONDS,
+            )
+
             # Start the scheduler only if tasks are registered
             if _background_scheduler.tasks:
                 await _background_scheduler.start()
@@ -182,9 +209,24 @@ async def lifespan(_app: FastAPI):
             "Background task scheduler disabled (ENABLE_BACKGROUND_TASKS=false)"
         )
 
+    # Start event-driven lead dispatcher
+    try:
+        await initialize_lead_dispatcher(
+            process_fn=process_single_lead, max_workers=BACKLOG_WORKER_COUNT
+        )
+        logger.info(f"Lead dispatcher started with {BACKLOG_WORKER_COUNT} workers")
+    except Exception as e:
+        logger.error(f"Failed to start lead dispatcher: {e}")
+
     yield
 
     logger.info("Application shutdown event triggered...")
+
+    # Stop lead dispatcher
+    try:
+        await shutdown_lead_dispatcher()
+    except Exception as e:
+        logger.error(f"Error stopping lead dispatcher: {e}")
 
     # Stop background task scheduler if running
     if _background_scheduler:

@@ -158,6 +158,7 @@ async def prepare_and_store_initial_greeting(
             await redis.set(
                 key=lead_greeting_key,
                 value=json.dumps(greeting_data),
+                ex=600,  # 10-minute TTL safety net — greeting consumed within seconds
             )
             logger.info(f"Stored dynamic greeting in Redis for lead {lead_id}")
             return resolved_greeting

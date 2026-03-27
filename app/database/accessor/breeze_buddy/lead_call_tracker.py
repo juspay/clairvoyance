@@ -20,6 +20,7 @@ from app.database.queries.breeze_buddy.lead_call_tracker import (
     get_lead_call_trackers_count_query,
     get_leads_based_on_status_and_next_attempt_query,
     get_leads_by_status_and_time_before_query,
+    grab_next_backlog_lead_query,
     insert_lead_call_tracker_query,
     release_lock_on_lead_by_id_query,
     update_langfuse_scores_query,
@@ -28,6 +29,7 @@ from app.database.queries.breeze_buddy.lead_call_tracker import (
     update_lead_call_initiated_time_by_id_query,
     update_lead_call_initiated_time_query,
     update_lead_call_recording_url_query,
+    update_lead_next_attempt_at_query,
     update_lead_payload_query,
 )
 from app.schemas import (
@@ -201,6 +203,26 @@ async def release_lock_on_lead_by_id(lead_id: str) -> Optional[LeadCallTracker]:
         return None
 
 
+async def grab_next_backlog_lead(time: datetime) -> Optional[LeadCallTracker]:
+    """
+    Atomically grab one BACKLOG lead using SELECT FOR UPDATE SKIP LOCKED.
+    Returns the locked lead if one is available, None if no eligible leads.
+    Used by the event-driven LeadDispatcher worker pool.
+    """
+    try:
+        query_text, values = grab_next_backlog_lead_query(time)
+        result = await run_parameterized_query(query_text, values)
+        if result and get_row_count(result) > 0:
+            decoded_result = decode_lead_call_tracker(result[0])
+            if decoded_result:
+                logger.info(f"Grabbed backlog lead {decoded_result.id} for processing")
+            return decoded_result
+        return None
+    except Exception as e:
+        logger.error(f"Error grabbing next backlog lead: {e}")
+        return None
+
+
 async def update_lead_call_details(
     id: str,
     status: LeadCallStatus,
@@ -362,16 +384,20 @@ async def update_lead_call_completion_details(
     outcome: Optional[str] = None,
     meta_data: Optional[Dict[str, Any]] = None,
     call_end_time: Optional[datetime] = None,
+    guard_not_status: Optional[LeadCallStatus] = None,
 ) -> Optional[LeadCallTracker]:
     """
     Update lead call completion details.
     Only updates fields that are not None.
+
+    guard_not_status: if provided, update only succeeds if lead is NOT in that status.
+    Returns None if the guard prevented the update (another callback already finished it).
     """
     logger.info(f"Updating lead call completion details for ID: {id}")
 
     try:
         query_text, values = update_lead_call_completion_details_query(
-            id, status, outcome, meta_data, call_end_time
+            id, status, outcome, meta_data, call_end_time, guard_not_status
         )
         result = await run_parameterized_query(query_text, values)
         if result and get_row_count(result) > 0:
@@ -386,6 +412,21 @@ async def update_lead_call_completion_details(
 
     except Exception as e:
         logger.error(f"Error updating lead call completion details: {e}")
+        return None
+
+
+async def update_lead_next_attempt_at(
+    lead_id: str, next_attempt_at: datetime
+) -> Optional[LeadCallTracker]:
+    """Update next_attempt_at for a lead (e.g., calling hours reschedule)."""
+    try:
+        query_text, values = update_lead_next_attempt_at_query(lead_id, next_attempt_at)
+        result = await run_parameterized_query(query_text, values)
+        if result and get_row_count(result) > 0:
+            return decode_lead_call_tracker(result[0])
+        return None
+    except Exception as e:
+        logger.error(f"Error updating next_attempt_at for lead {lead_id}: {e}")
         return None
 
 

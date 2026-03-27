@@ -124,8 +124,8 @@ async def callback_status(request: Request, provider: str):
         200 OK response (webhook acknowledgment)
 
     Behavior:
-        - If call_status is "no-answer", "failed", or "busy":
-          Triggers retry logic via handle_unanswered_calls()
+        - For all terminal statuses:
+          Triggers unified call lifecycle via handle_call_ended()
         - If recording URL present and call is transfer:
           Saves recording URL to lead metadata
         - Otherwise: Logs the status and acknowledges

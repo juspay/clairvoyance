@@ -16,11 +16,8 @@ from starlette.responses import HTMLResponse
 from twilio.twiml.voice_response import Connect, Stream, VoiceResponse
 
 from app.ai.voice.agents.breeze_buddy.managers.calls import (
-    handle_unanswered_calls,
+    handle_call_ended,
     update_call_recording,
-)
-from app.ai.voice.agents.breeze_buddy.services.agent_router.client import (
-    safe_release_pod,
 )
 from app.ai.voice.agents.breeze_buddy.services.telephony.exotel.exotel import (
     exotel_dial_text,
@@ -272,19 +269,11 @@ async def handle_callback_status(request: Request, provider: str) -> Response:
             extra={"call_sid": call_sid, "status": call_status, "provider": provider},
         )
 
-        # Backup release: notify Smart Router when call ends.
-        # Idempotent — safe even if WebSocket already released the pod.
-        if call_status.lower() in ended_statuses:
-            await safe_release_pod(
-                call_sid=str(call_sid), reason=f"status_{call_status}"
-            )
-
-        # Handle failed calls for retry logic
-        if call_status.lower() in ("no-answer", "failed", "busy"):
-            logger.info(f"Call with SID {call_sid} failed with status: {call_status}")
-            # Convert to string for the handler
-            if isinstance(call_sid, str):
-                await handle_unanswered_calls(call_sid)
+        # Unified call-ended handler for ALL terminal statuses.
+        # Handles pod release, number release, greeting cleanup, retry, and on_channel_freed.
+        # Idempotent — safe even if WebSocket already handled completion.
+        if call_status.lower() in ended_statuses and isinstance(call_sid, str):
+            await handle_call_ended(call_sid, call_status=call_status.lower())
 
     return Response(status_code=200)
 
