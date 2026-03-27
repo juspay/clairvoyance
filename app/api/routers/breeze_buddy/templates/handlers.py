@@ -514,3 +514,63 @@ async def delete_template_handler(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error deleting template: {str(e)}",
         )
+
+
+async def get_configuration_options_handler():
+
+    from app.ai.voice.agents.breeze_buddy.template.types import (
+        BackgroundSoundFile,
+        KeywordMatchType,
+        NoiseFilterType,
+        TTSVoiceName,
+    )
+    from app.ai.voice.agents.breeze_buddy.utils.language_utils.language_detector import (
+        LANGUAGE_NAMES,
+        SHORT_TO_FULL_LANGUAGE_CODE,
+    )
+    from app.ai.voice.agents.breeze_buddy.utils.tts_utils.tts_provider_selector import (
+        TTS_PROVIDER_TO_VOICE_NAME,
+    )
+
+    voice_to_provider = {v.value: k for k, v in TTS_PROVIDER_TO_VOICE_NAME.items()}
+
+    # TTS voices with provider info
+    tts_voices = [
+        {
+            "value": voice.value,
+            "label": f"{voice.value.capitalize()} ({voice_to_provider.get(voice.value, 'Unknown')})",
+        }
+        for voice in TTSVoiceName
+    ]
+
+    # STT languages (Soniox supported) - dynamically from constants
+    stt_languages = [
+        {"value": code, "label": LANGUAGE_NAMES.get(full_code, code)}
+        for code, full_code in SHORT_TO_FULL_LANGUAGE_CODE.items()
+    ]
+
+    # Background sounds
+    background_sounds = [
+        {"value": sound.value, "label": sound.value.replace("-", " ").title()}
+        for sound in BackgroundSoundFile
+    ]
+
+    # Noise filter types
+    noise_filter_types = [
+        {"value": filter_type.value, "label": filter_type.value.upper()}
+        for filter_type in NoiseFilterType
+    ]
+
+    # Keyword match types
+    keyword_match_types = [
+        {"value": match_type.value, "label": match_type.value.replace("_", " ").title()}
+        for match_type in KeywordMatchType
+    ]
+
+    return {
+        "tts_voices": tts_voices,
+        "stt_languages": stt_languages,
+        "background_sounds": background_sounds,
+        "noise_filter_types": noise_filter_types,
+        "keyword_match_types": keyword_match_types,
+    }

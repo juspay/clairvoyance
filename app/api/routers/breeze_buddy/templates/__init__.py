@@ -33,6 +33,7 @@ from app.schemas.breeze_buddy.template import (
 from .handlers import (
     create_template_handler,
     delete_template_handler,
+    get_configuration_options_handler,
     get_template_by_id_handler,
     list_templates_handler,
     replace_template_handler,
@@ -240,3 +241,10 @@ async def delete_template_by_id(
     require_admin(current_user)
 
     return await delete_template_handler(template_id, current_user)
+
+
+@router.get("/templates/configurations/options")
+async def get_configuration_options(
+    current_user: UserInfo = Depends(get_current_user_with_rbac),
+):
+    return await get_configuration_options_handler()

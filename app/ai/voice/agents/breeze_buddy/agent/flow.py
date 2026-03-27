@@ -41,6 +41,19 @@ async def load_template_config(
         call_payload=lead.payload,
     )
 
+    # If playground mode, override configurations from metadata
+    if lead.metaData and lead.metaData.get("playground"):
+        logger.info(f"Applying playground configuration overrides for lead {lead.id}")
+        configurations_dict = lead.metaData.get("configurations")
+        if configurations_dict and isinstance(configurations_dict, dict):
+            try:
+                template.configurations = ConfigurationModel(**configurations_dict)
+                logger.info(
+                    f"Applied playground configuration overrides for lead {lead.id}"
+                )
+            except Exception as e:
+                logger.warning(f"Failed to parse playground configurations: {e}")
+
     return template, template.configurations, template_vars
 
 

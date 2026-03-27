@@ -107,6 +107,17 @@ async def resolve_call_templates(
     if lead:
         # Outbound call - look up template using merchant info from lead
         logger.info(f"[Answer] Outbound call detected, lead: {lead.id}")
+
+        # Check if this is a playground lead with embedded flow
+        if lead.metaData and lead.metaData.get("playground"):
+            logger.info(f"[Answer] Playground lead detected, using embedded flow")
+            return {
+                "is_outbound": True,
+                "template_id": f"playground-{lead.id}",
+                "reseller_id": lead.reseller_id,
+                "is_playground": True,
+            }
+
         template = await get_template_by_merchant(
             reseller_id=lead.reseller_id,
             merchant_id=lead.merchant_id,

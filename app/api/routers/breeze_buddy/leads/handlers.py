@@ -141,7 +141,7 @@ async def push_lead_handler(req: PushLeadRequest, current_user: UserInfo) -> Dic
             )
 
         # Validate payload against expected schema if schema exists
-        if template.expected_payload_schema:
+        if template and template.expected_payload_schema:
             is_valid, validation_errors = validate_payload(
                 req.payload, template.expected_payload_schema
             )
@@ -192,8 +192,14 @@ async def push_lead_handler(req: PushLeadRequest, current_user: UserInfo) -> Dic
             lead_payload["reporting_webhook_url"] = req.reporting_webhook_url
 
         # Determine language using unified helper function
+        # In playground mode, use configurations_override if provided
+        effective_configurations = (
+            req.configurations_override
+            if (req.is_playground and req.configurations_override)
+            else (template.configurations if template else None)
+        )
         _, language_name = await determine_language_for_call(
-            template.configurations if template else None,
+            effective_configurations,
             lead_payload,
             req.request_id,
         )
@@ -202,13 +208,22 @@ async def push_lead_handler(req: PushLeadRequest, current_user: UserInfo) -> Dic
         lead_payload["language_name"] = language_name
 
         # Determine TTS voice using LLM if payload-based selection is enabled
+        # In playground mode, use configurations_override if provided
         tts_voice_name = await determine_tts_voice_for_call(
-            template.configurations if template else None,
+            effective_configurations,
             lead_payload,
             req.request_id,
         )
         if tts_voice_name:
             lead_payload["tts_voice_name"] = tts_voice_name.value
+
+        # In playground mode, store configurations override in metadata
+        meta_data = {}
+        if req.is_playground:
+            meta_data = {
+                "playground": True,
+                "configurations": effective_configurations,
+            }
 
         # Insert lead call tracker record with both template name and template_id
         lead_call_tracker = await create_lead_call_tracker(
@@ -220,7 +235,7 @@ async def push_lead_handler(req: PushLeadRequest, current_user: UserInfo) -> Dic
             next_attempt_at=next_attempt_at,
             payload=lead_payload,
             attempt_count=0,
-            meta_data={},
+            meta_data=meta_data,
             request_id=req.request_id,
             execution_mode=req.execution_mode or ExecutionMode.TELEPHONY,
             status=LeadCallStatus.BACKLOG,
