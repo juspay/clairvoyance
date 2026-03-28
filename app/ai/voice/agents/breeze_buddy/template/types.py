@@ -220,6 +220,43 @@ class InterruptionConfig(BaseModel):
     )
 
 
+class BackChannelConfig(BaseModel):
+    """Configuration for back-channel acknowledgments during input accumulation.
+
+    When enabled alongside input collection, the agent sends soft audio
+    acknowledgments ("okay", "got it") during the user_speech_timeout wait
+    window so the user knows the agent is still listening. Back-channels are
+    spoken via direct TTS without involving the LLM or polluting LLM context.
+
+    The delay_secs timer starts after each finalized transcript. If the user
+    resumes speaking (interim transcript arrives), the timer is cancelled.
+    min_interval_secs prevents rapid-fire acknowledgments.
+    """
+
+    enabled: bool = Field(
+        False,
+        description="Whether back-channel acknowledgments are active.",
+    )
+    delay_secs: float = Field(
+        1.5,
+        ge=0.1,
+        le=10.0,
+        description="Seconds to wait after a finalized transcript before sending "
+        "a back-channel. Must be less than user_speech_timeout to fire during "
+        "accumulation, not after the turn ends.",
+    )
+    min_interval_secs: float = Field(
+        3.0,
+        ge=0.5,
+        description="Minimum seconds between consecutive back-channel messages "
+        "to avoid rapid-fire acknowledgments.",
+    )
+    messages: List[str] = Field(
+        default_factory=lambda: ["okay", "got it", "go on"],
+        description="Pool of back-channel messages to randomly select from.",
+    )
+
+
 class InputCollectionConfig(BaseModel):
     """Configuration for multi-segment input collection at node level.
 
@@ -241,6 +278,10 @@ class InputCollectionConfig(BaseModel):
 
         Address dictation (wait longer):
             {"enabled": true, "user_speech_timeout": 4.0}
+
+        With back-channel acknowledgments:
+            {"enabled": true, "user_speech_timeout": 3.0,
+             "back_channel": {"enabled": true, "delay_secs": 1.5}}
     """
 
     enabled: bool = Field(
@@ -255,6 +296,13 @@ class InputCollectionConfig(BaseModel):
         "segments. In no-VAD mode (production), the timer resets on each new "
         "transcript, so segments within this window are accumulated into one turn. "
         "Total silence before bot responds = Soniox max_endpoint_delay_ms + this value.",
+    )
+    back_channel: Optional[BackChannelConfig] = Field(
+        None,
+        description="Back-channel acknowledgment configuration during input "
+        "accumulation. When enabled, the agent sends soft audio acknowledgments "
+        "('okay', 'got it') between speech segments so the user knows the agent "
+        "is still listening.",
     )
 
 

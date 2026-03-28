@@ -56,6 +56,15 @@ class TemplateContext:
         return getattr(self.bot, "speech_gate", None)
 
     @property
+    def back_channel(self):
+        """Get BackChannelProcessor instance.
+
+        Returns None if the pipeline has not been built yet. Callers should
+        guard with ``if context.back_channel:`` before use.
+        """
+        return getattr(self.bot, "back_channel", None)
+
+    @property
     def aiohttp_session(self):
         """Get AIO Http Session instance"""
         return self.bot.aiohttp_session

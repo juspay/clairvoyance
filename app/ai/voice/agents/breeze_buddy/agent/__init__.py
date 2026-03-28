@@ -155,6 +155,9 @@ class Agent:
         # Transcription gate processor (always present in pipeline)
         self.speech_gate: Any = None
 
+        # Back-channel processor (always present in pipeline, enabled per-node)
+        self.back_channel: Any = None
+
         # Error tracking
         self.errors: List[Dict[str, Any]] = []
 
@@ -703,6 +706,7 @@ class Agent:
                 context_aggregator,
                 user_idle_callback_handler,
                 self.speech_gate,
+                self.back_channel,
             ) = await build_pipeline(
                 self.transport,
                 stt,

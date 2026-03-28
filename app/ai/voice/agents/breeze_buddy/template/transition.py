@@ -13,6 +13,7 @@ from app.ai.voice.agents.breeze_buddy.observability.tracing_setup import auto_tr
 from app.ai.voice.agents.breeze_buddy.template.context import TemplateContext
 from app.ai.voice.agents.breeze_buddy.template.hooks import HookRegistry
 from app.ai.voice.agents.breeze_buddy.template.input_collection import (
+    get_node_back_channel_config,
     get_node_user_speech_timeout,
 )
 from app.ai.voice.agents.breeze_buddy.template.interruption import (
@@ -99,6 +100,14 @@ async def transition_handler(
         await apply_node_interruption_config(
             context, transition_to, user_speech_timeout=user_speech_timeout
         )
+
+        # --- Back-channel configuration ---
+        # Disable from previous node first, then enable if new node has it configured.
+        if context.back_channel:
+            context.back_channel.disable()
+            bc_config = get_node_back_channel_config(context, transition_to)
+            if bc_config:
+                context.back_channel.enable(bc_config)
 
         next_node = context.create_node_from_template(transition_to)
 
