@@ -21,6 +21,10 @@ from pipecat.processors.aggregators.llm_response_universal import (
     LLMContextAggregatorPair,
     LLMUserAggregatorParams,
 )
+from pipecat.processors.frameworks.rtvi import (
+    RTVIFunctionCallReportLevel,
+    RTVIObserverParams,
+)
 from pipecat.services.azure.llm import AzureLLMService
 from pipecat.services.openai.base_llm import BaseOpenAILLMService
 from pipecat.turns.user_mute import AlwaysUserMuteStrategy, BaseUserMuteStrategy
@@ -56,6 +60,7 @@ from app.core.config.static import (
     AZURE_BREEZE_BUDDY_OPENAI_MODEL,
     AZURE_OPENAI_API_KEY,
     AZURE_OPENAI_ENDPOINT,
+    ENABLE_BREEZE_BUDDY_DAILY_EVENTS,
     ENABLE_BREEZE_BUDDY_TRACING,
     ENVIRONMENT,
 )
@@ -98,6 +103,9 @@ async def create_services(
         Tuple of (stt_service, llm_service, tts_service)
     """
     stt_language = getattr(configurations, "stt_language", None)
+    # Normalize list to comma-separated string for downstream compatibility
+    if isinstance(stt_language, list):
+        stt_language = ",".join(stt_language)
     soniox_context = getattr(configurations, "soniox_context", None)
     if stt_language:
         logger.info(f"Using STT language from template: {stt_language}")
@@ -306,6 +314,8 @@ async def build_pipeline(
     # Order: stt → transcription_gate → user_aggregator → llm → tts
     # Pipecat's LLMUserAggregator natively handles interruptions via
     # UserTurnStrategies — no custom response gate needed.
+    # Note: RTVIProcessor is added automatically by PipelineTask (pipecat v0.0.102+)
+    # when enable_rtvi=True (default). No need to add it to the pipeline manually.
     pipeline_parts = [
         transport.input(),
         stt,
@@ -341,22 +351,49 @@ async def build_pipeline(
 async def create_pipeline_task(
     pipeline: Pipeline,
     conversation_id: str,
+    is_daily_mode: bool = False,
 ) -> PipelineTask:
     """Create and configure the pipeline task.
 
     Args:
         pipeline: The built pipeline
         conversation_id: Unique conversation identifier
+        is_daily_mode: When True, configures RTVIObserver params for real-time event emission
 
     Returns:
         Configured PipelineTask
     """
+    # Pipecat v0.0.102+ automatically adds RTVIProcessor and RTVIObserver
+    # when enable_rtvi=True (default). We just configure the observer params.
+    emit_daily_events = is_daily_mode and ENABLE_BREEZE_BUDDY_DAILY_EVENTS
+    rtvi_params = (
+        RTVIObserverParams(
+            user_transcription_enabled=True,
+            bot_llm_enabled=True,
+            bot_tts_enabled=True,
+            bot_speaking_enabled=True,
+            bot_output_enabled=True,
+            user_speaking_enabled=True,
+            metrics_enabled=True,
+            function_call_report_level={
+                "*": RTVIFunctionCallReportLevel.FULL,
+            },
+        )
+        if emit_daily_events
+        else None
+    )
+
+    if emit_daily_events:
+        logger.info("RTVI daily events enabled with full function call reporting")
+
     task_params: dict[str, Any] = {
         "params": PipelineParams(
             enable_metrics=True,
             enable_usage_metrics=True,
-            observers=get_observers(),
         ),
+        "observers": get_observers(),
+        "enable_rtvi": emit_daily_events,
+        "rtvi_observer_params": rtvi_params,
     }
 
     if ENABLE_BREEZE_BUDDY_TRACING:

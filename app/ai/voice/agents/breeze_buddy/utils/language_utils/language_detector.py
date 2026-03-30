@@ -186,9 +186,11 @@ async def determine_language_for_call(
             and template_configurations.stt_language
         ):
             # Highest priority: explicit stt_language setting
-            language_code = template_configurations.stt_language
+            # stt_language can be a string ("hi") or list (["en", "hi"]) — use first entry for language name
+            stt_lang = template_configurations.stt_language
+            language_code = stt_lang[0] if isinstance(stt_lang, list) else stt_lang
             logger.info(
-                f"Using explicit stt_language '{language_code}' for request {request_id}"
+                f"Using explicit stt_language '{stt_lang}' for request {request_id}"
             )
         elif (
             hasattr(template_configurations, "payload_based_language_selection")
