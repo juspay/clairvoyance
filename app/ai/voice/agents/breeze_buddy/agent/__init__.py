@@ -1,6 +1,7 @@
 """Voice agent for handling conversations via Daily or telephony transports."""
 
 import asyncio
+import time
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional
 
@@ -12,6 +13,7 @@ from pipecat.frames.frames import LLMMessagesAppendFrame
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineTask
 from pipecat.processors.aggregators.llm_context import LLMContext
+from pipecat.processors.frameworks.rtvi import RTVIServerMessageFrame
 from pipecat.runner.types import RunnerArguments
 from pipecat.runner.utils import (
     _create_telephony_transport,
@@ -155,12 +157,32 @@ class Agent:
         # Transcription gate processor (always present in pipeline)
         self.speech_gate: Any = None
 
+        # RTVI processor for daily mode real-time events
+        self._rtvi_processor: Any = None
+
         # Error tracking
         self.errors: List[Dict[str, Any]] = []
 
     @property
     def is_daily_mode(self) -> bool:
         return self.transport_type == TRANSPORT_TYPE_DAILY
+
+    async def _emit_rtvi_event(
+        self, event_type: str, payload: Optional[Dict[str, Any]] = None
+    ) -> None:
+        """Emit a custom RTVI event to the connected client (daily mode only)."""
+        if not self._rtvi_processor:
+            return
+        try:
+            data: Dict[str, Any] = {
+                "type": event_type,
+                "timestamp": int(time.time() * 1000),
+            }
+            if payload:
+                data["payload"] = payload
+            await self._rtvi_processor.push_frame(RTVIServerMessageFrame(data=data))
+        except Exception as e:
+            logger.warning(f"Failed to emit RTVI event '{event_type}': {e}")
 
     async def _handle_user_idle_timeout(self, idle_retry_count: int) -> None:
         """Handle user idle timeout by ending call with BUSY outcome.
@@ -555,15 +577,26 @@ class Agent:
             detailed_msg = f"[PIPELINE] {processor}: {error_msg}"
             logger.info(f"[PIPELINE_ERROR] {detailed_msg}")
             track_error(self.errors, detailed_msg)
+            if self._rtvi_processor:
+                await self._emit_rtvi_event(
+                    "pipeline-error",
+                    {"processor": str(processor), "error": error_msg},
+                )
 
         @self.transport.event_handler("on_client_connected")
         async def on_client_connected(transport, client):
             logger.info(f"Client connected: {client}")
+            if self._rtvi_processor:
+                await self._emit_rtvi_event("conversation-start")
             await self._handle_client_connected()
 
         @self.transport.event_handler("on_client_disconnected")
         async def on_client_disconnected(transport, client):
             logger.info(f"Client disconnected: {client}")
+            if self._rtvi_processor:
+                await self._emit_rtvi_event(
+                    "conversation-end", {"reason": "client_disconnected"}
+                )
             # Cancel post-greeting idle task if still running
             if self._post_greeting_task and not self._post_greeting_task.done():
                 self._post_greeting_task.cancel()
@@ -576,7 +609,20 @@ class Agent:
         @self.task.event_handler("on_idle_timeout")
         async def on_idle_timeout(task):
             logger.info("Idle timeout detected.")
+            if self._rtvi_processor:
+                await self._emit_rtvi_event(
+                    "conversation-end", {"reason": "idle_timeout"}
+                )
             await self._handle_unexpected_disconnect("idle_timeout")
+
+        # Register RTVI-specific event handlers for daily mode
+        if self._rtvi_processor:
+
+            @self._rtvi_processor.event_handler("on_client_ready")
+            async def on_client_ready(rtvi):
+                await rtvi.push_frame(
+                    RTVIServerMessageFrame(data={"type": "bot-ready"})
+                )
 
         # Register user turn started event to reset idle retry counter
         if self._context_aggregator and self._user_idle_callback_handler:
@@ -731,7 +777,13 @@ class Agent:
             self.conversation_id = generate_conversation_id(lead_payload)
             update_log_context(conversation_id=self.conversation_id)
 
-            self.task = await create_pipeline_task(pipeline, self.conversation_id)
+            self.task = await create_pipeline_task(
+                pipeline, self.conversation_id, is_daily_mode=self.is_daily_mode
+            )
+
+            # Get RTVI processor reference from task (auto-created by pipecat)
+            if self.is_daily_mode and hasattr(self.task, "rtvi") and self.task.rtvi:
+                self._rtvi_processor = self.task.rtvi
 
             # Validate required attributes for flow setup
             if not self.template:

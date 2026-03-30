@@ -292,7 +292,7 @@ class ConfigurationModel(BaseModel):
     tts_selection_config: Optional[TTSSelectionConfig] = (
         None  # LLM-based TTS provider selection config
     )
-    stt_language: Optional[str] = None
+    stt_language: Optional[str | list[str]] = None
     soniox_context: Optional[str] = Field(
         None,
         description="Soniox STT context for speech recognition domain adaptation (e.g., business terms, product names). Overrides BREEZE_BUDDY_SONIOX_CONTEXT env var if set.",
