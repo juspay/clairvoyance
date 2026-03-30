@@ -290,6 +290,26 @@ class RedisService:
             logger.error(f"Redis EXPIRE error for key {key}: {e}")
             return False
 
+    async def eval_script(self, script: str, keys: List[str], args: List[Any]) -> Any:
+        """Evaluate a Lua script on Redis."""
+        try:
+            client = await self.get_client()
+            result = client.eval(script, len(keys), *keys, *args)  # type: ignore[union-attr]
+            if hasattr(result, "__await__"):
+                return await cast(Awaitable[Any], result)
+            return result
+        except RedisError as e:
+            logger.error(
+                f"Redis EVAL error for script: {script!r}, keys: {keys}, args_len: {len(args)}: {e}"
+            )
+            return None
+        except Exception as e:
+            logger.error(
+                f"Unexpected Redis EVAL error for script: {script!r}, keys: {keys}, args_len: {len(args)}: {e}",
+                exc_info=True,
+            )
+            return None
+
     async def close(self) -> None:
         """Close Redis connections"""
         if self._factory:

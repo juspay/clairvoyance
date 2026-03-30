@@ -2,6 +2,7 @@
 Cron manager for handling background tasks.
 """
 
+import asyncio
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -12,6 +13,9 @@ from app.ai.voice.agents.breeze_buddy.managers.utils import (
 )
 from app.ai.voice.agents.breeze_buddy.services.agent_router.client import (
     safe_release_pod,
+)
+from app.ai.voice.agents.breeze_buddy.services.rate_limiter import (
+    process_outbound_rate_limit_alert,
 )
 from app.ai.voice.agents.breeze_buddy.services.telephony.exotel.recording import (
     download_call_recording as download_call_recording_exotel,
@@ -436,15 +440,16 @@ async def process_backlog_leads():
                     )
                     await release_lock_on_lead_by_id(locked_lead.id)
                     continue
-                # Check if customer phone number is blacklisted
-                blacklist_phone = (locked_lead.payload or {}).get(
+
+                customer_phone = (locked_lead.payload or {}).get(
                     "customer_mobile_number"
                 )
-                if blacklist_phone and await is_number_blacklisted(
-                    blacklist_phone, locked_lead.reseller_id
+
+                if customer_phone and await is_number_blacklisted(
+                    customer_phone, locked_lead.reseller_id
                 ):
                     logger.info(
-                        f"Skipping lead {locked_lead.id} - phone number {blacklist_phone} is blacklisted"
+                        f"Skipping lead {locked_lead.id} - phone number {customer_phone} is blacklisted"
                     )
                     await update_lead_call_completion_details(
                         id=locked_lead.id,
@@ -525,6 +530,13 @@ async def process_backlog_leads():
                     await _release_number(number_to_use.id, number_to_use.provider)
                     await release_lock_on_lead_by_id(locked_lead.id)
                     continue
+                _rate_limit_task = asyncio.create_task(
+                    process_outbound_rate_limit_alert(
+                        customer_phone=customer_mobile,
+                        lead_id=str(locked_lead.id),
+                        reseller_id=locked_lead.reseller_id,
+                    )
+                )
                 call = call_provider.make_call(
                     customer_mobile,
                     number_to_use.number,
