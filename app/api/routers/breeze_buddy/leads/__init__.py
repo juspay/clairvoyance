@@ -8,7 +8,7 @@ Endpoints:
 - POST   /leads              - Push new lead for processing
 - GET    /leads/{id}         - Get lead details by ID
 - DELETE /leads/{id}         - Delete (abort) a lead by ID
-- GET    /leads/recording/{call_sid} - Get call recording audio
+- GET    /leads/recording/{call_sid} - Get call recording audio (telephony & Daily)
 
 For backward compatibility, old endpoints are available in deprecated/leads.py
 """
@@ -140,9 +140,10 @@ async def get_call_recording(
     current_user: UserInfo = Depends(get_current_user_with_rbac),
 ):
     """
-    Fetches call recording audio for a given call SID.
+    Fetches call recording audio for a given call SID or Daily room name.
 
-    Automatically detects the provider (TWILIO or EXOTEL) and uses appropriate credentials.
+    Automatically detects the mode (telephony vs Daily) and provider,
+    then uses appropriate credentials to fetch the recording.
     Returns the audio file as a streaming response.
 
     RBAC:
@@ -150,20 +151,27 @@ async def get_call_recording(
     - Merchant/Shop: Can only access recordings for authorized merchants/shops
 
     Path Parameters:
-    - call_sid: The call SID to fetch recording for
+    - call_sid: The call SID (telephony) or room name (Daily) to fetch recording for
 
     Returns:
-        Audio file stream (MP3)
+        Audio file stream (MP3 for telephony, MP4 for Daily)
         404 if not found or access denied
     """
     try:
-        audio_file = await get_call_recording_handler(call_sid, current_user)
+        result = await get_call_recording_handler(call_sid, current_user)
+
+        if result.is_daily:
+            media_type = "audio/mp4"
+            extension = "mp4"
+        else:
+            media_type = "audio/mpeg"
+            extension = "mp3"
 
         return StreamingResponse(
-            audio_file,
-            media_type="audio/mpeg",
+            result.audio_file,
+            media_type=media_type,
             headers={
-                "Content-Disposition": f'inline; filename="recording_{call_sid}.mp3"'
+                "Content-Disposition": f'inline; filename="recording_{call_sid}.{extension}"'
             },
         )
     except HTTPException:

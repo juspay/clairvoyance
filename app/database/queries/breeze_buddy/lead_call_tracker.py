@@ -265,6 +265,24 @@ def update_lead_call_initiated_time_by_id_query(
     return text, values
 
 
+def update_lead_call_id_by_id_query(
+    lead_id: str, call_id: str
+) -> Tuple[str, List[Any]]:
+    """
+    Generate query to update lead call_id by lead id.
+    Used for Daily mode to store the Daily room name as call_id
+    so that recording webhooks can look up the lead by room name.
+    """
+    text = f"""
+        UPDATE "{LEAD_CALL_TRACKER_TABLE}"
+        SET "call_id" = $1, "updated_at" = NOW()
+        WHERE "id" = $2
+        RETURNING *;
+    """
+    values = [call_id, lead_id]
+    return text, values
+
+
 def update_lead_call_completion_details_query(
     id: str,
     status: Optional[LeadCallStatus] = None,

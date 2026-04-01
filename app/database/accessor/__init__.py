@@ -43,6 +43,7 @@ from .breeze_buddy.lead_call_tracker import (
     release_lock_on_lead_by_id,
     update_lead_call_completion_details,
     update_lead_call_details,
+    update_lead_call_id_by_id,
     update_lead_call_initiated_time,
     update_lead_call_recording_url,
 )
@@ -96,6 +97,7 @@ __all__ = [
     "get_lead_by_id",
     "update_lead_call_completion_details",
     "update_lead_call_initiated_time",
+    "update_lead_call_id_by_id",
     "update_lead_call_recording_url",
     "get_all_lead_call_trackers",
     "get_lead_based_analytics",

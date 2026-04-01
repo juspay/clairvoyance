@@ -25,7 +25,9 @@ from app.ai.voice.agents.breeze_buddy.services.telephony.twilio.recording import
 from app.ai.voice.agents.breeze_buddy.services.telephony.utils import get_voice_provider
 from app.ai.voice.agents.breeze_buddy.template.types import TemplateModel
 from app.ai.voice.agents.breeze_buddy.utils.common import send_webhook_with_retry
-from app.core.config.static import UPLOAD_BREEZE_BUDDY_CALL_RECORDINGS_TO_CLOUD
+from app.core.config.static import (
+    UPLOAD_BREEZE_BUDDY_CALL_RECORDINGS_TO_CLOUD,
+)
 from app.core.logger import logger
 from app.core.transport.http_client import create_aiohttp_session
 from app.database.accessor import (
@@ -198,7 +200,6 @@ async def _get_available_number(
                 number = outbound_number
 
     else:
-
         logger.info(
             f"Using backward compatible approach: looking for outbound number "
             f"matching reseller {config.reseller_id}, shop {config.merchant_id}"

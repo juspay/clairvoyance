@@ -4,12 +4,14 @@ All handlers perform database operations and enforce business rules.
 """
 
 from datetime import datetime, timedelta, timezone
-from io import BytesIO
 from typing import Dict
 from uuid import uuid4
 
 from fastapi import HTTPException, status
 
+from app.ai.voice.agents.breeze_buddy.services.daily.recording import (
+    download_call_recording as download_call_recording_daily,
+)
 from app.ai.voice.agents.breeze_buddy.services.telephony.exotel.recording import (
     download_call_recording as download_call_recording_exotel,
 )
@@ -20,6 +22,7 @@ from app.ai.voice.agents.breeze_buddy.services.telephony.twilio.recording import
     download_call_recording as download_call_recording_twilio,
 )
 from app.ai.voice.agents.breeze_buddy.types.models import (
+    CallRecordingResult,
     LeadCancellation,
     PushLeadRequest,
 )
@@ -251,22 +254,24 @@ async def push_lead_handler(req: PushLeadRequest, current_user: UserInfo) -> Dic
         )
 
 
-async def get_call_recording_handler(call_sid: str, current_user: UserInfo) -> BytesIO:
+async def get_call_recording_handler(
+    call_sid: str, current_user: UserInfo
+) -> CallRecordingResult:
     """
-    Get call recording audio file for a given call SID.
+    Get call recording audio file for a given call SID or Daily room name.
 
     This handler:
     1. Fetches lead by call_id to get reseller_id and merchant_id
     2. Validates RBAC access (fails fast before fetching recording)
-    3. Gets provider from outbound number
-    4. Downloads audio from the appropriate provider (Twilio/Exotel)
+    3. For Daily mode leads: downloads via Daily API access-link or GCS
+    4. For telephony leads: gets provider from outbound number and downloads
 
     Args:
-        call_sid: The call SID to fetch recording for
+        call_sid: The call SID (telephony) or room name (Daily) to fetch recording for
         current_user: Current authenticated user
 
     Returns:
-        BytesIO audio file
+        CallRecordingResult with audio file and whether it's a Daily recording
 
     Raises:
         HTTPException: 404 if not found, 400 if unsupported provider, 502 if download fails
@@ -297,7 +302,26 @@ async def get_call_recording_handler(call_sid: str, current_user: UserInfo) -> B
         current_user, call_sid, lead.reseller_id, lead.merchant_id
     )
 
-    # Step 3: Check if recording URL exists
+    # Step 3: If this is a Daily mode lead, use on-demand API lookup (no recording_url needed)
+    if lead.execution_mode in (ExecutionMode.DAILY, ExecutionMode.DAILY_TEST):
+        if not lead.call_id:
+            logger.warning(f"No room name (call_id) for Daily lead: {call_sid}")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Recording not found for call_sid: {call_sid}",
+            )
+
+        audio_file = await download_call_recording_daily(lead.call_id)
+        if not audio_file:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Failed to download recording from Daily",
+            )
+
+        audio_file.seek(0)
+        return CallRecordingResult(audio_file=audio_file, is_daily=True)
+
+    # Step 4: Check if recording URL exists (required for telephony only)
     if not lead.recording_url:
         logger.warning(f"No recording URL for call_sid: {call_sid}")
         raise HTTPException(
@@ -305,7 +329,7 @@ async def get_call_recording_handler(call_sid: str, current_user: UserInfo) -> B
             detail=f"Recording not found for call_sid: {call_sid}",
         )
 
-    # Step 4: Get provider from outbound number
+    # Step 5: Get provider from outbound number (telephony only)
     if not lead.outbound_number_id:
         logger.error(f"No outbound number ID for call_sid: {call_sid}")
         raise HTTPException(
@@ -323,7 +347,7 @@ async def get_call_recording_handler(call_sid: str, current_user: UserInfo) -> B
 
     call_provider = outbound_number.provider.value
 
-    # Step 5: Fetch audio with provider-specific credentials
+    # Step 6: Fetch audio with provider-specific credentials
     logger.info(f"Fetching recording from URL: {lead.recording_url}")
 
     if call_provider.upper() == "TWILIO":
@@ -346,7 +370,7 @@ async def get_call_recording_handler(call_sid: str, current_user: UserInfo) -> B
         )
 
     audio_file.seek(0)
-    return audio_file
+    return CallRecordingResult(audio_file=audio_file, is_daily=False)
 
 
 async def delete_lead_handler(
