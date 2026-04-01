@@ -13,11 +13,15 @@ from app.core.logger import logger
 search_tool = {"google_search": {}}
 tools_list = [search_tool]
 
-gemini_llm = GoogleLLMService(
-    api_key=GEMINI_API_KEY,
-    model=GEMINI_SEARCH_RESULT_API_MODEL,
-    tools=tools_list,
-)
+gemini_llm: GoogleLLMService | None = None
+if GEMINI_API_KEY:
+    gemini_llm = GoogleLLMService(
+        api_key=GEMINI_API_KEY,
+        model=GEMINI_SEARCH_RESULT_API_MODEL,
+        tools=tools_list,
+    )
+else:
+    logger.warning("GEMINI_API_KEY not set — web search tool will be unavailable")
 
 
 # ---------- 2. Define a function that uses Gemini to perform web search ----------
@@ -26,6 +30,11 @@ async def gemini_search_fn(params: FunctionCallParams):
     if not query or not query.strip():
         logger.warning("Gemini search called with an empty query.")
         await params.result_callback({"error": "Search query cannot be empty."})
+        return
+
+    if gemini_llm is None:
+        logger.warning("Gemini search unavailable — GEMINI_API_KEY not configured")
+        await params.result_callback({"error": "Web search is not configured."})
         return
 
     logger.info(f"Performing Gemini search for query: {query}")
