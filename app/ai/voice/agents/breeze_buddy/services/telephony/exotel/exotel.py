@@ -62,15 +62,17 @@ class ExotelProvider(VoiceCallProvider):
         customer_mobile_number: str,
         outbound_number: str,
         reseller_id: Optional[str] = None,
+        merchant_id: Optional[str] = None,
         template_name: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """
         Initiate an outbound call via Exotel.
 
         Note: Exotel uses applet-based routing configured in their dashboard,
-        so reseller_id and template_name are not used here directly (included
-        for interface consistency). The template is resolved at answer-time
-        via the voicebot-url webhook handler.
+        so reseller_id, merchant_id, and template_name are not used here
+        directly (included for interface consistency). The template is resolved
+        at answer-time via the voicebot-url webhook handler, where merchant_id
+        is used for merchant pool allocation.
         """
         # Resolve applet app ID: telephony_config override > env default
         if self.telephony_config and self.telephony_config.applet_app_id:

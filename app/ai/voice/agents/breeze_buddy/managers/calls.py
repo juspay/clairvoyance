@@ -198,7 +198,6 @@ async def _get_available_number(
                 number = outbound_number
 
     else:
-
         logger.info(
             f"Using backward compatible approach: looking for outbound number "
             f"matching reseller {config.reseller_id}, shop {config.merchant_id}"
@@ -534,6 +533,7 @@ async def process_backlog_leads():
                     customer_mobile,
                     number_to_use.number,
                     reseller_id=locked_lead.reseller_id,
+                    merchant_id=getattr(locked_lead, "merchant_id", None),
                     template_name=locked_lead.template,
                 )
 
@@ -735,6 +735,7 @@ async def process_backlog_leads():
                         retry_customer_mobile,
                         retry_number_to_use.number,
                         reseller_id=locked_lead.reseller_id,
+                        merchant_id=getattr(locked_lead, "merchant_id", None),
                         template_name=locked_lead.template,
                     )
 

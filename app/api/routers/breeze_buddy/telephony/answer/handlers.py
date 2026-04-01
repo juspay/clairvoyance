@@ -120,6 +120,7 @@ async def resolve_call_templates(
             "is_outbound": True,
             "template_id": str(template.id),
             "reseller_id": lead.reseller_id,
+            "merchant_id": lead.merchant_id,
         }
 
     # Inbound call - look up templates by outbound number
@@ -186,6 +187,7 @@ async def resolve_call_templates(
         "ivr_greeting": ivr_greeting,
         "ivr_goodbye": ivr_goodbye,
         "reseller_id": first_template.reseller_id if first_template else None,
+        "merchant_id": first_template.merchant_id if first_template else None,
     }
 
 
@@ -398,6 +400,7 @@ async def _build_provider_response(
         call_sid=call_id,
         provider=provider,
         reseller_id=result.get("reseller_id"),
+        merchant_id=result.get("merchant_id"),
         template="ws",
     )
     if allocation:

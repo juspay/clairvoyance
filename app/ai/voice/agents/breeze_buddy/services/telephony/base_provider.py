@@ -35,6 +35,7 @@ class VoiceCallProvider(ABC):
         customer_mobile_number: str,
         outbound_number: str,
         reseller_id: Optional[str] = None,
+        merchant_id: Optional[str] = None,
         template_name: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """
@@ -47,7 +48,8 @@ class VoiceCallProvider(ABC):
         Args:
             customer_mobile_number: Phone number to call
             outbound_number: Caller ID / outbound number
-            reseller_id: Optional merchant ID for tiered pod allocation
+            reseller_id: Optional reseller ID for tiered pod allocation
+            merchant_id: Optional merchant ID — routes to dedicated merchant pool
             template_name: Optional template name for WebSocket path routing
         """
 
