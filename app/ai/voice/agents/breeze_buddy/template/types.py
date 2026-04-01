@@ -5,9 +5,10 @@ Pydantic models for the dynamic workflow engine.
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, SecretStr
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
 
 from app.ai.voice.llm.types import LLMConfiguration
+from app.core.deprecation import log_deprecated_fields
 
 
 class ActionType(str, Enum):
@@ -31,6 +32,214 @@ class VadConfig(BaseModel):
     min_volume: Optional[float] = Field(
         None, ge=0.0, description="Minimum volume threshold for VAD"
     )
+
+
+# ---------------------------------------------------------------------------
+# STT Configuration (normalized, provider-agnostic)
+# ---------------------------------------------------------------------------
+
+
+class STTProvider(str, Enum):
+    """Supported STT providers."""
+
+    SONIOX = "soniox"
+    DEEPGRAM = "deepgram"
+    SARVAM = "sarvam"
+    OPENAI = "openai"
+    GOOGLE = "google"
+
+
+class SonioxSTTConfig(BaseModel):
+    """Soniox-specific STT settings."""
+
+    context: Optional[str] = Field(
+        None,
+        description="Soniox context JSON for domain adaptation "
+        "(business terms, product names). Overrides env default if set.",
+    )
+    model: Optional[str] = Field(
+        None, description="Soniox model (e.g. 'stt-rt-v4'). Defaults from env."
+    )
+
+
+class DeepgramSTTConfig(BaseModel):
+    """Deepgram-specific STT settings.
+
+    All params have sensible defaults — only override what you need.
+    """
+
+    model: str = Field("nova-3-general", description="Deepgram model.")
+    endpointing_ms: bool | int = Field(
+        25,
+        description="Silence threshold before endpointing fires. "
+        "Integer for exact ms (e.g. 25), True for Deepgram default (10ms), "
+        "False to disable. Low values (25ms) are ideal with SmartTurn.",
+    )
+    utterance_end_ms: Optional[int] = Field(
+        None,
+        ge=1000,
+        description="Max silence (ms) after last word before UtteranceEnd event. "
+        "None = disabled (recommended with SmartTurn). "
+        "Deepgram minimum is 1000ms when enabled.",
+    )
+    no_delay: bool = Field(True, description="Real-time processing with minimal delay.")
+    smart_format: bool = Field(
+        True, description="Smart formatting (phone numbers, dates, currency)."
+    )
+    punctuate: bool = Field(True, description="Add punctuation to transcription.")
+    numerals: bool = Field(
+        True,
+        description="Convert spoken numbers to numerals (critical for Indian lakhs/crores).",
+    )
+    profanity_filter: bool = Field(
+        False, description="Filter profanity (disabled for business context)."
+    )
+    diarize: bool = Field(
+        False, description="Speaker diarization (disabled for single-speaker)."
+    )
+    auto_detect_language: bool = Field(
+        False, description="Auto-detect language (uses 'multi' parameter)."
+    )
+
+
+class SarvamSTTConfig(BaseModel):
+    """Sarvam-specific STT settings."""
+
+    model: Optional[str] = Field(
+        None, description="Sarvam model (e.g. 'saarika:v2.5'). Defaults from env."
+    )
+    language_code: Optional[str] = Field(
+        None, description="Sarvam language code. Defaults from env."
+    )
+
+
+class SmartTurnConfig(BaseModel):
+    """SmartTurn ML turn-detection settings.
+
+    Controls the ONNX-based Whisper model that analyzes audio prosody and
+    intonation to predict when the user is done speaking.  Only used when
+    ``turn_detection='smart_turn'``.
+    """
+
+    stop_secs: float = Field(
+        3.0,
+        ge=0.0,
+        description="Max silence (seconds) before forcing turn end even if "
+        "the ML model hasn't triggered. Safety timeout.",
+    )
+    pre_speech_ms: float = Field(
+        500.0,
+        ge=0.0,
+        description="Milliseconds of audio to include before speech starts, "
+        "giving the ML model extra context for better predictions.",
+    )
+    max_duration_secs: float = Field(
+        8.0,
+        ge=1.0,
+        description="Max audio segment duration (seconds) fed to the ONNX model. "
+        "Longer segments give more context but increase inference time.",
+    )
+    cpu_count: int = Field(
+        1,
+        ge=1,
+        description="Number of CPUs for ONNX Runtime inference. "
+        "Keep at 1 for single-CPU deployments.",
+    )
+
+
+class TurnDetectionMode(str, Enum):
+    """How the pipeline detects when the user is done speaking.
+
+    STT_NATIVE:  Provider handles endpoint detection natively.
+                 Soniox sends <end> token; pipeline fires immediately.
+                 Default — matches current production behavior.
+    SMART_TURN:  SmartTurn ML model (Whisper-based, 8 MB ONNX) analyzes audio
+                 prosody / intonation to predict turn completion.
+                 Auto-enables Silero VAD (stop_secs=0.2) as trigger.
+                 Best for Deepgram Nova-3.
+    TIMEOUT:     Simple timer after last finalized transcript.  Resets on each
+                 new transcript.  Configurable via user_speech_timeout.
+    """
+
+    STT_NATIVE = "stt_native"
+    SMART_TURN = "smart_turn"
+    TIMEOUT = "timeout"
+
+
+class STTConfiguration(BaseModel):
+    """Template-level STT configuration.
+
+    Normalized, provider-agnostic model. Provider-specific settings go in the
+    matching nested config (``soniox``, ``deepgram``, ``sarvam``).
+    Turn detection mode is included here because it's tightly coupled to the
+    provider choice (soniox → stt_native, deepgram → smart_turn).
+
+    When not set on a template, falls back to BREEZE_BUDDY_STT_SERVICE env var
+    and provider-specific env defaults.
+
+    Examples::
+
+        # Deepgram Nova-3 with SmartTurn
+        {"provider": "deepgram", "language": "en",
+         "turn_detection": "smart_turn",
+         "deepgram": {"model": "nova-3-general"}}
+
+        # Soniox with domain context (default turn detection)
+        {"provider": "soniox", "language": ["en", "hi"],
+         "soniox": {"context": "{...}"}}
+
+        # Deepgram with simple timeout
+        {"provider": "deepgram", "turn_detection": "timeout",
+         "user_speech_timeout": 0.5}
+
+        # Minimal — all defaults from env
+        {"provider": "soniox"}
+    """
+
+    provider: STTProvider = Field(
+        STTProvider.SONIOX,
+        description="STT provider to use for this template.",
+    )
+    language: Optional[str | list[str]] = Field(
+        None,
+        description="Language code(s) for STT. String or list "
+        "(e.g. 'en', ['en', 'hi']). Provider-specific handling.",
+    )
+    payload_based_language_selection: bool = Field(
+        False,
+        description="Use LLM to detect language from lead payload.",
+    )
+    turn_detection: TurnDetectionMode = Field(
+        TurnDetectionMode.STT_NATIVE,
+        description="Turn detection strategy. stt_native for Soniox, "
+        "smart_turn for Deepgram Nova-3 (ML-based), timeout for simple timer.",
+    )
+    user_speech_timeout: float = Field(
+        0.3,
+        ge=0.0,
+        description="Seconds to wait after last finalized transcript before "
+        "ending turn. Only used when turn_detection='timeout'.",
+    )
+
+    # Provider-specific — only the matching one is used at runtime
+    soniox: Optional[SonioxSTTConfig] = None
+    deepgram: Optional[DeepgramSTTConfig] = None
+    sarvam: Optional[SarvamSTTConfig] = None
+
+    # SmartTurn ML config — only used when turn_detection='smart_turn'
+    smart_turn: Optional[SmartTurnConfig] = None
+
+    @model_validator(mode="after")
+    def _normalize_user_speech_timeout(self) -> "STTConfiguration":
+        """Force user_speech_timeout=0.0 for non-TIMEOUT modes.
+
+        STT_NATIVE fires immediately on finalized transcript (0.0s).
+        SMART_TURN uses its own ML-based detection (timeout irrelevant).
+        Only TIMEOUT mode honors the configured user_speech_timeout.
+        """
+        if self.turn_detection != TurnDetectionMode.TIMEOUT:
+            self.user_speech_timeout = 0.0
+        return self
 
 
 class NoiseFilterType(str, Enum):
@@ -281,6 +490,28 @@ class UserIdleHandlingConfig(BaseModel):
 
 
 class ConfigurationModel(BaseModel):
+    # --- STT (provider + turn detection) ---
+    stt_configuration: Optional[STTConfiguration] = Field(
+        None,
+        description="STT provider, language, turn detection, and provider-specific "
+        "config. When set, takes priority over legacy stt_language / soniox_context fields.",
+    )
+
+    # --- Legacy STT fields (backward compat — prefer stt_configuration) ---
+    stt_language: Optional[str | list[str]] = Field(
+        None,
+        description="DEPRECATED: Use stt_configuration.language instead.",
+    )
+    soniox_context: Optional[str] = Field(
+        None,
+        description="DEPRECATED: Use stt_configuration.soniox.context instead.",
+    )
+    payload_based_language_selection: bool = Field(
+        False,
+        description="DEPRECATED: Use stt_configuration.payload_based_language_selection instead.",
+    )
+
+    # --- TTS ---
     tts_voice_name: Optional[TTSVoiceName] = None
     mira_voice_id: Optional[str] = (
         None  # DEPRECATED: Use cartesia_voice_configurations.voice_id instead
@@ -294,12 +525,8 @@ class ConfigurationModel(BaseModel):
     tts_selection_config: Optional[TTSSelectionConfig] = (
         None  # LLM-based TTS provider selection config
     )
-    stt_language: Optional[str | list[str]] = None
-    soniox_context: Optional[str] = Field(
-        None,
-        description="Soniox STT context for speech recognition domain adaptation (e.g., business terms, product names). Overrides BREEZE_BUDDY_SONIOX_CONTEXT env var if set.",
-    )
-    payload_based_language_selection: bool = False
+
+    # --- Audio ---
     enable_background_sound: bool = False
     background_sound_file: Optional[BackgroundSoundFile] = None
     background_sound_volume: float = 2.0
@@ -342,6 +569,46 @@ class ConfigurationModel(BaseModel):
         None,
         description="LLM provider and model configuration",
     )
+
+    @model_validator(mode="after")
+    def _backfill_legacy_from_stt_config(self):
+        """Mirror stt_configuration values to legacy fields for backward compat.
+
+        Legacy consumers (flow.py, language_detector.py) read top-level
+        stt_language / payload_based_language_selection. When stt_configuration
+        is set but legacy fields are not explicitly provided, backfill so
+        those consumers keep working.
+        """
+        if self.stt_configuration is None:
+            return self
+        stt = self.stt_configuration
+        if "stt_language" not in self.model_fields_set and stt.language is not None:
+            self.stt_language = stt.language
+        if (
+            "soniox_context" not in self.model_fields_set
+            and stt.soniox is not None
+            and stt.soniox.context is not None
+        ):
+            self.soniox_context = stt.soniox.context
+        if (
+            "payload_based_language_selection" not in self.model_fields_set
+            and stt.payload_based_language_selection
+        ):
+            self.payload_based_language_selection = stt.payload_based_language_selection
+        return self
+
+    @model_validator(mode="after")
+    def _warn_deprecated_fields(self):
+        log_deprecated_fields(
+            self,
+            {
+                "stt_language": "stt_configuration.language",
+                "soniox_context": "stt_configuration.soniox.context",
+                "payload_based_language_selection": "stt_configuration.payload_based_language_selection",
+                "mira_voice_id": "cartesia_voice_configurations.voice_id",
+            },
+        )
+        return self
 
 
 class FlowAction(BaseModel):

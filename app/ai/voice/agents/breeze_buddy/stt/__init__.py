@@ -1,8 +1,27 @@
+"""Breeze Buddy STT service creation.
+
+Central routing: accepts a normalized ``STTConfiguration`` from the template
+and casts it to the provider-specific builder config. Defaults are baked into
+the Pydantic models — no env/dynamic config needed (except API keys).
+"""
+
+from __future__ import annotations
+
+from typing import Optional
+
 from pipecat.transcriptions.language import Language
 
+from app.ai.voice.agents.breeze_buddy.template.types import (
+    DeepgramSTTConfig,
+    SonioxSTTConfig,
+    STTConfiguration,
+    STTProvider,
+)
 from app.ai.voice.stt import (
+    DeepgramConfig,
     SarvamConfig,
     SonioxConfig,
+    build_deepgram_stt,
     build_google_stt,
     build_openai_stt,
     build_sarvam_stt,
@@ -24,6 +43,7 @@ from app.core.config.static import (
     BREEZE_BUDDY_SONIOX_MODEL,
     BREEZE_BUDDY_SONIOX_VAD_FORCE_TURN_ENDPOINT,
     BREEZE_BUDDY_STT_SERVICE,
+    DEEPGRAM_API_KEY,
     GOOGLE_CREDENTIALS_JSON,
     OPENAI_STT_API_KEY,
     OPENAI_STT_MODEL,
@@ -34,88 +54,165 @@ from app.core.config.static import (
 from app.core.logger import logger
 
 
-async def get_stt_service(
-    language_hints: str | None = None, soniox_context: str | None = None
-):
-    """
-    Returns an STT service instance based on the environment configuration.
+def _normalize_language(language: str | list[str] | None) -> str | None:
+    """Normalize language to comma-separated string (for Soniox language_hints)."""
+    if language is None:
+        return None
+    if isinstance(language, list):
+        return ",".join(language)
+    return language
 
-    Args:
-        language_hints: Optional list of language codes (e.g., ["en", "hi"]) to help STT recognize specific languages.
-                       Only used with soniox STT service.
-        soniox_context: Optional Soniox STT context for speech recognition domain adaptation.
-                       If provided, overrides BREEZE_BUDDY_SONIOX_CONTEXT env var.
+
+def _deepgram_language(language: str | list[str] | None) -> str:
+    """Normalize language for Deepgram (single code only, not CSV).
+
+    Deepgram's ``language`` option accepts a single code (e.g. ``"en"``)
+    or ``"multi"`` for auto-detection — not comma-separated lists.
     """
-    if BREEZE_BUDDY_STT_SERVICE == "sarvam":
-        if not SARVAM_API_KEY:
-            raise ValueError(
-                "SARVAM_API_KEY is required when BREEZE_BUDDY_STT_SERVICE=sarvam"
+    if language is None:
+        return "en"
+    if isinstance(language, list):
+        if len(language) > 1:
+            logger.warning(
+                "Deepgram supports only a single language code; "
+                "using first value '{}' from {}",
+                language[0],
+                language,
             )
+        return language[0] if language else "en"
+    return language
 
-        # Get Breeze Buddy-specific dynamic config values from Redis
-        bb_sarvam_stt_model = await BB_SARVAM_STT_MODEL()
-        bb_sarvam_stt_language_code = await BB_SARVAM_STT_LANGUAGE_CODE()
-        bb_sarvam_stt_prompt = await BB_SARVAM_STT_PROMPT()
-        bb_sarvam_stt_vad_signals = await BB_SARVAM_STT_VAD_SIGNALS()
-        bb_sarvam_stt_high_vad_sensitivity = await BB_SARVAM_STT_HIGH_VAD_SENSITIVITY()
 
-        # Pass raw config values - model-specific logic is handled internally by build_sarvam_stt
+async def create_stt_from_config(config: STTConfiguration):
+    """Create STT service from normalized STTConfiguration.
+
+    Central routing: reads ``config.provider`` and casts the normalized
+    config to the provider-specific builder config. All tuning params
+    come from the template config with sensible defaults baked in.
+    """
+    if config.provider == STTProvider.DEEPGRAM:
+        if not DEEPGRAM_API_KEY:
+            raise ValueError("DEEPGRAM_API_KEY is required for deepgram STT")
+
+        # All defaults are in DeepgramSTTConfig — no env/dynamic lookup needed
+        dg = config.deepgram or DeepgramSTTConfig()
+
+        logger.info("Using Deepgram Nova-3 STT service for Breeze Buddy")
+        return build_deepgram_stt(
+            DeepgramConfig(
+                api_key=DEEPGRAM_API_KEY,
+                model=dg.model,
+                language=_deepgram_language(config.language),
+                auto_detect_language=dg.auto_detect_language,
+                smart_format=dg.smart_format,
+                punctuate=dg.punctuate,
+                endpointing=dg.endpointing_ms,
+                utterance_end_ms=dg.utterance_end_ms,  # None = disabled
+                no_delay=dg.no_delay,
+                interim_results=True,
+                profanity_filter=dg.profanity_filter,
+                numerals=dg.numerals,
+                diarize=dg.diarize,
+            )
+        )
+
+    if config.provider == STTProvider.SONIOX:
+        if not SONIOX_API_KEY:
+            raise ValueError("SONIOX_API_KEY is required for soniox STT")
+
+        sx = config.soniox
+        effective_context = (
+            sx.context if sx and sx.context else BREEZE_BUDDY_SONIOX_CONTEXT
+        )
+        effective_model = sx.model if sx and sx.model else BREEZE_BUDDY_SONIOX_MODEL
+
+        if sx and sx.context:
+            logger.info("Using template-specific Soniox context")
+
+        language = _normalize_language(config.language)
+        return build_soniox_stt(
+            SonioxConfig(
+                api_key=SONIOX_API_KEY,
+                model=effective_model,
+                vad_force_turn_endpoint=BREEZE_BUDDY_SONIOX_VAD_FORCE_TURN_ENDPOINT,
+                language_hints=language or BREEZE_BUDDY_SONIOX_LANGUAGE_HINTS,
+                context_json=effective_context,
+                enable_non_final_tokens=BREEZE_BUDDY_SONIOX_ENABLE_NON_FINAL_TOKENS,
+                max_non_final_tokens_duration_ms=BREEZE_BUDDY_SONIOX_MAX_NON_FINAL_TOKENS_DURATION_MS,
+                max_endpoint_delay_ms=BREEZE_BUDDY_SONIOX_MAX_ENDPOINT_DELAY_MS,
+                log_context="Breeze Buddy",
+                language_hints_strict=bool(language),
+            )
+        )
+
+    if config.provider == STTProvider.SARVAM:
+        if not SARVAM_API_KEY:
+            raise ValueError("SARVAM_API_KEY is required for sarvam STT")
+
+        sv = config.sarvam
+        bb_model = sv.model if sv and sv.model else await BB_SARVAM_STT_MODEL()
+        bb_lang = (
+            sv.language_code
+            if sv and sv.language_code
+            else await BB_SARVAM_STT_LANGUAGE_CODE()
+        )
+
         return build_sarvam_stt(
             SarvamConfig(
                 api_key=SARVAM_API_KEY,
-                model=bb_sarvam_stt_model,
+                model=bb_model,
                 sample_rate=SAMPLE_RATE,
-                language_code=bb_sarvam_stt_language_code,
-                prompt=bb_sarvam_stt_prompt,
-                vad_signals=bb_sarvam_stt_vad_signals,
-                high_vad_sensitivity=bb_sarvam_stt_high_vad_sensitivity,
+                language_code=bb_lang,
+                prompt=await BB_SARVAM_STT_PROMPT(),
+                vad_signals=await BB_SARVAM_STT_VAD_SIGNALS(),
+                high_vad_sensitivity=await BB_SARVAM_STT_HIGH_VAD_SENSITIVITY(),
             )
         )
-    elif BREEZE_BUDDY_STT_SERVICE == "openai":
+
+    if config.provider == STTProvider.OPENAI:
         if not OPENAI_STT_API_KEY:
-            raise ValueError(
-                "OPENAI_STT_API_KEY is required when BREEZE_BUDDY_STT_SERVICE=openai"
-            )
-        logger.info("Using OpenAI STT service for Breeze Buddy voice")
+            raise ValueError("OPENAI_STT_API_KEY is required for openai STT")
+        logger.info("Using OpenAI STT service for Breeze Buddy")
         return build_openai_stt(
             api_key=OPENAI_STT_API_KEY,
             model=OPENAI_STT_MODEL,
             language=Language.EN,
             temperature=0.0,
         )
-    elif BREEZE_BUDDY_STT_SERVICE == "soniox":
-        if not SONIOX_API_KEY:
-            raise ValueError(
-                "SONIOX_API_KEY is required when BREEZE_BUDDY_STT_SERVICE=soniox"
-            )
-        # Priority: Template context > Env context > None
-        effective_context = (
-            soniox_context
-            if soniox_context is not None
-            else BREEZE_BUDDY_SONIOX_CONTEXT
-        )
-        if soniox_context:
-            logger.info("Using template-specific Soniox context")
 
-        # Pass raw config values - language hints parsing is handled internally by build_soniox_stt
-        return build_soniox_stt(
-            SonioxConfig(
-                api_key=SONIOX_API_KEY,
-                model=BREEZE_BUDDY_SONIOX_MODEL,
-                vad_force_turn_endpoint=BREEZE_BUDDY_SONIOX_VAD_FORCE_TURN_ENDPOINT,
-                language_hints=(
-                    language_hints
-                    if language_hints is not None
-                    else BREEZE_BUDDY_SONIOX_LANGUAGE_HINTS
-                ),
-                context_json=effective_context,
-                enable_non_final_tokens=BREEZE_BUDDY_SONIOX_ENABLE_NON_FINAL_TOKENS,
-                max_non_final_tokens_duration_ms=BREEZE_BUDDY_SONIOX_MAX_NON_FINAL_TOKENS_DURATION_MS,
-                max_endpoint_delay_ms=BREEZE_BUDDY_SONIOX_MAX_ENDPOINT_DELAY_MS,
-                log_context="Breeze Buddy",
-                language_hints_strict=True if language_hints else False,
-            )
-        )
-    else:
-        logger.info("Using Google STT service with VAD-based turn detection")
-        return build_google_stt(credentials_json=GOOGLE_CREDENTIALS_JSON)
+    # Default: Google
+    logger.info("Using Google STT service for Breeze Buddy")
+    return build_google_stt(credentials_json=GOOGLE_CREDENTIALS_JSON)
+
+
+async def get_stt_service(
+    language_hints: str | None = None,
+    soniox_context: str | None = None,
+    stt_configuration: Optional[STTConfiguration] = None,
+):
+    """Returns an STT service instance.
+
+    If ``stt_configuration`` is provided (from template), routes through
+    :func:`create_stt_from_config`. Otherwise falls back to env-var-based
+    provider selection (legacy path).
+    """
+    # --- New path: template-level STTConfiguration ---
+    if stt_configuration is not None:
+        return await create_stt_from_config(stt_configuration)
+
+    # --- Legacy path: env var BREEZE_BUDDY_STT_SERVICE ---
+    provider_map = {
+        "soniox": STTProvider.SONIOX,
+        "deepgram": STTProvider.DEEPGRAM,
+        "sarvam": STTProvider.SARVAM,
+        "openai": STTProvider.OPENAI,
+        "google": STTProvider.GOOGLE,
+    }
+    provider = provider_map.get(BREEZE_BUDDY_STT_SERVICE, STTProvider.GOOGLE)
+
+    legacy_config = STTConfiguration(
+        provider=provider,
+        language=language_hints,
+        soniox=SonioxSTTConfig(context=soniox_context) if soniox_context else None,
+    )
+    return await create_stt_from_config(legacy_config)

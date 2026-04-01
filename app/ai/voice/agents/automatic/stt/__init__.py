@@ -25,18 +25,6 @@ from app.core.config.static import (
     ASSEMBLYAI_API_KEY,
     AUTOMATIC_OPENAI_STT_PROMPT,
     DEEPGRAM_API_KEY,
-    DEEPGRAM_AUTO_DETECT_LANGUAGE,
-    DEEPGRAM_DIARIZE,
-    DEEPGRAM_ENDPOINTING,
-    DEEPGRAM_LANGUAGE,
-    DEEPGRAM_MODEL,
-    DEEPGRAM_NO_DELAY,
-    DEEPGRAM_NUMERALS,
-    DEEPGRAM_PROFANITY_FILTER,
-    DEEPGRAM_PUNCTUATE,
-    DEEPGRAM_SMART_FORMAT,
-    DEEPGRAM_UTTERANCE_END_MS,
-    DEEPGRAM_VAD_EVENTS,
     ENABLE_OPENAI_FOR_MIA,
     ENFORCED_OPENAI_STT_MODEL,
     GOOGLE_CREDENTIALS_JSON,
@@ -135,23 +123,18 @@ async def get_stt_service(voice_name: Optional[str] = None):
         if not DEEPGRAM_API_KEY:
             raise ValueError("DEEPGRAM_API_KEY is required when STT_PROVIDER=deepgram")
 
-        # Pass raw config values - language configuration is handled internally by build_deepgram_stt
+        # Defaults match DeepgramSTTConfig in template types
         return build_deepgram_stt(
             DeepgramConfig(
                 api_key=DEEPGRAM_API_KEY,
-                model=DEEPGRAM_MODEL,
-                language=DEEPGRAM_LANGUAGE,
-                auto_detect_language=DEEPGRAM_AUTO_DETECT_LANGUAGE,
-                smart_format=DEEPGRAM_SMART_FORMAT,
-                punctuate=DEEPGRAM_PUNCTUATE,
-                endpointing=DEEPGRAM_ENDPOINTING,
-                vad_events=DEEPGRAM_VAD_EVENTS,
-                utterance_end_ms=DEEPGRAM_UTTERANCE_END_MS,
-                no_delay=DEEPGRAM_NO_DELAY,
+                model="nova-3-general",
+                language="en",
+                endpointing=25,
+                no_delay=True,
+                smart_format=True,
+                punctuate=True,
+                numerals=True,
                 interim_results=True,
-                profanity_filter=DEEPGRAM_PROFANITY_FILTER,
-                numerals=DEEPGRAM_NUMERALS,
-                diarize=DEEPGRAM_DIARIZE,
             )
         )
     elif STT_PROVIDER == "soniox":

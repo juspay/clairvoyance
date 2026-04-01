@@ -4,7 +4,12 @@ from datetime import datetime
 from typing import Any, Callable, Optional
 from zoneinfo import ZoneInfo
 
+from pipecat.audio.turn.smart_turn.base_smart_turn import SmartTurnParams
+from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import (
+    LocalSmartTurnAnalyzerV3,
+)
 from pipecat.audio.vad.silero import SileroVADAnalyzer
+from pipecat.audio.vad.vad_analyzer import VADParams
 from pipecat.observers.loggers.llm_log_observer import LLMLogObserver
 from pipecat.observers.loggers.metrics_log_observer import MetricsLogObserver
 from pipecat.observers.loggers.transcription_log_observer import (
@@ -32,8 +37,13 @@ from pipecat.turns.user_start import (
     TranscriptionUserTurnStartStrategy,
     VADUserTurnStartStrategy,
 )
+from pipecat.turns.user_stop import (
+    BaseUserTurnStopStrategy,
+    TurnAnalyzerUserTurnStopStrategy,
+)
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 
+from app.ai.voice.agents.breeze_buddy.agent.vad import TELEPHONY_SAMPLE_RATE
 from app.ai.voice.agents.breeze_buddy.llm import get_llm_service
 from app.ai.voice.agents.breeze_buddy.observability.tracing_setup import setup_tracing
 from app.ai.voice.agents.breeze_buddy.processors import (
@@ -49,6 +59,8 @@ from app.ai.voice.agents.breeze_buddy.template.types import (
     ConfigurationModel,
     InterruptionConfig,
     InterruptionMode,
+    SmartTurnConfig,
+    TurnDetectionMode,
 )
 from app.ai.voice.agents.breeze_buddy.tts import get_tts_service
 from app.core.config.static import (
@@ -94,19 +106,26 @@ async def create_services(
     Returns:
         Tuple of (stt_service, llm_service, tts_service)
     """
-    stt_language = getattr(configurations, "stt_language", None)
-    # Normalize list to comma-separated string for downstream compatibility
-    if isinstance(stt_language, list):
-        stt_language = ",".join(stt_language)
-    soniox_context = getattr(configurations, "soniox_context", None)
-    if stt_language:
-        logger.info(f"Using STT language from template: {stt_language}")
-    if soniox_context:
-        logger.info(f"Using Soniox context from template")
+    stt_configuration = getattr(configurations, "stt_configuration", None)
 
-    stt = await get_stt_service(
-        language_hints=stt_language, soniox_context=soniox_context
-    )
+    if stt_configuration:
+        logger.info(
+            f"Using template STT configuration: provider={stt_configuration.provider.value}"
+        )
+        stt = await get_stt_service(stt_configuration=stt_configuration)
+    else:
+        # Legacy path: build from scattered fields
+        stt_language = getattr(configurations, "stt_language", None)
+        if isinstance(stt_language, list):
+            stt_language = ",".join(stt_language)
+        soniox_context = getattr(configurations, "soniox_context", None)
+        if stt_language:
+            logger.info(f"Using STT language from template: {stt_language}")
+        if soniox_context:
+            logger.info("Using Soniox context from template")
+        stt = await get_stt_service(
+            language_hints=stt_language, soniox_context=soniox_context
+        )
 
     llm_config = getattr(configurations, "llm_configurations", None)
     llm = await get_llm_service(llm_config)
@@ -198,17 +217,32 @@ async def build_pipeline(
         getattr(configurations, "interruption", None) or InterruptionConfig()
     )
 
-    # User turn start strategies:
-    # 1. VADUserTurnStartStrategy: Primary detector, fires on VAD speech detection (~100ms).
-    #    Only included when vad_analyzer is provided (BREEZE_BUDDY_ENABLE_VAD=true).
-    #    First-one-wins semantics — if VAD fires first, transcription fallback is skipped.
-    # 2. TranscriptionUserTurnStartStrategy: Used as sole start strategy when VAD is disabled,
-    #    or as fallback for soft speech that VAD misses when VAD is enabled.
-    #    With use_interim=True, triggers on any interim transcription from Soniox.
-    # 3. MinWordsUserTurnStartStrategy: Replaces Transcription strategy when min_words is set.
-    #    Requires N words before triggering interruption while bot speaks; 1 word when bot is silent.
-    # 4. AccumulatingSpeechTimeoutStrategy(0.0): Triggers immediately when Soniox
-    #    sends a finalized transcript with <end> token (native semantic endpoint detection).
+    # --- Turn detection (from stt_configuration) ---
+    stt_config = getattr(configurations, "stt_configuration", None)
+    turn_detection_mode = (
+        stt_config.turn_detection if stt_config else TurnDetectionMode.STT_NATIVE
+    )
+    # STT_NATIVE fires immediately (0.0s). Only TIMEOUT honours configured value.
+    # The STTConfiguration validator already enforces this, but be explicit here.
+    user_speech_timeout = (
+        stt_config.user_speech_timeout
+        if stt_config and turn_detection_mode == TurnDetectionMode.TIMEOUT
+        else 0.0
+    )
+
+    # SmartTurn mode: auto-create Silero VAD (stop_secs=0.2) as trigger if no
+    # external VAD was provided.  SmartTurn needs is_speech signal from VAD.
+    # When no external VAD exists this is the telephony path (8 kHz sample rate).
+    if turn_detection_mode == TurnDetectionMode.SMART_TURN and vad_analyzer is None:
+        vad_analyzer = SileroVADAnalyzer(
+            sample_rate=TELEPHONY_SAMPLE_RATE,
+            params=VADParams(stop_secs=0.2),
+        )
+        logger.info(
+            "SmartTurn mode: auto-created Silero VAD (stop_secs=0.2) as trigger"
+        )
+
+    # --- User turn start strategies ---
     start_strategies: list[BaseUserTurnStartStrategy] = []
     if vad_analyzer is not None:
         start_strategies.append(VADUserTurnStartStrategy())
@@ -228,11 +262,47 @@ async def build_pipeline(
     else:
         start_strategies.append(TranscriptionUserTurnStartStrategy(use_interim=True))
 
+    # --- User turn stop strategy (driven by stt_configuration.turn_detection) ---
+    stop_strategies: list[BaseUserTurnStopStrategy] = []
+    if turn_detection_mode == TurnDetectionMode.SMART_TURN:
+        st = (
+            stt_config.smart_turn
+            if stt_config and stt_config.smart_turn
+            else SmartTurnConfig()
+        )
+        smart_turn_analyzer = LocalSmartTurnAnalyzerV3(
+            cpu_count=st.cpu_count,
+            params=SmartTurnParams(
+                stop_secs=st.stop_secs,
+                pre_speech_ms=st.pre_speech_ms,
+                max_duration_secs=st.max_duration_secs,
+            ),
+        )
+        stop_strategies = [
+            TurnAnalyzerUserTurnStopStrategy(turn_analyzer=smart_turn_analyzer)
+        ]
+        logger.info(
+            "Turn detection: SmartTurn ML (stop_secs={}, pre_speech_ms={}, "
+            "max_duration_secs={}, cpu_count={})",
+            st.stop_secs,
+            st.pre_speech_ms,
+            st.max_duration_secs,
+            st.cpu_count,
+        )
+    else:
+        # TIMEOUT and STT_NATIVE are the same strategy — only the timeout differs.
+        # STT_NATIVE uses 0.0 (fires immediately on finalized transcript, e.g. Soniox <end> token).
+        # TIMEOUT uses user_speech_timeout (waits after last transcript, resets on each new one).
+        stop_strategies = [
+            AccumulatingSpeechTimeoutStrategy(user_speech_timeout=user_speech_timeout)
+        ]
+        logger.info(
+            f"Turn detection: {turn_detection_mode.value} (user_speech_timeout={user_speech_timeout}s)"
+        )
+
     user_turn_strategies = UserTurnStrategies(
         start=start_strategies,
-        stop=[
-            AccumulatingSpeechTimeoutStrategy(user_speech_timeout=0.0),
-        ],
+        stop=stop_strategies,
     )
 
     # User mute strategies:
