@@ -1,0 +1,117 @@
+{
+  "merchant": "breeze",
+  "template_name": "shopify-storefront-mcp",
+  "identifier": "shopify-mcp",
+  "is_active": true,
+  "description": "Shopify Storefront MCP integration example. Demonstrates using MCP tools (search_shop_catalog, get_cart, update_cart) instead of HTTP global functions. Features: 1) Product search via MCP, 2) Cart management, 3) No manual global_functions needed - tools auto-fetched from Shopify MCP",
+  "expected_payload_schema": {
+    "customer_name": {
+      "type": "string"
+    },
+    "language_name": {
+      "type": "string"
+    }
+  },
+  "configurations": {
+    "stt_language": "en",
+    "tts_voice_name": "mira",
+    "mcp_config": [
+      {
+        "enabled": true,
+        "server_url": "https://your-store.myshopify.com/api/mcp",
+        "timeout": 30
+      }
+    ],
+    "user_idle_configuration": {
+      "enabled": true,
+      "timeout": 10,
+      "max_retries": 2,
+      "idle_message": "Are you still there? I am ready to help with your store."
+    }
+  },
+  "expected_callback_response_schema": {
+    "products_viewed": {
+      "type": "array"
+    },
+    "cart_items": {
+      "type": "array"
+    }
+  },
+  "flow": {
+    "initial_node": "greeting",
+    "end_conversation_callbacks": [],
+    "nodes": [
+      {
+        "node_name": "greeting",
+        "role_messages": [
+          {
+            "role": "system",
+            "content": "You are a helpful Shopify store assistant for a voice/telephony conversation. You can search the product catalog and help customers find what they need. IMPORTANT: When describing products, NEVER speak URLs or links aloud. Only mention product names, prices, and descriptions. Use the search_shop_catalog tool when users ask about products."
+          }
+        ],
+        "task_messages": [
+          {
+            "role": "system",
+            "content": "Welcome the user and help them search for products. When you receive tool results with product URLs or links, DO NOT speak them aloud - customers don't want to hear URLs on the phone. Only mention product names, prices, and descriptions. Use the search_shop_catalog tool when they ask about products. You can also help with cart operations using get_cart and update_cart tools."
+          }
+        ],
+        "pre_actions": [
+          {
+            "type": "tts_say",
+            "text": "Hello! Welcome to our store. I am your shopping assistant. I can help you find products, check your cart, and more. What are you looking for today?"
+          }
+        ],
+        "post_actions": [],
+        "functions": [],
+        "transitions": {
+          "default": "handle_request"
+        }
+      },
+      {
+        "node_name": "handle_request",
+        "role_messages": [
+          {
+            "role": "system",
+            "content": "You are a helpful Shopify store assistant for voice/telephony. Use the search_shop_catalog tool when users ask about products. CRITICAL: Product search results may include URLs or image links. NEVER speak these URLs aloud. Only mention product names, prices, and descriptions. If they want to add items to cart, use update_cart. If they want to view cart, use get_cart."
+          }
+        ],
+        "task_messages": [
+          {
+            "role": "system",
+            "content": "Listen to user requests and help them find products using the available tools. When tool results include URLs or image links, DO NOT read them aloud. Customers are on the phone and don't want to hear URLs. Only summarize product names, prices, and descriptions in a natural, conversational way. Be helpful and concise."
+          }
+        ],
+        "pre_actions": [],
+        "post_actions": [],
+        "functions": [],
+        "transitions": {
+          "end": "goodbye",
+          "default": "handle_request"
+        }
+      },
+      {
+        "node_name": "goodbye",
+        "role_messages": [],
+        "task_messages": [
+          {
+            "role": "system",
+            "content": "Thank the user for shopping with us. Wish them a great day and end the conversation politely."
+          }
+        ],
+        "pre_actions": [
+          {
+            "type": "tts_say",
+            "text": "Thank you for shopping with us! Have a great day!"
+          }
+        ],
+        "post_actions": [
+          {
+            "type": "end_conversation"
+          }
+        ],
+        "functions": [],
+        "transitions": {}
+      }
+    ]
+  }
+}

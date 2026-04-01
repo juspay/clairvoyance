@@ -2,10 +2,21 @@
 Pydantic models for the dynamic workflow engine.
 """
 
+import ipaddress
+import re
 from enum import Enum
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse
 
-from pydantic import BaseModel, ConfigDict, Field, SecretStr
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    HttpUrl,
+    SecretStr,
+    field_validator,
+    model_validator,
+)
 
 
 class ActionType(str, Enum):
@@ -200,6 +211,134 @@ class UserIdleHandlingConfig(BaseModel):
     )
 
 
+# Private/internal hostname patterns for SSRF protection
+_SSRF_BLOCKED_HOSTNAMES = frozenset(
+    {
+        "localhost",
+        "localhost.localdomain",
+        "ip6-localhost",
+        "ip6-loopback",
+    }
+)
+
+
+def _is_private_or_reserved_ip(ip_str: str) -> bool:
+    """Check if an IP address string is private, loopback, or reserved.
+
+    Args:
+        ip_str: IP address as string (IPv4 or IPv6)
+
+    Returns:
+        True if the address is private/loopback/reserved, False otherwise
+    """
+    try:
+        ip = ipaddress.ip_address(ip_str)
+        return (
+            ip.is_private
+            or ip.is_loopback
+            or ip.is_link_local
+            or ip.is_reserved
+            or ip.is_multicast
+        )
+    except ValueError:
+        return False
+
+
+def _validate_url_not_ssrf(url_str: str) -> None:
+    """Validate that a URL does not point to internal/private addresses.
+
+    Raises ValueError if the URL could be used for SSRF attacks.
+    This is a defense-in-depth measure; infrastructure-level egress
+    controls should also be in place.
+
+    Args:
+        url_str: URL string to validate
+
+    Raises:
+        ValueError: If URL contains private/internal addresses
+    """
+    parsed = urlparse(url_str.lower())
+    hostname = parsed.hostname or ""
+
+    # Strip brackets from IPv6 addresses
+    if hostname.startswith("[") and hostname.endswith("]"):
+        hostname = hostname[1:-1]
+
+    # Block known internal hostnames
+    if hostname in _SSRF_BLOCKED_HOSTNAMES:
+        raise ValueError(
+            f"server_url cannot point to internal host: {hostname}. "
+            "Use a public hostname for MCP servers."
+        )
+
+    # Block private/reserved IP addresses
+    if _is_private_or_reserved_ip(hostname):
+        raise ValueError(
+            f"server_url cannot point to private/reserved IP: {hostname}. "
+            "Use a public hostname for MCP servers."
+        )
+
+    # Block localhost-related patterns (e.g., 127.0.0.1.nip.io)
+    localhost_patterns = re.compile(r"^(127\.\d+\.\d+\.\d+|localhost|\[?::1\]?)")
+    if localhost_patterns.match(hostname):
+        raise ValueError(
+            f"server_url cannot point to localhost: {hostname}. "
+            "Use a public hostname for MCP servers."
+        )
+
+
+class MCPConfiguration(BaseModel):
+    """MCP (Model Context Protocol) configuration for template.
+
+    When enabled, the agent connects to the Storefront MCP to fetch available tools.
+    MCP tools are registered with the LLM and can be called during the conversation.
+
+    Example:
+        {
+            "enabled": true,
+            "server_url": "https://your-store.myshopify.com/api/mcp",
+            "timeout": 30
+        }
+    """
+
+    enabled: bool = Field(False, description="Whether MCP is enabled for this template")
+    server_url: HttpUrl = Field(
+        description="Storefront MCP URL (e.g., https://shop.myshopify.com/api/mcp)",
+    )
+    timeout: int = Field(
+        30, ge=5, le=120, description="Connection timeout in seconds (5-120)"
+    )
+    headers: Optional[Dict[str, SecretStr]] = Field(
+        None,
+        description="Optional headers for MCP requests (values are secrets, e.g., API tokens)",
+    )
+
+    @model_validator(mode="after")
+    def validate_mcp_config(self) -> "MCPConfiguration":
+        """Validate that enabled MCP config has required fields and prevent SSRF.
+
+        Validates:
+        - server_url is required when enabled
+        - server_url uses HTTPS
+        - server_url does not point to private/internal addresses (SSRF protection)
+
+        Note: SSRF validation here is defense-in-depth. Infrastructure-level
+        egress controls should also be configured to restrict outbound traffic.
+        """
+        if self.enabled:
+            if not self.server_url:
+                raise ValueError("server_url is required when MCP is enabled")
+
+            url_str = str(self.server_url)
+
+            if not url_str.lower().startswith("https://"):
+                raise ValueError("server_url must use HTTPS for security")
+
+            _validate_url_not_ssrf(url_str)
+
+        return self
+
+
 class ConfigurationModel(BaseModel):
     tts_voice_name: Optional[TTSVoiceName] = None
     mira_voice_id: Optional[str] = (
@@ -247,6 +386,23 @@ class ConfigurationModel(BaseModel):
     user_idle_configuration: Optional[UserIdleHandlingConfig] = (
         None  # User idle handling config
     )
+    mcp_config: Optional[List[MCPConfiguration]] = Field(
+        None,
+        description=(
+            "MCP server configurations for template-based tool integration. "
+            "Supports multiple MCP servers as a list. "
+            "Backward compatible with single object format."
+        ),
+    )
+
+    @field_validator("mcp_config", mode="before")
+    @classmethod
+    def _normalize_mcp_config(cls, v: Any) -> Any:
+        """Normalize single MCP config object to list for backward compatibility."""
+        if isinstance(v, dict):
+            return [v]
+        return v
+
     noise_filter: Optional[NoiseFilterConfig] = Field(
         None, description="Noise filter configuration for audio input processing"
     )

@@ -52,6 +52,7 @@ def setup_flow_manager(
     flow_builder: FlowConfigBuilder,
     template: TemplateModel,
     bot_instance: Any = None,
+    mcp_global_functions: Optional[List[FlowsFunctionSchema]] = None,
 ) -> FlowManager:
     """Set up the flow manager with global functions.
 
@@ -63,17 +64,47 @@ def setup_flow_manager(
         flow_builder: Flow config builder
         template: Template model
         bot_instance: Bot instance for post-action context creation
+        mcp_global_functions: Optional MCP tools as FlowsFunctionSchema to merge
+                              with template-defined global functions
 
     Returns:
         Configured FlowManager
+
+    Note:
+        If MCP tool names collide with template function names, colliding
+        MCP tools are skipped (template functions take precedence) and a
+        warning is logged rather than raising an exception.
     """
-    global_functions = flow_builder.build_global_functions(
+    global_functions: List[FlowsFunctionSchema] = []
+
+    # Add MCP global functions first (base layer)
+    if mcp_global_functions:
+        global_functions.extend(mcp_global_functions)
+        logger.info(f"Added {len(mcp_global_functions)} MCP tools to global functions")
+
+    # Add template-defined global functions, handling collisions
+    template_functions = flow_builder.build_global_functions(
         flow=template.flow, bot_instance=bot_instance
     )
-    if global_functions:
+    if template_functions:
+        mcp_names = {f.name for f in global_functions}
+        template_names = {f.name for f in template_functions}
+        collisions = mcp_names & template_names
+
+        if collisions:
+            logger.warning(
+                f"MCP tool names collide with template function names: {collisions}. "
+                f"Skipping colliding MCP tools; template functions take precedence."
+            )
+            global_functions = [f for f in global_functions if f.name not in collisions]
+
+        global_functions.extend(template_functions)
         logger.info(
-            f"Registering {len(global_functions)} global functions with FlowManager"
+            f"Added {len(template_functions)} template global functions "
+            f"({len(global_functions)} total)"
         )
+    elif global_functions:
+        logger.info(f"Using {len(global_functions)} MCP tools as global functions")
 
     return FlowManager(
         task=task,
@@ -82,7 +113,7 @@ def setup_flow_manager(
         transport=transport,
         global_functions=cast(
             Optional[List[FlowsDirectFunction | FlowsFunctionSchema]],
-            global_functions or None,
+            global_functions if global_functions else None,
         ),
     )
 

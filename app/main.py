@@ -13,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pipecat.transports.daily.utils import DailyRESTHelper
 
-from app import __version__
+from app.__version__ import __version__
 from app.ai.voice.agents.breeze_buddy.services.agent_router.client import (
     close_smart_router_client,
 )

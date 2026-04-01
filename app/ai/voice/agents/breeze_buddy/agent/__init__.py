@@ -18,7 +18,7 @@ from pipecat.runner.utils import (
     create_transport,
     parse_telephony_websocket,
 )
-from pipecat_flows import FlowManager
+from pipecat_flows import FlowManager, FlowsFunctionSchema
 
 from app.ai.voice.agents.breeze_buddy.agent.flow import (
     build_flow_config,
@@ -54,6 +54,7 @@ from app.ai.voice.agents.breeze_buddy.agent.vad import create_vad_analyzer
 from app.ai.voice.agents.breeze_buddy.handlers.internal.end_conversation import (
     end_conversation,
 )
+from app.ai.voice.agents.breeze_buddy.mcp import BreezeBuddyMCPClient
 from app.ai.voice.agents.breeze_buddy.observability.tracing_setup import (
     create_root_span,
 )
@@ -128,6 +129,7 @@ class Agent:
         self.root_span: Any = None
         self.flow_manager: Optional[FlowManager] = None
         self.conversation_id: Optional[str] = None
+        self.mcp_clients: List[BreezeBuddyMCPClient] = []
 
         # Template configuration
         self.flow_builder: Any = None
@@ -592,6 +594,124 @@ class Agent:
                         logger.debug("Post-greeting timer cancelled - user spoke")
                 self._user_idle_callback_handler.reset_retry_count()
 
+    async def _initialize_mcp_clients(
+        self, llm: Any
+    ) -> Optional[List[FlowsFunctionSchema]]:
+        """Initialize MCP clients and register tools if enabled in template config.
+
+        Connects to multiple MCP servers (if configured) and aggregates tools.
+
+        Args:
+            llm: The LLM service to register tools with
+
+        Returns:
+            List of FlowsFunctionSchema for all MCP tools (to pass as global_functions),
+            or None if MCP not enabled or all connections failed
+        """
+        if not self.configurations or not self.configurations.mcp_config:
+            return None
+
+        mcp_configs = self.configurations.mcp_config
+        if not mcp_configs:
+            logger.info("No MCP configurations found")
+            return None
+
+        all_global_functions: List[FlowsFunctionSchema] = []
+
+        for idx, mcp_config in enumerate(mcp_configs):
+            if not mcp_config.enabled:
+                logger.info(f"MCP config {idx} not enabled, skipping")
+                continue
+
+            try:
+                client = BreezeBuddyMCPClient()
+                self.mcp_clients.append(client)
+
+                logger.info(
+                    f"Initializing MCP client {idx} for {mcp_config.server_url}"
+                )
+
+                # Extract headers from config (SecretStr values need to be decrypted)
+                headers = None
+                if mcp_config.headers:
+                    headers = {
+                        k: (
+                            v.get_secret_value()
+                            if hasattr(v, "get_secret_value")
+                            else str(v)
+                        )
+                        for k, v in mcp_config.headers.items()
+                    }
+
+                connected = await client.connect(
+                    server_url=str(mcp_config.server_url),
+                    headers=headers,
+                    timeout=mcp_config.timeout,
+                )
+
+                if connected:
+                    tools = await client.register_tools(llm, timeout=mcp_config.timeout)
+                    if tools:
+                        tool_count = (
+                            len(tools.standard_tools)
+                            if hasattr(tools, "standard_tools")
+                            else "unknown"
+                        )
+                        logger.info(
+                            f"Registered {tool_count} MCP tools from server {idx}"
+                        )
+
+                        flow_global_functions = client.get_flow_global_functions()
+                        if flow_global_functions:
+                            all_global_functions.extend(flow_global_functions)
+                    else:
+                        logger.warning(
+                            f"MCP client {idx} connected but no tools registered"
+                        )
+                else:
+                    logger.warning(f"Failed to connect to MCP server {idx}, continuing")
+
+            except Exception as e:
+                logger.error(
+                    f"Error initializing MCP client {idx}: {type(e).__name__}: {str(e)}"
+                )
+
+        if all_global_functions:
+            logger.info(
+                f"Passing {len(all_global_functions)} total MCP tools to FlowManager "
+                "as global_functions"
+            )
+            return all_global_functions
+
+        return None
+
+    async def _cleanup_mcp_clients(self) -> None:
+        """Cleanup all MCP client connections.
+
+        Ensures resources are released even if disconnect fails.
+        Logs errors but does not re-raise to prevent blocking other cleanup.
+        Handles CancelledError to prevent dangling connections on task cancellation.
+        """
+        if not self.mcp_clients:
+            return
+
+        clients = self.mcp_clients
+        self.mcp_clients = []
+
+        for idx, client in enumerate(clients):
+            try:
+                await asyncio.wait_for(client.disconnect(), timeout=5.0)
+                logger.info(f"MCP client {idx} disconnected")
+            except asyncio.CancelledError:
+                logger.warning(f"MCP client {idx} cleanup cancelled")
+                raise
+            except asyncio.TimeoutError:
+                logger.warning(f"MCP client {idx} disconnect timed out after 5s")
+            except Exception as e:
+                logger.error(
+                    f"Error disconnecting MCP client {idx}: {type(e).__name__}: {str(e)}"
+                )
+
     async def _handle_client_connected(self) -> None:
         """Handle client connection and initialize flow."""
         if (
@@ -729,6 +849,11 @@ class Agent:
                 logger.error("Template is not set, cannot setup flow manager")
                 return
 
+            # Initialize MCP clients if enabled in template config
+            mcp_global_functions: Optional[List[FlowsFunctionSchema]] = None
+            if self.configurations and self.configurations.mcp_config:
+                mcp_global_functions = await self._initialize_mcp_clients(llm)
+
             # Setup flow management
             self.flow_manager = setup_flow_manager(
                 task=self.task,
@@ -738,6 +863,7 @@ class Agent:
                 flow_builder=self.flow_builder,
                 template=self.template,
                 bot_instance=self,
+                mcp_global_functions=mcp_global_functions,
             )
             self._register_event_handlers()
 
@@ -755,6 +881,7 @@ class Agent:
             except asyncio.CancelledError:
                 logger.info("Pipeline task cancelled. Exiting gracefully.")
         finally:
+            await self._cleanup_mcp_clients()
             # Safety net: always clear log context when run() exits, regardless of how.
             # This handles crashes, cancellations, and any exit path missed above.
             # Double-clearing (if end_conversation already cleared) is harmless.
@@ -766,6 +893,8 @@ class Agent:
             return
 
         logger.info(f"{reason}. Updating call status.")
+
+        await self._cleanup_mcp_clients()
 
         if self.lead:
             if self.lead.outcome is None:

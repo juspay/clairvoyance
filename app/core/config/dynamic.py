@@ -30,6 +30,15 @@ async def ENABLE_CHAT_MODE_PROMPT() -> bool:
     return await get_config("ENABLE_CHAT_MODE_PROMPT", True, bool)
 
 
+async def BB_MCP_MAX_TIMEOUT() -> int:
+    """Returns BB_MCP_MAX_TIMEOUT from Redis (seconds).
+
+    Maximum allowed timeout for MCP tool execution to prevent indefinite hangs.
+    Default: 300s (5 minutes). Minimum: 60s, Maximum: 600s.
+    """
+    return await get_config("BB_MCP_MAX_TIMEOUT", 300, int)
+
+
 # --- Sarvam Configuration ---
 async def SARVAM_STT_MODEL() -> str:
     """Returns SARVAM_STT_MODEL from Redis"""
