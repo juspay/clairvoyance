@@ -1,8 +1,14 @@
-from typing import Any, Dict, List, Optional
+from io import BytesIO
+from typing import Any, Dict, List, NamedTuple, Optional
 
 from pydantic import BaseModel
 
 from app.schemas.breeze_buddy.core import ExecutionMode
+
+
+class CallRecordingResult(NamedTuple):
+    audio_file: BytesIO
+    is_daily: bool
 
 
 class PushLeadRequest(BaseModel):

@@ -25,6 +25,7 @@ from app.database.queries.breeze_buddy.lead_call_tracker import (
     update_langfuse_scores_query,
     update_lead_call_completion_details_query,
     update_lead_call_details_query,
+    update_lead_call_id_by_id_query,
     update_lead_call_initiated_time_by_id_query,
     update_lead_call_initiated_time_query,
     update_lead_call_recording_url_query,
@@ -327,6 +328,34 @@ async def update_lead_call_initiated_time_by_id(
 
     except Exception as e:
         logger.error(f"Error updating lead: {e}")
+        return None
+
+
+async def update_lead_call_id_by_id(
+    lead_id: str, call_id: str
+) -> Optional[LeadCallTracker]:
+    """
+    Update lead call_id by lead id (Daily mode).
+    Used to store the Daily room name as call_id so that
+    recording webhooks can look up the lead by room name.
+    """
+    logger.info(f"Updating lead {lead_id} with call_id: {call_id}")
+
+    try:
+        query_text, values = update_lead_call_id_by_id_query(lead_id, call_id)
+        result = await run_parameterized_query(query_text, values)
+        if result and get_row_count(result) > 0:
+            decoded_result = decode_lead_call_tracker(result[0])
+            logger.info(
+                f"Lead call_id updated successfully for lead_id: {lead_id}, call_id: {call_id}"
+            )
+            return decoded_result
+
+        logger.error(f"Failed to update lead call_id for lead_id: {lead_id}")
+        return None
+
+    except Exception as e:
+        logger.error(f"Error updating lead call_id: {e}")
         return None
 
 

@@ -15,6 +15,8 @@ from typing import Any, Dict, Optional
 
 from pipecat.runner.types import DailyRunnerArguments
 from pipecat.transports.daily.utils import (
+    DailyMeetingTokenParams,
+    DailyMeetingTokenProperties,
     DailyRESTHelper,
     DailyRoomParams,
     DailyRoomProperties,
@@ -29,6 +31,8 @@ from app.core.logger import logger
 from app.core.transport.http_client import create_aiohttp_session
 from app.database.accessor.breeze_buddy.lead_call_tracker import (
     update_lead_call_completion_details,
+    update_lead_call_id_by_id,
+    update_lead_call_recording_url,
 )
 from app.schemas import LeadCallStatus, LeadCallTracker
 
@@ -80,11 +84,12 @@ async def start_daily_session(lead_id: str) -> Dict[str, Any]:
             aiohttp_session=aiohttp_session,
         )
 
-        # Create room with params
+        # Create room with params (recording enabled for cloud recording)
         room_params = DailyRoomParams(
             properties=DailyRoomProperties(
                 exp=time.time() + 3600,  # 1 hour expiry
                 eject_at_room_exp=True,
+                enable_recording="cloud",
             )
         )
         room = await daily_rest.create_room(room_params)
@@ -92,7 +97,30 @@ async def start_daily_session(lead_id: str) -> Dict[str, Any]:
 
         # Create tokens
         user_token = await daily_rest.get_token(room_url)
-        bot_token = await daily_rest.get_token(room_url, expiry_time=3600)
+        bot_token = await daily_rest.get_token(
+            room_url,
+            expiry_time=3600,
+            params=DailyMeetingTokenParams(
+                properties=DailyMeetingTokenProperties(
+                    start_cloud_recording=True,
+                )
+            ),
+        )
+
+    # Store room name as call_id for on-demand recording retrieval
+    updated_lead = await update_lead_call_id_by_id(lead_id, room.name)
+    if not updated_lead:
+        logger.warning(
+            f"Failed to set call_id for lead {lead_id} — recording retrieval may not work"
+        )
+    else:
+        # Set sentinel recording_url so frontend shows the recording player
+        # (depends on call_id being set above)
+        recording_lead = await update_lead_call_recording_url(room.name, "daily")
+        if not recording_lead:
+            logger.warning(
+                f"Failed to set recording_url for lead {lead_id} — frontend may not show recording player"
+            )
 
     logger.info(f"Created Daily room for Breeze Buddy session {session_id}: {room_url}")
 
