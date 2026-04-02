@@ -7,7 +7,10 @@ from typing import Optional
 from app.ai.voice.agents.breeze_buddy.template.transformation_function import (
     TEMPLATE_FUNCTION_REGISTRY,
 )
-from app.ai.voice.agents.breeze_buddy.template.types import TemplateModel, TTSVoiceName
+from app.ai.voice.agents.breeze_buddy.template.types import (
+    TemplateModel,
+    TTSVoiceName,
+)
 from app.ai.voice.agents.breeze_buddy.tts import generate_audio
 from app.ai.voice.agents.breeze_buddy.utils.common import greeting_has_variables
 from app.core.logger import logger

@@ -23,8 +23,13 @@ from app.ai.voice.agents.breeze_buddy.services.telephony.twilio.recording import
     download_call_recording as download_call_recording_twilio,
 )
 from app.ai.voice.agents.breeze_buddy.services.telephony.utils import get_voice_provider
-from app.ai.voice.agents.breeze_buddy.template.types import TemplateModel
+from app.ai.voice.agents.breeze_buddy.template.types import (
+    TemplateModel,
+)
 from app.ai.voice.agents.breeze_buddy.utils.common import send_webhook_with_retry
+from app.ai.voice.agents.breeze_buddy.utils.playground import (
+    apply_playground_config_overrides,
+)
 from app.core.config.static import (
     UPLOAD_BREEZE_BUDDY_CALL_RECORDINGS_TO_CLOUD,
 )
@@ -53,6 +58,7 @@ from app.schemas import (
     CallDirection,
     CallExecutionConfig,
     CallProvider,
+    ExecutionMode,
     LeadCallStatus,
     LeadCallTracker,
     OutboundNumber,
@@ -389,9 +395,13 @@ async def _cleanup_stuck_leads():
                 if outbound_number:
                     await _release_number(outbound_number.id, outbound_number.provider)
 
-            # Only retry outbound calls - inbound calls should not be retried
+            # Only retry outbound telephony calls - inbound and test calls should not be retried
             config = await _get_lead_config(locked_lead)
-            if config and locked_lead.call_direction == CallDirection.OUTBOUND:
+            if (
+                config
+                and locked_lead.call_direction == CallDirection.OUTBOUND
+                and locked_lead.execution_mode == ExecutionMode.TELEPHONY
+            ):
                 await _retry_call(locked_lead, config)
 
         except Exception as e:
@@ -487,8 +497,11 @@ async def process_backlog_leads():
                     await release_lock_on_lead_by_id(locked_lead.id)
                     continue
 
-                # Synthesize initial greeting audio and store in Redis
+                # Synthesize initial greeting audio and store in Redis.
+                # Apply playground overrides first — they are normally applied
+                # later in flow.py (too late for greeting synthesis).
                 if template:
+                    apply_playground_config_overrides(locked_lead, template)
                     await prepare_and_store_initial_greeting(
                         lead_id=locked_lead.id,
                         payload=locked_lead.payload or {},
@@ -873,10 +886,11 @@ async def handle_call_completion(
         call_end_time=call_end_time,
     )
 
-    # Only retry outbound calls - inbound calls should not be retried
+    # Only retry outbound telephony calls - inbound and test calls should not be retried
     if (
         outcome in ["BUSY", "NO_ANSWER"]
         and lead.call_direction == CallDirection.OUTBOUND
+        and lead.execution_mode == ExecutionMode.TELEPHONY
     ):
         await _retry_call(lead, config, outcome)
 
@@ -953,8 +967,11 @@ async def handle_unanswered_calls(call_id: str):
         call_end_time=datetime.now(timezone.utc),
     )
 
-    # Only retry outbound calls - inbound calls should not be retried
-    if lead.call_direction == CallDirection.OUTBOUND:
+    # Only retry outbound telephony calls - inbound and test calls should not be retried
+    if (
+        lead.call_direction == CallDirection.OUTBOUND
+        and lead.execution_mode == ExecutionMode.TELEPHONY
+    ):
         await _retry_call(lead, config, "NO_ANSWER")
 
 

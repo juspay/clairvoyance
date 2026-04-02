@@ -91,22 +91,32 @@ async def resolve_call_templates(
         to_number: The number that was called
 
     Returns:
-        Dict with keys:
-            is_outbound: bool
-            template_id: Optional[str]         (outbound: template id from lead)
-            merchant_id: Optional[str]         (merchant ID for pod allocation)
-            templates: List[TemplateModel]      (inbound: all matched templates)
-            template_list: List[dict]           (inbound: [{id, name, description}])
-            voice_name: str                     (IVR voice, default "sara")
-            ivr_greeting: Optional[str]         (IVR greeting text)
-            error: Optional[str]               (if lookup failed)
-            error_status: Optional[int]        (HTTP status for error)
+        Dict with keys depending on call direction:
+
+        Outbound:
+            is_outbound: True
+            template_id: str               (template UUID, or lead UUID for playground)
+            reseller_id: str
+
+        Inbound:
+            is_outbound: False
+            templates: List[TemplateModel]
+            template_list: List[dict]       ([{id, name}])
+            voice_name: str                 (IVR voice, default "sara")
+            ivr_greeting: Optional[str]
+            ivr_goodbye: Optional[str]
+            reseller_id: str
+
+        Error:
+            error: str
+            error_status: int              (HTTP status code)
     """
     # Check if lead exists (outbound call)
     lead = await get_lead_by_call_id(call_sid)
     if lead:
         # Outbound call - look up template using merchant info from lead
         logger.info(f"[Answer] Outbound call detected, lead: {lead.id}")
+
         template = await get_template_by_merchant(
             reseller_id=lead.reseller_id,
             merchant_id=lead.merchant_id,
