@@ -7,6 +7,8 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
+from app.ai.voice.llm.types import LLMConfiguration
+
 
 class ActionType(str, Enum):
     TTS_SAY = "tts_say"
@@ -335,6 +337,10 @@ class ConfigurationModel(BaseModel):
     interruption: Optional[InterruptionConfig] = Field(
         None,
         description="Interruption handling configuration (mode, min_words threshold)",
+    )
+    llm_configurations: Optional[LLMConfiguration] = Field(
+        None,
+        description="LLM provider and model configuration",
     )
 
 
