@@ -25,8 +25,6 @@ from pipecat.processors.frameworks.rtvi import (
     RTVIFunctionCallReportLevel,
     RTVIObserverParams,
 )
-from pipecat.services.azure.llm import AzureLLMService
-from pipecat.services.openai.base_llm import BaseOpenAILLMService
 from pipecat.turns.user_mute import AlwaysUserMuteStrategy, BaseUserMuteStrategy
 from pipecat.turns.user_start import (
     BaseUserTurnStartStrategy,
@@ -36,6 +34,7 @@ from pipecat.turns.user_start import (
 )
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 
+from app.ai.voice.agents.breeze_buddy.llm import get_llm_service
 from app.ai.voice.agents.breeze_buddy.observability.tracing_setup import setup_tracing
 from app.ai.voice.agents.breeze_buddy.processors import (
     TranscriptionGateProcessor,
@@ -52,14 +51,7 @@ from app.ai.voice.agents.breeze_buddy.template.types import (
     InterruptionMode,
 )
 from app.ai.voice.agents.breeze_buddy.tts import get_tts_service
-from app.core.config.dynamic import (
-    BREEZE_BUDDY_AZURE_MAX_COMPLETION_TOKENS,
-    BREEZE_BUDDY_AZURE_TEMPERATURE,
-)
 from app.core.config.static import (
-    AZURE_BREEZE_BUDDY_OPENAI_MODEL,
-    AZURE_OPENAI_API_KEY,
-    AZURE_OPENAI_ENDPOINT,
     ENABLE_BREEZE_BUDDY_DAILY_EVENTS,
     ENABLE_BREEZE_BUDDY_TRACING,
     ENVIRONMENT,
@@ -93,7 +85,7 @@ def generate_conversation_id(payload: Optional[dict]) -> str:
 
 async def create_services(
     configurations: Optional[ConfigurationModel],
-) -> tuple[Any, AzureLLMService, Any]:
+) -> tuple[Any, Any, Any]:
     """Create STT, LLM, and TTS services.
 
     Args:
@@ -116,21 +108,8 @@ async def create_services(
         language_hints=stt_language, soniox_context=soniox_context
     )
 
-    # TODO: Add retry_on_timeout=True, retry_timeout_secs=3.0 to reduce P99 tail latency (500-1500ms).
-    #       These are valid top-level params on BaseOpenAILLMService. Needs testing before enabling.
-    # TODO: Override create_client() to add httpx connection pooling (keepalive_expiry=None,
-    #       max_keepalive_connections=100) to avoid TCP+TLS cold-start on first request (50-200ms).
-    #       AzureLLMService.create_client() currently creates AsyncAzureOpenAI without custom http_client.
-    llm = AzureLLMService(
-        api_key=AZURE_OPENAI_API_KEY,
-        endpoint=AZURE_OPENAI_ENDPOINT,
-        model=AZURE_BREEZE_BUDDY_OPENAI_MODEL,
-        params=BaseOpenAILLMService.InputParams(
-            max_completion_tokens=await BREEZE_BUDDY_AZURE_MAX_COMPLETION_TOKENS(),
-            temperature=await BREEZE_BUDDY_AZURE_TEMPERATURE(),
-            service_tier="auto",
-        ),
-    )
+    llm_config = getattr(configurations, "llm_configurations", None)
+    llm = await get_llm_service(llm_config)
 
     # Extract Cartesia voice configurations from template
     cartesia_voice_config = getattr(
@@ -166,7 +145,7 @@ async def create_services(
 async def build_pipeline(
     transport: Any,
     stt: Any,
-    llm: AzureLLMService,
+    llm: Any,
     tts: Any,
     vad_analyzer: Optional[SileroVADAnalyzer] = None,
     configurations: Optional[ConfigurationModel] = None,

@@ -197,6 +197,17 @@ async def BREEZE_BUDDY_AZURE_TEMPERATURE() -> float:
     return await get_config("BREEZE_BUDDY_AZURE_TEMPERATURE", 0.7, float)
 
 
+# --- Google Vertex AI Credentials ---
+async def GOOGLE_VERTEX_CREDENTIALS_JSON() -> str:
+    """Returns GOOGLE_VERTEX_CREDENTIALS_JSON from Redis"""
+    return await get_config("GOOGLE_VERTEX_CREDENTIALS_JSON", "", str)
+
+
+async def GOOGLE_VERTEX_PROJECT_ID() -> str:
+    """Returns GOOGLE_VERTEX_PROJECT_ID from Redis"""
+    return await get_config("GOOGLE_VERTEX_PROJECT_ID", "breeze-automatic-prod", str)
+
+
 # --- Daily Mode VAD Configuration (for web/mobile frontends) ---
 async def BB_DAILY_VAD_CONFIDENCE() -> float:
     """Returns BB_DAILY_VAD_CONFIDENCE from Redis"""
