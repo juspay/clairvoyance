@@ -110,14 +110,14 @@ def get_leads_based_on_status_and_next_attempt_query(
 ) -> Tuple[str, List[Any]]:
     """
     Generate query to select leads based on status and next attempt time.
-    Only selects TELEPHONY execution_mode leads for cron processing.
+    Selects TELEPHONY and TELEPHONY_TEST execution_mode leads for cron processing.
     """
     text = f"""
         SELECT * FROM "{LEAD_CALL_TRACKER_TABLE}"
         WHERE "status" = $1
         AND "next_attempt_at" <= $2
         AND "is_locked" = FALSE
-        AND "execution_mode" = 'TELEPHONY';
+        AND "execution_mode" IN ('TELEPHONY', 'TELEPHONY_TEST');
     """
     values = [status.value, time]
     return text, values

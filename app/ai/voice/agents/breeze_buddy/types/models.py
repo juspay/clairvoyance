@@ -21,6 +21,11 @@ class PushLeadRequest(BaseModel):
     execution_mode: Optional[ExecutionMode] = (
         None  # Defaults to TELEPHONY if not provided
     )
+    # Playground mode: when true, uses configurations_override
+    is_playground: Optional[bool] = False
+    configurations_override: Optional[Dict[str, Any]] = (
+        None  # Override template configurations
+    )
 
 
 class LoginRequest(BaseModel):

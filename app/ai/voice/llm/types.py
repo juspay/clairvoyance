@@ -68,6 +68,58 @@ class ThinkingConfiguration(BaseModel):
     )
 
 
+class AzureLLMPlaygroundConfig(BaseModel):
+    """User-facing Azure LLM fields for playground configuration."""
+
+    model: Optional[str] = Field(None, description="e.g. gpt-4o")
+    endpoint: Optional[str] = Field(None, description="Azure OpenAI endpoint URL")
+    api_key_name: Optional[str] = Field(None, description="Config key name for API key")
+    temperature: Optional[float] = Field(
+        None, ge=0.0, le=2.0, description="Sampling temperature (0–2)"
+    )
+    max_tokens: Optional[int] = Field(None, ge=1, description="Max completion tokens")
+
+
+class AzureThinkingPlaygroundConfig(BaseModel):
+    """Thinking fields for Azure."""
+
+    reasoning_effort: Optional[str] = Field(
+        None, description="none / minimal / low / medium / high / xhigh"
+    )
+
+
+class VertexLLMPlaygroundConfig(BaseModel):
+    """User-facing Google Vertex LLM fields for playground configuration (Gemini and Claude)."""
+
+    model: Optional[str] = Field(
+        None, description="e.g. gemini-2.0-flash or claude-3-5-sonnet"
+    )
+    region: Optional[str] = Field(None, description="e.g. asia-south1")
+    temperature: Optional[float] = Field(
+        None, ge=0.0, le=2.0, description="Sampling temperature (0–2)"
+    )
+    max_tokens: Optional[int] = Field(None, ge=1, description="Max completion tokens")
+
+
+class VertexGeminiThinkingPlaygroundConfig(BaseModel):
+    """Thinking fields for Google Vertex + Gemini."""
+
+    thinking_budget: Optional[int] = Field(
+        None, description="-1 dynamic, 0 disabled, or specific token count"
+    )
+    thinking_level: Optional[str] = Field(
+        None, description="minimal / low / medium / high"
+    )
+
+
+class VertexClaudeThinkingPlaygroundConfig(BaseModel):
+    """Thinking fields for Google Vertex + Claude."""
+
+    budget_tokens: Optional[int] = Field(
+        None, ge=1024, description="Token budget for extended thinking (min 1024)"
+    )
+
+
 class LLMConfiguration(BaseModel):
     """LLM configuration for template-level customization.
 

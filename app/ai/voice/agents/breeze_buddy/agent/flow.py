@@ -17,6 +17,9 @@ from app.ai.voice.agents.breeze_buddy.template.types import (
 from app.ai.voice.agents.breeze_buddy.utils.language_utils.prompt_injections import (
     inject_language_rules,
 )
+from app.ai.voice.agents.breeze_buddy.utils.playground import (
+    apply_playground_config_overrides,
+)
 from app.core.logger import logger
 from app.schemas.breeze_buddy.core import LeadCallTracker
 
@@ -40,6 +43,8 @@ async def load_template_config(
         merchant_id=lead.merchant_id if lead else None,
         call_payload=lead.payload,
     )
+
+    apply_playground_config_overrides(lead, template)
 
     return template, template.configurations, template_vars
 

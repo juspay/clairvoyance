@@ -19,6 +19,7 @@ from app.api.routers.breeze_buddy.demo import router as demo_router
 from app.api.routers.breeze_buddy.leads import router as leads_router
 from app.api.routers.breeze_buddy.merchants import router as merchants_router
 from app.api.routers.breeze_buddy.numbers import router as numbers_router
+from app.api.routers.breeze_buddy.playground import router as playground_router
 from app.api.routers.breeze_buddy.telephony import router as telephony_router
 from app.api.routers.breeze_buddy.templates import router as templates_router
 from app.api.routers.breeze_buddy.users import router as users_router
@@ -50,6 +51,9 @@ router.include_router(numbers_router, prefix="", tags=["numbers"])
 
 # Templates (conversational flow definitions)
 router.include_router(templates_router, prefix="", tags=["templates"])
+
+# Playground (configuration exploration)
+router.include_router(playground_router, prefix="", tags=["playground"])
 
 # Blacklist (blocked phone numbers - admin only)
 router.include_router(blacklist_router, prefix="", tags=["blacklist"])

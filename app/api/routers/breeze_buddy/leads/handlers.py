@@ -31,6 +31,8 @@ from app.ai.voice.agents.breeze_buddy.utils.common import (
     validate_payload,
 )
 from app.ai.voice.agents.breeze_buddy.utils.language_utils.language_detector import (
+    LANGUAGE_NAMES,
+    SHORT_TO_FULL_LANGUAGE_CODE,
     determine_language_for_call,
 )
 from app.ai.voice.agents.breeze_buddy.utils.tts_utils.tts_provider_selector import (
@@ -144,7 +146,7 @@ async def push_lead_handler(req: PushLeadRequest, current_user: UserInfo) -> Dic
             )
 
         # Validate payload against expected schema if schema exists
-        if template.expected_payload_schema:
+        if template and template.expected_payload_schema:
             is_valid, validation_errors = validate_payload(
                 req.payload, template.expected_payload_schema
             )
@@ -194,24 +196,43 @@ async def push_lead_handler(req: PushLeadRequest, current_user: UserInfo) -> Dic
         if req.reporting_webhook_url:
             lead_payload["reporting_webhook_url"] = req.reporting_webhook_url
 
-        # Determine language using unified helper function
-        _, language_name = await determine_language_for_call(
-            template.configurations if template else None,
-            lead_payload,
-            req.request_id,
-        )
+        if req.is_playground:
+            # Playground supplies stt_language and tts_voice_name explicitly —
+            # skip LLM-based detection entirely.
+            overrides = req.configurations_override or {}
+            stt_language = overrides.get("stt_language", "")
+            normalized_language = SHORT_TO_FULL_LANGUAGE_CODE.get(
+                stt_language, stt_language
+            )
+            lead_payload["language_name"] = LANGUAGE_NAMES.get(
+                normalized_language, "English"
+            )
+            tts_voice = overrides.get("tts_voice_name")
+            if tts_voice:
+                lead_payload["tts_voice_name"] = tts_voice
+        else:
+            _, language_name = await determine_language_for_call(
+                template.configurations if template else None,
+                lead_payload,
+                req.request_id,
+            )
+            lead_payload["language_name"] = language_name
 
-        # Add language name to payload for use during call (agent.py uses this)
-        lead_payload["language_name"] = language_name
+            tts_voice_name = await determine_tts_voice_for_call(
+                template.configurations if template else None,
+                lead_payload,
+                req.request_id,
+            )
+            if tts_voice_name:
+                lead_payload["tts_voice_name"] = tts_voice_name.value
 
-        # Determine TTS voice using LLM if payload-based selection is enabled
-        tts_voice_name = await determine_tts_voice_for_call(
-            template.configurations if template else None,
-            lead_payload,
-            req.request_id,
-        )
-        if tts_voice_name:
-            lead_payload["tts_voice_name"] = tts_voice_name.value
+        # In playground mode, store configurations override in metadata
+        meta_data = {}
+        if req.is_playground:
+            meta_data = {
+                "playground": True,
+                "configurations": req.configurations_override,
+            }
 
         # Insert lead call tracker record with both template name and template_id
         lead_call_tracker = await create_lead_call_tracker(
@@ -223,7 +244,7 @@ async def push_lead_handler(req: PushLeadRequest, current_user: UserInfo) -> Dic
             next_attempt_at=next_attempt_at,
             payload=lead_payload,
             attempt_count=0,
-            meta_data={},
+            meta_data=meta_data,
             request_id=req.request_id,
             execution_mode=req.execution_mode or ExecutionMode.TELEPHONY,
             status=LeadCallStatus.BACKLOG,
