@@ -32,12 +32,12 @@ class Permission(str, Enum):
     READ_ALL = "read:all"
     READ_OWN_DATA = "read:own_data"
     READ_ANALYTICS = "read:analytics"
-    READ_ASSIGNED_SHOPS = "read:assigned_shops"
+    READ_ASSIGNED_MERCHANTS = "read:assigned_merchants"
 
     # Write permissions
     WRITE_ALL = "write:all"
     WRITE_OWN_DATA = "write:own_data"
-    WRITE_ASSIGNED_SHOPS = "write:assigned_shops"
+    WRITE_ASSIGNED_MERCHANTS = "write:assigned_merchants"
 
     # Delete permissions
     DELETE_ALL = "delete:all"
@@ -46,15 +46,15 @@ class Permission(str, Enum):
     # Analytics permissions
     ANALYTICS_ALL = "analytics:all"
     ANALYTICS_OWN = "analytics:own"
-    ANALYTICS_ASSIGNED_SHOPS = "analytics:assigned_shops"
+    ANALYTICS_ASSIGNED_MERCHANTS = "analytics:assigned_merchants"
 
     # Configuration permissions
     CONFIGURATIONS_ALL = "configurations:all"
     CONFIGURATIONS_READ = "configurations:read"
-    CONFIGURATIONS_ASSIGNED_SHOPS = "configurations:assigned_shops"
+    CONFIGURATIONS_ASSIGNED_MERCHANTS = "configurations:assigned_merchants"
 
-    # Shop management
-    SHOPS_ALL = "shops:all"
+    # Merchant management
+    MERCHANTS_ALL = "merchants:all"
 
 
 class LoginRequest(BaseModel):

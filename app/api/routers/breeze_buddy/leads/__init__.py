@@ -55,14 +55,14 @@ async def push_lead(
     4. Return a lead_call_tracker_id for tracking
 
     Permissions:
-    - Admin: Can push leads for any reseller/shop
-    - Reseller: Can push leads for own shops only
+    - Admin: Can push leads for any reseller/merchant
+    - Reseller: Can push leads for own merchants only
 
     Request Body:
         {
-            "reseller_id": "shop_123",
+            "reseller_id": "reseller_123",
             "template": "order-confirmation",
-            "merchant_id": "shop_123",
+            "merchant_id": "merchant_123",
             "request_id": "order_456",
             "reporting_webhook_url": "https://example.com/webhook",
             "payload": {

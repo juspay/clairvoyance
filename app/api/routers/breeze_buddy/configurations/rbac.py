@@ -23,7 +23,7 @@ def validate_config_access(
     Args:
         current_user: Current authenticated user with RBAC info
         reseller_id: Reseller ID to validate access for
-        merchant_id: Shop identifier to validate access for (optional)
+        merchant_id: Merchant ID to validate access for (optional)
         operation: Operation being performed (for logging)
 
     Raises:

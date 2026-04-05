@@ -62,9 +62,9 @@ async def create_template(
 
     Request Body:
         {
-            "reseller_id": "shop_123",
+            "reseller_id": "reseller_123",
             "name": "order-confirmation",
-            "shop_identifier": "shop_123",
+            "merchant_id": "merchant_123",
             "is_active": true,
             "description": "Order confirmation flow",
             "flow": {
@@ -99,7 +99,7 @@ async def create_template(
 @router.get("/templates/list", response_model=TemplateListResponse)
 async def list_templates(
     reseller_id: Optional[str] = Query(None, description="Filter by reseller ID"),
-    merchant_id: Optional[str] = Query(None, description="Filter by merchant_id"),
+    merchant_id: Optional[str] = Query(None, description="Filter by merchant ID"),
     include_inactive: bool = Query(
         False, description="Include inactive templates (default: false)"
     ),
@@ -113,7 +113,7 @@ async def list_templates(
 
     Query Parameters:
     - reseller_id: Optional filter by specific reseller ID
-    - merchant_id: Optional filter by specific shop identifier
+    - merchant_id: Optional filter by specific merchant ID
     - include_inactive: Include inactive templates (default: false)
 
     RBAC Behavior:
@@ -179,7 +179,7 @@ async def replace_template(
     replace an existing template.
 
     replaces all fields of the template. Non-nullable fields (name, flow, is_active)
-    must be provided. Nullable fields (shop_identifier, outbound_number_id,
+    must be provided. Nullable fields (merchant_id, outbound_number_id,
     expected_payload_schema, expected_callback_response_schema, configurations)
     - if not provided, they will be set to NULL.
 
@@ -189,7 +189,7 @@ async def replace_template(
     Request Body:
         {
             "name": "updated-template-name",
-            "shop_identifier": "shop_identifier",
+            "merchant_id": "merchant_id",
             "outbound_number_id": "uuid",
             "is_active": true,
             "flow": {...},

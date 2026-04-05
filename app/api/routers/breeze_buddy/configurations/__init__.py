@@ -60,7 +60,7 @@ async def create_configuration(
 
     Request Body:
         {
-            "reseller_id": "shop_123",
+            "reseller_id": "reseller_123",
             "template": "order-confirmation",
             "merchant_id": "merchant_123",
             "initial_offset": 0,
@@ -110,8 +110,8 @@ async def list_configurations(
     Example Requests:
         GET /configurations                                    # All accessible configs
         GET /configurations?template=order-confirmation        # Filter by template
-        GET /configurations?reseller_id=shop_123               # Filter by reseller
-        GET /configurations?merchant_id=shop_456                # Filter by shop
+        GET /configurations?reseller_id=reseller_123           # Filter by reseller
+        GET /configurations?merchant_id=merchant_456           # Filter by merchant
 
     Returns:
         List of configuration objects matching filters and user permissions
@@ -198,9 +198,9 @@ async def update_configuration(
 
     Request Body:
         {
-            "reseller_id": "shop_123",
+            "reseller_id": "reseller_123",
             "template": "order-confirmation",
-            "merchant_id": "shop_123",
+            "merchant_id": "merchant_123",
             "initial_offset": 0,
             "retry_offset": 600,
             "call_start_time": "10:00",
@@ -256,12 +256,12 @@ async def calling_activation(
     current_user: UserInfo = Depends(get_current_user_with_rbac),
 ):
     """
-    Enable or disable calling globally or for specific resellers/shops.
+    Enable or disable calling globally or for specific resellers/merchants.
 
     Query Parameters:
     - enable_calling: Boolean to enable or disable calling
-    - reseller_id: Optional reseller ID filter (or merchant_id for backward compatibility)
-    - merchant_id: Optional shop identifier filter (or shop_identifier for backward compatibility)
+    - reseller_id: Optional reseller ID filter
+    - merchant_id: Optional  merchant ID filter
 
     Behavior:
     - If reseller_id is None: All configs across all resellers are updated (admin only)
@@ -269,13 +269,13 @@ async def calling_activation(
     - If both reseller_id and merchant_id are provided: Only that specific config is updated
 
     Permissions:
-    - Admin: Can toggle calling for any merchant/shop or globally
-    - Merchant: Can only toggle calling for own merchants/shops
+    - Admin: Can toggle calling for any reseller/merchant or globally
+    - Merchant: Can only toggle calling for own resellers/merchants
 
     Example Requests:
-        PATCH /configurations/toggle-calling?enable_calling=false                           # Global disable (admin only)
-        PATCH /configurations/toggle-calling?enable_calling=true&reseller_id=shop_123       # Enable for reseller
-        PATCH /configurations/toggle-calling?enable_calling=false&reseller_id=shop_123&merchant_id=shop_456  # Disable for specific shop
+        PATCH /configurations/calling/activation?enable_calling=false                          # Global disable (admin only)
+        PATCH /configurations/calling/activation?enable_calling=true&reseller_id=reseller_123  # Enable for reseller
+        PATCH /configurations/calling/activation?enable_calling=false&reseller_id=reseller_123&merchant_id=merchant_456  # Disable for specific merchant
 
     Returns:
         {

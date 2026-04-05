@@ -1,7 +1,7 @@
 """
 Merchants API endpoints.
 
-Admin-only endpoints for managing and viewing merchants (shop_identifiers).
+Admin-only endpoints for managing and viewing merchants.
 """
 
 from typing import Optional

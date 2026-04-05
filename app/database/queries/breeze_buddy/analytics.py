@@ -138,7 +138,6 @@ def build_analytics_where_clause(
         values.append(filters["template_id"])
         conditions.append(f"lct.template_id = ${len(values) + value_offset}::UUID")
 
-    # Reseller ID filter with backward compatibility
     if "reseller_id" in filters and filters["reseller_id"]:
         values.append(filters["reseller_id"])
         conditions.append(f"lct.reseller_id = ${len(values) + value_offset}")
@@ -148,7 +147,6 @@ def build_analytics_where_clause(
         values.append(filters["reseller_ids"])
         conditions.append(f"lct.reseller_id = ANY(${len(values) + value_offset})")
 
-    # Merchant identifier filter with backward compatibility
     if "merchant_id" in filters and filters["merchant_id"]:
         values.append(filters["merchant_id"])
         conditions.append(f"lct.merchant_id = ${len(values) + value_offset}")

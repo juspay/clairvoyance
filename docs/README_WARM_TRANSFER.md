@@ -41,7 +41,7 @@ sequenceDiagram
 When a `transfer_to_agent` function is triggered from a template, the system:
 
 - Extracts the `transfer_number` from the node hook's `expected_fields` payload (populated securely via dynamic template configuration).
-- Sets a transfer flag in Redis (`set_transfer_flag`) with the `transfer_number`, `merchant_id`, `shop_identifier`, and optional caller data.
+- Sets a transfer flag in Redis (`set_transfer_flag`) with the `transfer_number`, `reseller_id`, `merchant_id`, and optional caller data.
 - Readies the AI bot to gracefully exit the conversation so the transfer can execute.
 
 ### 2. Call Transfer Execution
