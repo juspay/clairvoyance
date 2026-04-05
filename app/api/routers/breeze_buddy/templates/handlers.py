@@ -161,7 +161,7 @@ async def get_template_handler(
 
     Args:
         reseller_id: Reseller ID
-        merchant_id: Optional shop identifier
+        merchant_id: Optional Merchant ID
         name: Optional template name
         current_user: Current authenticated user
 

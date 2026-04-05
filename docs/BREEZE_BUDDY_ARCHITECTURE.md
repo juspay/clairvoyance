@@ -78,8 +78,8 @@ Leads are inserted through the `/push/lead/v2` endpoint:
 class PushLeadRequest(BaseModel):
     payload: Dict[str, Any]          # Order/lead data
     template: str                     # Template name to use
-    reseller: str                     # Reseller identifier
-    identifier: Optional[str] = None  # Shop-specific identifier
+    reseller_id: str                     # Reseller identifier
+    merchant_id: Optional[str] = None  # Merchant-specific identifier
     reporting_webhook_url: str | None = None  # Callback URL
 ```
 
@@ -111,9 +111,9 @@ class PushLeadRequest(BaseModel):
    ```python
    lead_call_tracker = await create_lead_call_tracker(
        id=uuid,
-       reseller_id=req.reseller,
+       reseller_id=req.reseller_id,
        template=req.template,
-       shop_identifier=req.identifier,
+       merchant_id=req.merchant_id,
        next_attempt_at=next_attempt_at,  # Scheduled time
        payload=lead_payload,
        attempt_count=0,
@@ -135,7 +135,7 @@ lead = await get_lead_by_call_id(self.call_sid)
 ```python
 template = await get_template_by_merchant(
     reseller_id=reseller_id,
-    shop_identifier=self.lead.shop_identifier,
+    merchant_id=self.lead.merchant_id,
     name=self.lead.template,
 )
 ```
@@ -186,7 +186,7 @@ The template system is the core of Breeze Buddy's architecture. It consists of f
 class TemplateModel(BaseModel):
     id: str
     reseller_id: str
-    shop_identifier: Optional[str] = None
+    merchant_id: Optional[str] = None
     name: str
     flow: Dict[str, Any]  # The complete flow configuration
     expected_payload_schema: Optional[Dict[str, Any]] = None
@@ -197,7 +197,7 @@ class TemplateModel(BaseModel):
 **Fields**:
 - `id`: Unique template identifier
 - `reseller_id`: Reseller this template belongs to
-- `shop_identifier`: Optional shop-specific override
+- `merchant_id`: Optional merchant-specific override
 - `name`: Template name (e.g., "order-confirmation")
 - `flow`: Complete flow configuration with nodes and transitions
 - `expected_payload_schema`: Schema for validating incoming lead data
@@ -279,7 +279,7 @@ class HookFieldConfigSource(str, Enum):
 
 **Key Methods**:
 
-#### `load_template(reseller_id, template, template_vars, shop_identifier)`
+#### `load_template(reseller_id, template, template_vars, merchant_id)`
 Main entry point for loading and rendering templates.
 
 **Process**:
@@ -621,8 +621,8 @@ Inserts new lead for processing ([leads.py:153-275](app/api/routers/breeze_buddy
     "total_price": 1500
   },
   "template": "order-confirmation",
-  "reseller": "reseller_123",
-  "identifier": "shop_456",
+  "reseller_id": "reseller_123",
+  "merchant_id": "merchant_456",
   "reporting_webhook_url": "https://example.com/webhook"
 }
 ```
@@ -654,11 +654,11 @@ Legacy endpoint for order confirmation ([leads.py:58-150](app/api/routers/breeze
 **Endpoints**:
 
 ##### `GET /template`
-Retrieves template by reseller, shop, and name ([template.py:17-52](app/api/routers/breeze_buddy/template.py#L17-L52))
+Retrieves template by reseller, merchant, and name ([template.py:17-52](app/api/routers/breeze_buddy/template.py#L17-L52))
 
 **Query Parameters**:
 - `reseller_id`: Required
-- `shop_identifier`: Optional
+- `merchant_id`: Optional
 - `name`: Optional
 
 ##### `POST /template`
@@ -667,8 +667,8 @@ Creates new template from JSON ([template.py:55-123](app/api/routers/breeze_budd
 **Request**:
 ```json
 {
-  "reseller": "reseller_123",
-  "identifier": "shop_456",
+  "reseller_id": "reseller_123",
+  "merchant_id": "merchant_456",
   "template_name": "order-confirmation",
   "is_active": true,
   "expected_payload_schema": {...},
@@ -693,7 +693,7 @@ Creates new template from JSON ([template.py:55-123](app/api/routers/breeze_budd
 
 **Functions**:
 
-##### `get_template_by_merchant(reseller_id, shop_identifier, name)`
+##### `get_template_by_merchant(reseller_id, merchant_id, name)`
 Retrieves template from database ([template.py:29-52](app/database/accessor/breeze_buddy/template.py#L29-L52))
 
 **Process**:
@@ -1179,8 +1179,8 @@ Have a good day."
     ]
   },
   "template": "order-confirmation",
-  "reseller": "reseller_123",
-  "identifier": "myshop.myshopify.com",
+  "reseller_id": "reseller_123",
+  "merchant_id": "myshop.myshopify.com",
   "reporting_webhook_url": "https://myshop.com/webhooks/call-status"
 }
 ```

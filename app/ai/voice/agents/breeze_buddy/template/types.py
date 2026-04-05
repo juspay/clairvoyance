@@ -894,7 +894,7 @@ class ReplaceTemplateRequest(BaseModel):
     BOTH TemplateModel and this model with the SAME field name.
 
     Non-nullable fields (name, flow, is_active) must be provided - throws 400 if not.
-    Nullable fields (shop_identifier, outbound_number_id, expected_payload_schema,
+    Nullable fields (merchant_id, outbound_number_id, expected_payload_schema,
     expected_callback_response_schema, configurations) - if not provided, set to NULL.
     """
 

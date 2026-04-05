@@ -120,10 +120,10 @@ def get_templates_list_query(filters: Dict[str, Any]) -> Tuple[str, List[Any]]:
     Args:
         filters: Dictionary containing:
             - reseller_ids (optional): List of reseller IDs to filter by
-            - merchant_ids (optional): List of shop identifiers to filter by
+            - merchant_ids (optional): List of merchant IDs to filter by
             - is_active (optional): Filter by active status
             - reseller_id (optional): Single reseller ID to filter by
-            - merchant_id (optional): Single shop identifier to filter by
+            - merchant_id (optional): Single merchant ID to filter by
 
     Returns:
         Tuple of (query string, values list)
@@ -139,7 +139,7 @@ def get_templates_list_query(filters: Dict[str, Any]) -> Tuple[str, List[Any]]:
         values.append(filters["reseller_id"])
         conditions.append(f"reseller_id = ${len(values)}")
 
-    # Handle shop filtering (supports both single and multiple)
+    # Handle merchant filtering (supports both single and multiple)
     if "merchant_ids" in filters and filters["merchant_ids"]:
         values.append(filters["merchant_ids"])
         conditions.append(f"merchant_id = ANY(${len(values)})")

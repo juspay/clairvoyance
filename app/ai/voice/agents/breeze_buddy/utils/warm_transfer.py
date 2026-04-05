@@ -20,15 +20,15 @@ async def set_transfer_flag(
     ttl_seconds: int = 7200,  # 2 hours
 ) -> bool:
     """
-    Set transfer flag in Redis with merchant/shop context.
+    Set transfer flag in Redis with reseller/merchant context.
 
     Stores a flag indicating that this call should trigger transfer
     when Exotel callbacks to fetch the dial-up number.
 
     Args:
         call_sid: Call SID from telephony provider
-        reseller_id: Merchant identifier
-        merchant_id: Shop identifier
+        reseller_id: Reseller ID
+        merchant_id: Merchant ID
         agent_id: Optional pre-locked agent ID
         customer_phone_number: Optional customer phone number for Plivo dial-back
         ttl_seconds: Time to live in seconds (default: 86400 = 1 day)
@@ -52,7 +52,7 @@ async def set_transfer_flag(
     if success:
         logger.info(
             f"[TRANSFER REDIS] Set flag for call {call_sid}: "
-            f"reseller={reseller_id}, shop={merchant_id}, ttl={ttl_seconds}s"
+            f"reseller={reseller_id}, merchant={merchant_id}, ttl={ttl_seconds}s"
         )
     else:
         logger.error(f"[TRANSFER REDIS] Failed to set flag for call {call_sid}")

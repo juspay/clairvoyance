@@ -169,10 +169,10 @@ async def get_templates_list(filters: Dict[str, Any]) -> List[TemplateMetadata]:
     Args:
         filters: Dictionary containing:
             - reseller_ids (optional): List of reseller IDs to filter by
-            - merchant_ids (optional): List of shop identifiers to filter by
+            - merchant_ids (optional): List of merchant identifiers to filter by
             - is_active (optional): Filter by active status
             - reseller_id (optional): Single reseller ID to filter by
-            - merchant_id (optional): Single shop identifier to filter by
+            - merchant_id (optional): Single merchant identifier to filter by
 
     Returns:
         List of TemplateMetadata objects
@@ -183,7 +183,7 @@ async def get_templates_list(filters: Dict[str, Any]) -> List[TemplateMetadata]:
         # Auto-detect if reseller_id is actually a merchant_id (contains domain-like pattern)
         if "reseller_id" in filters and filters["reseller_id"]:
             reseller_id_value = filters["reseller_id"]
-            # Check if it looks like a shop identifier (contains domain patterns)
+            # Check if it looks like a merchant identifier (contains domain patterns)
             if "." in reseller_id_value and (
                 "myshopify.com" in reseller_id_value or "http" in reseller_id_value
             ):
@@ -204,7 +204,7 @@ async def get_templates_list(filters: Dict[str, Any]) -> List[TemplateMetadata]:
                 if lookup_result and len(lookup_result) > 0:
                     actual_reseller_id = lookup_result[0]["reseller_id"]
                     logger.info(
-                        f"Resolved shop '{reseller_id_value}' to reseller_id '{actual_reseller_id}'"
+                        f"Resolved merchant '{reseller_id_value}' to reseller_id '{actual_reseller_id}'"
                     )
 
                     # Update filters: move reseller_id to merchant_id and use resolved reseller_id
@@ -223,7 +223,7 @@ async def get_templates_list(filters: Dict[str, Any]) -> List[TemplateMetadata]:
         # If no results found and we're filtering by merchant_id, try fallback to generic templates
         if not result and ("merchant_id" in filters or "merchant_ids" in filters):
             logger.info(
-                "No shop-specific templates found, falling back to generic reseller templates (merchant_id IS NULL)"
+                "No merchant-specific templates found, falling back to generic reseller templates (merchant_id IS NULL)"
             )
 
             # Create fallback filters without merchant_id
@@ -322,7 +322,7 @@ async def replace_template(
         secrets: Secrets and variables for HTTP functions (optional, set to NULL if not provided)
         outbound_number_id: Outbound number ID (optional, set to NULL if not provided)
         is_active: Whether template is active (required)
-        merchant_id: Shop identifier (optional, set to NULL if not provided)
+        merchant_id: Merchant identifier (optional, set to NULL if not provided)
         now: Current timestamp
 
     Returns:

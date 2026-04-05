@@ -123,7 +123,7 @@ def validate_recording_access(
         current_user: Current authenticated user with RBAC info
         call_sid: Call SID being accessed (for logging)
         reseller_id: Reseller ID of the call
-        merchant_id: Shop identifier of the call (optional)
+        merchant_id: Merchant ID of the call (optional)
 
     Raises:
         HTTPException: 404 if user lacks permission (to avoid leaking existence)

@@ -126,7 +126,7 @@ def get_call_execution_config_by_merchant_id_query(
     merchant_id: Optional[str],
 ) -> Tuple[str, List[Any]]:
     """
-    Generate query to get call execution config by reseller ID and shop identifier.
+    Generate query to get call execution config by reseller ID and merchant identifier.
     """
     if merchant_id:
         text = f"""
@@ -330,7 +330,7 @@ def calling_activation_for_merchant_query(
             RETURNING *;
         """
     elif merchant_id:
-        # Update specific shop for specific reseller
+        # Update specific merchant for specific reseller
         text = f"""
             UPDATE "{CALL_EXECUTION_CONFIG_TABLE}"
             SET "enable_calling" = $1, "updated_at" = $2
@@ -379,10 +379,10 @@ def get_reseller_id_by_merchant_identifier_from_config_query(
     """
     Generate query to get reseller_id for a given merchant_id from call_execution_config.
 
-    Looks up the parent reseller_id for a shop from call execution config table.
+    Looks up the parent reseller_id for a merchant from call execution config table.
 
     Args:
-        merchant_id: Shop identifier to look up
+        merchant_id: merchant identifier to look up
 
     Returns:
         Tuple of (query string, values list)

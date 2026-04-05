@@ -41,9 +41,9 @@ class BreezeBuddyRBACTokenManager:
         Args:
             user_id: User's unique identifier
             username: Username
-            role: User's role (admin, reseller, merchant, shop)
-            reseller_ids: List of accessible merchant IDs (["*"] for all merchants)
-            merchant_ids: List of accessible shop identifiers (["*"] for all shops under the merchant(s))
+            role: User's role (admin, reseller, merchant, user)
+            reseller_ids: List of accessible reseller IDs (["*"] for all resellers)
+            merchant_ids: List of accessible merchant identifiers (["*"] for all merchants under the reseller(s))
             email: User's email (optional)
             expires_delta: Optional custom expiration time
 
@@ -128,7 +128,7 @@ class BreezeBuddyRBACTokenManager:
 
             logger.info(
                 f"RBAC token verified for user: {user_info.username} "
-                f"(role: {user_info.role}, resellers: {user_info.reseller_ids}, shops: {user_info.merchant_ids})"
+                f"(role: {user_info.role}, resellers: {user_info.reseller_ids}, merchants: {user_info.merchant_ids})"
             )
             return user_info
 
@@ -180,14 +180,14 @@ class BreezeBuddyRBACTokenManager:
                 "delete:all",
                 "analytics:all",
                 "configurations:all",
-                "shops:all",
+                "merchants:all",
             ]
         elif role_str == "reseller":
             return [
-                "read:assigned_shops",
-                "write:assigned_shops",
-                "analytics:assigned_shops",
-                "configurations:assigned_shops",
+                "read:assigned_merchants",
+                "write:assigned_merchants",
+                "analytics:assigned_merchants",
+                "configurations:assigned_merchants",
             ]
         elif role_str == "merchant":
             return [

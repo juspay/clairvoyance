@@ -25,7 +25,6 @@ def insert_outbound_number_query(
 ) -> Tuple[str, List[Any]]:
     """
     Generate query to insert outbound number record.
-    Populates both new and old columns for backward compatibility.
     """
     text = f"""
         INSERT INTO "{OUTBOUND_NUMBER_TABLE}"

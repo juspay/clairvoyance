@@ -58,7 +58,7 @@ router.include_router(playground_router, prefix="", tags=["playground"])
 # Blacklist (blocked phone numbers - admin only)
 router.include_router(blacklist_router, prefix="", tags=["blacklist"])
 
-# Merchants (shop identifiers - admin only)
+# Merchants (merchant identifiers - admin only)
 router.include_router(merchants_router, prefix="", tags=["merchants"])
 
 # User Accounts (login accounts with RBAC)

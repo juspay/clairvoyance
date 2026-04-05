@@ -11,98 +11,100 @@ from app.core.logger import logger
 from app.schemas import UserInfo
 
 
-def get_accessible_merchants(reseller_ids: List[str]) -> Optional[List[str]]:
+def get_accessible_resellers(reseller_ids: List[str]) -> Optional[List[str]]:
     """
-    Returns list of accessible merchants, or None if access to ALL merchants.
+    Returns list of accessible resellers, or None if access to ALL resellers.
 
     Args:
         reseller_ids: reseller_ids array from JWT token
 
     Returns:
-        None if user has access to ALL merchants (["*"])
+        None if user has access to ALL resellers (["*"])
         List[str] of specific reseller_ids otherwise
     """
     if "*" in reseller_ids:
-        return None  # None means "all merchants"
+        return None  # None means "all resellers"
     else:
         return reseller_ids
 
 
-def get_accessible_shops(merchant_ids: List[str]) -> Optional[List[str]]:
+def get_accessible_merchants(merchant_ids: List[str]) -> Optional[List[str]]:
     """
-    Returns list of accessible shops, or None if access to ALL shops.
+    Returns list of accessible merchants, or None if access to ALL merchants.
 
     Args:
         merchant_ids: merchant_ids array from JWT token
 
     Returns:
-        None if user has access to ALL shops (["*"])
+        None if user has access to ALL merchants (["*"])
         List[str] of specific merchant_ids otherwise
     """
     if "*" in merchant_ids:
-        return None  # None means "all shops"
+        return None  # None means "all merchants"
     else:
         return merchant_ids
 
 
-def validate_shop_access(
+def validate_merchant_access(
     current_user: UserInfo,
     merchant_id: Optional[str] = None,
     merchant_ids: Optional[List[str]] = None,
 ) -> None:
     """
-    Validate if current user has access to requested shop(s).
+    Validate if current user has access to requested merchant(s).
 
     Args:
         current_user: Current authenticated user
-        merchant_id: Single shop identifier to check (optional)
-        merchant_ids: Multiple shop identifiers to check (optional)
+        merchant_id: Single merchant identifier to check (optional)
+        merchant_ids: Multiple merchant identifiers to check (optional)
 
     Raises:
         HTTPException: 403 Forbidden if user doesn't have access
     """
-    accessible_shops = get_accessible_shops(current_user.merchant_ids)
+    accessible_merchants = get_accessible_merchants(current_user.merchant_ids)
 
-    # User has access to all shops (admin/reseller with wildcard)
-    if accessible_shops is None:
+    # User has access to all merchants (admin/reseller with wildcard)
+    if accessible_merchants is None:
         return  # Allow access
 
-    # Check single shop access
+    # Check single merchant access
     if merchant_id:
-        if merchant_id not in accessible_shops:
+        if merchant_id not in accessible_merchants:
             logger.warning(
-                f"User {current_user.username} attempted to access unauthorized shop: {merchant_id}"
+                f"User {current_user.username} attempted to access unauthorized merchant: {merchant_id}"
             )
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Access denied to shop {merchant_id}",
+                detail=f"Access denied to merchant {merchant_id}",
             )
 
-    # Check multiple shops access
+    # Check multiple merchants access
     if merchant_ids:
-        unauthorized_shops = [
-            shop for shop in merchant_ids if shop not in accessible_shops
+        unauthorized_merchants = [
+            merchant
+            for merchant in merchant_ids
+            if merchant not in accessible_merchants
         ]
 
-        if unauthorized_shops:
+        if unauthorized_merchants:
             logger.warning(
-                f"User {current_user.username} attempted to access unauthorized shops: {unauthorized_shops}"
+                f"User {current_user.username} attempted to access unauthorized merchants: {unauthorized_merchants}"
             )
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Access denied to one or more requested shops: {unauthorized_shops}",
+                detail=f"Access denied to one or more requested merchants: {unauthorized_merchants}",
             )
 
 
-def apply_shop_filter(
+def apply_merchant_filter(
     current_user: UserInfo,
     requested_merchant_identifier: Optional[str] = None,
     requested_merchant_identifiers: Optional[List[str]] = None,
 ) -> Optional[List[str]]:
     """
-    Apply shop filter based on user's accessible shops.
+    Apply merchant filter based on user's accessible merchants.
 
-    This function validates access and returns the appropriate shop filter to use in queries.
+    This function validates access and returns the appropriate merchant filter to use in queries.
 
     Args:
         current_user: Current authenticated user
@@ -110,59 +112,59 @@ def apply_shop_filter(
         requested_merchant_identifiers: Multiple merchants requested by user (optional)
 
     Returns:
-        None if user has access to ALL shops (no filter needed)
-        List[str] of shop identifiers to filter by
+        None if user has access to ALL merchants (no filter needed)
+        List[str] of merchant identifiers to filter by
 
     Raises:
         HTTPException: 403 Forbidden if user doesn't have access
     """
-    accessible_shops = get_accessible_shops(current_user.merchant_ids)
+    accessible_merchants = get_accessible_merchants(current_user.merchant_ids)
 
-    # User has access to all shops (admin/reseller with wildcard)
-    if accessible_shops is None:
-        # If user requested specific shop(s), return that
+    # User has access to all merchants (admin/reseller with wildcard)
+    if accessible_merchants is None:
+        # If user requested specific merchant(s), return that
         if requested_merchant_identifier:
             return [requested_merchant_identifier]
         if requested_merchant_identifiers:
             return requested_merchant_identifiers
-        # Otherwise, no filter (return all shops)
+        # Otherwise, no filter (return all merchants)
         return None
 
-    # User has access to specific shops only
-    # Validate requested shops
+    # User has access to specific merchants only
+    # Validate requested merchants
     if requested_merchant_identifier:
-        if requested_merchant_identifier not in accessible_shops:
+        if requested_merchant_identifier not in accessible_merchants:
             logger.warning(
-                f"User {current_user.username} attempted to access unauthorized shop: {requested_merchant_identifier}"
+                f"User {current_user.username} attempted to access unauthorized merchant: {requested_merchant_identifier}"
             )
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Access denied to shop {requested_merchant_identifier}",
+                detail=f"Access denied to merchant {requested_merchant_identifier}",
             )
         return [requested_merchant_identifier]
 
     if requested_merchant_identifiers:
-        unauthorized_shops = [
-            shop
-            for shop in requested_merchant_identifiers
-            if shop not in accessible_shops
+        unauthorized_merchants = [
+            merchant
+            for merchant in requested_merchant_identifiers
+            if merchant not in accessible_merchants
         ]
 
-        if unauthorized_shops:
+        if unauthorized_merchants:
             logger.warning(
-                f"User {current_user.username} attempted to access unauthorized shops: {unauthorized_shops}"
+                f"User {current_user.username} attempted to access unauthorized merchants: {unauthorized_merchants}"
             )
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Access denied to shops: {unauthorized_shops}",
+                detail=f"Access denied to merchants: {unauthorized_merchants}",
             )
         return requested_merchant_identifiers
 
-    # No specific shops requested, return user's accessible shops
-    return accessible_shops
+    # No specific merchants requested, return user's accessible merchants
+    return accessible_merchants
 
 
-def filter_by_shop_access(
+def filter_by_merchant_access(
     current_user: UserInfo,
     data_list: List[dict],
     merchant_key: str = "merchant_id",
@@ -173,29 +175,29 @@ def filter_by_shop_access(
     Args:
         current_user: Current authenticated user
         data_list: List of dictionaries containing data
-        merchant_key: Key name for shop identifier in each dict (default: "merchant_id")
+        merchant_key: Key name for merchant identifier in each dict (default: "merchant_id")
 
     Returns:
-        Filtered list containing only accessible shops
+        Filtered list containing only accessible merchants
     """
     identifier = current_user.merchant_ids
-    accessible_shops = get_accessible_shops(identifier)
+    accessible_merchants = get_accessible_merchants(identifier)
 
-    # User has access to all shops
-    if accessible_shops is None:
+    # User has access to all merchants
+    if accessible_merchants is None:
         return data_list
 
-    # Filter by accessible shops
+    # Filter by accessible merchants
     return [
         item
         for item in data_list
-        if merchant_key in item and item[merchant_key] in accessible_shops
+        if merchant_key in item and item[merchant_key] in accessible_merchants
     ]
 
 
 def has_wildcard_access(current_user: UserInfo) -> bool:
     """
-    Check if user has wildcard (all shops) access.
+    Check if user has wildcard (all merchants) access.
 
     Args:
         current_user: Current authenticated user
@@ -206,9 +208,9 @@ def has_wildcard_access(current_user: UserInfo) -> bool:
     return "*" in current_user.merchant_ids
 
 
-def has_wildcard_merchant_access(current_user: UserInfo) -> bool:
+def has_wildcard_reseller_access(current_user: UserInfo) -> bool:
     """
-    Check if user has wildcard (all merchants) access.
+    Check if user has wildcard (all resellers) access.
 
     Args:
         current_user: Current authenticated user
@@ -219,7 +221,7 @@ def has_wildcard_merchant_access(current_user: UserInfo) -> bool:
     return "*" in current_user.reseller_ids
 
 
-def validate_merchant_access(
+def validate_reseller_access(
     current_user: UserInfo,
     reseller_id: Optional[str] = None,
     reseller_ids: Optional[List[str]] = None,
@@ -235,7 +237,7 @@ def validate_merchant_access(
     Raises:
         HTTPException: 403 Forbidden if user doesn't have access
     """
-    accessible_resellers = get_accessible_merchants(current_user.reseller_ids)
+    accessible_resellers = get_accessible_resellers(current_user.reseller_ids)
 
     # User has access to all resellers (admin/reseller with wildcard)
     if accessible_resellers is None:
@@ -268,7 +270,7 @@ def validate_merchant_access(
             )
 
 
-def apply_merchant_shop_filter(
+def apply_reseller_merchant_filter(
     current_user: UserInfo,
     requested_reseller_id: Optional[str] = None,
     requested_merchant_identifier: Optional[str] = None,
@@ -291,8 +293,8 @@ def apply_merchant_shop_filter(
     Raises:
         HTTPException: 403 Forbidden if user doesn't have access
     """
-    accessible_resellers = get_accessible_merchants(current_user.reseller_ids)
-    accessible_shops = get_accessible_shops(current_user.merchant_ids)
+    accessible_resellers = get_accessible_resellers(current_user.reseller_ids)
+    accessible_merchants = get_accessible_merchants(current_user.merchant_ids)
 
     # Determine reseller filter
     reseller_filter = None
@@ -316,26 +318,26 @@ def apply_merchant_shop_filter(
             reseller_filter = [requested_reseller_id]
         # else: No filter needed (all resellers)
 
-    # Determine shop filter
-    shop_filter = None
-    if accessible_shops is not None:
-        # User has specific shop access
+    # Determine merchant filter
+    merchant_filter = None
+    if accessible_merchants is not None:
+        # User has specific merchant access
         if requested_merchant_identifier:
-            if requested_merchant_identifier not in accessible_shops:
+            if requested_merchant_identifier not in accessible_merchants:
                 logger.warning(
-                    f"User {current_user.username} attempted to access unauthorized shop: {requested_merchant_identifier}"
+                    f"User {current_user.username} attempted to access unauthorized merchant: {requested_merchant_identifier}"
                 )
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
-                    detail=f"Access denied to shop {requested_merchant_identifier}",
+                    detail=f"Access denied to merchant {requested_merchant_identifier}",
                 )
-            shop_filter = [requested_merchant_identifier]
+            merchant_filter = [requested_merchant_identifier]
         else:
-            shop_filter = accessible_shops
+            merchant_filter = accessible_merchants
     else:
-        # User has wildcard shop access
+        # User has wildcard merchant access
         if requested_merchant_identifier:
-            shop_filter = [requested_merchant_identifier]
-        # else: No filter needed (all shops)
+            merchant_filter = [requested_merchant_identifier]
+        # else: No filter needed (all merchants)
 
-    return (reseller_filter, shop_filter)
+    return (reseller_filter, merchant_filter)

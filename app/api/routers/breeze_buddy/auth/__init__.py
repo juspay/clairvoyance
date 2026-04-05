@@ -129,7 +129,7 @@ async def get_current_user_info(
     - Frontend to display user info
     - Checking current permissions
     - Verifying token validity
-    - Getting accessible merchants and shops
+    - Getting accessible resellers and merchants
 
     Returns:
         {
@@ -137,8 +137,8 @@ async def get_current_user_info(
             "username": "user@example.com",
             "role": "merchant",
             "email": "user@example.com",
-            "reseller_ids": ["merchant_123"],
-            "merchant_ids": ["shop_456", "shop_789"],
+            "reseller_ids": ["reseller_123"],
+            "merchant_ids": ["merchant_456", "merchant_789"],
             "permissions": ["read:leads", "write:leads", ...]
         }
 

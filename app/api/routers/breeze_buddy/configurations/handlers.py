@@ -128,7 +128,7 @@ async def list_configurations_handler(
     Args:
         reseller_id: Optional reseller ID filter
         template: Optional template filter
-        merchant_id: Optional shop identifier filter
+        merchant_id: Optional merchant ID filter
         current_user: Current authenticated user
 
     Returns:
@@ -154,7 +154,6 @@ async def list_configurations_handler(
             configs = [c for c in configs if c.template == template]
 
         if merchant_id:
-            # Support both new (merchant_id) and old (shop_identifier) field names
             configs = [c for c in configs if c.merchant_id == merchant_id]
 
         logger.info(f"Found {len(configs)} configurations before RBAC filtering")
