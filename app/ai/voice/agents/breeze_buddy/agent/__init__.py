@@ -597,13 +597,30 @@ class Agent:
                 await self._emit_rtvi_event(
                     "conversation-end", {"reason": "client_disconnected"}
                 )
+
+            # Cancel any pending tasks in the pipeline
+            if self.task and hasattr(self.task, "_PipelineTask__tasks"):
+                tasks_to_await = []
+                for t in self.task._PipelineTask__tasks:
+                    if not t.done():
+                        t.cancel()
+                        tasks_to_await.append(t)
+
+                # Await the cancelled tasks to ensure they are cleaned up
+                # and suppress the "Task was destroyed but it is pending" warning
+                if tasks_to_await:
+                    await asyncio.gather(*tasks_to_await, return_exceptions=True)
+
             # Cancel post-greeting idle task if still running
             if self._post_greeting_task and not self._post_greeting_task.done():
                 self._post_greeting_task.cancel()
+                try:
+                    await self._post_greeting_task
+                except asyncio.CancelledError:
+                    pass
                 self._post_greeting_task = None
-                logger.info(
-                    "Cancelling the post greeting task due to client disconnect"
-                )
+                logger.info("Cancelled the post greeting task due to client disconnect")
+
             await self._handle_unexpected_disconnect("client_disconnected")
 
         @self.task.event_handler("on_idle_timeout")
