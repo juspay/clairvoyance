@@ -152,6 +152,7 @@ class CallDetailResult(BaseModel):
     calling_provider: Optional[str] = None
     attempt_count: Optional[int] = None
     cost: Optional[float] = None
+    payload: Optional[Dict[str, Any]] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
 
