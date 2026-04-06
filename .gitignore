@@ -50,5 +50,7 @@ Thumbs.db
 
 logs
 
-# Claude
-.claude
+# Claude (share settings.json and rules/ with team, keep personal files local)
+.claude/settings.local.json
+.claude/memory/
+CLAUDE.local.md
