@@ -13,6 +13,9 @@ from app.ai.voice.agents.breeze_buddy.managers.utils import (
 from app.ai.voice.agents.breeze_buddy.services.agent_router.client import (
     safe_release_pod,
 )
+from app.ai.voice.agents.breeze_buddy.services.call_limiter import (
+    check_outbound_rate_limit_and_alert,
+)
 from app.ai.voice.agents.breeze_buddy.services.telephony.exotel.recording import (
     download_call_recording as download_call_recording_exotel,
 )
@@ -452,15 +455,21 @@ async def process_backlog_leads():
                     )
                     await release_lock_on_lead_by_id(locked_lead.id)
                     continue
-                # Check if customer phone number is blacklisted
-                blacklist_phone = (locked_lead.payload or {}).get(
+
+                customer_phone = (locked_lead.payload or {}).get(
                     "customer_mobile_number"
                 )
-                if blacklist_phone and await is_number_blacklisted(
-                    blacklist_phone, locked_lead.reseller_id
+
+                if customer_phone and await is_number_blacklisted(
+                    customer_phone, locked_lead.reseller_id
                 ):
+                    masked_phone = (
+                        f"***{customer_phone[-4:]}"
+                        if len(customer_phone) >= 4
+                        else "***"
+                    )
                     logger.info(
-                        f"Skipping lead {locked_lead.id} - phone number {blacklist_phone} is blacklisted"
+                        f"Skipping lead {locked_lead.id} - phone number {masked_phone} is blacklisted"
                     )
                     await update_lead_call_completion_details(
                         id=locked_lead.id,
@@ -541,6 +550,18 @@ async def process_backlog_leads():
                     logger.error(
                         f"Invalid customer_mobile_number for lead {locked_lead.id}"
                     )
+                    await _release_number(number_to_use.id, number_to_use.provider)
+                    await release_lock_on_lead_by_id(locked_lead.id)
+                    continue
+                rate_limit_allowed = await check_outbound_rate_limit_and_alert(
+                    customer_phone=customer_mobile,
+                    lead_id=str(locked_lead.id),
+                    reseller_id=locked_lead.reseller_id,
+                )
+                if not rate_limit_allowed:
+                    # TODO: advance next_attempt_at by the rate-limit window so
+                    # the scheduler does not immediately re-pick this lead and
+                    # re-trigger the alert on the next cycle.
                     await _release_number(number_to_use.id, number_to_use.provider)
                     await release_lock_on_lead_by_id(locked_lead.id)
                     continue

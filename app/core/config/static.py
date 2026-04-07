@@ -462,6 +462,7 @@ REDIS_PORT = os.getenv("REDIS_PORT", "")
 REDIS_CLUSTER_NODES = os.getenv("REDIS_CLUSTER_NODES", "")
 REDIS_TTL = int(os.getenv("REDIS_TTL", "3600"))  # Default TTL in seconds (1 hour)
 BLACKLIST_CACHE_TTL = int(os.getenv("BLACKLIST_CACHE_TTL", "300"))  # 5 minutes
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Voice Agent Pod Isolation Configuration (1-pod-1-call architecture)
 # ─────────────────────────────────────────────────────────────────────────────
