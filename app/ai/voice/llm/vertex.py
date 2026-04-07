@@ -25,6 +25,7 @@ class VertexConfig:
     max_tokens: int
     thinking_budget: Optional[int] = None
     thinking_level: Optional[str] = None
+    function_call_timeout_secs: float = 10.0
 
 
 def build_vertex_llm(config: VertexConfig) -> GoogleVertexLLMService:
@@ -62,4 +63,5 @@ def build_vertex_llm(config: VertexConfig) -> GoogleVertexLLMService:
         location=config.location,
         model=config.model,
         params=params,
+        function_call_timeout_secs=config.function_call_timeout_secs,
     )

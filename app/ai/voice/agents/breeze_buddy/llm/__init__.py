@@ -96,6 +96,11 @@ async def _resolve_azure(llm_config: LLMConfiguration | None) -> AzureLLMService
             temperature=temperature,
             max_tokens=max_tokens,
             reasoning_effort=reasoning_effort,
+            function_call_timeout_secs=(
+                llm_config.function_call_timeout_secs
+                if llm_config and llm_config.function_call_timeout_secs
+                else 10.0
+            ),
         )
     )
 
@@ -155,6 +160,11 @@ async def _resolve_vertex(llm_config: LLMConfiguration) -> GoogleVertexLLMServic
             max_tokens=llm_config.max_tokens,
             thinking_budget=thinking_budget,
             thinking_level=thinking_level,
+            function_call_timeout_secs=(
+                llm_config.function_call_timeout_secs
+                if llm_config.function_call_timeout_secs
+                else 10.0
+            ),
         )
     )
 
@@ -211,6 +221,11 @@ async def _resolve_claude_vertex(llm_config: LLMConfiguration) -> AnthropicLLMSe
             max_tokens=llm_config.max_tokens,
             thinking_enabled=thinking_enabled,
             thinking_budget_tokens=thinking_budget_tokens,
+            function_call_timeout_secs=(
+                llm_config.function_call_timeout_secs
+                if llm_config.function_call_timeout_secs
+                else 10.0
+            ),
         )
     )
 
