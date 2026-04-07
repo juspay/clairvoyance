@@ -16,6 +16,7 @@ def validate_config_access(
     reseller_id: Optional[str],
     merchant_id: Optional[str],
     operation: str = "access",
+    allow_merchant_only: bool = False,
 ) -> None:
     """
     Validate that user has access to a specific reseller/merchant.
@@ -25,12 +26,30 @@ def validate_config_access(
         reseller_id: Reseller ID to validate access for
         merchant_id: Merchant ID to validate access for (optional)
         operation: Operation being performed (for logging)
+        allow_merchant_only: If True, allows validation with only merchant_id
+                             (no reseller_id required). Used for merchant-only toggle.
 
     Raises:
         HTTPException: 403 if user lacks permission
     """
     # Admin has full access
     if current_user.role == "admin":
+        return
+
+    # Merchant-only access check (when reseller_id is None but merchant_id is provided)
+    if allow_merchant_only and reseller_id is None and merchant_id is not None:
+        if (
+            merchant_id not in current_user.merchant_ids
+            and "*" not in current_user.merchant_ids
+        ):
+            logger.warning(
+                f"User {current_user.username} attempted to {operation} configuration "
+                f"for unauthorized merchant: {merchant_id}"
+            )
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Access denied to merchant {merchant_id}",
+            )
         return
 
     # Check reseller access

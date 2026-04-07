@@ -286,15 +286,24 @@ async def calling_activation(
     """
 
     # RBAC: Check permissions
-    if reseller_id is None:
+    if reseller_id is None and merchant_id is None:
         # Global toggle - only admins allowed
         if current_user.role != "admin":
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Only admin users can toggle calling globally",
             )
+    elif merchant_id is not None and reseller_id is None:
+        # Merchant-only toggle: validate merchant access directly
+        validate_config_access(
+            current_user,
+            reseller_id=None,
+            merchant_id=merchant_id,
+            operation="toggle calling for",
+            allow_merchant_only=True,
+        )
     else:
-        # Reseller-specific toggle - validate access
+        # Reseller-specific toggle (with or without merchant) - validate access
         validate_config_access(
             current_user,
             reseller_id,

@@ -343,25 +343,25 @@ def calling_activation_for_merchant_query(
 ) -> Tuple[str, List[Any]]:
     """
     Generate query to toggle enable_calling for configs.
-    - If reseller_id is None: All configs across all resellers are updated
+    - If reseller_id is None and merchant_id is None: All configs across all resellers are updated (global)
+    - If merchant_id is provided: Only configs for that merchant are updated (optionally filtered by reseller_id)
     - If reseller_id is provided but merchant_id is None: All configs for that reseller are updated
-    - If both reseller_id and merchant_id are provided: Only that specific config is updated
     """
     values: List[Any] = [enable_calling, datetime.now()]
 
-    if reseller_id is None:
-        # Update all configs across all resellers
+    if reseller_id is None and merchant_id is None:
+        # Update all configs across all resellers (global toggle)
         text = f"""
             UPDATE "{CALL_EXECUTION_CONFIG_TABLE}"
             SET "enable_calling" = $1, "updated_at" = $2
             RETURNING *;
         """
     elif merchant_id:
-        # Update specific merchant for specific reseller
+        # Update specific merchant (we always have reseller_id for the merchant)
         text = f"""
             UPDATE "{CALL_EXECUTION_CONFIG_TABLE}"
             SET "enable_calling" = $1, "updated_at" = $2
-            WHERE reseller_id = $3 
+            WHERE reseller_id = $3
             AND merchant_id = $4
             RETURNING *;
         """
