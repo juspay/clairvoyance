@@ -23,6 +23,7 @@ class AzureConfig:
     temperature: Optional[float] = None
     max_tokens: Optional[int] = None
     reasoning_effort: Optional[str] = None
+    function_call_timeout_secs: float = 10.0
 
 
 def build_azure_llm(config: AzureConfig) -> AzureLLMService:
@@ -55,4 +56,5 @@ def build_azure_llm(config: AzureConfig) -> AzureLLMService:
         endpoint=config.endpoint,
         model=config.model,
         params=params,
+        function_call_timeout_secs=config.function_call_timeout_secs,
     )

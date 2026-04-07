@@ -155,3 +155,10 @@ class LLMConfiguration(BaseModel):
     thinking: Optional[ThinkingConfiguration] = Field(
         None, description="Thinking/reasoning configuration"
     )
+    function_call_timeout_secs: Optional[float] = Field(
+        None,
+        ge=1.0,
+        description="Per-template timeout in seconds for LLM function calls "
+        "(how long Pipecat waits for a function handler to return). "
+        "Defaults to 10s if not set.",
+    )

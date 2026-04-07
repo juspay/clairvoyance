@@ -1,4 +1,16 @@
-"""Claude on Vertex AI LLM config and builder."""
+"""Claude on Vertex AI LLM config and builder.
+
+Provides ``VertexAnthropicLLMService``, a subclass of
+``AnthropicLLMService`` that handles the Vertex AI restriction on
+assistant-message prefill.  Vertex-hosted Claude models reject any
+conversation whose last message has ``role: assistant``; the direct
+Anthropic API treats them as generative prefill, but Vertex returns 400.
+
+When a trailing assistant message is detected in the API params, the
+subclass appends a minimal dummy user message (``"."``) so the
+conversation ends with a ``user`` turn.  The original messages
+(including the assistant acknowledgment) are preserved.
+"""
 
 from __future__ import annotations
 
@@ -8,11 +20,52 @@ from typing import Optional
 
 from anthropic import AsyncAnthropicVertex
 from google.oauth2 import service_account
-from pipecat.services.anthropic.llm import AnthropicLLMService
+from pipecat.adapters.services.anthropic_adapter import AnthropicLLMInvocationParams
+from pipecat.processors.aggregators.llm_context import LLMContext
+from pipecat.services.anthropic.llm import AnthropicLLMService, OpenAILLMContext
 
 from app.core.logger import logger
 
 __all__ = ["ClaudeVertexConfig", "build_claude_vertex_llm"]
+
+
+class VertexAnthropicLLMService(AnthropicLLMService):
+    """AnthropicLLMService subclass safe for Vertex AI Claude endpoints.
+
+    Vertex AI Claude does **not** support assistant-message prefill.
+    Pipecat adds the model's last response to context before re-triggering
+    the LLM (e.g. after a tool-call result).  That trailing assistant
+    message is just the acknowledgment spoken via TTS before the function
+    call.
+
+    When this happens, we append a minimal dummy user message (``"."``) to
+    the **API params only** so the conversation ends with a ``user`` turn.
+    The persistent context is unchanged.
+
+    Compatibility note:
+        Overrides Pipecat's private ``_get_llm_invocation_params`` hook
+        because no public outbound-message mutation hook is available.
+        Tested with Pipecat v0.0.102. Review this override when upgrading
+        Pipecat, as the private method signature may change.
+
+    See: https://github.com/pipecat-ai/pipecat/issues/4020
+    """
+
+    def _get_llm_invocation_params(
+        self, context: OpenAILLMContext | LLMContext
+    ) -> AnthropicLLMInvocationParams:
+        params = super()._get_llm_invocation_params(context)
+        messages = params.get("messages", [])
+
+        if messages and messages[-1].get("role") == "assistant":
+            preview = str(messages[-1].get("content", ""))[:80]
+            logger.info(
+                "Vertex AI Claude: appending empty user message to satisfy "
+                f"no-prefill restriction. Last assistant msg: {preview}"
+            )
+            messages.append({"role": "user", "content": "."})
+
+        return params
 
 
 @dataclass
@@ -31,16 +84,17 @@ class ClaudeVertexConfig:
     max_tokens: int
     thinking_enabled: bool = False
     thinking_budget_tokens: Optional[int] = None
+    function_call_timeout_secs: float = 10.0
 
 
-def build_claude_vertex_llm(config: ClaudeVertexConfig) -> AnthropicLLMService:
+def build_claude_vertex_llm(config: ClaudeVertexConfig) -> VertexAnthropicLLMService:
     """Create a Claude on Vertex AI LLM service instance.
 
     Args:
         config: Claude Vertex-specific configuration.
 
     Returns:
-        Configured AnthropicLLMService instance with Vertex AI client.
+        Configured VertexAnthropicLLMService instance with Vertex AI client.
     """
     logger.info(
         f"Building Claude Vertex LLM service with model={config.model}, "
@@ -74,9 +128,10 @@ def build_claude_vertex_llm(config: ClaudeVertexConfig) -> AnthropicLLMService:
     if thinking is not None:
         params.thinking = thinking
 
-    return AnthropicLLMService(
+    return VertexAnthropicLLMService(
         api_key="dummy",
         model=config.model,
         params=params,
         client=vertex_client,
+        function_call_timeout_secs=config.function_call_timeout_secs,
     )
