@@ -53,7 +53,7 @@ Depending on the underlying telephony provider powering the call (`twilio`, `pli
 - **Exotel**: Exotel's flow (Applet) detects the AI disconnecting, proceeds to its next internal step, executes a REST call to our `/dial-up` webhook, reads the target agent plain-text number from Redis, dials it, and bridges the calls.
 
 > [!NOTE]
-> Deep technical documentation on exactly how each telephony provider bridges the call can be found in the `docs/warm-transfer/` directory.
+> Deep technical documentation on exactly how each telephony provider bridges the call can be found in the provider-specific docs in this directory.
 
 ### 3. Automatic Cleanup
 

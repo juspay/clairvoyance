@@ -41,15 +41,11 @@ Reduce voice agent connection time from **~8 seconds to 3-4 seconds** by impleme
 ```
 Application Startup
 ├── Initialize Database
-├── Initialize Daily Room Pool (5 rooms)
+├── Initialize Daily Room Pool (1 room by default)
 │   ├── Create Room 1 + Tokens (1s)
-│   ├── Create Room 2 + Tokens (1s)
-│   ├── ...
 │   └── Mark rooms as AVAILABLE
-├── Initialize Process Pool (3 processes)
+├── Initialize Process Pool (1 process by default)
 │   ├── Create Process 1 (5-6s initialization)
-│   ├── Create Process 2 (5-6s initialization)
-│   ├── ...
 │   └── Mark processes as READY
 └── Start API Server
 ```
@@ -74,8 +70,8 @@ Background:
 │                 │    │                 │
 │ ┌─────────────┐ │    │ ┌─────────────┐ │
 │ │Available    │ │    │ │Available    │ │
-│ │Rooms (5)    │ │    │ │Processes    │ │
-│ │             │ │    │ │(3)          │ │
+│ │Rooms (1)    │ │    │ │Processes    │ │
+│ │             │ │    │ │(1)          │ │
 │ └─────────────┘ │    │ └─────────────┘ │
 │        │        │    │        │        │
 │        ▼        │    │        ▼        │
@@ -100,21 +96,21 @@ The pool sizes are now configurable via environment variables. You can set them 
 
 ```bash
 # The number of voice agent processes to keep ready in the pool.
-VOICE_AGENT_POOL_SIZE=3
+VOICE_AGENT_POOL_SIZE=1
 
 # The maximum number of voice agent processes the pool can scale up to.
 VOICE_AGENT_MAX_POOL_SIZE=3
 
 # The number of Daily.co rooms to keep ready in the pool.
-DAILY_ROOM_POOL_SIZE=5
+DAILY_ROOM_POOL_SIZE=1
 
 # The maximum number of Daily.co rooms the pool can scale up to.
 DAILY_ROOM_MAX_POOL_SIZE=5
 ```
 
 ### Multi-Pod Setup
-- **5 pods × 3 processes = 15 ready processes**
-- **5 pods × 5 rooms = 25 ready rooms**
+- **5 pods × 1 process = 5 ready processes** (with default `VOICE_AGENT_POOL_SIZE=1`)
+- **5 pods × 1 room = 5 ready rooms** (with default `DAILY_ROOM_POOL_SIZE=1`)
 - **Overflow handling**: Pool caps at these values; extra demand falls back to on-demand creation.
 - **Resource predictable**: Known memory footprint per pod.
 
@@ -259,7 +255,7 @@ The original implementation had a critical token expiry mismatch:
 2. **Token Validation**: Added `are_tokens_valid()` method to check token expiry before room assignment
 3. **Automatic Refresh**: If tokens are expired, they are automatically refreshed with session-specific expiry
 4. **Graceful Degradation**: Failed token refreshes result in room cleanup rather than errors
-5. **Enhanced Monitoring**: Added `available_rooms_with_valid_tokens` metric to track token health
+5. **Enhanced Monitoring**: Added token validity tracking to pool stats
 
 ### Code Changes
 - **`DailyRoom` class**: Added `token_exp_timestamp` and `are_tokens_valid()` method
@@ -289,9 +285,9 @@ The original implementation had a critical token expiry mismatch:
 
 ### Performance Comparison
 
-| Metric                 | Original | Process Pool Only | Dual Pool | Improvement |
-| ---------------------- | -------- | ----------------- | --------- | ----------- |
-| Connection Time        | ~8.0s    | ~1.2s             | **~3-4s** | ~50-62.5%   |
-| Daily Room Creation    | 1.0s     | 1.0s              | **0.05s** | 95%         |
-| Process Initialization | 6.0s     | 0.1s              | **0.05s** | 99.2%       |
-| User Experience        | Poor     | Good              | Excellent | -           |
+| Metric                 | Original | Dual Pool | Improvement |
+| ---------------------- | -------- | --------- | ----------- |
+| Connection Time        | ~8.0s    | **~3-4s** | ~50-62.5%   |
+| Daily Room Creation    | 1.0s     | **0.05s** | 95%         |
+| Process Initialization | 6.0s     | **0.05s** | 99.2%       |
+| User Experience        | Poor     | Excellent | -           |

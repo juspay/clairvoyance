@@ -1,8 +1,10 @@
-# Call Pre-Checks Implementation Plan
+# Call Pre-Checks
+
+> **Status:** Fully **implemented and in production**. This document describes the architecture and design of the pre-check system.
 
 ## Overview
 
-Add a pluggable pre-check system that runs before a call is initiated from the backlog. Pre-checks validate whether a call should proceed, supporting multiple check types (starting with external API checks). Pre-checks are configurable **per merchant per template** (and optionally per shop).
+A pluggable pre-check system that runs before a call is initiated from the backlog. Pre-checks validate whether a call should proceed, supporting multiple check types (starting with external API checks). Pre-checks are configurable **per merchant per template** (and optionally per shop).
 
 ---
 

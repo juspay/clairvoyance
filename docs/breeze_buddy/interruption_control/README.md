@@ -1,4 +1,6 @@
-# Interruption Control — Design Document
+# Interruption Control
+
+> **Status:** Phase 1 (Template-Level) and Phase 2 (Node-Level Switching) are **implemented and in production**. Phase 3 (Buffered Speech) is designed but not yet implemented.
 
 ## Table of Contents
 

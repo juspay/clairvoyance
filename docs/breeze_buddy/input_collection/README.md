@@ -1,4 +1,6 @@
-# Input Collection Mode — Research, Findings & Implementation Plan
+# Input Collection Mode
+
+> **Status:** Phase 1 (Configurable Turn Accumulation) is **implemented and in production**. Phases 2 and 3 are designed but not yet implemented.
 
 ## Table of Contents
 
@@ -768,7 +770,7 @@ async def handle_collection_status(context, args, **kwargs):
 | `app/ai/voice/agents/breeze_buddy/template/interruption.py` | Interruption reset-then-apply pattern |
 | `app/ai/voice/agents/breeze_buddy/processors/transcription_gate.py` | Existing processor example |
 | `app/ai/voice/agents/breeze_buddy/processors/user_idle.py` | Timer/timeout patterns |
-| `docs/INTERRUPTION_CONTROL.md` | Design doc for interruption system (template for this doc) |
+| `docs/breeze_buddy/interruption_control/` | Design doc for interruption system (template for this doc) |
 
 ### Example Templates
 

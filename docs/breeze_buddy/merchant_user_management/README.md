@@ -24,9 +24,10 @@
 - `UserRole.SHOP` → `UserRole.USER`
 - Existing data automatically migrated
 
-✅ **Unified schemas**
-- Both `/merchants` and `/user-accounts` endpoints use the same `UserCreate`/`UserResponse` schemas
-- No duplicate schema classes for merchant vs user accounts
+✅ **Separate schemas per resource**
+- `/merchants` endpoints use `MerchantCreate`/`MerchantResponse` schemas (business entity fields)
+- `/users` endpoints use `UserCreate`/`UserResponse` schemas (login account fields)
+- Each resource has its own dedicated schema classes
 
 ✅ **Reseller ownership**
 - Merchant entities track which reseller owns them via `reseller_id`
@@ -41,17 +42,14 @@ All endpoints are under the prefix `/agent/voice/breeze-buddy`.
 
 | Resource | Endpoint | Method | Access |
 |----------|----------|--------|--------|
-| **Merchant Entities** | `/entity/merchant` | POST | Admin/Reseller |
-| | `/entity/merchants` | GET | All roles (scoped) |
-| | `/entity/merchant/{merchant_identifier}` | GET | All roles (scoped) |
-| | `/entity/merchant/{merchant_identifier}` | PUT | Admin / Reseller (own only) |
-| | `/entity/merchant/{merchant_identifier}` | DELETE | Admin / Reseller (own only) |
+| **Merchant Entities** | `/merchant` | POST | Admin/Reseller |
+| | `/merchants` | GET | All roles (scoped) |
+| | `/merchant/{merchant_id}` | GET | All roles (scoped) |
+| | `/merchant/{merchant_id}` | PUT | Admin / Reseller (own only) |
+| | `/merchant/{merchant_id}` | DELETE | Admin / Reseller (own only) |
 | **User Accounts** | `/user` | POST | RBAC-based |
 | | `/users` | GET | RBAC-filtered |
 | | `/user/{user_id}` | GET/PUT/DELETE | RBAC-based |
-| **Merchants (admin shortcut)** | `/merchants` | GET | Admin only |
-| | `/merchant` | POST | Admin only |
-| | `/merchant/{id}` | GET/PUT/DELETE | Admin only |
 
 > **⚠️ Admin accounts cannot be deleted by anyone** — including admins themselves.
 
@@ -71,23 +69,23 @@ This caused confusion and made access control difficult.
 
 ```
 merchants table                     users table
-├─ merchant_identifier VARCHAR(255) (PK)    ├─ id (UUID, PK)
+├─ merchant_id VARCHAR(255) (PK)    ├─ id (UUID, PK)
 ├─ name VARCHAR(255)  [nullable]    ├─ username (unique)
 ├─ description TEXT                 ├─ password_hash
 ├─ is_active BOOLEAN                ├─ role (admin/reseller/merchant/user)
 ├─ reseller_id VARCHAR(255)         ├─ reseller_ids (JSONB array)
-├─ created_at TIMESTAMPTZ           ├─ merchant_identifiers (JSONB array)
+├─ created_at TIMESTAMPTZ           ├─ merchant_ids (JSONB array)
 └─ updated_at TIMESTAMPTZ           ├─ owner_id VARCHAR(255)
                                     ├─ created_at TIMESTAMPTZ
                                     └─ updated_at TIMESTAMPTZ
 ```
 
 **Key Concepts**:
-- `merchant_identifier` (e.g., "redbus", "nvidia") is the **primary key** — human-readable business identifier (no separate UUID)
+- `merchant_id` (e.g., "redbus", "nvidia") is the **primary key** — human-readable business identifier (no separate UUID)
 - `reseller_id` on merchants table tracks which reseller owns the merchant entity
 - `owner_id` on users table tracks who created each user account — `VARCHAR(255)` (not a UUID foreign key) to support both UUID user IDs and legacy string IDs
-- `reseller_ids` on users table — list of resellers the user can access (for reseller role)
-- `merchant_identifiers` on users table — list of merchants the user can access (for merchant/user roles)
+- `reseller_ids` on users table — retained for backward compatibility; does not drive effective access scope
+- `merchant_ids` on users table — drives effective access scope for all non-admin roles
 
 ---
 
@@ -122,18 +120,18 @@ User (Read-only)
 - **Reseller with `["*"]`**: Access to only merchants they own (where `merchants.reseller_id = reseller.id`)
 - **Merchant/User with `["*"]`**: Access to all merchants their owner (reseller) has access to
 
-Resolution is handled by `resolve_merchant_ids()` in `app/core/security/authorization.py`.
+Resolution is handled by `resolve_merchant_ids()` in `app/core/security/scope.py`.
 
 #### 4. **Immutability**
 Certain fields cannot be changed after creation:
-- `merchant_identifier` (business identifier)
+- `merchant_id` (business identifier)
 - `username` (login name)
 - `role` (user role)
 
 Rationale: Prevents identity confusion and maintains referential integrity.
 
 #### 5. **Delete Rules**
-- **Merchant entities**: Hard delete available via `DELETE /entity/merchant/{merchant_identifier}`
+- **Merchant entities**: Hard delete available via `DELETE /merchant/{merchant_id}`
   - Admin: Can delete any merchant entity
   - Reseller: Can only delete merchant entities they own (`reseller_id` match)
   - Merchant/User: Cannot delete merchant entities
@@ -149,7 +147,7 @@ Rationale: Prevents identity confusion and maintains referential integrity.
 ##### 1. `merchants` Table
 ```sql
 CREATE TABLE IF NOT EXISTS merchants (
-    merchant_identifier VARCHAR(255) PRIMARY KEY,       -- Business identifier ("redbus") — IS the PK
+    merchant_id VARCHAR(255) PRIMARY KEY,       -- Business identifier ("redbus") — IS the PK
     name VARCHAR(255),                          -- Optional display name
     description TEXT,                           -- Optional description
     is_active BOOLEAN DEFAULT true,             -- Active status
@@ -159,7 +157,7 @@ CREATE TABLE IF NOT EXISTS merchants (
 );
 ```
 
-> **Note**: `merchant_identifier` is the primary key — there is no separate UUID `id` column.
+> **Note**: `merchant_id` is the primary key — there is no separate UUID `id` column.
 > `name` is nullable (optional). `reseller_id` references users but is VARCHAR (not FK).
 
 **Indexes**:
@@ -184,7 +182,7 @@ ALTER TABLE users ADD CONSTRAINT users_role_check
 ```
 ┌─────────────────────────────────────────┐
 │          merchants table                │
-│  merchant_identifier (PK), name, reseller_id    │
+│  merchant_id (PK), name, reseller_id    │
 └─────────────────────────────────────────┘
               ↑ reseller_id (VARCHAR)
               │ (references a reseller user's ID)
@@ -204,19 +202,19 @@ ALTER TABLE users ADD CONSTRAINT users_role_check
 ┌──────────┐
 │  Admin   │ (id: user-uuid-123)
 └─────┬────┘
-      │ POST /entity/merchant { merchant_identifier: "redbus" }
+      │ POST /merchant { merchant_id: "redbus" }
       ↓
 ┌──────────────────────────────────────────┐
 │  create_merchant_handler()        │
 │  1. Check: admin role? ✓                 │
-│  2. Validate: merchant_identifier unique? ✓      │
+│  2. Validate: merchant_id unique? ✓      │
 │  3. Admin can optionally set reseller_id │
 └─────────────────┬────────────────────────┘
                   ↓
 ┌──────────────────────────────────────────┐
 │  Database INSERT                         │
 │  merchants (                             │
-│    merchant_identifier: "redbus",                │
+│    merchant_id: "redbus",                │
 │    reseller_id: null or specified         │
 │  )                                       │
 └──────────────────────────────────────────┘
@@ -228,7 +226,7 @@ ALTER TABLE users ADD CONSTRAINT users_role_check
 ┌───────────┐
 │ Reseller  │ (id: reseller-uuid-456)
 └─────┬─────┘
-      │ POST /entity/merchant { merchant_identifier: "fastbus" }
+      │ POST /merchant { merchant_id: "fastbus" }
       ↓
 ┌──────────────────────────────────────────┐
 │  create_merchant_handler()        │
@@ -240,7 +238,7 @@ ALTER TABLE users ADD CONSTRAINT users_role_check
 ┌──────────────────────────────────────────┐
 │  Database INSERT                         │
 │  merchants (                             │
-│    merchant_identifier: "fastbus",               │
+│    merchant_id: "fastbus",               │
 │    reseller_id: reseller-uuid-456 ←auto  │
 │  )                                       │
 └──────────────────────────────────────────┘
@@ -303,9 +301,9 @@ ALTER TABLE users ADD CONSTRAINT users_role_check
 ```
 app/
 ├── utils/
-│   └── common.py                 # is_valid_uuid, is_valid_merchant_identifier, parse_json_field + other helpers
+│   └── common.py                 # is_valid_uuid, is_valid_merchant_id, parse_json_field + other helpers
 ├── core/security/
-│   └── authorization.py          # RBAC helpers: resolve_merchant_ids, validate_merchant_ids_subset
+│   └── scope.py          # RBAC helpers: resolve_merchant_ids, validate_merchant_ids_subset
 ├── database/
 │   ├── migrations/
 │   │   └── 019_create_merchants_table.sql
@@ -328,10 +326,7 @@ app/
         ├── merchants/    # Business entity CRUD
         │   ├── __init__.py
         │   └── handlers.py
-        ├── users/        # User account CRUD (RBAC-based)
-        │   ├── __init__.py
-        │   └── handlers.py
-        └── users/                # /merchants endpoints (admin shortcut, uses UserCreate/UserResponse)
+        └── users/        # User account CRUD (RBAC-based)
             ├── __init__.py
             └── handlers.py
 ```
@@ -384,7 +379,7 @@ app/
 **merchants.py** — Business entities:
 ```python
 class MerchantCreate(BaseModel):
-    merchant_identifier: str   # Pattern: ^[a-zA-Z0-9_-]+$, min=3, max=100, Required
+    merchant_id: str   # min=3, max=100, Required
     name: Optional[str] = None    # max=255, Optional
     description: Optional[str] = None
     is_active: Optional[bool] = True
@@ -397,7 +392,7 @@ class MerchantUpdate(BaseModel):
     reseller_id: Optional[str] = None  # Only admin can change
 
 class MerchantResponse(BaseModel):
-    merchant_identifier: str              # PK — no separate UUID id
+    merchant_id: str              # PK — no separate UUID id
     name: Optional[str] = None
     description: Optional[str] = None
     is_active: bool = True
@@ -409,26 +404,29 @@ class MerchantResponse(BaseModel):
 **users.py** — Unified schemas for all user/merchant accounts:
 ```python
 class UserCreate(BaseModel):
+    id: str                     # min=1, max=255, Required
     username: str
     password: str
+    email: Optional[str] = None
     role: UserRole              # admin, reseller, merchant, user
-    reseller_ids: List[str] = []      # For reseller role (resellers they can access)
-    merchant_identifiers: List[str] = []  # For merchant/user roles (merchants they can access)
+    reseller_ids: List[str] = []      # Retained for backward compatibility only
+    merchant_ids: List[str] = []  # Drives effective access scope for all non-admin roles
     is_active: bool = True
 
 class UserUpdate(BaseModel):
     password: Optional[str] = None
     email: Optional[str] = None
     reseller_ids: Optional[List[str]] = None
-    merchant_identifiers: Optional[List[str]] = None
+    merchant_ids: Optional[List[str]] = None
     is_active: Optional[bool] = None
 
 class UserResponse(BaseModel):
     id: str
     username: str
+    email: Optional[str] = None
     role: UserRole
-    reseller_ids: List[str] = []      # Reseller IDs user can access
-    merchant_identifiers: List[str] = []  # Merchant identifiers user can access
+    reseller_ids: List[str] = []      # Retained for backward compatibility only
+    merchant_ids: List[str] = []  # Drives effective access scope
     is_active: bool = True
     owner_id: Optional[str] = None  # Who created this account
     ...
@@ -441,10 +439,7 @@ class UserListResponse(BaseModel):
     total_pages: int = 1
 ```
 
-> **Note**: The `/merchants` admin endpoints use the same `UserCreate`/`UserResponse` schemas.
-> There are no separate `MerchantCreate`/`MerchantResponse` classes — one set of schemas for all roles.
-
-#### Authorization Helpers (`app/core/security/authorization.py`)
+#### Authorization Helpers (`app/core/security/scope.py`)
 
 ```python
 async def resolve_merchant_ids(user: UserInfo) -> Optional[List[str]]:
@@ -473,7 +468,7 @@ def validate_merchant_ids_subset(
 # decode_merchant — merchants table
 def decode_merchant(row) -> MerchantResponse:
     return MerchantResponse(
-        merchant_identifier=row["merchant_identifier"],
+        merchant_id=row["merchant_id"],
         name=row.get("name"),         # nullable
         reseller_id=str(row["reseller_id"]) if row.get("reseller_id") else None,
         ...
@@ -496,15 +491,15 @@ def decode_user(row) -> UserResponse:
 
 ### Merchant Entity Endpoints
 
-#### POST /entity/merchant (Create Merchant Entity)
+#### POST /merchant (Create Merchant Entity)
 **Access**: Admin or Reseller
 
 ```bash
-curl -X POST http://localhost:8000/agent/voice/breeze-buddy/entity/merchant \
+curl -X POST http://localhost:8000/agent/voice/breeze-buddy/merchant \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
-    "merchant_identifier": "redbus",
+    "merchant_id": "redbus",
     "name": "RedBus India",
     "description": "Bus booking platform",
     "is_active": true
@@ -514,7 +509,7 @@ curl -X POST http://localhost:8000/agent/voice/breeze-buddy/entity/merchant \
 **Response** (201 Created):
 ```json
 {
-  "merchant_identifier": "redbus",
+  "merchant_id": "redbus",
   "name": "RedBus India",
   "description": "Bus booking platform",
   "is_active": true,
@@ -524,30 +519,30 @@ curl -X POST http://localhost:8000/agent/voice/breeze-buddy/entity/merchant \
 }
 ```
 
-> **Note**: Response has no `id` field — `merchant_identifier` is the primary key.
+> **Note**: Response has no `id` field — `merchant_id` is the primary key.
 > For resellers, `reseller_id` is auto-set to their user ID.
 > For admins, `reseller_id` can be explicitly provided or left null.
 
 **Validation**:
-- `merchant_identifier`: 3-100 chars, alphanumeric + underscore/hyphen only
+- `merchant_id`: 3-100 chars
 - Must be unique across merchants table
 
-#### GET /entity/merchants (List Merchant Entities)
+#### GET /merchants (List Merchant Entities)
 **Access**: All roles (scoped by merchant_ids)
 - Admin: sees all
-- Reseller: sees merchants where `reseller_id` matches or `merchant_identifier` is in their scope
+- Reseller: sees merchants where `reseller_id` matches or `merchant_id` is in their scope
 - Merchant/User: sees only merchants matching their `merchant_ids`
 
 **Query Parameters**:
 - `page` (default: 1) - Page number
 - `limit` (default: 50, max: 100) - Items per page
-- `merchant_identifier` - Filter by merchant_identifier (partial match, case-insensitive)
+- `merchant_id` - Filter by merchant_id (partial match, case-insensitive)
 - `name` - Filter by name (partial match, case-insensitive)
 - `is_active` - Filter by active status (true/false)
-- `sort_by` - Sort field (merchant_identifier | name | created_at | updated_at)
+- `sort_by` - Sort field (merchant_id | name | created_at | updated_at)
 - `sort_order` - Sort direction (asc | desc)
 
-#### PUT /entity/merchant/{merchant_identifier} (Update Merchant Entity)
+#### PUT /merchant/{merchant_id} (Update Merchant Entity)
 **Access**: Admin (any) / Reseller (only merchants they own — `reseller_id` match)
 
 **Updatable fields**:
@@ -556,13 +551,13 @@ curl -X POST http://localhost:8000/agent/voice/breeze-buddy/entity/merchant \
 - `is_active`: Active status (true/false)
 - `reseller_id`: Reassign ownership (admin only)
 
-**Restrictions**: `merchant_identifier` cannot be changed (immutable)
+**Restrictions**: `merchant_id` cannot be changed (immutable)
 
-#### DELETE /entity/merchant/{merchant_identifier} (Delete Merchant Entity)
+#### DELETE /merchant/{merchant_id} (Delete Merchant Entity)
 **Access**: Admin (any) / Reseller (only merchants they own — `reseller_id` match)
 
 ```bash
-curl -X DELETE http://localhost:8000/agent/voice/breeze-buddy/entity/merchant/redbus \
+curl -X DELETE http://localhost:8000/agent/voice/breeze-buddy/merchant/redbus \
   -H "Authorization: Bearer $TOKEN"
 ```
 
@@ -592,7 +587,7 @@ curl -X POST http://localhost:8000/agent/voice/breeze-buddy/user \
     "password": "secure_password",
     "role": "reseller",
     "reseller_ids": ["BB_SHOPIFY"],
-    "merchant_identifiers": ["*"],
+    "merchant_ids": ["*"],
     "is_active": true
   }'
 
@@ -605,7 +600,7 @@ curl -X POST http://localhost:8000/agent/voice/breeze-buddy/user \
     "password": "secure_password",
     "role": "merchant",
     "reseller_ids": ["BB_SHOPIFY"],
-    "merchant_identifiers": ["shop1", "shop2"],
+    "merchant_ids": ["shop1", "shop2"],
     "is_active": true
   }'
 
@@ -618,15 +613,15 @@ curl -X POST http://localhost:8000/agent/voice/breeze-buddy/user \
     "password": "secure_password",
     "role": "user",
     "reseller_ids": ["BB_SHOPIFY"],
-    "merchant_identifiers": ["shop1"],
+    "merchant_ids": ["shop1"],
     "is_active": true
   }'
 ```
 
 **Validation**:
 - Username must be unique
-- `reseller_ids` required for reseller role
-- `merchant_identifiers` required for merchant/user roles
+- `merchant_ids` required for merchant/user roles (drives effective access scope)
+- `reseller_ids` accepted but retained for backward compatibility only
 - Password is hashed before storage
 
 #### GET /users (List User Accounts)
@@ -637,7 +632,7 @@ curl -X POST http://localhost:8000/agent/voice/breeze-buddy/user \
 - `username` - Filter by username (partial match)
 - `role` - Filter by role (admin | reseller | merchant | user)
 - `reseller_id` - Filter by reseller_id (checks if in reseller_ids array)
-- `merchant_identifier` - Filter by merchant_identifier (checks if in merchant_identifiers array)
+- `merchant_id` - Filter by merchant_id (checks if in merchant_ids array)
 - `is_active` - Filter by active status
 - `sort_by` - Sort field (username | role | created_at | updated_at)
 - `sort_order` - Sort direction (asc | desc)
@@ -684,7 +679,7 @@ curl -X POST http://localhost:8000/agent/voice/breeze-buddy/user \
 | User | `["*"]` | Looks up owner's merchant_ids |
 | Merchant/User | `["redbus"]` | Only "redbus" |
 
-This is implemented by `resolve_merchant_ids()` in `app/core/security/authorization.py`.
+This is implemented by `resolve_merchant_ids()` in `app/core/security/scope.py`.
 
 ### RBAC Helper Functions
 
@@ -781,7 +776,7 @@ psql -U <user> -d <database> -f app/database/migrations/019_create_merchants_tab
 ```
 
 **What it does**:
-1. Creates `merchants` table (with `reseller_id`, nullable `name`, no `merchant_identifiers`)
+1. Creates `merchants` table (with `reseller_id`, nullable `name`, no `merchant_ids`)
 2. Adds `owner_id` column to `users` table
 3. Updates role constraint (shop → user)
 4. Migrates existing role='shop' to role='user'
@@ -802,13 +797,13 @@ curl -X POST http://localhost:8000/agent/voice/breeze-buddy/login \
   -d '{"username": "admin", "password": "your_password"}'
 
 # 2. Create merchant entity
-curl -X POST http://localhost:8000/agent/voice/breeze-buddy/entity/merchant \
+curl -X POST http://localhost:8000/agent/voice/breeze-buddy/merchant \
   -H "Authorization: Bearer $ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"merchant_identifier": "test_merchant"}'
+  -d '{"merchant_id": "test_merchant"}'
 
 # 3. Verify creation
-curl http://localhost:8000/agent/voice/breeze-buddy/entity/merchants \
+curl http://localhost:8000/agent/voice/breeze-buddy/merchants \
   -H "Authorization: Bearer $ADMIN_TOKEN"
 
 # 4. Create user account
@@ -835,13 +830,13 @@ curl -X POST http://localhost:8000/agent/voice/breeze-buddy/user \
 
 #### Endpoint Organization
 
-**Merchant Entities API** (Business-level merchant management) — prefix `/entity`:
-- `POST /entity/merchant` - Create merchant entity (Admin/Reseller)
-- `GET /entity/merchants` - List merchant entities (all roles, scoped)
-- `GET /entity/merchant/{merchant_identifier}` - Get merchant by merchant_identifier
-- `PUT /entity/merchant/{merchant_identifier}` - Update merchant (Admin any, Reseller own only)
-- `DELETE /entity/merchant/{merchant_identifier}` - Delete merchant (Admin any, Reseller own only)
-- Tag: `merchant-entities`
+**Merchant Entities API** (Business-level merchant management):
+- `POST /merchant` - Create merchant entity (Admin/Reseller)
+- `GET /merchants` - List merchant entities (all roles, scoped)
+- `GET /merchant/{merchant_id}` - Get merchant by merchant_id
+- `PUT /merchant/{merchant_id}` - Update merchant (Admin any, Reseller own only)
+- `DELETE /merchant/{merchant_id}` - Delete merchant (Admin any, Reseller own only)
+- Tag: `merchants`
 
 **User Accounts API** (Login account management):
 - `POST /user` - Create user account
@@ -849,16 +844,7 @@ curl -X POST http://localhost:8000/agent/voice/breeze-buddy/user \
 - `GET /user/{id}` - Get user account
 - `PUT /user/{id}` - Update user account
 - `DELETE /user/{id}` - Delete user account
-- Tag: `user-accounts`
-
-**Merchants API** (Admin shortcut — uses same UserCreate/UserResponse schemas):
-- `GET /merchants` - List merchants (Admin only)
-- `POST /merchant` - Create merchant (Admin only, enforces role=merchant)
-- `GET /merchant/{id}` - Get merchant by UUID
-- `PUT /merchant/{id}` - Update merchant
-- `DELETE /merchant/{id}` - Delete merchant
-- Tag: `merchants`
-- **Note**: These are convenience endpoints for admin. Internally they use the unified `UserCreate`/`UserResponse` schemas — no duplicate models.
+- Tag: `users`
 
 ---
 
@@ -921,7 +907,7 @@ curl -X POST http://localhost:8000/agent/voice/breeze-buddy/user \
 # Expected: 403 Forbidden
 
 # Test scoped access - reseller listing merchants
-curl http://localhost:8000/agent/voice/breeze-buddy/entity/merchants \
+curl http://localhost:8000/agent/voice/breeze-buddy/merchants \
   -H "Authorization: Bearer $RESELLER_TOKEN"
 # Expected: Only merchants in reseller's merchant_ids scope
 
@@ -939,10 +925,10 @@ curl -X DELETE http://localhost:8000/agent/voice/breeze-buddy/user/{admin_uuid} 
 
 #### "Merchant ID already exists"
 ```
-Cause: merchant_identifier must be unique
+Cause: merchant_id must be unique
 
 Solution: Check existing:
-SELECT merchant_identifier FROM merchants WHERE merchant_identifier = 'redbus';
+SELECT merchant_id FROM merchants WHERE merchant_id = 'redbus';
 ```
 
 #### "Username already exists"
@@ -955,7 +941,7 @@ SELECT username FROM users WHERE username = 'john';
 
 #### "Cannot create accounts for merchant_ids outside your scope"
 ```
-Cause: Reseller/merchant trying to create account for inaccessible merchant_identifier
+Cause: Reseller/merchant trying to create account for inaccessible merchant_id
 
 Solution:
 1. Check your merchant_ids: GET /users/me
@@ -1006,7 +992,7 @@ allowed = await resolve_merchant_ids(user)
 
 #### JSONB Operators
 ```sql
--- Check if merchant_identifier exists in array
+-- Check if merchant_id exists in array
 merchant_ids::jsonb ? 'redbus'
 
 -- Check if ANY exist (RBAC)
@@ -1036,7 +1022,7 @@ total_pages = (total + limit - 1) // limit  # Ceiling division
 2. **Unified Schemas**
    - Single `UserCreate`/`UserResponse` for all user/merchant account operations
    - No duplicate `MerchantCreate`/`MerchantResponse` classes
-   - `/merchants` and `/user-accounts` endpoints share the same models
+   - `/merchants` and `/users` endpoints share the same models
 
 3. **Reseller Ownership**
    - Merchant entities track which reseller owns them via `reseller_id`
@@ -1062,7 +1048,7 @@ total_pages = (total + limit - 1) // limit  # Ceiling division
 
 ### Key Takeaways
 
-- **merchant_identifier** → Business identifier ("redbus") — PK in merchants table
+- **merchant_id** → Business identifier ("redbus") — PK in merchants table
 - **username** → Login account ("john_doe") — unique in users table
 - **reseller_id** → Which reseller owns a merchant entity
 - **owner_id** → Who created a user account
@@ -1072,10 +1058,10 @@ total_pages = (total + limit - 1) // limit  # Ceiling division
 
 ### Implementation Checklist
 
-✅ Migration 019 created (`merchant_identifier` as PK, `reseller_id`, nullable `name`)  
+✅ Migration 019 created (`merchant_id` as PK, `reseller_id`, nullable `name`)  
 ✅ UserRole enum updated (SHOP → USER)  
 ✅ RBAC token bug fixed (`"shop"` → `"user"` in permissions)  
-✅ Merchant entity schemas created (with `reseller_id`, no `merchant_identifiers`)  
+✅ Merchant entity schemas created (with `reseller_id`, no `merchant_ids`)  
 ✅ Unified user schemas (`UserCreate`/`UserResponse` for all account types)  
 ✅ No duplicate `MerchantCreate`/`MerchantResponse` classes  
 ✅ Wildcard resolution via `resolve_merchant_ids()` + `validate_merchant_ids_subset()`  
@@ -1083,7 +1069,6 @@ total_pages = (total + limit - 1) // limit  # Ceiling division
 ✅ User account DB queries updated with RBAC + UUID validation  
 ✅ Merchant entity API router & handlers created (CRUD + reseller ownership)  
 ✅ User account API router & handlers created  
-✅ `/merchants` admin endpoints use unified User schemas  
 ✅ Routers registered and schemas exported  
 ✅ Admin accounts can NEVER be deleted (handler + DB layer protection)  
 ✅ UUID validation prevents crashes from legacy string IDs  

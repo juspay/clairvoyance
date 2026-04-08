@@ -9,7 +9,7 @@ This document describes the automated Langfuse evaluation monitoring system that
 - [System Flow](#system-flow)
 - [Core Components](#core-components)
 - [Distributed Locking](#distributed-locking)
-- [Deduplication Logic](#deduplication-logic)
+- [Duplicate Prevention](#duplicate-prevention)
 - [Time Window Handling](#time-window-handling)
 - [Configuration](#configuration)
 - [Guarantees](#guarantees)
@@ -20,25 +20,26 @@ This document describes the automated Langfuse evaluation monitoring system that
 The auto evaluation and alerting system runs as a **background task** managed by the `BackgroundTaskScheduler` that:
 
 1. Continuously polls Langfuse for LLM-as-a-judge evaluation scores
-2. Identifies failures (score = 0) across multiple evaluators
+2. Identifies failures (scores below configurable thresholds on a 1-10 scale) across multiple evaluators
 3. Sends detailed Slack alerts with call context and recording URLs
 4. Uses Redis distributed locking for multi-pod deployments
-5. Implements deduplication to prevent duplicate alerts
-6. Ensures 100% coverage with no missed evaluations
+5. Stores scores in the database for each call
+6. Sends a daily summary with alert counts and call/lead analytics
+7. Ensures continuous coverage via last-check-time tracking in Redis
 
 **Key Design Principles:**
 - **Scheduler-Based**: Runs via generic `BackgroundTaskScheduler` framework
 - **Distributed Safety**: Only one pod checks scores at a time (Redis locking)
-- **No Duplicates**: Redis-based deduplication prevents repeat alerts
-- **No Missed Scores**: Overlapping time windows ensure complete coverage
+- **Last-Check-Time Tracking**: Redis stores the last check timestamp so subsequent runs pick up exactly where the previous run left off, preventing gaps or overlaps
 - **Graceful Shutdown**: Handles SIGTERM for clean pod termination
 - **Extensible**: Easy to add new background tasks using the same framework
+- **Daily Summary**: Sends a daily Slack summary with alert counts, call stats, and lead analytics
 
 **Production Configuration:**
 - Scheduler Loop: **60 seconds** (checks all tasks every minute)
 - Score Check Interval: **10 minutes** (600 seconds)
-- Lookback Window: **10 minutes** (overlapping)
-- Deduplication TTL: **60 minutes**
+- First run lookback: **10 minutes** (subsequent runs use last-check-time from Redis)
+- Daily Summary Hour: configurable via `DAILY_SUMMARY_HOUR` (default: 21, i.e. 9 PM)
 
 ## Architecture
 
@@ -71,17 +72,20 @@ The auto evaluation and alerting system runs as a **background task** managed by
                     │               │
                     │ Distributed   │
                     │ Lock:         │
-                    │ "langfuse:    │
+                    │ "background:  │
+                    │  task:        │
+                    │  langfuse_    │
                     │  score_       │
                     │  monitor:     │
                     │  lock"        │
                     │ TTL: 600s     │
                     │               │
-                    │ Dedup Keys:   │
+                    │ Last Check:   │
                     │ "langfuse:    │
-                    │  alert_sent:  │
-                    │  {call_sid}"  │
-                    │ TTL: 3600s    │
+                    │  score_       │
+                    │  monitor:     │
+                    │  last_check_  │
+                    │  time"        │
                     └───────┬───────┘
                             │
         ┌───────────────────┼───────────────────┐
@@ -105,38 +109,46 @@ The auto evaluation and alerting system runs as a **background task** managed by
 ### Startup Sequence
 
 1. **Application Startup** (`app/main.py` lifespan)
+
+   The score monitor is registered as a background task via the `BackgroundTaskScheduler` framework.
+   The initialization logic lives in `app/services/langfuse/tasks/task.py`:
+
    ```python
-   @asynccontextmanager
-   async def lifespan(_app: FastAPI):
-       # Initialize database, Redis, etc.
-       
-       # Start score monitoring loop if enabled
-       if ENABLE_SCORE_MONITORING_LOOP:
-           _score_monitoring_task = asyncio.create_task(
-               run_score_monitoring_loop()
-           )
+   async def initialize_langfuse_tasks(scheduler) -> bool:
+       evaluators = await LANGFUSE_EVALUATORS()
+       if not (ENABLE_BB_LANGFUSE_MONITORING_LOOP and evaluators and SLACK_WEBHOOK_URL):
+           return False
+
+       scheduler.register_task(
+           name="langfuse_score_monitor",
+           func=score_monitor.check_and_alert,
+           interval_seconds=SCORE_CHECK_INTERVAL_SECONDS,
+       )
+       return True
    ```
 
 2. **Configuration Validation**
-   - Checks `LANGFUSE_EVALUATORS` is configured
+   - Checks `ENABLE_BB_LANGFUSE_MONITORING_LOOP` is `true`
+   - Checks `LANGFUSE_EVALUATORS` is configured (dynamic config from Redis, `name:threshold` pairs)
    - Checks `SLACK_WEBHOOK_URL` is configured
    - Logs errors if configuration is incomplete
-   - Only starts loop if all required config is present
+   - Only registers the task if all required config is present
 
-3. **Loop Initialization**
-   - Creates background asyncio task
-   - Runs independently of HTTP request handling
-   - Continues until pod shutdown (SIGTERM)
+3. **Scheduler Startup**
+   - `BackgroundTaskScheduler` runs a main loop every 60 seconds
+   - Each loop iteration attempts to acquire a distributed lock per registered task
+   - Lock TTL equals the task's `interval_seconds` (600s for score monitor)
+   - Only the pod that acquires the lock executes the task
 
 ### Monitoring Loop Cycle
 
-Each cycle (every **10 minutes** in production):
+Each cycle (every **10 minutes** in production, controlled by lock TTL):
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │ 1. Try to Acquire Distributed Lock                          │
-│    Redis: SET "langfuse:score_monitor:lock" "locked"        │
-│           NX (only if not exists)                            │
+│    Redis: SET "background:task:langfuse_score_monitor:lock" │
+│           "locked" NX (only if not exists)                   │
 │           EX 600 (TTL = 10 minutes)                          │
 │                                                              │
 │    ✓ Lock acquired → Proceed to step 2                      │
@@ -145,51 +157,64 @@ Each cycle (every **10 minutes** in production):
                             │
                             ▼
 ┌─────────────────────────────────────────────────────────────┐
-│ 2. Fetch Scores from Langfuse                               │
-│    - Time window: Last 10 minutes (overlapping)             │
-│    - For each evaluator in LANGFUSE_EVALUATORS         │
-│    - Filter for score == 0.0 (failures only)                │
-│                                                              │
-│    Example: 15 total scores, 2 zero scores found            │
+│ 2. Check if daily summary is due                            │
+│    - If current hour == DAILY_SUMMARY_HOUR, send summary    │
+│    - Summary includes alert counts, call stats, lead stats  │
 └─────────────────────────────────────────────────────────────┘
                             │
                             ▼
 ┌─────────────────────────────────────────────────────────────┐
-│ 3. Process Each Zero Score                                  │
-│    For each failure:                                         │
-│    a) Fetch trace details from Langfuse                     │
-│    b) Extract call_sid from metadata.attributes.call_sid    │
-│    c) Check deduplication (see next section)                │
-│    d) Query database for recording_url                      │
-│    e) Send Slack alert                                      │
-│    f) Mark call_sid as alerted in Redis (60 min TTL)        │
+│ 3. Determine Time Window                                    │
+│    - Get last check time from Redis key                     │
+│      "langfuse:score_monitor:last_check_time"               │
+│    - If found: from_time = last_check_time (no gaps)        │
+│    - If not found (first run): from_time = now - 10 min     │
+│    - to_time = now (UTC)                                     │
 └─────────────────────────────────────────────────────────────┘
                             │
                             ▼
 ┌─────────────────────────────────────────────────────────────┐
-│ 4. Wait for Next Cycle                                      │
-│    await asyncio.sleep(600)  # 10 minutes                   │
+│ 4. Fetch Scores from Langfuse                               │
+│    - For each evaluator in LANGFUSE_EVALUATORS (with its    │
+│      threshold from dynamic Redis config)                    │
+│    - Filter for scores below threshold (1-10 scale)         │
+│      using _is_below_threshold(score, threshold)            │
 │                                                              │
+│    Example: 15 total scores, 2 failing scores found         │
+└─────────────────────────────────────────────────────────────┘
+                            │
+                            ▼
+┌─────────────────────────────────────────────────────────────┐
+│ 5. Process Scores                                           │
+│    a) Group all scores by traceId                           │
+│    b) Fetch trace details ONCE per unique trace             │
+│    c) Extract call_sid from metadata.attributes.call_sid    │
+│    d) Store ALL scores in database (update_langfuse_scores) │
+│    e) Update last check time in Redis                       │
+│    f) For each failing score:                               │
+│       - Query database for recording_url via                │
+│         get_lead_by_call_id(call_sid) → lead.recording_url  │
+│       - Send Slack alert                                    │
+│       - Track alert count in Redis for daily summary        │
+└─────────────────────────────────────────────────────────────┘
+                            │
+                            ▼
+┌─────────────────────────────────────────────────────────────┐
+│ 6. Lock Expiry                                              │
 │    Lock automatically expires after 10 minutes               │
-│    Next pod can acquire lock and repeat cycle               │
+│    Next scheduler loop iteration, a pod can acquire lock    │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-### Deduplication Flow
+### Last-Check-Time Tracking
 
-For each zero score found:
+Instead of per-call deduplication, the system uses **last-check-time tracking** in Redis to ensure each score is only seen once:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│ Extract call_sid from trace metadata                        │
-│   trace.metadata.attributes.call_sid                        │
-└─────────────────────────────────────────────────────────────┘
-                            │
-                            ▼
-┌─────────────────────────────────────────────────────────────┐
-│ Check Redis for existing alert                              │
-│   Key: "langfuse:alert_sent:{call_sid}"                     │
-│   Command: EXISTS key                                        │
+│ Get last check time from Redis                              │
+│   Key: "langfuse:score_monitor:last_check_time"             │
+│   Value: ISO 8601 timestamp of previous run's end time      │
 └─────────────────────────────────────────────────────────────┘
                             │
                 ┌───────────┴───────────┐
@@ -197,42 +222,49 @@ For each zero score found:
                 ▼                       ▼
         ┌──────────────┐        ┌──────────────┐
         │ Key EXISTS   │        │ Key NOT      │
-        │ (already     │        │ EXISTS       │
-        │  alerted)    │        │ (new alert)  │
+        │ (continuing  │        │ EXISTS       │
+        │  from last)  │        │ (first run)  │
         └──────┬───────┘        └──────┬───────┘
                │                       │
                ▼                       ▼
         ┌──────────────┐        ┌──────────────┐
-        │ Skip Alert   │        │ Send Alert   │
-        │ Log: "Alert  │        │ to Slack     │
-        │ already sent"│        └──────┬───────┘
-        └──────────────┘               │
-                                       ▼
-                                ┌──────────────┐
-                                │ Mark as      │
-                                │ Alerted      │
-                                │ SETEX key    │
-                                │ "1" 3600     │
-                                │ (60 min TTL) │
-                                └──────────────┘
+        │ from_time =  │        │ from_time =  │
+        │ last check   │        │ now - 10 min │
+        │ time         │        │ (default)    │
+        └──────┬───────┘        └──────┬───────┘
+               │                       │
+               └───────────┬───────────┘
+                           ▼
+                    ┌──────────────┐
+                    │ Fetch scores │
+                    │ from_time →  │
+                    │ to_time=now  │
+                    └──────┬───────┘
+                           ▼
+                    ┌──────────────┐
+                    │ Update Redis │
+                    │ last check   │
+                    │ time = now   │
+                    └──────────────┘
 ```
+
+This approach ensures **no gaps and no overlaps** between check cycles. Each score window starts exactly where the previous one ended.
 
 ### Shutdown Sequence
 
 1. **SIGTERM Received** (Kubernetes pod termination)
    ```python
    # In lifespan shutdown
-   if _score_monitoring_task and not _score_monitoring_task.done():
-       _score_monitoring_task.cancel()
-       await _score_monitoring_task  # Wait for cancellation
+   await scheduler.stop()
    ```
 
 2. **Graceful Cancellation**
    ```python
-   # In run_score_monitoring_loop()
-   except asyncio.CancelledError:
-       logger.info("Score monitoring loop cancelled, shutting down...")
-       break
+   # In BackgroundTaskScheduler.stop()
+   self._running = False
+   if self._task and not self._task.done():
+       self._task.cancel()
+       await self._task
    ```
 
 3. **Lock Auto-Expiry**
@@ -244,36 +276,40 @@ For each zero score found:
 
 ### 1. Score Monitor Service
 
-**File:** `app/services/langfuse/score_monitor.py`
+**File:** `app/services/langfuse/tasks/score_monitor/score.py`
 
 **Class:** `ScoreMonitor`
 
 **Key Methods:**
 
 - `check_and_alert()` - Main entry point, orchestrates entire check cycle
-- `fetch_recent_scores()` - Fetches scores for all evaluators
-- `_fetch_scores_for_evaluator()` - Calls Langfuse REST API
-- `_is_zero_score()` - Checks if score value == 0.0
+- `_fetch_scores_for_evaluator()` - Calls Langfuse REST API for a single evaluator
+- `_is_below_threshold(score, threshold)` - Checks if score value is below threshold (1-10 scale)
 - `get_trace_details()` - Fetches trace metadata for context
+- `send_score_alert()` - Sends a Slack alert for a failing score
+- `send_daily_summary_if_time()` - Sends daily summary at `DAILY_SUMMARY_HOUR`
+- `_store_scores()` - Stores scores in database via `update_langfuse_scores()`
+- `_get_last_check_time()` / `_set_last_check_time()` - Redis-based time tracking
+- `get_alert_counts_for_date()` - Retrieves per-evaluator alert counts for daily summary
 
-**Example Usage:**
+**Task Registration** (`app/services/langfuse/tasks/task.py`):
 ```python
-from app.services.langfuse.score_monitor import score_monitor
+from app.services.langfuse.tasks.task import initialize_langfuse_tasks
 
-# Called by infinite loop in app/main.py
-await score_monitor.check_and_alert()
+# Called during app startup
+await initialize_langfuse_tasks(scheduler)
 ```
 
-### 2. Slack Webhook Service
+### 2. Slack Alert Service
 
-**File:** `app/services/slack/webhook.py`
+**File:** `app/services/slack/alert.py`
 
-**Class:** `SlackWebhook`
+**Class:** `Alert`
 
 **Key Methods:**
 
-- `send_score_alert()` - Sends formatted alert to Slack
-- `_build_alert_message()` - Constructs Slack message payload
+- `send()` - Generic method to send formatted Slack alerts with customizable title, fields, sections, and links
+- Supports `SLACK_TAG_USERS` to automatically mention configured users/groups in alerts
 
 **Alert Format:**
 ```
@@ -307,15 +343,14 @@ Failure Reason: Customer said "cancel" but system marked as "confirmed"
 - `exists(key)` - Check if key exists
 - `setex(key, value, ttl_seconds)` - Set key with TTL
 
-**Distributed Lock Usage:**
+**Distributed Lock Usage (handled by BackgroundTaskScheduler):**
 ```python
 redis_service = await get_redis_service()
-client = await redis_service.get_client()
 
 # Atomic lock acquisition (10 minute TTL in production)
-lock_acquired = await client.set(
-    "langfuse:score_monitor:lock",
-    "locked",
+lock_acquired = await redis_service.set(
+    key="background:task:langfuse_score_monitor:lock",
+    value="locked",
     nx=True,  # Only set if not exists
     ex=600    # TTL: 10 minutes
 )
@@ -325,9 +360,12 @@ lock_acquired = await client.set(
 
 **File:** `app/database/accessor/breeze_buddy/lead_call_tracker.py`
 
-**Function:** `get_call_recording_url(call_sid: str)`
+**Key Functions:**
 
-**Purpose:** Fetch recording URL for Slack alert links
+- `get_lead_by_call_id(call_sid)` - Fetches the lead record; recording URL accessed via `lead.recording_url`
+- `update_langfuse_scores(call_sid, langfuse_data)` - Stores fetched Langfuse scores in the database
+- `get_all_lead_call_trackers(start_date, end_date)` - Used by daily summary for call stats
+- `get_lead_based_analytics(start_date, end_date)` - Used by daily summary for lead stats
 
 ## Distributed Locking
 
@@ -345,13 +383,15 @@ With distributed locking:
 
 ### How It Works
 
-**Atomic Operation:**
+**Atomic Operation (in `BackgroundTaskScheduler._execute_task()`):**
 ```python
-lock_acquired = await client.set(
-    lock_key,
-    "locked",
+lock_key = f"background:task:{task.name.lower().replace(' ', '_')}:lock"
+
+lock_acquired = await redis_service.set(
+    key=lock_key,
+    value="locked",
     nx=True,  # NX = "Not eXists" - only set if key doesn't exist
-    ex=600    # EX = "EXpire" - TTL: 10 minutes (production)
+    ex=task.interval_seconds    # EX = "EXpire" - TTL matches task interval
 )
 ```
 
@@ -366,7 +406,7 @@ lock_acquired = await client.set(
 ```
 Time    Pod 1                Pod 2                Pod 3
 ────────────────────────────────────────────────────────────
-00:00   SET lock NX EX 600   SET lock NX EX 600   SET lock NX EX 600
+00:00   SET lock NX EX=600   SET lock NX EX=600   SET lock NX EX=600
         → TRUE ✓             → FALSE ✗            → FALSE ✗
         
 00:00   Checking scores...   Skipping cycle       Skipping cycle
@@ -374,8 +414,8 @@ Time    Pod 1                Pod 2                Pod 3
 00:05   Completed            (waiting)            (waiting)
 00:05   Sleep 10 min         (waiting)            (waiting)
         
-10:00   Lock expired         SET lock NX EX 600   SET lock NX EX 600
-        SET lock NX EX 600   → TRUE ✓             → FALSE ✗
+10:00   Lock expired         SET lock NX EX=600   SET lock NX EX=600
+        SET lock NX EX=600   → TRUE ✓             → FALSE ✗
         → FALSE ✗
         
 10:00   Skipping cycle       Checking scores...   Skipping cycle
@@ -383,108 +423,79 @@ Time    Pod 1                Pod 2                Pod 3
 
 ### Lock Properties
 
-- **Key:** `langfuse:score_monitor:lock`
+- **Key:** `background:task:langfuse_score_monitor:lock`
 - **Value:** `"locked"` (arbitrary, not used)
 - **TTL:** **600 seconds (10 minutes)** - matches check interval
 - **Auto-Expiry:** Lock automatically expires, no manual cleanup needed
 - **Failure Handling:** If pod crashes, lock expires naturally
 
-## Deduplication Logic
+## Duplicate Prevention
 
-### Why Deduplication?
+### How Duplicates Are Prevented
 
-**Problem:** Overlapping time windows can see the same score multiple times
+The system avoids duplicate alerts through **last-check-time tracking** rather than per-call deduplication keys:
 
-```
-Check 1: 12:00 - 12:10 (finds score at 12:05)
-Check 2: 12:10 - 12:20 (finds same score at 12:05)
-```
+1. **Redis stores the last check timestamp** (`langfuse:score_monitor:last_check_time`)
+2. Each run queries Langfuse from `last_check_time` to `now` -- no overlap
+3. After fetching scores, the system updates `last_check_time = now` **before** processing alerts
+4. This ensures even if a pod crashes mid-alerting, the next run won't re-fetch the same scores
 
-Without deduplication: 2 alerts for the same failure ❌
-
-With deduplication: 1 alert only ✓
-
-### Implementation
-
-**Redis Key Pattern:**
-```
-langfuse:alert_sent:{call_sid}
-```
-
-**Example:**
-```
-langfuse:alert_sent:CA1234567890abcdef
-```
-
-**TTL:** 60 minutes (3600 seconds)
-
-**Flow:**
+**Implementation:**
 ```python
-# Check if already alerted
-redis_key = f"langfuse:alert_sent:{call_sid}"
-already_alerted = await redis_service.exists(redis_key)
+# Get last check time from Redis (shared across all pods)
+last_check_time = await self._get_last_check_time()
 
-if already_alerted:
-    logger.info(f"Alert already sent for call_sid '{call_sid}', skipping")
-    continue
+if last_check_time:
+    from_time = last_check_time  # Continue from where we left off
+else:
+    from_time = to_time - timedelta(minutes=10)  # First run default
 
-# Send alert
-await slack_webhook.send_score_alert(...)
+# ... fetch and process scores ...
 
-# Mark as alerted (60 min TTL)
-await redis_service.setex(redis_key, "1", ttl_seconds=3600)
+# Update last check time BEFORE processing alerts
+await self._set_last_check_time(to_time)
 ```
-
-### Why 60 Minutes TTL?
-
-- Langfuse scores are typically created within minutes of call completion
-- 60 minutes ensures we don't re-alert for the same call
-- After 60 minutes, key expires and Redis memory is freed
-- Covers 6 check cycles (6 × 10 min = 60 min)
-- If a new score appears for the same call_sid after 60 min, it's likely a different issue
 
 ### Edge Case: Missing call_sid
 
 If `call_sid` is not found in trace metadata:
-```python
-if not call_sid:
-    logger.warning(
-        f"No call_sid found for trace {trace_id}, "
-        f"cannot prevent duplicate alerts"
-    )
-    # Still send alert, but can't deduplicate
-```
+- Scores without a `call_sid` are skipped for database storage
+- Alerts are still sent for failing scores even without `call_sid`
 
 ## Time Window Handling
 
-### Overlapping Windows Strategy
+### Last-Check-Time Strategy
 
 **Production Configuration:**
-- Check Interval: **10 minutes** (600 seconds)
-- Lookback Window: **10 minutes** (hardcoded in `check_and_alert()`)
+- Check Interval: **10 minutes** (600 seconds, controlled by lock TTL)
+- Time window: **from last check time to now** (stored in Redis)
+- First run fallback: **10 minutes** lookback
 
-**Why Overlapping?**
+**How It Works:**
 
-Ensures **100% coverage** with no missed scores:
+Each run picks up exactly where the previous one left off:
 
 ```
-Timeline (Production - 10 minute intervals):
+Timeline (Production):
 ────────────────────────────────────────────────────────────
 12:00   Check 1: 11:50 - 12:00 ████████████
-12:10   Check 2: 12:00 - 12:10  ████████████
-12:20   Check 3: 12:10 - 12:20   ████████████
-12:30   Check 4: 12:20 - 12:30    ████████████
+        (first run, no last_check_time, defaults to -10min)
+        → saves last_check_time = 12:00
 
-Score created at 12:05:
-- Caught by Check 2 (12:00-12:10) ✓
-- Caught by Check 3 (12:10-12:20) ✓ (deduplicated)
+12:10   Check 2: 12:00 - 12:10  ████████████
+        (reads last_check_time = 12:00)
+        → saves last_check_time = 12:10
+
+12:20   Check 3: 12:10 - 12:20   ████████████
+        (reads last_check_time = 12:10)
+        → saves last_check_time = 12:20
 ```
 
 **Benefits:**
-- **No Missed Scores:** Even if one check fails, next check catches it
-- **Resilient to Failures:** Pod crashes don't cause gaps
-- **Deduplication Handles Overlap:** Redis prevents duplicate alerts
-- **Efficient:** 10-minute intervals reduce API load while maintaining coverage
+- **No Gaps:** Each window starts where the previous one ended
+- **No Overlaps:** No duplicate score processing
+- **Shared Across Pods:** Redis key is shared, so whichever pod wins the lock continues from the right time
+- **Resilient:** If Redis is unavailable, falls back to 10-minute lookback
 
 ### UTC Timestamp Handling
 
@@ -506,7 +517,7 @@ from_time = to_time - timedelta(minutes=10)
 
 ### Environment Variables
 
-**Production Configuration:**
+**Static Configuration (environment variables):**
 
 ```bash
 # Langfuse Configuration
@@ -515,20 +526,32 @@ LANGFUSE_PUBLIC_KEY=pk-lf-your-public-key
 LANGFUSE_BASEURL=https://periscope.breeze.in
 
 # Score Monitoring
-LANGFUSE_EVALUATORS="breeze buddy outcome correctness,transcript_quality"
 SLACK_WEBHOOK_URL=https://hooks.slack.com/services/YOUR/WEBHOOK/URL
+SLACK_TAG_USERS=narsimha.reddy   # Comma-separated Slack usernames or mention formats to tag in alerts
 
 # Enable/Disable Monitoring
-ENABLE_SCORE_MONITORING_LOOP=true
+ENABLE_BB_LANGFUSE_MONITORING_LOOP=true
 
 # Check Interval (10 minutes in production)
 SCORE_CHECK_INTERVAL_SECONDS=600
 ```
 
+**Dynamic Configuration (stored in Redis, changeable at runtime):**
+
+```bash
+# Evaluators with thresholds (format: "name:threshold,name:threshold")
+# Thresholds are on a 1-10 scale. Scores below threshold trigger alerts.
+# Default threshold is 5 if not specified.
+LANGFUSE_EVALUATORS="OUTCOME MISMATCH:5,HIGH LATENCY:7,transcript_quality"
+
+# Daily summary hour (24-hour format, default: 21 = 9 PM)
+DAILY_SUMMARY_HOUR=21
+```
+
 **Optional:**
 
 ```bash
-# Redis Configuration (for distributed locking)
+# Redis Configuration (for distributed locking and dynamic config)
 REDIS_HOST=localhost
 REDIS_PORT=6379
 REDIS_DB=0
@@ -537,34 +560,32 @@ REDIS_PASSWORD=your-password  # if required
 
 ### Configuration Validation
 
-On startup, the system validates:
+On startup, `initialize_langfuse_tasks()` validates:
 
 ```python
-config_errors = []
-if not LANGFUSE_EVALUATORS:
-    config_errors.append("LANGFUSE_EVALUATORS is empty")
-if not SLACK_WEBHOOK_URL:
-    config_errors.append("SLACK_WEBHOOK_URL is not configured")
-
-if config_errors:
-    logger.error("Score monitoring will NOT start due to configuration errors")
-    # Loop does not start
+evaluators = await LANGFUSE_EVALUATORS()
+if not (ENABLE_BB_LANGFUSE_MONITORING_LOOP and evaluators and SLACK_WEBHOOK_URL):
+    logger.debug("Langfuse tasks skipped - missing required configuration")
+    return False
 ```
 
-### Evaluator Names
+### Evaluator Names and Thresholds
 
-**Format:** Comma-separated list (case-sensitive)
+**Format:** Comma-separated `name:threshold` pairs (stored in Redis, dynamic)
 
 ```bash
-LANGFUSE_EVALUATORS="evaluator1,evaluator2,evaluator3"
+LANGFUSE_EVALUATORS="evaluator1:5,evaluator2:7,evaluator3"
 ```
 
 **Example:**
 ```bash
-LANGFUSE_EVALUATORS="breeze buddy outcome correctness,transcript quality,address verification"
+LANGFUSE_EVALUATORS="OUTCOME MISMATCH:5,HIGH LATENCY:7,transcript_quality"
 ```
 
-**Important:** Names must match exactly what's in Langfuse (case-sensitive)
+- Thresholds are on a **1-10 scale**; scores below the threshold trigger alerts
+- If threshold is omitted, defaults to **5**
+- Names must match exactly what's in Langfuse (case-sensitive)
+- Config is fetched from Redis on each check cycle, so changes take effect without restart
 
 ## Guarantees
 
@@ -573,18 +594,20 @@ LANGFUSE_EVALUATORS="breeze buddy outcome correctness,transcript quality,address
 **Guarantee:** Every score created in Langfuse will be checked
 
 **How:**
-- Overlapping 10-minute windows
-- Checks every 10 minutes
-- Each score appears in at least 2 consecutive checks
-- Even if 1 check fails, next check catches it
+- Last-check-time tracking ensures continuous, gap-free windows
+- Each run starts from where the previous one ended
+- Fallback to 10-minute lookback if Redis is unavailable
 
 **Example:**
 ```
 Score created at 12:05:30
 
-Will be caught by checks at:
-12:10 (12:00-12:10) ✓
-12:20 (12:10-12:20) ✓ (deduplicated)
+Check at 12:10 (window: 12:00-12:10):
+- Score at 12:05:30 is caught ✓
+- last_check_time updated to 12:10
+
+Check at 12:20 (window: 12:10-12:20):
+- Only checks new scores after 12:10
 ```
 
 ### 2. No Duplicate Alerts ✓
@@ -592,19 +615,9 @@ Will be caught by checks at:
 **Guarantee:** Each failure generates exactly one Slack alert
 
 **How:**
-- Redis-based deduplication using `call_sid`
-- 60-minute TTL on deduplication keys (covers 6 check cycles)
-- Atomic check-and-set pattern
-
-**Example:**
-```
-Score for call_sid "CA123" found in 2 consecutive checks:
-
-Check 1 (12:10): Alert sent ✓, Redis key set
-Check 2 (12:20): Key exists, skip ✗
-
-Result: 1 alert sent, 1 skipped
-```
+- Non-overlapping time windows via last-check-time tracking
+- Each score only appears in exactly one check window
+- `last_check_time` is updated **before** alert processing to prevent re-processing on crash
 
 ### 3. Distributed Safety ✓
 
@@ -658,22 +671,15 @@ Pod 3: Lock exists ✗, skips cycle
 
 **Behavior:**
 ```python
-# Production always has Redis configured
+# In BackgroundTaskScheduler._execute_task()
 try:
-    client = await redis_service.get_client()
-    lock_acquired = await client.set(
-        lock_key, "locked", nx=True, ex=SCORE_CHECK_INTERVAL_SECONDS
+    redis_service = await get_redis_service()
+    lock_acquired = await redis_service.set(
+        key=lock_key, value="locked", nx=True, ex=task.interval_seconds
     )
-    
-    if lock_acquired:
-        await score_monitor.check_and_alert()
-    else:
-        logger.debug("Another pod is monitoring scores, skipping...")
 except Exception as e:
-    # Redis connection failed
-    logger.error(f"Error in score monitoring loop: {e}")
-    await asyncio.sleep(60)  # Wait 1 minute before retrying
-    # Does NOT proceed with check - skips to next cycle
+    logger.error(f"Redis error for task '{task.name}': {e}. Skipping task.")
+    return
 ```
 
 **Impact (Production - Redis configured but down):**
@@ -720,37 +726,39 @@ except Exception as e:
 
 **Behavior:**
 ```python
-alert_sent = await slack_webhook.send_score_alert(...)
-if alert_sent:
-    # Mark as alerted in Redis
-    await redis_service.setex(redis_key, "1", ttl_seconds=3600)
-else:
-    # Alert failed, don't mark as alerted
-    logger.error("Failed to send Slack alert")
+success = await slack_alert.send(
+    title=f"🔴 Breeze Buddy - {evaluator_name}",
+    fields=fields,
+    sections=sections,
+    links=links,
+    fallback_text=f"LLM Judge Failure: {evaluator_name} - Score {score_value}",
+)
+
+# Alert count tracking only happens on successful send
+if success:
+    await track_evaluator_alert(evaluator_name)
 ```
 
 **Impact:**
 - Alert not sent
-- Not marked in Redis
-- Next check retries sending alert
+- Alert count not tracked
+- Since `last_check_time` was already updated, the score will NOT be re-fetched
+- Failed alerts are logged for monitoring
 
-**Result:** Retry on next check ✓
+**Result:** Score window moves forward; failed alerts are lost (by design, to prevent duplicate processing) ✓
 
 ### 5. Missing call_sid in Metadata
 
 **Scenario:** Trace doesn't have `call_sid` in metadata
 
 **Behavior:**
-```python
-if not call_sid:
-    logger.warning("No call_sid found, cannot prevent duplicates")
-    # Still send alert, but can't deduplicate
-```
+- Scores without `call_sid` are skipped for database storage
+- Alerts are still sent for failing scores even without `call_sid`
 
 **Impact:**
 - Alert sent successfully
-- Cannot deduplicate (no Redis key)
-- May receive duplicate alerts if score appears in multiple checks
+- Score not stored in database (no call record to associate with)
+- Recording URL will be `N/A` in the alert
 
 **Mitigation:** Ensure all traces include `call_sid` in metadata
 
@@ -762,11 +770,13 @@ To monitor the health and performance of the Langfuse auto evaluation and alerti
 
 **Successful Operation:**
 ```
-INFO: Score monitoring loop started
+INFO: Background task scheduler started (loop interval: 60s, registered tasks: 1)
+INFO: Acquired lock for task 'langfuse_score_monitor', executing...
 INFO: Checking Langfuse scores from 2025-11-25T12:00:00+00:00 to 2025-11-25T12:10:00+00:00
-INFO: Evaluator 'breeze buddy outcome correctness': Found 15 total scores, 2 zero scores
-INFO: ✓ Slack alert sent successfully for evaluator 'breeze buddy outcome correctness', trace_id: trace-abc-123
-INFO: Alert summary: 2 sent, 0 skipped (duplicates)
+INFO: Evaluator 'OUTCOME MISMATCH' (threshold=5): Found 15 total scores, 2 failing scores
+INFO: Slack alert sent successfully: 🔴 Breeze Buddy - OUTCOME MISMATCH
+INFO: Alert tracked successfully. New count for 'OUTCOME MISMATCH' on 2025-11-25: 3
+INFO: Task 'langfuse_score_monitor' completed successfully
 ```
 
 **Warning Signs:**
@@ -806,20 +816,20 @@ Monitor these system components:
 #### 1. No Alerts Being Sent
 
 **Symptoms:**
-- Log shows "No zero scores found in this check"
+- Log shows "No failing scores found in this check"
 - Or no log messages at all
 
 **Possible Causes:**
-- `ENABLE_SCORE_MONITORING_LOOP=false` in environment
-- `LANGFUSE_EVALUATORS` not configured or empty
+- `ENABLE_BB_LANGFUSE_MONITORING_LOOP=false` in environment
+- `LANGFUSE_EVALUATORS` not configured or empty in Redis
 - Langfuse credentials invalid or missing
 - No actual failures in the time window
 
 **Solutions:**
 ```bash
 # Verify configuration
-echo $ENABLE_SCORE_MONITORING_LOOP  # Should be "true"
-echo $LANGFUSE_EVALUATORS           # Should have evaluator names
+echo $ENABLE_BB_LANGFUSE_MONITORING_LOOP  # Should be "true"
+# LANGFUSE_EVALUATORS is in Redis, check via redis-cli
 echo $LANGFUSE_SECRET_KEY           # Should be set
 echo $SLACK_WEBHOOK_URL             # Should be set
 
@@ -835,9 +845,8 @@ grep "Langfuse credentials not found" logs/app.log
 - Log shows alerts sent but not skipped
 
 **Possible Causes:**
-- Redis not configured or unavailable
-- `call_sid` missing from trace metadata
-- Deduplication TTL expired (>60 minutes between checks)
+- Redis not configured or unavailable (last_check_time cannot be stored)
+- `last_check_time` Redis key lost (causes fallback to 10-minute lookback which may overlap with previous check)
 
 **Solutions:**
 ```bash
@@ -848,8 +857,8 @@ echo $REDIS_PORT  # Should be set
 # Check Redis connectivity
 redis-cli -h $REDIS_HOST -p $REDIS_PORT ping
 
-# Verify trace metadata includes call_sid
-# Check Langfuse UI for trace structure
+# Check last_check_time in Redis
+redis-cli -h $REDIS_HOST -p $REDIS_PORT GET "langfuse:score_monitor:last_check_time"
 ```
 
 #### 3. Distributed Lock Conflicts
