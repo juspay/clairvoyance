@@ -7,7 +7,7 @@ import csv
 import io
 import json
 from datetime import datetime, timedelta
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional
 
 from starlette.responses import StreamingResponse
 
@@ -599,15 +599,46 @@ async def get_lead_status_counts(
     }
 
 
+# Static list of supported columns for CSV export
+EXPORT_COLUMNS = [
+    "Lead ID",
+    "Call ID",
+    "Template",
+    "Name",
+    "Mobile Number",
+    "Start Time",
+    "End Time",
+    "Duration",
+    "Outcome",
+    "Metadata Outcome",
+    "Attempt Count",
+    "Record",
+]
+
+
 async def download_call_details(
     filters: Dict[str, Any], options: Dict[str, Any], current_user: UserInfo
 ) -> StreamingResponse:
     """
     Generate a CSV file download of all call details matching the filters.
     Streams CSV rows in batches to avoid loading everything into memory.
+
+    Supports dynamic column selection via options["custom_columns"].
+    custom_columns should contain clean display names (e.g. "Call Id").
+    If not provided, all available columns are exported.
     """
     sort_by = options.get("sort_by", "call_initiated_time")
     sort_order = options.get("sort_order", "desc")
+    custom_columns: Optional[List[str]] = options.get("custom_columns")
+
+    # Resolve which columns to include, sorting by our natural EXPORT_COLUMNS order
+    if custom_columns and len(custom_columns) > 0:
+        # Include custom_columns only if they are in our static list, but maintain EXPORT_COLUMNS order
+        selected_columns = [c for c in EXPORT_COLUMNS if c in custom_columns]
+        if not selected_columns:
+            selected_columns = list(EXPORT_COLUMNS)
+    else:
+        selected_columns = list(EXPORT_COLUMNS)
 
     BATCH_SIZE = 1000
     MAX_CSV_ROWS = 100_000
@@ -616,18 +647,8 @@ async def download_call_details(
         output = io.StringIO()
         writer = csv.writer(output)
 
-        headers = [
-            "Call ID",
-            "Lead ID",
-            "Template",
-            "Driver Name",
-            "Caller Number",
-            "Start Time",
-            "End Time",
-            "Duration (seconds)",
-            "Outcome",
-        ]
-        writer.writerow(headers)
+        # Write header row with selected display names
+        writer.writerow(selected_columns)
         yield output.getvalue()
         output.seek(0)
         output.truncate(0)
@@ -652,48 +673,49 @@ async def download_call_details(
                 break
 
             for tracker in trackers:
-                payload = parse_json(tracker, "payload")
+                payload = parse_json(tracker, "payload") or {}
+                start = tracker.get("call_initiated_time")
+                end = tracker.get("call_end_time")
 
-                duration = None
-                if tracker.get("call_initiated_time") and tracker.get("call_end_time"):
-                    duration = int(
-                        (
-                            tracker["call_end_time"] - tracker["call_initiated_time"]
-                        ).total_seconds()
-                    )
+                # Pre-calculate all possible fields for this row
+                row_data = {
+                    "Lead ID": tracker.get("id", ""),
+                    "Call ID": tracker.get("call_id", ""),
+                    "Template": tracker.get("template", ""),
+                    "Name": payload.get("customer_name", ""),
+                    "Mobile Number": payload.get("customer_mobile_number")
+                    or payload.get("phone", ""),
+                    "Start Time": (
+                        start.strftime("%Y-%m-%d %H:%M:%S")
+                        if hasattr(start, "strftime")
+                        else ""
+                    ),
+                    "End Time": (
+                        end.strftime("%Y-%m-%d %H:%M:%S")
+                        if hasattr(end, "strftime")
+                        else ""
+                    ),
+                    "Duration": (
+                        int((end - start).total_seconds())
+                        if start
+                        and end
+                        and hasattr(start, "strftime")
+                        and hasattr(end, "strftime")
+                        else ""
+                    ),
+                    "Outcome": tracker.get("outcome", ""),
+                    "Metadata Outcome": tracker.get("meta_data_outcome", ""),
+                    "Attempt Count": tracker.get("attempt_count", ""),
+                    "Record": (
+                        f"https://buddy.breezelabs.app/calls/records/{tracker.get('id')}"
+                        if tracker.get("id")
+                        else ""
+                    ),
+                }
 
-                start_time = (
-                    tracker["call_initiated_time"].strftime("%Y-%m-%d %H:%M:%S")
-                    if tracker.get("call_initiated_time")
-                    else ""
-                )
-                end_time = (
-                    tracker["call_end_time"].strftime("%Y-%m-%d %H:%M:%S")
-                    if tracker.get("call_end_time")
-                    else ""
-                )
-
-                caller_number = ""
-                if payload:
-                    caller_number = (
-                        payload.get("customer_mobile_number")
-                        or payload.get("phone")
-                        or ""
-                    )
-
-                writer.writerow(
-                    [
-                        tracker.get("call_id", ""),
-                        tracker.get("id", ""),
-                        tracker.get("template", ""),
-                        payload.get("customer_name", "") if payload else "",
-                        caller_number,
-                        start_time,
-                        end_time,
-                        duration if duration is not None else "",
-                        tracker.get("outcome") or "N/A",
-                    ]
-                )
+                # Select only the columns requested by the user, in consistent order
+                row = [row_data.get(col, "") for col in selected_columns]
+                writer.writerow(row)
 
             yield output.getvalue()
             output.seek(0)

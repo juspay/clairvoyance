@@ -433,9 +433,11 @@ def get_call_details_records_query(
             lct.call_id,
             lct.template,
             lct.payload,
+            lct.meta_data->>'outcome' as meta_data_outcome,
             lct.call_initiated_time,
             lct.call_end_time,
             lct.outcome,
+            lct.attempt_count + 1 as attempt_count,
             ou.provider as calling_provider
         FROM "{LEAD_CALL_TRACKER_TABLE}" lct
         LEFT JOIN "{OUTBOUND_NUMBER_TABLE}" ou ON lct.outbound_number_id = ou.id
