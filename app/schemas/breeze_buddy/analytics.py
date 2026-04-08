@@ -95,6 +95,9 @@ class AnalyticsOptions(BaseModel):
     sort_order: Literal["asc", "desc"] = Field(
         default="desc", description="Sort direction"
     )
+    custom_columns: Optional[List[str]] = Field(
+        None, description="Select specific columns for CSV export"
+    )
 
 
 class AnalyticsRequest(BaseModel):
