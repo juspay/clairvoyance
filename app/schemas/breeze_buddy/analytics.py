@@ -156,6 +156,7 @@ class CallDetailResult(BaseModel):
     attempt_count: Optional[int] = None
     cost: Optional[float] = None
     payload: Optional[Dict[str, Any]] = None
+    call_initiated_time: Optional[datetime] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
 

@@ -211,6 +211,7 @@ async def get_call_details_analytics(
                 attempt_count=tracker.get("attempt_count"),
                 cost=tracker.get("cost"),
                 payload=payload,
+                call_initiated_time=tracker.get("call_initiated_time"),
                 created_at=tracker.get("call_initiated_time")
                 or tracker.get("created_at")
                 or datetime.now(),
