@@ -72,7 +72,7 @@ async def create_call_execution_config(
     pre_checks: Optional[List[Any]] = None,
     telephony_config: Optional[TelephonyConfig] = None,
 ) -> Optional[CallExecutionConfig]:
-    """Create a new call execution config record."""
+    """Create a new call execution config record (upsert based on merchant_id + template)."""
     logger.info(f"Creating call execution config for reseller ID: {reseller_id}")
 
     try:

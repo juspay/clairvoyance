@@ -43,6 +43,7 @@ def insert_call_execution_config_query(
 ) -> Tuple[str, List[Any]]:
     """
     Generate query to insert call execution config record.
+    Uses ON CONFLICT to upsert based on (merchant_id, template) to prevent duplicates.
 
     Args:
         template_id: UUID of the template (preferred, for referential integrity)
@@ -83,7 +84,33 @@ def insert_call_execution_config_query(
             "created_at",
             "updated_at"
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29) RETURNING *;
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29)
+        ON CONFLICT (merchant_id, template) DO UPDATE SET
+            initial_offset = EXCLUDED.initial_offset,
+            retry_offset = EXCLUDED.retry_offset,
+            call_start_time = EXCLUDED.call_start_time,
+            call_end_time = EXCLUDED.call_end_time,
+            max_retry = EXCLUDED.max_retry,
+            calling_provider = EXCLUDED.calling_provider,
+            template_id = EXCLUDED.template_id,
+            enable_international_call = EXCLUDED.enable_international_call,
+            enable_calling = EXCLUDED.enable_calling,
+            enable_inbound = EXCLUDED.enable_inbound,
+            inbound_call_start_time = EXCLUDED.inbound_call_start_time,
+            inbound_call_end_time = EXCLUDED.inbound_call_end_time,
+            inbound_call_timezone = EXCLUDED.inbound_call_timezone,
+            inbound_block_action = EXCLUDED.inbound_block_action,
+            inbound_redirect_number = EXCLUDED.inbound_redirect_number,
+            inbound_block_message = EXCLUDED.inbound_block_message,
+            enforce_blacklist = EXCLUDED.enforce_blacklist,
+            rate_limit_enabled = EXCLUDED.rate_limit_enabled,
+            rate_limit_max_calls = EXCLUDED.rate_limit_max_calls,
+            rate_limit_window_seconds = EXCLUDED.rate_limit_window_seconds,
+            rate_limit_whitelist = EXCLUDED.rate_limit_whitelist,
+            pre_checks = EXCLUDED.pre_checks,
+            telephony_config = EXCLUDED.telephony_config,
+            updated_at = EXCLUDED.updated_at
+        RETURNING *;
     """
 
     values = [
@@ -301,7 +328,7 @@ def update_call_execution_config_query(
 
     text = f"""
         UPDATE "{CALL_EXECUTION_CONFIG_TABLE}"
-        SET {', '.join(updates)}
+        SET {", ".join(updates)}
         WHERE {where_clause}
         RETURNING *;
     """
