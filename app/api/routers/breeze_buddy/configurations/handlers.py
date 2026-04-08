@@ -62,6 +62,9 @@ async def create_configuration_handler(
             template=config.template,
             merchant_id=config.merchant_id,
             enable_international_call=config.enable_international_call,
+            enable_calling=(
+                config.enable_calling if config.enable_calling is not None else True
+            ),
             enable_inbound=(
                 config.enable_inbound if config.enable_inbound is not None else True
             ),
@@ -279,6 +282,7 @@ async def update_configuration_handler(
             max_retry=config.max_retry,
             calling_provider=config.calling_provider,
             enable_international_call=config.enable_international_call,
+            enable_calling=config.enable_calling,
             enable_inbound=config.enable_inbound,
             inbound_call_start_time=config.inbound_call_start_time,
             inbound_call_end_time=config.inbound_call_end_time,
