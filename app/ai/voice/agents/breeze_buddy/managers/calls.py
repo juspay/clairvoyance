@@ -52,12 +52,17 @@ from app.database.accessor import (
     acquire_lock_on_lead_by_id,
     create_lead_call_tracker,
     decrement_outbound_number_channels,
+    decrement_pool_channels,
     get_call_execution_config_by_merchant_id,
     get_lead_by_call_id,
     get_leads_by_status_and_time_before,
+    get_numbers_by_pool_id,
     get_outbound_number_based_on_status_and_provider,
     get_outbound_number_by_id,
+    get_outbound_number_pool_by_id,
     increment_outbound_number_channels,
+    increment_pool_channels,
+    increment_pool_rotation_index,
     release_lock_on_lead_by_id,
     update_lead_call_completion_details,
     update_lead_call_recording_url,
@@ -71,6 +76,8 @@ from app.schemas import (
     LeadCallStatus,
     LeadCallTracker,
     OutboundNumber,
+    OutboundNumberPool,
+    OutboundNumberPoolStatus,
     OutboundNumberStatus,
 )
 from app.services.gcp.storage.storage import upload_file_to_gcs
@@ -207,57 +214,61 @@ async def _get_available_number(
     template: Optional[TemplateModel],
 ) -> Optional[OutboundNumber]:
     """
-    Resolve the outbound number to dial from. Returns None only for
-    permanent / semi-permanent failures:
+    Finds an available outbound number for a given configuration.
 
-      - template.outbound_number_id points at a row that doesn't exist
-      - the row's status is not AVAILABLE (manually disabled, or — for
-        Twilio's legacy 1-bit gate — currently IN_USE on another call)
-      - fallback search found nothing for this reseller/merchant pool
-
-    Capacity exhaustion is NOT a reason to return None: the Redis
-    channel-token semaphore is now the authoritative gate (see
-    ``dispatch/channel_semaphore.py``) and is checked one step downstream
-    in the worker. The old Exotel ``channels < maximum_channels`` check
-    here was redundant with that semaphore and caused permanent
-    misconfigurations and transient capacity issues to be indistinguishable
-    to the caller — both surfaced as None and were retried forever every
-    10s.
-
-    Callers should treat a None return as a terminal condition for the
-    lead (mark FINISHED + alert), not as something to retry.
+    Resolution order:
+    1. template.outbound_number_id is a real outbound number → DIRECT NUMBER FLOW
+    2. template.outbound_number_id is a pool ID → POOL FLOW (round-robin)
+    3. No outbound_number_id → SHARED FALLBACK
     """
 
     number = None
 
     if template and template.outbound_number_id:
-        logger.info(
-            f"Using new approach: template {config.template} has outbound_number_id {template.outbound_number_id}"
-        )
-        outbound_number = await get_outbound_number_by_id(template.outbound_number_id)
+        ref_id = template.outbound_number_id
 
-        if outbound_number and outbound_number.status == OutboundNumberStatus.AVAILABLE:
-            number = outbound_number
-        elif outbound_number is None:
-            logger.error(
-                f"_get_available_number: template {config.template} references "
-                f"outbound_number_id {template.outbound_number_id} which does not "
-                "exist. This is a misconfiguration that will not self-heal."
-            )
+        # Try as outbound number first
+        outbound_number = await get_outbound_number_by_id(ref_id)
+
+        if outbound_number:
+            # DIRECT NUMBER FLOW
+            if outbound_number.status != OutboundNumberStatus.AVAILABLE:
+                logger.warning(
+                    f"Template {config.template} outbound number {ref_id} "
+                    f"not available (status={outbound_number.status})"
+                )
+                return None
+
+            if outbound_number.provider == CallProvider.EXOTEL:
+                if (
+                    outbound_number.channels is not None
+                    and outbound_number.maximum_channels is not None
+                    and outbound_number.channels < outbound_number.maximum_channels
+                ):
+                    number = outbound_number
+            elif outbound_number.provider == CallProvider.TWILIO:
+                number = outbound_number
+            elif outbound_number.provider == CallProvider.PLIVO:
+                number = outbound_number
         else:
-            logger.warning(
-                f"_get_available_number: outbound number {outbound_number.id} "
-                f"is in status {outbound_number.status.value} (not AVAILABLE) "
-                f"for template {config.template}."
-            )
+            # Not a number — verify if it's a pool
+            pool = await get_outbound_number_pool_by_id(ref_id)
+
+            if pool:
+                # POOL FLOW
+                number = await _resolve_pool_number(pool)
+            else:
+                logger.warning(
+                    f"Template {config.template} outbound_number_id {ref_id} "
+                    f"is neither a valid outbound number nor a pool"
+                )
+                return None
 
     else:
+        # SHARED FALLBACK
         logger.info(
-            f"Using backward compatible approach for reseller "
-            f"{config.reseller_id}, shop {config.merchant_id}: scanning the "
-            f"unassigned-default pool (outbound_number rows with reseller_id "
-            f"and merchant_id both NULL) on provider "
-            f"{config.calling_provider}."
+            f"Using backward compatible approach: looking for outbound number "
+            f"matching reseller {config.reseller_id}, shop {config.merchant_id}"
         )
 
         # Get all available numbers
@@ -265,28 +276,31 @@ async def _get_available_number(
             OutboundNumberStatus.AVAILABLE, config.calling_provider
         )
 
-        # Legacy fallback: any number with no explicit reseller/merchant
-        # assignment serves as a shared default. The caller's reseller_id /
-        # merchant_id from `config` are intentionally NOT used as a filter
-        # here — the fallback is the unassigned-default pool, not a per-
-        # tenant pool. See raise_no_outbound_number() in dispatch/alerts.py
-        # for the operator guidance that matches this behavior.
+        # Filter by reseller_id and merchant_id as none for fallback
         matching_numbers = [
             n
             for n in all_available_numbers
-            if n.reseller_id is None and n.merchant_id is None
+            if n.reseller_id is None and n.merchant_id is None and n.pool_id is None
         ]
 
         if matching_numbers:
-            number = matching_numbers[0]
+            for num in matching_numbers:
+                if num.provider == CallProvider.EXOTEL:
+                    if (
+                        num.channels is not None
+                        and num.maximum_channels is not None
+                        and num.channels < num.maximum_channels
+                    ):
+                        number = num
+                        break
+                else:
+                    number = num
+                    break
 
     if not number:
-        # Support both new and old field names for config
-        config_reseller_id = config.reseller_id
-        config_merchant_id = config.merchant_id
         logger.warning(
-            f"No outbound number found for reseller {config_reseller_id}, "
-            f"template {config.template}, shop {config_merchant_id}"
+            f"No outbound number found for reseller {config.reseller_id}, "
+            f"template {config.template}, shop {config.merchant_id}"
         )
         return None
 
@@ -297,38 +311,166 @@ async def _get_available_number(
     return number
 
 
-async def _acquire_number(number: OutboundNumber) -> bool:
+async def _resolve_pool_number(
+    pool: OutboundNumberPool,
+) -> Optional[OutboundNumber]:
+    """
+    Picks a number from a pool using round-robin.
+    Returns None if pool is inactive, at capacity, or has no available numbers.
+    """
+    if pool.status != OutboundNumberPoolStatus.ACTIVE:
+        logger.warning(
+            f"Pool {pool.id} ({pool.name}) is not active (status={pool.status})"
+        )
+        return None
+
+    if pool.current_channels >= pool.max_channels:
+        logger.warning(
+            f"Pool {pool.id} ({pool.name}) at capacity: "
+            f"{pool.current_channels}/{pool.max_channels}"
+        )
+        return None
+
+    pool_numbers = await get_numbers_by_pool_id(pool.id)
+    if not pool_numbers:
+        logger.warning(f"Pool {pool.id} ({pool.name}) has no numbers")
+        return None
+
+    available = [n for n in pool_numbers if n.status == OutboundNumberStatus.AVAILABLE]
+    if not available:
+        logger.warning(f"Pool {pool.id} ({pool.name}) has no AVAILABLE numbers")
+        return None
+
+    # Round-robin selection
+    count = len(available)
+    start_idx = pool.rotation_index % count
+
+    number = None
+    for i in range(count):
+        candidate = available[(start_idx + i) % count]
+        if candidate.provider in (CallProvider.EXOTEL, CallProvider.PLIVO):
+            if (
+                candidate.channels is not None
+                and candidate.maximum_channels is not None
+                and candidate.channels < candidate.maximum_channels
+            ):
+                number = candidate
+                break
+        else:
+            number = candidate
+            break
+
+    if number:
+        await increment_pool_rotation_index(pool.id)
+        logger.info(
+            f"Pool {pool.id} ({pool.name}) round-robin selected "
+            f"{number.number} (rotation_index={pool.rotation_index})"
+        )
+    else:
+        logger.warning(
+            f"Pool {pool.id} ({pool.name}) all numbers at individual capacity"
+        )
+
+    return number
+
+
+async def _acquire_number(number: OutboundNumber, via_pool: bool = False) -> bool:
     """
     Marks an outbound number as in use.
     Uses atomic increment to avoid race conditions.
-    For Exotel, only succeeds if channels < maximum_channels.
+    For Exotel/Plivo, only succeeds if channels < maximum_channels.
+    If via_pool is True, also increments pool-level channels.
     Returns True if acquisition succeeded, False if at capacity.
     """
+    # Only increment pool channels when the number was resolved via pool round-robin
+    if via_pool and number.pool_id:
+        pool_result = await increment_pool_channels(number.pool_id)
+        if pool_result is None:
+            logger.warning(
+                f"Pool {number.pool_id} at capacity — cannot acquire number {number.id}"
+            )
+            return False
+
+    # Acquire the individual number
     if number.provider == CallProvider.TWILIO:
         result = await update_outbound_number_status(
             number.id, OutboundNumberStatus.IN_USE
         )
-        return result is not None
     elif number.provider == CallProvider.EXOTEL:
         result = await increment_outbound_number_channels(number.id)
-        return result is not None
     elif number.provider == CallProvider.PLIVO:
         result = await increment_outbound_number_channels(number.id)
-        return result is not None
-    return False
+    else:
+        result = None
+
+    if result is None:
+        # Number-level acquisition failed — roll back pool increment
+        if via_pool and number.pool_id:
+            await decrement_pool_channels(number.pool_id)
+            logger.warning(
+                f"Number {number.id} acquisition failed — rolled back pool {number.pool_id} channel increment"
+            )
+        return False
+
+    return True
 
 
-async def _release_number(number_id: str, provider: CallProvider):
+async def _release_number(
+    number_id: str, provider: CallProvider, via_pool: bool = False
+):
     """
     Releases an outbound number, making it available for other calls.
     Uses atomic decrement to avoid race conditions.
+    If via_pool is True, also decrements pool-level channels.
     """
+    # First, fetch the number to check pool membership
+    outbound_number = await get_outbound_number_by_id(number_id)
+
     if provider == CallProvider.TWILIO:
         await update_outbound_number_status(number_id, OutboundNumberStatus.AVAILABLE)
     elif provider == CallProvider.EXOTEL:
         await decrement_outbound_number_channels(number_id)
     elif provider == CallProvider.PLIVO:
         await decrement_outbound_number_channels(number_id)
+
+    # Only decrement pool channels when the number was acquired via pool round-robin
+    if via_pool and outbound_number and outbound_number.pool_id:
+        await decrement_pool_channels(outbound_number.pool_id)
+        logger.info(
+            f"Released pool channel for pool {outbound_number.pool_id} "
+            f"(number {number_id})"
+        )
+
+
+# Redis key prefix for tracking pool-acquired leads
+_POOL_ACQUIRED_PREFIX = "pool_acquired"
+_POOL_ACQUIRED_TTL = 86400  # 24 hours — safety expiry for orphaned keys
+
+
+async def _mark_pool_acquired(lead_id: str) -> bool:
+    """Store a flag in Redis indicating the lead's number was acquired via pool round-robin.
+
+    Returns True if the flag was stored successfully, False on failure.
+    """
+    try:
+        redis = await get_redis_service()
+        return await redis.set(
+            f"{_POOL_ACQUIRED_PREFIX}:{lead_id}", "1", ex=_POOL_ACQUIRED_TTL
+        )
+    except Exception as e:
+        logger.error(f"Failed to set pool_acquired flag for lead {lead_id}: {e}")
+        return False
+
+
+async def _check_and_clear_pool_acquired(lead_id: str) -> bool:
+    """Atomically check and delete the pool-acquired flag for a lead."""
+    try:
+        redis = await get_redis_service()
+        val = await redis.getdel(f"{_POOL_ACQUIRED_PREFIX}:{lead_id}")
+        return val is not None
+    except Exception as e:
+        logger.error(f"Failed to check pool_acquired flag for lead {lead_id}: {e}")
+        return False
 
 
 async def _retry_call(
@@ -471,9 +613,12 @@ async def reconcile_stuck_processing_leads():
                     locked_lead.outbound_number_id
                 )
                 if outbound_number:
-                    await _release_number(outbound_number.id, outbound_number.provider)
-                    # Event-driven dispatch: return token to channel semaphore.
-                    await release_channel_token(outbound_number.id)
+                    lead_via_pool = await _check_and_clear_pool_acquired(locked_lead.id)
+                    await _release_number(
+                        outbound_number.id,
+                        outbound_number.provider,
+                        via_pool=lead_via_pool,
+                    )
 
             # Only retry outbound telephony calls - inbound and test calls should not be retried
             config = await _get_lead_config(locked_lead)
@@ -490,6 +635,437 @@ async def reconcile_stuck_processing_leads():
         finally:
             if locked_lead:
                 await release_lock_on_lead_by_id(locked_lead.id)
+
+
+async def process_backlog_leads():
+    """
+    Processes backlog leads and initiates calls.
+    """
+    await _cleanup_stuck_leads()
+
+    logger.info("Processing backlog leads...")
+    leads = await get_leads_based_on_status_and_next_attempt(
+        LeadCallStatus.BACKLOG, datetime.now(timezone.utc)
+    )
+    logger.info(f"Found {len(leads)} leads to process.")
+
+    async with create_aiohttp_session() as session:
+        for lead in leads:
+            try:
+                # Atomically acquire lock AND verify status is still BACKLOG in one DB trip.
+                # Multiple concurrent process_backlog_leads invocations hold stale snapshots
+                # of BACKLOG leads — by the time we reach this lead, another invocation may
+                # have already processed it. The expected_status guard prevents locking a
+                # lead that's already in PROCESSING or FINISHED.
+                locked_lead = await acquire_lock_on_lead_by_id(
+                    lead.id, expected_status=LeadCallStatus.BACKLOG
+                )
+                if not locked_lead:
+                    continue
+
+                # Now we have exclusive access to this BACKLOG lead
+                logger.info(f"Successfully locked lead {lead.id} for processing.")
+
+                config = await _get_lead_config(locked_lead)
+                if not config:
+                    await release_lock_on_lead_by_id(locked_lead.id)
+                    continue
+                # Support both new and old field names for lead
+                if not config.enable_calling:
+                    logger.info(
+                        f"Skipping lead {locked_lead.id} - calling is disabled for reseller {locked_lead.reseller_id}, template {locked_lead.template}"
+                    )
+                    await release_lock_on_lead_by_id(locked_lead.id)
+                    continue
+
+                customer_phone = (locked_lead.payload or {}).get(
+                    "customer_mobile_number"
+                )
+
+                if customer_phone and await is_number_blacklisted(
+                    customer_phone, locked_lead.reseller_id
+                ):
+                    masked_phone = (
+                        f"***{customer_phone[-4:]}"
+                        if len(customer_phone) >= 4
+                        else "***"
+                    )
+                    logger.info(
+                        f"Skipping lead {locked_lead.id} - phone number {masked_phone} is blacklisted"
+                    )
+                    await update_lead_call_completion_details(
+                        id=locked_lead.id,
+                        status=LeadCallStatus.FINISHED,
+                        outcome="BLACKLISTED",
+                        meta_data={"reason": "Phone number is blacklisted"},
+                        call_end_time=datetime.now(timezone.utc),
+                    )
+                    await release_lock_on_lead_by_id(locked_lead.id)
+                    continue
+
+                if not _is_within_calling_hours(config):
+                    logger.info(
+                        f"Skipping lead {locked_lead.id} - outside calling hours. "
+                        f"Current time: {datetime.now(timezone(timedelta(hours=5, minutes=30))).time()}, "
+                        f"Allowed window: {config.call_start_time} - {config.call_end_time}"
+                    )
+                    await release_lock_on_lead_by_id(locked_lead.id)
+                    continue
+                template = await get_template_by_merchant(
+                    reseller_id=config.reseller_id,
+                    merchant_id=config.merchant_id,
+                    name=config.template,
+                )
+
+                logger.info(
+                    f"Lead {locked_lead.id} , template found: {template is not None}"
+                )
+
+                # Run pre-checks before committing resources
+                if not await _run_pre_checks_for_lead(
+                    config, locked_lead, template, session
+                ):
+                    await release_lock_on_lead_by_id(locked_lead.id)
+                    continue
+
+                # Synthesize initial greeting audio and store in Redis.
+                # Apply playground overrides first — they are normally applied
+                # later in flow.py (too late for greeting synthesis).
+                if template:
+                    apply_playground_config_overrides(locked_lead, template)
+                    await prepare_and_store_initial_greeting(
+                        lead_id=locked_lead.id,
+                        payload=locked_lead.payload or {},
+                        template=template,
+                    )
+
+                number_to_use = await _get_available_number(config, template)
+                if not number_to_use:
+                    await release_lock_on_lead_by_id(locked_lead.id)
+                    continue
+
+                acquired = await _acquire_number(number_to_use)
+                if not acquired:
+                    logger.warning(
+                        f"Failed to acquire number {number_to_use.id} for lead {locked_lead.id} - "
+                        "number may be at maximum capacity"
+                    )
+                    # Reset number_to_use as the number was not acquired and must not be used
+                    number_to_use = None
+                    await release_lock_on_lead_by_id(locked_lead.id)
+                    continue
+
+                call_provider = get_voice_provider(
+                    number_to_use.provider,
+                    session,
+                    config.telephony_config,
+                )
+
+                # Pod allocation now happens at webhook time (when customer answers)
+                # via provider-specific answer webhooks. No pre-allocation needed.
+                # merchant_id is passed for tiered pod allocation.
+
+                customer_mobile = (locked_lead.payload or {}).get(
+                    "customer_mobile_number"
+                )
+                if not customer_mobile or not isinstance(customer_mobile, str):
+                    logger.error(
+                        f"Invalid customer_mobile_number for lead {locked_lead.id}"
+                    )
+                    await _release_number(number_to_use.id, number_to_use.provider)
+                    await release_lock_on_lead_by_id(locked_lead.id)
+                    continue
+                rate_limit_allowed = await check_outbound_rate_limit_and_alert(
+                    customer_phone=customer_mobile,
+                    lead_id=str(locked_lead.id),
+                    reseller_id=locked_lead.reseller_id,
+                )
+                if not rate_limit_allowed:
+                    # TODO: advance next_attempt_at by the rate-limit window so
+                    # the scheduler does not immediately re-pick this lead and
+                    # re-trigger the alert on the next cycle.
+                    await _release_number(number_to_use.id, number_to_use.provider)
+                    await release_lock_on_lead_by_id(locked_lead.id)
+                    continue
+                call = call_provider.make_call(
+                    customer_mobile,
+                    number_to_use.number,
+                    reseller_id=locked_lead.reseller_id,
+                    template_name=locked_lead.template,
+                )
+
+                if call and call.get("sid"):
+                    actual_call_sid = str(call.get("sid"))
+
+                    updated = await update_lead_call_details(
+                        locked_lead.id,
+                        LeadCallStatus.PROCESSING,
+                        actual_call_sid,
+                        datetime.now(timezone.utc),
+                        number_to_use.id,
+                    )
+                    if not updated:
+                        # Another invocation already moved this lead out of BACKLOG.
+                        # The call was placed but the lead is no longer ours — release resources.
+                        logger.warning(
+                            f"Lead {locked_lead.id} was already processed by another invocation "
+                            f"(status changed from BACKLOG). Releasing number. "
+                            f"Call {actual_call_sid} may be orphaned."
+                        )
+                        await _release_number(number_to_use.id, number_to_use.provider)
+                        try:
+                            redis = await get_redis_service()
+                            await redis.delete(f"greeting:{locked_lead.id}")
+                        except Exception:
+                            pass
+                        await release_lock_on_lead_by_id(locked_lead.id)
+                        continue
+                else:
+                    logger.error(
+                        f"Failed to initiate call for lead {locked_lead.id}. Call response: {call}"
+                    )
+                    await _release_number(number_to_use.id, number_to_use.provider)
+
+                    if template and template.outbound_number_id:
+                        logger.info(
+                            f"Not retrying call for lead {locked_lead.id} as outbound_number_id is set in template."
+                        )
+                        await update_lead_call_completion_details(
+                            id=locked_lead.id,
+                            status=LeadCallStatus.FINISHED,
+                            outcome="UNKNOWN",
+                            meta_data={
+                                "failure_reason": "Failed to initiate call, no retry due to fixed outbound number."
+                            },
+                            call_end_time=datetime.now(timezone.utc),
+                        )
+
+                        # Send webhook for failed call
+                        reporting_webhook_url = (
+                            locked_lead.payload.get("reporting_webhook_url")
+                            if locked_lead.payload
+                            else None
+                        )
+                        if reporting_webhook_url:
+                            webhook_data = {
+                                "outcome": "FAILED",
+                                "attemptCount": locked_lead.attempt_count + 1,
+                                "failureReason": "Failed to initiate call, no retry due to fixed outbound number.",
+                                "orderId": locked_lead.request_id,
+                            }
+                            logger.info(
+                                f"Sending failure webhook for lead {locked_lead.id} to {reporting_webhook_url}"
+                            )
+                            try:
+                                await send_webhook_with_retry(
+                                    session, reporting_webhook_url, webhook_data
+                                )
+                            except Exception as e:
+                                logger.error(
+                                    f"Error sending failure webhook for lead {locked_lead.id}: {e}"
+                                )
+
+                        await release_lock_on_lead_by_id(locked_lead.id)
+
+                        continue
+
+                    retry_calling_provider = None
+
+                    if number_to_use.provider == CallProvider.TWILIO:
+                        retry_calling_provider = CallProvider.EXOTEL
+                    elif number_to_use.provider == CallProvider.EXOTEL:
+                        if not config.enable_international_call:
+                            # Support both new and old field names for lead
+                            locked_lead.reseller_id
+                            logger.warning(
+                                f"International calls disabled for reseller {locked_lead.reseller_id}. Skipping retry with Twilio."
+                            )
+                            await update_lead_call_completion_details(
+                                id=locked_lead.id,
+                                status=LeadCallStatus.FINISHED,
+                                outcome="UNKNOWN",
+                                meta_data={
+                                    "failure_reason": "Failed to initiate call with EXOTEL, international calling disabled."
+                                },
+                                call_end_time=datetime.now(timezone.utc),
+                            )
+
+                            # Send webhook for failed call
+                            reporting_webhook_url = (
+                                locked_lead.payload.get("reporting_webhook_url")
+                                if locked_lead.payload
+                                else None
+                            )
+                            if reporting_webhook_url:
+                                webhook_data = {
+                                    "outcome": "FAILED",
+                                    "attemptCount": locked_lead.attempt_count + 1,
+                                    "failureReason": "Failed to initiate call due to NCPR, international calling disabled.",
+                                    "orderId": locked_lead.request_id,
+                                }
+                                logger.info(
+                                    f"Sending failure webhook for lead {locked_lead.id} to {reporting_webhook_url}"
+                                )
+                                try:
+                                    await send_webhook_with_retry(
+                                        session, reporting_webhook_url, webhook_data
+                                    )
+                                except Exception as e:
+                                    logger.error(
+                                        f"Error sending failure webhook for lead {locked_lead.id}: {e}"
+                                    )
+
+                            await release_lock_on_lead_by_id(locked_lead.id)
+
+                            continue
+                        retry_calling_provider = CallProvider.TWILIO
+
+                    if not retry_calling_provider:
+                        # No retry provider available, skip retry
+                        await release_lock_on_lead_by_id(locked_lead.id)
+                        continue
+
+                    retry_number_to_use = None
+
+                    # First, get all available numbers with the retry provider
+                    retry_numbers = (
+                        await get_outbound_number_based_on_status_and_provider(
+                            OutboundNumberStatus.AVAILABLE, retry_calling_provider
+                        )
+                    )
+
+                    if retry_numbers:
+                        for number in retry_numbers:
+                            if (
+                                number.reseller_id is None
+                                and number.merchant_id is None
+                            ):
+                                if retry_calling_provider == CallProvider.EXOTEL:
+                                    if (
+                                        number.channels is not None
+                                        and number.maximum_channels is not None
+                                        and number.channels < number.maximum_channels
+                                    ):
+                                        retry_number_to_use = number
+                                        break
+                                else:
+                                    retry_number_to_use = number
+                                    break
+
+                    if not retry_number_to_use:
+                        await release_lock_on_lead_by_id(locked_lead.id)
+                        continue
+
+                    retry_acquired = await _acquire_number(retry_number_to_use)
+                    if not retry_acquired:
+                        logger.warning(
+                            f"Failed to acquire retry number {retry_number_to_use.id} for lead {locked_lead.id} - "
+                            "number may be at maximum capacity"
+                        )
+                        retry_number_to_use = None
+                        await release_lock_on_lead_by_id(locked_lead.id)
+                        continue
+
+                    retry_call_provider = get_voice_provider(
+                        retry_calling_provider,
+                        session,
+                        config.telephony_config,
+                    )
+
+                    # Pod allocation happens at webhook time (when customer answers)
+                    # via provider-specific answer webhooks.
+                    retry_customer_mobile = (locked_lead.payload or {}).get(
+                        "customer_mobile_number"
+                    )
+                    if not retry_customer_mobile or not isinstance(
+                        retry_customer_mobile, str
+                    ):
+                        logger.error(
+                            f"Invalid customer_mobile_number for retry lead {locked_lead.id}"
+                        )
+                        await _release_number(
+                            retry_number_to_use.id, retry_number_to_use.provider
+                        )
+                        await release_lock_on_lead_by_id(locked_lead.id)
+                        continue
+                    retry_call = retry_call_provider.make_call(
+                        retry_customer_mobile,
+                        retry_number_to_use.number,
+                        reseller_id=locked_lead.reseller_id,
+                        template_name=locked_lead.template,
+                    )
+
+                    if retry_call and retry_call.get("sid"):
+                        retry_call_sid = str(retry_call.get("sid"))
+                        retry_updated = await update_lead_call_details(
+                            locked_lead.id,
+                            LeadCallStatus.PROCESSING,
+                            retry_call_sid,
+                            datetime.now(timezone.utc),
+                            retry_number_to_use.id,
+                        )
+                        if not retry_updated:
+                            logger.warning(
+                                f"Lead {locked_lead.id} was already processed by another invocation "
+                                f"during retry call. Releasing retry number. "
+                                f"Call {retry_call_sid} may be orphaned."
+                            )
+                            await _release_number(
+                                retry_number_to_use.id, retry_number_to_use.provider
+                            )
+                            try:
+                                redis = await get_redis_service()
+                                await redis.delete(f"greeting:{locked_lead.id}")
+                            except Exception:
+                                pass
+                            await release_lock_on_lead_by_id(locked_lead.id)
+                            continue
+                    else:
+                        logger.error(
+                            f"Failed to initiate retry call for lead {locked_lead.id}. Call response: {retry_call}"
+                        )
+                        await update_lead_call_completion_details(
+                            id=locked_lead.id,
+                            status=LeadCallStatus.FINISHED,
+                            outcome="UNKNOWN",
+                            meta_data={
+                                "failure_reason": f"Failed to initiate call using {retry_calling_provider.value} after {config.calling_provider.value} failed."
+                            },
+                            call_end_time=datetime.now(timezone.utc),
+                        )
+                        await _release_number(
+                            retry_number_to_use.id, retry_number_to_use.provider
+                        )
+
+                        # Send webhook for failed call
+                        reporting_webhook_url = (
+                            locked_lead.payload.get("reporting_webhook_url")
+                            if locked_lead.payload
+                            else None
+                        )
+                        if reporting_webhook_url:
+                            webhook_data = {
+                                "outcome": "FAILED",
+                                "attemptCount": locked_lead.attempt_count + 1,
+                                "failureReason": "Failed to initiate call with both providers.",
+                                "orderId": locked_lead.request_id,
+                            }
+                            logger.info(
+                                f"Sending failure webhook for lead {locked_lead.id} to {reporting_webhook_url}"
+                            )
+                            try:
+                                await send_webhook_with_retry(
+                                    session, reporting_webhook_url, webhook_data
+                                )
+                            except Exception as e:
+                                logger.error(
+                                    f"Error sending failure webhook for lead {locked_lead.id}: {e}"
+                                )
+
+                await release_lock_on_lead_by_id(locked_lead.id)
+
+            except Exception as e:
+                logger.error(f"Error processing lead {lead.id}: {e}")
 
 
 async def handle_call_completion(
@@ -524,11 +1100,10 @@ async def handle_call_completion(
     if lead.outbound_number_id:
         outbound_number = await get_outbound_number_by_id(lead.outbound_number_id)
         if outbound_number:
-            await _release_number(outbound_number.id, outbound_number.provider)
-            # Event-driven dispatch: return a token to the channel semaphore.
-            # Idempotent in aggregate — reconcile_channel_tokens trims any
-            # over-count caused by duplicate webhooks within 60s.
-            await release_channel_token(outbound_number.id)
+            lead_via_pool = await _check_and_clear_pool_acquired(lead.id)
+            await _release_number(
+                outbound_number.id, outbound_number.provider, via_pool=lead_via_pool
+            )
         else:
             logger.error(
                 f"Could not find outbound number with id: {lead.outbound_number_id} to release."
@@ -615,9 +1190,10 @@ async def handle_unanswered_calls(call_id: str):
     if lead.outbound_number_id:
         outbound_number = await get_outbound_number_by_id(lead.outbound_number_id)
         if outbound_number:
-            await _release_number(outbound_number.id, outbound_number.provider)
-            # Event-driven dispatch: return token to channel semaphore.
-            await release_channel_token(outbound_number.id)
+            lead_via_pool = await _check_and_clear_pool_acquired(lead.id)
+            await _release_number(
+                outbound_number.id, outbound_number.provider, via_pool=lead_via_pool
+            )
         else:
             logger.error(
                 f"Could not find outbound number with id: {lead.outbound_number_id} to release."

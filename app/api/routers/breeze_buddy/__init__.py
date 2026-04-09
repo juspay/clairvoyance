@@ -18,6 +18,7 @@ from app.api.routers.breeze_buddy.daily import router as daily_router
 from app.api.routers.breeze_buddy.demo import router as demo_router
 from app.api.routers.breeze_buddy.leads import router as leads_router
 from app.api.routers.breeze_buddy.merchants import router as merchants_router
+from app.api.routers.breeze_buddy.number_pools import router as number_pools_router
 from app.api.routers.breeze_buddy.numbers import router as numbers_router
 from app.api.routers.breeze_buddy.playground import router as playground_router
 
@@ -60,6 +61,9 @@ router.include_router(credentials_router, prefix="", tags=["credentials"])
 
 # Outbound Numbers (phone numbers for making calls)
 router.include_router(numbers_router, prefix="", tags=["numbers"])
+
+# Outbound Number Pools (grouped numbers with round-robin rotation)
+router.include_router(number_pools_router, prefix="", tags=["number-pools"])
 
 # Templates (conversational flow definitions)
 router.include_router(templates_router, prefix="", tags=["templates"])

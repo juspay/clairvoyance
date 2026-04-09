@@ -246,6 +246,19 @@ class RedisService:
             logger.error(f"Redis DELETE error for key {key}: {e}")
             return False
 
+    async def getdel(self, key: str) -> Optional[str]:
+        """Atomically get and delete a key from Redis.
+
+        Returns the value if the key existed, None otherwise.
+        """
+        try:
+            client = await self.get_client()
+            value = await client.getdel(key)
+            return value
+        except RedisError as e:
+            logger.error(f"Redis GETDEL error for key {key}: {e}")
+            return None
+
     async def exists(self, key: str) -> bool:
         """Check if key exists in Redis"""
         try:
