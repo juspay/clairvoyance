@@ -570,6 +570,15 @@ class ConfigurationModel(BaseModel):
         description="LLM provider and model configuration",
     )
 
+    # --- Analytics ---
+    success_outcomes: Optional[list[str]] = Field(
+        None,
+        description="List of outcome values considered successful for this template "
+        "(e.g. ['CONFIRMED', 'ADDRESS_UPDATED']). Used by the analytics layer to "
+        "classify outcomes as success vs non-success. When unset, outcomes are "
+        "returned uncategorized.",
+    )
+
     @model_validator(mode="after")
     def _backfill_legacy_from_stt_config(self):
         """Mirror stt_configuration values to legacy fields for backward compat.
