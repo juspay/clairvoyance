@@ -608,3 +608,31 @@ def update_lead_payload_query(
     """
     values = [json.dumps(payload_updates), lead_id]
     return text, values
+
+
+def append_metadata_field_query(
+    lead_id: str, field_updates: Dict[str, Any]
+) -> Tuple[str, List[Any]]:
+    """
+    Append/merge specific fields into the meta_data JSONB column for a lead.
+
+    Uses jsonb merge (||) to update only the specified fields without
+    overwriting existing meta_data.
+
+    Args:
+        lead_id: Lead UUID
+        field_updates: Dictionary of fields to merge into existing meta_data
+
+    Returns:
+        Tuple of (query_text, values)
+    """
+    text = f"""
+        UPDATE "{LEAD_CALL_TRACKER_TABLE}"
+        SET
+            "meta_data" = COALESCE("meta_data", '{{}}')::jsonb || $1::jsonb,
+            "updated_at" = NOW()
+        WHERE "id" = $2
+        RETURNING *;
+    """
+    values = [json.dumps(field_updates), lead_id]
+    return text, values

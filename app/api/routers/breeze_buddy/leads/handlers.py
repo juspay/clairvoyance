@@ -3,6 +3,7 @@ Business logic handlers for lead operations.
 All handlers perform database operations and enforce business rules.
 """
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import Dict
 from uuid import uuid4
@@ -35,11 +36,15 @@ from app.ai.voice.agents.breeze_buddy.utils.language_utils.language_detector imp
     SHORT_TO_FULL_LANGUAGE_CODE,
     determine_language_for_call,
 )
+from app.ai.voice.agents.breeze_buddy.utils.language_utils.translator import (
+    translate_transcript_to_english,
+)
 from app.ai.voice.agents.breeze_buddy.utils.tts_utils.tts_provider_selector import (
     determine_tts_provider_for_call,
 )
 from app.core.logger import logger
 from app.database.accessor import (
+    append_metadata_field,
     create_lead_call_tracker,
     get_call_execution_config_by_merchant_id,
     get_lead_by_call_id,
@@ -51,6 +56,7 @@ from app.database.accessor import (
     is_number_blacklisted,
 )
 from app.schemas import ExecutionMode, LeadCallStatus, UserInfo
+from app.schemas.breeze_buddy.core import LeadCallTracker
 
 from .rbac import validate_recording_access
 
@@ -591,4 +597,108 @@ async def delete_lead_handler(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Unexpected error while deleting leads: {str(e)}",
+        )
+
+
+async def translate_lead_transcript_handler(
+    lead_id: str, lead: LeadCallTracker, current_user: UserInfo
+) -> Dict:
+    """
+    Translate a lead's transcription to English.
+
+    If a cached translation (transcription_en) already exists in meta_data,
+    returns it immediately. Otherwise, translates via Gemini and caches the
+    result in the DB.
+
+    Args:
+        lead_id: Lead UUID
+        lead: Already-fetched lead object (avoids duplicate DB call)
+        current_user: Current authenticated user
+
+    Returns:
+        Dict with translated messages
+
+    Raises:
+        HTTPException: 400 if no transcription, 500 if translation fails
+    """
+    logger.info(
+        f"User {current_user.username} (role: {current_user.role}) "
+        f"requesting translation for lead: {lead_id}"
+    )
+
+    try:
+        meta_data = lead.metaData or {}
+
+        # Check for cached translation
+        if meta_data.get("transcription_en"):
+            logger.info(f"Returning cached translation for lead: {lead_id}")
+            return {
+                "lead_id": lead_id,
+                "transcription_en": meta_data["transcription_en"],
+                "cached": True,
+            }
+
+        # Get original transcription
+        transcription = meta_data.get("transcription")
+        if not transcription:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No transcription found for this lead",
+            )
+
+        # Handle both list and object formats
+        if isinstance(transcription, list):
+            messages = transcription
+        elif isinstance(transcription, dict) and "messages" in transcription:
+            messages = transcription["messages"]
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Transcription format not supported",
+            )
+
+        if not messages:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Transcription has no messages to translate",
+            )
+
+        # Translate via Gemini
+        translated_messages = await translate_transcript_to_english(messages)
+
+        if not translated_messages:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Translation failed. Please try again later.",
+            )
+
+        # Cache in DB (fire-and-forget — don't block the response)
+        async def _cache_translation():
+            try:
+                await append_metadata_field(
+                    lead_id, {"transcription_en": translated_messages}
+                )
+            except Exception as e:
+                logger.warning(
+                    f"Translation succeeded but failed to cache for lead: {lead_id}. "
+                    f"Error: {e}"
+                )
+
+        asyncio.create_task(_cache_translation())
+
+        return {
+            "lead_id": lead_id,
+            "transcription_en": translated_messages,
+            "cached": False,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(
+            f"Error translating transcript for lead {lead_id}: {e}", exc_info=True
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Unexpected error during translation: {str(e)}",
         )

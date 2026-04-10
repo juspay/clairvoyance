@@ -13,6 +13,7 @@ from app.database.queries import run_parameterized_query
 from app.database.queries.breeze_buddy.lead_call_tracker import (
     abort_lead_by_id_query,
     acquire_lock_on_lead_by_id_query,
+    append_metadata_field_query,
     defer_lead_next_attempt_and_release_lock_query,
     get_all_lead_call_trackers_query,
     get_lead_based_analytics_query,
@@ -650,4 +651,33 @@ async def update_lead_payload(
 
     except Exception as e:
         logger.error(f"Error updating lead payload for ID {lead_id}: {e}")
+        return None
+
+
+async def append_metadata_field(
+    lead_id: str, field_updates: Dict[str, Any]
+) -> Optional[LeadCallTracker]:
+    """
+    Append/merge specific fields into the meta_data JSONB column for a lead.
+    Merges the provided updates into the existing meta_data without
+    overwriting other fields.
+    """
+    logger.info(
+        f"Appending metadata fields for lead ID: {lead_id}, keys: {list(field_updates.keys())}"
+    )
+
+    try:
+        query_text, values = append_metadata_field_query(lead_id, field_updates)
+        result = await run_parameterized_query(query_text, values)
+
+        if result and get_row_count(result) > 0:
+            decoded_result = decode_lead_call_tracker(result[0])
+            logger.info(f"Lead metadata updated successfully for ID: {lead_id}")
+            return decoded_result
+
+        logger.error(f"Failed to update lead metadata for ID: {lead_id}")
+        return None
+
+    except Exception as e:
+        logger.error(f"Error updating lead metadata for ID {lead_id}: {e}")
         return None
