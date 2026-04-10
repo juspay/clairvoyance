@@ -30,6 +30,7 @@ from .handlers import (
     get_call_recording_handler,
     get_lead_handler,
     push_lead_handler,
+    translate_lead_transcript_handler,
 )
 from .rbac import (
     validate_lead_access,
@@ -132,6 +133,48 @@ async def get_lead(
 
     # Get sanitized lead data
     return await get_lead_handler(lead_id, current_user)
+
+
+@router.post("/leads/{lead_id}/translate")
+async def translate_lead_transcript(
+    lead_id: str,
+    current_user: UserInfo = Depends(get_current_user_with_rbac),
+):
+    """
+    Translate a lead's call transcription to English.
+
+    Uses Gemini LLM to translate the transcription from its original language
+    (Hindi, Tamil, Telugu, Kannada, etc.) to English. The translation is cached
+    in the lead's meta_data as 'transcription_en' for subsequent requests.
+
+    Path Parameters:
+    - lead_id: Lead UUID
+
+    RBAC:
+    - Admin: Can translate any lead's transcription
+    - Merchant: Can only translate transcriptions for authorized leads
+
+    Returns:
+        {
+            "lead_id": "uuid",
+            "transcription_en": [{role, content}, ...],
+            "cached": true/false
+        }
+        404 if lead not found or access denied
+        400 if no transcription exists
+    """
+    lead = await get_lead_by_id(lead_id)
+
+    if not lead:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Lead not found for ID: {lead_id}",
+        )
+
+    # RBAC: Check access (returns 404 to avoid leaking existence)
+    validate_lead_read_access(current_user, lead, operation="translate")
+
+    return await translate_lead_transcript_handler(lead_id, lead, current_user)
 
 
 @router.get("/leads/recording/{call_sid}")

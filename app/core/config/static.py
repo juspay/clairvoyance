@@ -153,6 +153,10 @@ ENABLE_SEARCH_GROUNDING = (
 GEMINI_SEARCH_RESULT_API_MODEL = os.environ.get(
     "GEMINI_SEARCH_RESULT_API_MODEL", "gemini-2.5-flash-lite-preview-06-17"
 )
+GEMINI_TRANSLATION_MODEL = os.environ.get(
+    "GEMINI_TRANSLATION_MODEL", "gemini-2.5-flash"
+)
+TRANSLATION_TIMEOUT_SECONDS = int(os.environ.get("TRANSLATION_TIMEOUT_SECONDS", "30"))
 
 # --- STT Configuration ---
 STT_PROVIDER = os.environ.get(
