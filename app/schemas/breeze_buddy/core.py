@@ -46,6 +46,7 @@ class ExecutionMode(str, Enum):
     TELEPHONY_TEST = "TELEPHONY_TEST"  # Test telephony calls
     DAILY = "DAILY"  # Production Daily (web) calls
     DAILY_TEST = "DAILY_TEST"  # Test Daily (web) calls
+    DAILY_STREAM = "DAILY_STREAM"  # Daily STT/TTS-only (no LLM, client-driven)
 
 
 class CallDirection(str, Enum):
