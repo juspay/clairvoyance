@@ -17,7 +17,7 @@ from app import __version__
 from app.ai.voice.agents.breeze_buddy.services.agent_router.client import (
     close_smart_router_client,
 )
-from app.api.routers import automatic, breeze_buddy, devcycle, systems
+from app.api.routers import automatic, breeze_buddy, devcycle, feature_flags, systems
 
 # Import background task scheduler
 from app.core.background_tasks import BackgroundTaskScheduler
@@ -237,6 +237,11 @@ app.include_router(
     automatic.router, prefix="/agent/voice/automatic", tags=["Automatic Agent"]
 )
 app.include_router(devcycle.router, prefix="", tags=["DevCycle"])
+app.include_router(
+    feature_flags.router,
+    prefix="/agent/voice/breeze-buddy",
+    tags=["Feature Flags"],
+)
 
 # System health endpoints
 app.include_router(systems.router, prefix="", tags=["Systems"])
