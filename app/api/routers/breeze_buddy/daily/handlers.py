@@ -49,8 +49,13 @@ async def breeze_buddy_daily_connect_handler(
             f"status: {lead.status}, execution_mode: {lead.execution_mode}"
         )
 
-        # 2. Validate execution_mode is DAILY or DAILY_TEST
-        if lead.execution_mode not in (ExecutionMode.DAILY, ExecutionMode.DAILY_TEST):
+        # 2. Validate execution_mode is a Daily variant
+        daily_modes = (
+            ExecutionMode.DAILY,
+            ExecutionMode.DAILY_TEST,
+            ExecutionMode.DAILY_STREAM,
+        )
+        if lead.execution_mode not in daily_modes:
             raise HTTPException(
                 status_code=400,
                 detail=f"Lead is not a Daily lead. execution_mode: {lead.execution_mode}",

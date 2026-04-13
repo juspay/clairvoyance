@@ -14,11 +14,11 @@ from pipecat.audio.mixers.soundfile_mixer import SoundfileMixer
 from pipecat.transports.daily.transport import DailyParams
 from pipecat.transports.websocket.fastapi import FastAPIWebsocketParams
 
-from app.ai.voice.agents.breeze_buddy.agent.vad import TELEPHONY_SAMPLE_RATE
 from app.ai.voice.agents.breeze_buddy.template.types import (
     ConfigurationModel,
     NoiseFilterType,
 )
+from app.ai.voice.agents.breeze_buddy.template.vad import TELEPHONY_SAMPLE_RATE
 from app.core.config import static
 from app.core.logger import logger
 

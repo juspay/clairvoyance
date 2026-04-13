@@ -229,6 +229,29 @@ async def BB_DAILY_VAD_MIN_VOLUME() -> float:
     return await get_config("BB_DAILY_VAD_MIN_VOLUME", 0.75, float)
 
 
+# --- Telephony Mode VAD Configuration (for Twilio/Plivo/Exotel) ---
+# Defaults match the previous static env values (BREEZE_BUDDY_VAD_*) so
+# deployments that don't set these Redis keys keep the same behavior.
+async def BB_TELEPHONY_VAD_CONFIDENCE() -> float:
+    """Returns BB_TELEPHONY_VAD_CONFIDENCE from Redis"""
+    return await get_config("BB_TELEPHONY_VAD_CONFIDENCE", 0.5, float)
+
+
+async def BB_TELEPHONY_VAD_START_SECS() -> float:
+    """Returns BB_TELEPHONY_VAD_START_SECS from Redis"""
+    return await get_config("BB_TELEPHONY_VAD_START_SECS", 0.1, float)
+
+
+async def BB_TELEPHONY_VAD_STOP_SECS() -> float:
+    """Returns BB_TELEPHONY_VAD_STOP_SECS from Redis"""
+    return await get_config("BB_TELEPHONY_VAD_STOP_SECS", 0.3, float)
+
+
+async def BB_TELEPHONY_VAD_MIN_VOLUME() -> float:
+    """Returns BB_TELEPHONY_VAD_MIN_VOLUME from Redis"""
+    return await get_config("BB_TELEPHONY_VAD_MIN_VOLUME", 0.4, float)
+
+
 # --- Langfuse Score Monitoring Configuration ---
 async def LANGFUSE_EVALUATORS() -> dict[str, int]:
     """

@@ -9,7 +9,7 @@ from fastapi import WebSocket
 from opentelemetry import trace
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.vad.vad_analyzer import VADParams
-from pipecat.frames.frames import LLMMessagesAppendFrame
+from pipecat.frames.frames import LLMMessagesAppendFrame, TTSSpeakFrame
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineTask
 from pipecat.processors.aggregators.llm_context import LLMContext
@@ -52,13 +52,13 @@ from app.ai.voice.agents.breeze_buddy.agent.utils import (
     end_call_with_errors,
     send_initial_greeting,
 )
-from app.ai.voice.agents.breeze_buddy.agent.vad import create_vad_analyzer
 from app.ai.voice.agents.breeze_buddy.handlers.internal.end_conversation import (
     end_conversation,
 )
 from app.ai.voice.agents.breeze_buddy.observability.tracing_setup import (
     create_root_span,
 )
+from app.ai.voice.agents.breeze_buddy.processors import TranscriptCollectorProcessor
 from app.ai.voice.agents.breeze_buddy.services.inbound_policy import (
     get_block_redirect,
 )
@@ -74,6 +74,7 @@ from app.ai.voice.agents.breeze_buddy.template.types import (
     TemplateModel,
     TTSVoiceName,
 )
+from app.ai.voice.agents.breeze_buddy.template.vad import create_vad_analyzer
 from app.ai.voice.agents.breeze_buddy.utils.common import (
     create_background_sound_mixer,
     track_error,
@@ -94,9 +95,10 @@ from app.database.accessor.breeze_buddy.lead_call_tracker import (
     update_lead_call_initiated_time_by_id,
 )
 from app.schemas import CallProvider
-from app.schemas.breeze_buddy.core import LeadCallTracker
+from app.schemas.breeze_buddy.core import ExecutionMode, LeadCallTracker
 
 DEFAULT_OUTCOME = "BUSY"
+TTS_SPEAK_MAX_CHARS = 2000
 
 
 class Agent:
@@ -160,12 +162,22 @@ class Agent:
         # RTVI processor for daily mode real-time events
         self._rtvi_processor: Any = None
 
+        # Stream mode transcript collector (replaces LLMContext for transcription)
+        self._transcript_collector: Optional[TranscriptCollectorProcessor] = None
+
         # Error tracking
         self.errors: List[Dict[str, Any]] = []
 
     @property
     def is_daily_mode(self) -> bool:
         return self.transport_type == TRANSPORT_TYPE_DAILY
+
+    @property
+    def is_stream_mode(self) -> bool:
+        return (
+            self.lead is not None
+            and self.lead.execution_mode == ExecutionMode.DAILY_STREAM
+        )
 
     async def _emit_rtvi_event(
         self, event_type: str, payload: Optional[Dict[str, Any]] = None
@@ -210,6 +222,11 @@ class Agent:
             self.lead.metaData["call_ended_by"] = "system"
             self.lead.metaData["call_end_reason"] = "user_idle_timeout"
             self.lead.metaData["idle_retry_count"] = idle_retry_count
+
+            if self._transcript_collector:
+                self.lead.metaData["transcription"] = (
+                    self._transcript_collector.get_transcription()
+                )
 
         logger.info(
             f"Ending call as BUSY due to user idle timeout "
@@ -279,12 +296,13 @@ class Agent:
             f"Starting Daily bot for lead_id: {lead_id}, call_sid: {self.call_sid}"
         )
 
-        self.flow_builder = FlowConfigBuilder()
-
-        for handler_name, handler_func in self.flow_builder.handler_map.items():
-            self.flow_builder.handler_map[handler_name] = with_context(self)(
-                handler_func
-            )
+        # Stream mode skips flow builder — no LLM/template nodes needed
+        if not self.is_stream_mode:
+            self.flow_builder = FlowConfigBuilder()
+            for handler_name, handler_func in self.flow_builder.handler_map.items():
+                self.flow_builder.handler_map[handler_name] = with_context(self)(
+                    handler_func
+                )
 
         try:
             (
@@ -297,11 +315,11 @@ class Agent:
             raise
 
         self.vad_analyzer, self.default_vad_params = await create_vad_analyzer(
-            is_daily_mode=True
+            is_daily_mode=True,
+            template=self.template,
         )
 
         # Daily transport does not support audio_out_mixer, so we pass None
-        # Note: VAD is configured in the aggregator (via UserTurnStrategies), not the transport
         transport_params = get_transport_params(None, self.configurations)
         self.transport = await create_transport(runner_args, transport_params)
 
@@ -624,6 +642,26 @@ class Agent:
                     RTVIServerMessageFrame(data={"type": "bot-ready"})
                 )
 
+        # Stream mode: accept tts-speak via RTVI client-message (PipecatClient SDK)
+        if self.is_stream_mode and self._rtvi_processor:
+
+            @self._rtvi_processor.event_handler("on_client_message")
+            async def on_client_message(rtvi, message):
+                if message.type == "tts-speak":
+                    data = message.data or {}
+                    text = data.get("text", "")
+                    if not isinstance(text, str) or not text:
+                        return
+                    if len(text) > TTS_SPEAK_MAX_CHARS:
+                        logger.warning(
+                            f"[STREAM] tts-speak text exceeds {TTS_SPEAK_MAX_CHARS} chars "
+                            f"({len(text)}), truncating"
+                        )
+                        text = text[:TTS_SPEAK_MAX_CHARS]
+                    if self.task:
+                        logger.debug(f"[STREAM] TTS speak: {text[:80]}")
+                        await self.task.queue_frame(TTSSpeakFrame(text=text))
+
         # Register user turn started event to reset idle retry counter
         if self._context_aggregator and self._user_idle_callback_handler:
             user_aggregator = self._context_aggregator.user()
@@ -642,6 +680,12 @@ class Agent:
 
     async def _handle_client_connected(self) -> None:
         """Handle client connection and initialize flow."""
+        if self.is_stream_mode:
+            if self.lead and self.lead.metaData is None:
+                self.lead.metaData = {}
+            logger.info("[STREAM] Client connected — ready for STT/TTS")
+            return
+
         if (
             not self.flow_builder
             or not self.template
@@ -739,16 +783,24 @@ class Agent:
                             f"Invalid TTS voice '{payload_voice}' in payload, keeping existing config"
                         )
 
-            # Create services and pipeline
-            # VAD analyzer is passed to build_pipeline where it's configured inside the
-            # LLMUserAggregator. This enables UserTurnStrategies (VAD + Transcription fallback).
-            stt, llm, tts = await create_services(self.configurations)
+            # Build services and pipeline. Stream mode skips LLM creation and
+            # runs build_pipeline with mode="stream" (no LLM processor, no
+            # assistant aggregator, transcript collector inserted, no user idle).
+            # All other wiring is identical.
+            is_stream = self.is_stream_mode
+            stt, llm, tts = await create_services(
+                self.configurations, include_llm=not is_stream
+            )
+            if not is_stream:
+                assert llm is not None, "LLM is required in agent mode"
+
             (
                 pipeline,
-                self.context,
+                context,
                 context_aggregator,
                 user_idle_callback_handler,
                 self.speech_gate,
+                self._transcript_collector,
             ) = await build_pipeline(
                 self.transport,
                 stt,
@@ -756,23 +808,26 @@ class Agent:
                 tts,
                 self.vad_analyzer,
                 self.configurations,
-                on_user_idle_timeout=self._handle_user_idle_timeout,
+                on_user_idle_timeout=(
+                    None if is_stream else self._handle_user_idle_timeout
+                ),
+                mode="stream" if is_stream else "agent",
             )
-
-            # Store callback handler for resetting retry count on user activity
-            self._user_idle_callback_handler = user_idle_callback_handler
-
-            # Store context aggregator for user turn event registration
-            # and dynamic strategy switching during node transitions (Phase 2)
             self._context_aggregator = context_aggregator
 
-            # Store default interruption config for reset-on-transition
-            self.default_interruption_config = (
-                getattr(self.configurations, "interruption", None)
-                or InterruptionConfig()
-            )
+            # Stream mode deliberately leaves self.context=None so end_conversation
+            # falls back to the transcript collector (captures both user turns AND
+            # client-driven bot TTS text). The aggregator writes user turns into
+            # the LLMContext, but nothing writes bot TTS text — using the context
+            # would lose the bot side of the transcript.
+            if not is_stream:
+                self.context = context
+                self._user_idle_callback_handler = user_idle_callback_handler
+                self.default_interruption_config = (
+                    getattr(self.configurations, "interruption", None)
+                    or InterruptionConfig()
+                )
 
-            # Generate conversation ID and update context
             lead_payload = self.lead.payload if self.lead else None
             self.conversation_id = generate_conversation_id(lead_payload)
             update_log_context(conversation_id=self.conversation_id)
@@ -781,44 +836,41 @@ class Agent:
                 pipeline, self.conversation_id, is_daily_mode=self.is_daily_mode
             )
 
-            # Get RTVI processor reference from task (auto-created by pipecat)
             if self.is_daily_mode and hasattr(self.task, "rtvi") and self.task.rtvi:
                 self._rtvi_processor = self.task.rtvi
 
-            # Validate required attributes for flow setup
-            if not self.template:
-                logger.error("Template is not set, cannot setup flow manager")
-                return
+            # Flow manager is agent-mode only (stream mode has no LLM to drive
+            # node transitions or function calls).
+            if not is_stream:
+                if not self.template:
+                    logger.error("Template is not set, cannot setup flow manager")
+                    return
+                assert llm is not None  # narrowed: non-stream path always has LLM
+                self.flow_manager = setup_flow_manager(
+                    task=self.task,
+                    llm=llm,
+                    context_aggregator=context_aggregator,
+                    transport=self.transport,
+                    flow_builder=self.flow_builder,
+                    template=self.template,
+                    bot_instance=self,
+                )
 
-            # Setup flow management
-            self.flow_manager = setup_flow_manager(
-                task=self.task,
-                llm=llm,
-                context_aggregator=context_aggregator,
-                transport=self.transport,
-                flow_builder=self.flow_builder,
-                template=self.template,
-                bot_instance=self,
-            )
             self._register_event_handlers()
 
-            # Run the pipeline
             runner = PipelineRunner(handle_sigint=False, force_gc=True)
-
+            log_prefix = "[STREAM] " if is_stream else ""
             try:
                 if ENABLE_BREEZE_BUDDY_TRACING:
                     await self._run_with_tracing(runner)
                 else:
                     logger.info(
-                        f"Running pipeline without tracing for conversation: {self.conversation_id}"
+                        f"{log_prefix}Running pipeline for conversation: {self.conversation_id}"
                     )
                     await runner.run(self.task)
             except asyncio.CancelledError:
-                logger.info("Pipeline task cancelled. Exiting gracefully.")
+                logger.info(f"{log_prefix}Pipeline task cancelled. Exiting gracefully.")
         finally:
-            # Safety net: always clear log context when run() exits, regardless of how.
-            # This handles crashes, cancellations, and any exit path missed above.
-            # Double-clearing (if end_conversation already cleared) is harmless.
             clear_log_context()
 
     async def _handle_unexpected_disconnect(self, reason: str) -> None:
@@ -841,9 +893,15 @@ class Agent:
             elif reason == "client_disconnected":
                 self.lead.metaData["call_ended_by"] = "customer"
             else:
-                # Shouldn't happen, but safe fallback
                 self.lead.metaData["call_ended_by"] = "agent"
                 logger.warning(f"Unexpected disconnect reason: {reason}")
+
+            # Stream mode: populate transcription from collector before
+            # end_conversation runs (no LLMContext to pull from)
+            if self._transcript_collector:
+                self.lead.metaData["transcription"] = (
+                    self._transcript_collector.get_transcription()
+                )
 
         context = TemplateContext(self)
         await end_conversation(context, {})
