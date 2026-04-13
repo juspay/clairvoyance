@@ -22,6 +22,7 @@ from app.api.routers.breeze_buddy.numbers import router as numbers_router
 from app.api.routers.breeze_buddy.playground import router as playground_router
 from app.api.routers.breeze_buddy.telephony import router as telephony_router
 from app.api.routers.breeze_buddy.templates import router as templates_router
+from app.api.routers.breeze_buddy.test import router as template_test_router
 from app.api.routers.breeze_buddy.users import router as users_router
 from app.api.routers.breeze_buddy.websocket import router as websocket_router
 
@@ -48,6 +49,12 @@ router.include_router(credentials_router, prefix="", tags=["credentials"])
 
 # Outbound Numbers (phone numbers for making calls)
 router.include_router(numbers_router, prefix="", tags=["numbers"])
+
+# Template testing (scenario generation & execution)
+# NOTE: must be registered BEFORE templates_router — the templates router has a
+# catch-all GET /templates/{template_id} route that would otherwise shadow the
+# more-specific /templates/{template_id}/test/* paths.
+router.include_router(template_test_router, prefix="", tags=["template-testing"])
 
 # Templates (conversational flow definitions)
 router.include_router(templates_router, prefix="", tags=["templates"])
