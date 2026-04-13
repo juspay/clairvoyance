@@ -80,6 +80,12 @@ from app.schemas.breeze_buddy.users import (
     UserCreate,
     UserUpdate,
 )
+from app.schemas.feature_flags import (
+    FeatureFlagDeleteResponse,
+    FeatureFlagResponse,
+    FeatureFlagUpdate,
+    FeatureFlagUpdateResponse,
+)
 
 __all__ = [
     # Auth
@@ -142,4 +148,9 @@ __all__ = [
     "AutomaticVoiceUserConnectRequest",
     # User Management
     "DeleteUserResponse",
+    # Feature Flags
+    "FeatureFlagDeleteResponse",
+    "FeatureFlagResponse",
+    "FeatureFlagUpdate",
+    "FeatureFlagUpdateResponse",
 ]
