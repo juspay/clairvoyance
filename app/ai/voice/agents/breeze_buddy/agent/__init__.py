@@ -69,10 +69,12 @@ from app.ai.voice.agents.breeze_buddy.template import TemplateContext
 from app.ai.voice.agents.breeze_buddy.template.builder import FlowConfigBuilder
 from app.ai.voice.agents.breeze_buddy.template.context import with_context
 from app.ai.voice.agents.breeze_buddy.template.types import (
+    LEGACY_VOICE_TO_PROVIDER,
     ConfigurationModel,
     InterruptionConfig,
     TemplateModel,
-    TTSVoiceName,
+    TTSConfig,
+    TTSProvider,
 )
 from app.ai.voice.agents.breeze_buddy.template.vad import create_vad_analyzer
 from app.ai.voice.agents.breeze_buddy.utils.common import (
@@ -768,19 +770,34 @@ class Agent:
                 if not await self._setup_telephony_transport():
                     return
 
-            # Override TTS voice name if LLM-based selection was done at lead push time
+            # Override TTS provider if LLM-based selection was done at lead push time.
+            # resolve_voice_config() will pick per-provider settings from
+            # tts_configuration_overrides if available, else Redis defaults.
             if self.lead and self.lead.payload:
-                payload_voice = self.lead.payload.get("tts_voice_name")
-                if payload_voice and self.configurations:
+                payload_provider = self.lead.payload.get(
+                    "tts_provider"
+                ) or LEGACY_VOICE_TO_PROVIDER.get(
+                    (self.lead.payload.get("tts_voice_name") or "").lower()
+                )
+                if payload_provider and self.configurations:
                     try:
-                        voice_enum = TTSVoiceName(payload_voice)
+                        provider_enum = TTSProvider(payload_provider)
                         logger.info(
-                            f"Overriding TTS voice from payload: {voice_enum.value}"
+                            f"Overriding TTS provider from payload: {provider_enum.value}"
                         )
-                        self.configurations.tts_voice_name = voice_enum
+                        existing = self.configurations.tts_configuration
+                        if existing and existing.provider == provider_enum:
+                            # Same provider — keep existing template settings
+                            pass
+                        else:
+                            # Different provider — create minimal config;
+                            # resolve_voice_config will fill from overrides/defaults
+                            self.configurations.tts_configuration = TTSConfig(
+                                provider=provider_enum
+                            )
                     except ValueError:
                         logger.warning(
-                            f"Invalid TTS voice '{payload_voice}' in payload, keeping existing config"
+                            f"Invalid TTS provider '{payload_provider}' in payload, keeping existing config"
                         )
 
             # Build services and pipeline. Stream mode skips LLM creation and

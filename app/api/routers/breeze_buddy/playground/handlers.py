@@ -4,12 +4,12 @@ Business logic handlers for playground operations.
 
 from app.ai.voice.agents.breeze_buddy.template.types import (
     BackgroundSoundFile,
-    CartesiaVoiceConfiguration,
-    ElevenLabsVoiceConfiguration,
     InterruptionMode,
     KeywordMatchType,
     NoiseFilterType,
-    TTSVoiceName,
+    STTProvider,
+    TTSConfig,
+    TTSProvider,
 )
 from app.ai.voice.agents.breeze_buddy.utils.language_utils.language_detector import (
     LANGUAGE_NAMES,
@@ -27,22 +27,15 @@ from app.ai.voice.llm.types import (
 
 
 async def get_configuration_options_handler():
-    # TTS voices — config_key points to which config fields array to use
-    _voice_config_key_map = {
-        "mira": "cartesia_voice_configurations",
-        "rhea": "elevenlabs_voice_configurations",
-    }
-    tts_voices = [
-        {
-            "value": voice.value,
-            "label": voice.value.capitalize(),
-            **(
-                {"config_key": _voice_config_key_map[voice.value]}
-                if voice.value in _voice_config_key_map
-                else {}
-            ),
-        }
-        for voice in TTSVoiceName
+    stt_providers = [
+        {"value": provider.value, "label": provider.value.replace("_", " ").title()}
+        for provider in STTProvider
+    ]
+
+    # TTS providers
+    tts_providers = [
+        {"value": provider.value, "label": provider.value.capitalize()}
+        for provider in TTSProvider
     ]
 
     # Per-voice config field definitions derived from the Pydantic model schema
@@ -66,8 +59,7 @@ async def get_configuration_options_handler():
             fields.append(entry)
         return fields
 
-    cartesia_voice_configurations = _voice_config_fields(CartesiaVoiceConfiguration)
-    elevenlabs_voice_configurations = _voice_config_fields(ElevenLabsVoiceConfiguration)
+    tts_configuration_fields = _voice_config_fields(TTSConfig)
 
     # STT languages (Soniox supported) - dynamically from constants
     # Use full locale codes (e.g. "en-IN") as values to match what templates store
@@ -129,14 +121,14 @@ async def get_configuration_options_handler():
     }
 
     return {
-        "tts_voices": tts_voices,
+        "stt_providers": stt_providers,
+        "tts_providers": tts_providers,
+        "tts_configuration_fields": tts_configuration_fields,
         "stt_languages": stt_languages,
         "background_sounds": background_sounds,
         "noise_filter_types": noise_filter_types,
         "keyword_match_types": keyword_match_types,
         "interruption_modes": interruption_modes,
-        "cartesia_voice_configurations": cartesia_voice_configurations,
-        "elevenlabs_voice_configurations": elevenlabs_voice_configurations,
         "llm_providers": llm_providers,
         "llm_sdks": llm_sdks,
         "llm_fields": llm_fields,

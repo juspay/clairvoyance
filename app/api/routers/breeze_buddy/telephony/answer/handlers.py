@@ -29,7 +29,7 @@ INBOUND (customer calls us):
 import asyncio
 import json
 from html import escape as html_escape
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 from urllib.parse import quote
 
 from fastapi import Request, Response
@@ -52,6 +52,7 @@ from app.ai.voice.agents.breeze_buddy.services.inbound_policy import (
 from app.ai.voice.agents.breeze_buddy.services.telephony.plivo.recording import (
     start_call_recording,
 )
+from app.ai.voice.agents.breeze_buddy.template.types import TTSConfig
 from app.core.config.dynamic import (
     BB_NOISE_CANCELLATION_ENABLED,
     BB_NOISE_CANCELLATION_LEVEL,
@@ -83,7 +84,7 @@ async def resolve_call_templates(
     2. If outbound: look up template from lead
     3. If inbound: look up outbound_number by to_number, get all templates
     4. Build template_list with IVR descriptions
-    5. Resolve voice_name and ivr_greeting from template configurations
+    5. Resolve IVR config (voice, greeting, goodbye) from template configurations
 
     Args:
         call_sid: Unique call identifier (Exotel CallSid / Plivo CallUUID)
@@ -102,7 +103,7 @@ async def resolve_call_templates(
             is_outbound: False
             templates: List[TemplateModel]
             template_list: List[dict]       ([{id, name}])
-            voice_name: str                 (IVR voice, default "sara")
+            ivr_voice_config: Optional[dict] (IVR voice configuration, default "sara")
             ivr_greeting: Optional[str]
             ivr_goodbye: Optional[str]
             reseller_id: str
@@ -163,28 +164,41 @@ async def resolve_call_templates(
         for t in templates
     ]
 
-    # Resolve voice_name, ivr_greeting, and ivr_goodbye from template configurations
-    voice_name = "sara"  # Default voice
-    ivr_greeting = None
-    ivr_goodbye = None
-
+    # Resolve IVR config from templates — first non-None ivr_configuration wins for each field
     first_template = templates[0]
-    if first_template.configurations and first_template.configurations.tts_voice_name:
-        voice_name = first_template.configurations.tts_voice_name.value
+    ivr_greeting: Optional[str] = None
+    ivr_goodbye: Optional[str] = None
+    ivr_voice_config_dict: Optional[Dict[str, Any]] = None
 
     for template in templates:
-        if template.configurations:
-            if not ivr_greeting and template.configurations.ivr_greeting:
-                ivr_greeting = template.configurations.ivr_greeting
-            if not ivr_goodbye and template.configurations.ivr_goodbye:
-                ivr_goodbye = template.configurations.ivr_goodbye
-            if ivr_greeting and ivr_goodbye:
-                break
+        cfg = template.configurations
+        if not cfg:
+            continue
+        ivr = cfg.ivr_configuration
+        if ivr:
+            ivr_greeting = ivr_greeting or ivr.greeting
+            ivr_goodbye = ivr_goodbye or ivr.goodbye
+            if not ivr_voice_config_dict and ivr.tts_configuration:
+                ivr_voice_config_dict = ivr.tts_configuration.model_dump(
+                    exclude_none=True
+                )
+        # Backward compat: flat fields (already migrated into ivr_configuration by validator,
+        # but check directly in case raw DB data hasn't been re-saved)
+        ivr_greeting = ivr_greeting or cfg.ivr_greeting
+        ivr_goodbye = ivr_goodbye or cfg.ivr_goodbye
+        if ivr_greeting and ivr_goodbye:
+            break
 
-    # Warn if IVR mode (multiple templates) but no ivr_greeting configured
+    # Fall back to main tts_configuration for IVR voice if no ivr-specific one
+    if not ivr_voice_config_dict and first_template.configurations:
+        vc = first_template.configurations.tts_configuration
+        if vc:
+            ivr_voice_config_dict = vc.model_dump(exclude_none=True)
+
+    # Warn if IVR mode but no greeting configured
     if len(templates) > 1 and ivr_greeting is None:
         logger.warning(
-            f"[Answer] IVR mode with {len(templates)} templates but no ivr_greeting configured "
+            f"[Answer] IVR mode with {len(templates)} templates but no ivr greeting configured "
             f"for outbound_number: {to_number}"
         )
 
@@ -192,7 +206,7 @@ async def resolve_call_templates(
         "is_outbound": False,
         "templates": templates,
         "template_list": template_list,
-        "voice_name": voice_name,
+        "ivr_voice_config": ivr_voice_config_dict,
         "ivr_greeting": ivr_greeting,
         "ivr_goodbye": ivr_goodbye,
         "reseller_id": first_template.reseller_id if first_template else None,
@@ -442,27 +456,37 @@ async def _build_provider_response(
         return await make_response(ws_url)
 
     # Multiple templates - IVR mode
-    voice_name = result["voice_name"]
+    ivr_voice_config_dict = result.get("ivr_voice_config")
     ivr_greeting = result["ivr_greeting"]
     ivr_goodbye = result.get("ivr_goodbye")
 
-    logger.info(f"[{tag}] IVR mode - {len(templates)} templates, voice={voice_name}")
+    # Convert dict to TTSConfig for IVR helpers (they access .provider.value etc.)
+    ivr_voice = (
+        TTSConfig.model_validate(ivr_voice_config_dict)
+        if ivr_voice_config_dict
+        else None
+    )
+
+    logger.info(
+        f"[{tag}] IVR mode - {len(templates)} templates, "
+        f"voice_provider={ivr_voice.provider.value if ivr_voice else 'default'}"
+    )
 
     # Pre-generate IVR audio (checks cache first)
-    await prepare_ivr_menu_audio(provider, voice_name, ivr_greeting)
-    await prepare_goodbye_audio(provider, voice_name, ivr_goodbye)
+    await prepare_ivr_menu_audio(provider, ivr_greeting, ivr_voice)
+    await prepare_goodbye_audio(provider, ivr_goodbye, ivr_voice)
 
     # Store IVR config in Redis
-    ivr_config = {
+    ivr_configuration = {
         "options": template_list,
-        "voice_name": voice_name,
+        "tts_configuration": ivr_voice_config_dict,
         "ivr_greeting": ivr_greeting,
         "ivr_goodbye": ivr_goodbye,
     }
     redis = await get_redis_service()
     await redis.setex(
         f"{IVR_CONFIG_CACHE_PREFIX}{call_id}",
-        json.dumps(ivr_config),
+        json.dumps(ivr_configuration),
         IVR_CONFIG_CACHE_TTL,
     )
 

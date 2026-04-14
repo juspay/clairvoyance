@@ -13,14 +13,14 @@
     }
   },
   "configurations": {
-    "tts_voice_name": "rhea",
-    "stt_language": "en",
-    "elevenlabs_voice_configurations": {
+    "tts_configuration": {
+      "provider": "elevenlabs",
       "voice_id": "fG9s0SXJb213f4UxVHyG",
-      "model_id": "eleven_flash_v2_5",
+      "model": "eleven_flash_v2_5",
       "speed": 1.2,
       "language": "en"
     },
+    "stt_language": "en",
     "enable_background_sound": false,
     "background_sound_volume": 2.0
   },

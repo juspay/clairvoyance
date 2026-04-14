@@ -29,7 +29,8 @@ from app.ai.voice.agents.breeze_buddy.services.inbound_policy import (
 from app.ai.voice.agents.breeze_buddy.services.telephony.base_provider import (
     VoiceCallProvider,
 )
-from app.ai.voice.agents.breeze_buddy.tts import generate_audio
+from app.ai.voice.agents.breeze_buddy.template.types import TTSConfig
+from app.ai.voice.agents.breeze_buddy.tts import generate_audio, resolve_voice_config
 from app.ai.voice.agents.breeze_buddy.utils.transport.websockets import (
     close_websocket_safely,
     send_message,
@@ -304,14 +305,19 @@ async def _run_ivr_menu(
 
         ivr_config = json.loads(ivr_config_json)
         ivr_options = ivr_config["options"]
-        voice_name = ivr_config.get("voice_name", "sara")
         ivr_greeting = ivr_config.get("ivr_greeting")
         ivr_goodbye = ivr_config.get("ivr_goodbye")
+
+        # Resolve IVR voice config from stored dict (or fall back to defaults)
+        voice_config_dict = ivr_config.get("tts_configuration")
+        voice_config = TTSConfig(**voice_config_dict) if voice_config_dict else None
+        resolved_voice = await resolve_voice_config(voice_config)
 
         logger.info(
             f"[IVR] Fetched config from Redis - "
             f"{len(ivr_options)} options: {[o['name'] for o in ivr_options]}, "
-            f"voice={voice_name!r}, greeting={ivr_greeting!r}, goodbye={ivr_goodbye!r}"
+            f"voice_provider={resolved_voice.provider.value!r}, "
+            f"greeting={ivr_greeting!r}, goodbye={ivr_goodbye!r}"
         )
 
         # Handle IVR menu - speak options and wait for DTMF
@@ -320,7 +326,7 @@ async def _run_ivr_menu(
             stream_sid=stream_sid,
             ivr_options=ivr_options,
             provider=provider,
-            voice_name=voice_name,
+            voice_config=resolved_voice,
             ivr_greeting=ivr_greeting,
             ivr_goodbye=ivr_goodbye,
         )
@@ -340,7 +346,7 @@ async def handle_ivr_menu(
     stream_sid: str,
     ivr_options: List[Dict[str, Optional[str]]],
     provider: str,
-    voice_name: str = "sara",
+    voice_config: TTSConfig,
     ivr_greeting: Optional[str] = None,
     ivr_goodbye: Optional[str] = None,
 ) -> Optional[str]:
@@ -356,7 +362,7 @@ async def handle_ivr_menu(
         stream_sid: Stream ID for sending audio
         ivr_options: List of {"id": str, "name": str}
         provider: "twilio" or "exotel"
-        voice_name: TTS voice to use (default "sara")
+        voice_config: Resolved TTSConfig for IVR TTS
         ivr_greeting: Full IVR audio text including greeting and menu options
         ivr_goodbye: Goodbye message when no input received (default: English fallback)
 
@@ -368,8 +374,8 @@ async def handle_ivr_menu(
         return None
 
     # Get cached/generated audio once (reuse for retries)
-    menu_audio = await prepare_ivr_menu_audio(provider, voice_name, ivr_greeting)
-    goodbye_audio = await prepare_goodbye_audio(provider, voice_name, ivr_goodbye)
+    menu_audio = await prepare_ivr_menu_audio(provider, ivr_greeting, voice_config)
+    goodbye_audio = await prepare_goodbye_audio(provider, ivr_goodbye, voice_config)
 
     if not menu_audio:
         logger.error("[IVR] Failed to prepare menu audio")
@@ -411,37 +417,37 @@ async def handle_ivr_menu(
 
 async def prepare_ivr_menu_audio(
     provider: str,
-    voice_name: str = "sara",
     ivr_greeting: Optional[str] = None,
+    voice_config: Optional[TTSConfig] = None,
 ) -> Optional[bytes]:
     """
     Prepare IVR menu audio - from cache or generate new.
 
-    Similar pattern to prepare_initial_greeting_payload.
-    Stores as mulaw in Redis, converts to provider format on retrieval.
-
     Args:
         provider: "twilio", "exotel", or "plivo"
-        voice_name: TTS voice to use (default "sara")
         ivr_greeting: Full IVR audio text including greeting and menu options
+        voice_config: Resolved TTSConfig for IVR TTS
 
     Returns:
         Audio bytes ready to send, or None if failed
     """
-    # ivr_greeting is required - it contains the full menu text defined by the user
     if not ivr_greeting:
         logger.error(
             "[IVR] No ivr_greeting provided - cannot generate menu audio. "
-            "Please define ivr_greeting in template configurations with the full menu text."
+            "Please define ivr_config.greeting in template configurations."
         )
         return None
 
     try:
         redis = await get_redis_service()
 
-        # Generate cache key from ivr_greeting text and voice
-        # MD5 hash ensures constant key size regardless of input length
-        cache_components = f"greeting:{ivr_greeting}|voice:{voice_name}"
+        # Cache key includes voice provider+id so different configs get different audio
+        voice_key = (
+            f"{voice_config.provider.value}:{voice_config.voice_id}"
+            if voice_config
+            else "default"
+        )
+        cache_components = f"greeting:{ivr_greeting}|voice:{voice_key}"
         cache_key = f"{IVR_AUDIO_CACHE_PREFIX}{hashlib.md5(cache_components.encode()).hexdigest()}"
 
         # Check cache first
@@ -455,10 +461,9 @@ async def prepare_ivr_menu_audio(
                 f"[IVR] Cache MISS - generating menu audio for: {ivr_greeting!r}"
             )
 
-            mulaw_data = await _generate_tts_audio_mulaw(ivr_greeting, voice_name)
+            mulaw_data = await _generate_tts_audio_mulaw(ivr_greeting, voice_config)
 
             if mulaw_data:
-                # Cache for future calls
                 await redis.setex(
                     cache_key,
                     base64.b64encode(mulaw_data).decode("utf-8"),
@@ -469,7 +474,6 @@ async def prepare_ivr_menu_audio(
                 logger.error("[IVR] Failed to generate menu audio")
                 return None
 
-        # Convert format based on provider (same as greeting)
         return _convert_audio_for_provider(mulaw_data, provider)
 
     except Exception as e:
@@ -479,16 +483,16 @@ async def prepare_ivr_menu_audio(
 
 async def prepare_goodbye_audio(
     provider: str,
-    voice_name: str = "sara",
     ivr_goodbye: Optional[str] = None,
+    voice_config: Optional[TTSConfig] = None,
 ) -> Optional[bytes]:
     """
     Get cached goodbye audio or generate it.
 
     Args:
         provider: "twilio" or "exotel"
-        voice_name: TTS voice to use (default "sara")
         ivr_goodbye: Custom goodbye message (default: English fallback)
+        voice_config: Resolved TTSConfig for IVR TTS
 
     Returns:
         Audio bytes ready to send, or None if failed
@@ -496,12 +500,14 @@ async def prepare_goodbye_audio(
     try:
         redis = await get_redis_service()
 
-        # Use provided goodbye message or fall back to English default
         goodbye_text = ivr_goodbye or IVR_DEFAULT_GOODBYE
 
-        # Generate cache key from goodbye text and voice name
-        # MD5 hash ensures constant key size regardless of input length
-        cache_components = f"goodbye:{goodbye_text}|voice:{voice_name}"
+        voice_key = (
+            f"{voice_config.provider.value}:{voice_config.voice_id}"
+            if voice_config
+            else "default"
+        )
+        cache_components = f"goodbye:{goodbye_text}|voice:{voice_key}"
         cache_key = f"{IVR_GOODBYE_CACHE_PREFIX}{hashlib.md5(cache_components.encode()).hexdigest()}"
 
         cached = await redis.get(cache_key)
@@ -511,7 +517,7 @@ async def prepare_goodbye_audio(
         else:
             # Generate
             logger.info(f"[IVR] Generating goodbye audio: {goodbye_text!r}")
-            mulaw_data = await _generate_tts_audio_mulaw(goodbye_text, voice_name)
+            mulaw_data = await _generate_tts_audio_mulaw(goodbye_text, voice_config)
 
             if mulaw_data:
                 await redis.setex(
@@ -532,18 +538,15 @@ async def prepare_goodbye_audio(
 async def prepare_block_audio(
     block_message: str,
     provider: str,
-    voice_name: str = "sara",
+    voice_config: Optional[TTSConfig] = None,
 ) -> Optional[bytes]:
     """
     Get cached block message audio or generate and cache it.
 
-    Uses MD5 hash of text+voice as cache key. Same message text reuses cached audio.
-    Different text regenerates and caches. TTL: 24 hours.
-
     Args:
         block_message: The block/reject message text to synthesize
         provider: "twilio", "exotel", or "plivo"
-        voice_name: TTS voice to use (default "sara")
+        voice_config: Optional TTSConfig for TTS (defaults to system default)
 
     Returns:
         Audio bytes ready to send (provider-specific format), or None if failed
@@ -551,8 +554,12 @@ async def prepare_block_audio(
     try:
         redis = await get_redis_service()
 
-        # Generate cache key from block message text and voice
-        cache_components = f"block:{block_message}|voice:{voice_name}"
+        voice_key = (
+            f"{voice_config.provider.value}:{voice_config.voice_id}"
+            if voice_config
+            else "default"
+        )
+        cache_components = f"block:{block_message}|voice:{voice_key}"
         cache_key = f"{IVR_BLOCK_AUDIO_CACHE_PREFIX}{hashlib.md5(cache_components.encode()).hexdigest()}"
 
         cached = await redis.get(cache_key)
@@ -561,7 +568,7 @@ async def prepare_block_audio(
             mulaw_data = base64.b64decode(cached)
         else:
             logger.info(f"[IVR] Generating block audio: {block_message!r}")
-            mulaw_data = await _generate_tts_audio_mulaw(block_message, voice_name)
+            mulaw_data = await _generate_tts_audio_mulaw(block_message, voice_config)
 
             if mulaw_data:
                 await redis.setex(
@@ -582,20 +589,20 @@ async def prepare_block_audio(
 
 
 async def _generate_tts_audio_mulaw(
-    text: str, voice_name: str = "sara"
+    text: str, voice_config: Optional[TTSConfig] = None
 ) -> Optional[bytes]:
     """
-    Generate TTS audio using existing TTS abstraction.
+    Generate TTS audio using the voice configuration.
 
     Args:
         text: Text to synthesize
-        voice_name: TTS voice to use (default "sara")
+        voice_config: TTSConfig to use. If None, resolve_voice_config picks system defaults.
 
     Returns:
         Audio bytes in mulaw format, or None if failed
     """
     try:
-        mulaw_data = await generate_audio(text=text, voice_name=voice_name)
+        mulaw_data = await generate_audio(text=text, voice_config=voice_config)
         logger.info(f"[IVR] Generated TTS audio: {len(mulaw_data)} bytes mulaw")
         return mulaw_data
     except Exception as e:

@@ -8,8 +8,10 @@ from app.ai.voice.agents.breeze_buddy.template.transformation_function import (
     TEMPLATE_FUNCTION_REGISTRY,
 )
 from app.ai.voice.agents.breeze_buddy.template.types import (
+    LEGACY_VOICE_TO_PROVIDER,
     TemplateModel,
-    TTSVoiceName,
+    TTSConfig,
+    TTSProvider,
 )
 from app.ai.voice.agents.breeze_buddy.tts import generate_audio
 from app.ai.voice.agents.breeze_buddy.utils.common import greeting_has_variables
@@ -119,37 +121,33 @@ async def prepare_and_store_initial_greeting(
                         placeholder, str(value)
                     )
 
-            # Get voice name: check payload first (set during push lead), then template config, then default
-            voice_name = None
-            payload_voice = (payload or {}).get("tts_voice_name")
-            if payload_voice:
+            # Build voice config: check payload override first, then template config
+            voice_config = None
+            p = payload or {}
+            payload_provider = p.get("tts_provider") or LEGACY_VOICE_TO_PROVIDER.get(
+                (p.get("tts_voice_name") or "").lower()
+            )
+            if payload_provider:
                 try:
-                    voice_name = TTSVoiceName(payload_voice).value
+                    voice_config = TTSConfig(provider=TTSProvider(payload_provider))
                     logger.info(
-                        f"Using TTS voice '{voice_name}' from payload for greeting (lead {lead_id})"
+                        f"Using TTS provider '{payload_provider}' from payload for greeting (lead {lead_id})"
                     )
                 except ValueError:
                     logger.warning(
-                        f"Invalid TTS voice '{payload_voice}' in payload, falling back to template config"
+                        f"Invalid TTS provider '{payload_provider}' in payload, falling back to template config"
                     )
 
-            # Fall back to template config or default
-            if not voice_name:
-                if template.configurations.tts_voice_name:
-                    voice_name = (
-                        template.configurations.tts_voice_name.value
-                        if hasattr(template.configurations.tts_voice_name, "value")
-                        else str(template.configurations.tts_voice_name)
-                    )
-                else:
-                    voice_name = "rhea"
+            # Fall back to template tts_configuration (resolve_voice_config handles None)
+            if not voice_config and template.configurations.tts_configuration:
+                voice_config = template.configurations.tts_configuration
 
             logger.info(
                 f"Synthesizing dynamic greeting for lead {lead_id}: {resolved_greeting[:50]}..."
             )
             greeting_audio = await generate_audio(
                 text=resolved_greeting,
-                voice_name=voice_name,
+                voice_config=voice_config,
                 configurations=template.configurations,
             )
 
@@ -177,21 +175,12 @@ async def prepare_and_store_initial_greeting(
                 # For static greetings, the greeting text is the initial_greeting itself
                 return initial_greeting
 
-            # Synthesize and store as template audio (persistent, not deleted after use)
-            voice_name = "rhea"
-            if template.configurations.tts_voice_name:
-                voice_name = (
-                    template.configurations.tts_voice_name.value
-                    if hasattr(template.configurations.tts_voice_name, "value")
-                    else str(template.configurations.tts_voice_name)
-                )
-
             logger.info(
                 f"Synthesizing static greeting for template {template.id}: {initial_greeting[:50]}..."
             )
             greeting_audio = await generate_audio(
                 text=initial_greeting,
-                voice_name=voice_name,
+                voice_config=template.configurations.tts_configuration,
                 configurations=template.configurations,
             )
             await redis.set(

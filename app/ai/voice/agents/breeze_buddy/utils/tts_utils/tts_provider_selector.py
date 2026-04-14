@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.services.google.llm import GoogleLLMService
 
-from app.ai.voice.agents.breeze_buddy.template.types import TTSProvider, TTSVoiceName
+from app.ai.voice.agents.breeze_buddy.template.types import TTSProvider
 from app.core.config.static import GEMINI_API_KEY
 from app.core.logger import logger
 
@@ -16,12 +16,6 @@ GEMINI_TTS_SELECTION_MODEL = "gemini-2.5-flash"
 
 # Timeout for LLM inference calls (in seconds)
 LLM_INFERENCE_TIMEOUT_SECS = 10
-
-# Mapping from TTS provider to existing voice name
-TTS_PROVIDER_TO_VOICE_NAME: Dict[str, TTSVoiceName] = {
-    TTSProvider.ELEVENLABS.value: TTSVoiceName.RHEA,
-    TTSProvider.CARTESIA.value: TTSVoiceName.MIRA,
-}
 
 
 async def detect_tts_provider_from_payload(
@@ -110,17 +104,16 @@ Do not return anything else. Just the provider name."""
         return None
 
 
-async def determine_tts_voice_for_call(
-    template_configurations,
+async def determine_tts_provider_for_call(
+    template_configurations: Any,
     payload: Dict[str, Any],
     request_id: str = "unknown",
-) -> Optional[TTSVoiceName]:
+) -> Optional[TTSProvider]:
     """
-    Determine the TTS voice name for a call based on template config and payload.
+    Determine the TTS provider for a call based on template config and payload.
 
     Checks if payload-based TTS selection is enabled in the template configuration,
-    and if so, uses LLM to select the optimal provider, then maps it to the
-    corresponding voice name (e.g., elevenlabs → rhea, cartesia → mira).
+    and if so, uses LLM to select the optimal provider.
 
     Args:
         template_configurations: Template configurations object
@@ -129,8 +122,8 @@ async def determine_tts_voice_for_call(
         request_id: Request ID for logging purposes
 
     Returns:
-        TTSVoiceName (e.g., RHEA, MIRA) or None if selection is disabled
-        or detection fails (caller should fall back to existing logic)
+        TTSProvider or None if selection is disabled or detection fails
+        (caller should fall back to existing logic)
     """
     if not template_configurations:
         logger.debug(
@@ -149,28 +142,27 @@ async def determine_tts_voice_for_call(
 
     logger.info(f"Attempting LLM-based TTS provider selection for request {request_id}")
 
-    provider = await detect_tts_provider_from_payload(
+    provider_name = await detect_tts_provider_from_payload(
         payload=payload,
         prompt=tts_selection_config.prompt,
         allowed_providers=tts_selection_config.providers,
     )
 
-    if not provider:
+    if not provider_name:
         logger.info(
             f"Could not determine TTS provider from payload for request {request_id}, "
             f"will fall back to template/default config"
         )
         return None
 
-    voice_name = TTS_PROVIDER_TO_VOICE_NAME.get(provider)
-    if voice_name:
+    try:
+        provider = TTSProvider(provider_name)
         logger.info(
-            f"LLM selected TTS provider '{provider}' → voice '{voice_name.value}' "
-            f"for request {request_id}"
+            f"LLM selected TTS provider '{provider.value}' for request {request_id}"
         )
-    else:
+        return provider
+    except ValueError:
         logger.warning(
-            f"No voice name mapping for provider '{provider}', request {request_id}"
+            f"No TTSProvider mapping for '{provider_name}', request {request_id}"
         )
-
-    return voice_name
+        return None
