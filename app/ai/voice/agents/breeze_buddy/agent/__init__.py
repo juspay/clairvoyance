@@ -9,7 +9,7 @@ from fastapi import WebSocket
 from opentelemetry import trace
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.vad.vad_analyzer import VADParams
-from pipecat.frames.frames import LLMMessagesAppendFrame
+from pipecat.frames.frames import LLMMessagesAppendFrame, TTSSpeakFrame
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineTask
 from pipecat.processors.aggregators.llm_context import LLMContext
@@ -95,6 +95,7 @@ from app.database.accessor.breeze_buddy.lead_call_tracker import (
 )
 from app.schemas import CallProvider
 from app.schemas.breeze_buddy.core import LeadCallTracker
+from app.services.redis import get_redis_service
 
 DEFAULT_OUTCOME = "BUSY"
 
@@ -219,15 +220,19 @@ class Agent:
         context = TemplateContext(self)
         await end_conversation(context, {})
 
-    async def _handle_post_greeting_idle(self, user_idle_config) -> None:
+    async def _handle_post_greeting_idle(
+        self, user_idle_config, is_daily_mode: bool = False
+    ) -> None:
         """Handle post-greeting idle detection before user speaks for the first time.
 
-        This runs as an asyncio task that waits for the idle timeout and triggers
-        the first idle prompt if the user hasn't spoken yet.
+        This runs as an asyncio task that waits for the greeting to finish
+        (estimated delay) then waits for the idle timeout and triggers the
+        first idle prompt if the user hasn't spoken yet.
         """
         try:
-            # Wait for greeting to finish (~5s) + idle timeout before checking
-            initial_delay = 5.0  # Estimated greeting duration
+            # Wait for greeting to finish (estimated) + idle timeout before checking
+            # Daily mode uses longer delay (10s) for TTS generation vs telephony (5s) pre-encoded
+            initial_delay = 10.0 if is_daily_mode else 5.0
             await asyncio.sleep(initial_delay + user_idle_config.timeout)
 
             # If user never spoke, trigger first idle prompt
@@ -249,6 +254,72 @@ class Agent:
         except asyncio.CancelledError:
             logger.debug("Post-greeting idle timer cancelled.")
             return
+
+    async def _send_initial_greeting_daily(self, task: PipelineTask) -> None:
+        """Send initial greeting for Daily mode via TTS pipeline.
+
+        Unlike telephony which sends pre-encoded audio bytes via WebSocket,
+        Daily mode queues a TTSSpeakFrame to the pipeline which handles
+        text-to-speech generation and playback.
+
+        Greeting is ONLY spoken if explicitly configured. Priority:
+        1. Lead-specific greeting from Redis (set during call)
+        2. Template configurations initial_greeting
+
+        If no greeting is configured, the bot remains silent and waits for user.
+        """
+        if not self.template:
+            logger.warning("No template loaded, skipping Daily initial greeting")
+            return
+
+        greeting_text = None
+
+        # 1. Check Redis for lead-specific dynamic greeting (set during call)
+        if self.lead and self.lead.id:
+            try:
+                redis = await get_redis_service()
+                lead_greeting_key = f"greeting:{self.lead.id}"
+                lead_greeting_data = await redis.get(lead_greeting_key)
+                if lead_greeting_data:
+                    import json
+
+                    try:
+                        greeting_obj = json.loads(lead_greeting_data)
+                        greeting_text = greeting_obj.get("text")
+                        logger.info("Using dynamic greeting from Redis for lead")
+                        # Clean up Redis after retrieving
+                        await redis.delete(lead_greeting_key)
+                    except (json.JSONDecodeError, KeyError):
+                        logger.warning("Invalid greeting data format in Redis")
+            except Exception as e:
+                logger.warning(f"Failed to retrieve greeting from Redis: {e}")
+
+        # 2. Fall back to template configurations (explicit initial_greeting only)
+        if not greeting_text:
+            if (
+                self.template.configurations
+                and self.template.configurations.initial_greeting
+            ):
+                greeting_text = self.template.configurations.initial_greeting
+                logger.debug("Using initial_greeting from template configurations")
+
+        if not greeting_text:
+            logger.warning("No initial greeting found")
+            return
+
+        # Resolve template variables like {customer_name}
+        if self.lead and self.lead.payload:
+            try:
+                greeting_text = greeting_text.format(**self.lead.payload)
+            except (KeyError, ValueError) as e:
+                logger.warning(f"Failed to resolve greeting variables: {e}")
+
+        # Store greeting info so flow manager knows it was already sent
+        self.greeting_source = "daily_tts"
+        self.greeting_text = greeting_text
+
+        logger.info(f"Sending Daily initial greeting: '{greeting_text[:50]}...'")
+        await task.queue_frame(TTSSpeakFrame(text=greeting_text))
 
     async def _setup_daily_transport(self, runner_args: RunnerArguments) -> None:
         """Initialize transport for Daily mode."""
@@ -784,6 +855,22 @@ class Agent:
             # Get RTVI processor reference from task (auto-created by pipecat)
             if self.is_daily_mode and hasattr(self.task, "rtvi") and self.task.rtvi:
                 self._rtvi_processor = self.task.rtvi
+
+            # Send initial greeting for Daily mode (telephony handles this separately)
+            if self.is_daily_mode and self.template:
+                await self._send_initial_greeting_daily(self.task)
+
+            # Start post-greeting idle timer for Daily mode (uses same logic as telephony)
+            if self.is_daily_mode and self.configurations:
+                user_idle_config = getattr(
+                    self.configurations, "user_idle_configuration", None
+                )
+                if user_idle_config and user_idle_config.enabled:
+                    self._post_greeting_task = asyncio.create_task(
+                        self._handle_post_greeting_idle(
+                            user_idle_config, is_daily_mode=True
+                        )
+                    )
 
             # Validate required attributes for flow setup
             if not self.template:

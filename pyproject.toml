@@ -12,7 +12,7 @@ dependencies = [
     "websockets>=11.0.3",
     "starlette>=0.27.0",
     "python-dotenv>=1.0.0",
-    "pipecat-ai[daily,google,assemblyai,silero,openai,azure,elevenlabs,aic,anthropic,deepgram,soniox,mcp,sarvam,cartesia]",
+    "pipecat-ai[daily,google,assemblyai,silero,openai,azure,elevenlabs,aic,anthropic,deepgram,soniox,mcp,sarvam,cartesia,rnnoise]",
     "pipecat-ai-flows",
     "loguru",
     "opentelemetry-api",

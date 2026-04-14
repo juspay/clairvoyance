@@ -10,6 +10,7 @@ from typing import Optional
 
 from pipecat.audio.filters.aic_filter import AICFilter
 from pipecat.audio.filters.base_audio_filter import BaseAudioFilter
+from pipecat.audio.filters.rnnoise_filter import RNNoiseFilter
 from pipecat.audio.mixers.soundfile_mixer import SoundfileMixer
 from pipecat.transports.daily.transport import DailyParams
 from pipecat.transports.websocket.fastapi import FastAPIWebsocketParams
@@ -28,16 +29,17 @@ TRANSPORT_TYPE_DAILY = "daily"
 
 def _create_audio_input_filter(
     configurations: Optional[ConfigurationModel] = None,
+    transport_type: str = "telephony",
 ) -> Optional[BaseAudioFilter]:
-    """Create audio input filter based on configuration.
+    """Create audio input filter based on configuration and transport type.
 
-    Currently supports:
-        - AIC filter (ai-coustics noise enhancement)
-
-    Future filters can be added here with their own enable flags.
+    Supports:
+        - AIC filter (ai-coustics noise enhancement) for telephony (8kHz)
+        - RNNoise filter for Daily/web (16kHz+, resamples internally to 48kHz)
 
     Args:
         configurations: The configuration model containing noise filter settings.
+        transport_type: "telephony" or "daily". Determines which filter to use.
 
     Returns:
         Audio filter instance if enabled and successfully created, None otherwise.
@@ -50,7 +52,12 @@ def _create_audio_input_filter(
     if not noise_filter_config or not noise_filter_config.enable:
         return None
 
-    # Create filter based on type
+    # Use RNNoise for Daily mode (supports any sample rate via internal resampling)
+    if transport_type == TRANSPORT_TYPE_DAILY:
+        logger.info("Using RNNoise filter for Daily mode (16kHz support)")
+        return RNNoiseFilter()
+
+    # Use AIC for telephony (optimized for 8kHz)
     if noise_filter_config.type == NoiseFilterType.AIC:
         if not static.BREEZE_BUDDY_AICOUSTICS_LICENSE_KEY:
             logger.warning("AIC filter enabled but license key not configured")
@@ -84,14 +91,15 @@ def get_transport_params(
     Returns:
         Dictionary mapping transport types to parameter factory functions
     """
-    audio_in_filter = _create_audio_input_filter(configurations)
+    # Create transport-specific filters (AIC for telephony 8kHz, RNNoise for Daily 16kHz+)
+    daily_filter = _create_audio_input_filter(configurations, TRANSPORT_TYPE_DAILY)
+    telephony_filter = _create_audio_input_filter(configurations, "telephony")
 
     return {
         "daily": lambda: DailyParams(
             audio_in_enabled=True,
             audio_out_enabled=True,
-            audio_in_filter=audio_in_filter,
-            # Note: DailyParams does not support audio_out_mixer
+            audio_in_filter=daily_filter,
         ),
         "twilio": lambda: FastAPIWebsocketParams(
             audio_in_enabled=True,
@@ -99,7 +107,7 @@ def get_transport_params(
             audio_in_sample_rate=TELEPHONY_SAMPLE_RATE,
             audio_out_sample_rate=TELEPHONY_SAMPLE_RATE,
             audio_out_mixer=audio_out_mixer,
-            audio_in_filter=audio_in_filter,
+            audio_in_filter=telephony_filter,
         ),
         "exotel": lambda: FastAPIWebsocketParams(
             audio_in_enabled=True,
@@ -107,7 +115,7 @@ def get_transport_params(
             audio_in_sample_rate=TELEPHONY_SAMPLE_RATE,
             audio_out_sample_rate=TELEPHONY_SAMPLE_RATE,
             audio_out_mixer=audio_out_mixer,
-            audio_in_filter=audio_in_filter,
+            audio_in_filter=telephony_filter,
         ),
         "telnyx": lambda: FastAPIWebsocketParams(
             audio_in_enabled=True,
@@ -115,7 +123,7 @@ def get_transport_params(
             audio_in_sample_rate=TELEPHONY_SAMPLE_RATE,
             audio_out_sample_rate=TELEPHONY_SAMPLE_RATE,
             audio_out_mixer=audio_out_mixer,
-            audio_in_filter=audio_in_filter,
+            audio_in_filter=telephony_filter,
         ),
         "plivo": lambda: FastAPIWebsocketParams(
             audio_in_enabled=True,
@@ -123,6 +131,6 @@ def get_transport_params(
             audio_in_sample_rate=TELEPHONY_SAMPLE_RATE,
             audio_out_sample_rate=TELEPHONY_SAMPLE_RATE,
             audio_out_mixer=audio_out_mixer,
-            audio_in_filter=audio_in_filter,
+            audio_in_filter=telephony_filter,
         ),
     }
