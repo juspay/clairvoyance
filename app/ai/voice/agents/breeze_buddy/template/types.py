@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
 
 from app.ai.voice.llm.types import LLMConfiguration
 from app.core.deprecation import log_deprecated_fields
+from app.core.logger import logger
 
 
 class ActionType(str, Enum):
@@ -590,6 +591,14 @@ class ConfigurationModel(BaseModel):
             }
             if ivr:
                 data["ivr_configuration"] = ivr
+                # Log deprecation warnings for each migrated field
+                for old_field in ("ivr_greeting", "ivr_goodbye", "ivr_priority"):
+                    if data.get(old_field) is not None:
+                        new_field = old_field.replace("ivr_", "")
+                        logger.warning(
+                            f"[Deprecated] field '{old_field}' is set. "
+                            f"Use 'ivr_configuration.{new_field}' instead."
+                        )
 
         return data
 

@@ -139,7 +139,7 @@ def log_deprecated_fields(
             except Exception:
                 length = -1
             logger.warning(
-                "Deprecated field '{}' is set (type: {}, length: {}). Use '{}' instead.",
+                "[Deprecated] field '{}' is set (type: {}, length: {}). Use '{}' instead.",
                 old_field,
                 type_name,
                 length,

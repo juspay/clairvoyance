@@ -434,7 +434,7 @@ async def prepare_ivr_menu_audio(
     if not ivr_greeting:
         logger.error(
             "[IVR] No ivr_greeting provided - cannot generate menu audio. "
-            "Please define ivr_config.greeting in template configurations."
+            "Please define ivr_configuration.greeting in template configurations."
         )
         return None
 

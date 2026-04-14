@@ -103,7 +103,9 @@ async def resolve_call_templates(
             is_outbound: False
             templates: List[TemplateModel]
             template_list: List[dict]       ([{id, name}])
-            ivr_voice_config: Optional[dict] (IVR voice configuration, default "sara")
+            ivr_voice_config: Optional[dict] (IVR voice configuration; when no
+                IVR/main tts_configuration is set, falls back to BB_TTS_SERVICE(),
+                which defaults to "elevenlabs")
             ivr_greeting: Optional[str]
             ivr_goodbye: Optional[str]
             reseller_id: str
