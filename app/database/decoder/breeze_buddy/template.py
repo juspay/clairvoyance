@@ -65,11 +65,31 @@ def _migrate_legacy_voice_config(data: Dict[str, Any]) -> Dict[str, Any]:
             else old_voice_name
         )
         default_provider = LEGACY_VOICE_TO_PROVIDER.get(name)
+        logger.warning(
+            f"[Deprecated] field 'tts_voice_name' is set (value: '{name}'). "
+            "Use 'tts_configuration.provider' instead."
+        )
 
     # Extract provider-specific configs
     old_cartesia = data.pop("cartesia_voice_configurations", None)
     old_elevenlabs = data.pop("elevenlabs_voice_configurations", None)
     old_mira_voice_id = data.pop("mira_voice_id", None)
+
+    if old_cartesia:
+        logger.warning(
+            "[Deprecated] field 'cartesia_voice_configurations' is set. "
+            "Use 'tts_configuration_overrides.cartesia' instead."
+        )
+    if old_elevenlabs:
+        logger.warning(
+            "[Deprecated] field 'elevenlabs_voice_configurations' is set. "
+            "Use 'tts_configuration_overrides.elevenlabs' instead."
+        )
+    if old_mira_voice_id:
+        logger.warning(
+            "[Deprecated] field 'mira_voice_id' is set. "
+            "Use 'tts_configuration_overrides.cartesia.voice_id' instead."
+        )
 
     provider_configs: Dict[str, Dict[str, Any]] = {}
 
