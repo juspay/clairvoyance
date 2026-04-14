@@ -1,7 +1,9 @@
 import re
 
 
-def indian_number_to_speech(number: int) -> str:
+def indian_number_to_speech(number: float | int) -> str:
+    # Round to nearest integer to handle float inputs like 2609.9
+    number = round(number)
     if number <= 0:
         return "0 rupees"
     parts = []
