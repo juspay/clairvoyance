@@ -7,11 +7,7 @@ import httpx
 from pipecat.services.cartesia.tts import CartesiaTTSService, GenerationConfig
 from pipecat.transcriptions.language import Language
 
-from app.core.config.dynamic import (
-    BB_CARTESIA_LANGUAGE,
-    BB_CARTESIA_MODEL,
-    BB_CARTESIA_VOICE_ID,
-)
+from app.core.config.dynamic import BB_VOICE_PROVIDER_DEFAULTS
 from app.core.config.static import CARTESIA_API_KEY
 from app.core.logger import logger
 
@@ -79,22 +75,20 @@ async def _generate_cartesia_audio(
 
     Args:
         text: The text to synthesize
-        voice_id: Optional voice ID override. Falls back to BB_CARTESIA_VOICE_ID if None.
-        model: Optional model override. Falls back to BB_CARTESIA_MODEL if None.
+        voice_id: Optional voice ID override. Falls back to Redis defaults if None.
+        model: Optional model override. Falls back to Redis defaults if None.
 
     Returns:
         Audio bytes in raw PCM format (16-bit, 16kHz)
     """
     if not CARTESIA_API_KEY:
-        raise ValueError("CARTESIA_API_KEY is required for Mira voice")
+        raise ValueError("CARTESIA_API_KEY is required for Cartesia TTS")
 
-    # Use provided values or fall back to defaults
-    default_voice_id = await BB_CARTESIA_VOICE_ID()
-    default_model = await BB_CARTESIA_MODEL()
-    language = await BB_CARTESIA_LANGUAGE()
-
-    final_voice_id = voice_id if voice_id else default_voice_id
-    final_model = model if model else default_model
+    # Use provided values or fall back to Redis/hardcoded defaults
+    defaults = await BB_VOICE_PROVIDER_DEFAULTS("cartesia")
+    final_voice_id = voice_id or defaults.get("voice_id", "")
+    final_model = model or defaults.get("model", "sonic-3")
+    language = defaults.get("language", "en")
 
     url = "https://api.cartesia.ai/tts/bytes"
     headers = {
@@ -107,7 +101,7 @@ async def _generate_cartesia_audio(
         "model_id": final_model,
         "transcript": text,
         "voice": {"mode": "id", "id": final_voice_id},
-        "language": language or "en",
+        "language": language,
         "output_format": {
             "container": "raw",
             "encoding": "pcm_s16le",
@@ -116,7 +110,7 @@ async def _generate_cartesia_audio(
     }
 
     logger.info(
-        f"Synthesizing greeting with Cartesia: {text[:50]}... "
+        f"Synthesizing audio with Cartesia: {text[:50]}... "
         f"[voice_id={final_voice_id}, model={final_model}]"
     )
 

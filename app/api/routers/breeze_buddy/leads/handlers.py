@@ -36,7 +36,7 @@ from app.ai.voice.agents.breeze_buddy.utils.language_utils.language_detector imp
     determine_language_for_call,
 )
 from app.ai.voice.agents.breeze_buddy.utils.tts_utils.tts_provider_selector import (
-    determine_tts_voice_for_call,
+    determine_tts_provider_for_call,
 )
 from app.core.logger import logger
 from app.database.accessor import (
@@ -197,7 +197,7 @@ async def push_lead_handler(req: PushLeadRequest, current_user: UserInfo) -> Dic
             lead_payload["reporting_webhook_url"] = req.reporting_webhook_url
 
         if req.is_playground:
-            # Playground supplies stt_language and tts_voice_name explicitly —
+            # Playground supplies stt_language and tts_provider explicitly —
             # skip LLM-based detection entirely.
             overrides = req.configurations_override or {}
             stt_language = overrides.get("stt_language", "")
@@ -207,9 +207,9 @@ async def push_lead_handler(req: PushLeadRequest, current_user: UserInfo) -> Dic
             lead_payload["language_name"] = LANGUAGE_NAMES.get(
                 normalized_language, "English"
             )
-            tts_voice = overrides.get("tts_voice_name")
-            if tts_voice:
-                lead_payload["tts_voice_name"] = tts_voice
+            tts_provider_val = overrides.get("tts_provider")
+            if tts_provider_val:
+                lead_payload["tts_provider"] = tts_provider_val
         else:
             _, language_name = await determine_language_for_call(
                 template.configurations if template else None,
@@ -218,13 +218,14 @@ async def push_lead_handler(req: PushLeadRequest, current_user: UserInfo) -> Dic
             )
             lead_payload["language_name"] = language_name
 
-            tts_voice_name = await determine_tts_voice_for_call(
+            # Determine TTS provider using LLM if payload-based selection is enabled
+            tts_provider = await determine_tts_provider_for_call(
                 template.configurations if template else None,
                 lead_payload,
                 req.request_id,
             )
-            if tts_voice_name:
-                lead_payload["tts_voice_name"] = tts_voice_name.value
+            if tts_provider:
+                lead_payload["tts_provider"] = tts_provider.value
 
         # In playground mode, store configurations override in metadata
         meta_data = {}

@@ -63,7 +63,7 @@ from app.ai.voice.agents.breeze_buddy.template.types import (
     TurnDetectionMode,
 )
 from app.ai.voice.agents.breeze_buddy.template.vad import TELEPHONY_SAMPLE_RATE
-from app.ai.voice.agents.breeze_buddy.tts import get_tts_service
+from app.ai.voice.agents.breeze_buddy.tts import get_tts_service, resolve_voice_config
 from app.core.config.static import (
     ENABLE_BREEZE_BUDDY_DAILY_EVENTS,
     ENABLE_BREEZE_BUDDY_TRACING,
@@ -137,33 +137,15 @@ async def create_services(
         llm = None
         logger.info("[STREAM] Skipping LLM service creation")
 
-    # Extract Cartesia voice configurations from template
-    cartesia_voice_config = getattr(
-        configurations, "cartesia_voice_configurations", None
+    template_voice_config = getattr(configurations, "tts_configuration", None)
+    voice_config_overrides = getattr(
+        configurations, "tts_configuration_overrides", None
     )
-    legacy_mira_voice_id = getattr(configurations, "mira_voice_id", None)
-
-    if cartesia_voice_config:
-        logger.info(
-            f"Using Cartesia voice configurations from template: {cartesia_voice_config}"
-        )
-
-    # Extract ElevenLabs voice configurations from template
-    elevenlabs_voice_config = getattr(
-        configurations, "elevenlabs_voice_configurations", None
+    voice_config = await resolve_voice_config(
+        template_voice_config, voice_config_overrides
     )
-
-    if elevenlabs_voice_config:
-        logger.info(
-            f"Using ElevenLabs voice configurations from template: {elevenlabs_voice_config}"
-        )
-
-    tts = await get_tts_service(
-        voice_name=getattr(configurations, "tts_voice_name", None),
-        mira_voice_id=legacy_mira_voice_id,
-        cartesia_voice_configurations=cartesia_voice_config,
-        elevenlabs_voice_configurations=elevenlabs_voice_config,
-    )
+    logger.info(f"Resolved voice config: provider={voice_config.provider.value}")
+    tts = await get_tts_service(voice_config)
 
     return stt, llm, tts
 

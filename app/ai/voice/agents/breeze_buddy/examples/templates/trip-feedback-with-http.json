@@ -29,7 +29,9 @@
   },
   "configurations": {
     "stt_language": "en",
-    "tts_voice_name": "rhea",
+    "tts_configuration": {
+      "provider": "elevenlabs"
+    },
     "background_sound_volume": 2.0,
     "enable_background_sound": false,
     "payload_based_language_selection": false

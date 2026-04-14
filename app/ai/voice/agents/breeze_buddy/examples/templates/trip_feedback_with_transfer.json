@@ -13,7 +13,9 @@
     }
   },
   "configurations": {
-    "tts_voice_name": "rhea",
+    "tts_configuration": {
+      "provider": "elevenlabs"
+    },
     "stt_language": "en",
     "payload_based_language_selection": false,
     "transfer_number": "+1234567890"
