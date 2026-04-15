@@ -6,10 +6,12 @@
   "description": "Demonstrates keyword filtering to suppress background acknowledgements while the bot is speaking. Filters out words like 'hmm', 'okay', 'haan' to prevent accidental interruptions.",
   "expected_payload_schema": {
     "customer_name": {
-      "type": "string"
+      "type": "string",
+      "example": "John Doe"
     },
     "order_id": {
-      "type": "string"
+      "type": "string",
+      "example": "12345"
     }
   },
   "configurations": {

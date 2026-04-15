@@ -6,10 +6,12 @@
   "description": "Demonstrates basic TTS voice selection using tts_voice_name with 'rhea' voice.",
   "expected_payload_schema": {
     "customer_name": {
-      "type": "string"
+      "type": "string",
+      "example": "John Doe"
     },
     "order_id": {
-      "type": "string"
+      "type": "string",
+      "example": "12345"
     }
   },
   "configurations": {

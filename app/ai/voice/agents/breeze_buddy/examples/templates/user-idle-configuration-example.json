@@ -6,10 +6,12 @@
   "description": "Demonstrates user idle detection and handling. Automatically detects when the customer is silent for 7 seconds and re-engages them. After 3 retries, the call ends with 'busy' outcome.",
   "expected_payload_schema": {
     "customer_name": {
-      "type": "string"
+      "type": "string",
+      "example": "John Doe"
     },
     "order_id": {
-      "type": "string"
+      "type": "string",
+      "example": "12345"
     }
   },
   "configurations": {

@@ -6,22 +6,28 @@
     "description": "Order confirmation workflow with template-level and node-level VAD configuration",
     "expected_payload_schema": {
         "customer_name": {
-            "type": "string"
+            "type": "string",
+            "example": "John Doe"
         },
         "shop_name": {
-            "type": "string"
+            "type": "string",
+            "example": "Breeze Store"
         },
         "total_price": {
-            "type": "number"
+            "type": "number",
+            "example": 250.75
         },
         "customer_address": {
-            "type": "string"
+            "type": "string",
+            "example": "456 Elm Street, Mumbai, Maharashtra, India, 400001"
         },
         "customer_mobile_number": {
-            "type": "string"
+            "type": "string",
+            "example": "9123456780"
         },
         "items": {
-            "type": "string"
+            "type": "string",
+            "example": "1x Samsung Galaxy S21, 2x Apple AirPods Pro"
         }
     },
     "configurations": {

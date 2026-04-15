@@ -6,25 +6,32 @@
   "description": "Complete feedback collection workflow demonstrating HTTP hooks and global functions. Features: 1) Global HTTP function (refund_trip_amount) - LLM calls this, waits for response, 2) HTTP hook (send_http_request) - fire-and-forget API call, 3) Built-in hooks (update_outcome_in_database), 4) Field resolution patterns (static from payload/secrets, llm from function args)",
   "expected_payload_schema": {
     "trip_date": {
-      "type": "string"
+      "type": "string",
+      "example": "2024-05-01"
     },
     "booking_id": {
-      "type": "string"
+      "type": "string",
+      "example": "ABC123"
     },
     "customer_name": {
-      "type": "string"
+      "type": "string",
+      "example": "John Doe"
     },
     "destination_to": {
-      "type": "string"
+      "type": "string",
+      "example": "MG Road, Bangalore"
     },
     "customer_gender": {
-      "type": "string"
+      "type": "string",
+      "example": "male"
     },
     "destination_from": {
-      "type": "string"
+      "type": "string",
+      "example": "Whitefield, Bangalore"
     },
     "customer_mobile_number": {
-      "type": "string"
+      "type": "string",
+      "example": "9876543210"
     }
   },
   "configurations": {

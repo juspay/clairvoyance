@@ -6,22 +6,28 @@
   "description": "Trip feedback collection demonstrating builtin global functions. Features: 1) Builtin global function (transfer_to_agent) - warm transfer available from any node, 2) Builtin global function (get_current_time) - returns current IST time, 3) HTTP global function (refund_trip_amount) - waits for API response. Shows how to combine builtin and HTTP global function types.",
   "expected_payload_schema": {
     "trip_date": {
-      "type": "string"
+      "type": "string",
+      "example": "2024-05-01"
     },
     "booking_id": {
-      "type": "string"
+      "type": "string",
+      "example": "ABC123"
     },
     "customer_name": {
-      "type": "string"
+      "type": "string",
+      "example": "John Doe"
     },
     "destination_to": {
-      "type": "string"
+      "type": "string",
+      "example": "MG Road, Bangalore"
     },
     "destination_from": {
-      "type": "string"
+      "type": "string",
+      "example": "Whitefield, Bangalore"
     },
     "customer_mobile_number": {
-      "type": "string"
+      "type": "string",
+      "example": "9876543210"
     }
   },
   "configurations": {
@@ -222,3 +228,4 @@
     ]
   }
 }
+

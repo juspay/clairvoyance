@@ -6,10 +6,12 @@
   "description": "Demonstrates call transfer to a live human agent. When the customer requests to speak with a human, the call is transferred to the configured phone number.",
   "expected_payload_schema": {
     "customer_name": {
-      "type": "string"
+      "type": "string",
+      "example": "John Doe"
     },
     "order_id": {
-      "type": "string"
+      "type": "string",
+      "example": "12345"
     }
   },
   "configurations": {

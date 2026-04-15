@@ -6,13 +6,16 @@
   "description": "Demonstrates pre-synthesized initial greeting that plays immediately when call connects, using template variables for personalization.",
   "expected_payload_schema": {
     "customer_name": {
-      "type": "string"
+      "type": "string",
+      "example": "John Doe"
     },
     "shop_name": {
-      "type": "string"
+      "type": "string",
+      "example": "Breeze Store"
     },
     "order_id": {
-      "type": "string"
+      "type": "string",
+      "example": "12345"
     }
   },
   "configurations": {

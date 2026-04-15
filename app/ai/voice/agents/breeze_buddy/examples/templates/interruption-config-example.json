@@ -6,10 +6,12 @@
   "description": "Demonstrates interruption control at template and node level. Template-level 'min_words=3' is the default. The 'closing' node overrides with 'disabled_discard' so the confirmation message cannot be interrupted. On transition back to other nodes, strategies reset to template defaults.",
   "expected_payload_schema": {
     "customer_name": {
-      "type": "string"
+      "type": "string",
+      "example": "John Doe"
     },
     "order_id": {
-      "type": "string"
+      "type": "string",
+      "example": "12345"
     }
   },
   "configurations": {

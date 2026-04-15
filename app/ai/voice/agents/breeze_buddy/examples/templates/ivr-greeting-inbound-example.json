@@ -6,10 +6,12 @@
   "description": "Demonstrates IVR (Interactive Voice Response) for inbound calls. Customers call in and select options via keypad to reach the appropriate department.",
   "expected_payload_schema": {
     "from_number": {
-      "type": "string"
+      "type": "string",
+      "example": "1234567890"
     },
     "to_number": {
-      "type": "string"
+      "type": "string",
+      "example": "9876543210"
     }
   },
   "configurations": {

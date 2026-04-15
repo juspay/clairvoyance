@@ -6,16 +6,20 @@
   "description": "Demonstrates automatic language detection from payload. The system analyzes customer data (like address or name) to automatically determine the appropriate language for the conversation.",
   "expected_payload_schema": {
     "customer_name": {
-      "type": "string"
+      "type": "string",
+      "example": "John Doe"
     },
     "order_id": {
-      "type": "string"
+      "type": "string",
+      "example": "12345"
     },
     "customer_address": {
-      "type": "string"
+      "type": "string",
+      "example": "456 Elm Street, Mumbai, Maharashtra, India, 400001"
     },
     "preferred_language": {
-      "type": "string"
+      "type": "string",
+      "example": "Hindi"
     }
   },
   "configurations": {
