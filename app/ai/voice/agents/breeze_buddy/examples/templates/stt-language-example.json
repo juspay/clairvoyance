@@ -6,10 +6,12 @@
   "description": "Demonstrates STT language configuration for Hindi speech recognition. The AI will understand and transcribe Hindi language from the customer.",
   "expected_payload_schema": {
     "customer_name": {
-      "type": "string"
+      "type": "string",
+      "example": "John Doe"
     },
     "order_id": {
-      "type": "string"
+      "type": "string",
+      "example": "12345"
     }
   },
   "configurations": {

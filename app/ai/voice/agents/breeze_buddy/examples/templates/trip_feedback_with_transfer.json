@@ -6,10 +6,12 @@
   "description": "Trip feedback collection with warm transfer capability using template configuration",
   "expected_payload_schema": {
     "customer_name": {
-      "type": "string"
+      "type": "string",
+      "example": "John Doe"
     },
     "company_name": {
-      "type": "string"
+      "type": "string",
+      "example": "Breeze"
     }
   },
   "configurations": {

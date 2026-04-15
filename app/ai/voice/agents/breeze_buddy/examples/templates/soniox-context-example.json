@@ -6,13 +6,16 @@
   "description": "Demonstrates Soniox context configuration for improved speech recognition of domain-specific terms like brand names, product categories, and e-commerce terminology.",
   "expected_payload_schema": {
     "customer_name": {
-      "type": "string"
+      "type": "string",
+      "example": "John Doe"
     },
     "order_id": {
-      "type": "string"
+      "type": "string",
+      "example": "12345"
     },
     "product_name": {
-      "type": "string"
+      "type": "string",
+      "example": "Nike Air Max 270"
     }
   },
   "configurations": {

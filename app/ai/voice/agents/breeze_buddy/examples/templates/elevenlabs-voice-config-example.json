@@ -6,10 +6,12 @@
   "description": "Example template demonstrating ElevenLabs voice configuration parameters",
   "expected_payload_schema": {
     "customer_name": {
-      "type": "string"
+      "type": "string",
+      "example": "John Doe"
     },
     "order_id": {
-      "type": "string"
+      "type": "string",
+      "example": "12345"
     }
   },
   "configurations": {

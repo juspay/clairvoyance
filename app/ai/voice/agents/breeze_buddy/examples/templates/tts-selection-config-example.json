@@ -6,16 +6,20 @@
   "description": "Demonstrates LLM-based TTS provider selection. Automatically chooses between ElevenLabs and Cartesia based on customer's delivery address region.",
   "expected_payload_schema": {
     "customer_name": {
-      "type": "string"
+      "type": "string",
+      "example": "John Doe"
     },
     "order_id": {
-      "type": "string"
+      "type": "string",
+      "example": "12345"
     },
     "delivery_address": {
-      "type": "string"
+      "type": "string",
+      "example": "456 Elm Street, Mumbai, Maharashtra, India, 400001"
     },
     "city": {
-      "type": "string"
+      "type": "string",
+      "example": "Mumbai"
     }
   },
   "configurations": {
