@@ -610,6 +610,7 @@ class ConfigurationModel(BaseModel):
     enable_background_sound: bool = False
     background_sound_file: Optional[BackgroundSoundFile] = None
     background_sound_volume: float = 2.0
+
     initial_greeting: Optional[str] = (
         None  # Initial greeting text template with variables (e.g., "Hi {customer_name}")
     )
@@ -730,6 +731,46 @@ class HttpAuthType(str, Enum):
     API_KEY = "api_key"
 
 
+class SseResponseMode(str, Enum):
+    """How the SSE response is packaged for the LLM."""
+
+    FULL = "full"
+    """Send all SSE event data as a single newline-joined string to the LLM."""
+    SELECT = "select"
+    """Send a single event's data string selected by ``select_index``."""
+
+
+class SseResponseHandlerConfig(BaseModel):
+    """Controls how SSE events are packaged for the LLM payload.
+
+    When ``sse_response_handler`` is ``None`` on ``GlobalHttpFunction``, the
+    default behaviour is ``mode=full``: all SSE event data is joined with
+    newlines and returned as one string to the LLM.
+
+    Examples::
+
+        # Send all event data concatenated (default when handler is None)
+        {"mode": "full"}
+
+        # Send only the last event's data
+        {"mode": "select", "select_index": -1}
+
+        # Send only the first event's data
+        {"mode": "select", "select_index": 0}
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    mode: SseResponseMode = SseResponseMode.FULL
+    select_index: Optional[int] = None
+
+    @model_validator(mode="after")
+    def validate_select_index(self) -> "SseResponseHandlerConfig":
+        if self.mode == SseResponseMode.SELECT and self.select_index is None:
+            raise ValueError("select_index is required when mode='select'")
+        return self
+
+
 class HttpAuthConfig(BaseModel):
     """Authentication configuration for HTTP requests"""
 
@@ -747,6 +788,12 @@ class HttpRequestConfig(BaseModel):
     The body field can be:
     - A Dict that will be serialized to JSON
     - A JSON string that will be parsed and have placeholders resolved
+
+    Streaming is auto-detected from the response Content-Type header:
+    - ``text/event-stream`` → read SSE line-by-line, forward each event
+      to the frontend via RTVI. What the LLM sees is controlled by
+      ``sse_response_handler`` on ``GlobalHttpFunction``.
+    - Any other Content-Type → standard request/response with retry logic.
     """
 
     url: str
@@ -848,6 +895,7 @@ class GlobalHttpFunction(BaseGlobalFunction):
     type: GlobalFunctionType = GlobalFunctionType.HTTP
     expected_fields: Dict[str, FieldConfig] = {}
     http_request: HttpRequestConfig
+    sse_response_handler: Optional[SseResponseHandlerConfig] = None
 
 
 class GlobalBuiltinFunction(BaseGlobalFunction):
