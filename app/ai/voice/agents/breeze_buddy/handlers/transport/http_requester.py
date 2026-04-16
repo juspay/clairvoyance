@@ -6,17 +6,24 @@ Executes HTTP requests with:
 - Retry logic with exponential backoff
 - Timeout enforcement
 - Comprehensive error handling and logging
+- Auto-detection of SSE streaming from response Content-Type
 
 Supports two modes:
 - fire_and_forget=True: For hooks (no response needed)
 - fire_and_forget=False: For global functions (returns response to LLM)
+
+When the response Content-Type is ``text/event-stream``, the executor reads
+SSE events line-by-line. Each parsed event is forwarded via an optional
+``on_sse_event`` callback (used for RTVI forwarding). Only the last event
+is kept and returned to the caller — the LLM never sees intermediate events.
 """
 
 import asyncio
 import base64
 import ipaddress
 import json
-from typing import Any, Optional, Tuple
+from collections.abc import Awaitable
+from typing import Any, Callable, Dict, Optional, Tuple
 from urllib.parse import urlencode, urlparse
 
 import aiohttp
@@ -56,9 +63,21 @@ class HttpRequestExecutor:
         config: HttpRequestConfig,
         resolved_fields: Optional[dict] = None,
         fire_and_forget: bool = True,
+        on_sse_event: Optional[Callable[[Dict[str, Any]], Awaitable[None]]] = None,
     ) -> Optional[Tuple[int, str]]:
         """
         Execute HTTP request with template resolution.
+
+        When the response Content-Type is ``text/event-stream``, the response
+        is read line-by-line as SSE. Each parsed event is forwarded via the
+        ``on_sse_event`` callback (if provided). Only the last event's data
+        is returned to the caller — intermediate events are forwarded but
+        discarded. This allows real-time RTVI forwarding while keeping the
+        LLM payload small.
+
+        SSE events must be terminated by a blank line. The upstream API
+        should send a sentinel event (e.g. ``data: [DONE]``) to signal
+        end-of-stream.
 
         Args:
             config: HttpRequestConfig with url, method, headers, body, auth, etc.
@@ -66,10 +85,14 @@ class HttpRequestExecutor:
                             Defaults to empty dict if None.
             fire_and_forget: If True (default), returns None (hook behavior).
                             If False, returns (status_code, response_body) tuple.
+            on_sse_event: Optional async callback invoked for each parsed SSE event.
+                          Must be a coroutine function. Receives the event dict
+                          ({"event": ..., "data": ...}).
 
         Returns:
             None if fire_and_forget=True
             Tuple[int, str] (status_code, response_body) if fire_and_forget=False
+            For SSE responses, response_body is the JSON of the last event's data.
             Returns (0, "") on failure when fire_and_forget=False
 
         Raises:
@@ -132,6 +155,27 @@ class HttpRequestExecutor:
                                 if fire_and_forget:
                                     return None
                                 return (0, error_msg)
+
+                        # SSE branch: stream events when the server opts in
+                        # with text/event-stream and the caller supplied a
+                        # per-event callback. Only on 2xx — error bodies fall
+                        # through to the bulk read path below.
+                        is_sse = "text/event-stream" in content_type
+                        if (
+                            is_sse
+                            and on_sse_event is not None
+                            and not fire_and_forget
+                            and 200 <= status < 300
+                        ):
+                            concatenated = await self._consume_sse_stream(
+                                response=response,
+                                on_sse_event=on_sse_event,
+                            )
+                            logger.info(
+                                f"HTTP {config.method.value} SSE stream complete: "
+                                f"total_data_bytes={len(concatenated)}"
+                            )
+                            return (status, concatenated)
 
                         # Security Check 2: Validate Content-Length header
                         content_length = response.headers.get("Content-Length")
@@ -242,6 +286,74 @@ class HttpRequestExecutor:
             if fire_and_forget:
                 return None
             return (0, str(e))
+
+    @staticmethod
+    async def _consume_sse_stream(
+        response: aiohttp.ClientResponse,
+        on_sse_event: Callable[[Dict[str, Any]], Awaitable[None]],
+    ) -> str:
+        """Parse a text/event-stream response line by line.
+
+        SSE: blank line terminates an event; multiple ``data:`` lines join with
+        ``\\n``; lines starting with ``:`` are comments; fields have the form
+        ``field: value`` with an optional space after the colon. Stops once
+        emitted data exceeds ``HTTP_REQUEST_MAX_RESPONSE_BYTES``.
+        """
+        chunks: list[str] = []
+        total_bytes = 0
+        event_name: Optional[str] = None
+        event_id: Optional[str] = None
+        data_lines: list[str] = []
+
+        async def dispatch() -> None:
+            nonlocal event_name, event_id, data_lines, total_bytes
+            if not data_lines and event_name is None:
+                return
+            event_data = "\n".join(data_lines)
+            if event_data.strip() == "[DONE]":
+                event_name = None
+                event_id = None
+                data_lines = []
+                return
+            try:
+                await on_sse_event(
+                    {"event": event_name, "id": event_id, "data": event_data}
+                )
+            except Exception as cb_err:
+                logger.warning(f"on_sse_event callback raised: {cb_err}")
+            chunks.append(event_data)
+            total_bytes += len(event_data.encode("utf-8"))
+            event_name = None
+            event_id = None
+            data_lines = []
+
+        while True:
+            line_bytes = await response.content.readline()
+            if not line_bytes:
+                break
+            line = line_bytes.decode("utf-8", errors="replace").rstrip("\r\n")
+            if line == "":
+                await dispatch()
+                if total_bytes > HTTP_REQUEST_MAX_RESPONSE_BYTES:
+                    logger.warning(
+                        f"SSE stream exceeded {HTTP_REQUEST_MAX_RESPONSE_BYTES} bytes; closing"
+                    )
+                    break
+                continue
+            if line.startswith(":"):
+                continue
+            field, _, value = line.partition(":")
+            if value.startswith(" "):
+                value = value[1:]
+            if field == "data":
+                data_lines.append(value)
+            elif field == "event":
+                event_name = value
+            elif field == "id":
+                event_id = value
+
+        await dispatch()
+        return "\n".join(chunks)
 
     def _build_headers_with_auth(
         self, headers_dict: dict, auth_config, has_body: bool
