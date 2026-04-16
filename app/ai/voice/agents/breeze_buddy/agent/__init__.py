@@ -78,7 +78,6 @@ from app.ai.voice.agents.breeze_buddy.template.types import (
 )
 from app.ai.voice.agents.breeze_buddy.template.vad import create_vad_analyzer
 from app.ai.voice.agents.breeze_buddy.utils.common import (
-    create_background_sound_mixer,
     track_error,
 )
 from app.ai.voice.agents.breeze_buddy.utils.transport.websockets import (
@@ -321,8 +320,7 @@ class Agent:
             template=self.template,
         )
 
-        # Daily transport does not support audio_out_mixer, so we pass None
-        transport_params = get_transport_params(None, self.configurations)
+        transport_params = get_transport_params(self.template, self.configurations)
         self.transport = await create_transport(runner_args, transport_params)
 
     async def _setup_telephony_transport(self) -> bool:
@@ -514,12 +512,8 @@ class Agent:
             template=self.template,
         )
 
-        # Create background sound mixer if configured in template
-        audio_out_mixer = create_background_sound_mixer(self.template)
-
         # Get transport params using the detected transport type
-        # Note: VAD is configured in the aggregator (via UserTurnStrategies), not the transport
-        transport_params = get_transport_params(audio_out_mixer, self.configurations)
+        transport_params = get_transport_params(self.template, self.configurations)
         params = transport_params[transport_type]()
 
         # Create transport with the call data

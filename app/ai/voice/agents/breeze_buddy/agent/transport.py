@@ -10,15 +10,18 @@ from typing import Optional
 
 from pipecat.audio.filters.aic_filter import AICFilter
 from pipecat.audio.filters.base_audio_filter import BaseAudioFilter
-from pipecat.audio.mixers.soundfile_mixer import SoundfileMixer
 from pipecat.transports.daily.transport import DailyParams
 from pipecat.transports.websocket.fastapi import FastAPIWebsocketParams
 
 from app.ai.voice.agents.breeze_buddy.template.types import (
     ConfigurationModel,
     NoiseFilterType,
+    TemplateModel,
 )
 from app.ai.voice.agents.breeze_buddy.template.vad import TELEPHONY_SAMPLE_RATE
+from app.ai.voice.agents.breeze_buddy.utils.audio_mixer import (
+    create_background_sound_mixer,
+)
 from app.core.config import static
 from app.core.logger import logger
 
@@ -69,7 +72,7 @@ def _create_audio_input_filter(
 
 
 def get_transport_params(
-    audio_out_mixer: Optional[SoundfileMixer] = None,
+    template: Optional[TemplateModel] = None,
     configurations: Optional[ConfigurationModel] = None,
 ) -> dict:
     """Get transport parameters dictionary for all transport types.
@@ -78,12 +81,18 @@ def get_transport_params(
     (via vad_analyzer + UserTurnStrategies) where it feeds turn detection.
 
     Args:
-        audio_out_mixer: Optional audio mixer for background sounds (only used by telephony transports)
+        template: Optional template model for background sound mixer configuration
         configurations: Optional configuration model for settings (e.g., noise filter)
 
     Returns:
         Dictionary mapping transport types to parameter factory functions
     """
+    # Create separate mixers per transport so each uses the correct sample rate.
+    # Daily runs at 24 kHz; all telephony transports run at TELEPHONY_SAMPLE_RATE (8 kHz).
+    daily_mixer = create_background_sound_mixer(template, sample_rate=24000)
+    telephony_mixer = create_background_sound_mixer(
+        template, sample_rate=TELEPHONY_SAMPLE_RATE
+    )
     audio_in_filter = _create_audio_input_filter(configurations)
 
     return {
@@ -91,14 +100,14 @@ def get_transport_params(
             audio_in_enabled=True,
             audio_out_enabled=True,
             audio_in_filter=audio_in_filter,
-            # Note: DailyParams does not support audio_out_mixer
+            audio_out_mixer=daily_mixer,
         ),
         "twilio": lambda: FastAPIWebsocketParams(
             audio_in_enabled=True,
             audio_out_enabled=True,
             audio_in_sample_rate=TELEPHONY_SAMPLE_RATE,
             audio_out_sample_rate=TELEPHONY_SAMPLE_RATE,
-            audio_out_mixer=audio_out_mixer,
+            audio_out_mixer=telephony_mixer,
             audio_in_filter=audio_in_filter,
         ),
         "exotel": lambda: FastAPIWebsocketParams(
@@ -106,7 +115,7 @@ def get_transport_params(
             audio_out_enabled=True,
             audio_in_sample_rate=TELEPHONY_SAMPLE_RATE,
             audio_out_sample_rate=TELEPHONY_SAMPLE_RATE,
-            audio_out_mixer=audio_out_mixer,
+            audio_out_mixer=telephony_mixer,
             audio_in_filter=audio_in_filter,
         ),
         "telnyx": lambda: FastAPIWebsocketParams(
@@ -114,7 +123,7 @@ def get_transport_params(
             audio_out_enabled=True,
             audio_in_sample_rate=TELEPHONY_SAMPLE_RATE,
             audio_out_sample_rate=TELEPHONY_SAMPLE_RATE,
-            audio_out_mixer=audio_out_mixer,
+            audio_out_mixer=telephony_mixer,
             audio_in_filter=audio_in_filter,
         ),
         "plivo": lambda: FastAPIWebsocketParams(
@@ -122,7 +131,7 @@ def get_transport_params(
             audio_out_enabled=True,
             audio_in_sample_rate=TELEPHONY_SAMPLE_RATE,
             audio_out_sample_rate=TELEPHONY_SAMPLE_RATE,
-            audio_out_mixer=audio_out_mixer,
+            audio_out_mixer=telephony_mixer,
             audio_in_filter=audio_in_filter,
         ),
     }

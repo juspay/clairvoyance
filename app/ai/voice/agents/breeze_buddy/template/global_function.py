@@ -11,20 +11,91 @@ The adapters follow the same context injection pattern as normal functions:
 """
 
 import asyncio
+import random
 from typing import Any, Callable, Dict, List, Optional, Protocol, runtime_checkable
 
 from pipecat_flows import FlowsFunctionSchema
 
+from app.ai.voice.agents.breeze_buddy.template.context import TemplateContext
 from app.ai.voice.agents.breeze_buddy.template.func_action_handlers import (
     execute_func_post_actions,
 )
 from app.ai.voice.agents.breeze_buddy.template.types import (
+    BaseGlobalFunction,
     GlobalBuiltinFunction,
     GlobalFunctionType,
     GlobalHttpFunction,
+    PhrasingOrder,
 )
 from app.core.config.static import GLOBAL_FUNCTION_DESCRIPTION_SUFFIX
 from app.core.logger import logger
+
+
+async def _run_filler_and_music(
+    bot_instance: Any,
+    func: BaseGlobalFunction,
+) -> None:
+    """Queue filler TTS and/or enable background music before a global function runs.
+
+    Both configs are independent and can run together:
+    - filler_phrase_config: queues a TTS phrase first so the user hears it immediately.
+    - background_music_config: MixerEnableFrame queued after TTSSpeakFrame so music
+      only starts after filler playback ends (enforced by Pipecat's frame ordering).
+    """
+    if not bot_instance or not func.filler_audio:
+        return
+
+    context = TemplateContext(bot_instance)
+    filler_audio = func.filler_audio
+
+    # Phrase is queued first so the user hears it while waiting.
+    # MixerEnableFrame is queued after TTSSpeakFrame — Pipecat processes frames
+    # in order, so music only starts after filler playback ends.
+    phrase_cfg = filler_audio.filler_phrase_config
+    if phrase_cfg and phrase_cfg.phrases:
+        if phrase_cfg.phrasing_order == PhrasingOrder.RANDOM:
+            phrase = random.choice(phrase_cfg.phrases)
+        else:  # SEQUENTIAL — stateless: always picks phrases[0] (first phrase only)
+            phrase = phrase_cfg.phrases[0]
+        try:
+            await context.queue_tts_filler(phrase)
+            logger.info(f"[{func.name}] Filler phrase queued: {phrase!r}")
+        except Exception as e:
+            logger.warning(f"[{func.name}] Failed to queue filler phrase: {e}")
+
+    music_cfg = filler_audio.background_music_config
+    if music_cfg and music_cfg.sound_file:
+        try:
+            soundtrack_key = (
+                music_cfg.sound_file.value
+                if hasattr(music_cfg.sound_file, "value")
+                else music_cfg.sound_file
+            )
+            await context.manage_audio_mixer(
+                enable=True,
+                settings={"sound": soundtrack_key, "volume": music_cfg.volume},
+            )
+            logger.info(f"[{func.name}] Background music enabled")
+        except Exception as e:
+            logger.warning(f"[{func.name}] Failed to enable background music: {e}")
+
+
+async def _stop_music(bot_instance: Any, func: BaseGlobalFunction) -> None:
+    """Disable background music after a global function handler completes."""
+    if not bot_instance:
+        return
+
+    filler_audio = func.filler_audio
+    if (
+        filler_audio
+        and filler_audio.background_music_config
+        and filler_audio.background_music_config.sound_file
+    ):
+        context = TemplateContext(bot_instance)
+        try:
+            await context.manage_audio_mixer(enable=False)
+        except Exception as e:
+            logger.warning(f"[{func.name}] Failed to disable background music: {e}")
 
 
 @runtime_checkable
@@ -168,14 +239,23 @@ class HttpGlobalFunctionAdapter:
                 """
                 Outer wrapper for global HTTP function.
 
-                Calls the wrapped handler (with_context wrapper) passing function_config
-                via kwargs. The with_context wrapper will extract function_config and
-                pass it to http_function_handler.
+                1. Runs filler phrase TTS + enables background music (if configured)
+                2. Calls the wrapped handler (with_context wrapper) passing function_config
+                3. Disables background music after handler returns
+                4. Fires post-actions (fire-and-forget)
                 """
-                result = await wrapped_handler(
-                    llm_args,
-                    function_config=captured_func,
-                )
+                # Pre-call: filler phrase + background music
+                await _run_filler_and_music(captured_bot_instance, captured_func)
+
+                try:
+                    result = await wrapped_handler(
+                        llm_args,
+                        function_config=captured_func,
+                    )
+                finally:
+                    # Post-call: always stop music even if handler errors
+                    await _stop_music(captured_bot_instance, captured_func)
+
                 if captured_func.func_post_actions and captured_bot_instance:
                     asyncio.create_task(
                         execute_func_post_actions(
@@ -269,14 +349,23 @@ class BuiltinGlobalFunctionAdapter:
                 """
                 Outer wrapper for built-in global function.
 
-                Passes function_config to the dispatcher via kwargs.
-                The with_context wrapper extracts function_config and passes
-                it to builtin_function_dispatcher.
+                1. Runs filler phrase TTS + enables background music (if configured)
+                2. Passes function_config to the dispatcher via kwargs
+                3. Disables background music after handler returns
+                4. Fires post-actions (fire-and-forget)
                 """
-                result = await wrapped_handler(
-                    llm_args,
-                    function_config=captured_func,
-                )
+                # Pre-call: filler phrase + background music
+                await _run_filler_and_music(captured_bot_instance, captured_func)
+
+                try:
+                    result = await wrapped_handler(
+                        llm_args,
+                        function_config=captured_func,
+                    )
+                finally:
+                    # Post-call: always stop music even if handler errors
+                    await _stop_music(captured_bot_instance, captured_func)
+
                 if captured_func.func_post_actions and captured_bot_instance:
                     asyncio.create_task(
                         execute_func_post_actions(

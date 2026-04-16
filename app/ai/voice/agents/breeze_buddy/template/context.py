@@ -8,6 +8,11 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, Optional
 
+from pipecat.frames.frames import (
+    MixerEnableFrame,
+    MixerUpdateSettingsFrame,
+    TTSSpeakFrame,
+)
 from pipecat_flows import NodeConfig
 
 from app.core.logger import logger
@@ -99,6 +104,29 @@ class TemplateContext:
     def root_span(self):
         """Get OpenTelemetry root span"""
         return self.bot.root_span
+
+    async def queue_tts_filler(self, phrase: str) -> None:
+        """Queue a filler phrase for TTS synthesis. Non-blocking."""
+        if self.task:
+            await self.task.queue_frame(TTSSpeakFrame(text=phrase))
+
+    async def manage_audio_mixer(
+        self,
+        enable: bool,
+        settings: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Enable/disable the transport audio mixer, optionally updating settings.
+
+        Args:
+            enable: True to start mixing, False to stop.
+            settings: Optional dict with keys 'sound', 'volume', 'loop' to
+                update mixer settings before toggling (applied first).
+        """
+        if not self.task:
+            return
+        if settings:
+            await self.task.queue_frame(MixerUpdateSettingsFrame(settings=settings))
+        await self.task.queue_frame(MixerEnableFrame(enable=enable))
 
     @property
     def provider(self):
