@@ -7,8 +7,6 @@ from datetime import datetime, timezone
 from io import BytesIO
 from typing import Any, Dict, List, Optional, Tuple
 
-import soundfile
-from pipecat.audio.mixers.soundfile_mixer import SoundfileMixer
 from pipecat.frames.frames import OutputAudioRawFrame
 from pydub import AudioSegment
 
@@ -402,90 +400,6 @@ def get_validation_error_message(errors: List[str]) -> str:
 
     error_list = "\n- ".join(errors)
     return f"Payload validation failed with {len(errors)} errors:\n- {error_list}"
-
-
-def create_background_sound_mixer(template) -> Optional[SoundfileMixer]:
-    """
-    Create a background sound mixer from template configuration.
-
-    Args:
-        template: Template object with configurations for background sound
-
-    Returns:
-        SoundfileMixer instance if successfully configured, None otherwise
-    """
-    # Constant path for background sound audio files
-    BACKGROUND_SOUND_AUDIO_PATH = "app/ai/voice/agents/breeze_buddy/static/audio"
-
-    # Check if background sound is enabled in template
-    if (
-        not template
-        or not template.configurations
-        or not template.configurations.enable_background_sound
-    ):
-        logger.info("Background sound mixer disabled (not configured in template)")
-        return None
-
-    background_sound_file = template.configurations.background_sound_file
-    background_sound_volume = template.configurations.background_sound_volume
-
-    if not background_sound_file:
-        logger.warning("Background sound enabled but no file specified in template")
-        return None
-
-    # Mapping from background sound file identifier to actual filename with extension
-    background_sound_file_map = {"office-ambience": "office-ambience.mp3"}
-
-    # Convert enum to string value if needed
-    background_sound_key = (
-        background_sound_file.value
-        if hasattr(background_sound_file, "value")
-        else background_sound_file
-    )
-
-    # Map to actual filename with extension
-    background_sound_filename = background_sound_file_map.get(
-        background_sound_key, background_sound_key
-    )
-
-    # Construct full path to audio file
-    full_audio_path = os.path.join(
-        BACKGROUND_SOUND_AUDIO_PATH, background_sound_filename
-    )
-
-    if not os.path.exists(full_audio_path):
-        logger.warning(
-            f"Background sound enabled but file not found: {full_audio_path}"
-        )
-        return None
-
-    # Validate that the audio file is mono before creating the mixer
-    try:
-        audio_info = soundfile.info(full_audio_path)
-        if audio_info.channels != 1:
-            logger.warning(
-                f"Background sound file is not mono (channels={audio_info.channels}). "
-                f"Skipping mixer creation to avoid runtime failures: {background_sound_filename}"
-            )
-            return None
-
-        # Create and return the mixer
-        audio_out_mixer = SoundfileMixer(
-            sound_files={"background": full_audio_path},
-            default_sound="background",
-            volume=background_sound_volume,
-        )
-        logger.info(
-            f"Background sound mixer enabled: file={background_sound_filename}, "
-            f"volume={background_sound_volume}"
-        )
-        return audio_out_mixer
-
-    except Exception as e:
-        logger.warning(
-            f"Failed to read audio file info for {background_sound_filename}: {e}"
-        )
-        return None
 
 
 async def prepare_initial_greeting_payload(

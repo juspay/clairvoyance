@@ -5,7 +5,13 @@ Pydantic models for the dynamic workflow engine.
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SecretStr,
+    model_validator,
+)
 
 from app.ai.voice.llm.types import LLMConfiguration
 from app.core.deprecation import log_deprecated_fields
@@ -369,6 +375,17 @@ class BackgroundSoundFile(str, Enum):
     OFFICE_AMBIENCE = "office-ambience"
 
 
+class FillerSoundtrack(str, Enum):
+    """Pre-registered soundtrack files available for filler background music.
+
+    Users pass one of these enum values instead of a raw filename.
+    The audio file mapping lives in utils/audio_mixer.py.
+    """
+
+    TYPING = "typing"  # typing_music_realistic_{8k,24k}.mp3
+    DIAL_TONE = "dial-tone"  # dial-tone_{8k,24k}.wav
+
+
 class KeywordMatchType(str, Enum):
     """Match strategy for keyword filtering."""
 
@@ -498,6 +515,94 @@ class UserIdleHandlingConfig(BaseModel):
         ge=1,
         description="Maximum number of idle timeout events before ending the call with 'busy' outcome. The user receives at most max_retries prompts. The call ends on the (max_retries+1)th event.",
     )
+
+
+class PhrasingOrder(str, Enum):
+    """Order in which filler phrases are selected.
+
+    RANDOM: Pick a random phrase from the list on each invocation.
+    SEQUENTIAL: Always use the first phrase in the list (stateless/fixed).
+                Agent processes are stateless across calls so true round-robin
+                is not possible without external state. Use RANDOM for variety.
+    """
+
+    SEQUENTIAL = "sequential"
+    RANDOM = "random"
+
+
+class FillerPhraseConfig(BaseModel):
+    """Configuration for TTS filler phrases spoken during function call execution."""
+
+    phrases: List[str] = Field(
+        ...,
+        min_length=1,
+        description="List of phrases to speak. One is spoken before the handler runs.",
+    )
+    phrasing_order: PhrasingOrder = Field(
+        PhrasingOrder.RANDOM,
+        description="How to pick phrases: 'random' (default) or 'sequential'.",
+    )
+
+
+class FillerBackgroundMusicConfig(BaseModel):
+    """Configuration for background music played during function call execution."""
+
+    sound_file: Optional[FillerSoundtrack] = Field(
+        None,
+        description="Soundtrack to play. Choose from the FillerSoundtrack enum "
+        "(e.g., 'typing', 'dial-tone'). None disables background music.",
+    )
+    volume: float = Field(
+        0.4,
+        ge=0.0,
+        le=1.0,
+        description="Mixer volume (0.0–1.0).",
+    )
+
+
+class FillerAudioConfig(BaseModel):
+    """Filler audio played while a global function call is executing.
+
+    Set either or both configs — they are independent and can run together:
+    - filler_phrase_config: speaks a TTS phrase before the handler runs.
+    - background_music_config: loops background music via SoundfileMixer
+      while the handler runs, then stops when done.
+
+    At least one config must be provided.
+
+    Examples:
+        Phrase only::
+
+            {"filler_phrase_config": {"phrases": ["One moment...", "Let me check..."]}}
+
+        Music only::
+
+            {"background_music_config": {"sound_file": "typing", "volume": 0.4}}
+
+        Both (phrase spoken first, music starts after phrase ends)::
+
+            {"filler_phrase_config": {"phrases": ["Let me check that for you..."]},
+             "background_music_config": {"sound_file": "typing", "volume": 0.3}}
+    """
+
+    background_music_config: Optional[FillerBackgroundMusicConfig] = None
+    filler_phrase_config: Optional[FillerPhraseConfig] = None
+
+    @model_validator(mode="after")
+    def _validate_config(self) -> "FillerAudioConfig":
+        has_music = (
+            self.background_music_config is not None
+            and self.background_music_config.sound_file is not None
+        )
+        has_phrases = self.filler_phrase_config is not None and bool(
+            self.filler_phrase_config.phrases
+        )
+        if not has_music and not has_phrases:
+            raise ValueError(
+                "FillerAudioConfig requires at least one of: "
+                "background_music_config (with sound_file set), filler_phrase_config (with phrases)"
+            )
+        return self
 
 
 class IvrConfig(BaseModel):
@@ -862,6 +967,12 @@ class BaseGlobalFunction(BaseModel):
     description: str
     properties: Dict[str, Any] = {}
     required: List[str] = []
+    filler_audio: Optional["FillerAudioConfig"] = Field(
+        None,
+        description="Audio to play while this function call is executing. "
+        "Use 'filler_phrases' to speak a TTS phrase before the handler runs, "
+        "or 'background_music' to loop background music during execution.",
+    )
     func_pre_actions: List[FlowAction] = Field(default=[], alias="pre_actions")
     func_post_actions: List[FlowAction] = Field(default=[], alias="post_actions")
 
