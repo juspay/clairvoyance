@@ -274,6 +274,43 @@ class TTSProvider(str, Enum):
     GEMINI = "gemini"
 
 
+class ElevenLabsVoiceModel(str, Enum):
+    """ElevenLabs TTS voice models."""
+
+    MULTILINGUAL_V2 = "eleven_multilingual_v2"
+    FLASH_V2_5 = "eleven_flash_v2_5"
+    TURBO_V2_5 = "eleven_turbo_v2_5"
+    MULTILINGUAL_V2_STS = "eleven_multilingual_v2_sts"
+
+
+class ElevenLabsVoiceId(str, Enum):
+    """ElevenLabs TTS voice IDs."""
+
+    ROOHI = "Zjj2iX3aHYDcJSG4mMzk"
+    ANIKA = "B18ifp9INVN3SE2RoopA"
+    RANBIR = "2iAXJEMO2o0PqUHzvZwQ"
+    RAJU = "pzxut4zZz4GImZNlqQ3H"
+
+
+class CartesiaVoiceModel(str, Enum):
+    """Cartesia TTS voice models."""
+
+    SONIC_3_STABLE = "sonic-3-stable"
+    SONIC_3_LATEST = "sonic-3-latest"
+    SONIC_2 = "sonic-2"
+    SONIC_TURBO = "sonic-turbo"
+    SONIC = "sonic"
+
+
+class CartesiaVoiceId(str, Enum):
+    """Cartesia TTS voice IDs."""
+
+    ARUSHI = "95d51f79-c397-46f9-b49a-23763d3eaa2d"
+    NISHA = "0f14d8cb-f039-41fe-a813-a9b4bee7eed8"
+    ROHAN = "4877b818-c7fe-4c89-b1cf-eadf8e23da72"
+    VISHAL = "098fb15d-2597-4186-8b74-25340050b6e7"
+
+
 # Maps legacy tts_voice_name values to current provider strings for backward compat.
 # Used by decoder migration and runtime lead payload resolution.
 LEGACY_VOICE_TO_PROVIDER: Dict[str, str] = {

@@ -4,6 +4,10 @@ Business logic handlers for playground operations.
 
 from app.ai.voice.agents.breeze_buddy.template.types import (
     BackgroundSoundFile,
+    CartesiaVoiceId,
+    CartesiaVoiceModel,
+    ElevenLabsVoiceId,
+    ElevenLabsVoiceModel,
     InterruptionMode,
     KeywordMatchType,
     NoiseFilterType,
@@ -16,8 +20,10 @@ from app.ai.voice.agents.breeze_buddy.utils.language_utils.language_detector imp
     SHORT_TO_FULL_LANGUAGE_CODE,
 )
 from app.ai.voice.llm.types import (
+    AzureLLMModel,
     AzureLLMPlaygroundConfig,
     AzureThinkingPlaygroundConfig,
+    GoogleVertexModel,
     LLMProvider,
     LLMSdk,
     VertexClaudeThinkingPlaygroundConfig,
@@ -120,10 +126,49 @@ async def get_configuration_options_handler():
         ),
     }
 
+    # TTS voice models per provider (label derived from value)
+    tts_voice_models = {
+        TTSProvider.ELEVENLABS.value: [
+            {
+                "value": m.value,
+                "label": m.value.replace("eleven_", "").replace("_", " ").title(),
+            }
+            for m in ElevenLabsVoiceModel
+        ],
+        TTSProvider.CARTESIA.value: [
+            {"value": m.value, "label": m.value.replace("-", " ").title()}
+            for m in CartesiaVoiceModel
+        ],
+        TTSProvider.SARVAM.value: [],
+    }
+
+    # TTS voice IDs per provider (label from enum name since values are UUIDs)
+    tts_voice_ids = {
+        TTSProvider.ELEVENLABS.value: [
+            {"value": v.value, "label": v.name.title()} for v in ElevenLabsVoiceId
+        ],
+        TTSProvider.CARTESIA.value: [
+            {"value": v.value, "label": v.name.title()} for v in CartesiaVoiceId
+        ],
+        TTSProvider.SARVAM.value: [],
+    }
+
+    # LLM models per provider (keyed by provider or provider__sdk)
+    llm_models = {
+        LLMProvider.AZURE.value: [
+            {"value": m.value, "label": m.value} for m in AzureLLMModel
+        ],
+        LLMProvider.GOOGLE_VERTEX.value: [
+            {"value": m.value, "label": m.value} for m in GoogleVertexModel
+        ],
+    }
+
     return {
         "stt_providers": stt_providers,
         "tts_providers": tts_providers,
         "tts_configuration_fields": tts_configuration_fields,
+        "tts_voice_models": tts_voice_models,
+        "tts_voice_ids": tts_voice_ids,
         "stt_languages": stt_languages,
         "background_sounds": background_sounds,
         "noise_filter_types": noise_filter_types,
@@ -133,4 +178,5 @@ async def get_configuration_options_handler():
         "llm_sdks": llm_sdks,
         "llm_fields": llm_fields,
         "llm_thinking_fields": llm_thinking_fields,
+        "llm_models": llm_models,
     }

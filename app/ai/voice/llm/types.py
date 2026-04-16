@@ -66,6 +66,20 @@ class RealtimeConfig(BaseModel):
     )
 
 
+class AzureLLMModel(str, Enum):
+    """Azure OpenAI LLM models ."""
+
+    GPT_4O = "gpt-4o"
+    GPT_4O_AUTOMATIC = "gpt-4o-automatic"
+
+
+class GoogleVertexModel(str, Enum):
+    """Google Vertex AI models (Gemini and Claude)."""
+
+    GEMINI_2_0_FLASH = "gemini-2.0-flash"
+    CLAUDE_3_5_SONNET = "claude-3-5-sonnet"
+
+
 class LLMSdk(str, Enum):
     """SDK used for LLM communication.
 
