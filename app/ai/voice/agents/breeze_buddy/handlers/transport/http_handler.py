@@ -20,6 +20,9 @@ from typing import Any, Dict, Optional, Tuple
 from app.ai.voice.agents.breeze_buddy.handlers.transport.http_requester import (
     HttpRequestExecutor,
 )
+from app.ai.voice.agents.breeze_buddy.handlers.transport.rtvi import (
+    SseRtviForwarder,
+)
 from app.ai.voice.agents.breeze_buddy.handlers.transport.utils.field_resolver import (
     FieldResolver,
 )
@@ -27,6 +30,7 @@ from app.ai.voice.agents.breeze_buddy.template.context import TemplateContext
 from app.ai.voice.agents.breeze_buddy.template.types import (
     FieldSource,
     GlobalHttpFunction,
+    SseResponseMode,
 )
 from app.core.logger import logger
 
@@ -131,10 +135,15 @@ async def http_function_handler(
             f"request to {config.http_request.url}"
         )
 
+        # SSE events stream to the client automatically via the forwarder;
+        # sse_response_handler only shapes what the LLM sees on return.
+        sse_forwarder = SseRtviForwarder(context, function_name)
+
         result = await executor.execute(
             config=config.http_request,
             resolved_fields=resolved_fields,
             fire_and_forget=False,  # KEY: Wait for response
+            on_sse_event=sse_forwarder,
         )
 
         # Step 3: Handle response
@@ -152,18 +161,41 @@ async def http_function_handler(
             f"body_length={len(response_body)} bytes"
         )
 
-        # Step 4: Try to parse JSON, fallback to raw text
-        try:
-            data = json.loads(response_body)
-            logger.debug(
-                f"[{function_name}] Parsed JSON response with "
-                f"{len(data) if isinstance(data, dict) else 'non-dict'} keys"
-            )
-        except json.JSONDecodeError:
-            logger.debug(
-                f"[{function_name}] Response is not valid JSON, using raw text"
-            )
-            data = response_body
+        data: Any
+        chunks = sse_forwarder.chunks
+        if chunks:
+            logger.info(f"[{function_name}] SSE response: {len(chunks)} chunks")
+            sse_forwarder.emit_end()
+            handler_cfg = config.sse_response_handler
+            if handler_cfg and handler_cfg.mode == SseResponseMode.SELECT:
+                idx = handler_cfg.select_index
+                try:
+                    if idx is None:
+                        raise IndexError("select_index not set")
+                    data = chunks[idx].get("data", "")
+                    logger.info(f"[{function_name}] SSE select[{idx}] returned to LLM")
+                except IndexError as e:
+                    logger.warning(
+                        f"[{function_name}] invalid select_index={idx} "
+                        f"for {len(chunks)} chunks: {e}"
+                    )
+                    return {
+                        "status": "error",
+                        "error": "Something went wrong",
+                    }, None
+            else:
+                # None / FULL: concatenated data strings from the executor.
+                data = response_body
+                logger.debug(
+                    f"[{function_name}] SSE full mode: {len(response_body)} bytes to LLM"
+                )
+        else:
+            try:
+                data = json.loads(response_body)
+                logger.debug(f"[{function_name}] parsed JSON response")
+            except json.JSONDecodeError:
+                data = response_body
+                logger.debug(f"[{function_name}] non-JSON response, using raw text")
 
         # Step 5: Return formatted response to LLM
         is_success = 200 <= status_code < 300

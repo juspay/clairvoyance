@@ -819,6 +819,28 @@ class BaseGlobalFunction(BaseModel):
     func_post_actions: List[FlowAction] = Field(default=[], alias="post_actions")
 
 
+class SseResponseMode(str, Enum):
+    """How SSE response chunks are returned to the LLM."""
+
+    FULL = "full"
+    SELECT = "select"
+
+
+class SseResponseHandlerConfig(BaseModel):
+    """Controls how an SSE (text/event-stream) response is returned to the LLM.
+
+    RTVI streaming of each SSE event to the client happens automatically in
+    Daily mode regardless of this config. This only shapes the LLM-visible
+    payload.
+
+    - FULL: return concatenated data strings across all events to the LLM.
+    - SELECT: return only the chunk at `select_index` (supports negative indexing).
+    """
+
+    mode: SseResponseMode = SseResponseMode.FULL
+    select_index: Optional[int] = None
+
+
 class GlobalHttpFunction(BaseGlobalFunction):
     """
     Configuration for a global HTTP function available across all nodes.
@@ -848,6 +870,7 @@ class GlobalHttpFunction(BaseGlobalFunction):
     type: GlobalFunctionType = GlobalFunctionType.HTTP
     expected_fields: Dict[str, FieldConfig] = {}
     http_request: HttpRequestConfig
+    sse_response_handler: Optional[SseResponseHandlerConfig] = None
 
 
 class GlobalBuiltinFunction(BaseGlobalFunction):
