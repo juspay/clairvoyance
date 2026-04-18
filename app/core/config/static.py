@@ -572,3 +572,14 @@ HTTP_REQUEST_BLOCKED_CONTENT_TYPES = [
 
 # Maximum number of redirects to follow (0 to disable redirects)
 HTTP_REQUEST_MAX_REDIRECTS = int(os.environ.get("HTTP_REQUEST_MAX_REDIRECTS", "3"))
+
+# Kaleyra WhatsApp Configuration
+KALEYRA_API_BASE_URL = os.environ.get(
+    "KALEYRA_API_BASE_URL", "https://api.in.kaleyra.io/v2"
+)  # India region by default
+KALEYRA_SID = os.getenv("KALEYRA_SID", "")
+KALEYRA_API_KEY = os.getenv("KALEYRA_API_KEY", "")
+KALEYRA_WHATSAPP_FROM = os.getenv("KALEYRA_WHATSAPP_FROM", "")  # Sender phone number
+KALEYRA_WHATSAPP_TEMPLATE = os.getenv(
+    "KALEYRA_WHATSAPP_TEMPLATE", ""
+)  # Pre-approved WhatsApp template name
