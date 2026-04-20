@@ -46,6 +46,22 @@ async def ENABLE_BACKGROUND_TASKS() -> bool:
     return await get_config("ENABLE_BACKGROUND_TASKS", "false", bool)
 
 
+# --- Pickup Rate Alert Configuration ---
+async def ENABLE_PICKUP_RATE_ALERT() -> bool:
+    """Returns ENABLE_PICKUP_RATE_ALERT from Redis"""
+    return await get_config("ENABLE_PICKUP_RATE_ALERT", "false", bool)
+
+
+async def PICKUP_RATE_ALERT_INTERVAL_SECONDS() -> int:
+    """Returns PICKUP_RATE_ALERT_INTERVAL_SECONDS from Redis (default: 86400 = 24 h)"""
+    return await get_config("PICKUP_RATE_ALERT_INTERVAL_SECONDS", 86400, int)
+
+
+async def PICKUP_RATE_ALERT_THRESHOLD() -> float:
+    """Returns PICKUP_RATE_ALERT_THRESHOLD from Redis (default: 40.0 %)"""
+    return await get_config("PICKUP_RATE_ALERT_THRESHOLD", 40.0, float)
+
+
 async def DAILY_SUMMARY_HOUR() -> int:
     """Returns DAILY_SUMMARY_HOUR from Redis (24-hour format: 0-23)"""
     return await get_config("DAILY_SUMMARY_HOUR", 21, int)
