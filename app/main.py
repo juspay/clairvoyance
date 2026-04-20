@@ -35,6 +35,7 @@ from app.core.config.static import (
     HOST,
     MAX_DAILY_SESSION_LIMIT,
     PORT,
+    SERVICE_HEALTH_CHECKER_ENABLED,
     VOICE_AGENT_MAX_POOL_SIZE,
     VOICE_AGENT_POOL_SIZE,
 )
@@ -71,6 +72,7 @@ from app.services.redis import (
     get_redis_service,
     is_redis_configured,
 )
+from app.services.service_health.monitor import install_log_sink
 
 # Store Daily API helpers and room pool
 daily_helpers = {}
@@ -92,6 +94,10 @@ async def room_cleanup_callback(session_id: str):
 async def lifespan(_app: FastAPI):
     """FastAPI lifespan manager that handles startup and shutdown tasks."""
     logger.info("Application startup...")
+
+    # Install centralised log-pattern health sink
+    # Every logger.error/warning anywhere in the app is evaluated against rules.json
+    install_log_sink()
 
     # Initialize database and create tables if needed
     try:
@@ -168,6 +174,20 @@ async def lifespan(_app: FastAPI):
             await initialize_langfuse_tasks(_background_scheduler)
 
             ### Register new tasks here
+
+            if SERVICE_HEALTH_CHECKER_ENABLED:
+                from app.services.service_health.monitor import service_health_monitor
+
+                _background_scheduler.register_task(
+                    name="service_health_check",
+                    func=service_health_monitor.run_auto_health_check,
+                    interval_seconds=60,
+                )
+                logger.info("[ServiceHealth] This pod is the designated health checker")
+            else:
+                logger.info(
+                    "[ServiceHealth] Health checker disabled on this pod (SERVICE_HEALTH_CHECKER_ENABLED=false)"
+                )
 
             # Start the scheduler only if tasks are registered
             if _background_scheduler.tasks:

@@ -341,3 +341,21 @@ async def OUTBOUND_RATE_LIMIT_WINDOW_SECONDS() -> int:
 async def OUTBOUND_RATE_LIMIT_BLOCK_ENABLED() -> bool:
     """Returns OUTBOUND_RATE_LIMIT_BLOCK_ENABLED from Redis"""
     return await get_config("OUTBOUND_RATE_LIMIT_BLOCK_ENABLED", False, bool)
+
+
+# --- Service Health Monitoring Configuration ---
+async def ENABLE_SERVICE_HEALTH_MONITORING() -> bool:
+    """Returns ENABLE_SERVICE_HEALTH_MONITORING from Redis.
+
+    Master switch for service health monitoring. When False, errors are not
+    counted and auto-pause/resume is disabled.
+    """
+    return await get_config("ENABLE_SERVICE_HEALTH_MONITORING", True, bool)
+
+
+async def SERVICE_HEALTH_AUTO_RESUME_MINUTES() -> int:
+    """Returns SERVICE_HEALTH_AUTO_RESUME_MINUTES from Redis.
+
+    Minutes to wait after errors clear before auto-resuming calls.
+    """
+    return await get_config("SERVICE_HEALTH_AUTO_RESUME_MINUTES", 15, int)

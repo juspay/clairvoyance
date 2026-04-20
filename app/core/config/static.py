@@ -572,3 +572,10 @@ HTTP_REQUEST_BLOCKED_CONTENT_TYPES = [
 
 # Maximum number of redirects to follow (0 to disable redirects)
 HTTP_REQUEST_MAX_REDIRECTS = int(os.environ.get("HTTP_REQUEST_MAX_REDIRECTS", "3"))
+
+# Set to "true" on exactly one pod to make it the dedicated service-health
+# checker. All pods still report errors to Redis via the Loguru sink; only
+# the pod with this flag enabled will run the background check + pause logic.
+SERVICE_HEALTH_CHECKER_ENABLED = (
+    os.environ.get("SERVICE_HEALTH_CHECKER_ENABLED", "false").lower() == "true"
+)

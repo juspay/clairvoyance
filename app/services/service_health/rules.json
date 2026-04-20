@@ -1,0 +1,50 @@
+{
+  "soniox": {
+    "threshold_count": 10,
+    "window_minutes": 5,
+    "log_patterns": [
+      "http 502",
+      "unable to connect to soniox",
+      "exception processing startframe"
+    ]
+  },
+  "exotel": {
+    "threshold_count": 10,
+    "window_minutes": 5,
+    "log_patterns": [
+      "connection error when calling exotel api",
+      "timeout error when calling exotel api",
+      "request error when calling exotel api",
+      "unexpected error when calling exotel api",
+      "exotel api error"
+    ]
+  },
+  "plivo": {
+    "threshold_count": 10,
+    "window_minutes": 5,
+    "log_patterns": [
+      "error when making call via plivo"
+    ]
+  },
+  "twilio": {
+    "threshold_count": 10,
+    "window_minutes": 5,
+    "log_patterns": [
+      "error when making call via twilio"
+    ]
+  },
+  "call_initiation": {
+    "threshold_count": 20,
+    "window_minutes": 5,
+    "log_patterns": [
+      "failed to initiate call for lead"
+    ]
+  },
+  "provider_fallback": {
+    "threshold_count": 5,
+    "window_minutes": 5,
+    "log_patterns": [
+      "failed to initiate retry call for lead"
+    ]
+  }
+}

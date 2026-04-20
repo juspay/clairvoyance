@@ -8,11 +8,15 @@ import time
 from typing import Awaitable, cast
 
 import httpx
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 from google import genai
 from openai import AsyncAzureOpenAI
 
+from app.api.security.breeze_buddy.rbac_token import (
+    UserInfo,
+    get_current_user_with_rbac,
+)
 from app.core.config.static import (
     AZURE_OPENAI_API_KEY,
     AZURE_OPENAI_ENDPOINT,
@@ -23,6 +27,7 @@ from app.core.config.static import (
 from app.core.logger import logger
 from app.database import get_db_connection
 from app.services.redis.client import get_redis_service
+from app.services.service_health.monitor import service_health_monitor
 
 router = APIRouter()
 
@@ -403,6 +408,55 @@ async def azure_openai_health_check():
         health_status["status"] = "unhealthy"
         health_status["error"] = str(e)
         return JSONResponse(status_code=503, content=health_status)
+
+
+@router.get("/health/service")
+async def service_health_status():
+    """Return current service-health state: pause overlay + per-rule error counts."""
+    status = await service_health_monitor.get_status()
+    return JSONResponse(status)
+
+
+@router.post("/health/pause")
+async def service_health_pause(
+    request: Request,
+    current_user: UserInfo = Depends(get_current_user_with_rbac),
+):
+    """Manually pause outbound calls. Requires admin authentication."""
+    body = await request.json()
+    reason = body.get("reason", "Manual pause via API")
+    paused_by = current_user.username or current_user.id or "admin"
+    await service_health_monitor.pause_calls(
+        reason=reason, paused_by=paused_by, source_rule=None
+    )
+    return JSONResponse({"status": "paused", "reason": reason, "paused_by": paused_by})
+
+
+@router.post("/health/resume")
+async def service_health_resume(
+    request: Request,
+    current_user: UserInfo = Depends(get_current_user_with_rbac),
+):
+    """Manually resume outbound calls. Requires admin authentication."""
+    resumed_by = current_user.username or current_user.id or "admin"
+    await service_health_monitor.resume_calls(resumed_by=resumed_by)
+    return JSONResponse({"status": "resumed", "resumed_by": resumed_by})
+
+
+@router.post("/health/alert")
+async def service_health_alert(
+    request: Request,
+    current_user: UserInfo = Depends(get_current_user_with_rbac),
+):
+    """Webhook endpoint for external alert systems to trigger a service pause. Requires authentication."""
+    body = await request.json()
+    rule = body.get("rule", "external_alert")
+    reason = body.get("reason", f"External alert received for rule: {rule}")
+    paused_by = current_user.username or current_user.id or "alert_webhook"
+    await service_health_monitor.pause_calls(
+        reason=reason, paused_by=paused_by, source_rule=rule
+    )
+    return JSONResponse({"status": "paused", "rule": rule, "reason": reason})
 
 
 @router.get("/version")
