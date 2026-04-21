@@ -575,18 +575,19 @@ async def process_backlog_leads():
                     await _release_number(number_to_use.id, number_to_use.provider)
                     await release_lock_on_lead_by_id(locked_lead.id)
                     continue
-                rate_limit_allowed = await check_outbound_rate_limit_and_alert(
-                    customer_phone=customer_mobile,
-                    lead_id=str(locked_lead.id),
-                    reseller_id=locked_lead.reseller_id,
-                )
-                if not rate_limit_allowed:
-                    # TODO: advance next_attempt_at by the rate-limit window so
-                    # the scheduler does not immediately re-pick this lead and
-                    # re-trigger the alert on the next cycle.
-                    await _release_number(number_to_use.id, number_to_use.provider)
-                    await release_lock_on_lead_by_id(locked_lead.id)
-                    continue
+                if locked_lead.execution_mode == ExecutionMode.TELEPHONY:
+                    rate_limit_allowed = await check_outbound_rate_limit_and_alert(
+                        customer_phone=customer_mobile,
+                        lead_id=str(locked_lead.id),
+                        reseller_id=locked_lead.reseller_id,
+                    )
+                    if not rate_limit_allowed:
+                        # TODO: advance next_attempt_at by the rate-limit window so
+                        # the scheduler does not immediately re-pick this lead and
+                        # re-trigger the alert on the next cycle.
+                        await _release_number(number_to_use.id, number_to_use.provider)
+                        await release_lock_on_lead_by_id(locked_lead.id)
+                        continue
                 call = call_provider.make_call(
                     customer_mobile,
                     number_to_use.number,
