@@ -32,6 +32,26 @@ from app.database.accessor.breeze_buddy.lead_call_tracker import (
 )
 
 
+# Mapping from LLM-friendly display labels to database-friendly machine codes
+# Used for abandoned checkout recovery "abandonment_reason" field
+ABANDONMENT_REASON_DISPLAY_TO_CODE = {
+    # High-Intent Reasons
+    "Payment failed": "PAYMENT_FAILED",
+    "Payment method unavailable": "PAYMENT_METHOD_UNAVAILABLE",
+    "Technical issue": "TECHNICAL_ISSUE",
+    "Product detail gap": "PRODUCT_DETAIL_GAP",
+    "Delivery / pincode blocker": "DELIVERY_PINCODE_BLOCKER",
+    "Wants discount": "WANTS_DISCOUNT",
+    # Low-Intent Reasons
+    "Just browsing": "JUST_BROWSING",
+    "Price too high / no offers": "PRICE_TOO_HIGH",
+    "Product not available": "PRODUCT_NOT_AVAILABLE",
+    "Already purchased elsewhere": "ALREADY_PURCHASED_ELSEWHERE",
+    "Still deciding": "STILL_DECIDING",
+    "Changed mind": "CHANGED_MIND",
+}
+
+
 class Hook(ABC):
     """
     Base class for all hooks.
@@ -212,6 +232,23 @@ class UpdateOutcomeInDatabaseHook(Hook):
             # Initialize outcome object inside metadata if it doesn't exist
             if "outcome" not in meta_data:
                 meta_data["outcome"] = {}
+
+            # Map abandonment_reason from display label to machine code
+            # (e.g., "Payment failed" -> "PAYMENT_FAILED")
+            if "abandonment_reason" in final_data:
+                display_value = final_data["abandonment_reason"]
+                if display_value in ABANDONMENT_REASON_DISPLAY_TO_CODE:
+                    machine_code = ABANDONMENT_REASON_DISPLAY_TO_CODE[display_value]
+                    final_data["abandonment_reason"] = machine_code
+                    logger.debug(
+                        f"Mapped abandonment_reason from '{display_value}' to '{machine_code}' "
+                        f"for lead {context.lead.id}"
+                    )
+                else:
+                    logger.warning(
+                        f"Unknown abandonment_reason display value '{display_value}' "
+                        f"for lead {context.lead.id}. Using as-is."
+                    )
 
             # Add all other fields except outcome to the outcome object
             for key, value in final_data.items():
