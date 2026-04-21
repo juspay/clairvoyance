@@ -10,6 +10,6 @@ from app.services.pickup_rate.task import initialize_pickup_rate_tasks
 
 __all__ = [
     "PickupRateMonitor",
-    "pickup_rate_monitor",
     "initialize_pickup_rate_tasks",
+    "pickup_rate_monitor",
 ]

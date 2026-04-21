@@ -1,8 +1,7 @@
 """
 AlertConfig dataclass for the Pickup Rate Alert system.
 
-Phase 1: global alerting only.
-Phase 2 will extend this with optional merchant_id / reseller_id for per-merchant scope.
+Supports both global alerting and per-merchant scoping via merchant_id.
 """
 
 from dataclasses import dataclass, field
@@ -19,16 +18,15 @@ class AlertConfig:
                             Also used as the Redis TTL for the dedup key.
         threshold_percent:  Alert fires when pickup rate drops below this value (0-100).
         alert_type:         Which rate(s) to evaluate.
-                            "CALL_BASED"  – only call-based pickup rate.
-                            "LEAD_BASED"  – only lead-based pickup rate.
-                            "BOTH"        – alert if *either* rate is below threshold.
+                            "CALL_BASED"  - only call-based pickup rate.
+                            "LEAD_BASED"  - only lead-based pickup rate.
+                            "BOTH"        - alert if *either* rate is below threshold.
         scope:              Human-readable label used in Slack messages and Redis keys
                             (e.g. "global", "merchant:acme/store-1").
         lookback_hours:     Rolling window of call data to evaluate (default: 24 h).
 
-    Phase 2 extension fields (unused in Phase 1 – kept for forward-compatibility):
-        merchant_id:   Merchant identifier to scope DB queries (None = no filter).
-        reseller_id:   Reseller identifier to scope DB queries (None = no filter).
+    Optional scope fields:
+        merchant_id:   Merchant identifier to scope DB queries (None = all merchants).
     """
 
     enabled: bool
@@ -38,11 +36,10 @@ class AlertConfig:
     scope: str = "global"
     lookback_hours: int = 24
 
-    # Phase 2: per-merchant fields – not used yet, wired through to calculator
+    # Per-merchant scoping - wired through to calculator for DB query filtering
     merchant_id: Optional[str] = None
-    reseller_id: Optional[str] = None
 
-    # Computed Redis dedup key – derived from scope, not configurable directly
+    # Computed Redis dedup key - derived from scope, not configurable directly
     _redis_key: str = field(init=False, repr=False, default="")
 
     def __post_init__(self) -> None:

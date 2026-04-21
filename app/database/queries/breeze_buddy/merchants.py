@@ -25,18 +25,34 @@ def create_merchant_query(
     name: Optional[str] = None,
     description: Optional[str] = None,
     is_active: bool = True,
+    pickup_rate_alert_enabled: bool = False,
+    pickup_rate_alert_threshold: Optional[float] = None,
 ) -> Tuple[str, List[Any]]:
     """Generate query to create a new merchant entity."""
     query = f"""
         INSERT INTO {MERCHANTS_TABLE} (
             merchant_id, name, description,
-            is_active, reseller_id, created_at, updated_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+            is_active, reseller_id,
+            pickup_rate_alert_enabled, pickup_rate_alert_threshold,
+            created_at, updated_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
         RETURNING merchant_id, name, description,
-                  is_active, reseller_id, created_at, updated_at
+                  is_active, reseller_id,
+                  pickup_rate_alert_enabled, pickup_rate_alert_threshold,
+                  created_at, updated_at
     """
     now = datetime.now(timezone.utc)
-    values = [merchant_id, name, description, is_active, reseller_id, now, now]
+    values = [
+        merchant_id,
+        name,
+        description,
+        is_active,
+        reseller_id,
+        pickup_rate_alert_enabled,
+        pickup_rate_alert_threshold,
+        now,
+        now,
+    ]
     return query, values
 
 
@@ -46,7 +62,9 @@ def get_merchant_by_merchant_identifier_query(
     """Generate query to get merchant by merchant_id."""
     query = f"""
         SELECT merchant_id, name, description,
-               is_active, reseller_id, created_at, updated_at
+               is_active, reseller_id,
+               pickup_rate_alert_enabled, pickup_rate_alert_threshold,
+               created_at, updated_at
         FROM {MERCHANTS_TABLE}
         WHERE merchant_id = $1
     """
@@ -109,7 +127,9 @@ def get_all_merchants_query(
     # Build queries
     query = f"""
         SELECT merchant_id, name, description,
-               is_active, reseller_id, created_at, updated_at
+               is_active, reseller_id,
+               pickup_rate_alert_enabled, pickup_rate_alert_threshold,
+               created_at, updated_at
         FROM {MERCHANTS_TABLE}
         {where_clause}
         ORDER BY {sort_by} {sort_order.upper()}
@@ -137,7 +157,9 @@ def get_merchants_by_reseller_query(
 
     query = f"""
         SELECT merchant_id, name, description,
-               is_active, reseller_id, created_at, updated_at
+               is_active, reseller_id,
+               pickup_rate_alert_enabled, pickup_rate_alert_threshold,
+               created_at, updated_at
         FROM {MERCHANTS_TABLE}
         WHERE reseller_id = $1
         ORDER BY created_at DESC
@@ -159,6 +181,9 @@ def update_merchant_query(
     description: Optional[str] = None,
     is_active: Optional[bool] = None,
     reseller_id: Optional[str] = None,
+    pickup_rate_alert_enabled: Optional[bool] = None,
+    pickup_rate_alert_threshold: Optional[float] = None,
+    clear_pickup_rate_alert_threshold: bool = False,
 ) -> Tuple[str, List[Any]]:
     """Generate query to update a merchant entity.
 
@@ -189,6 +214,21 @@ def update_merchant_query(
         params.append(reseller_id)
         param_idx += 1
 
+    if pickup_rate_alert_enabled is not None:
+        set_clauses.append(f"pickup_rate_alert_enabled = ${param_idx}")
+        params.append(pickup_rate_alert_enabled)
+        param_idx += 1
+
+    if clear_pickup_rate_alert_threshold:
+        # Explicit null clear - set column to NULL
+        set_clauses.append(f"pickup_rate_alert_threshold = ${param_idx}")
+        params.append(None)
+        param_idx += 1
+    elif pickup_rate_alert_threshold is not None:
+        set_clauses.append(f"pickup_rate_alert_threshold = ${param_idx}")
+        params.append(pickup_rate_alert_threshold)
+        param_idx += 1
+
     if not set_clauses:
         # No fields to update
         return "", []
@@ -206,7 +246,9 @@ def update_merchant_query(
         SET {', '.join(set_clauses)}
         WHERE merchant_id = ${param_idx}
         RETURNING merchant_id, name, description,
-                  is_active, reseller_id, created_at, updated_at
+                  is_active, reseller_id,
+                  pickup_rate_alert_enabled, pickup_rate_alert_threshold,
+                  created_at, updated_at
     """
 
     return query, params
@@ -262,7 +304,9 @@ def get_merchants_by_ids_query(
 
     query = f"""
         SELECT merchant_id, name, description,
-               is_active, reseller_id, created_at, updated_at
+               is_active, reseller_id,
+               pickup_rate_alert_enabled, pickup_rate_alert_threshold,
+               created_at, updated_at
         FROM {MERCHANTS_TABLE}
         {where_clause}
         ORDER BY {sort_by} {sort_order.upper()}
@@ -298,3 +342,18 @@ def delete_merchant_query(merchant_id: str) -> Tuple[str, List[Any]]:
             (SELECT COUNT(*) FROM delete_operation) as deleted_count
     """
     return query, [merchant_id]
+
+
+def get_merchants_with_pickup_rate_alert_enabled_query() -> Tuple[str, List[Any]]:
+    """Generate query to get all active merchants with pickup rate alerting enabled."""
+    query = f"""
+        SELECT merchant_id, name, description,
+               is_active, reseller_id,
+               pickup_rate_alert_enabled, pickup_rate_alert_threshold,
+               created_at, updated_at
+        FROM {MERCHANTS_TABLE}
+        WHERE pickup_rate_alert_enabled = true
+          AND is_active = true
+        ORDER BY merchant_id ASC
+    """
+    return query, []

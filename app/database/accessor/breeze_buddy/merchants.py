@@ -19,6 +19,7 @@ from app.database.queries.breeze_buddy.merchants import (
     get_merchant_by_merchant_identifier_query,
     get_merchants_by_ids_query,
     get_merchants_by_reseller_query,
+    get_merchants_with_pickup_rate_alert_enabled_query,
     update_merchant_query,
 )
 from app.schemas.breeze_buddy.merchants import MerchantResponse
@@ -49,6 +50,8 @@ async def create_merchant(
     name: Optional[str] = None,
     description: Optional[str] = None,
     is_active: bool = True,
+    pickup_rate_alert_enabled: bool = False,
+    pickup_rate_alert_threshold: Optional[float] = None,
 ) -> Optional[MerchantResponse]:
     """Create a new merchant entity (business entity).
 
@@ -58,6 +61,8 @@ async def create_merchant(
         name: Optional display name
         description: Optional description
         is_active: Active status (default: true)
+        pickup_rate_alert_enabled: Enable per-merchant pickup rate alerting
+        pickup_rate_alert_threshold: Alert threshold %; None falls back to global config
 
     Returns:
         MerchantResponse if successful, None otherwise
@@ -68,6 +73,8 @@ async def create_merchant(
         name=name,
         description=description,
         is_active=is_active,
+        pickup_rate_alert_enabled=pickup_rate_alert_enabled,
+        pickup_rate_alert_threshold=pickup_rate_alert_threshold,
     )
 
     try:
@@ -258,6 +265,9 @@ async def update_merchant(
     description: Optional[str] = None,
     is_active: Optional[bool] = None,
     reseller_id: Optional[str] = None,
+    pickup_rate_alert_enabled: Optional[bool] = None,
+    pickup_rate_alert_threshold: Optional[float] = None,
+    clear_pickup_rate_alert_threshold: bool = False,
 ) -> Optional[MerchantResponse]:
     """Update merchant entity (merchant_id cannot be changed).
 
@@ -267,6 +277,11 @@ async def update_merchant(
         description: New description
         is_active: New active status
         reseller_id: New reseller owner ID
+        pickup_rate_alert_enabled: Toggle per-merchant pickup rate alerting
+        pickup_rate_alert_threshold: New alert threshold %; None leaves unchanged
+        clear_pickup_rate_alert_threshold: Set to True to explicitly clear the
+            threshold to NULL (fall back to global config). Takes precedence over
+            pickup_rate_alert_threshold.
 
     Returns:
         MerchantResponse if successful, None if not found
@@ -277,6 +292,9 @@ async def update_merchant(
         description=description,
         is_active=is_active,
         reseller_id=reseller_id,
+        pickup_rate_alert_enabled=pickup_rate_alert_enabled,
+        pickup_rate_alert_threshold=pickup_rate_alert_threshold,
+        clear_pickup_rate_alert_threshold=clear_pickup_rate_alert_threshold,
     )
 
     if not values:
@@ -337,4 +355,21 @@ async def delete_merchant(merchant_id: str) -> bool:
         return False
     except Exception as e:
         logger.error(f"Error deleting merchant entity {merchant_id}: {e}")
+        raise
+
+
+async def get_merchants_with_pickup_rate_alert_enabled() -> List[MerchantResponse]:
+    """Get all active merchants that have pickup rate alerting enabled.
+
+    Returns:
+        List of MerchantResponse for merchants where pickup_rate_alert_enabled = true
+        and is_active = true.
+    """
+    query, values = get_merchants_with_pickup_rate_alert_enabled_query()
+
+    try:
+        rows = await run_parameterized_query(query, values)
+        return [decode_merchant(row) for row in rows] if rows else []
+    except Exception as e:
+        logger.error(f"Error fetching merchants with pickup rate alert enabled: {e}")
         raise

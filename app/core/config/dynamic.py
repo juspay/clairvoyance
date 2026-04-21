@@ -53,13 +53,21 @@ async def ENABLE_PICKUP_RATE_ALERT() -> bool:
 
 
 async def PICKUP_RATE_ALERT_INTERVAL_SECONDS() -> int:
-    """Returns PICKUP_RATE_ALERT_INTERVAL_SECONDS from Redis (default: 86400 = 24 h)"""
-    return await get_config("PICKUP_RATE_ALERT_INTERVAL_SECONDS", 86400, int)
+    """Returns PICKUP_RATE_ALERT_INTERVAL_SECONDS from Redis (default: 86400 = 24 h).
+
+    Minimum enforced value is 60 seconds to prevent runaway task loops.
+    """
+    value = await get_config("PICKUP_RATE_ALERT_INTERVAL_SECONDS", 86400, int)
+    return max(60, value)
 
 
 async def PICKUP_RATE_ALERT_THRESHOLD() -> float:
-    """Returns PICKUP_RATE_ALERT_THRESHOLD from Redis (default: 40.0 %)"""
-    return await get_config("PICKUP_RATE_ALERT_THRESHOLD", 40.0, float)
+    """Returns PICKUP_RATE_ALERT_THRESHOLD from Redis (default: 40.0 %).
+
+    Clamped to [0, 100] to guard against misconfiguration.
+    """
+    value = await get_config("PICKUP_RATE_ALERT_THRESHOLD", 40.0, float)
+    return max(0.0, min(100.0, value))
 
 
 async def DAILY_SUMMARY_HOUR() -> int:

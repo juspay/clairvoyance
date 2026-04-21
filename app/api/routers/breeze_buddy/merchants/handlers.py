@@ -107,6 +107,8 @@ async def create_merchant_handler(
                 merchant_data.is_active if merchant_data.is_active is not None else True
             ),
             reseller_id=reseller_id,
+            pickup_rate_alert_enabled=merchant_data.pickup_rate_alert_enabled or False,
+            pickup_rate_alert_threshold=merchant_data.pickup_rate_alert_threshold,
         )
 
         if not merchant:
@@ -235,12 +237,22 @@ async def update_merchant_handler(
                 )
             reseller_id = merchant_data.reseller_id
 
+        # Detect if pickup_rate_alert_threshold was explicitly set to null
+        # (vs simply not included in the request body).
+        clear_threshold = (
+            "pickup_rate_alert_threshold" in merchant_data.model_fields_set
+            and merchant_data.pickup_rate_alert_threshold is None
+        )
+
         updated_merchant = await merchant_accessors.update_merchant(
             merchant_id=merchant_id,
             name=merchant_data.name,
             description=merchant_data.description,
             is_active=merchant_data.is_active,
             reseller_id=reseller_id,
+            pickup_rate_alert_enabled=merchant_data.pickup_rate_alert_enabled,
+            pickup_rate_alert_threshold=merchant_data.pickup_rate_alert_threshold,
+            clear_pickup_rate_alert_threshold=clear_threshold,
         )
 
         if not updated_merchant:

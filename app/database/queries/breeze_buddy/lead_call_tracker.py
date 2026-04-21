@@ -338,6 +338,7 @@ def get_all_lead_call_trackers_query(
     shop_name: Optional[str] = None,
     limit: Optional[int] = None,
     offset: Optional[int] = None,
+    merchant_id: Optional[str] = None,
 ) -> Tuple[str, List[Any]]:
     """
     Generate query to get all lead call trackers within a date range with optional filters and pagination.
@@ -373,6 +374,10 @@ def get_all_lead_call_trackers_query(
     if shop_name:
         values.append(f"%{shop_name}%")
         conditions.append(f"payload->>'shop_name' LIKE ${len(values)}")
+
+    if merchant_id:
+        values.append(merchant_id)
+        conditions.append(f'lct."merchant_id" = ${len(values)}')
 
     if conditions:
         text += " WHERE " + " AND ".join(conditions)
@@ -451,9 +456,50 @@ def get_lead_call_trackers_count_query(
     return text, values
 
 
+def get_call_based_pickup_rate_query(
+    start_date: Optional[datetime] = None,
+    end_date: Optional[datetime] = None,
+    merchant_id: Optional[str] = None,
+) -> Tuple[str, List[Any]]:
+    """
+    Generate query to aggregate call-based pickup rate metrics in a single SQL pass.
+
+    Returns one row with:
+        calls_attempted  - COUNT of FINISHED calls in window
+        calls_no_answer  - COUNT of FINISHED calls with NO_ANSWER outcome
+    """
+    values: List[Any] = []
+    conditions = []
+
+    if start_date:
+        values.append(start_date)
+        conditions.append(f'"call_initiated_time" >= ${len(values)}')
+
+    if end_date:
+        values.append(end_date)
+        conditions.append(f'"call_initiated_time" < ${len(values)}')
+
+    if merchant_id:
+        values.append(merchant_id)
+        conditions.append(f'"merchant_id" = ${len(values)}')
+
+    where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
+
+    text = f"""
+        SELECT
+            COUNT(*) FILTER (WHERE status = 'FINISHED') AS calls_attempted,
+            COUNT(*) FILTER (WHERE status = 'FINISHED' AND outcome = 'NO_ANSWER')
+                AS calls_no_answer
+        FROM "{LEAD_CALL_TRACKER_TABLE}"
+        {where_clause};
+    """
+    return text, values
+
+
 def get_lead_based_analytics_query(
     start_date: Optional[datetime] = None,
     end_date: Optional[datetime] = None,
+    merchant_id: Optional[str] = None,
 ) -> Tuple[str, List[Any]]:
     """
     Generate query to get per-lead call data.
@@ -469,6 +515,10 @@ def get_lead_based_analytics_query(
     if end_date:
         values.append(end_date)
         conditions.append(f'"call_initiated_time" < ${len(values)}')
+
+    if merchant_id:
+        values.append(merchant_id)
+        conditions.append(f'"merchant_id" = ${len(values)}')
 
     where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
 

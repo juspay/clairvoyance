@@ -29,6 +29,14 @@ class MerchantCreate(BaseModel):
         description="Reseller user ID who owns this merchant. "
         "Admin-only field; auto-set for resellers.",
     )
+    pickup_rate_alert_enabled: Optional[bool] = Field(
+        False, description="Enable per-merchant pickup rate alerting"
+    )
+    pickup_rate_alert_threshold: Optional[float] = Field(
+        None,
+        description="Alert threshold % for this merchant. "
+        "If null, falls back to global PICKUP_RATE_ALERT_THRESHOLD.",
+    )
 
 
 class MerchantUpdate(BaseModel):
@@ -40,6 +48,8 @@ class MerchantUpdate(BaseModel):
     reseller_id: Optional[str] = Field(
         None, description="Update reseller assignment (admin only)"
     )
+    pickup_rate_alert_enabled: Optional[bool] = None
+    pickup_rate_alert_threshold: Optional[float] = None
 
 
 class MerchantResponse(BaseModel):
@@ -50,6 +60,8 @@ class MerchantResponse(BaseModel):
     description: Optional[str] = None
     is_active: bool = True
     reseller_id: Optional[str] = None
+    pickup_rate_alert_enabled: bool = False
+    pickup_rate_alert_threshold: Optional[float] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
