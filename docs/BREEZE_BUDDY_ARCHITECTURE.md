@@ -38,7 +38,7 @@ Breeze Buddy is a template-based voice agent system built on top of Pipecat for 
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                           API Layer (FastAPI)                            │
 ├─────────────────────────────────────────────────────────────────────────┤
-│  /push/lead/v2         │  /template (GET/POST)  │  /websocket           │
+│  POST /leads           │  /template (GET/POST)  │  /websocket           │
 │  - Lead insertion      │  - Template CRUD       │  - Call handling      │
 │  - Payload validation  │  - Schema validation   │  - WebSocket connect  │
 └────────────┬───────────────────────┬──────────────────────┬─────────────┘
@@ -71,7 +71,7 @@ Breeze Buddy is a template-based voice agent system built on top of Pipecat for 
 
 ### 1. Lead Insertion Flow
 
-Leads are inserted through the `/push/lead/v2` endpoint:
+Leads are inserted through the `POST /leads` endpoint:
 
 **Request Model** ([types/models.py:15-20](app/ai/voice/agents/breeze_buddy/types/models.py#L15-L20)):
 ```python
@@ -83,7 +83,7 @@ class PushLeadRequest(BaseModel):
     reporting_webhook_url: str | None = None  # Callback URL
 ```
 
-**Insertion Process** ([leads.py:153-275](app/api/routers/breeze_buddy/leads.py#L153-L275)):
+**Insertion Process** ([handlers.py:97](app/api/routers/breeze_buddy/leads/handlers.py#L97)):
 
 1. **Template Retrieval**: Fetch template by reseller, identifier, and name
    ```python
@@ -604,12 +604,12 @@ async def my_handler(context, flow_manager, args):
 ### API Layer
 
 #### 1. Leads Router
-**Location**: [api/routers/breeze_buddy/leads.py](app/api/routers/breeze_buddy/leads.py)
+**Location**: [api/routers/breeze_buddy/leads/](app/api/routers/breeze_buddy/leads/)
 
 **Endpoints**:
 
-##### `POST /push/lead/v2`
-Inserts new lead for processing ([leads.py:153-275](app/api/routers/breeze_buddy/leads.py#L153-L275))
+##### `POST /leads`
+Inserts new lead for processing ([handlers.py:97](app/api/routers/breeze_buddy/leads/handlers.py#L97))
 
 **Request**:
 ```json
@@ -642,11 +642,14 @@ Inserts new lead for processing ([leads.py:153-275](app/api/routers/breeze_buddy
 - Checks template exists for reseller
 - Verifies call execution config exists
 
-##### `GET /lead/{lead_id}`
-Retrieves lead by ID ([leads.py:25-55](app/api/routers/breeze_buddy/leads.py#L25-L55))
+##### `GET /leads/{lead_id}`
+Retrieves lead by ID ([__init__.py:99](app/api/routers/breeze_buddy/leads/__init__.py#L99))
 
-##### `POST /{reseller}/{template}`
-Legacy endpoint for order confirmation ([leads.py:58-150](app/api/routers/breeze_buddy/leads.py#L58-L150))
+##### `DELETE /leads/{lead_id}`
+Aborts a lead by ID ([__init__.py](app/api/routers/breeze_buddy/leads/__init__.py))
+
+##### `GET /leads/recording/{call_sid}`
+Streams the call recording audio ([__init__.py](app/api/routers/breeze_buddy/leads/__init__.py))
 
 #### 2. Template Router
 **Location**: [api/routers/breeze_buddy/template.py](app/api/routers/breeze_buddy/template.py)
@@ -804,7 +807,7 @@ Plays audio (e.g., dial tone, hold music).
 
 ```
 1. Lead Insertion
-   ├─> POST /push/lead/v2
+   ├─> POST /leads
    ├─> Validate payload against template schema
    ├─> Get call execution config
    └─> Insert into lead_call_tracker table
@@ -1163,7 +1166,7 @@ Have a good day."
 
 ### Payload Example
 
-**Input Payload** (from `/push/lead/v2`):
+**Input Payload** (from `POST /leads`):
 ```json
 {
   "payload": {

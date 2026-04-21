@@ -104,7 +104,7 @@ Breeze Buddy is the template-driven telephony agent. These patterns MUST be foll
 - Template types defined in `breeze_buddy/template/types.py` -- this is the source of truth for all template models
 
 ### Lead Processing Flow
-1. Lead inserted via `/push/lead/v2` -> validated -> stored as BACKLOG
+1. Lead inserted via `POST /leads` -> validated -> stored as BACKLOG
 2. Cron job picks up backlog leads
 3. Pre-checks run (optional external API validation)
 4. Call initiated via telephony provider (Twilio/Plivo/Exotel)
