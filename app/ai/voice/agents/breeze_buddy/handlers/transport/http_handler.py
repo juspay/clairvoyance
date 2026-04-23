@@ -29,6 +29,9 @@ from app.ai.voice.agents.breeze_buddy.handlers.transport.rtvi import SseRtviForw
 from app.ai.voice.agents.breeze_buddy.handlers.transport.utils.field_resolver import (
     FieldResolver,
 )
+from app.ai.voice.agents.breeze_buddy.handlers.transport.utils.response_filter import (
+    apply_response_schema,
+)
 from app.ai.voice.agents.breeze_buddy.template.context import TemplateContext
 from app.ai.voice.agents.breeze_buddy.template.types import (
     FieldSource,
@@ -194,6 +197,26 @@ async def http_function_handler(
                 logger.debug(f"[{function_name}] non-JSON response, using raw text")
 
         is_success = 200 <= status_code < 300
+
+        # Apply expected_response_schema: extract only whitelisted fields
+        # before returning data to the LLM. Only applied on successful (2xx)
+        # responses — error bodies pass through unfiltered so the LLM can
+        # read error messages/codes (e.g. "person not found") as-is.
+        if (
+            is_success
+            and config.expected_response_schema
+            and isinstance(data, (dict, list))
+        ):
+            data = apply_response_schema(
+                data, config.expected_response_schema, args=args
+            )
+            logger.debug(
+                f"[{function_name}] response filtered via expected_response_schema: "
+                f"{list(config.expected_response_schema.keys())}"
+            )
+
+        logger.debug(f"[{function_name}] data going to LLM: {data}")
+
         return {
             "status": "success" if is_success else "error",
             "status_code": status_code,

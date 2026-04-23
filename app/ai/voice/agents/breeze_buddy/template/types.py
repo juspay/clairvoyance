@@ -896,6 +896,23 @@ class GlobalHttpFunction(BaseGlobalFunction):
     expected_fields: Dict[str, FieldConfig] = {}
     http_request: HttpRequestConfig
     sse_response_handler: Optional[SseResponseHandlerConfig] = None
+    expected_response_schema: Dict[str, str] = {}
+    """Whitelist of fields to extract from the HTTP response before feeding to the LLM.
+
+    Key   = name as it will appear in the LLM payload.
+    Value = JMESPath expression (https://jmespath.org) evaluated against the
+            response data. ``{placeholder}`` tokens in the expression are
+            resolved from the LLM function call arguments before evaluation.
+
+    Common patterns:
+        - Simple field:        ``"status"``
+        - Nested field:        ``"order.status"``
+        - Array wildcard:      ``"items[*].name"``
+        - Multi-field project: ``"rides[*].{rideId: rideId, area: pickup.area}"``
+        - Filter with arg:     ``"coinEarnHistory[?rideId=='{ride_id}']"``
+
+    When empty (default), the full response data is passed to the LLM unchanged.
+    """
 
 
 class GlobalBuiltinFunction(BaseGlobalFunction):
