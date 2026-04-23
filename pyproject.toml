@@ -32,6 +32,7 @@ dependencies = [
     "soundfile",
     "redis[hiredis]>=5.0.0",
     "nltk",
+    "jmespath>=1.1.0",
 ]
 
 [project.optional-dependencies]
