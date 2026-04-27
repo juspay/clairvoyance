@@ -32,6 +32,8 @@ dependencies = [
     "soundfile",
     "redis[hiredis]>=5.0.0",
     "nltk",
+    "faiss-cpu>=1.7.4",
+    "pdfminer.six>=20251230",
 ]
 
 [project.optional-dependencies]

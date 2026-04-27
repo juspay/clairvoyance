@@ -47,6 +47,7 @@ from app.ai.voice.agents.breeze_buddy.agent.vad import TELEPHONY_SAMPLE_RATE
 from app.ai.voice.agents.breeze_buddy.llm import get_llm_service
 from app.ai.voice.agents.breeze_buddy.observability.tracing_setup import setup_tracing
 from app.ai.voice.agents.breeze_buddy.processors import (
+    RagContextProcessor,
     TranscriptionGateProcessor,
     UserIdleCallbackHandler,
     create_user_idle_processor,
@@ -169,6 +170,7 @@ async def build_pipeline(
     vad_analyzer: Optional[SileroVADAnalyzer] = None,
     configurations: Optional[ConfigurationModel] = None,
     on_user_idle_timeout: Optional[Callable[[int], Any]] = None,
+    rag_context_processor: Optional[RagContextProcessor] = None,
 ) -> tuple[
     Pipeline,
     LLMContext,
@@ -360,7 +362,7 @@ async def build_pipeline(
     # Store reference to user aggregator for position lookup
     user_aggregator = context_aggregator.user()
 
-    # Order: stt → transcription_gate → user_aggregator → llm → tts
+    # Order: stt → transcription_gate → user_aggregator → [rag_context] → llm → tts
     # Pipecat's LLMUserAggregator natively handles interruptions via
     # UserTurnStrategies — no custom response gate needed.
     # Note: RTVIProcessor is added automatically by PipelineTask (pipecat v0.0.102+)
@@ -375,6 +377,24 @@ async def build_pipeline(
         transport.output(),
         context_aggregator.assistant(),
     ]
+
+    # Insert RAG context processor between user_aggregator and llm.
+    # It must sit after user_aggregator so it can intercept the LLMContextFrame
+    # (which carries the assembled context) and inject knowledge ephemerally
+    # before the LLM sees it.  Placing it before user_aggregator would mean it
+    # only sees raw TranscriptionFrames and has no access to the LLMContext object.
+    if rag_context_processor is not None:
+        try:
+            user_aggregator_idx = pipeline_parts.index(user_aggregator)
+            pipeline_parts.insert(user_aggregator_idx + 1, rag_context_processor)
+            logger.info(
+                "RAG context processor inserted into pipeline (after user_aggregator)"
+            )
+        except ValueError as e:
+            logger.error(
+                "Failed to insert RAG context processor into pipeline: %s. RAG disabled.",
+                e,
+            )
 
     # Insert user idle processor before user_aggregator to monitor user activity
     if user_idle:

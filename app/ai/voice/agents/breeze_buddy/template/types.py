@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
 
+from app.ai.voice.agents.breeze_buddy.services.rag.types import KnowledgeBaseConfig
 from app.ai.voice.llm.types import LLMConfiguration
 from app.core.deprecation import log_deprecated_fields
 
@@ -568,6 +569,15 @@ class ConfigurationModel(BaseModel):
     llm_configurations: Optional[LLMConfiguration] = Field(
         None,
         description="LLM provider and model configuration",
+    )
+
+    # --- RAG Knowledge Base ---
+    knowledge_base: Optional[KnowledgeBaseConfig] = Field(
+        None,
+        description="Knowledge-base configuration for voice-optimised RAG. "
+        "When set, Breeze Buddy pre-loads the specified GCS bucket/prefix into a "
+        "FAISS index and injects relevant context into every LLM turn using the "
+        "dual-agent (SlowThinker + FastTalker) architecture.",
     )
 
     @model_validator(mode="after")

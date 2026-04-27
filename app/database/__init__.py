@@ -17,7 +17,61 @@ from app.core.config.static import (
 from app.core.logger import logger
 from app.services.aws.kms import decrypt_kms
 
-pool = None
+pool: asyncpg.Pool | None = None
+
+
+def get_pool() -> asyncpg.Pool:
+    """Return the initialised connection pool, raising if not yet ready."""
+    if pool is None:
+        raise RuntimeError(
+            "Database pool is not initialized. Call init_db_pool() first."
+        )
+    return pool
+
+
+async def _init_vector_codec(conn: asyncpg.Connection) -> None:
+    """Register pgvector <-> Python list codec on a connection.
+
+    asyncpg does not know the ``vector`` type by default.  We register a
+    text codec so that:
+      - Python lists / numpy arrays are sent as the text representation
+        ``'[0.1, -0.2, ...]'`` that pgvector accepts.
+      - Values read back from the DB are returned as Python lists of floats.
+
+    This is called via ``init`` in ``create_pool`` so it runs for every
+    connection in the pool automatically.
+
+    The ``vector`` extension itself is created by migration 023 — we do not
+    issue DDL here to avoid requiring elevated privileges on every connection.
+    """
+    # Fetch the OID of the vector type (must already exist via migration)
+    vector_oid = await conn.fetchval(
+        "SELECT oid FROM pg_type WHERE typname = 'vector' LIMIT 1"
+    )
+    if vector_oid is None:
+        logger.warning(
+            "pgvector extension not available — RAG vector search will not work"
+        )
+        return
+
+    def _encode_vector(value: object) -> str:  # list[float] | np.ndarray → str
+        if hasattr(value, "tolist"):
+            value = value.tolist()  # type: ignore[union-attr]
+        return "[" + ",".join(str(float(v)) for v in value) + "]"  # type: ignore[arg-type]
+
+    def _decode_vector(data: str) -> list:  # '[0.1,…]' → list[float]
+        inner = data.strip("[]").strip()
+        if not inner:
+            return []
+        return [float(x) for x in inner.split(",")]
+
+    await conn.set_type_codec(
+        "vector",
+        encoder=_encode_vector,
+        decoder=_decode_vector,
+        schema="public",
+        format="text",
+    )
 
 
 async def init_db_pool():
@@ -56,6 +110,7 @@ async def init_db_pool():
                 port=POSTGRES_PORT,
                 min_size=POSTGRES_POOL_SIZE,
                 max_size=POSTGRES_POOL_SIZE + POSTGRES_MAX_OVERFLOW,
+                init=_init_vector_codec,
             )
             logger.info("Database pool initialized successfully.")
         except Exception as e:
@@ -94,5 +149,6 @@ async def close_db_pool():
 __all__ = [
     "init_db_pool",
     "get_db_connection",
+    "get_pool",
     "close_db_pool",
 ]

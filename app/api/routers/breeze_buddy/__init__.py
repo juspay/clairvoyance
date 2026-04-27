@@ -16,6 +16,9 @@ from app.api.routers.breeze_buddy.cron import router as cron_router
 # Daily transport (web/mobile clients via Daily.co)
 from app.api.routers.breeze_buddy.daily import router as daily_router
 from app.api.routers.breeze_buddy.demo import router as demo_router
+
+# RAG knowledge base management
+from app.api.routers.breeze_buddy.knowledge_base import router as knowledge_base_router
 from app.api.routers.breeze_buddy.leads import router as leads_router
 from app.api.routers.breeze_buddy.merchants import router as merchants_router
 from app.api.routers.breeze_buddy.numbers import router as numbers_router
@@ -80,3 +83,6 @@ router.include_router(websocket_router, prefix="", tags=["websocket"])
 router.include_router(pod_router, prefix="/pod", tags=["pod"])
 
 router.include_router(daily_router, prefix="", tags=["daily"])
+
+# RAG knowledge base management (upload, index, status, invalidate)
+router.include_router(knowledge_base_router, prefix="", tags=["knowledge-base"])

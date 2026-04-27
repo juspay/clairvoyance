@@ -59,9 +59,11 @@ from app.ai.voice.agents.breeze_buddy.handlers.internal.end_conversation import 
 from app.ai.voice.agents.breeze_buddy.observability.tracing_setup import (
     create_root_span,
 )
+from app.ai.voice.agents.breeze_buddy.processors.rag_context import RagContextProcessor
 from app.ai.voice.agents.breeze_buddy.services.inbound_policy import (
     get_block_redirect,
 )
+from app.ai.voice.agents.breeze_buddy.services.rag import RagMemoryRouter
 from app.ai.voice.agents.breeze_buddy.services.telephony.base_provider import (
     VoiceCallProvider,
 )
@@ -82,7 +84,11 @@ from app.ai.voice.agents.breeze_buddy.utils.transport.websockets import (
     close_websocket_safely,
 )
 from app.ai.voice.agents.breeze_buddy.utils.warm_transfer import set_transfer_flag
-from app.core.config.static import ENABLE_BREEZE_BUDDY_TRACING
+from app.core.config.static import (
+    ENABLE_BREEZE_BUDDY_TRACING,
+    RAG_EMBEDDING_DEPLOYMENT,
+    RAG_ENABLED,
+)
 from app.core.logger import logger
 from app.core.logger.context import (
     clear_log_context,
@@ -162,6 +168,10 @@ class Agent:
 
         # Error tracking
         self.errors: List[Dict[str, Any]] = []
+
+        # RAG (Retrieval-Augmented Generation) — optional, per-call
+        self._rag_router: Optional[RagMemoryRouter] = None
+        self._rag_context_processor: Optional[RagContextProcessor] = None
 
     @property
     def is_daily_mode(self) -> bool:
@@ -707,6 +717,50 @@ class Agent:
             track_error(self.errors, error_msg)
             self.root_span.end()
 
+    async def _init_rag(self) -> None:
+        """Initialise RAG router and context processor if knowledge_base is configured."""
+        if not RAG_ENABLED:
+            logger.info("RAG disabled globally (RAG_ENABLED=false) — skipping init")
+            return
+        if not self.configurations or not self.template:
+            return
+        kb_config = getattr(self.configurations, "knowledge_base", None)
+        if not kb_config:
+            return
+
+        merchant_id = self.template.merchant_id or "default"
+        template_id = self.template.id
+
+        try:
+            self._rag_router = await RagMemoryRouter.build(
+                kb_config=kb_config,
+                merchant_id=merchant_id,
+                template_id=template_id,
+                azure_embedding_deployment=RAG_EMBEDDING_DEPLOYMENT,
+            )
+            await self._rag_router.start()
+            self._rag_context_processor = RagContextProcessor(self._rag_router)
+            logger.info(
+                "RAG initialised: gs://.../%s/%s",
+                merchant_id,
+                template_id,
+            )
+        except Exception as exc:
+            logger.error("RAG initialisation failed (proceeding without RAG): %s", exc)
+            self._rag_router = None
+            self._rag_context_processor = None
+
+    async def _stop_rag(self) -> None:
+        """Stop and clean up the RAG router."""
+        if self._rag_router is not None:
+            try:
+                await self._rag_router.stop()
+            except Exception as exc:
+                logger.warning("RAG stop error: %s", exc)
+            finally:
+                self._rag_router = None
+                self._rag_context_processor = None
+
     async def run(self, runner_args: Optional[RunnerArguments] = None) -> None:
         """Main entry point for running the agent.
 
@@ -743,6 +797,10 @@ class Agent:
             # VAD analyzer is passed to build_pipeline where it's configured inside the
             # LLMUserAggregator. This enables UserTurnStrategies (VAD + Transcription fallback).
             stt, llm, tts = await create_services(self.configurations)
+
+            # Initialise RAG (non-blocking on failure)
+            await self._init_rag()
+
             (
                 pipeline,
                 self.context,
@@ -757,6 +815,7 @@ class Agent:
                 self.vad_analyzer,
                 self.configurations,
                 on_user_idle_timeout=self._handle_user_idle_timeout,
+                rag_context_processor=self._rag_context_processor,
             )
 
             # Store callback handler for resetting retry count on user activity
@@ -816,6 +875,8 @@ class Agent:
             except asyncio.CancelledError:
                 logger.info("Pipeline task cancelled. Exiting gracefully.")
         finally:
+            # Stop RAG router (logs final metrics, cancels background tasks)
+            await self._stop_rag()
             # Safety net: always clear log context when run() exits, regardless of how.
             # This handles crashes, cancellations, and any exit path missed above.
             # Double-clearing (if end_conversation already cleared) is harmless.

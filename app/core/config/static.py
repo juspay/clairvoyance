@@ -262,6 +262,29 @@ AZURE_BREEZE_BUDDY_OPENAI_MODEL = os.environ.get(
     "AZURE_BREEZE_BUDDY_OPENAI_MODEL", "gpt-4o-automatic"
 )
 
+# RAG (Retrieval-Augmented Generation) Configuration — Breeze Buddy
+# Dedicated GCS bucket for knowledge files. Structure: /<merchant_id>/<template_id>/
+RAG_GCS_BUCKET = os.environ.get("RAG_GCS_BUCKET", "")
+
+# Embedding endpoint (Azure AI Foundry, OpenAI-compatible base_url pattern)
+# endpoint : full base URL including trailing slash and "openai/v1/"
+# api_key  : API key from the Foundry deployment page
+# deployment: model/deployment name shown in Foundry (e.g. "embed-v-4-0")
+# dimension : output vector size — confirmed 1536 for embed-v4.0
+RAG_EMBEDDING_ENDPOINT = os.environ.get(
+    "RAG_EMBEDDING_ENDPOINT",
+    "https://breeze-automatic.services.ai.azure.com/openai/v1/",
+)
+RAG_EMBEDDING_API_KEY = os.environ.get("RAG_EMBEDDING_API_KEY", "")
+RAG_EMBEDDING_DEPLOYMENT = os.environ.get("RAG_EMBEDDING_DEPLOYMENT", "embed-v-4-0")
+RAG_EMBEDDING_DIMENSION = int(os.environ.get("RAG_EMBEDDING_DIMENSION", "1536"))
+
+# Master switch: set to "false" to disable RAG globally without changing templates
+RAG_ENABLED = os.environ.get("RAG_ENABLED", "true").lower() == "true"
+
+# Maximum characters of RAG context injected per LLM turn (prevents prompt bloat)
+RAG_MAX_CONTEXT_CHARS = int(os.environ.get("RAG_MAX_CONTEXT_CHARS", "1200"))
+
 # Twilio settings
 TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "")
 TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "")
