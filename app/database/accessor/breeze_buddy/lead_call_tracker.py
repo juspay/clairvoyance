@@ -13,6 +13,7 @@ from app.database.queries import run_parameterized_query
 from app.database.queries.breeze_buddy.lead_call_tracker import (
     abort_lead_by_id_query,
     acquire_lock_on_lead_by_id_query,
+    defer_lead_next_attempt_and_release_lock_query,
     get_all_lead_call_trackers_query,
     get_lead_based_analytics_query,
     get_lead_by_call_id_query,
@@ -199,6 +200,44 @@ async def release_lock_on_lead_by_id(lead_id: str) -> Optional[LeadCallTracker]:
 
     except Exception as e:
         logger.error(f"Error releasing lock on lead: {e}")
+        return None
+
+
+async def defer_lead_next_attempt_and_release_lock(
+    lead_id: str, defer_seconds: int
+) -> Optional[LeadCallTracker]:
+    """
+    Release the lock on a lead and push next_attempt_at out by at least
+    defer_seconds. Used when the cron must release a lead it cannot dispatch
+    (e.g. blocked by the outbound rate limiter) without making it eligible
+    for immediate re-pickup on the next cron cycle.
+    """
+    logger.info(
+        f"Deferring next_attempt_at by {defer_seconds}s and releasing lock "
+        f"for lead {lead_id}"
+    )
+
+    try:
+        query_text, values = defer_lead_next_attempt_and_release_lock_query(
+            lead_id, defer_seconds
+        )
+        result = await run_parameterized_query(query_text, values)
+        if result and get_row_count(result) > 0:
+            decoded_result = decode_lead_call_tracker(result[0])
+            if decoded_result:
+                logger.info(
+                    f"Lead {decoded_result.id} deferred to "
+                    f"{decoded_result.next_attempt_at} and unlocked"
+                )
+            else:
+                logger.error("Lead decoding failed after defer + release")
+            return decoded_result
+
+        logger.warning(f"Lead {lead_id} not found for defer + release")
+        return None
+
+    except Exception as e:
+        logger.error(f"Error deferring lead next_attempt_at: {e}")
         return None
 
 

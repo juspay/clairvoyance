@@ -32,6 +32,7 @@ from .breeze_buddy.credentials import (
 from .breeze_buddy.lead_call_tracker import (
     acquire_lock_on_lead_by_id,
     create_lead_call_tracker,
+    defer_lead_next_attempt_and_release_lock,
     get_all_lead_call_trackers,
     get_lead_based_analytics,
     get_lead_by_call_id,
@@ -96,6 +97,7 @@ __all__ = [
     "get_leads_based_on_status_and_next_attempt",
     "acquire_lock_on_lead_by_id",
     "release_lock_on_lead_by_id",
+    "defer_lead_next_attempt_and_release_lock",
     "update_lead_call_details",
     "get_lead_by_call_id",
     "get_lead_by_id",
