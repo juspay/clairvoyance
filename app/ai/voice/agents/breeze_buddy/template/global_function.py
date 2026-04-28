@@ -11,6 +11,7 @@ The adapters follow the same context injection pattern as normal functions:
 """
 
 import asyncio
+import inspect
 import random
 from typing import Any, Callable, Dict, List, Optional, Protocol, runtime_checkable
 
@@ -23,9 +24,13 @@ from app.ai.voice.agents.breeze_buddy.template.func_action_handlers import (
 from app.ai.voice.agents.breeze_buddy.template.types import (
     BaseGlobalFunction,
     GlobalBuiltinFunction,
+    GlobalCustomFunction,
     GlobalFunctionType,
     GlobalHttpFunction,
     PhrasingOrder,
+)
+from app.ai.voice.agents.breeze_buddy.utils.parser import (
+    compile_custom_function,
 )
 from app.core.config.static import GLOBAL_FUNCTION_DESCRIPTION_SUFFIX
 from app.core.logger import logger
@@ -138,7 +143,7 @@ class GlobalFunctionAdapter(Protocol):
         config: Dict[str, Any],
         wrapped_handler: Callable,
         bot_instance: Any = None,
-    ) -> FlowsFunctionSchema:
+    ) -> Optional[FlowsFunctionSchema]:
         """
         Build a FlowsFunctionSchema from the config.
 
@@ -148,7 +153,7 @@ class GlobalFunctionAdapter(Protocol):
             bot_instance: Bot instance for creating TemplateContext in func_post_actions
 
         Returns:
-            FlowsFunctionSchema ready for FlowManager
+            FlowsFunctionSchema ready for FlowManager, or None if build failed
         """
         ...
 
@@ -388,6 +393,131 @@ class BuiltinGlobalFunctionAdapter:
         )
 
 
+class CustomPythonGlobalFunctionAdapter:
+    """
+    Adapter for custom Python global functions.
+
+    Custom functions allow developers to write Python code directly in templates.
+    The python_code is compiled at build time and executed when the LLM calls the function.
+
+    Template config example:
+        {
+            "type": "custom",
+            "name": "calculate_discount",
+            "description": "Calculate discount based on order count",
+            "properties": {"order_count": {"type": "integer"}},
+            "required": ["order_count"],
+            "python_code": "def handler(args, context):\\n    n = args['order_count']\\n    if n > 50:\\n        return {'tier': 'gold'}\\n    return {'tier': 'bronze'}",
+            "timeout_seconds": 5
+        }
+
+    The handler entry point must be a top-level function named 'handler' accepting
+    two arguments: (args, context). It can be sync or async.
+    """
+
+    @property
+    def function_type(self) -> GlobalFunctionType:
+        return GlobalFunctionType.CUSTOM
+
+    @property
+    def handler_name(self) -> str:
+        """Return the handler name required from handler_map."""
+        return "custom_python_code_handler"
+
+    def can_handle(self, config: Dict[str, Any]) -> bool:
+        """Check if config has type='custom'."""
+        return config.get("type") == GlobalFunctionType.CUSTOM.value
+
+    def build_schema(
+        self,
+        config: Dict[str, Any],
+        wrapped_handler: Callable,
+        bot_instance: Any = None,
+    ) -> Optional[FlowsFunctionSchema]:
+        """
+        Build FlowsFunctionSchema for a custom Python global function.
+
+        Compiles the python_code at build time and attaches the compiled handler
+        to the function config for use at runtime.
+
+        Args:
+            config: Raw function configuration dict with 'python_code' field
+            wrapped_handler: custom_python_code_handler wrapped with with_context
+            bot_instance: Bot instance for creating TemplateContext in func_post_actions
+
+        Returns:
+            FlowsFunctionSchema or None if compilation failed
+        """
+        func = GlobalCustomFunction.model_validate(config)
+
+        # Compile python_code at build time
+        compiled = compile_custom_function(func.name, func.python_code)
+        if compiled is None:
+            # Compilation failed - log warning and skip this function
+            # Other functions in the template continue normally
+            logger.warning(
+                f"Skipping custom function '{func.name}' due to compilation failure"
+            )
+            return None
+
+        # Attach compiled handler to function config
+        func.compiled_handler = compiled
+
+        enhanced_description = func.description
+        if GLOBAL_FUNCTION_DESCRIPTION_SUFFIX:
+            enhanced_description = (
+                f"{func.description} {GLOBAL_FUNCTION_DESCRIPTION_SUFFIX}"
+            )
+
+        logger.debug(
+            f"Building custom Python global function: {func.name}, "
+            f"timeout={func.timeout_seconds}s"
+        )
+
+        def create_wrapper(
+            captured_func: GlobalCustomFunction, captured_bot_instance: Any
+        ):
+            async def wrapper_handler(llm_args, flow_manager):
+                """
+                Outer wrapper for custom Python global function.
+
+                Passes function_config (with compiled_handler) to the handler.
+                The with_context wrapper extracts function_config and passes
+                it to custom_python_code_handler.
+                """
+                # Pre-call: filler phrase + background music
+                await _run_filler_and_music(captured_bot_instance, captured_func)
+
+                try:
+                    result = await wrapped_handler(
+                        llm_args,
+                        function_config=captured_func,
+                    )
+                finally:
+                    # Post-call: always stop music even if handler errors
+                    await _stop_music(captured_bot_instance, captured_func)
+                if captured_func.func_post_actions and captured_bot_instance:
+                    asyncio.create_task(
+                        execute_func_post_actions(
+                            captured_bot_instance,
+                            result,
+                            captured_func.func_post_actions,
+                            captured_func.name,
+                        )
+                    )
+                return result
+
+            return wrapper_handler
+
+        return FlowsFunctionSchema(
+            name=func.name,
+            description=enhanced_description,
+            handler=create_wrapper(func, bot_instance),
+            properties=func.properties,
+            required=func.required,
+        )
+
+
 class GlobalFunctionRegistry:
     """
     Registry for global function adapters.
@@ -528,3 +658,41 @@ class GlobalFunctionRegistry:
 # Register adapters at module load time (same pattern as HookRegistry)
 GlobalFunctionRegistry.register("http", HttpGlobalFunctionAdapter())
 GlobalFunctionRegistry.register("builtin", BuiltinGlobalFunctionAdapter())
+GlobalFunctionRegistry.register("custom", CustomPythonGlobalFunctionAdapter())
+
+
+async def execute_custom_function(
+    handler: Callable,
+    args: Dict[str, Any],
+    context: Dict[str, Any],
+    timeout: int = 5,
+) -> Any:
+    """
+    Execute the custom handler with timeout handling.
+
+    Handles both sync and async handlers.
+
+    Args:
+        handler: The compiled handler function
+        args: Arguments dict from LLM
+        context: Context dict with lead info
+        timeout: Maximum execution time in seconds
+
+    Returns:
+        Handler result
+
+    Raises:
+        TimeoutError: If execution exceeds timeout
+        Exception: Any exception raised by handler
+    """
+    try:
+        if inspect.iscoroutinefunction(handler):
+            # Async handler - await directly with timeout
+            return await asyncio.wait_for(handler(args, context), timeout=timeout)
+        else:
+            # Sync handler - run in thread pool to avoid blocking
+            return await asyncio.wait_for(
+                asyncio.to_thread(handler, args, context), timeout=timeout
+            )
+    except asyncio.TimeoutError:
+        raise TimeoutError(f"Function timed out after {timeout}s")

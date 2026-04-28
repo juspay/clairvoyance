@@ -1056,6 +1056,50 @@ class GlobalBuiltinFunction(BaseGlobalFunction):
     )
 
 
+class GlobalCustomFunction(BaseGlobalFunction):
+    """
+    Configuration for a custom Python global function available across all nodes.
+
+    Custom functions allow developers to write Python code directly in the template
+    that gets compiled at build time and executed when the LLM calls the function.
+
+    The python_code string must define a top-level callable named 'handler' that
+    accepts two arguments: (args, context).
+
+    Example:
+        {
+            "type": "custom",
+            "name": "calculate_discount",
+            "description": "Calculate discount based on order count",
+            "properties": {"order_count": {"type": "integer"}},
+            "required": ["order_count"],
+            "python_code": "def handler(args, context):\\n    n = args['order_count']\\n    if n > 50:\\n        return {'tier': 'gold'}\\n    return {'tier': 'bronze'}"
+        }
+
+    Handler contract:
+        def handler(args: dict, context: dict) -> Any:
+            # args: LLM-provided arguments
+            # context: read-only context with lead, call_sid, lead_id
+            # return: any JSON-serializable value
+    """
+
+    type: GlobalFunctionType = GlobalFunctionType.CUSTOM
+    python_code: str = Field(
+        ...,
+        description="Python source code. Must define a top-level 'handler(args, context)' function.",
+    )
+    timeout_seconds: int = Field(
+        5,
+        ge=1,
+        le=30,
+        description="Wall-time limit per invocation in seconds (1-30, default 5).",
+    )
+    # Populated by the adapter after successful compile. Excluded from serialization.
+    compiled_handler: Optional[Any] = Field(default=None, exclude=True, repr=False)
+
+    model_config = ConfigDict(populate_by_name=True, arbitrary_types_allowed=True)
+
+
 class FlowNodeModel(BaseModel):
     node_name: str
     task_messages: List[TaskMessage]
