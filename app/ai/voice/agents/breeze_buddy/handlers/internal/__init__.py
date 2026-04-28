@@ -8,6 +8,9 @@ from app.ai.voice.agents.breeze_buddy.handlers.internal.audio import play_audio_
 from app.ai.voice.agents.breeze_buddy.handlers.internal.builtin_dispatcher import (
     builtin_function_dispatcher,
 )
+from app.ai.voice.agents.breeze_buddy.handlers.internal.custom_python_code_handler import (
+    custom_python_code_handler,
+)
 from app.ai.voice.agents.breeze_buddy.handlers.internal.end_conversation import (
     end_conversation,
 )
@@ -28,6 +31,7 @@ from app.ai.voice.agents.breeze_buddy.handlers.internal.warm_transfer import (
 __all__ = [
     "builtin_function_dispatcher",
     "connect_to_live_agent",
+    "custom_python_code_handler",
     "end_conversation",
     "get_current_time",
     "mute_stt",
