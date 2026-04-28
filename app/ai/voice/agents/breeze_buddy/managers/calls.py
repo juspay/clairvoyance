@@ -42,6 +42,7 @@ from app.database.accessor import (
     acquire_lock_on_lead_by_id,
     create_lead_call_tracker,
     decrement_outbound_number_channels,
+    defer_lead_next_attempt_and_release_lock,
     get_call_execution_config_by_merchant_id,
     get_lead_by_call_id,
     get_leads_based_on_status_and_next_attempt,
@@ -576,17 +577,29 @@ async def process_backlog_leads():
                     await release_lock_on_lead_by_id(locked_lead.id)
                     continue
                 if locked_lead.execution_mode == ExecutionMode.TELEPHONY:
-                    rate_limit_allowed = await check_outbound_rate_limit_and_alert(
-                        customer_phone=customer_mobile,
-                        lead_id=str(locked_lead.id),
-                        reseller_id=locked_lead.reseller_id,
+                    rate_limit_allowed, defer_seconds = (
+                        await check_outbound_rate_limit_and_alert(
+                            customer_phone=customer_mobile,
+                            lead_id=str(locked_lead.id),
+                            reseller_id=locked_lead.reseller_id,
+                        )
                     )
                     if not rate_limit_allowed:
-                        # TODO: advance next_attempt_at by the rate-limit window so
-                        # the scheduler does not immediately re-pick this lead and
-                        # re-trigger the alert on the next cycle.
+                        # Push next_attempt_at out by the rate-limit window so the
+                        # cron does not immediately re-pick this lead and re-trigger
+                        # the alert on the next cycle.
                         await _release_number(number_to_use.id, number_to_use.provider)
-                        await release_lock_on_lead_by_id(locked_lead.id)
+                        deferred = await defer_lead_next_attempt_and_release_lock(
+                            locked_lead.id, defer_seconds
+                        )
+                        if deferred is None:
+                            # Defer accessor failed; fall back to a plain unlock so
+                            # the lead does not stay stuck in locked state.
+                            logger.error(
+                                f"Failed to defer next_attempt_at for lead "
+                                f"{locked_lead.id}; releasing lock without deferral"
+                            )
+                            await release_lock_on_lead_by_id(locked_lead.id)
                         continue
                 call = call_provider.make_call(
                     customer_mobile,

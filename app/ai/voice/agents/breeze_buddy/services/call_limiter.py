@@ -12,13 +12,15 @@ OUTBOUND_RATE_LIMIT_LUA = """
 local key    = KEYS[1]
 local now    = tonumber(ARGV[1])
 local window = tonumber(ARGV[2])
-local limit  = tonumber(ARGV[3]) -- reserved for Phase 2 blocking
+local limit  = tonumber(ARGV[3])
 local member = ARGV[4]
 
 redis.call('ZREMRANGEBYSCORE', key, 0, now - window)
 local count = redis.call('ZCARD', key)
-redis.call('ZADD', key, now, member)
-redis.call('EXPIRE', key, window)
+if count < limit then
+    redis.call('ZADD', key, now, member)
+    redis.call('EXPIRE', key, window)
+end
 return count
 """
 
@@ -38,9 +40,11 @@ async def check_outbound_limit_for_number(
     """
     Track an outbound call and check if the rate limit is exceeded.
 
-    Always records the call in the sliding window. Returns whether the limit
-    has been exceeded and the count of calls already in the window (before
-    this one).
+    The Lua script only ZADDs (records the attempt and refreshes the TTL)
+    while the count is below the limit; once the limit is reached, blocked
+    attempts are NOT recorded so they cannot inflate the sliding window
+    further. Returns whether the limit has been exceeded and the count of
+    calls already in the window (before this one).
 
     Returns:
         (exceeded, count_before) — exceeded is True when count_before >= limit.
@@ -75,12 +79,18 @@ async def check_outbound_rate_limit_and_alert(
     customer_phone: str,
     lead_id: str,
     reseller_id: str,
-) -> bool:
+) -> Tuple[bool, int]:
     """
     Track an outbound call and check if the rate limit is exceeded.
 
-    Returns False if the call should be blocked (block enabled + limit exceeded).
-    Returns True if the call may proceed.
+    Returns (allow, defer_seconds):
+      - allow=True, defer_seconds=0 — call may proceed.
+      - allow=False, defer_seconds>0 — call blocked; the caller should push
+        next_attempt_at out by defer_seconds so the cron does not immediately
+        re-pick the lead and re-trigger the alert.
+      - allow=True, defer_seconds=0 (alert-only mode) — limit exceeded but
+        block is disabled; call may proceed without deferral.
+
     Always sends a Slack alert when the limit is exceeded.
 
     The block/allow decision is made before the Slack alert is sent so that
@@ -111,9 +121,10 @@ async def check_outbound_rate_limit_and_alert(
                 f"calls in {window_seconds}s "
                 f"(lead: {lead_id}, action: {action})"
             )
-            # Determine allow/block BEFORE sending the Slack alert so that any
+            # Determine allow/defer BEFORE sending the Slack alert so that any
             # Slack exception cannot affect the call decision.
             allow = not block_enabled
+            defer_seconds = 0 if allow else window_seconds
             try:
                 await slack_alert.send(
                     title=f"Outbound Rate Limit Exceeded ({action})",
@@ -134,8 +145,8 @@ async def check_outbound_rate_limit_and_alert(
                 )
             except Exception as slack_exc:
                 logger.warning(f"[OUTBOUND_RATE_LIMIT] Slack alert failed: {slack_exc}")
-            return allow
-        return True
+            return allow, defer_seconds
+        return True, 0
     except Exception as e:
         logger.warning(f"[OUTBOUND_RATE_LIMIT] Error in rate limit check: {e}")
-        return True
+        return True, 0

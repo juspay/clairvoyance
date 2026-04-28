@@ -160,6 +160,34 @@ def release_lock_on_lead_by_id_query(lead_id: str) -> Tuple[str, List[Any]]:
     return text, values
 
 
+def defer_lead_next_attempt_and_release_lock_query(
+    lead_id: str, defer_seconds: int
+) -> Tuple[str, List[Any]]:
+    """
+    Generate query to release the lock on a lead and push next_attempt_at
+    forward by at least defer_seconds. Used when a backlog lead cannot be
+    dispatched right now (e.g. blocked by the outbound rate limiter) so the
+    cron does not immediately re-pick it on the next cycle.
+
+    GREATEST() preserves any further-in-the-future schedule already on the
+    row, and COALESCE() guards against NULL next_attempt_at so the deferral
+    always takes effect.
+    """
+    text = f"""
+        UPDATE "{LEAD_CALL_TRACKER_TABLE}"
+        SET "is_locked" = FALSE,
+            "next_attempt_at" = GREATEST(
+                COALESCE("next_attempt_at", NOW()),
+                NOW() + make_interval(secs => $2::int)
+            ),
+            "updated_at" = NOW()
+        WHERE "id" = $1
+        RETURNING *;
+    """
+    values: List[Any] = [lead_id, defer_seconds]
+    return text, values
+
+
 def update_lead_call_details_query(
     id: str,
     status: LeadCallStatus,

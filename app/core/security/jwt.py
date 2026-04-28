@@ -1,5 +1,5 @@
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
 import jwt
@@ -50,13 +50,13 @@ class JWTManager:
         to_encode = data.copy()
 
         if expires_delta:
-            expire = datetime.utcnow() + expires_delta
+            expire = datetime.now(timezone.utc) + expires_delta
         else:
-            expire = datetime.utcnow() + timedelta(
+            expire = datetime.now(timezone.utc) + timedelta(
                 minutes=self.access_token_expire_minutes
             )
 
-        to_encode.update({"exp": expire, "iat": datetime.utcnow()})
+        to_encode.update({"exp": expire, "iat": datetime.now(timezone.utc)})
 
         try:
             encoded_jwt = jwt.encode(
@@ -95,7 +95,7 @@ class JWTManager:
                 logger.warning("Token missing expiration claim")
                 raise CREDENTIALS_EXCEPTION
 
-            if datetime.utcnow() > datetime.fromtimestamp(exp):
+            if datetime.now(timezone.utc) > datetime.fromtimestamp(exp, timezone.utc):
                 logger.warning("Token has expired")
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
