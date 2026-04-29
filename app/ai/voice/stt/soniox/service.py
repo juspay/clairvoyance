@@ -59,23 +59,27 @@ class SonioxSTTServiceWithEndpointDelay(SonioxSTTService):
 
             enable_endpoint_detection = not self._vad_force_turn_endpoint
 
-            context = self._params.context
+            s = self._settings
+
+            context = s.context
             if isinstance(context, SonioxContextObject):
                 context = context.model_dump()
 
             config = {
                 "api_key": self._api_key,
-                "model": self._model_name,
-                "audio_format": self._params.audio_format,
-                "num_channels": self._params.num_channels or 1,
+                "model": s.model,
+                "audio_format": self._audio_format,
+                "num_channels": self._num_channels,
                 "enable_endpoint_detection": enable_endpoint_detection,
                 "sample_rate": self.sample_rate,
-                "language_hints": _prepare_language_hints(self._params.language_hints),
-                "language_hints_strict": self._params.language_hints_strict,
+                "language_hints": _prepare_language_hints(
+                    s.language_hints if isinstance(s.language_hints, list) else None
+                ),
+                "language_hints_strict": s.language_hints_strict,
                 "context": context,
-                "enable_speaker_diarization": self._params.enable_speaker_diarization,
-                "enable_language_identification": self._params.enable_language_identification,
-                "client_reference_id": self._params.client_reference_id,
+                "enable_speaker_diarization": s.enable_speaker_diarization,
+                "enable_language_identification": s.enable_language_identification,
+                "client_reference_id": s.client_reference_id,
             }
 
             # Inject max_endpoint_delay_ms when native endpoint detection is on

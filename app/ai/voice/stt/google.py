@@ -12,7 +12,7 @@ def build_google_stt(credentials_json: str):
     """Create a Google STT service with default language hints."""
 
     return GoogleSTTService(
-        params=GoogleSTTService.InputParams(
+        settings=GoogleSTTService.Settings(
             languages=[Language.EN_US, Language.EN_IN],
             enable_interim_results=False,
         ),

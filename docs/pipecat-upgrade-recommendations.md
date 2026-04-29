@@ -299,7 +299,7 @@ v0.0.105 re-added `enhancement_level` support to `AICFilter` with runtime `Filte
 **Recommendation**: Pass `enhancement_level` and `voice_gain` to the Breeze Buddy AIC filter:
 ```python
 return AICFilter(
-    license_key=static.BREEZE_BUDDY_AICOUSTICS_LICENSE_KEY,
+    license_key=static.BREEZE_BUDDY_AIC_LICENSE_KEY,
     model_path=Path(static.AIC_MODEL_PATH),
     enhancement_level=static.AIC_ENHANCEMENT_LEVEL,
     voice_gain=static.AIC_VOICE_GAIN,

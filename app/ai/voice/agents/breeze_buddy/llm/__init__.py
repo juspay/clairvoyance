@@ -13,9 +13,8 @@ from __future__ import annotations
 
 from typing import Union
 
-from pipecat.services.anthropic.llm import AnthropicLLMService
 from pipecat.services.azure.llm import AzureLLMService
-from pipecat.services.google.llm_vertex import GoogleVertexLLMService
+from pipecat.services.google.vertex.llm import GoogleVertexLLMService
 
 from app.ai.voice.llm import (
     AzureConfig,
@@ -28,6 +27,7 @@ from app.ai.voice.llm import (
     build_claude_vertex_llm,
     build_vertex_llm,
 )
+from app.ai.voice.llm.claude_vertex import VertexAnthropicLLMService
 from app.core.config.dynamic import (
     BREEZE_BUDDY_AZURE_MAX_COMPLETION_TOKENS,
     BREEZE_BUDDY_AZURE_TEMPERATURE,
@@ -169,7 +169,9 @@ async def _resolve_vertex(llm_config: LLMConfiguration) -> GoogleVertexLLMServic
     )
 
 
-async def _resolve_claude_vertex(llm_config: LLMConfiguration) -> AnthropicLLMService:
+async def _resolve_claude_vertex(
+    llm_config: LLMConfiguration,
+) -> VertexAnthropicLLMService:
     """Build Claude on Vertex AI — all params required from template config."""
     credentials_json = await GOOGLE_VERTEX_CREDENTIALS_JSON()
     project_id = await GOOGLE_VERTEX_PROJECT_ID()
@@ -232,7 +234,7 @@ async def _resolve_claude_vertex(llm_config: LLMConfiguration) -> AnthropicLLMSe
 
 async def get_llm_service(
     llm_config: LLMConfiguration | None = None,
-) -> Union[AzureLLMService, GoogleVertexLLMService, AnthropicLLMService]:
+) -> Union[AzureLLMService, GoogleVertexLLMService, VertexAnthropicLLMService]:
     """Get LLM service instance based on configuration.
 
     Dispatch:

@@ -90,7 +90,7 @@ def build_sarvam_stt(config: SarvamConfig):
         api_key=config.api_key,
         model=config.model,
         sample_rate=config.sample_rate,
-        params=SarvamSTTService.InputParams(
+        settings=SarvamSTTService.Settings(
             language=language_param,
             prompt=prompt_param,
             vad_signals=config.vad_signals if config.vad_signals is not None else True,

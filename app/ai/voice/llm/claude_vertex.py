@@ -16,13 +16,16 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any, Optional
 
 from anthropic import AsyncAnthropicVertex
 from google.oauth2 import service_account
 from pipecat.adapters.services.anthropic_adapter import AnthropicLLMInvocationParams
 from pipecat.processors.aggregators.llm_context import LLMContext
-from pipecat.services.anthropic.llm import AnthropicLLMService, OpenAILLMContext
+from pipecat.services.anthropic.llm import (
+    AnthropicLLMService,
+    AnthropicLLMSettings,
+)
 
 from app.core.logger import logger
 
@@ -45,14 +48,14 @@ class VertexAnthropicLLMService(AnthropicLLMService):
     Compatibility note:
         Overrides Pipecat's private ``_get_llm_invocation_params`` hook
         because no public outbound-message mutation hook is available.
-        Tested with Pipecat v0.0.102. Review this override when upgrading
+        Tested with Pipecat v1.1.0. Review this override when upgrading
         Pipecat, as the private method signature may change.
 
     See: https://github.com/pipecat-ai/pipecat/issues/4020
     """
 
     def _get_llm_invocation_params(
-        self, context: OpenAILLMContext | LLMContext
+        self, context: LLMContext
     ) -> AnthropicLLMInvocationParams:
         params = super()._get_llm_invocation_params(context)
         messages = params.get("messages", [])
@@ -121,17 +124,22 @@ def build_claude_vertex_llm(config: ClaudeVertexConfig) -> VertexAnthropicLLMSer
             budget_tokens=config.thinking_budget_tokens,
         )
 
-    params = AnthropicLLMService.InputParams(
-        max_tokens=config.max_tokens,
-        temperature=config.temperature,
-    )
+    # Pipecat 1.0: AnthropicLLMSettings exposes `enable_prompt_caching` (the
+    # `enable_prompt_caching_beta` flag was removed). Vertex Anthropic charges
+    # per cached/uncached input token, so caching the long system prompt and
+    # template instructions across turns materially cuts spend and latency.
+    settings_kwargs: dict[str, Any] = {
+        "max_tokens": config.max_tokens,
+        "temperature": config.temperature,
+        "enable_prompt_caching": True,
+    }
     if thinking is not None:
-        params.thinking = thinking
+        settings_kwargs["thinking"] = thinking
 
     return VertexAnthropicLLMService(
         api_key="dummy",
         model=config.model,
-        params=params,
+        settings=AnthropicLLMSettings(**settings_kwargs),
         client=vertex_client,
         function_call_timeout_secs=config.function_call_timeout_secs,
     )

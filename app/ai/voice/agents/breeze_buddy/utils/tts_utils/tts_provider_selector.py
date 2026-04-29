@@ -63,7 +63,7 @@ Do not return anything else. Just the provider name."""
         llm = GoogleLLMService(
             api_key=GEMINI_API_KEY,
             model=GEMINI_TTS_SELECTION_MODEL,
-            params=GoogleLLMService.InputParams(
+            settings=GoogleLLMService.Settings(
                 max_tokens=200,
                 temperature=0,
             ),

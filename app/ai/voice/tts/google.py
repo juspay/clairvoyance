@@ -28,7 +28,7 @@ def build_google_tts(config: GoogleConfig):
 
     return GoogleTTSService(
         voice_id=config.voice_id,
-        params=GoogleTTSService.InputParams(language=config.language),
+        settings=GoogleTTSService.Settings(language=config.language),
         credentials=config.credentials,
         text_filters=text_filters,
     )

@@ -108,7 +108,7 @@ Language code:"""
         llm = GoogleLLMService(
             api_key=GEMINI_API_KEY,
             model=GEMINI_LANGUAGE_DETECTION_MODEL,
-            params=GoogleLLMService.InputParams(
+            settings=GoogleLLMService.Settings(
                 max_tokens=200,
                 temperature=0,
             ),

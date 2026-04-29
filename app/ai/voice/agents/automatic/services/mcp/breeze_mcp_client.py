@@ -25,11 +25,20 @@ async def init_breeze_mcp_tools(
     mode,
     args,
 ):
+    """Register MCP tools and return (tools, mcp_client).
+
+    Pipecat 1.0 made MCPClient an async-context-managed resource: closing the
+    client tears down the session and the registered tools stop working.
+    The caller MUST keep the returned client alive for the pipeline lifetime
+    and `await mcp_client.close()` on shutdown. On the fallback path the
+    returned client is None.
+    """
     logger.info(f"Initializing tools from remote MCP server")
 
     # Use pure Pipecat MCP client
     logger.info(f"Using pure Pipecat MCP client for shop_id: {args.shop_id}")
 
+    mcp_client: PipecatMCPClient | None = None
     try:
         # Use Pipecat MCP client directly (standard MCP protocol only)
         server_params = StreamableHttpParameters(
@@ -46,6 +55,9 @@ async def init_breeze_mcp_tools(
         )
 
         mcp_client = PipecatMCPClient(server_params=server_params)
+        # Pipecat 1.0: explicit start() before register_tools() — the prior
+        # implicit-connect-on-use path now raises RuntimeError.
+        await mcp_client.start()
 
         # Wrap all MCP functions to intercept chart results
         if not hasattr(llm, "register_function") or not callable(llm.register_function):
@@ -78,11 +90,19 @@ async def init_breeze_mcp_tools(
         else:
             logger.warning(f"MCP client returned None or empty tools object")
 
-        return tools
+        return tools, mcp_client
 
     except Exception as e:
         logger.error(f"Failed to register MCP tools: {type(e).__name__}: {str(e)}")
         logger.exception("Full exception traceback:")
+
+        # Close the started MCP client to avoid leaking the session/transport
+        # when we fall back to local tools.
+        if mcp_client is not None:
+            try:
+                await mcp_client.close()
+            except Exception:
+                logger.exception("Failed to close MCP client after registration error")
 
         # Fallback to traditional tools
         if mode == Mode.LIVE:
@@ -112,4 +132,4 @@ async def init_breeze_mcp_tools(
             logger.info(f"Initializing fallback function tool: {name}")
             llm.register_function(name, function)
 
-        return tools
+        return tools, None

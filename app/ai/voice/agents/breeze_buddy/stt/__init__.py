@@ -36,10 +36,8 @@ from app.core.config.dynamic import (
 )
 from app.core.config.static import (
     BREEZE_BUDDY_SONIOX_CONTEXT,
-    BREEZE_BUDDY_SONIOX_ENABLE_NON_FINAL_TOKENS,
     BREEZE_BUDDY_SONIOX_LANGUAGE_HINTS,
     BREEZE_BUDDY_SONIOX_MAX_ENDPOINT_DELAY_MS,
-    BREEZE_BUDDY_SONIOX_MAX_NON_FINAL_TOKENS_DURATION_MS,
     BREEZE_BUDDY_SONIOX_MODEL,
     BREEZE_BUDDY_SONIOX_VAD_FORCE_TURN_ENDPOINT,
     BREEZE_BUDDY_STT_SERVICE,
@@ -108,7 +106,6 @@ async def create_stt_from_config(config: STTConfiguration):
                 punctuate=dg.punctuate,
                 endpointing=dg.endpointing_ms,
                 utterance_end_ms=dg.utterance_end_ms,  # None = disabled
-                no_delay=dg.no_delay,
                 interim_results=True,
                 profanity_filter=dg.profanity_filter,
                 numerals=dg.numerals,
@@ -137,8 +134,6 @@ async def create_stt_from_config(config: STTConfiguration):
                 vad_force_turn_endpoint=BREEZE_BUDDY_SONIOX_VAD_FORCE_TURN_ENDPOINT,
                 language_hints=language or BREEZE_BUDDY_SONIOX_LANGUAGE_HINTS,
                 context_json=effective_context,
-                enable_non_final_tokens=BREEZE_BUDDY_SONIOX_ENABLE_NON_FINAL_TOKENS,
-                max_non_final_tokens_duration_ms=BREEZE_BUDDY_SONIOX_MAX_NON_FINAL_TOKENS_DURATION_MS,
                 max_endpoint_delay_ms=BREEZE_BUDDY_SONIOX_MAX_ENDPOINT_DELAY_MS,
                 log_context="Breeze Buddy",
                 language_hints_strict=bool(language),

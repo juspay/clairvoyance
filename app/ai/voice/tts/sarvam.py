@@ -134,7 +134,7 @@ def build_sarvam_tts(config: SarvamTTSConfig):
         api_key=config.api_key,
         voice_id=config.voice_id,
         model=config.model,
-        params=SarvamTTSService.InputParams(
+        settings=SarvamTTSService.Settings(
             language=language,
             pitch=config.pitch,
             pace=config.pace,
@@ -159,13 +159,13 @@ class LanguageAwareSarvamTTS(SarvamTTSService):
         try:
             detected_script = detect_script(text)
             new_lang_code = SCRIPT_TO_SARVAM_LANG.get(detected_script, "en-IN")
-            current_lang_code = self._settings.get("target_language_code", "en-IN")
+            current_lang_code = getattr(self._settings, "language", "en-IN")
 
             if new_lang_code != current_lang_code:
                 logger.info(
                     f"[SARVAM] Script detected: {detected_script} - switching {current_lang_code} to {new_lang_code}"
                 )
-                self._settings["target_language_code"] = new_lang_code
+                self._settings.language = new_lang_code
 
                 try:
                     await self._send_config()
