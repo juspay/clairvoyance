@@ -737,6 +737,9 @@ class Agent:
             order_id=self.lead.request_id or "unknown",
             provider=self.provider or "",
             template_type=self.lead.template,
+            evaluator_config=(
+                self.configurations.evaluator_config if self.configurations else None
+            ),
         )
         try:
             with trace.use_span(self.root_span, end_on_exit=True):

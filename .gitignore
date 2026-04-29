@@ -54,3 +54,4 @@ logs
 .claude/settings.local.json
 .claude/memory/
 CLAUDE.local.md
+.claude/settings.json
