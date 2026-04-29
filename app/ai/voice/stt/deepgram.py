@@ -10,8 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Union
 
-from deepgram import LiveOptions
-from pipecat.services.deepgram.stt import DeepgramSTTService
+from pipecat.services.deepgram.stt import DeepgramSTTService, LiveOptions
 
 from app.core.logger import logger
 
@@ -42,7 +41,6 @@ class DeepgramConfig:
     punctuate: bool = True
     endpointing: Union[int, bool] = True
     utterance_end_ms: int | None = None
-    no_delay: bool = True
     interim_results: bool = True
     profanity_filter: bool = False
     numerals: bool = True
@@ -73,14 +71,13 @@ def build_deepgram_stt(config: DeepgramConfig) -> DeepgramSTTService:
         smart_format=config.smart_format,
         punctuate=config.punctuate,
         endpointing=config.endpointing,
-        no_delay=config.no_delay,
         interim_results=config.interim_results,
         profanity_filter=config.profanity_filter,
         numerals=config.numerals,
         diarize=config.diarize,
     )
     if config.utterance_end_ms is not None:
-        live_opts["utterance_end_ms"] = str(config.utterance_end_ms)
+        live_opts["utterance_end_ms"] = config.utterance_end_ms
     live_options = LiveOptions(**live_opts)
 
     logger.info(

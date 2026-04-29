@@ -89,7 +89,6 @@ class DeepgramSTTConfig(BaseModel):
         "None = disabled (recommended with SmartTurn). "
         "Deepgram minimum is 1000ms when enabled.",
     )
-    no_delay: bool = Field(True, description="Real-time processing with minimal delay.")
     smart_format: bool = Field(
         True, description="Smart formatting (phone numbers, dates, currency)."
     )
@@ -113,7 +112,7 @@ class SarvamSTTConfig(BaseModel):
     """Sarvam-specific STT settings."""
 
     model: Optional[str] = Field(
-        None, description="Sarvam model (e.g. 'saarika:v2.5'). Defaults from env."
+        None, description="Sarvam model (e.g. 'saaras:v3'). Defaults from env."
     )
     language_code: Optional[str] = Field(
         None, description="Sarvam language code. Defaults from env."
@@ -981,6 +980,18 @@ class BaseGlobalFunction(BaseModel):
     )
     func_pre_actions: List[FlowAction] = Field(default=[], alias="pre_actions")
     func_post_actions: List[FlowAction] = Field(default=[], alias="post_actions")
+    cancel_on_interruption: Optional[bool] = Field(
+        default=None,
+        description="Pipecat 1.0 async function calls. When False, the LLM "
+        "continues the turn without waiting for the function result; the "
+        "result is injected as a developer message later, triggering a new "
+        "LLM inference. Defaults to flows' own default (False) when unset.",
+    )
+    timeout_secs: Optional[float] = Field(
+        default=None,
+        description="Per-function timeout override in seconds. Falls back to "
+        "the LLM service's function_call_timeout_secs when unset.",
+    )
 
 
 class GlobalHttpFunction(BaseGlobalFunction):
@@ -1013,6 +1024,11 @@ class GlobalHttpFunction(BaseGlobalFunction):
     expected_fields: Dict[str, FieldConfig] = {}
     http_request: HttpRequestConfig
     sse_response_handler: Optional[SseResponseHandlerConfig] = None
+    # Pipecat 1.0 async function calls (PR #4217): HTTP global functions are
+    # the canonical "slow API" path, so default to async — the LLM continues
+    # talking while the request runs and the result is injected as a developer
+    # message that re-triggers inference. Templates can override per-function.
+    cancel_on_interruption: Optional[bool] = False
     expected_response_schema: Dict[str, str] = {}
     """Whitelist of fields to extract from the HTTP response before feeding to the LLM.
 
@@ -1060,6 +1076,11 @@ class GlobalBuiltinFunction(BaseGlobalFunction):
         "Useful for handlers that terminate the pipeline (e.g., transfer) where the LLM's "
         "generated text may get cut off.",
     )
+    # Pipecat-flows 1.0 flipped the FlowsFunctionSchema default to async
+    # (cancel_on_interruption=False). Builtins are control-flow critical
+    # (warm_transfer, end_conversation, etc.) — the LLM must NOT keep talking
+    # over the handler. Force sync execution to preserve pre-1.0 behavior.
+    cancel_on_interruption: Optional[bool] = True
 
 
 class GlobalCustomFunction(BaseGlobalFunction):

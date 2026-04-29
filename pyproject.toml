@@ -12,8 +12,8 @@ dependencies = [
     "websockets>=11.0.3",
     "starlette>=0.27.0",
     "python-dotenv>=1.0.0",
-    "pipecat-ai[daily,google,assemblyai,silero,openai,azure,elevenlabs,aic,anthropic,deepgram,soniox,mcp,sarvam,cartesia]",
-    "pipecat-ai-flows",
+    "pipecat-ai[daily,google,assemblyai,silero,openai,azure,elevenlabs,aic,anthropic,deepgram,soniox,mcp,sarvam,cartesia]==1.1.0",
+    "pipecat-ai-flows==1.0.0",
     "loguru",
     "opentelemetry-api",
     "opentelemetry-sdk",
@@ -57,6 +57,7 @@ target-version = ['py311']
 [tool.isort]
 profile = "black"
 line_length = 88
+combine_as_imports = true
 
 [tool.pyrefly]
 project-excludes = ["**/automatic/**"]

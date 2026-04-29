@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any, Optional
 
 from pipecat.services.google.llm import GoogleLLMService
-from pipecat.services.google.llm_vertex import GoogleVertexLLMService
+from pipecat.services.google.vertex.llm import (
+    GoogleVertexLLMService,
+    GoogleVertexLLMSettings,
+)
 
 from app.core.logger import logger
 
@@ -51,17 +54,18 @@ def build_vertex_llm(config: VertexConfig) -> GoogleVertexLLMService:
             thinking_level=config.thinking_level,
         )
 
-    params = GoogleLLMService.InputParams(
-        max_tokens=config.max_tokens,
-        temperature=config.temperature,
-        thinking=thinking,
-    )
+    settings_kwargs: dict[str, Any] = {
+        "max_tokens": config.max_tokens,
+        "temperature": config.temperature,
+    }
+    if thinking is not None:
+        settings_kwargs["thinking"] = thinking
 
     return GoogleVertexLLMService(
         credentials=config.credentials_json,
         project_id=config.project_id,
         location=config.location,
         model=config.model,
-        params=params,
+        settings=GoogleVertexLLMSettings(**settings_kwargs),
         function_call_timeout_secs=config.function_call_timeout_secs,
     )

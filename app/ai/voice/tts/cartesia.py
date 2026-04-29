@@ -1,10 +1,11 @@
 """Cartesia TTS helpers and builder."""
 
 from dataclasses import dataclass
-from typing import Literal, Optional
+from typing import Optional
 
 import httpx
 from pipecat.services.cartesia.tts import CartesiaTTSService, GenerationConfig
+from pipecat.services.tts_service import TextAggregationMode
 from pipecat.transcriptions.language import Language
 
 from app.core.config.dynamic import BB_VOICE_PROVIDER_DEFAULTS
@@ -23,7 +24,6 @@ class CartesiaConfig:
     - voice_id: ID of the voice to use for synthesis
     - model: TTS model to use (default: "sonic-3")
     - language: Language to use for synthesis (default: Language.EN)
-    - speed: Voice speed control for non-Sonic-3 models (literal values: "slow", "normal", "fast")
     - generation_config: Generation configuration for Sonic-3 models with:
         - volume: Volume multiplier [0.5, 2.0], default 1.0
         - speed: Speed multiplier [0.6, 1.5], default 1.0
@@ -35,7 +35,6 @@ class CartesiaConfig:
     voice_id: str
     model: str = "sonic-3"
     language: Language = Language.EN
-    speed: Optional[Literal["slow", "normal", "fast"]] = None
     generation_config: Optional[GenerationConfig] = None
     aggregate_sentences: bool = True
 
@@ -50,19 +49,19 @@ def build_cartesia_tts(config: CartesiaConfig) -> CartesiaTTSService:
         Configured CartesiaTTSService instance
     """
 
-    # Build input params
-    params = CartesiaTTSService.InputParams(
-        language=config.language,
-        speed=config.speed,
-        generation_config=config.generation_config,
-    )
-
     return CartesiaTTSService(
         api_key=config.api_key,
         voice_id=config.voice_id,
         model=config.model,
-        params=params,
-        aggregate_sentences=config.aggregate_sentences,
+        settings=CartesiaTTSService.Settings(
+            language=config.language,
+            generation_config=config.generation_config,
+        ),
+        text_aggregation_mode=(
+            TextAggregationMode.SENTENCE
+            if config.aggregate_sentences
+            else TextAggregationMode.TOKEN
+        ),
     )
 
 

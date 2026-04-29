@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any, Optional
 
-from pipecat.services.azure.llm import AzureLLMService
-from pipecat.services.openai.base_llm import BaseOpenAILLMService
+from pipecat.services.azure.llm import AzureLLMService, AzureLLMSettings
 
 from app.core.logger import logger
 
@@ -44,17 +43,18 @@ def build_azure_llm(config: AzureConfig) -> AzureLLMService:
     if config.reasoning_effort:
         extra["reasoning_effort"] = config.reasoning_effort
 
-    params = BaseOpenAILLMService.InputParams(
-        max_completion_tokens=config.max_tokens,
-        temperature=config.temperature,
-        service_tier="auto",
-        extra=extra,
-    )
+    settings_kwargs: dict[str, Any] = {
+        "temperature": config.temperature,
+        "extra": extra,
+    }
+    if config.max_tokens is not None:
+        settings_kwargs["max_completion_tokens"] = config.max_tokens
 
     return AzureLLMService(
         api_key=config.api_key,
         endpoint=config.endpoint,
         model=config.model,
-        params=params,
+        service_tier="auto",
+        settings=AzureLLMSettings(**settings_kwargs),
         function_call_timeout_secs=config.function_call_timeout_secs,
     )

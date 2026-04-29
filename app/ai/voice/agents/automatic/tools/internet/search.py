@@ -3,7 +3,7 @@ from datetime import datetime
 from google.genai.types import GenerateContentConfig
 from pipecat.adapters.schemas.function_schema import FunctionSchema
 from pipecat.adapters.schemas.tools_schema import ToolsSchema
-from pipecat.services.google.llm import GoogleLLMContext, GoogleLLMService
+from pipecat.services.google.llm import GoogleLLMService
 from pipecat.services.llm_service import FunctionCallParams
 
 from app.core.config.static import GEMINI_API_KEY, GEMINI_SEARCH_RESULT_API_MODEL
@@ -40,12 +40,12 @@ async def gemini_search_fn(params: FunctionCallParams):
     logger.info(f"Performing Gemini search for query: {query}")
 
     try:
-        ctx = GoogleLLMContext(messages=[{"role": "user", "content": query}])
-
-        # Include current date in system message to provide context for the search
+        # Pipecat 1.0 removed GoogleLLMContext (universal LLMContext now). We
+        # call the underlying Google genai client directly with native content
+        # format — this bypass is intentional, the Gemini search path was
+        # already side-stepping pipecat's context-aggregation pipeline.
         current_date = datetime.now().strftime("%Y-%m-%d")
-
-        ctx.system_message = (
+        system_instruction = (
             f"You are a helpful assistant that will always search the web for up-to-date information. "
             f"The current date is {current_date}. "
             f"Your responses must be concise—no more than 50 words—while maximizing useful detail and clarity. "
@@ -53,16 +53,15 @@ async def gemini_search_fn(params: FunctionCallParams):
             f"Avoid filler or repetition. Get straight to the point."
         )
 
-        ctx._restructure_from_openai_messages()
-
         config = GenerateContentConfig(
             tools=gemini_llm._tools,
-            system_instruction=ctx.system_message,
+            system_instruction=system_instruction,
         )
 
+        contents = [{"role": "user", "parts": [{"text": query}]}]
         response = await gemini_llm._client.aio.models.generate_content_stream(
             model=gemini_llm._model_name,
-            contents=ctx.messages,
+            contents=contents,
             config=config,
         )
 

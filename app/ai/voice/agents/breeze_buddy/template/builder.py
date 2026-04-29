@@ -290,11 +290,12 @@ class FlowConfigBuilder:
         hooks = [hook.model_dump() for hook in func.hooks] if func.hooks else []
         logger.debug(f"Using hooks for {func.name}: {hooks}")
 
-        # Create a wrapper handler matching FlowsFunctionSchema expected signature
-        # Signature: (llm_args: Dict[str, Any], flow_manager: FlowManager) -> Awaitable[FlowResult | tuple]
+        # Create a wrapper handler matching FlowsFunctionSchema expected signature.
+        # In flows 1.0, ConsolidatedFunctionResult is (FlowResult | None, NodeConfig | None);
+        # the legacy str-node-name variant of next_node was removed.
         async def wrapper_handler(
             llm_args: Dict[str, Any], _flow_manager: FlowManager
-        ) -> FlowResult | tuple[FlowResult | None, str | NodeConfig | None]:
+        ) -> FlowResult | tuple[FlowResult | None, NodeConfig | None]:
             # Call the wrapped unified transition handler
             # The with_context wrapper expects llm_args as first positional arg
             result = await cast(Callable[..., Any], wrapped_unified_handler)(

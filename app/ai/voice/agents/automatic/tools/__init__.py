@@ -10,11 +10,9 @@ from app.core.config.static import (
 from app.core.logger import logger
 
 from . import breeze, charts, internet, juspay
-from .dummy import tool_functions as dummy_tool_functions
-from .dummy import tools as dummy_tools
+from .dummy import tool_functions as dummy_tool_functions, tools as dummy_tools
 from .dummy.acme_analytics import acme_tool_functions, acme_tools
-from .system import tool_functions as system_tool_functions
-from .system import tools as system_tools
+from .system import tool_functions as system_tool_functions, tools as system_tools
 
 
 def initialize_tools(

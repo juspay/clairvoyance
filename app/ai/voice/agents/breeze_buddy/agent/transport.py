@@ -55,12 +55,12 @@ def _create_audio_input_filter(
 
     # Create filter based on type
     if noise_filter_config.type == NoiseFilterType.AIC:
-        if not static.BREEZE_BUDDY_AICOUSTICS_LICENSE_KEY:
+        if not static.BREEZE_BUDDY_AIC_LICENSE_KEY:
             logger.warning("AIC filter enabled but license key not configured")
             return None
         try:
             return AICFilter(
-                license_key=static.BREEZE_BUDDY_AICOUSTICS_LICENSE_KEY,
+                license_key=static.BREEZE_BUDDY_AIC_LICENSE_KEY,
                 model_path=Path(static.AIC_MODEL_PATH),
             )
         except Exception as e:

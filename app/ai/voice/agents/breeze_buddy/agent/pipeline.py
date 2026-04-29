@@ -15,9 +15,6 @@ from pipecat.observers.loggers.metrics_log_observer import MetricsLogObserver
 from pipecat.observers.loggers.transcription_log_observer import (
     TranscriptionLogObserver,
 )
-from pipecat.observers.loggers.user_bot_latency_log_observer import (
-    UserBotLatencyLogObserver,
-)
 from pipecat.observers.turn_tracking_observer import TurnTrackingObserver
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.task import PipelineParams, PipelineTask
@@ -49,7 +46,6 @@ from app.ai.voice.agents.breeze_buddy.processors import (
     TranscriptCollectorProcessor,
     TranscriptionGateProcessor,
     UserIdleCallbackHandler,
-    create_user_idle_processor,
 )
 from app.ai.voice.agents.breeze_buddy.stt import get_stt_service
 from app.ai.voice.agents.breeze_buddy.template.interruption import (
@@ -73,14 +69,22 @@ from app.core.logger import logger
 
 
 def get_observers() -> list[Any]:
-    """Get pipeline observers for dev environment."""
+    """Get pipeline observers for dev environment.
+
+    Note: pipecat's ``UserBotLatencyObserver`` is intentionally not attached.
+    Its per-turn ``on_latency_measured`` event is anchored on
+    ``VADUserStoppedSpeakingFrame``, which is only emitted when a VAD
+    analyzer is wired into the user aggregator. Production runs with
+    ``BREEZE_BUDDY_ENABLE_VAD=false``, so the observer would emit at most a
+    single greeting-latency event per call — misleading as a "latency"
+    signal. See TODO.md §2 for follow-up.
+    """
     if ENVIRONMENT.lower() != "dev":
         return []
     return [
         MetricsLogObserver(),
         LLMLogObserver(),
         TranscriptionLogObserver(),
-        UserBotLatencyLogObserver(),
         TurnTrackingObserver(),
     ]
 
@@ -317,12 +321,28 @@ async def build_pipeline(
             f"Interruption: mode={interruption_config.mode.value} — interruptions enabled"
         )
 
+    # Resolve user idle config up front so its timeout can flow into the
+    # aggregator params (1.0 manages idle detection inside LLMUserAggregator,
+    # not via a separate processor). Stream mode skips idle — client drives it.
+    user_idle_config = getattr(configurations, "user_idle_configuration", None)
+    user_idle_enabled = (
+        user_idle_config is not None
+        and getattr(user_idle_config, "enabled", False)
+        and not is_stream
+    )
+    user_idle_timeout = (
+        float(user_idle_config.timeout)
+        if user_idle_enabled and user_idle_config is not None
+        else 0.0
+    )
+
     context_aggregator = LLMContextAggregatorPair(
         context,
         user_params=LLMUserAggregatorParams(
             user_turn_strategies=user_turn_strategies,
             user_mute_strategies=user_mute_strategies,
             vad_analyzer=vad_analyzer,
+            user_idle_timeout=user_idle_timeout,
         ),
     )
 
@@ -339,27 +359,27 @@ async def build_pipeline(
             f"match_type={keyword_filter_config.match_type.value}"
         )
 
-    # Create user idle processor from template configuration.
-    # Stream mode skips user idle — the client drives idle logic itself.
-    user_idle_config = getattr(configurations, "user_idle_configuration", None)
-    user_idle_result = (
-        create_user_idle_processor(
-            enabled=user_idle_config.enabled,
-            timeout=user_idle_config.timeout,
-            message=user_idle_config.idle_message,
+    # Wire retry-then-end-call logic to the aggregator's on_user_turn_idle event.
+    # The timer itself is owned by LLMUserAggregator (user_idle_timeout above).
+    user_idle_callback_handler: Optional[UserIdleCallbackHandler] = (
+        UserIdleCallbackHandler(
+            idle_message=user_idle_config.idle_message,
             max_retries=user_idle_config.max_retries,
             on_user_idle_timeout=on_user_idle_timeout,
         )
-        if user_idle_config is not None and not is_stream
+        if user_idle_enabled and user_idle_config is not None
         else None
     )
 
-    # Unpack result - returns (processor, callback_handler) or None
-    user_idle = user_idle_result[0] if user_idle_result else None
-    user_idle_callback_handler = user_idle_result[1] if user_idle_result else None
-
     # Store reference to user aggregator for position lookup
     user_aggregator = context_aggregator.user()
+
+    if user_idle_callback_handler is not None:
+        _idle_handler = user_idle_callback_handler
+
+        @user_aggregator.event_handler("on_user_turn_idle")
+        async def _on_user_turn_idle(aggregator: Any) -> None:
+            await _idle_handler.handle_user_idle(aggregator)
 
     # Stream mode: insert TranscriptCollectorProcessor to capture user + bot
     # TTS text for DB storage (no LLMContext to pull from at end-of-conversation).
@@ -390,18 +410,6 @@ async def build_pipeline(
         pipeline_parts.extend(
             [llm, tts, transport.output(), context_aggregator.assistant()]
         )
-
-    # Insert user idle processor before user_aggregator to monitor user activity
-    if user_idle:
-        try:
-            user_aggregator_idx = pipeline_parts.index(user_aggregator)
-            pipeline_parts.insert(user_aggregator_idx, user_idle)
-        except ValueError as e:
-            # This should never happen since we explicitly added user_aggregator above
-            logger.error(
-                f"Failed to find user aggregator in pipeline: {e}. User idle detection disabled."
-            )
-            # Don't insert user_idle - it's safer to disable the feature than insert at wrong position
 
     return (
         Pipeline(pipeline_parts),

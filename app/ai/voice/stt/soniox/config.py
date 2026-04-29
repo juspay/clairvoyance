@@ -10,7 +10,7 @@ from pipecat.services.soniox.stt import (
     SonioxContextGeneralItem,
     SonioxContextObject,
     SonioxContextTranslationTerm,
-    SonioxInputParams,
+    SonioxSTTService,
 )
 from pipecat.transcriptions.language import Language
 
@@ -35,8 +35,6 @@ class SonioxConfig:
     vad_force_turn_endpoint: bool = False
     language_hints: Optional[str | Iterable[str]] = None
     context_json: Optional[str] = None
-    enable_non_final_tokens: bool = False
-    max_non_final_tokens_duration_ms: Optional[int] = None
     max_endpoint_delay_ms: Optional[int] = None
     client_reference_id: Optional[str] = None
     log_context: str = "Soniox"
@@ -140,17 +138,10 @@ def build_soniox_stt(config: SonioxConfig):
 
     context = _parse_soniox_context(config.context_json, config.log_context)
 
-    soniox_params = SonioxInputParams(
+    soniox_settings = SonioxSTTService.Settings(
         model=config.model,
         language_hints=language_hints,
         context=context,
-        enable_non_final_tokens=config.enable_non_final_tokens,
-        max_non_final_tokens_duration_ms=(
-            config.max_non_final_tokens_duration_ms
-            if config.max_non_final_tokens_duration_ms
-            and config.max_non_final_tokens_duration_ms > 0
-            else None
-        ),
         client_reference_id=config.client_reference_id,
         language_hints_strict=config.language_hints_strict,
     )
@@ -165,18 +156,17 @@ def build_soniox_stt(config: SonioxConfig):
 
     logger.info(
         "Using %s Soniox STT service with model: %s, language_hints: %s, "
-        "VAD force endpoint: %s, non_final_tokens: %s, max_endpoint_delay_ms: %s",
+        "VAD force endpoint: %s, max_endpoint_delay_ms: %s",
         config.log_context,
         config.model,
         hints_display,
         config.vad_force_turn_endpoint,
-        config.enable_non_final_tokens,
         config.max_endpoint_delay_ms,
     )
 
     return SonioxSTTServiceWithEndpointDelay(
         api_key=config.api_key,
-        params=soniox_params,
+        settings=soniox_settings,
         vad_force_turn_endpoint=config.vad_force_turn_endpoint,
         max_endpoint_delay_ms=config.max_endpoint_delay_ms,
     )

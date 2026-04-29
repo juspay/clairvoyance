@@ -64,7 +64,7 @@ async def ENABLE_CHAT_MODE_PROMPT() -> bool:
 # --- Sarvam Configuration ---
 async def SARVAM_STT_MODEL() -> str:
     """Returns SARVAM_STT_MODEL from Redis"""
-    return await get_config("SARVAM_STT_MODEL", "saarika:v2.5", str)
+    return await get_config("SARVAM_STT_MODEL", "saaras:v3", str)
 
 
 async def SARVAM_STT_LANGUAGE_CODE() -> str:
@@ -115,7 +115,7 @@ async def SARVAM_TTS_PACE() -> float:
 # --- Breeze Buddy Sarvam STT Configuration ---
 async def BB_SARVAM_STT_MODEL() -> str:
     """Returns BB_SARVAM_STT_MODEL from Redis"""
-    return await get_config("BB_SARVAM_STT_MODEL", "saarika:v2.5", str)
+    return await get_config("BB_SARVAM_STT_MODEL", "saaras:v3", str)
 
 
 async def BB_SARVAM_STT_LANGUAGE_CODE() -> str:

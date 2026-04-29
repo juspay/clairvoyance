@@ -2,14 +2,13 @@
 import asyncio
 from typing import Any, Dict, List, Optional
 
-from pipecat.adapters.services.open_ai_adapter import OpenAILLMInvocationParams
-from pipecat.processors.aggregators.openai_llm_context import OpenAILLMContext
+from pipecat.processors.aggregators.llm_context import LLMContext
 
 from app.core.config.static import KEEP_RECENT_TURNS, MAX_TURNS_BEFORE_SUMMARY
 from app.core.logger import logger
 
 
-class ContextSummarizer(OpenAILLMContext):
+class ContextSummarizer(LLMContext):
     """
     Extended OpenAI LLM Context that automatically summarizes conversation
     after a specified number of turns to maintain context window efficiency.
@@ -124,9 +123,9 @@ class ContextSummarizer(OpenAILLMContext):
                 {"role": "user", "content": "".join(prompt_parts)},
             ]
 
-            # Get summary from LLM
-            params_from_context = OpenAILLMInvocationParams(messages=summary_messages)
-            chunks = await self._llm_service.get_chat_completions(params_from_context)
+            # Get summary from LLM. Pipecat 1.0: get_chat_completions takes LLMContext.
+            summary_context = LLMContext(messages=summary_messages)
+            chunks = await self._llm_service.get_chat_completions(summary_context)
             summary_parts = [
                 chunk.choices[0].delta.content
                 async for chunk in chunks

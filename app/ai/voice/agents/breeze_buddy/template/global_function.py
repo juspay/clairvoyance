@@ -36,6 +36,25 @@ from app.core.config.static import GLOBAL_FUNCTION_DESCRIPTION_SUFFIX
 from app.core.logger import logger
 
 
+def _flows_async_kwargs(func: BaseGlobalFunction) -> Dict[str, Any]:
+    """Per-function pipecat-flows 1.0 kwargs, opt-in via template config.
+
+    `cancel_on_interruption=False` makes the call async — the LLM continues
+    the turn without waiting and the result is injected as a developer
+    message later. When unset on the model, flows' own default applies
+    (False / async since pipecat-flows 1.0). Sync vs. async behaviour is
+    therefore controlled by the per-subclass model defaults — `GlobalHttp
+    Function` defaults to async (False) for slow APIs and `GlobalBuiltin
+    Function` defaults to sync (True) for control-flow critical handlers.
+    """
+    extra: Dict[str, Any] = {}
+    if func.cancel_on_interruption is not None:
+        extra["cancel_on_interruption"] = func.cancel_on_interruption
+    if func.timeout_secs is not None:
+        extra["timeout_secs"] = func.timeout_secs
+    return extra
+
+
 async def _run_filler_and_music(
     bot_instance: Any,
     func: BaseGlobalFunction,
@@ -280,6 +299,7 @@ class HttpGlobalFunctionAdapter:
             handler=create_wrapper(func, bot_instance),
             properties=func.properties,
             required=func.required,
+            **_flows_async_kwargs(func),
         )
 
 
@@ -390,6 +410,7 @@ class BuiltinGlobalFunctionAdapter:
             handler=create_wrapper(func, bot_instance),
             properties=func.properties,
             required=func.required,
+            **_flows_async_kwargs(func),
         )
 
 
@@ -515,6 +536,7 @@ class CustomPythonGlobalFunctionAdapter:
             handler=create_wrapper(func, bot_instance),
             properties=func.properties,
             required=func.required,
+            **_flows_async_kwargs(func),
         )
 
 

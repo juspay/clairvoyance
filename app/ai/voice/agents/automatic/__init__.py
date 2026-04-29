@@ -15,31 +15,30 @@ from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.vad.vad_analyzer import VADParams
 from pipecat.frames.frames import (
     BotSpeakingFrame,
-    EmulateUserStartedSpeakingFrame,
-    EmulateUserStoppedSpeakingFrame,
     LLMFullResponseEndFrame,
     LLMRunFrame,
     OutputAudioRawFrame,
     TTSSpeakFrame,
+    UserStartedSpeakingFrame,
+    UserStoppedSpeakingFrame,
 )
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
-from pipecat.processors.filters.stt_mute_filter import (
-    STTMuteConfig,
-    STTMuteFilter,
-    STTMuteStrategy,
+from pipecat.processors.aggregators.llm_response_universal import (
+    LLMContextAggregatorPair,
+    LLMUserAggregatorParams,
 )
 from pipecat.processors.frameworks.rtvi import (
-    RTVIConfig,
     RTVIProcessor,
     RTVIServerMessageFrame,
 )
 from pipecat.services.azure.llm import AzureLLMService
 from pipecat.services.google.rtvi import GoogleRTVIObserver
 from pipecat.transports.daily.transport import DailyParams, DailyTransport
-from pipecat.utils.tracing.conversation_context_provider import (
-    ConversationContextProvider,
+from pipecat.turns.user_mute import (
+    BaseUserMuteStrategy,
+    MuteUntilFirstBotCompleteUserMuteStrategy,
 )
 
 from app.ai.voice.agents.automatic.features.llm_wrapper import LLMServiceWrapper
@@ -313,17 +312,20 @@ async def run_normal_mode(args):
             params=vad_params,
         )
 
+    # Pipecat 1.0: vad_analyzer moved off DailyParams onto LLMUserAggregatorParams.
+    # We keep the analyzer locally so the aggregator can take it below.
+    if static.DISABLE_SILERO_VAD:
+        vad_analyzer = None
     daily_params = DailyParams(
         audio_in_enabled=True,
         audio_out_enabled=True,
-        vad_analyzer=None if static.DISABLE_SILERO_VAD else vad_analyzer,
     )
 
     # Audio filter configuration
-    if static.ENABLE_AIC_FILTER and static.AICOUSTICS_LICENSE_KEY:
+    if static.ENABLE_AIC_FILTER and static.AIC_LICENSE_KEY:
         try:
             aic_filter = AICFilter(
-                license_key=static.AICOUSTICS_LICENSE_KEY,
+                license_key=static.AIC_LICENSE_KEY,
                 enhancement_level=static.AIC_ENHANCEMENT_LEVEL,
                 voice_gain=static.AIC_VOICE_GAIN,
                 noise_gate_enable=static.AIC_NOISE_GATE_ENABLE,
@@ -362,6 +364,10 @@ async def run_normal_mode(args):
             run_in_parallel=True,
         )
     )
+
+    # MCP client kept alive for the pipeline lifetime (closed after runner.run);
+    # None for the non-MCP path.
+    breeze_mcp_client = None
 
     if not use_breeze_mcp_server and not use_breeze_mcp_server_for_bret:
         # Initialize tools normally
@@ -410,7 +416,7 @@ async def run_normal_mode(args):
             "shopifyConnectedShop": getattr(args, "shopify_connected_shop", None),
         }
 
-        tools = await init_breeze_mcp_tools(
+        tools, breeze_mcp_client = await init_breeze_mcp_tools(
             llm=llm,
             mcp_context=mcp_context,
             breeze_token=args.breeze_token,
@@ -419,7 +425,7 @@ async def run_normal_mode(args):
             args=args,
         )
 
-    rtvi = RTVIProcessor(config=RTVIConfig(config=[]))
+    rtvi = RTVIProcessor()
 
     # Simplified event handler for TTS feedback
     @llm.event_handler("on_function_calls_started")
@@ -465,11 +471,24 @@ async def run_normal_mode(args):
         tools,
     )
 
-    context_aggregator = llm.create_context_aggregator(context)
+    # Pipecat 1.0: STTMuteFilter is gone. Mute behavior is now a strategy on
+    # the user aggregator. Pre-bot-completion muting becomes
+    # MuteUntilFirstBotCompleteUserMuteStrategy in user_mute_strategies.
+    user_mute_strategies: list[BaseUserMuteStrategy] = []
+    if static.ENABLE_MUTE_UNTIL_FIRST_BOT_COMPLETE:
+        user_mute_strategies.append(MuteUntilFirstBotCompleteUserMuteStrategy())
 
-    # Initialize processors and pipeline components
-    stt_mute_filter = None
-    tool_call_processor = None
+    context_aggregator = LLMContextAggregatorPair(
+        context,
+        user_params=LLMUserAggregatorParams(
+            vad_analyzer=vad_analyzer,
+            user_mute_strategies=user_mute_strategies,
+        ),
+    )
+
+    tool_call_processor = LLMSpyProcessor(
+        rtvi, args.session_id, static.ENABLE_CHARTS, None, "LLMSpyProcessor"
+    )
 
     # Build pipeline components list
     pipeline_components = [
@@ -482,27 +501,6 @@ async def run_normal_mode(args):
         pipeline_components.append(ptt_vad_filter)  # Filter VAD frames after STT
 
     pipeline_components.append(stt)
-
-    if static.ENABLE_MUTE_UNTIL_FIRST_BOT_COMPLETE:
-        stt_mute_filter = STTMuteFilter(
-            config=STTMuteConfig(
-                strategies={
-                    STTMuteStrategy.MUTE_UNTIL_FIRST_BOT_COMPLETE,
-                }
-            )
-        )
-        tool_call_processor = LLMSpyProcessor(
-            rtvi,
-            args.session_id,
-            static.ENABLE_CHARTS,
-            stt_mute_filter,
-            "LLMSpyProcessor",
-        )
-        pipeline_components.extend([stt_mute_filter])
-    else:
-        tool_call_processor = LLMSpyProcessor(
-            rtvi, args.session_id, static.ENABLE_CHARTS, None, "LLMSpyProcessor"
-        )
 
     pipeline_components.extend([rtvi, context_aggregator.user()])
 
@@ -563,7 +561,7 @@ async def run_normal_mode(args):
     task_params = {
         "idle_timeout_secs": static.AUTOMATIC_SESSION_INACTIVITY_TIMEOUT,
         "idle_timeout_frames": (BotSpeakingFrame, LLMFullResponseEndFrame),
-        "params": PipelineParams(allow_interruptions=True),
+        "params": PipelineParams(),
         "cancel_on_idle_timeout": True,
         "observers": [GoogleRTVIObserver(rtvi)],
     }
@@ -607,7 +605,7 @@ async def run_normal_mode(args):
                     logger.debug("PTT started - activating VAD filter")
                     ptt_vad_filter.set_ptt_active(True)
                     # Send emulated user started speaking frame
-                    await task.queue_frames([EmulateUserStartedSpeakingFrame()])
+                    await task.queue_frames([UserStartedSpeakingFrame()])
 
                 elif message_type == "ptt-end":
                     # Handle PTT end event
@@ -616,7 +614,7 @@ async def run_normal_mode(args):
                     )
                     ptt_vad_filter.set_ptt_active(False)
                     # Send emulated user stopped speaking frame
-                    await task.queue_frames([EmulateUserStoppedSpeakingFrame()])
+                    await task.queue_frames([UserStoppedSpeakingFrame()])
 
                 elif message_type == "ptt-sync":
                     # Handle PTT state synchronization from client
@@ -633,9 +631,9 @@ async def run_normal_mode(args):
 
                         # Send appropriate frames for state change
                         if client_ptt_state:
-                            await task.queue_frames([EmulateUserStartedSpeakingFrame()])
+                            await task.queue_frames([UserStartedSpeakingFrame()])
                         else:
-                            await task.queue_frames([EmulateUserStoppedSpeakingFrame()])
+                            await task.queue_frames([UserStoppedSpeakingFrame()])
                     else:
                         logger.debug(
                             f"PTT state sync: states match (current_state: {current_state})"
@@ -692,6 +690,15 @@ async def run_normal_mode(args):
             logger.info("Main task cancelled. Exiting gracefully.")
         except Exception as e:
             logger.error(f"Pipeline runner error: {e}")
+        finally:
+            # Pipecat 1.0: MCPClient owns a long-lived session that must be
+            # explicitly closed after the pipeline ends, otherwise the SSE
+            # connection leaks until process exit.
+            if breeze_mcp_client is not None:
+                try:
+                    await breeze_mcp_client.close()
+                except Exception as close_err:
+                    logger.warning(f"Error closing MCP client: {close_err}")
 
     if static.ENABLE_TRACING:
         langfuse_client = get_client()
@@ -723,15 +730,6 @@ async def run_normal_mode(args):
                         else str(voice_name)
                     )
                 ],
-            )
-
-            # Set Pipecat conversation context for proper tool call nesting
-            provider = ConversationContextProvider.get_instance()
-            provider.set_current_conversation_context(
-                root_span.get_span_context(), conversation_id
-            )
-            logger.info(
-                f"Set Pipecat conversation context with span ID: {root_span.get_span_context().span_id}"
             )
 
             await run_pipeline()

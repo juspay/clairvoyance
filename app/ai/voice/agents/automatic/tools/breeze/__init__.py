@@ -1,6 +1,8 @@
 from .analytics import breeze_token, shop_id, shop_type, shop_url, tool_functions, tools
-from .configuration import tool_functions as configuration_tool_functions
-from .configuration import tools as configuration_tools
+from .configuration import (
+    tool_functions as configuration_tool_functions,
+    tools as configuration_tools,
+)
 
 __all__ = [
     "tools",

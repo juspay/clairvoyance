@@ -8,8 +8,7 @@ from typing import Any, Awaitable, Dict, List, Optional, Union, cast
 
 from redis.asyncio import Redis
 from redis.asyncio.cluster import ClusterNode, RedisCluster
-from redis.exceptions import ConnectionError as RedisConnectionError
-from redis.exceptions import RedisError
+from redis.exceptions import ConnectionError as RedisConnectionError, RedisError
 
 from app.core.config.static import (
     REDIS_CLUSTER_NODES,

@@ -53,13 +53,11 @@ from app.schemas.breeze_buddy.template import (
 )
 from app.schemas.breeze_buddy.users import (
     DeleteUserResponse,
-)
-from app.schemas.breeze_buddy.users import UserCreate as UserAccountCreate
-from app.schemas.breeze_buddy.users import (
+    UserCreate as UserAccountCreate,
     UserListResponse,
     UserResponse,
+    UserUpdate as UserAccountUpdate,
 )
-from app.schemas.breeze_buddy.users import UserUpdate as UserAccountUpdate
 
 __all__ = [
     # Auth

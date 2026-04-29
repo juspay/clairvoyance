@@ -8,7 +8,6 @@ from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExport
 from opentelemetry.sdk.resources import SERVICE_NAME, Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
-from pipecat.utils.tracing.turn_context_provider import get_current_turn_context
 
 from app.ai.voice.agents.breeze_buddy.template.context import TemplateContext
 from app.core.config.static import (
@@ -156,14 +155,10 @@ def auto_trace(tool_name: str):
                 return await func(*args, **kwargs)
 
             tracer = trace.get_tracer(__name__)
-            turn_context = get_current_turn_context()
-
-            # Create span with turn context for proper nesting
             span_name = f"Tool: {tool_name}"
             with tracer.start_span(
                 span_name,
                 kind=trace.SpanKind.CLIENT,
-                context=turn_context,
             ) as span:
                 span.set_attribute("tool.name", tool_name)
                 span.set_attribute("tool.service", "breeze-buddy")
