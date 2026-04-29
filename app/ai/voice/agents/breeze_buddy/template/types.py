@@ -749,6 +749,12 @@ class ConfigurationModel(BaseModel):
         None,
         description="LLM provider and model configuration",
     )
+    evaluator_config: Optional[List[str]] = Field(
+        None,
+        description="List of LLM-as-judge evaluator names to run for this template. "
+        "Each name is added as a tag on the Langfuse trace. "
+        "If empty/None, 'ALL_EVALS' tag is added instead.",
+    )
 
     @model_validator(mode="after")
     def _backfill_legacy_from_stt_config(self):

@@ -1,6 +1,7 @@
 import json
 from datetime import datetime, timezone
 from functools import wraps
+from typing import List, Optional
 
 from opentelemetry import trace
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
@@ -78,6 +79,7 @@ def create_root_span(
     order_id: str,
     provider: str,
     template_type: str,
+    evaluator_config: Optional[List[str]] = None,
 ) -> trace.Span:
     """
     Create and configure the root tracing span with all conversation attributes.
@@ -91,6 +93,8 @@ def create_root_span(
         order_id: Order/request ID
         provider: Provider name (daily or telephony provider)
         template_type: Template type being used
+        evaluator_config: List of evaluator names to add as Langfuse trace tags.
+            If None/empty, "ALL_EVALS" tag is added so all evaluators run.
 
     Returns:
         A span object that can be used with trace.use_span() context manager
@@ -123,6 +127,12 @@ def create_root_span(
         "daily" if transport_type == "daily" else provider,
     )
     span.set_attribute("template.type", template_type)
+
+    # Set evaluator tags for Langfuse trace filtering
+    # Langfuse maps `langfuse.trace.tags` span attribute to trace-level tags
+    tags = evaluator_config if evaluator_config is not None else ["ALL_EVALS"]
+    span.set_attribute("langfuse.trace.tags", tags)
+    logger.info(f"Langfuse trace tags set: {tags}")
 
     return span
 
