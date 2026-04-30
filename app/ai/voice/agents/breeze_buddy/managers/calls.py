@@ -31,7 +31,7 @@ from app.ai.voice.agents.breeze_buddy.template.types import (
 )
 from app.ai.voice.agents.breeze_buddy.utils.common import send_webhook_with_retry
 from app.ai.voice.agents.breeze_buddy.utils.playground import (
-    apply_playground_config_overrides,
+    apply_playground_overrides,
 )
 from app.core.config.static import (
     UPLOAD_BREEZE_BUDDY_CALL_RECORDINGS_TO_CLOUD,
@@ -533,7 +533,7 @@ async def process_backlog_leads():
                 # Apply playground overrides first — they are normally applied
                 # later in flow.py (too late for greeting synthesis).
                 if template:
-                    apply_playground_config_overrides(locked_lead, template)
+                    template = apply_playground_overrides(locked_lead, template)
                     await prepare_and_store_initial_greeting(
                         lead_id=locked_lead.id,
                         payload=locked_lead.payload or {},

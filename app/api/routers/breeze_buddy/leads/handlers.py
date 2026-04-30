@@ -300,13 +300,23 @@ async def push_lead_handler(req: PushLeadRequest, current_user: UserInfo) -> Dic
             if tts_provider:
                 lead_payload["tts_provider"] = tts_provider.value
 
-        # In playground mode, store configurations override in metadata
+        # Validate that flow override is only used in playground mode
+        if req.flow_override and not req.is_playground:
+            raise HTTPException(
+                status_code=400,
+                detail="flow_override can only be provided when is_playground=true",
+            )
+
+        # In playground mode, store configurations and flow overrides in metadata
         meta_data = {}
         if req.is_playground:
             meta_data = {
                 "playground": True,
                 "configurations": req.configurations_override,
             }
+            # Store flow override if provided (allows testing flow changes without saving template)
+            if req.flow_override:
+                meta_data["flow_override"] = req.flow_override
 
         # Insert lead call tracker record with both template name and template_id
         lead_call_tracker = await create_lead_call_tracker(

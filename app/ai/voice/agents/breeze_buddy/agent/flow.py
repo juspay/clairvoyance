@@ -18,7 +18,7 @@ from app.ai.voice.agents.breeze_buddy.utils.language_utils.prompt_injections imp
     inject_language_rules,
 )
 from app.ai.voice.agents.breeze_buddy.utils.playground import (
-    apply_playground_config_overrides,
+    apply_playground_overrides,
 )
 from app.core.logger import logger
 from app.schemas.breeze_buddy.core import LeadCallTracker
@@ -45,7 +45,8 @@ async def load_template_config(
         template_id=lead.template_id,
     )
 
-    apply_playground_config_overrides(lead, template)
+    # Apply overrides and re-render if playground mode
+    template = apply_playground_overrides(lead, template, template_vars)
 
     return template, template.configurations, template_vars
 

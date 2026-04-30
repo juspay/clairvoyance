@@ -39,6 +39,9 @@ class PushLeadRequest(BaseModel):
     configurations_override: Optional[Dict[str, Any]] = (
         None  # Override template configurations
     )
+    flow_override: Optional[Dict[str, Any]] = (
+        None  # Override template flow JSON (playground only)
+    )
 
     @model_validator(mode="after")
     def check_template_identifier(self) -> "PushLeadRequest":
