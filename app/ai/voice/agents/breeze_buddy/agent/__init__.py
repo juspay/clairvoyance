@@ -55,6 +55,9 @@ from app.ai.voice.agents.breeze_buddy.agent.utils import (
 from app.ai.voice.agents.breeze_buddy.handlers.internal.end_conversation import (
     end_conversation,
 )
+from app.ai.voice.agents.breeze_buddy.managers.utils import (
+    prepare_and_store_initial_greeting,
+)
 from app.ai.voice.agents.breeze_buddy.observability.tracing_setup import (
     create_root_span,
 )
@@ -485,6 +488,33 @@ class Agent:
             logger.error("Missing required attributes after setup")
             clear_log_context()
             return False
+
+        # Inbound calls have no pre-call window to synthesize the greeting
+        # (lead is created on-the-fly here), so do it before send_initial_greeting
+        # to avoid the dial-tone fallback. Idempotent for outbound — cron has
+        # already populated the cache, so this is a Redis hit and no-op.
+        # Bounded by a short timeout: if TTS hangs, the WS is already accepted
+        # and the customer would hear dead air. On timeout/error, fall through
+        # to send_initial_greeting which plays the dial-tone fallback.
+        try:
+            await asyncio.wait_for(
+                prepare_and_store_initial_greeting(
+                    lead_id=self.lead.id,
+                    payload=self.lead.payload or {},
+                    template=self.template,
+                ),
+                timeout=5.0,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                f"Greeting synthesis timed out for lead {self.lead.id}; "
+                "falling back to dial tone"
+            )
+        except Exception as e:
+            logger.warning(
+                f"Greeting synthesis failed for lead {self.lead.id}: {e}; "
+                "falling back to dial tone"
+            )
 
         greeting_result = await send_initial_greeting(
             ws=self.ws,
