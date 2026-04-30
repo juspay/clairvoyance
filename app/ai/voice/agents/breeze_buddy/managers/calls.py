@@ -69,6 +69,7 @@ from app.schemas import (
 )
 from app.services.gcp.storage.storage import upload_file_to_gcs
 from app.services.redis.client import get_redis_service
+from app.services.service_health import service_health_monitor
 
 
 async def _get_lead_config(lead: LeadCallTracker) -> Optional[CallExecutionConfig]:
@@ -452,6 +453,14 @@ async def process_backlog_leads():
                 if not config.enable_calling:
                     logger.info(
                         f"Skipping lead {locked_lead.id} - calling is disabled for reseller {locked_lead.reseller_id}, template {locked_lead.template}"
+                    )
+                    await release_lock_on_lead_by_id(locked_lead.id)
+                    continue
+
+                # Check global service health pause (circuit breaker pattern)
+                if await service_health_monitor.is_globally_paused():
+                    logger.info(
+                        f"Skipping lead {locked_lead.id} - calls are globally paused due to service health"
                     )
                     await release_lock_on_lead_by_id(locked_lead.id)
                     continue
