@@ -341,3 +341,52 @@ async def OUTBOUND_RATE_LIMIT_WINDOW_SECONDS() -> int:
 async def OUTBOUND_RATE_LIMIT_BLOCK_ENABLED() -> bool:
     """Returns OUTBOUND_RATE_LIMIT_BLOCK_ENABLED from Redis"""
     return await get_config("OUTBOUND_RATE_LIMIT_BLOCK_ENABLED", False, bool)
+
+
+# --- Vertex AI / Claude configuration (for template scenario generation) ---
+async def VERTEX_CREDENTIALS_JSON() -> str:
+    """Returns VERTEX_CREDENTIALS_JSON from Redis.
+
+    Dedicated service account JSON for Vertex AI / Claude scenario generation.
+    Falls back to GOOGLE_CREDENTIALS_JSON env var if not set in Redis.
+    project_id is extracted from whichever credentials JSON is resolved.
+    """
+    import os
+
+    fallback = os.environ.get("VERTEX_CREDENTIALS_JSON", "") or os.environ.get(
+        "GOOGLE_CREDENTIALS_JSON", ""
+    )
+    return await get_config("VERTEX_CREDENTIALS_JSON", fallback, str)
+
+
+async def VERTEX_PROJECT_ID() -> str:
+    """Returns VERTEX_PROJECT_ID from Redis.
+
+    Overrides the project_id extracted from VERTEX_CREDENTIALS_JSON.
+    Leave empty to auto-extract from the credentials JSON.
+    """
+    import os
+
+    return await get_config(
+        "VERTEX_PROJECT_ID", os.environ.get("VERTEX_PROJECT_ID", ""), str
+    )
+
+
+async def VERTEX_REGION() -> str:
+    """Returns VERTEX_REGION from Redis (default: us-east5)."""
+    import os
+
+    return await get_config(
+        "VERTEX_REGION", os.environ.get("VERTEX_REGION", "us-east5"), str
+    )
+
+
+async def VERTEX_CLAUDE_MODEL() -> str:
+    """Returns VERTEX_CLAUDE_MODEL from Redis (default: claude-sonnet-4-6)."""
+    import os
+
+    return await get_config(
+        "VERTEX_CLAUDE_MODEL",
+        os.environ.get("VERTEX_CLAUDE_MODEL", "claude-sonnet-4-6"),
+        str,
+    )
