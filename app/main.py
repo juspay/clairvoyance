@@ -65,6 +65,8 @@ from app.helpers.automatic.session_manager import (
 from app.schemas import (
     AutomaticVoiceUserConnectRequest,
 )
+from app.services.fallback import initialize_fallback_tasks
+from app.services.service_health import initialize_service_health_tasks
 from app.services.langfuse.tasks.task import initialize_langfuse_tasks
 from app.services.redis import (
     close_redis_connections,
@@ -166,6 +168,9 @@ async def lifespan(_app: FastAPI):
 
             # Initialize Langfuse tasks (if configured)
             await initialize_langfuse_tasks(_background_scheduler)
+
+            # Initialize STT fallback reset tasks
+            await initialize_fallback_tasks(_background_scheduler)
 
             ### Register new tasks here
 

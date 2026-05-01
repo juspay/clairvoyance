@@ -68,6 +68,13 @@ from app.ai.voice.agents.breeze_buddy.services.inbound_policy import (
 from app.ai.voice.agents.breeze_buddy.services.telephony.base_provider import (
     VoiceCallProvider,
 )
+from app.ai.voice.agents.breeze_buddy.stt.fallback import (
+    ALERT_STT_TERMINAL_FAILURE,
+    STT_FALLBACK_SLACK_TAG,
+    record_stt_failure,
+    send_templated_alert,
+)
+from app.services.service_health import service_health_monitor
 from app.ai.voice.agents.breeze_buddy.template import TemplateContext
 from app.ai.voice.agents.breeze_buddy.template.builder import FlowConfigBuilder
 from app.ai.voice.agents.breeze_buddy.template.context import with_context
@@ -626,6 +633,42 @@ class Agent:
                     "pipeline-error",
                     {"processor": str(processor), "error": error_msg},
                 )
+
+            # Detect STT errors by processor name keywords
+            processor_str = str(processor).lower()
+            stt_keywords = (
+                "stt",
+                "soniox",
+                "deepgram",
+                "transcri",
+                "google",
+                "sarvam",
+            )
+            is_stt_error = any(kw in processor_str for kw in stt_keywords)
+
+            if not is_stt_error:
+                return
+
+            logger.warning(f"STT error detected from processor: {processor}")
+
+            # Record failure in fallback system (once per call, Soniox only)
+            if self.stt_provider == "soniox" and not self._stt_failure_recorded:
+                self._stt_failure_recorded = True
+                try:
+                    await record_stt_failure(
+                        error_msg=str(error_msg)[:200],
+                        call_sid=self.call_sid or "",
+                        context="mid-call",
+                    )
+                except Exception as fb_err:
+                    logger.warning(f"STT fallback record_failure failed: {fb_err}")
+
+            # Alert and end call — no mid-call swap in Phase 1
+            fire_and_forget(self._send_mid_call_stt_alert())
+            try:
+                await task.queue_frames([EndFrame()])
+            except Exception:
+                pass
 
         @self.transport.event_handler("on_client_connected")
         async def on_client_connected(transport, client):

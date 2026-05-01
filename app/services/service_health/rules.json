@@ -1,0 +1,34 @@
+{
+  "elevenlabs": {
+    "threshold_count": 10,
+    "window_minutes": 5
+  },
+  "cartesia": {
+    "threshold_count": 10,
+    "window_minutes": 5
+  },
+  "llm": {
+    "threshold_count": 10,
+    "window_minutes": 5
+  },
+  "twilio": {
+    "threshold_count": 10,
+    "window_minutes": 5
+  },
+  "exotel": {
+    "threshold_count": 10,
+    "window_minutes": 5
+  },
+  "plivo": {
+    "threshold_count": 10,
+    "window_minutes": 5
+  },
+  "call_initiation": {
+    "threshold_count": 20,
+    "window_minutes": 5
+  },
+  "provider_fallback": {
+    "threshold_count": 5,
+    "window_minutes": 5
+  }
+}
