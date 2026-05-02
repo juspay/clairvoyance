@@ -10,6 +10,7 @@ from app.ai.voice.agents.breeze_buddy.template.transformation_function import (
     TEMPLATE_FUNCTION_REGISTRY,
 )
 from app.ai.voice.agents.breeze_buddy.template.types import (
+    FlowMode,
     TemplateModel,
 )
 from app.core.logger import logger
@@ -66,6 +67,18 @@ class FlowConfigLoader:
             )
 
         return template
+
+    def _render_direct_mode_flow(self, flow: Dict, variables: Dict[str, str]) -> None:
+        """Render {placeholder} variables in a direct-mode flow JSON in place.
+
+        Direct mode only has a top-level ``system_prompt`` to render. Function
+        descriptions are not rendered, matching flow-mode behavior.
+        """
+        system_prompt = flow.get("system_prompt")
+        if isinstance(system_prompt, str) and system_prompt:
+            for key, value in variables.items():
+                system_prompt = system_prompt.replace(f"{{{key}}}", str(value))
+            flow["system_prompt"] = system_prompt
 
     def render_task_messages(
         self, task_messages: list, variables: Dict[str, str]
@@ -195,6 +208,14 @@ class FlowConfigLoader:
         logger.info(
             f"Dynamically built template_vars from schema: {list(template_vars.keys())}"
         )
+
+        # Direct mode has a flat structure (system_prompt + flat function list)
+        # rather than a nodes array, so render the top-level message fields and
+        # skip the per-node loop entirely.
+        if template_obj.flow.get("mode") == FlowMode.DIRECT.value:
+            self._render_direct_mode_flow(template_obj.flow, template_vars)
+            logger.info(f"Rendered direct-mode flow for template {template_obj.name}")
+            return template_obj, template_vars
 
         # Get nodes from flow structure
         nodes = template_obj.flow.get("nodes", [])

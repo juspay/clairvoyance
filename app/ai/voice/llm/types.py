@@ -18,6 +18,54 @@ class LLMProvider(str, Enum):
     GOOGLE_VERTEX = "google_vertex"
 
 
+class RealtimeLLMProvider(str, Enum):
+    """Supported realtime (speech-to-speech) LLM providers.
+
+    Realtime providers handle audio in/out natively via a single LLM service,
+    replacing the traditional STT → LLM → TTS triplet. Used only when
+    ``LLMConfiguration.realtime`` is set.
+    """
+
+    OPENAI = "openai"
+    XAI = "xai"
+    AZURE = "azure"
+
+
+class RealtimeConfig(BaseModel):
+    """Realtime / speech-to-speech LLM configuration.
+
+    Presence of this object (vs ``None``) on ``LLMConfiguration.realtime``
+    is what enables realtime mode — there is no separate boolean flag.
+    Currently supported only with template ``mode == 'direct'``.
+    """
+
+    provider: RealtimeLLMProvider = Field(
+        ..., description="Which realtime provider to use."
+    )
+    model: Optional[str] = Field(
+        None,
+        description="Provider-specific realtime model override "
+        "(e.g. 'gpt-realtime-1.5' for OpenAI). Falls back to the provider "
+        "service's default when unset.",
+    )
+    voice: Optional[str] = Field(
+        None,
+        description="Provider-specific voice id for realtime audio output "
+        "(e.g. 'alloy', 'echo' for OpenAI; 'Ara', 'Rex' for xAI). "
+        "Falls back to the provider service's default when unset.",
+    )
+    endpoint: Optional[str] = Field(
+        None,
+        description="Provider-specific endpoint URL override (currently used "
+        "by Azure Realtime, where the WebSocket URL includes the api-version "
+        "and deployment name, e.g. "
+        "'wss://my-project.openai.azure.com/openai/realtime?api-version="
+        "2025-04-01-preview&deployment=my-realtime-deployment'). "
+        "Falls back to AZURE_OPENAI_REALTIME_ENDPOINT in dynamic config "
+        "when unset.",
+    )
+
+
 class LLMSdk(str, Enum):
     """SDK used for LLM communication.
 
@@ -125,9 +173,22 @@ class LLMConfiguration(BaseModel):
 
     Allows per-template override of LLM provider and parameters.
     Values specified here take precedence over global environment defaults.
+
+    TODO: refactor to a symmetric nested shape — pull the text-LLM fields
+    (provider, sdk, model, region, endpoint, api_key_name, temperature,
+    max_tokens, thinking) into a ``TextLLMConfig`` so this class becomes
+    ``text: Optional[TextLLMConfig]`` + ``realtime: Optional[RealtimeConfig]``
+    + the shared ``function_call_timeout_secs``. Cleaner schema (you set
+    exactly one of text/realtime), but touches every text-LLM caller, so
+    deferred to a follow-up PR.
     """
 
-    provider: LLMProvider = LLMProvider.AZURE
+    provider: Optional[LLMProvider] = Field(
+        None,
+        description="Text-LLM provider. When unset, defaults to Azure inside "
+        "``get_llm_service``. Ignored when ``realtime`` is set (the realtime "
+        "service handles audio in/out natively).",
+    )
     sdk: Optional[LLMSdk] = Field(
         None,
         description="SDK to use (required for GOOGLE_VERTEX to distinguish Gemini vs Claude)",
@@ -161,4 +222,13 @@ class LLMConfiguration(BaseModel):
         description="Per-template timeout in seconds for LLM function calls "
         "(how long Pipecat waits for a function handler to return). "
         "Defaults to 10s if not set.",
+    )
+
+    realtime: Optional[RealtimeConfig] = Field(
+        None,
+        description="When set, use a realtime/speech-to-speech LLM service "
+        "that handles audio in/out natively (no separate STT/TTS). "
+        "Presence of this object enables realtime mode; absence means use "
+        "the standard text-LLM path. Currently supported only with template "
+        "``mode == 'direct'``.",
     )
