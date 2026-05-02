@@ -5,7 +5,7 @@ import os
 import re
 from datetime import datetime, timezone
 from io import BytesIO
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, cast
 
 from pipecat.frames.frames import OutputAudioRawFrame
 from pydub import AudioSegment
@@ -97,8 +97,8 @@ def convert_to_mulaw(audio_data: bytes, input_format: str = "raw") -> bytes:
             return mulaw_data
 
         # For MP3 format from ElevenLabs
-        audio_segment: AudioSegment = AudioSegment.from_file(
-            BytesIO(audio_data), format="mp3"
+        audio_segment = cast(
+            AudioSegment, AudioSegment.from_file(BytesIO(audio_data), format="mp3")
         )
         audio_segment = (
             audio_segment.set_frame_rate(8000).set_channels(1).set_sample_width(2)
@@ -168,7 +168,7 @@ def load_audio(audio_path) -> OutputAudioRawFrame | None:
     if os.path.exists(audio_path):
         try:
             # Load audio file using pydub and convert to transport format
-            audio_segment: AudioSegment = AudioSegment.from_wav(audio_path)
+            audio_segment = cast(AudioSegment, AudioSegment.from_wav(audio_path))
 
             # Convert to 8000 Hz sample rate, mono channel, 16-bit PCM to match transport config
             audio_segment = (
@@ -488,7 +488,7 @@ async def prepare_initial_greeting_payload(
             )
 
             # Load and convert audio
-            audio: AudioSegment = AudioSegment.from_wav(wav_file_path)
+            audio = cast(AudioSegment, AudioSegment.from_wav(wav_file_path))
             audio = audio.set_frame_rate(8000).set_channels(1).set_sample_width(2)
             pcm_data: bytes = audio.raw_data  # type: ignore[assignment]
             mulaw_data = audioop.lin2ulaw(pcm_data, 2)
