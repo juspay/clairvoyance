@@ -6,7 +6,12 @@ This module builds Pipecat flow configurations from database models.
 
 from typing import Any, Callable, Dict, List, cast
 
-from pipecat_flows import FlowManager, FlowsFunctionSchema, NodeConfig
+from pipecat_flows import (
+    FlowManager,
+    FlowsDirectFunction,
+    FlowsFunctionSchema,
+    NodeConfig,
+)
 from pipecat_flows.types import ActionConfig, FlowResult
 
 from app.ai.voice.agents.breeze_buddy.handlers.internal import (
@@ -232,7 +237,7 @@ class FlowConfigBuilder:
             name=node.node_name,
             task_messages=task_messages,
             role_messages=role_messages,
-            functions=cast(List[FlowsFunctionSchema], functions),
+            functions=cast(List[FlowsDirectFunction | FlowsFunctionSchema], functions),
             pre_actions=cast(List[ActionConfig], pre_actions),
             post_actions=cast(List[ActionConfig], post_actions),
         )
