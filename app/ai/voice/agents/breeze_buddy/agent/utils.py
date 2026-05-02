@@ -1,12 +1,17 @@
 """Utility functions for voice agents."""
 
+import audioop
+import base64
+import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional
 
 from fastapi import WebSocket
+from pipecat.frames.frames import OutputAudioRawFrame
+from pipecat.pipeline.task import PipelineTask
 
-from app.ai.voice.agents.breeze_buddy.template.types import TemplateModel
+from app.ai.voice.agents.breeze_buddy.template.types import FlowMode, TemplateModel
 from app.ai.voice.agents.breeze_buddy.utils.common import (
     prepare_initial_greeting_payload,
     track_error,
@@ -14,6 +19,13 @@ from app.ai.voice.agents.breeze_buddy.utils.common import (
 from app.ai.voice.agents.breeze_buddy.utils.transport.websockets import send_message
 from app.core.logger import logger
 from app.schemas.breeze_buddy.core import LeadCallTracker
+from app.services.redis.client import get_redis_service
+
+# Daily output runs at PipelineParams default (24 kHz, 16-bit, mono); the
+# telephony greeting cache stores mulaw 8 kHz, so we transcode at retrieval.
+DAILY_OUTPUT_SAMPLE_RATE = 24000
+TELEPHONY_GREETING_SAMPLE_RATE = 8000
+PCM_SAMPLE_WIDTH_BYTES = 2  # 16-bit linear PCM
 
 
 @dataclass
@@ -103,6 +115,163 @@ async def send_initial_greeting(
         logger.error(f"Failed to send initial greeting: {e}")
         track_error(errors, f"Failed to send initial greeting: {e}")
         return GreetingResult(source=None, text=None)
+
+
+def _transcode_mulaw_to_daily_pcm(mulaw_bytes: bytes) -> bytes:
+    """Transcode mulaw 8 kHz mono → PCM 16-bit 24 kHz mono for Daily playback.
+
+    Two-step stdlib path: ``audioop.ulaw2lin`` decodes mulaw to 16-bit linear
+    PCM at the source rate (8 kHz); ``audioop.ratecv`` upsamples 8→24 kHz with
+    linear interpolation. Speech-quality is fine for a 3–5 s greeting; the
+    floor was already telephony-quality mulaw.
+    """
+    pcm_8k = audioop.ulaw2lin(mulaw_bytes, PCM_SAMPLE_WIDTH_BYTES)
+    pcm_daily, _state = audioop.ratecv(
+        pcm_8k,
+        PCM_SAMPLE_WIDTH_BYTES,
+        1,  # mono
+        TELEPHONY_GREETING_SAMPLE_RATE,
+        DAILY_OUTPUT_SAMPLE_RATE,
+        None,
+    )
+    return pcm_daily
+
+
+async def send_initial_greeting_daily(
+    task: PipelineTask,
+    lead: LeadCallTracker,
+    template: TemplateModel,
+    errors: Optional[List[Dict[str, Any]]] = None,
+) -> GreetingResult:
+    """Send initial greeting audio for Daily-mode calls.
+
+    Reuses the telephony Redis greeting cache (mulaw 8 kHz), transcodes to PCM
+    24 kHz to match the Daily transport's output sample rate, and queues an
+    ``OutputAudioRawFrame`` through the pipeline for playback.
+
+    The cache keys are identical to telephony, so cron pre-synthesis (which
+    runs for outbound) populates the cache for both transport types. Inbound
+    Daily calls fall back to lazy synthesis via ``prepare_and_store_initial_greeting``
+    in the agent setup, same pattern as inbound telephony.
+
+    Args:
+        task: Pipeline task to queue the audio frame on
+        lead: Lead data
+        template: Template model
+        errors: Optional errors list to track failures
+
+    Returns:
+        GreetingResult with source and resolved greeting text. ``source`` is
+        ``None`` when no cached audio is available (falls through to LLM-speaks-first).
+    """
+    try:
+        redis = await get_redis_service()
+        mulaw_data: Optional[bytes] = None
+        greeting_source: Optional[str] = None
+        greeting_text: Optional[str] = None
+
+        # 1. Static greeting (persistent template-level cache)
+        template_audio_key = f"greeting:template:{template.id}"
+        template_greeting = await redis.get(template_audio_key)
+        if template_greeting:
+            mulaw_data = base64.b64decode(template_greeting)
+            greeting_source = "template_static"
+            if template.configurations and template.configurations.initial_greeting:
+                greeting_text = template.configurations.initial_greeting
+
+        # 2. Dynamic greeting (per-lead cache, deleted after retrieval)
+        if not mulaw_data:
+            lead_greeting_key = f"greeting:{lead.id}"
+            lead_greeting_data = await redis.get(lead_greeting_key)
+            if lead_greeting_data:
+                greeting_source = "lead_dynamic"
+                try:
+                    greeting_obj = json.loads(lead_greeting_data)
+                    mulaw_data = base64.b64decode(greeting_obj["audio"])
+                    greeting_text = greeting_obj.get("text")
+                except (json.JSONDecodeError, KeyError):
+                    # Legacy format: raw base64 mulaw, no JSON wrapper
+                    mulaw_data = base64.b64decode(lead_greeting_data)
+                await redis.delete(lead_greeting_key)
+                logger.info(f"Deleted dynamic greeting from Redis for lead {lead.id}")
+
+        if not mulaw_data:
+            logger.info("No greeting audio cached for Daily call; LLM will speak first")
+            return GreetingResult(source=None, text=None)
+
+        pcm_daily = _transcode_mulaw_to_daily_pcm(mulaw_data)
+
+        await task.queue_frame(
+            OutputAudioRawFrame(
+                audio=pcm_daily,
+                sample_rate=DAILY_OUTPUT_SAMPLE_RATE,
+                num_channels=1,
+            )
+        )
+        logger.info(
+            f"Queued Daily initial greeting (source={greeting_source}, "
+            f"{len(pcm_daily)} bytes PCM at {DAILY_OUTPUT_SAMPLE_RATE} Hz)"
+        )
+        return GreetingResult(source=greeting_source, text=greeting_text)
+
+    except Exception as e:
+        logger.error(f"Failed to send Daily initial greeting: {e}", exc_info=True)
+        track_error(errors, f"Failed to send Daily initial greeting: {e}")
+        return GreetingResult(source=None, text=None)
+
+
+def validate_template_compat(template: TemplateModel) -> None:
+    """Reject incompatible combinations between flow mode and LLM mode.
+
+    Realtime / speech-to-speech LLMs (set via
+    ``configurations.llm_configurations.realtime``) are constrained in two
+    ways for v1:
+
+    1. They are only supported in direct-mode templates — flow-mode relies
+       on per-node prompt/tool swapping which doesn't translate cleanly to
+       the realtime session model (one persistent session.update channel).
+    2. They cannot be combined with ``configurations.keyword_filter`` —
+       the keyword filter is enforced inside ``TranscriptionGateProcessor``,
+       which the realtime pipeline topology omits (audio in/out, server-
+       side STT and turn detection live inside the realtime LLM service,
+       so there is no place in the pipeline to drop matched transcripts).
+       Reject loudly rather than silently letting the filter no-op.
+    """
+    flow = template.flow or {}
+    configurations = template.configurations
+    llm_config = (
+        configurations.llm_configurations if configurations is not None else None
+    )
+    realtime = llm_config.realtime if llm_config else None
+    if realtime is None:
+        return
+
+    flow_mode = flow.get("mode")
+    if flow_mode != FlowMode.DIRECT.value:
+        raise ValueError(
+            "Realtime LLMs (llm_configurations.realtime set) are only "
+            "supported with direct-mode templates. Set flow.mode='direct' "
+            f"on template {template.id} or disable realtime."
+        )
+
+    keyword_filter = (
+        getattr(configurations, "keyword_filter", None)
+        if configurations is not None
+        else None
+    )
+    if keyword_filter is not None and getattr(keyword_filter, "enabled", False):
+        raise ValueError(
+            "Realtime LLMs (llm_configurations.realtime set) cannot be "
+            "combined with configurations.keyword_filter — the realtime "
+            "pipeline has no TranscriptionGateProcessor to enforce it. "
+            f"Disable keyword_filter on template {template.id} or disable "
+            "realtime."
+        )
+
+    logger.info(
+        f"Template {template.id} validated: realtime LLM + direct mode "
+        f"(provider={realtime.provider.value})"
+    )
 
 
 async def end_call_with_errors(

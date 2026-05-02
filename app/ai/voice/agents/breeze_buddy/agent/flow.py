@@ -6,6 +6,7 @@ from pipecat.services.azure.llm import AzureLLMService
 from pipecat_flows import FlowManager, NodeConfig
 from pipecat_flows.types import FlowsDirectFunction, FlowsFunctionSchema
 
+from app.ai.voice.agents.breeze_buddy.agent.utils import validate_template_compat
 from app.ai.voice.agents.breeze_buddy.template import (
     FlowConfigBuilder,
 )
@@ -21,7 +22,7 @@ from app.ai.voice.agents.breeze_buddy.utils.playground import (
     apply_playground_config_overrides,
 )
 from app.core.logger import logger
-from app.schemas.breeze_buddy.core import LeadCallTracker
+from app.schemas.breeze_buddy.core import ExecutionMode, LeadCallTracker
 
 
 async def load_template_config(
@@ -46,6 +47,15 @@ async def load_template_config(
     )
 
     apply_playground_config_overrides(lead, template)
+
+    # DAILY_STREAM is client-driven STT/TTS-only — no LLM is ever built, so
+    # LLM-config compatibility checks (realtime + flow-mode rejection,
+    # realtime + keyword_filter rejection) cannot fire at runtime. Skip the
+    # check so a stream session can reuse a template that's also configured
+    # for agent-mode without spurious load failures. Agent-mode loads still
+    # validate normally and surface misconfiguration loudly.
+    if getattr(lead, "execution_mode", None) != ExecutionMode.DAILY_STREAM:
+        validate_template_compat(template)
 
     return template, template.configurations, template_vars
 

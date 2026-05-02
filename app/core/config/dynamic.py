@@ -341,3 +341,43 @@ async def OUTBOUND_RATE_LIMIT_WINDOW_SECONDS() -> int:
 async def OUTBOUND_RATE_LIMIT_BLOCK_ENABLED() -> bool:
     """Returns OUTBOUND_RATE_LIMIT_BLOCK_ENABLED from Redis"""
     return await get_config("OUTBOUND_RATE_LIMIT_BLOCK_ENABLED", False, bool)
+
+
+# --- Realtime / speech-to-speech LLM credentials ---
+async def OPENAI_REALTIME_API_KEY() -> str:
+    """Returns the OpenAI Realtime API key from Redis.
+
+    Used by direct-mode templates with
+    ``llm_configurations.realtime.provider="openai"``.
+    """
+    return await get_config("OPENAI_REALTIME_API_KEY", "", str)
+
+
+async def XAI_REALTIME_API_KEY() -> str:
+    """Returns the xAI Realtime API key from Redis.
+
+    Used by direct-mode templates with
+    ``llm_configurations.realtime.provider="xai"``.
+    """
+    return await get_config("XAI_REALTIME_API_KEY", "", str)
+
+
+async def AZURE_OPENAI_REALTIME_API_KEY() -> str:
+    """Returns the Azure OpenAI Realtime API key from Redis.
+
+    Used by direct-mode templates with
+    ``llm_configurations.realtime.provider="azure"``.
+    """
+    return await get_config("AZURE_OPENAI_REALTIME_API_KEY", "", str)
+
+
+async def AZURE_OPENAI_REALTIME_ENDPOINT() -> str:
+    """Returns the Azure OpenAI Realtime WebSocket endpoint URL from Redis.
+
+    Must be the full Azure WebSocket URL including api-version and
+    deployment, e.g. ``"wss://my-project.openai.azure.com/openai/realtime?
+    api-version=2025-04-01-preview&deployment=my-realtime-deployment"``.
+    Templates can override this per-call via
+    ``llm_configurations.realtime.endpoint``.
+    """
+    return await get_config("AZURE_OPENAI_REALTIME_ENDPOINT", "", str)

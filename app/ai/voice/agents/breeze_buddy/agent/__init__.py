@@ -51,6 +51,7 @@ from app.ai.voice.agents.breeze_buddy.agent.transport import (
 from app.ai.voice.agents.breeze_buddy.agent.utils import (
     end_call_with_errors,
     send_initial_greeting,
+    send_initial_greeting_daily,
 )
 from app.ai.voice.agents.breeze_buddy.handlers.internal.end_conversation import (
     end_conversation,
@@ -317,6 +318,33 @@ class Agent:
         except ValueError as e:
             logger.error(f"Failed to load template config for Daily mode: {e}")
             raise
+
+        # Synthesize and cache the initial greeting in Redis so it can be
+        # played out on client-connect. Idempotent: if cron pre-synthesized
+        # the audio at lead-push time (outbound), this is a Redis hit and
+        # skips TTS. Bounded by a short timeout so a hung TTS does not block
+        # the room from accepting the client. Stream mode skips this — no
+        # LLM/template playback in passthrough mode.
+        if not self.is_stream_mode:
+            try:
+                await asyncio.wait_for(
+                    prepare_and_store_initial_greeting(
+                        lead_id=self.lead.id,
+                        payload=self.lead.payload or {},
+                        template=self.template,
+                    ),
+                    timeout=5.0,
+                )
+            except asyncio.TimeoutError:
+                logger.warning(
+                    f"Daily greeting synthesis timed out for lead {self.lead.id}; "
+                    "client will hear no greeting (LLM may speak first instead)"
+                )
+            except Exception as e:
+                logger.warning(
+                    f"Daily greeting synthesis failed for lead {self.lead.id}: {e}; "
+                    "client will hear no greeting (LLM may speak first instead)"
+                )
 
         self.vad_analyzer, self.default_vad_params = await create_vad_analyzer(
             is_daily_mode=True,
@@ -720,6 +748,36 @@ class Agent:
         ):
             logger.error("Required attributes not initialized for client connection")
             return
+
+        # Daily mode plays the pre-synthesized greeting through the pipeline
+        # transport on client-connect (telephony plays it out-of-band during
+        # _setup_telephony_transport, before the pipeline starts). Setting
+        # greeting_source/text here makes prepare_initial_node inject the
+        # greeting into the LLM context as an assistant message and switch
+        # respond_immediately=False — same downstream behavior as telephony.
+        # DAILY_STREAM also uses a Daily transport but is client-driven STT/
+        # TTS-only (no LLM, no template playback) — explicitly skip greeting
+        # injection there so we don't push audio into a passthrough pipeline.
+        if self.is_daily_mode and not self.is_stream_mode and self.task:
+            greeting_result = await send_initial_greeting_daily(
+                task=self.task,
+                lead=self.lead,
+                template=self.template,
+                errors=self.errors,
+            )
+            self.greeting_source = greeting_result.source
+            self.greeting_text = greeting_result.text
+
+            # Mirror telephony: start post-greeting idle timer so the bot
+            # re-engages if the user stays silent after the greeting.
+            if self.greeting_source and self.configurations:
+                user_idle_config = getattr(
+                    self.configurations, "user_idle_configuration", None
+                )
+                if user_idle_config and user_idle_config.enabled:
+                    self._post_greeting_task = asyncio.create_task(
+                        self._handle_post_greeting_idle(user_idle_config)
+                    )
 
         (
             self.flow_config,

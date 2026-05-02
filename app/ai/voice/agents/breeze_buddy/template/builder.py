@@ -36,10 +36,21 @@ from app.ai.voice.agents.breeze_buddy.template.types import (
     ActionType,
     FlowAction,
     FlowFunction,
+    FlowMode,
     FlowNodeModel,
+    GlobalFunctionType,
     TemplateModel,
 )
 from app.core.logger import logger
+
+# Synthetic node name used in direct mode. There is only ever one node so the
+# concrete name does not matter, but it must be stable across the build/init
+# code paths and unlikely to collide with a user-defined node.
+DIRECT_MODE_NODE_NAME = "__direct__"
+
+# Function dicts whose ``type`` is one of these are routed through the global
+# function adapter registry; everything else is treated as a FlowFunction.
+_GLOBAL_FUNCTION_TYPES = {t.value for t in GlobalFunctionType}
 
 
 class FlowConfigBuilder:
@@ -89,6 +100,12 @@ class FlowConfigBuilder:
         if not flow:
             logger.error("Flow structure is empty in template")
             raise ValueError("Flow structure is empty")
+
+        # Direct mode: synthesize a single virtual node from a global system
+        # prompt. Reuses the rest of the flow path unchanged so all features
+        # (filler audio, hooks, evaluators, OTEL, greeting injection) work.
+        if flow.get("mode") == FlowMode.DIRECT.value:
+            return self._build_direct_flow_config(template)
 
         initial_node_name = flow.get("initial_node")
         if not initial_node_name:
@@ -152,6 +169,73 @@ class FlowConfigBuilder:
             "expected_callback_response_schema": template.expected_callback_response_schema,
         }
 
+    def _build_direct_flow_config(self, template: TemplateModel) -> Dict[str, Any]:
+        """
+        Build a flow config for direct mode (one global system prompt, no nodes).
+
+        Internally synthesizes a single node named ``DIRECT_MODE_NODE_NAME`` so
+        the rest of the flow path (FlowManager.initialize, prepare_initial_node,
+        etc.) works unchanged. All user-defined functions are exposed as global
+        functions — there are no per-node functions because there is only one
+        virtual node.
+
+        VAD / interruption / input-collection settings are intentionally not
+        accepted here: they already exist at ``template.configurations.*`` and
+        apply globally when no per-node override is set, so direct mode just
+        relies on those.
+
+        Args:
+            template: Template configuration from database
+
+        Returns:
+            Dictionary in Pipecat flow format with a single synthesized node.
+
+        Raises:
+            ValueError: If ``system_prompt`` is missing.
+        """
+        flow = template.flow
+        system_prompt = flow.get("system_prompt")
+        if not system_prompt or not isinstance(system_prompt, str):
+            raise ValueError(
+                "Direct mode requires a non-empty 'system_prompt' string in flow"
+            )
+
+        # system_prompt goes into role_messages so pipecat-flows prepends it
+        # ahead of task_messages. When a greeting is played, prepare_initial_node
+        # prepends an assistant greeting message to task_messages, giving the LLM
+        # an [system_prompt, assistant_greeting, user_reply] order rather than
+        # the awkward [assistant_greeting, system_prompt, user_reply] order that
+        # putting system_prompt in task_messages would produce. Language rules
+        # injected by inject_language_rules append to role_messages naturally.
+        role_messages: List[Dict[str, Any]] = [
+            {"role": "system", "content": system_prompt}
+        ]
+
+        node_config = NodeConfig(  # type: ignore[no-matching-overload]
+            name=DIRECT_MODE_NODE_NAME,
+            task_messages=[],
+            role_messages=role_messages,
+            functions=cast(List[FlowsFunctionSchema], []),
+            pre_actions=cast(List[ActionConfig], []),
+            post_actions=cast(List[ActionConfig], []),
+        )
+
+        end_conversation_callbacks = flow.get("end_conversation_callbacks", [])
+
+        logger.info(
+            f"Built direct-mode flow config: 1 synthesized node "
+            f"({DIRECT_MODE_NODE_NAME}), system_prompt={len(system_prompt)} chars, "
+            f"end_conversation_callbacks={end_conversation_callbacks}"
+        )
+
+        return {
+            "initial_node": DIRECT_MODE_NODE_NAME,
+            "nodes": {DIRECT_MODE_NODE_NAME: node_config},
+            "end_conversation_callbacks": end_conversation_callbacks,
+            "expected_callback_response_schema": template.expected_callback_response_schema,
+            "mode": FlowMode.DIRECT.value,
+        }
+
     def build_global_functions(
         self, flow: Dict[str, Any], bot_instance: Any = None
     ) -> List[FlowsFunctionSchema]:
@@ -173,11 +257,73 @@ class FlowConfigBuilder:
         Returns:
             List of FlowsFunctionSchema objects to pass to FlowManager(global_functions=[...])
         """
-        # Pass entire handler_map - each adapter will pick the handler it needs
-        # All handlers are already wrapped with with_context(bot_instance) in agent.py
+        # Direct mode has a single flat `functions` array. Each entry is
+        # routed by `type`: http/builtin/custom go through the global-function
+        # adapter registry; everything else is a FlowFunction (hooks-only).
+        if flow.get("mode") == FlowMode.DIRECT.value:
+            return self._build_direct_mode_functions(
+                flow.get("functions") or [],
+                bot_instance=bot_instance,
+            )
+
+        # Flow mode: keep the legacy split between per-node `functions` (built
+        # by `_build_function_schema` during node construction) and top-level
+        # `global_functions` (built here via the adapter registry).
         return GlobalFunctionRegistry.build(
             flow, handler_map=self.handler_map, bot_instance=bot_instance
         )
+
+    def _build_direct_mode_functions(
+        self,
+        functions: List[Dict[str, Any]],
+        bot_instance: Any = None,
+    ) -> List[FlowsFunctionSchema]:
+        """Convert a direct-mode functions array to FlowsFunctionSchemas.
+
+        Routes each entry by type:
+          - ``type`` ∈ {"http", "builtin", "custom"} → global function adapter
+          - otherwise → FlowFunction (hooks-only, no transition)
+        """
+        global_entries: List[Dict[str, Any]] = []
+        flow_function_models: List[FlowFunction] = []
+
+        for func_raw in functions:
+            if not isinstance(func_raw, dict):
+                logger.warning(
+                    f"Direct mode: ignoring non-dict function entry: {type(func_raw)}"
+                )
+                continue
+
+            func_data = func_raw.copy()
+            if "function_name" in func_data and "name" not in func_data:
+                func_data["name"] = func_data.pop("function_name")
+
+            if func_data.get("type") in _GLOBAL_FUNCTION_TYPES:
+                global_entries.append(func_data)
+            else:
+                # Direct mode never transitions — silently drop any
+                # `transition_to` so old templates copied across modes don't
+                # accidentally try to navigate to a non-existent node.
+                func_data.pop("transition_to", None)
+                flow_function_models.append(FlowFunction.model_validate(func_data))
+
+        result: List[FlowsFunctionSchema] = []
+        if global_entries:
+            result.extend(
+                GlobalFunctionRegistry.build(
+                    {"global_functions": global_entries},
+                    handler_map=self.handler_map,
+                    bot_instance=bot_instance,
+                )
+            )
+        for func_model in flow_function_models:
+            result.append(self._build_function_schema(func_model))
+
+        logger.info(
+            f"Direct mode: built {len(result)} function(s) "
+            f"({len(global_entries)} adapter-routed, {len(flow_function_models)} hook-only)"
+        )
+        return result
 
     def _build_node(self, node: FlowNodeModel) -> NodeConfig:
         """

@@ -1149,6 +1149,83 @@ class FlowNodeModel(BaseModel):
     )
 
 
+class FlowMode(str, Enum):
+    """Top-level flow mode controlling how the agent is wired.
+
+    FLOW (default):  Multi-node template with LLM-driven transitions, hooks,
+                     pre/post-actions per node — the original Breeze Buddy
+                     wiring on top of pipecat-flows FlowManager.
+    DIRECT:          Single global system prompt + flat function list with
+                     no node transitions. Closer to a vanilla pipecat agent;
+                     internally implemented as a synthetic single node so
+                     the rest of the pipeline (filler audio, hooks, OTEL,
+                     evaluators, greeting, idle handling) is unchanged.
+    """
+
+    FLOW = "flow"
+    DIRECT = "direct"
+
+
+class DirectModeFlow(BaseModel):
+    """Schema for ``flow`` JSON when ``mode == "direct"``.
+
+    Only used for documentation and template-side validation — the builder
+    reads the raw dict directly (mode-agnostic loading path).
+
+    Direct mode is intentionally minimal: one global system prompt and a
+    single flat ``functions`` array. VAD, interruption, and input-collection
+    settings live at the template level (``template.configurations.*``),
+    same as today — there is no per-node override because there is only
+    one (synthetic) node.
+
+    Example::
+
+        {
+            "mode": "direct",
+            "system_prompt": "You are an order-confirmation agent...",
+            "functions": [
+                # FlowFunction-style: hook-driven side effects
+                {
+                    "name": "user_busy",
+                    "description": "Mark the user as busy.",
+                    "hooks": [{"name": "update_outcome_in_database", ...}]
+                },
+                # Builtin global function
+                {"type": "builtin", "name": "end_conversation",
+                 "handler": "end_conversation",
+                 "description": "Politely end the call when the user is done."},
+                # HTTP global function
+                {"type": "http", "name": "check_order_status", ...},
+                # Custom Python global function
+                {"type": "custom", "name": "calculate_discount", ...}
+            ]
+        }
+    """
+
+    mode: FlowMode = Field(
+        FlowMode.DIRECT,
+        description="Must be 'direct' for this schema.",
+    )
+    system_prompt: str = Field(
+        ...,
+        description="Global system prompt for the LLM. Rendered with "
+        "{placeholder} variables resolved from lead payload.",
+    )
+    functions: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="Functions exposed to the LLM. Heterogeneous: each entry "
+        "is either a FlowFunction-style dict (with optional hooks; "
+        "``transition_to`` is ignored) OR a global function with "
+        "``type: 'http' | 'builtin' | 'custom'`` (built via the existing "
+        "GlobalFunctionRegistry adapters).",
+    )
+    end_conversation_callbacks: List[str] = Field(
+        default_factory=list,
+        description="Same semantics as flow mode — list of callback names "
+        "to invoke when the conversation ends.",
+    )
+
+
 class TemplateModel(BaseModel):
     # Read-only fields (set by server, not editable via API).
     # These are intentionally excluded from ReplaceTemplateRequest so that

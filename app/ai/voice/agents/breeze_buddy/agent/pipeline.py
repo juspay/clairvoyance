@@ -60,6 +60,7 @@ from app.ai.voice.agents.breeze_buddy.template.types import (
 )
 from app.ai.voice.agents.breeze_buddy.template.vad import TELEPHONY_SAMPLE_RATE
 from app.ai.voice.agents.breeze_buddy.tts import get_tts_service, resolve_voice_config
+from app.ai.voice.llm.realtime import get_realtime_llm_service
 from app.core.config.static import (
     ENABLE_BREEZE_BUDDY_DAILY_EVENTS,
     ENABLE_BREEZE_BUDDY_TRACING,
@@ -103,7 +104,7 @@ def generate_conversation_id(payload: Optional[dict]) -> str:
 async def create_services(
     configurations: Optional[ConfigurationModel],
     include_llm: bool = True,
-) -> tuple[Any, Optional[Any], Any]:
+) -> tuple[Optional[Any], Optional[Any], Optional[Any]]:
     """Create STT, LLM, and TTS services.
 
     Args:
@@ -111,8 +112,26 @@ async def create_services(
         include_llm: When False, skip LLM creation (stream mode). LLM will be None.
 
     Returns:
-        Tuple of (stt_service, llm_service_or_None, tts_service)
+        Tuple of (stt_service, llm_service_or_None, tts_service). For realtime
+        / speech-to-speech LLMs, both ``stt_service`` and ``tts_service`` are
+        ``None`` because the realtime LLM handles audio in/out natively.
     """
+    llm_config = getattr(configurations, "llm_configurations", None)
+    is_realtime = bool(include_llm and llm_config and llm_config.realtime is not None)
+
+    if is_realtime:
+        # Realtime / speech-to-speech: one service replaces STT + LLM + TTS.
+        # Skip the separate text-LLM, STT, and TTS services entirely so the
+        # pipeline can wire the realtime service directly between transport
+        # input/output and the context aggregators.
+        assert llm_config is not None  # narrowed by is_realtime
+        realtime_llm = await get_realtime_llm_service(llm_config)
+        logger.info(
+            "[REALTIME] Skipping separate STT and TTS service creation; "
+            "realtime LLM handles audio natively"
+        )
+        return None, realtime_llm, None
+
     stt_configuration = getattr(configurations, "stt_configuration", None)
 
     if stt_configuration:
@@ -135,7 +154,6 @@ async def create_services(
         )
 
     if include_llm:
-        llm_config = getattr(configurations, "llm_configurations", None)
         llm = await get_llm_service(llm_config)
     else:
         llm = None
@@ -154,11 +172,29 @@ async def create_services(
     return stt, llm, tts
 
 
+def _wire_user_idle_event(
+    user_aggregator: Any, handler: Optional[UserIdleCallbackHandler]
+) -> None:
+    """Bind the on_user_turn_idle event on the aggregator to the handler.
+
+    Pipecat 1.0 owns the idle timer inside ``LLMUserAggregator`` and emits
+    ``on_user_turn_idle`` when it fires; the handler decides whether to
+    nudge the user, retry, or end the call.
+    """
+    if handler is None:
+        return
+    idle_handler = handler  # narrow Optional for the closure below
+
+    @user_aggregator.event_handler("on_user_turn_idle")
+    async def _on_user_turn_idle(aggregator: Any) -> None:
+        await idle_handler.handle_user_idle(aggregator)
+
+
 async def build_pipeline(
     transport: Any,
-    stt: Any,
+    stt: Optional[Any],
     llm: Optional[Any],
-    tts: Any,
+    tts: Optional[Any],
     vad_analyzer: Optional[SileroVADAnalyzer] = None,
     configurations: Optional[ConfigurationModel] = None,
     on_user_idle_timeout: Optional[Callable[[int], Any]] = None,
@@ -168,7 +204,7 @@ async def build_pipeline(
     LLMContext,
     Any,
     Optional[UserIdleCallbackHandler],
-    TranscriptionGateProcessor,
+    Optional[TranscriptionGateProcessor],
     Optional[TranscriptCollectorProcessor],
 ]:
     """Build the processing pipeline.
@@ -189,9 +225,11 @@ async def build_pipeline(
 
     Args:
         transport: The transport instance
-        stt: Speech-to-text service
+        stt: Speech-to-text service (None in realtime mode — the realtime
+            LLM handles audio input natively)
         llm: LLM service (None in stream mode)
-        tts: Text-to-speech service
+        tts: Text-to-speech service (None in realtime mode — the realtime
+            LLM handles audio output natively)
         vad_analyzer: SileroVADAnalyzer instance for voice activity detection
         configurations: Template configuration model
         on_user_idle_timeout: Async callback to handle user idle timeout (triggers full end_conversation flow)
@@ -207,10 +245,78 @@ async def build_pipeline(
         - transcript_collector: TranscriptCollectorProcessor instance (stream mode only, None in agent mode)
     """
     is_stream = mode == "stream"
+    # Realtime / speech-to-speech: when create_services returns no STT and no
+    # TTS but a single LLM, we wire a minimal pipeline. The realtime LLM does
+    # its own audio in/out, transcription, and turn detection, so all of BB's
+    # STT-side scaffolding (TranscriptionGateProcessor, smart-turn analyzer,
+    # MinWords/Transcription user-turn-start strategies, AccumulatingSpeech
+    # TimeoutStrategy) is irrelevant or duplicative and is skipped.
+    is_realtime = stt is None and tts is None and llm is not None and not is_stream
+
     # TODO: Add a breeze-buddy-specific context summarizer.
     # Pipecat does not provide built-in summarization; implement one under
     # app/ai/voice/agents/breeze_buddy/ to manage long conversation contexts.
     context = LLMContext()
+
+    # User-idle resolution is shared between realtime and standard pipelines:
+    # both paths use the same aggregator-driven idle detection (timer lives
+    # inside LLMUserAggregator; handler fires on on_user_turn_idle). Stream
+    # mode skips idle entirely — client drives the turn lifecycle.
+    user_idle_config = getattr(configurations, "user_idle_configuration", None)
+    user_idle_enabled = (
+        user_idle_config is not None
+        and getattr(user_idle_config, "enabled", False)
+        and not is_stream
+    )
+    user_idle_timeout = (
+        float(user_idle_config.timeout)
+        if user_idle_enabled and user_idle_config is not None
+        else 0.0
+    )
+    user_idle_callback_handler: Optional[UserIdleCallbackHandler] = (
+        UserIdleCallbackHandler(
+            idle_message=user_idle_config.idle_message,
+            max_retries=user_idle_config.max_retries,
+            on_user_idle_timeout=on_user_idle_timeout,
+        )
+        if user_idle_enabled and user_idle_config is not None
+        else None
+    )
+
+    if is_realtime:
+        # Aggregator with no custom strategies; the realtime LLM emits
+        # TranscriptionFrame on its own based on server-side STT, and emits
+        # UserStartedSpeakingFrame / UserStoppedSpeakingFrame from server-side
+        # turn detection. user_idle still works because on_user_turn_idle
+        # fires on the aggregator regardless of upstream source.
+        context_aggregator = LLMContextAggregatorPair(
+            context,
+            user_params=LLMUserAggregatorParams(user_idle_timeout=user_idle_timeout),
+        )
+        user_aggregator = context_aggregator.user()
+        _wire_user_idle_event(user_aggregator, user_idle_callback_handler)
+
+        # Pipeline order (realtime):
+        #   input → user_aggregator → realtime_llm → output → assistant_aggregator
+        pipeline_parts: list[Any] = [
+            transport.input(),
+            user_aggregator,
+            llm,
+            transport.output(),
+            context_aggregator.assistant(),
+        ]
+        logger.info(
+            "[REALTIME] Built pipeline without STT/TTS/transcription_gate; "
+            f"user_idle_enabled={user_idle_enabled}"
+        )
+        return (
+            Pipeline(pipeline_parts),
+            context,
+            context_aggregator,
+            user_idle_callback_handler,
+            None,  # no TranscriptionGateProcessor in realtime mode
+            None,  # no TranscriptCollectorProcessor (stream-mode only)
+        )
 
     # --- Interruption configuration ---
     # Reads template-level interruption config to select PipeCat strategies:
@@ -321,21 +427,9 @@ async def build_pipeline(
             f"Interruption: mode={interruption_config.mode.value} — interruptions enabled"
         )
 
-    # Resolve user idle config up front so its timeout can flow into the
-    # aggregator params (1.0 manages idle detection inside LLMUserAggregator,
-    # not via a separate processor). Stream mode skips idle — client drives it.
-    user_idle_config = getattr(configurations, "user_idle_configuration", None)
-    user_idle_enabled = (
-        user_idle_config is not None
-        and getattr(user_idle_config, "enabled", False)
-        and not is_stream
-    )
-    user_idle_timeout = (
-        float(user_idle_config.timeout)
-        if user_idle_enabled and user_idle_config is not None
-        else 0.0
-    )
-
+    # The aggregator owns the idle timer (user_idle_timeout above); the
+    # callback handler is wired via on_user_turn_idle below. Both were
+    # resolved before the realtime branch.
     context_aggregator = LLMContextAggregatorPair(
         context,
         user_params=LLMUserAggregatorParams(
@@ -359,27 +453,9 @@ async def build_pipeline(
             f"match_type={keyword_filter_config.match_type.value}"
         )
 
-    # Wire retry-then-end-call logic to the aggregator's on_user_turn_idle event.
-    # The timer itself is owned by LLMUserAggregator (user_idle_timeout above).
-    user_idle_callback_handler: Optional[UserIdleCallbackHandler] = (
-        UserIdleCallbackHandler(
-            idle_message=user_idle_config.idle_message,
-            max_retries=user_idle_config.max_retries,
-            on_user_idle_timeout=on_user_idle_timeout,
-        )
-        if user_idle_enabled and user_idle_config is not None
-        else None
-    )
-
     # Store reference to user aggregator for position lookup
     user_aggregator = context_aggregator.user()
-
-    if user_idle_callback_handler is not None:
-        _idle_handler = user_idle_callback_handler
-
-        @user_aggregator.event_handler("on_user_turn_idle")
-        async def _on_user_turn_idle(aggregator: Any) -> None:
-            await _idle_handler.handle_user_idle(aggregator)
+    _wire_user_idle_event(user_aggregator, user_idle_callback_handler)
 
     # Stream mode: insert TranscriptCollectorProcessor to capture user + bot
     # TTS text for DB storage (no LLMContext to pull from at end-of-conversation).
