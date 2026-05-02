@@ -14,10 +14,21 @@ from fastapi.responses import JSONResponse
 from pipecat.transports.daily.utils import DailyRESTHelper
 
 from app import __version__
+from app.ai.text.agents.blueprint.agent.checkpointer import (
+    close_checkpointer as close_blueprint_checkpointer,
+    init_checkpointer as init_blueprint_checkpointer,
+)
 from app.ai.voice.agents.breeze_buddy.services.agent_router.client import (
     close_smart_router_client,
 )
-from app.api.routers import automatic, breeze_buddy, devcycle, feature_flags, systems
+from app.api.routers import (
+    automatic,
+    blueprint,
+    breeze_buddy,
+    devcycle,
+    feature_flags,
+    systems,
+)
 
 # Import background task scheduler
 from app.core.background_tasks import BackgroundTaskScheduler
@@ -98,6 +109,13 @@ async def lifespan(_app: FastAPI):
         await init_db_pool()
     except Exception as e:
         logger.error(f"Failed to initialize database: {e}")
+
+    # Initialize Blueprint graph checkpointer (Postgres if configured,
+    # else in-process MemorySaver fallback — the function logs which).
+    try:
+        await init_blueprint_checkpointer()
+    except Exception as e:
+        logger.error(f"Failed to initialize Blueprint checkpointer: {e}")
     # Initialize Redis client
     try:
         if is_redis_configured():
@@ -210,6 +228,8 @@ async def lifespan(_app: FastAPI):
     await cleanup_voice_agent_pool()
     # Cleanup bot processes
     await cleanup_bot_processes()
+    # Close Blueprint checkpointer (its own psycopg pool, separate from asyncpg).
+    await close_blueprint_checkpointer()
     # Close database pool
     await close_db_pool()
     # Close Redis connections
@@ -233,6 +253,7 @@ app.add_middleware(
 app.include_router(
     breeze_buddy.router, prefix="/agent/voice/breeze-buddy", tags=["Breeze Buddy"]
 )
+app.include_router(blueprint.router, prefix="/agent/text/blueprint", tags=["Blueprint"])
 app.include_router(
     automatic.router, prefix="/agent/voice/automatic", tags=["Automatic Agent"]
 )

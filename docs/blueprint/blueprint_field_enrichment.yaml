@@ -1,0 +1,259 @@
+# Blueprint field-enrichment data.
+#
+# Keyed by dotted field path (same path Blueprint's schema graph uses).
+# Each entry may provide:
+#   rationale:          str  — user-facing "why this field exists"
+#   recommendation:          — hand-curated default for v1
+#     value:            any  — the suggested value (leaf type)
+#     justification:    str  — one-line reason surfaced to the user
+#   alternatives:       list — use-case-specific overrides the planner can
+#                              pick when conversation context matches.
+#                              Each entry has:
+#                                value:        any
+#                                when:         str — short trigger phrase
+#                                justification:str
+#   example_phrasings:  list — short phrasings the planner can borrow
+#
+# Entries are optional at every level. Fields without an entry fall back
+# to their Pydantic ``description`` and their Python default.
+#
+# Defaults reflect the production stack: Soniox + ElevenLabs are the
+# generally-best picks; the alternatives section lists when to swap.
+#
+# This file is the source of truth for Phase 1b enrichment. Phase 8 will
+# replace hand-curated recommendations with ones inferred from production
+# templates in the DB.
+
+# ---------------------------------------------------------------------------
+# STT
+# ---------------------------------------------------------------------------
+
+configurations.stt_configuration.provider:
+  rationale: >
+    Which speech-to-text provider transcribes the caller's audio in
+    real time. Each provider has different latency, accuracy and
+    language coverage tradeoffs.
+  recommendation:
+    value: soniox
+    justification: >
+      Soniox is the strongest all-rounder — best Indian-English + Hindi
+      coverage, native intelligent endpointing (no SmartTurn needed),
+      and handles code-switching cleanly. Safe default for most flows.
+  alternatives:
+    - value: deepgram
+      when: English-only US/EU calls, or you specifically want SmartTurn endpointing.
+      justification: >
+        Lowest latency for clean English audio; pairs with the SmartTurn
+        ML endpointing model.
+    - value: sarvam
+      when: Indic-only flows (Hindi, Tamil, Telugu, Marathi, etc.) where Sarvam's models excel.
+      justification: Indic-native models with strong accent + dialect coverage.
+    - value: google
+      when: Already standardized on GCP and want a single vendor for STT/TTS.
+      justification: Solid baseline accuracy; convenient when you're all-in on Google Cloud.
+    - value: openai
+      when: You need Whisper-class accuracy and don't mind higher latency.
+      justification: Whisper handles noisy audio and accents very well, but is slower.
+  example_phrasings:
+    - Which STT provider should we use?
+    - Pick the speech recognition engine.
+
+configurations.stt_configuration.language:
+  rationale: >
+    Primary language the caller is expected to speak in. Drives STT model
+    selection and downstream language handling.
+  recommendation:
+    value: en
+    justification: English is the safest default; switch to hi / mr / ta etc. for Indic flows.
+  alternatives:
+    - value: hi
+      when: User mentions Hindi callers or Indic-language collections / outreach.
+      justification: Hindi is the most common Indic outbound language.
+
+configurations.stt_configuration.turn_detection:
+  rationale: >
+    How the agent decides the caller is done speaking so it can respond.
+    ``smart_turn`` uses an ML model; ``stt_native`` uses provider signals;
+    ``timeout`` falls back to a silence timer.
+  recommendation:
+    value: stt_native
+    justification: >
+      Soniox (and Deepgram) ship intelligent endpoint detection that
+      avoids the 0.5s mid-sentence cutoffs you get from silence timers.
+      Most natural for conversational flows.
+  alternatives:
+    - value: smart_turn
+      when: Provider is Deepgram and you want the ML-based SmartTurn model instead of Deepgram's native endpointing.
+      justification: SmartTurn's ML model can be slightly more natural than Deepgram-native on long turns.
+    - value: timeout
+      when: Provider's native endpointing isn't trustworthy or you need a hard silence cutoff.
+      justification: Predictable behaviour — fires after ``user_speech_timeout`` seconds of silence.
+
+configurations.stt_configuration.user_speech_timeout:
+  rationale: >
+    Silence window (seconds) after which we consider the caller done
+    speaking. Only used when turn_detection is "timeout"; SmartTurn forces
+    this to 0.
+  recommendation:
+    value: 2.0
+    justification: 2 seconds is a comfortable pause before the agent responds.
+
+# ---------------------------------------------------------------------------
+# TTS
+# ---------------------------------------------------------------------------
+
+configurations.tts_configuration.provider:
+  rationale: >
+    Which text-to-speech provider synthesises the agent's voice. ElevenLabs
+    and Cartesia are the natural-sounding choices; Sarvam handles Indic
+    languages well.
+  recommendation:
+    value: elevenlabs
+    justification: ElevenLabs voices sound natural and support SSML pacing cues.
+  alternatives:
+    - value: sarvam
+      when: Hindi / Indic flows where you want a native Indic voice.
+      justification: Sarvam's Indic voices sound more natural than Eleven's multilingual model in Hindi / Tamil / etc.
+    - value: cartesia
+      when: You need ultra-low TTS latency (sub-200ms) and English voices are acceptable.
+      justification: Cartesia's Sonic models are the fastest English TTS available today.
+    - value: google
+      when: Already standardized on GCP and want simple billing.
+      justification: Wide language coverage; voices are competent if not flagship.
+
+configurations.tts_configuration.voice_id:
+  rationale: >
+    The specific voice to use. Pick one that matches the merchant's brand
+    tone (warm / professional / energetic). The exact ID format is
+    provider-specific.
+
+configurations.tts_configuration.speed:
+  rationale: Playback rate multiplier. 1.0 is the voice's natural speed.
+  recommendation:
+    value: 1.0
+    justification: Natural speed; slow down only for noisy lines or older demographics.
+
+# ---------------------------------------------------------------------------
+# VAD
+# ---------------------------------------------------------------------------
+
+configurations.vad_config.confidence:
+  rationale: >
+    Silero VAD confidence threshold (0..1). Higher = stricter about
+    what counts as speech — fewer false positives from background noise,
+    but risks clipping quiet speech.
+  recommendation:
+    value: 0.7
+    justification: Balanced for typical phone audio.
+
+configurations.vad_config.start_secs:
+  rationale: Seconds of sustained speech before we commit to "user is speaking".
+  recommendation:
+    value: 0.2
+    justification: Short enough to feel responsive, long enough to ignore clicks.
+
+configurations.vad_config.stop_secs:
+  rationale: Seconds of silence before we commit to "user stopped speaking".
+  recommendation:
+    value: 0.8
+    justification: Under a second avoids awkward pauses.
+
+configurations.vad_config.min_volume:
+  rationale: Minimum audio level (0..1) to count as speech.
+  recommendation:
+    value: 0.6
+    justification: Filters quiet line noise without clipping regular speakers.
+
+# ---------------------------------------------------------------------------
+# Interruption
+# ---------------------------------------------------------------------------
+
+configurations.interruption.mode:
+  rationale: >
+    Whether the caller can barge in and cut off the agent mid-sentence.
+    Most natural conversations allow this; noisy environments may need it off.
+  recommendation:
+    value: enabled
+    justification: Feels more human when callers can interrupt.
+
+configurations.interruption.min_words:
+  rationale: >
+    How many words the caller must say before an interrupt actually takes
+    effect. Filters out "uh-huh" / "mhm" backchannels that shouldn't stop
+    the agent.
+  recommendation:
+    value: 3
+    justification: Ignores brief acknowledgements but respects real interruptions.
+
+# ---------------------------------------------------------------------------
+# Audio
+# ---------------------------------------------------------------------------
+
+configurations.enable_background_sound:
+  rationale: >
+    Play subtle ambient audio behind the agent to mask silence gaps.
+    Makes the call feel more natural but can distract in quiet contexts.
+  recommendation:
+    value: false
+    justification: Keep off by default; turn on only for outbound sales flows.
+
+configurations.initial_greeting:
+  rationale: >
+    First sentence the agent speaks when the call connects. Supports
+    ``{placeholder}`` variables resolved from the lead payload (e.g.
+    ``{customer_name}``).
+  example_phrasings:
+    - What should the agent say first?
+    - Give me the opening line.
+
+# ---------------------------------------------------------------------------
+# Warm transfer
+# ---------------------------------------------------------------------------
+
+configurations.transfer_number:
+  rationale: >
+    Phone number the agent dials when it decides to hand off to a human.
+    Only takes effect if the flow exposes the ``connect_to_live_agent``
+    builtin function — otherwise it's unused.
+  example_phrasings:
+    - Which number should escalations go to?
+    - Where should we transfer live agents?
+
+# ---------------------------------------------------------------------------
+# User idle
+# ---------------------------------------------------------------------------
+
+configurations.user_idle_configuration.enabled:
+  rationale: >
+    Whether the agent nudges the caller after a silence window.
+  recommendation:
+    value: true
+    justification: Stops the call from stalling when the caller goes quiet.
+
+configurations.user_idle_configuration.timeout:
+  rationale: Seconds of silence before the idle prompt fires.
+  recommendation:
+    value: 8
+    justification: 8 seconds avoids nagging while still rescuing stalled calls.
+
+configurations.user_idle_configuration.max_retries:
+  rationale: How many idle nudges we attempt before ending the call.
+  recommendation:
+    value: 2
+    justification: Two chances is the industry norm.
+
+# ---------------------------------------------------------------------------
+# Metadata
+# ---------------------------------------------------------------------------
+
+name:
+  rationale: Short human-readable name for this template. Shown in dashboards.
+  example_phrasings:
+    - What do you want to call this template?
+    - Give me a name for this flow.
+
+is_active:
+  rationale: Whether calls can actually be placed against this template.
+  recommendation:
+    value: true
+    justification: Most merchants want to start with the template live.

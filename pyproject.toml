@@ -33,6 +33,10 @@ dependencies = [
     "redis[hiredis]>=5.0.0",
     "nltk",
     "jmespath>=1.1.0",
+    # Blueprint agent (template creation wizard)
+    "langgraph>=1.1",
+    "langgraph-checkpoint-postgres>=3.0",
+    "langchain-google-vertexai>=3.2",
 ]
 
 [project.optional-dependencies]
@@ -61,3 +65,12 @@ combine_as_imports = true
 
 [tool.pyrefly]
 project-excludes = ["**/automatic/**"]
+
+[tool.uv]
+# langchain-google-vertexai 3.2.2 incorrectly lists langchain-tests in
+# [project].dependencies (should be a test extra). It pulls in pytest +
+# 6 pytest plugins as runtime deps. Suppress via an unsatisfiable marker
+# until the upstream packaging bug is fixed.
+override-dependencies = [
+    "langchain-tests; python_version < '0'",
+]

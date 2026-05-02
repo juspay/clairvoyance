@@ -66,7 +66,44 @@ jobs:
           uv run pyrefly check
         continue-on-error: false
 
-      # Step 9: Check commit count (must be exactly 1)
+      # Step 9: Check template enrichment freshness
+      - name: Check template enrichment freshness
+        run: |
+          TEMPLATE_FILES=$(git diff --name-only origin/${{ github.event.pull_request.base.ref }}...${{ github.event.pull_request.head.sha }} | grep -cE "(template/types|template/builder|examples/templates)" || true)
+          DOCS_TOUCHED=$(git diff --name-only origin/${{ github.event.pull_request.base.ref }}...${{ github.event.pull_request.head.sha }} | grep -cE "(blueprint_field_enrichment|TEMPLATE_PERFECT_PLAYBOOK|TEMPLATE_CREATION_AGENT)" || true)
+          if [ "$TEMPLATE_FILES" -gt 0 ] && [ "$DOCS_TOUCHED" -eq 0 ]; then
+            echo "::warning::Template schema files changed but no Blueprint docs were updated. Please review if docs/blueprint/blueprint_field_enrichment.yaml, TEMPLATE_PERFECT_PLAYBOOK.md, or TEMPLATE_CREATION_AGENT.md needs updating."
+          else
+            echo "Template enrichment check passed."
+          fi
+        continue-on-error: true
+
+      # Step 9b: Check blueprint agent stays in sync with template changes
+      - name: Check blueprint sync with template
+        run: |
+          CHANGED_FILES=$(git diff --name-only origin/${{ github.event.pull_request.base.ref }}...${{ github.event.pull_request.head.sha }})
+
+          # Template files outside blueprint that blueprint depends on
+          TEMPLATE_CHANGED=$(echo "$CHANGED_FILES" | grep -cE "^(app/ai/voice/agents/breeze_buddy/template/|app/schemas/breeze_buddy/template|app/api/routers/breeze_buddy/templates/|app/database/(accessor|decoder|queries)/breeze_buddy/template)" || true)
+
+          # Blueprint agent files
+          BLUEPRINT_CHANGED=$(echo "$CHANGED_FILES" | grep -cE "^(app/ai/text/|app/api/routers/blueprint/|app/database/(accessor|decoder|queries)/blueprint/|app/schemas/blueprint/|docs/blueprint/)" || true)
+
+          if [ "$TEMPLATE_CHANGED" -gt 0 ] && [ "$BLUEPRINT_CHANGED" -eq 0 ]; then
+            echo "::error::Template-related files changed but blueprint agent was not updated."
+            echo ""
+            echo "Changed template files:"
+            echo "$CHANGED_FILES" | grep -E "^(app/ai/voice/agents/breeze_buddy/template/|app/schemas/breeze_buddy/template|app/api/routers/breeze_buddy/templates/|app/database/(accessor|decoder|queries)/breeze_buddy/template)"
+            echo ""
+            echo "The blueprint agent generates templates and must stay in sync."
+            echo "Please review and update the blueprint agent or spec, or add a justification comment on the PR."
+            exit 1
+          else
+            echo "Blueprint sync check passed."
+          fi
+        continue-on-error: false
+
+      # Step 10: Check commit count (must be exactly 1)
       - name: Check commit count
         run: |
           COMMIT_COUNT=${{ github.event.pull_request.commits }}
