@@ -22,6 +22,11 @@ Why each entry is disabled:
   pipeline tears down via ``run_turn``'s ``finally`` already, and queueing
   an ``EndFrame`` mid-turn races the just-queued ``LLMRunFrame`` for the
   closing node and cancels the user-facing reply in flight.
+- ``hold_and_consult``: telephony-only — requires an active call leg to
+  put on hold and a telephony service to make the outbound call. Neither
+  exists in the chat pipeline; the handler would fail with
+  "Telephony service not available." Stripping prevents the LLM from
+  ever attempting to call it in chat mode.
 """
 
 from __future__ import annotations
@@ -34,6 +39,7 @@ CHAT_DISABLED_NAMES: frozenset[str] = frozenset(
         "warm_transfer",
         "connect_to_live_agent",
         "end_conversation",
+        "hold_and_consult",
     }
 )
 

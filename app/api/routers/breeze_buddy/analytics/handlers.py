@@ -216,6 +216,7 @@ async def get_call_details_analytics(
                 or tracker.get("created_at")
                 or datetime.now(),
                 updated_at=tracker.get("updated_at"),
+                execution_mode=tracker.get("execution_mode"),
             )
         )
 

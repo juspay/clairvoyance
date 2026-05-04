@@ -1,4 +1,5 @@
 import ast
+import datetime
 import inspect
 from typing import Any, Callable, Dict, Optional
 
@@ -79,6 +80,7 @@ def compile_custom_function(name: str, source: str) -> Optional[Callable]:
             "tuple": tuple,
             "type": type,
             "zip": zip,
+            "datetime": datetime,
         }
         namespace: Dict[str, Any] = {"__builtins__": safe_builtins}
         exec(code_obj, namespace)  # noqa: S102

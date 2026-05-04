@@ -159,6 +159,7 @@ class CallDetailResult(BaseModel):
     call_initiated_time: Optional[datetime] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
+    execution_mode: Optional[str] = None
 
 
 class TrendDataPoint(BaseModel):
