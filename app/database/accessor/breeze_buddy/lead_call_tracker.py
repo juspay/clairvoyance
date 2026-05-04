@@ -16,6 +16,7 @@ from app.database.queries.breeze_buddy.lead_call_tracker import (
     append_metadata_field_query,
     defer_lead_next_attempt_and_release_lock_query,
     get_all_lead_call_trackers_query,
+    get_call_based_pickup_rate_query,
     get_lead_based_analytics_query,
     get_lead_by_call_id_query,
     get_lead_by_id_query,
@@ -466,6 +467,7 @@ async def get_all_lead_call_trackers(
     shop_name: Optional[str] = None,
     page: Optional[int] = None,
     page_size: Optional[int] = None,
+    merchant_id: Optional[str] = None,
 ) -> List[Tuple[LeadCallTracker, Optional[str]]]:
     """
     Get all lead call trackers with optional filters and pagination.
@@ -484,6 +486,7 @@ async def get_all_lead_call_trackers(
             shop_name=shop_name,
             limit=limit,
             offset=offset,
+            merchant_id=merchant_id,
         )
         result = await run_parameterized_query(query_text, values)
         if result:
@@ -553,9 +556,33 @@ async def get_lead_call_trackers_count(
         return 0
 
 
+async def get_call_based_pickup_rate(
+    start_date: Optional[datetime] = None,
+    end_date: Optional[datetime] = None,
+    merchant_id: Optional[str] = None,
+) -> Tuple[int, int]:
+    """Get call-based pickup rate as a single aggregated SQL result.
+
+    Returns:
+        Tuple of (calls_attempted, calls_no_answer) — both ints.
+        Raises on DB error so the caller can handle failure explicitly.
+    """
+    query_text, values = get_call_based_pickup_rate_query(
+        start_date=start_date,
+        end_date=end_date,
+        merchant_id=merchant_id,
+    )
+    result = await run_parameterized_query(query_text, values)
+    if result:
+        row = result[0]
+        return int(row["calls_attempted"]), int(row["calls_no_answer"])
+    return 0, 0
+
+
 async def get_lead_based_analytics(
     start_date: Optional[datetime] = None,
     end_date: Optional[datetime] = None,
+    merchant_id: Optional[str] = None,
 ) -> List[asyncpg.Record]:
     """
     Get per-lead call data for analytics.
@@ -567,6 +594,7 @@ async def get_lead_based_analytics(
         query_text, values = get_lead_based_analytics_query(
             start_date=start_date,
             end_date=end_date,
+            merchant_id=merchant_id,
         )
         result = await run_parameterized_query(query_text, values)
         return result if result else []

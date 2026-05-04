@@ -66,6 +66,7 @@ from app.schemas import (
     AutomaticVoiceUserConnectRequest,
 )
 from app.services.langfuse.tasks.task import initialize_langfuse_tasks
+from app.services.pickup_rate.task import initialize_pickup_rate_tasks
 from app.services.redis import (
     close_redis_connections,
     get_redis_service,
@@ -168,6 +169,7 @@ async def lifespan(_app: FastAPI):
             await initialize_langfuse_tasks(_background_scheduler)
 
             ### Register new tasks here
+            await initialize_pickup_rate_tasks(_background_scheduler)
 
             # Start the scheduler only if tasks are registered
             if _background_scheduler.tasks:
