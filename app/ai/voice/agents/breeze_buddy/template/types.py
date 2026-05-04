@@ -383,6 +383,7 @@ class FillerSoundtrack(str, Enum):
 
     TYPING = "typing"  # typing_music_realistic_{8k,24k}.mp3
     DIAL_TONE = "dial-tone"  # dial-tone_{8k,24k}.wav
+    ON_HOLD_RINGTONE = "on-hold-ringtone"  # on-hold-ringtone_{8k,24k}.mp3
 
 
 class KeywordMatchType(str, Enum):
@@ -604,6 +605,71 @@ class FillerAudioConfig(BaseModel):
         return self
 
 
+class HoldTransferConfig(BaseModel):
+    """Configuration for hold & consultative transfer.
+
+    When the AI agent places the inbound caller on hold and makes an outbound
+    call to a third party, this config tells the handler which outbound number
+    (and therefore which template) to use for the outbound conversation.
+
+    Example:
+        {
+            "outbound_number_id": "uuid-of-outbound-number",
+            "hold_music": "typing",
+            "hold_timeout_seconds": 180,
+            "summarize": true,
+            "payload_schema": {
+                "customer_name": "lead.customer_name",
+                "customer_language": "lead.customer_language",
+                "trip_id": "lead.trip_id",
+                "agent_name": "Rhea"
+            }
+        }
+    """
+
+    outbound_number_id: str = Field(
+        ...,
+        description="Outbound number ID used to make the outbound call. "
+        "The template associated with this outbound_number_id "
+        "will be used for the outbound conversation.",
+    )
+    hold_music: FillerSoundtrack = Field(
+        FillerSoundtrack.ON_HOLD_RINGTONE,
+        description="Hold music soundtrack played while the inbound caller waits.",
+    )
+    hold_timeout_seconds: int = Field(
+        180,
+        ge=30,
+        le=600,
+        description="Max seconds the inbound caller stays on hold. Default 3 min.",
+    )
+    phone_number: Optional[str] = Field(
+        None,
+        description="Phone number to call. If set, the handler uses this "
+        "instead of the LLM-provided phone_number argument. "
+        "Omit to let the LLM provide the number at runtime.",
+    )
+    summarize: bool = Field(
+        False,
+        description="When true, summarize the outbound transcription via LLM "
+        "before sending to the inbound pod. When false, send raw transcription.",
+    )
+    hold_music_volume: float = Field(
+        0.4,
+        ge=0.0,
+        le=1.0,
+        description="Volume for hold music playback (0.0–1.0). Default 0.4.",
+    )
+    payload_schema: Optional[Dict[str, str]] = Field(
+        None,
+        description="Mapping of outbound template variable names to values. "
+        "Use 'lead.<field>' to reference the inbound lead's payload field "
+        "(e.g. 'lead.customer_name'), or a plain string for a literal value "
+        "(e.g. 'Rhea'). Missing 'lead.<field>' references are logged as "
+        "warnings and resolved to None — the outbound call still proceeds.",
+    )
+
+
 class IvrConfig(BaseModel):
     """IVR-specific configuration — voice, greeting, goodbye, priority.
 
@@ -753,6 +819,11 @@ class ConfigurationModel(BaseModel):
         description="List of LLM-as-judge evaluator names to run for this template. "
         "Each name is added as a tag on the Langfuse trace. "
         "If empty/None, 'ALL_EVALS' tag is added instead.",
+    )
+    hold_transfer: Optional[HoldTransferConfig] = Field(
+        None,
+        description="Hold & consultative transfer configuration. "
+        "When set, enables the hold_and_consult builtin handler.",
     )
 
     @model_validator(mode="after")

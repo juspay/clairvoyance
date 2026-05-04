@@ -87,7 +87,7 @@ async def custom_python_code_handler(
 
         # Wrap successful result
         logger.info(
-            f"[custom_python_code_handler] '{function_config.name}' completed successfully"
+            f"[custom_python_code_handler] '{function_config.name}' completed successfully, result: {result}"
         )
         return {
             "status": "success",

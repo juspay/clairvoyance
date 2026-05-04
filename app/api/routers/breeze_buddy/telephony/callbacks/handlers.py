@@ -28,11 +28,15 @@ from app.ai.voice.agents.breeze_buddy.services.telephony.exotel.exotel import (
 from app.ai.voice.agents.breeze_buddy.services.telephony.plivo.plivo import (
     plivo_dial_xml,
 )
+from app.ai.voice.agents.breeze_buddy.utils.hold_transfer import (
+    publish_hold_transfer_result,
+)
 from app.ai.voice.agents.breeze_buddy.utils.warm_transfer import (
     get_transfer_flag,
 )
 from app.core.config.static import TWILIO_TEMPLATE_WEBSOCKET_URL
 from app.core.logger import logger
+from app.database.accessor import get_lead_by_call_id
 
 
 async def handle_callback_details_get(
@@ -280,10 +284,52 @@ async def handle_callback_status(request: Request, provider: str) -> Response:
             )
 
         # Handle failed calls for retry logic
-        if call_status.lower() in ("no-answer", "failed", "busy"):
+        if call_status.lower() in (
+            "no-answer",
+            "failed",
+            "busy",
+            "timeout",
+            "cancel",
+            "canceled",
+            "cancelled",
+        ):
             logger.info(f"Call with SID {call_sid} failed with status: {call_status}")
             # Convert to string for the handler
             if isinstance(call_sid, str):
+                # Hold-transfer: publish failure to inbound pod
+                try:
+                    lead = await get_lead_by_call_id(call_sid)
+                    if lead and lead.payload:
+                        pub_channel = lead.payload.get("_hold_transfer_pub_channel")
+                        if pub_channel:
+                            status_map = {
+                                "no-answer": "no_answer",
+                                "busy": "busy",
+                                "failed": "failed",
+                                "timeout": "no_answer",
+                                "cancel": "no_answer",
+                                "canceled": "no_answer",
+                                "cancelled": "no_answer",
+                            }
+                            await publish_hold_transfer_result(
+                                pub_channel,
+                                {
+                                    "status": status_map.get(
+                                        call_status.lower(), call_status.lower()
+                                    ),
+                                    "summary": f"Outbound call {call_status.lower()}",
+                                },
+                            )
+                            logger.info(
+                                f"[hold_transfer] Published failure "
+                                f"({call_status}) for call {call_sid}"
+                            )
+                except Exception as pub_error:
+                    logger.error(
+                        f"[hold_transfer] Failed to publish failure for "
+                        f"call {call_sid}: {pub_error}"
+                    )
+
                 await handle_unanswered_calls(call_sid)
 
     return Response(status_code=200)

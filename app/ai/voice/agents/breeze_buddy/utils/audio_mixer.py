@@ -35,6 +35,7 @@ _BACKGROUND_SOUND_FILE_MAP: dict[str, tuple[str, str]] = {
 _FILLER_SOUNDTRACK_FILE_MAP: dict[str, tuple[str, str]] = {
     "typing": ("typing_music_realistic_8k.mp3", "typing_music_realistic_24k.mp3"),
     "dial-tone": ("dial-tone_8k.wav", "dial-tone_24k.wav"),
+    "on-hold-ringtone": ("on-hold-ringtone_8k.mp3", "on-hold-ringtone_24k.mp3"),
 }
 
 
@@ -140,6 +141,31 @@ def create_background_sound_mixer(
             logger.warning(
                 f"Filler soundtrack file not found or invalid: {file_variants[file_idx]}"
             )
+
+    # --- 3. Hold & consult hold music ---
+    # Always register the hold music soundtrack so the mixer key is available
+    # when hold_and_consult fires MixerUpdateSettingsFrame at runtime.
+    hold_transfer = getattr(config, "hold_transfer", None)
+    if hold_transfer:
+        hold_music_key = (
+            hold_transfer.hold_music.value
+            if hasattr(hold_transfer.hold_music, "value")
+            else hold_transfer.hold_music
+        )
+        if hold_music_key and hold_music_key not in sound_files:
+            file_variants = _FILLER_SOUNDTRACK_FILE_MAP.get(hold_music_key)
+            if file_variants:
+                path = _audio_file_path(file_variants[file_idx])
+                if _validate_audio_file(path):
+                    sound_files[hold_music_key] = path
+                    logger.info(f"Registered hold music soundtrack: {hold_music_key!r}")
+                else:
+                    logger.warning(
+                        f"Hold music file not found or invalid: "
+                        f"{file_variants[file_idx]}"
+                    )
+            else:
+                logger.warning(f"Unknown hold music soundtrack: {hold_music_key!r}")
 
     if not sound_files:
         return None

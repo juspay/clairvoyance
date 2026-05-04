@@ -47,6 +47,7 @@ class ExecutionMode(str, Enum):
     DAILY = "DAILY"  # Production Daily (web) calls
     DAILY_TEST = "DAILY_TEST"  # Test Daily (web) calls
     DAILY_STREAM = "DAILY_STREAM"  # Daily STT/TTS-only (no LLM, client-driven)
+    HOLD_TRANSFER = "HOLD_TRANSFER"  # Outbound leg of a hold & consultative transfer
 
 
 class CallDirection(str, Enum):

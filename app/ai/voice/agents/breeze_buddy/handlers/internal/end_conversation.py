@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Any, Dict
 
 from pipecat.frames.frames import EndFrame
 
@@ -9,6 +10,10 @@ from app.ai.voice.agents.breeze_buddy.observability.tracing_setup import (
     update_span_with_evaluation_data,
 )
 from app.ai.voice.agents.breeze_buddy.template.context import TemplateContext
+from app.ai.voice.agents.breeze_buddy.utils.hold_transfer import (
+    publish_hold_transfer_result,
+    summarize_transcription,
+)
 from app.core.logger import logger
 from app.core.logger.context import clear_log_context
 
@@ -51,6 +56,16 @@ async def end_conversation(context: TemplateContext, args, transition_to=None):
         logger.debug(f"Initialized empty metaData for call {context.call_sid}")
 
     try:
+        # ── Set call_ended_by default ──────────────────────────────────────
+        # _handle_unexpected_disconnect already sets "customer"/"system"/"agent"
+        # before calling end_conversation; this default only fires for normal
+        # LLM-driven completions where nothing has set it yet.
+        if "call_ended_by" not in context.lead.metaData:
+            context.lead.metaData["call_ended_by"] = "agent"
+            logger.debug(
+                f"Set call_ended_by to 'agent' for normal flow completion in call {context.call_sid}"
+            )
+
         # Collect transcription
         transcription = []
         filtered_transcript = []
@@ -80,18 +95,54 @@ async def end_conversation(context: TemplateContext, args, transition_to=None):
                 f"Collected {len(transcription)} total messages "
                 f"({len(filtered_transcript)} user/assistant) for call {context.call_sid}"
             )
+
         else:
             logger.warning(
                 f"No context found for transcription collection in call {context.call_sid}"
             )
 
-        # Set call_ended_by if not already set (e.g., by _handle_unexpected_disconnect)
-        if "call_ended_by" not in context.lead.metaData:
-            # Default to "agent" for normal conversation flow completion
-            context.lead.metaData["call_ended_by"] = "agent"
-            logger.debug(
-                f"Set call_ended_by to 'agent' for normal flow completion in call {context.call_sid}"
-            )
+        # ── Hold-transfer: publish outbound result to inbound pod ──────────
+        # Runs regardless of whether context.context exists so that outbound
+        # legs that crash before LLM history is built still notify the waiting
+        # hold_and_consult() instead of letting it time out.
+        payload = context.lead.payload or {}
+        pub_channel = payload.get("_hold_transfer_pub_channel")
+        if pub_channel:
+            try:
+                # Determine status: "success" if LLM/agent ended the call,
+                # "incomplete" if the customer hung up mid-way.
+                call_ended_by = context.lead.metaData.get("call_ended_by")
+                if call_ended_by == "customer":
+                    status = "incomplete"
+                elif call_ended_by:
+                    status = "success"
+                else:
+                    # No explicit ender — unexpected disconnect
+                    status = "incomplete"
+
+                result_payload: Dict[str, Any] = {"status": status}
+
+                if payload.get("_hold_transfer_summarize"):
+                    reason = payload.get("_hold_transfer_reason", "")
+                    summary = await summarize_transcription(filtered_transcript, reason)
+                    if summary:
+                        result_payload["summary"] = summary
+                    else:
+                        result_payload["transcription"] = filtered_transcript
+                else:
+                    result_payload["transcription"] = filtered_transcript
+
+                await publish_hold_transfer_result(pub_channel, result_payload)
+                logger.info(
+                    f"[hold_transfer] Published outbound result for call "
+                    f"{context.call_sid} with status={status}"
+                )
+            except Exception as pub_error:
+                logger.error(
+                    f"[hold_transfer] Failed to publish result for call "
+                    f"{context.call_sid}: {pub_error}",
+                    exc_info=True,
+                )
 
         # Finalize the last node in node_traversal
         if (

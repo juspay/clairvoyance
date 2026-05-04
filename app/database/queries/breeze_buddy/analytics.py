@@ -109,9 +109,11 @@ def build_analytics_where_clause(
     conditions = []
     values = []
 
-    # Filter by execution_mode to exclude test calls from analytics
+    # Filter by execution_mode to exclude test calls from analytics.
+    # HOLD_TRANSFER is included so hold & consult outbound legs appear in
+    # the dashboard alongside regular TELEPHONY calls.
     if filter_execution_mode:
-        conditions.append("lct.execution_mode = 'TELEPHONY'")
+        conditions.append("lct.execution_mode IN ('TELEPHONY', 'HOLD_TRANSFER')")
 
     # Date range filters - convert IST to UTC before passing to DB
     if "date_from" in filters and filters["date_from"]:
