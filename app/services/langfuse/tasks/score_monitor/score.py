@@ -440,24 +440,22 @@ class ScoreMonitor:
 
             # Process each call tracker for call-based stats
             for tracker, calling_provider in call_trackers:
-                # Count attempted calls (FINISHED status)
+                # Count attempted calls and outcomes only for FINISHED calls
                 if tracker.status and tracker.status.value == "FINISHED":
                     calls_attempted += 1
+                    outcome_value = tracker.outcome if tracker.outcome else None
+                    if outcome_value == "NO_ANSWER":
+                        calls_no_answer += 1
+                    elif outcome_value == "CONFIRM":
+                        calls_confirm += 1
+                    elif outcome_value == "CANCEL":
+                        calls_cancel += 1
+                    elif outcome_value == "ADDRESS_UPDATED":
+                        calls_address_updated += 1
+                    elif outcome_value == "BUSY":
+                        calls_busy += 1
 
-                # Count by outcome
-                outcome_value = tracker.outcome if tracker.outcome else None
-                if outcome_value == "NO_ANSWER":
-                    calls_no_answer += 1
-                elif outcome_value == "CONFIRM":
-                    calls_confirm += 1
-                elif outcome_value == "CANCEL":
-                    calls_cancel += 1
-                elif outcome_value == "ADDRESS_UPDATED":
-                    calls_address_updated += 1
-                elif outcome_value == "BUSY":
-                    calls_busy += 1
-
-                # Count by provider
+                # Count by provider regardless of status
                 if calling_provider:
                     provider_upper = calling_provider.upper()
                     if provider_upper in provider_counts:
