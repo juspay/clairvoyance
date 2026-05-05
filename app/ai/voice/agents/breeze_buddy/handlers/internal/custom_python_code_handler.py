@@ -89,6 +89,15 @@ async def custom_python_code_handler(
         logger.info(
             f"[custom_python_code_handler] '{function_config.name}' completed successfully"
         )
+
+        # Record in node traversal path. Custom functions have no
+        # expected_response_schema so function_response is always None.
+        context.record_global_function_call(
+            function_name=function_config.name,
+            function_args=args,
+            function_response=None,
+        )
+
         return {
             "status": "success",
             "data": result,
