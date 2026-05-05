@@ -162,8 +162,19 @@ async def builtin_function_dispatcher(
         result = await handler(context, args)
         # Ensure consistent return format (result, None) for global functions
         if isinstance(result, tuple):
-            return result
-        return result, None
+            result_dict, next_node = result
+        else:
+            result_dict, next_node = result, None
+
+        # Record in node traversal path. Builtins have no expected_response_schema
+        # so function_response is always None.
+        context.record_global_function_call(
+            function_name=function_config.name,
+            function_args=args,
+            function_response=None,
+        )
+
+        return result_dict, next_node
     except Exception as e:
         logger.error(
             f"[builtin_dispatcher] Error in handler '{handler_name}': {e}",

@@ -226,6 +226,7 @@ class TemplateContext:
             "duration_seconds": None,
             "via_function": via_function,
             "function_args": function_args,
+            "global_functions_called": [],
         }
 
         self.lead.metaData["node_traversal"].append(entry)
@@ -274,6 +275,68 @@ class TemplateContext:
                 return
 
         logger.warning("No active node entry found to record exit")
+
+    def record_global_function_call(
+        self,
+        function_name: str,
+        function_args: Optional[Dict[str, Any]] = None,
+        function_response: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """
+        Record a global function call under the currently active node.
+
+        Appends an entry to the ``global_functions_called`` list of the most
+        recent node traversal entry (the one with ``exited_at`` still None).
+
+        Args:
+            function_name: Name of the global function that was invoked
+            function_args: Arguments passed by the LLM to the function
+            function_response: Filtered response data to store. Should be set
+                only when the function has an ``expected_response_schema``
+                (HTTP functions); pass None for builtins and custom functions.
+        """
+        if not self.lead or not self.lead.metaData:
+            logger.warning(
+                "Cannot record global function call: lead or metaData is None"
+            )
+            return
+
+        if "node_traversal" not in self.lead.metaData:
+            logger.warning(
+                "Cannot record global function call: node_traversal not initialized"
+            )
+            return
+
+        # Find the last open node entry (the currently active node)
+        active_entry = None
+        for entry in reversed(self.lead.metaData["node_traversal"]):
+            if entry.get("exited_at") is None:
+                active_entry = entry
+                break
+
+        if active_entry is None:
+            logger.warning(
+                f"Cannot record global function call '{function_name}': "
+                "no active node entry found"
+            )
+            return
+
+        # Ensure the list exists (handles legacy entries without this field)
+        if "global_functions_called" not in active_entry:
+            active_entry["global_functions_called"] = []
+
+        active_entry["global_functions_called"].append(
+            {
+                "function_name": function_name,
+                "called_at": self._get_ist_timestamp(),
+                "function_args": function_args,
+                "function_response": function_response,
+            }
+        )
+        logger.info(
+            f"Recorded global function call '{function_name}' under node "
+            f"'{active_entry.get('node_name')}'"
+        )
 
 
 def with_context(bot_instance):

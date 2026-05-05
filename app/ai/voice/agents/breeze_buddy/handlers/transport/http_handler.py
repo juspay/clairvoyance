@@ -217,6 +217,22 @@ async def http_function_handler(
 
         logger.debug(f"[{function_name}] data going to LLM: {data}")
 
+        # Record global function call in node traversal path.
+        # Store the filtered response only when expected_response_schema is
+        # defined — that's the curated subset we want to persist. For plain
+        # HTTP calls without a schema the raw response may be large / noisy,
+        # so we store None in that case.
+        response_to_store = (
+            data
+            if is_success and config.expected_response_schema and isinstance(data, dict)
+            else None
+        )
+        context.record_global_function_call(
+            function_name=function_name,
+            function_args=args,
+            function_response=response_to_store,
+        )
+
         return {
             "status": "success" if is_success else "error",
             "status_code": status_code,
