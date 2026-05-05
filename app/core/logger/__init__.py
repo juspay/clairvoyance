@@ -242,6 +242,12 @@ def setup_logging_interception():
     logging.getLogger("websockets").disabled = True
     logging.getLogger("daily_core").disabled = True
 
+    # HTTP transport / SDK chatter — at DEBUG these dump every HPACK header
+    # table entry, every chunk, the full LLM request body, etc. Useful when
+    # debugging the connection layer; pure noise in normal operation.
+    for noisy in ("h2", "hpack", "hyperframe", "httpcore", "httpx", "openai"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
+
 
 # Initial logger configuration
 _setup_logger_sinks(include_session_id=False)

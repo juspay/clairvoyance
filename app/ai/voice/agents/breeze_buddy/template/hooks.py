@@ -197,9 +197,10 @@ class UpdateOutcomeInDatabaseHook(Hook):
 
         # Get lead from context
         if not context.lead or not context.lead.id:
-            logger.warning(
-                f"No lead found in context for function '{function_name}'. "
-                f"Cannot update outcome in database."
+            # Expected in chat mode (no lead by design). Outcome persistence
+            # to chat_session is a separate concern; see docs/CHAT_MODE.md §15.
+            logger.info(
+                f"Skipping outcome DB update for '{function_name}': no lead in context."
             )
             return
 

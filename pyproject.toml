@@ -33,6 +33,7 @@ dependencies = [
     "redis[hiredis]>=5.0.0",
     "nltk",
     "jmespath>=1.1.0",
+    "h2>=4.3.0",
 ]
 
 [project.optional-dependencies]

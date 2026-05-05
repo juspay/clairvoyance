@@ -43,8 +43,15 @@ from app.core.logger import logger
 from app.services.live_config.store import get_config
 
 
-async def _resolve_azure(llm_config: LLMConfiguration | None) -> AzureLLMService:
-    """Build Azure LLM, using dynamic config as fallback for template overrides."""
+async def _resolve_azure(
+    llm_config: LLMConfiguration | None, *, pooled: bool = False
+) -> AzureLLMService:
+    """Build Azure LLM, using dynamic config as fallback for template overrides.
+
+    ``pooled=True`` is reserved for chat mode (long-lived process, multiple
+    turns). Voice runs each call in its own subprocess and gets nothing
+    from connection sharing — keep voice on the stock pipecat service.
+    """
     # Endpoint: template override or env default
     endpoint = (
         llm_config.endpoint
@@ -101,7 +108,8 @@ async def _resolve_azure(llm_config: LLMConfiguration | None) -> AzureLLMService
                 if llm_config and llm_config.function_call_timeout_secs
                 else 10.0
             ),
-        )
+        ),
+        pooled=pooled,
     )
 
 
@@ -170,7 +178,7 @@ async def _resolve_vertex(llm_config: LLMConfiguration) -> GoogleVertexLLMServic
 
 
 async def _resolve_claude_vertex(
-    llm_config: LLMConfiguration,
+    llm_config: LLMConfiguration, *, pooled: bool = False
 ) -> VertexAnthropicLLMService:
     """Build Claude on Vertex AI — all params required from template config."""
     credentials_json = await GOOGLE_VERTEX_CREDENTIALS_JSON()
@@ -228,12 +236,15 @@ async def _resolve_claude_vertex(
                 if llm_config.function_call_timeout_secs
                 else 10.0
             ),
-        )
+        ),
+        pooled=pooled,
     )
 
 
 async def get_llm_service(
     llm_config: LLMConfiguration | None = None,
+    *,
+    pooled: bool = False,
 ) -> Union[AzureLLMService, GoogleVertexLLMService, VertexAnthropicLLMService]:
     """Get LLM service instance based on configuration.
 
@@ -244,6 +255,10 @@ async def get_llm_service(
 
     Args:
         llm_config: Optional template-level LLM configuration.
+        pooled: chat-mode opt-in for sharing the underlying client across
+            calls. Today Azure (HTTP/2 httpx pool) and Claude on Vertex
+            (AsyncAnthropicVertex client + OAuth token cache) honour it;
+            Gemini Vertex ignores it (still per-call).
 
     Returns:
         Configured LLM service instance.
@@ -251,24 +266,29 @@ async def get_llm_service(
     Raises:
         ValueError: If required provider configuration is missing.
     """
+    # Pooled callers (chat) re-resolve every turn — demote the
+    # provider-selection trace so follow-up turns don't spam INFO.
+    # Voice (pooled=False) keeps INFO for once-per-call setup.
+    _dispatch_log = logger.debug if pooled else logger.info
+
     if (
         not llm_config
         or not llm_config.provider
         or llm_config.provider == LLMProvider.AZURE
     ):
-        logger.info("Using Azure LLM provider")
-        return await _resolve_azure(llm_config)
+        _dispatch_log("Using Azure LLM provider")
+        return await _resolve_azure(llm_config, pooled=pooled)
 
     if llm_config.provider == LLMProvider.GOOGLE_VERTEX:
         if llm_config.sdk == LLMSdk.ANTHROPIC:
-            logger.info("Using Claude on Vertex AI (Anthropic SDK)")
-            return await _resolve_claude_vertex(llm_config)
+            _dispatch_log("Using Claude on Vertex AI (Anthropic SDK)")
+            return await _resolve_claude_vertex(llm_config, pooled=pooled)
 
-        logger.info("Using Gemini on Vertex AI (Google SDK)")
+        _dispatch_log("Using Gemini on Vertex AI (Google SDK)")
         return await _resolve_vertex(llm_config)
 
     # Fallback — shouldn't happen with the enum, but be safe
     logger.warning(
         f"Unknown LLM provider '{llm_config.provider}', falling back to Azure"
     )
-    return await _resolve_azure(llm_config)
+    return await _resolve_azure(llm_config, pooled=pooled)

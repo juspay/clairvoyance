@@ -185,6 +185,11 @@ def decode_template(result: asyncpg.Record) -> Optional[TemplateModel]:
             secrets_data = json.loads(secrets_data)
         # If it's already a dict (from JSONB), use it directly
 
+    # supported_channels is a Postgres text[] (NOT NULL DEFAULT {'voice'}).
+    # Some legacy SELECTs may not include the column — fall back to ['voice']
+    # so the model always has at least one channel.
+    supported_channels = result.get("supported_channels") or ["voice"]
+
     return TemplateModel(
         id=str(result["id"]),
         reseller_id=result["reseller_id"],
@@ -201,6 +206,7 @@ def decode_template(result: asyncpg.Record) -> Optional[TemplateModel]:
             else None
         ),
         is_active=result["is_active"],
+        supported_channels=list(supported_channels),
         created_at=result["created_at"],
         updated_at=result["updated_at"],
     )

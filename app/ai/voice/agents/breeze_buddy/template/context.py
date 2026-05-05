@@ -208,7 +208,8 @@ class TemplateContext:
             function_args: Arguments passed to the function that brought us here
         """
         if not self.lead:
-            logger.warning("Cannot record node entry: lead is None")
+            # Expected in chat mode (no lead by design); voice always sets one.
+            logger.info("Skipping node entry record: lead is None")
             return
 
         if self.lead.metaData is None:
@@ -238,7 +239,8 @@ class TemplateContext:
         The via_function and function_args are set during node entry, not exit.
         """
         if not self.lead or not self.lead.metaData:
-            logger.warning("Cannot record node exit: lead or metaData is None")
+            # Expected in chat mode (no lead by design); voice always sets one.
+            logger.info("Skipping node exit record: lead or metaData is None")
             return
 
         if "node_traversal" not in self.lead.metaData:
