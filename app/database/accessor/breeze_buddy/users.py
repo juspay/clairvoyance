@@ -6,43 +6,161 @@ using queries from queries.breeze_buddy.users and
 decoders from decoder.breeze_buddy.users.
 """
 
+import json
 from typing import List, Optional, Tuple
 
 from app.core.logger import logger
 from app.core.security.password import hash_password
+from app.database import get_db_connection
 from app.database.decoder.breeze_buddy.users import decode_user
 from app.database.queries import run_parameterized_query
+from app.database.queries.breeze_buddy.merchants import create_merchant_query
 from app.database.queries.breeze_buddy.users import (
+    check_email_exists_query,
     check_username_exists_query,
     create_user_query,
     delete_user_query,
     get_all_users_query,
+    get_user_by_email_query,
     get_user_by_id_query,
+    get_user_by_username_query,
+    get_user_in_db_by_id_query,
+    get_users_by_email_query,
     update_user_query,
 )
+from app.schemas.breeze_buddy.auth import UserInDB, UserRole
 from app.schemas.breeze_buddy.users import UserResponse
 
 
 async def check_username_exists(username: str) -> bool:
-    """Check if a username already exists.
-
-    Args:
-        username: Username to check
-
-    Returns:
-        True if exists, False otherwise
-
-    Raises:
-        Exception: On database errors for fail-safe behavior
-    """
+    """Check if a username already exists."""
     query, values = check_username_exists_query(username)
-
     try:
         result = await run_parameterized_query(query, values)
         return result is not None and len(result) > 0
     except Exception as e:
         logger.error(f"Error checking username {username}: {e}")
         raise
+
+
+async def check_email_exists(email: str) -> bool:
+    """Check if an email address is already registered."""
+    query, values = check_email_exists_query(email)
+    try:
+        result = await run_parameterized_query(query, values)
+        return result is not None and len(result) > 0
+    except Exception as e:
+        logger.error(f"Error checking email {email}: {e}")
+        raise
+
+
+def _decode_user_in_db(row) -> UserInDB:
+    """Decode a raw asyncpg Record into a UserInDB model."""
+    return UserInDB(
+        id=row["id"],
+        username=row["username"],
+        password_hash=row["password_hash"],
+        role=row["role"],
+        email=row.get("email"),
+        reseller_ids=json.loads(row["reseller_ids"]) if row.get("reseller_ids") else [],
+        merchant_ids=json.loads(row["merchant_ids"]) if row.get("merchant_ids") else [],
+        is_active=row["is_active"],
+        owner_id=row.get("owner_id"),
+        created_at=row.get("created_at"),
+        updated_at=row.get("updated_at"),
+    )
+
+
+async def get_user_by_username(username: str) -> Optional[UserInDB]:
+    """Get a full UserInDB record (including password_hash) by username."""
+    query, values = get_user_by_username_query(username)
+    try:
+        result = await run_parameterized_query(query, values)
+        row = result[0] if result else None
+        return _decode_user_in_db(row) if row else None
+    except Exception as e:
+        logger.error(f"Error fetching user by username '{username}': {e}")
+        raise
+
+
+async def get_user_by_email(email: str) -> Optional[UserInDB]:
+    """Get a full UserInDB record (including password_hash) by email (first match)."""
+    query, values = get_user_by_email_query(email)
+    try:
+        result = await run_parameterized_query(query, values)
+        row = result[0] if result else None
+        return _decode_user_in_db(row) if row else None
+    except Exception as e:
+        logger.error(f"Error fetching user by email '{email}': {e}")
+        raise
+
+
+async def get_users_by_email(email: str) -> List[UserInDB]:
+    """Get all UserInDB records sharing a given email address."""
+    query, values = get_users_by_email_query(email)
+    try:
+        result = await run_parameterized_query(query, values)
+        return [_decode_user_in_db(row) for row in result] if result else []
+    except Exception as e:
+        logger.error(f"Error fetching users by email '{email}': {e}")
+        raise
+
+
+async def get_user_in_db_by_id(user_id: str) -> Optional[UserInDB]:
+    """Get a full UserInDB record (including password_hash) by user ID."""
+    query, values = get_user_in_db_by_id_query(user_id)
+    try:
+        result = await run_parameterized_query(query, values)
+        row = result[0] if result else None
+        return _decode_user_in_db(row) if row else None
+    except Exception as e:
+        logger.error(f"Error fetching user by id '{user_id}': {e}")
+        raise
+
+
+async def create_merchant_and_user_atomically(
+    *,
+    merchant_id: str,
+    merchant_name: str,
+    merchant_description: str | None,
+    reseller_id: str,
+    user_id: str,
+    username: str,
+    password: str,
+    email: str | None,
+    role: UserRole,
+) -> None:
+    """
+    Insert both the merchant entity and the user account inside a single
+    DB transaction.  Either both succeed or both are rolled back — no
+    orphaned merchant rows if the user insert fails.
+    """
+    password_hash = hash_password(password)
+
+    merchant_q, merchant_v = create_merchant_query(
+        merchant_id=merchant_id,
+        name=merchant_name,
+        description=merchant_description,
+        is_active=True,
+        reseller_id=reseller_id,
+    )
+    user_q, user_v = create_user_query(
+        id=user_id,
+        username=username,
+        password_hash=password_hash,
+        role=role,
+        email=email,
+        reseller_ids=[reseller_id],
+        merchant_ids=[merchant_id],
+        is_active=True,
+        owner_id=None,
+    )
+
+    async for conn in get_db_connection():
+        async with conn.transaction():
+            await conn.execute(merchant_q, *merchant_v)
+            await conn.execute(user_q, *user_v)
+        return
 
 
 async def create_user(

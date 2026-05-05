@@ -21,6 +21,9 @@ from app.api.routers.breeze_buddy.leads import router as leads_router
 from app.api.routers.breeze_buddy.merchants import router as merchants_router
 from app.api.routers.breeze_buddy.numbers import router as numbers_router
 from app.api.routers.breeze_buddy.playground import router as playground_router
+
+# Self-service signup and Google SSO (public, unauthenticated)
+from app.api.routers.breeze_buddy.signup import router as signup_router
 from app.api.routers.breeze_buddy.telephony import router as telephony_router
 from app.api.routers.breeze_buddy.templates import router as templates_router
 from app.api.routers.breeze_buddy.users import router as users_router
@@ -37,6 +40,9 @@ router.include_router(demo_router, prefix="", tags=["demo"])
 
 # Authentication (JWT & S2S tokens)
 router.include_router(auth_router, prefix="", tags=["auth"])
+
+# Public self-service signup + Google SSO (no auth required)
+router.include_router(signup_router, prefix="", tags=["signup"])
 
 # Analytics (template-agnostic, RBAC-enabled)
 router.include_router(analytics_router, prefix="", tags=["analytics"])
