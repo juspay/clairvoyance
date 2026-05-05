@@ -1,84 +1,84 @@
 """
-Database queries for user authentication.
-Provides essential user lookup functionality for JWT authentication.
+Database query builders for user operations.
+
+All functions here are pure — they return (query_string, values) tuples
+and perform no I/O.  All async DB execution lives in the accessor layer.
 """
 
 import json
 from datetime import datetime, timezone
 from typing import Any, List, Optional, Tuple
 
-from app.core.logger import logger
-from app.database import get_db_connection
-from app.schemas import UserInDB, UserRole
-
 USERS_TABLE = "users"
 
+_USER_COLUMNS = """
+    id, username, password_hash, role, email, reseller_ids, merchant_ids,
+    is_active, owner_id, created_at, updated_at
+"""
 
-async def get_user_by_username(username: str) -> Optional[UserInDB]:
-    """
-    Get user by username for authentication.
+_USER_COLUMNS_NO_HASH = """
+    id, username, role, email, reseller_ids, merchant_ids,
+    is_active, owner_id, created_at, updated_at
+"""
 
-    Args:
-        username: Username to search for
 
-    Returns:
-        UserInDB object if found, None otherwise
-    """
-    query = """
-        SELECT
-            id,
-            username,
-            password_hash,
-            role,
-            email,
-            reseller_ids,
-            merchant_ids,
-            is_active,
-            owner_id,
-            created_at,
-            updated_at
-        FROM users
-        WHERE username = $1
-    """
+# ─────────────────────────────────────────────────────────────────────────────
+# Lookup query builders
+# ─────────────────────────────────────────────────────────────────────────────
 
-    try:
-        async for conn in get_db_connection():
-            row = await conn.fetchrow(query, username)
 
-            if not row:
-                return None
+def get_user_by_username_query(username: str) -> Tuple[str, List[Any]]:
+    """Generate query to get a full UserInDB row by username."""
+    query = f"SELECT {_USER_COLUMNS} FROM users WHERE username = $1"
+    return query, [username]
 
-            return UserInDB(
-                id=str(row["id"]),
-                username=row["username"],
-                password_hash=row["password_hash"],
-                role=UserRole(row["role"]),
-                email=row["email"],
-                reseller_ids=(
-                    row["reseller_ids"]
-                    if isinstance(row["reseller_ids"], list)
-                    else json.loads(row["reseller_ids"])
-                ),
-                merchant_ids=(
-                    row["merchant_ids"]
-                    if isinstance(row["merchant_ids"], list)
-                    else json.loads(row["merchant_ids"])
-                ),
-                is_active=row["is_active"],
-                owner_id=str(row["owner_id"]) if row.get("owner_id") else None,
-                created_at=row["created_at"],
-                updated_at=row["updated_at"],
-            )
 
-    except Exception as e:
-        logger.error(f"Error fetching user by username {username}: {e}")
-        return None
+def get_user_by_email_query(email: str) -> Tuple[str, List[Any]]:
+    """Generate query to get a single user by email (first match)."""
+    query = f"SELECT {_USER_COLUMNS} FROM users WHERE email = $1 LIMIT 1"
+    return query, [email]
+
+
+def get_users_by_email_query(email: str) -> Tuple[str, List[Any]]:
+    """Generate query to get ALL users sharing an email address."""
+    query = (
+        f"SELECT {_USER_COLUMNS} FROM users WHERE email = $1 ORDER BY created_at ASC"
+    )
+    return query, [email]
+
+
+def get_user_in_db_by_id_query(user_id: str) -> Tuple[str, List[Any]]:
+    """Generate query to get a full UserInDB row (incl. password_hash) by id."""
+    query = f"SELECT {_USER_COLUMNS} FROM users WHERE id = $1 LIMIT 1"
+    return query, [user_id]
+
+
+def get_user_by_id_query(user_id: str) -> Tuple[str, List[Any]]:
+    """Generate query to get user account by ID (no password_hash)."""
+    query = f"SELECT {_USER_COLUMNS_NO_HASH} FROM users WHERE id = $1"
+    return query, [user_id]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Existence check query builders
+# ─────────────────────────────────────────────────────────────────────────────
 
 
 def check_username_exists_query(username: str) -> Tuple[str, List[Any]]:
     """Generate query to check if username exists."""
     query = "SELECT 1 FROM users WHERE username = $1"
     return query, [username]
+
+
+def check_email_exists_query(email: str) -> Tuple[str, List[Any]]:
+    """Generate query to check if email exists."""
+    query = "SELECT 1 FROM users WHERE email = $1"
+    return query, [email]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Mutation query builders
+# ─────────────────────────────────────────────────────────────────────────────
 
 
 def create_user_query(
@@ -146,7 +146,6 @@ def get_all_users_query(
     """
     offset = (page - 1) * limit
 
-    # Build WHERE clause
     where_conditions = []
     params: list = []
     param_idx = 1
@@ -182,17 +181,11 @@ def get_all_users_query(
         params.append(is_active_filter)
         param_idx += 1
 
-    # RBAC filtering - filter by merchant_ids column
-    # allowed_merchant_ids comes from resolve_merchant_ids() which already
-    # resolves reseller_ids → merchant_ids hierarchically (wildcards resolved).
-    # Only match rows with an explicit merchant_id overlap — wildcard merchant_ids
-    # in target rows are NOT treated as universal allow to prevent cross-tenant leaks.
     if allowed_merchant_ids is not None and "*" not in allowed_merchant_ids:
         where_conditions.append(f"merchant_ids ?| ${param_idx}")
         params.append(allowed_merchant_ids)
         param_idx += 1
 
-    # Exclude certain roles (for RBAC - resellers/merchants can't see admin/reseller accounts)
     if excluded_roles:
         placeholders = ", ".join(
             [f"${param_idx + i}" for i in range(len(excluded_roles))]
@@ -203,14 +196,12 @@ def get_all_users_query(
 
     where_clause = f"WHERE {' AND '.join(where_conditions)}" if where_conditions else ""
 
-    # Validate sort fields
     valid_sort_fields = {"username", "role", "created_at", "updated_at"}
     if sort_by not in valid_sort_fields:
         sort_by = "created_at"
     if sort_order.lower() not in {"asc", "desc"}:
         sort_order = "desc"
 
-    # Build queries
     query = f"""
         SELECT id, username, role, email, reseller_ids, merchant_ids,
                is_active, owner_id, created_at, updated_at
@@ -225,17 +216,6 @@ def get_all_users_query(
     params.extend([limit, offset])
 
     return query, count_query, params
-
-
-def get_user_by_id_query(user_id: str) -> Tuple[str, List[Any]]:
-    """Generate query to get user account by ID."""
-    query = """
-        SELECT id, username, role, email, reseller_ids, merchant_ids,
-               is_active, owner_id, created_at, updated_at
-        FROM users
-        WHERE id = $1
-    """
-    return query, [user_id]
 
 
 def update_user_query(

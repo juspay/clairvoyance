@@ -24,7 +24,7 @@ from app.core.config.static import (
 from app.core.logger import logger
 from app.core.security.password import verify_password
 from app.core.security.scope import resolve_merchant_ids, resolve_reseller_ids
-from app.database.queries.breeze_buddy.users import get_user_by_username
+from app.database.accessor.breeze_buddy.users import get_user_by_username
 from app.schemas import (
     LoginRequest,
     S2STokenRequest,

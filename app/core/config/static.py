@@ -347,6 +347,10 @@ JWT_ACCESS_TOKEN_EXPIRE_MINUTES = int(
 LIGHTHOUSE_JWT_SECRET = os.getenv("LIGHTHOUSE_JWT_SECRET", "")
 ENABLE_LIGHTHOUSE_AUTH = os.getenv("ENABLE_LIGHTHOUSE_AUTH", "false").lower() == "true"
 
+# Google OAuth (for SSO login and self-service merchant signup)
+# Obtain from: https://console.cloud.google.com/apis/credentials
+GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
+
 BREEZE_BUDDY_STT_SERVICE = os.getenv(
     "BREEZE_BUDDY_STT_SERVICE", "soniox"
 ).lower()  # "soniox", "sarvam", "openai", "deepgram", or "google"
