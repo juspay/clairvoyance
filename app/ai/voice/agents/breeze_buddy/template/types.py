@@ -639,6 +639,90 @@ class IvrConfig(BaseModel):
     )
 
 
+class McpServerConfig(BaseModel):
+    """Configuration for a single MCP tool server.
+
+    The ``url`` field supports ``{variable}`` placeholder substitution using
+    ``template_vars`` (derived from the call payload and credentials table).
+    This allows dynamic MCP URLs — for example, the Nautilus Shopify app passes
+    ``shop_url`` in the lead payload so Clairvoyance can build the full URL at
+    call time:
+
+    Example template JSON (no-auth Shopify Storefront MCP via Nautilus)::
+
+        "configurations": {
+            "mcp": {
+                "servers": [
+                    {
+                        "enabled": true,
+                        "name": "shopify",
+                        "url": "https://{shop_url}/api/mcp",
+                        "timeout": 30,
+                        "auth": {
+                            "type": "none"
+                        }
+                    }
+                ]
+            }
+        }
+
+    Example with credential-based auth (api_key resolved from credentials table)::
+
+        "configurations": {
+            "mcp": {
+                "servers": [
+                    {
+                        "enabled": true,
+                        "name": "shopify-storefront",
+                        "url": "https://{shop_url}/api/mcp",
+                        "timeout": 30,
+                        "auth": {
+                            "type": "api_key",
+                            "api_key_name": "X-Shopify-Storefront-Access-Token",
+                            "api_key_value": "{shopify_storefront_token}"
+                        }
+                    }
+                ]
+            }
+        }
+
+    Auth types:
+    - ``none``: No authentication — call the MCP server directly.
+    - ``api_key``: Pass ``api_key_value`` as an HTTP header named ``api_key_name``.
+      Use ``{credential_name}`` placeholders; the value is resolved from the
+      credentials table (loaded into ``template_vars`` before MCP setup).
+    - ``bearer``: Pass ``token`` as ``Authorization: Bearer <token>``.
+    - ``basic``: Pass ``username`` / ``password`` as HTTP Basic auth.
+    """
+
+    enabled: bool = Field(True, description="Whether to enable this MCP server")
+    name: Optional[str] = Field(
+        None,
+        description="Optional name for this server, used as tool prefix on collisions",
+    )
+    url: str = Field(..., description="Full MCP server URL")
+    timeout: int = Field(
+        30,
+        ge=1,
+        le=120,
+        description="Timeout in seconds for MCP server connections and tool calls",
+    )
+    auth: Optional["HttpAuthConfig"] = Field(
+        None, description="Optional auth config for this MCP server"
+    )
+    headers: Dict[str, str] = Field(
+        default_factory=dict, description="Additional static headers to send"
+    )
+
+
+class McpConfig(BaseModel):
+    """Top-level MCP configuration holding a list of MCP servers."""
+
+    servers: List["McpServerConfig"] = Field(
+        default_factory=list, description="List of MCP servers to connect to"
+    )
+
+
 class ConfigurationModel(BaseModel):
     # --- STT (provider + turn detection) ---
     stt_configuration: Optional[STTConfiguration] = Field(
@@ -739,6 +823,10 @@ class ConfigurationModel(BaseModel):
     keyword_filter: Optional[KeywordFilterConfig] = Field(
         None,
         description="Keyword filter to suppress specific transcriptions while bot is active",
+    )
+    mcp: Optional[McpConfig] = Field(
+        None,
+        description="MCP tool server configuration for dynamic tool discovery",
     )
     interruption: Optional[InterruptionConfig] = Field(
         None,

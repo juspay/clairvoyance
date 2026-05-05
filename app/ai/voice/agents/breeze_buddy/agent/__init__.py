@@ -59,6 +59,7 @@ from app.ai.voice.agents.breeze_buddy.handlers.internal.end_conversation import 
 from app.ai.voice.agents.breeze_buddy.managers.utils import (
     prepare_and_store_initial_greeting,
 )
+from app.ai.voice.agents.breeze_buddy.mcp import get_mcp_global_functions
 from app.ai.voice.agents.breeze_buddy.observability.tracing_setup import (
     create_root_span,
 )
@@ -947,6 +948,21 @@ class Agent:
                 if not self.template:
                     logger.error("Template is not set, cannot setup flow manager")
                     return
+
+                # Fetch MCP tools if configured in template configuration
+                mcp_global_functions = []
+                mcp_config = self.configurations.mcp if self.configurations else None
+                if mcp_config and mcp_config.servers:
+                    try:
+                        mcp_global_functions = await get_mcp_global_functions(
+                            mcp_config=mcp_config,
+                            template_vars=self.template_vars,
+                        )
+                    except Exception as e:
+                        logger.error(
+                            f"[BUDDY_MCP] Failed to load MCP tools, continuing without them: {e}"
+                        )
+
                 assert llm is not None  # narrowed: non-stream path always has LLM
                 self.flow_manager = setup_flow_manager(
                     task=self.task,
@@ -956,6 +972,7 @@ class Agent:
                     flow_builder=self.flow_builder,
                     template=self.template,
                     bot_instance=self,
+                    mcp_global_functions=mcp_global_functions,
                 )
 
             self._register_event_handlers()
