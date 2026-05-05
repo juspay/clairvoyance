@@ -141,6 +141,15 @@ Breeze Buddy is the template-driven telephony agent. These patterns MUST be foll
 - **Log context** via `set_log_context()` / `update_log_context()` using contextvars (call_sid, lead_id, reseller_id, merchant_id)
 - **Transcriptions**: Collected from LLM message history in `end_conversation`, stored as `{role, content}` array in `lead.metaData`
 
+### Chat (text) mode
+- Same template + FlowManager + LLM as voice; swaps audio I/O for text frames. Spec lives in `docs/CHAT_MODE.md`
+- Code under `app/ai/voice/agents/breeze_buddy/chat/` (agent, transport, sse, cleanup) + router at `app/api/routers/breeze_buddy/chat.py`
+- Templates opt in via `supported_channels: ["voice", "chat"]`; chat agents construct the builder with `disabled_names=CHAT_DISABLED_NAMES` (defined in `chat/disabled.py`) to strip voice-only functions/actions (mute_stt, play_audio_sound, warm_transfer, end_conversation, ...)
+- **Stateless per turn**: `POST /message` builds a fresh `ChatAgent`, replays history from DB into `LLMContext`, drives one turn via `run_turn`, tears down. No in-memory registry, no sticky LB.
+- Per-session `RedisLock` (180s TTL, no auto-extend) wraps the entire turn — single mutual-exclusion primitive across pods.
+- Idle session cleanup is one task on the global `BackgroundTaskScheduler` (`chat/cleanup.py`); the scheduler's distributed lock keeps it single-pod-per-tick.
+- Open follow-ups: LLM-generated greeting (today only `static_greeting` works), outcome webhook on `end()`
+
 ## Important
 
 - IMPORTANT: Never modify migration SQL files directly. Create new sequential migrations (e.g., `026_your_change.sql`)

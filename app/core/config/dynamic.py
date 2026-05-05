@@ -61,6 +61,104 @@ async def ENABLE_CHAT_MODE_PROMPT() -> bool:
     return await get_config("ENABLE_CHAT_MODE_PROMPT", True, bool)
 
 
+# ============================================================================
+# Chat (text-mode) idle session timeout. Read by the cleanup task in
+# app/ai/voice/agents/breeze_buddy/chat/cleanup.py on every sweep so a
+# DevCycle change propagates without a pod restart. The sweep cadence
+# itself lives in static config (CHAT_SESSION_END_TIMEOUT_LOOP_INTERVAL_SECONDS
+# in app/core/config/static.py) because the BackgroundTaskScheduler binds it
+# once at startup.
+# See docs/CHAT_MODE.md §7.3.
+# ============================================================================
+async def CHAT_SESSION_END_TIMEOUT_SECONDS() -> int:
+    """Mark an ACTIVE/IDLE chat session ENDED once it has been inactive
+    for this many seconds. The safety net that prevents zombie sessions
+    from accumulating forever. Default 60 minutes."""
+    return await get_config("CHAT_SESSION_END_TIMEOUT_SECONDS", 3600, int)
+
+
+async def CHAT_HISTORY_REPLAY_LIMIT() -> int:
+    """Cap on prior chat_message rows replayed into LLMContext per turn.
+
+    The only per-turn read whose cost grows with conversation length;
+    capping keeps DB read + LLM input-token cost flat for long
+    sessions (and the LLM context window is bounded anyway). Default
+    100 (≈50 user/assistant exchanges) — well above typical chat
+    session length, so in practice the cap only kicks in for
+    pathologically long sessions.
+
+    Tuning trade-offs:
+    - **Too low** (≤ ~10): the LLM "forgets" earlier context within
+      a single session. Concrete failures — user states their name /
+      account / preference early, asks about it 12 turns later, bot
+      can't recall it; bot re-asks a question already answered;
+      multi-step intents ("do X, then Y, then Z") lose the original
+      intent once truncated; FlowManager node assumes context the
+      LLM no longer sees, producing contradictions; previously-
+      called function results drop out of context, so the LLM
+      either re-calls (cost) or hallucinates.
+    - **Too high** (≥ ~500): DB read returns a large rowset every
+      turn; LLM input-token cost rises proportionally; TTFT latency
+      grows with prompt length; risk of bumping the model's context
+      window for very long sessions."""
+    return await get_config("CHAT_HISTORY_REPLAY_LIMIT", 100, int)
+
+
+# ============================================================================
+# Public chat-demo tuning knobs (CHAT_MODE.md §13).
+#
+# All four are operational dials we may want to turn during incident
+# response or after observing real demo traffic, *without* a deploy.
+# Reads are async because they hit Redis/DevCycle — cheap, but call
+# sites must ``await``. Each value is captured at the moment it's needed:
+#
+# - ``DEMO_MESSAGE_CAP_PER_SESSION`` is read at session-create and
+#   baked into the demo JWT, so changes apply to *future* sessions only.
+# - ``DEMO_TOKEN_TTL_MINUTES`` is read at mint time, same forward-only
+#   semantics.
+# - The two rate limits are read on every request, so they take effect
+#   immediately on the next request.
+# ============================================================================
+
+
+async def DEMO_MESSAGE_CAP_PER_SESSION() -> int:
+    """Hard ceiling on assistant turns per public demo session.
+
+    Persisted into the demo JWT on session-create — the per-turn handler
+    reads it from the token, not from Redis again, so changing this only
+    affects sessions created *after* the tweak. Default 20.
+    """
+    return await get_config("DEMO_MESSAGE_CAP_PER_SESSION", 20, int)
+
+
+async def DEMO_SESSIONS_PER_IP_HOUR() -> int:
+    """Per-IP cap on demo session creates inside a 1-hour fixed window.
+    Read on every ``POST /chat/demo/session`` so a tweak takes effect on
+    the next request.
+
+    Default 100 (intentionally loose). Real LLM spend is bounded by the
+    *per-session* turn cap and the per-IP message rate — session creates
+    are cheap (one DB insert + one greeting LLM call at most). Keeping
+    this number in three digits avoids false positives when several
+    visitors share a NAT'd IP (corporate networks, mobile carriers,
+    classrooms doing a live demo)."""
+    return await get_config("DEMO_SESSIONS_PER_IP_HOUR", 100, int)
+
+
+async def DEMO_MESSAGES_PER_IP_HOUR() -> int:
+    """Per-IP cap on demo messages inside a 1-hour fixed window. Same
+    semantics as ``DEMO_SESSIONS_PER_IP_HOUR``. Default 600."""
+    return await get_config("DEMO_MESSAGES_PER_IP_HOUR", 600, int)
+
+
+async def DEMO_TOKEN_TTL_MINUTES() -> int:
+    """Demo bearer-token lifetime, in minutes. Long enough for a typical
+    demo conversation (cap + a few minutes of think time per turn) and
+    short enough that a leaked token isn't a long-running attack vector.
+    Read at mint time only. Default 30."""
+    return await get_config("DEMO_TOKEN_TTL_MINUTES", 30, int)
+
+
 # --- Sarvam Configuration ---
 async def SARVAM_STT_MODEL() -> str:
     """Returns SARVAM_STT_MODEL from Redis"""

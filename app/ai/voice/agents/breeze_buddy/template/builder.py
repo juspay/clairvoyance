@@ -4,7 +4,7 @@ Flow Configuration Builder
 This module builds Pipecat flow configurations from database models.
 """
 
-from typing import Any, Callable, Dict, List, cast
+from typing import AbstractSet, Any, Callable, Dict, List, cast
 
 from pipecat_flows import (
     FlowManager,
@@ -53,19 +53,90 @@ DIRECT_MODE_NODE_NAME = "__direct__"
 _GLOBAL_FUNCTION_TYPES = {t.value for t in GlobalFunctionType}
 
 
+def filter_disabled_identifiers(
+    items: List[Dict[str, Any]],
+    disabled: AbstractSet[str],
+    log_label: str = "item",
+) -> List[Dict[str, Any]]:
+    """Drop dicts whose ``name``, ``function_name`` *or* ``handler`` is disabled.
+
+    All three identifier keys are checked: a single ``or`` chain would let
+    an authored entry like ``{"name": "transfer_to_finance", "handler":
+    "connect_to_live_agent"}`` slip past, because ``name`` resolves first
+    and isn't in the disabled set even though the handler binding is.
+    Action entries (which carry only ``handler``) and function entries
+    (``name`` / ``function_name``) are both covered by the union check.
+
+    Returns the input list as-is when ``disabled`` is empty (no copy
+    made), so call sites can route through this helper unconditionally
+    without paying for an allocation in the common case.
+
+    A ``WARNING`` is logged for each stripped item, suffixed with
+    ``log_label`` so authors can locate the affected JSON array.
+    """
+    if not disabled:
+        return items
+
+    out: List[Dict[str, Any]] = []
+    for item in items:
+        if isinstance(item, dict):
+            present: set[str] = {
+                str(item[k])
+                for k in ("name", "function_name", "handler")
+                if isinstance(item.get(k), str)
+            }
+            blocked = present & disabled
+            if blocked:
+                logger.warning(
+                    f"Stripping disabled {log_label} (matched {sorted(blocked)})"
+                )
+                continue
+        out.append(item)
+    return out
+
+
 class FlowConfigBuilder:
     """Builds Pipecat flow configurations from database models"""
 
-    def __init__(self):
+    def __init__(
+        self,
+        disabled_names: AbstractSet[str] = frozenset(),
+        *,
+        quiet: bool = False,
+    ):
         """
         Initialize builder with a static handler map.
 
         The handler_map contains raw handlers that will be wrapped with
-        with_context(bot_instance) in agent.py before use.
+        with_context(bot_instance) in agent.py before use. The map is
+        the same regardless of caller — channel-specific behaviour is
+        realised by filtering template-level references via
+        ``filter_disabled_identifiers`` rather than swapping handler
+        bodies.
 
         Note: Global function adapters are registered at module level in
         global_function_handler.py (same pattern as HookRegistry).
+
+        Args:
+            disabled_names: Identifiers to drop from per-node functions,
+                global functions, and per-node pre/post actions before
+                pydantic validation. Voice agents pass nothing (default
+                empty set, no-op fast-path inside the filter); chat
+                agents pass ``CHAT_DISABLED_NAMES`` (see
+                ``app.ai.voice.agents.breeze_buddy.chat.disabled``).
+            quiet: When True, demote the per-build INFO log lines
+                (``Building flow config``, ``Built direct-mode flow
+                config``, ``Direct mode: built N function(s)``,
+                ``Built flow config with N nodes``) to DEBUG. Chat
+                rebuilds the flow per turn — keep INFO for voice's
+                once-per-call setup but skip the noise on follow-up
+                chat turns.
         """
+        self._disabled_names = disabled_names
+        # Pre-bind so call sites stay terse: ``self._log(...)`` instead
+        # of ``(logger.debug if quiet else logger.info)(...)`` per call.
+        self._log = logger.debug if quiet else logger.info
+
         self.handler_map = {
             "mute_stt": mute_stt,
             "unmute_stt": unmute_stt,
@@ -91,7 +162,7 @@ class FlowConfigBuilder:
         Raises:
             ValueError: If initial node is not found or flow structure is invalid
         """
-        logger.info(
+        self._log(
             f"Building flow config from template: {template.name if hasattr(template, 'name') else 'unknown'}"
         )
 
@@ -127,9 +198,36 @@ class FlowConfigBuilder:
             # Transform function_name to name for compatibility
             transformed_node_data = node_data.copy()
             if "functions" in transformed_node_data:
+                # Templates are now L2-cached (``template/cache.py``) and
+                # ``node_data.copy()`` is shallow — the inner ``functions``
+                # list and its dicts are still cache-owned. Materialise a
+                # fresh list of shallow-copied dicts so the rename below
+                # (``pop("function_name")``) doesn't rewrite the cached
+                # template in place and corrupt subsequent turns.
+                transformed_node_data["functions"] = [
+                    dict(func) if isinstance(func, dict) else func
+                    for func in filter_disabled_identifiers(
+                        transformed_node_data["functions"],
+                        self._disabled_names,
+                        "function",
+                    )
+                ]
                 for func in transformed_node_data["functions"]:
-                    if "function_name" in func and "name" not in func:
+                    if isinstance(func, dict) and (
+                        "function_name" in func and "name" not in func
+                    ):
                         func["name"] = func.pop("function_name")
+
+            # In chat mode, also strip FUNCTION-type pre/post actions whose
+            # handler is voice-only — otherwise they'd attempt to invoke STT
+            # mute / audio playback against a transport that has neither.
+            for action_field in ("pre_actions", "post_actions"):
+                if action_field in transformed_node_data:
+                    transformed_node_data[action_field] = filter_disabled_identifiers(
+                        transformed_node_data[action_field],
+                        self._disabled_names,
+                        "action",
+                    )
 
             flow_nodes.append(FlowNodeModel.model_validate(transformed_node_data))
             logger.debug(
@@ -157,7 +255,7 @@ class FlowConfigBuilder:
         end_conversation_callbacks = flow.get("end_conversation_callbacks", [])
         logger.debug(f"End conversation callbacks: {end_conversation_callbacks}")
 
-        logger.info(
+        self._log(
             f"Built flow config with {len(nodes)} nodes, initial: {initial_node_name}, "
             f"callbacks: {end_conversation_callbacks}"
         )
@@ -222,7 +320,7 @@ class FlowConfigBuilder:
 
         end_conversation_callbacks = flow.get("end_conversation_callbacks", [])
 
-        logger.info(
+        self._log(
             f"Built direct-mode flow config: 1 synthesized node "
             f"({DIRECT_MODE_NODE_NAME}), system_prompt={len(system_prompt)} chars, "
             f"end_conversation_callbacks={end_conversation_callbacks}"
@@ -262,15 +360,29 @@ class FlowConfigBuilder:
         # adapter registry; everything else is a FlowFunction (hooks-only).
         if flow.get("mode") == FlowMode.DIRECT.value:
             return self._build_direct_mode_functions(
-                flow.get("functions") or [],
+                filter_disabled_identifiers(
+                    flow.get("functions") or [], self._disabled_names, "function"
+                ),
                 bot_instance=bot_instance,
             )
 
         # Flow mode: keep the legacy split between per-node `functions` (built
         # by `_build_function_schema` during node construction) and top-level
-        # `global_functions` (built here via the adapter registry).
+        # `global_functions` (built here via the adapter registry). The
+        # filter is a no-op in voice mode (returns the same list), so we can
+        # always run it; we shallow-copy the flow dict to avoid mutating the
+        # caller's structure when assigning the filtered list back.
+        flow_for_globals = {
+            **flow,
+            "global_functions": filter_disabled_identifiers(
+                flow.get("global_functions") or [], self._disabled_names, "function"
+            ),
+        }
+
         return GlobalFunctionRegistry.build(
-            flow, handler_map=self.handler_map, bot_instance=bot_instance
+            flow_for_globals,
+            handler_map=self.handler_map,
+            bot_instance=bot_instance,
         )
 
     def _build_direct_mode_functions(
@@ -319,7 +431,7 @@ class FlowConfigBuilder:
         for func_model in flow_function_models:
             result.append(self._build_function_schema(func_model))
 
-        logger.info(
+        self._log(
             f"Direct mode: built {len(result)} function(s) "
             f"({len(global_entries)} adapter-routed, {len(flow_function_models)} hook-only)"
         )

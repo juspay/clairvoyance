@@ -13,6 +13,7 @@ from app.ai.voice.agents.breeze_buddy.template.types import (
     FlowMode,
     TemplateModel,
 )
+from app.ai.voice.agents.breeze_buddy.template.utils import render_messages_with_vars
 from app.core.logger import logger
 from app.database.accessor.breeze_buddy.credentials import (
     get_credentials_as_template_vars,
@@ -83,32 +84,8 @@ class FlowConfigLoader:
     def render_task_messages(
         self, task_messages: list, variables: Dict[str, str]
     ) -> list:
-        """
-        Render task messages with runtime variables.
-
-        Args:
-            task_messages: List of task message objects
-            variables: Dictionary of variable values
-
-        Returns:
-            List of rendered task messages
-        """
-        rendered_messages = []
-        for message in task_messages:
-            if isinstance(message, dict) and "content" in message:
-                content = message["content"]
-                # Replace variables in content
-                for key, value in variables.items():
-                    placeholder = f"{{{key}}}"
-                    content = content.replace(placeholder, str(value))
-
-                rendered_message = message.copy()
-                rendered_message["content"] = content
-                rendered_messages.append(rendered_message)
-            else:
-                rendered_messages.append(message)
-
-        return rendered_messages
+        """Method-style alias preserved for the voice loader call sites."""
+        return render_messages_with_vars(task_messages, variables)
 
     async def load_template(
         self,

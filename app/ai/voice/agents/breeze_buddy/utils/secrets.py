@@ -90,6 +90,12 @@ def mask_template_secrets(template: TemplateModel) -> TemplateModel:
         secrets=mask_secrets(template.secrets),
         outbound_number_id=template.outbound_number_id,
         is_active=template.is_active,
+        # ``supported_channels`` must be carried through the masked copy.
+        # If not preserved, GET / PUT response paths fall back to the
+        # ``TemplateModel`` default (``['voice']``) and chat-enabled
+        # templates appear voice-only to API clients — which then PUT the
+        # default back, silently disabling chat on round-trip edits.
+        supported_channels=list(template.supported_channels),
         created_at=template.created_at,
         updated_at=template.updated_at,
     )

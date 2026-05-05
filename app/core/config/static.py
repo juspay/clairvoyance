@@ -258,6 +258,52 @@ AZURE_BREEZE_BUDDY_OPENAI_MODEL = os.environ.get(
     "AZURE_BREEZE_BUDDY_OPENAI_MODEL", "gpt-4o-automatic"
 )
 
+# Chat (text-mode) idle-cleanup sweep cadence. Bound once at startup by
+# BackgroundTaskScheduler.register_task — a change requires a pod restart.
+# The threshold itself (CHAT_SESSION_END_TIMEOUT_SECONDS, in dynamic.py)
+# stays live-tunable. Default 5 minutes.
+CHAT_SESSION_END_TIMEOUT_LOOP_INTERVAL_SECONDS = int(
+    os.environ.get("CHAT_SESSION_END_TIMEOUT_LOOP_INTERVAL_SECONDS", 300)
+)
+
+
+# ---------------------------------------------------------------------------
+# Public chat demo (CHAT_MODE.md §13) — structural config
+# ---------------------------------------------------------------------------
+#
+# DEMO_TEMPLATES is a comma-separated ``slug:template_id`` list, parsed
+# once at import. Visitors pass the slug in the JSON body of
+# ``POST /chat/demo/session``; the demo router resolves it to the
+# template_id below. Adding a new demo = env var change + pod restart;
+# no DB migration. Anything not listed here is invisible to the demo
+# router, so an accidentally chat-enabled production template can't
+# leak through.
+#
+# This stays static (rather than living in dynamic.py) because the value
+# is structured (parsed dict) and adding/removing demos is operationally
+# infrequent. The *tuning* knobs (caps, rate limits, token TTL) live in
+# dynamic.py and can be dialed without a restart.
+def _parse_demo_templates(raw: str) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for entry in (raw or "").split(","):
+        entry = entry.strip()
+        if not entry:
+            continue
+        if ":" not in entry:
+            continue
+        slug, template_id = entry.split(":", 1)
+        slug = slug.strip()
+        template_id = template_id.strip()
+        if slug and template_id:
+            out[slug] = template_id
+    return out
+
+
+DEMO_TEMPLATES: dict[str, str] = _parse_demo_templates(
+    os.environ.get("DEMO_TEMPLATES", "")
+)
+
+
 # Twilio settings
 TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "")
 TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "")

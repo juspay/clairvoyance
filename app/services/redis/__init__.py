@@ -11,6 +11,7 @@ from .client import (
     get_redis_service,
     is_redis_configured,
 )
+from .locks import LockAcquireError, RedisLock
 
 __all__ = [
     "RedisFactory",
@@ -18,4 +19,6 @@ __all__ = [
     "get_redis_service",
     "close_redis_connections",
     "is_redis_configured",
+    "RedisLock",
+    "LockAcquireError",
 ]

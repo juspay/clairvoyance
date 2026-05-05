@@ -3,11 +3,16 @@ Common utilities for validation, parsing, and helper functions.
 """
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from app.core.config.static import AWS_BREEZE_PORTAL_URL, GCP_BREEZE_PORTAL_URL
 from app.core.logger import logger
+
+
+def utcnow() -> datetime:
+    """Tz-aware UTC now — use for any column declared ``timestamptz``."""
+    return datetime.now(timezone.utc)
 
 
 def parse_iso_datetime(iso_string: Optional[str]) -> Optional[datetime]:

@@ -3,7 +3,7 @@ Pydantic models for the dynamic workflow engine.
 """
 
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import (
     BaseModel,
@@ -1226,6 +1226,11 @@ class DirectModeFlow(BaseModel):
     )
 
 
+def _default_supported_channels() -> List[Literal["voice", "chat"]]:
+    """Default `TemplateModel.supported_channels` factory — voice-only."""
+    return ["voice"]
+
+
 class TemplateModel(BaseModel):
     # Read-only fields (set by server, not editable via API).
     # These are intentionally excluded from ReplaceTemplateRequest so that
@@ -1245,6 +1250,15 @@ class TemplateModel(BaseModel):
     secrets: Optional[Dict[str, Any]] = None
     outbound_number_id: Optional[str] = None
     is_active: bool = True
+    # Channels this template is allowed to be served on. Defaults to
+    # voice-only so existing templates are unaffected. Add "chat" to
+    # opt the template into the chat (text) mode flow build path
+    # (see docs/CHAT_MODE.md §8). Persistence column lands with the
+    # chat router task; until then the field uses the default.
+    supported_channels: List[Literal["voice", "chat"]] = Field(
+        default_factory=_default_supported_channels,
+        min_length=1,
+    )
 
 
 # Request models for API
@@ -1278,6 +1292,10 @@ class CreateTemplateRequest(BaseModel):
     expected_callback_response_schema: Optional[Dict[str, Any]] = None
     configurations: Optional[ConfigurationModel] = None
     secrets: Optional[Dict[str, Any]] = None
+    supported_channels: List[Literal["voice", "chat"]] = Field(
+        default_factory=_default_supported_channels,
+        min_length=1,
+    )
 
 
 class ReplaceTemplateRequest(BaseModel):
@@ -1294,6 +1312,12 @@ class ReplaceTemplateRequest(BaseModel):
     Non-nullable fields (name, flow, is_active) must be provided - throws 400 if not.
     Nullable fields (merchant_id, outbound_number_id, expected_payload_schema,
     expected_callback_response_schema, configurations) - if not provided, set to NULL.
+
+    ``supported_channels`` is intentionally optional (``None`` default) rather
+    than defaulting to ``['voice']``: pre-chat-feature PUT clients have no
+    knowledge of this field, and silently overwriting a chat-enabled template
+    back to voice-only on every unrelated edit would be a behaviour change.
+    Handler keeps the persisted value when this field is omitted.
     """
 
     # extra="ignore" allows clients to pass the full GET response body to PUT;
@@ -1309,3 +1333,7 @@ class ReplaceTemplateRequest(BaseModel):
     expected_callback_response_schema: Optional[Dict[str, Any]] = None
     configurations: Optional[ConfigurationModel] = None
     secrets: Optional[Dict[str, Any]] = None
+    supported_channels: Optional[List[Literal["voice", "chat"]]] = Field(
+        default=None,
+        min_length=1,
+    )

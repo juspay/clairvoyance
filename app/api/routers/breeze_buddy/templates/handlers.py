@@ -4,11 +4,12 @@ All handlers perform database operations and enforce business rules.
 """
 
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
 from fastapi import HTTPException, status
 
+from app.ai.voice.agents.breeze_buddy.template.cache import invalidate_template
 from app.ai.voice.agents.breeze_buddy.template.types import (
     CreateTemplateRequest,
     ReplaceTemplateRequest,
@@ -116,6 +117,7 @@ async def create_template_handler(
             secrets=template_data.secrets,
             outbound_number_id=template_data.outbound_number_id,
             is_active=template_data.is_active,
+            supported_channels=list(template_data.supported_channels),
             now=now,
         )
 
@@ -391,6 +393,19 @@ async def replace_template_handler(
             incoming_secrets=template_data.secrets,
             existing_secrets=existing_template.secrets,
         )
+        # Preserve persisted ``supported_channels`` when the client doesn't
+        # explicitly send the field — older PUT clients don't know about it,
+        # and a default-driven overwrite would silently revert chat-enabled
+        # templates to voice-only on unrelated edits.
+        supported_channels: List[str] = [
+            str(ch)
+            for ch in (
+                template_data.supported_channels
+                if template_data.supported_channels is not None
+                else existing_template.supported_channels
+            )
+        ]
+
         updated_template = await replace_template(
             template_id=template_id,
             name=template_data.name,
@@ -402,6 +417,7 @@ async def replace_template_handler(
             outbound_number_id=template_data.outbound_number_id,
             is_active=template_data.is_active,
             merchant_id=template_data.merchant_id,
+            supported_channels=supported_channels,
             now=now,
         )
 
@@ -409,6 +425,17 @@ async def replace_template_handler(
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to update template",
+            )
+
+        # Cache invalidation is best-effort: the DB write has already
+        # committed, so a Redis blip here must not surface as a 500 to a
+        # client whose mutation actually succeeded. Stale cache entries
+        # self-correct on TTL expiry.
+        try:
+            await invalidate_template(template_id)
+        except Exception as cache_exc:
+            logger.warning(
+                f"Template cache invalidation failed for {template_id}: {cache_exc}"
             )
 
         logger.info(
@@ -493,6 +520,13 @@ async def delete_template_handler(
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=detail,
+            )
+
+        try:
+            await invalidate_template(template_id)
+        except Exception as cache_exc:
+            logger.warning(
+                f"Template cache invalidation failed for {template_id}: {cache_exc}"
             )
 
         logger.info(

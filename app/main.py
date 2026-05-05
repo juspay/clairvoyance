@@ -14,17 +14,24 @@ from fastapi.responses import JSONResponse
 from pipecat.transports.daily.utils import DailyRESTHelper
 
 from app import __version__
+from app.ai.voice.agents.breeze_buddy.chat.cleanup import end_idle_chat_sessions
 from app.ai.voice.agents.breeze_buddy.services.agent_router.client import (
     close_smart_router_client,
 )
+
+# Database imports
+from app.ai.voice.llm._pools import close_all_pools as close_llm_http_pools
 from app.api.routers import automatic, breeze_buddy, devcycle, feature_flags, systems
 
 # Import background task scheduler
 from app.core.background_tasks import BackgroundTaskScheduler
-from app.core.config.dynamic import ENABLE_BACKGROUND_TASKS
+from app.core.config.dynamic import (
+    ENABLE_BACKGROUND_TASKS,
+)
 from app.core.config.static import (
     BACKGROUND_TASKS_LOOP_INTERVAL_SECONDS,
     BOT_MAX_DRAIN_SECONDS,
+    CHAT_SESSION_END_TIMEOUT_LOOP_INTERVAL_SECONDS,
     CORS_ALLOWED_ORIGINS,
     DAILY_API_KEY,
     DAILY_API_URL,
@@ -43,8 +50,6 @@ from app.core.config.static import (
 from app.core.logger import logger
 from app.core.security.jwt import validate_automatic_request
 from app.core.transport.http_client import create_aiohttp_session
-
-# Database imports
 from app.database import close_db_pool, init_db_pool
 from app.helpers.automatic.daily_room_pool import (
     cleanup_room_pool,
@@ -167,7 +172,14 @@ async def lifespan(_app: FastAPI):
             # Initialize Langfuse tasks (if configured)
             await initialize_langfuse_tasks(_background_scheduler)
 
-            ### Register new tasks here
+            # Chat-mode idle session cleanup. Distributed lock comes
+            # free from the scheduler, so only one pod runs the sweep
+            # per interval. See docs/CHAT_MODE.md §7.3.
+            _background_scheduler.register_task(
+                name="chat_session_idle_cleanup",
+                func=end_idle_chat_sessions,
+                interval_seconds=CHAT_SESSION_END_TIMEOUT_LOOP_INTERVAL_SECONDS,
+            )
 
             # Start the scheduler only if tasks are registered
             if _background_scheduler.tasks:
@@ -210,6 +222,9 @@ async def lifespan(_app: FastAPI):
     await cleanup_voice_agent_pool()
     # Cleanup bot processes
     await cleanup_bot_processes()
+    # Close shared httpx pools used by chat LLM clients (Azure today).
+    # Drains keep-alive connections cleanly so we don't leak fds on SIGTERM.
+    await close_llm_http_pools()
     # Close database pool
     await close_db_pool()
     # Close Redis connections

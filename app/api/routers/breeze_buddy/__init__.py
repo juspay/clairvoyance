@@ -9,6 +9,7 @@ from app.api.routers.breeze_buddy.analytics import router as analytics_router
 # Auth, telephony, cron, websocket
 from app.api.routers.breeze_buddy.auth import router as auth_router
 from app.api.routers.breeze_buddy.blacklist import router as blacklist_router
+from app.api.routers.breeze_buddy.chat import router as chat_router
 from app.api.routers.breeze_buddy.configurations import router as configurations_router
 from app.api.routers.breeze_buddy.credentials import router as credentials_router
 from app.api.routers.breeze_buddy.cron import router as cron_router
@@ -80,3 +81,6 @@ router.include_router(websocket_router, prefix="", tags=["websocket"])
 router.include_router(pod_router, prefix="/pod", tags=["pod"])
 
 router.include_router(daily_router, prefix="", tags=["daily"])
+
+# Chat (text-mode sessions: REST + SSE, no STT/TTS/VAD)
+router.include_router(chat_router, prefix="", tags=["chat"])

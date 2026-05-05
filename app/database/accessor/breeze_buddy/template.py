@@ -102,6 +102,7 @@ async def create_template(
     secrets: Optional[dict] = None,
     outbound_number_id: Optional[str] = None,
     is_active: bool = True,
+    supported_channels: Optional[List[str]] = None,
 ) -> Optional[TemplateModel]:
     """Create a new template with flow stored as JSON."""
     logger.info(f"Creating template with ID: {template_id}")
@@ -140,6 +141,7 @@ async def create_template(
             secrets_json,
             outbound_number_id,  # Moved: now matches SQL column order
             is_active,
+            supported_channels or ["voice"],
             now,
             now,
         )
@@ -355,6 +357,7 @@ async def replace_template(
     is_active: bool,
     merchant_id: Optional[str],
     now,
+    supported_channels: Optional[List[str]] = None,
 ) -> Optional[TemplateModel]:
     """
     Update an existing template.
@@ -410,6 +413,7 @@ async def replace_template(
             outbound_number_id,
             is_active,
             merchant_id,
+            supported_channels or ["voice"],
             now,
         )
 

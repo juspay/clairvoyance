@@ -27,6 +27,7 @@ from pipecat.services.anthropic.llm import (
     AnthropicLLMSettings,
 )
 
+from app.ai.voice.llm._pools import get_anthropic_vertex_client
 from app.core.logger import logger
 
 __all__ = ["ClaudeVertexConfig", "build_claude_vertex_llm"]
@@ -90,31 +91,49 @@ class ClaudeVertexConfig:
     function_call_timeout_secs: float = 10.0
 
 
-def build_claude_vertex_llm(config: ClaudeVertexConfig) -> VertexAnthropicLLMService:
+def build_claude_vertex_llm(
+    config: ClaudeVertexConfig, *, pooled: bool = False
+) -> VertexAnthropicLLMService:
     """Create a Claude on Vertex AI LLM service instance.
 
     Args:
         config: Claude Vertex-specific configuration.
+        pooled: When True, share the underlying ``AsyncAnthropicVertex``
+            client (httpx pool + Vertex OAuth token cache) across calls.
+            Reserved for chat mode (long-lived process). Voice runs each
+            call in its own subprocess and gets nothing from sharing —
+            keep voice on a fresh per-call client.
 
     Returns:
         Configured VertexAnthropicLLMService instance with Vertex AI client.
     """
-    logger.info(
+    # Pooled callers (chat) build this every turn but only the first
+    # produces a new pooled client — keep the per-call log at DEBUG so
+    # follow-up turns stay quiet. Voice (pooled=False) builds once per
+    # call and keeps INFO for setup observability.
+    _build_log = logger.debug if pooled else logger.info
+    _build_log(
         f"Building Claude Vertex LLM service with model={config.model}, "
         f"project_id={config.project_id}, region={config.region}, "
-        f"thinking_enabled={config.thinking_enabled}"
+        f"thinking_enabled={config.thinking_enabled}, pooled={pooled}"
     )
 
-    creds = service_account.Credentials.from_service_account_info(
-        json.loads(config.credentials_json),
-        scopes=["https://www.googleapis.com/auth/cloud-platform"],
-    )
-
-    vertex_client = AsyncAnthropicVertex(
-        region=config.region,
-        project_id=config.project_id,
-        credentials=creds,
-    )
+    if pooled:
+        vertex_client = get_anthropic_vertex_client(
+            credentials_json=config.credentials_json,
+            project_id=config.project_id,
+            region=config.region,
+        )
+    else:
+        creds = service_account.Credentials.from_service_account_info(
+            json.loads(config.credentials_json),
+            scopes=["https://www.googleapis.com/auth/cloud-platform"],
+        )
+        vertex_client = AsyncAnthropicVertex(
+            region=config.region,
+            project_id=config.project_id,
+            credentials=creds,
+        )
 
     # Build thinking config if enabled
     thinking = None
