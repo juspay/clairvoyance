@@ -1,3 +1,4 @@
+import json
 from datetime import datetime
 
 from pipecat.frames.frames import EndFrame
@@ -67,6 +68,18 @@ async def end_conversation(context: TemplateContext, args, transition_to=None):
                     and "content" in msg
                     and isinstance(msg["content"], str)
                 ):
+                    # Skip Pipecat internal async-tool protocol messages
+                    # (injected as user-role JSON blobs to coordinate async tool calls)
+                    try:
+                        parsed = json.loads(msg["content"])
+                        if (
+                            isinstance(parsed, dict)
+                            and parsed.get("type") == "async_tool"
+                        ):
+                            continue
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+
                     transcription.append(
                         {"role": msg["role"], "content": msg["content"]}
                     )
