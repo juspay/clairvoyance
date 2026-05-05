@@ -68,6 +68,7 @@ def setup_flow_manager(
     flow_builder: FlowConfigBuilder,
     template: TemplateModel,
     bot_instance: Any = None,
+    mcp_global_functions: Optional[List[FlowsFunctionSchema]] = None,
 ) -> FlowManager:
     """Set up the flow manager with global functions.
 
@@ -79,6 +80,7 @@ def setup_flow_manager(
         flow_builder: Flow config builder
         template: Template model
         bot_instance: Bot instance for post-action context creation
+        mcp_global_functions: Optional MCP tools converted to FlowsFunctionSchema
 
     Returns:
         Configured FlowManager
@@ -86,6 +88,24 @@ def setup_flow_manager(
     global_functions = flow_builder.build_global_functions(
         flow=template.flow, bot_instance=bot_instance
     )
+
+    # Merge MCP global functions if present (avoiding name collisions)
+    if mcp_global_functions:
+        existing_names = {fn.name for fn in global_functions}
+        mcp_names = [fn.name for fn in mcp_global_functions]
+        collisions = [name for name in mcp_names if name in existing_names]
+        if collisions:
+            logger.warning(
+                f"[BUDDY_MCP] Skipping duplicate MCP tool names: {sorted(set(collisions))}"
+            )
+        unique_mcp_functions = [
+            fn for fn in mcp_global_functions if fn.name not in existing_names
+        ]
+        global_functions.extend(unique_mcp_functions)
+        logger.info(
+            f"[BUDDY_MCP] Added {len(unique_mcp_functions)} MCP tools as global functions"
+        )
+
     if global_functions:
         logger.info(
             f"Registering {len(global_functions)} global functions with FlowManager"

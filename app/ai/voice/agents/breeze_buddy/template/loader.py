@@ -186,6 +186,19 @@ class FlowConfigLoader:
             f"Dynamically built template_vars from schema: {list(template_vars.keys())}"
         )
 
+        # 4. Inject any remaining payload fields not already in template_vars.
+        # This allows payload fields used for infrastructure (e.g. shop_url for
+        # MCP server URL resolution) to be available without being declared in
+        # expected_payload_schema. Must run before the direct-mode early return
+        # so that MCP URL/auth placeholders resolve correctly in both modes.
+        if call_payload:
+            for field_name, field_value in call_payload.items():
+                if field_name not in template_vars:
+                    template_vars[field_name] = field_value
+                    logger.info(
+                        f"Injected extra payload field '{field_name}' into template_vars"
+                    )
+
         # Direct mode has a flat structure (system_prompt + flat function list)
         # rather than a nodes array, so render the top-level message fields and
         # skip the per-node loop entirely.
