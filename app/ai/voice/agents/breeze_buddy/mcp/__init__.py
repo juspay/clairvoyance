@@ -14,6 +14,7 @@ from pipecat.services.llm_service import (
 from pipecat.services.mcp_service import MCPClient
 from pipecat_flows.types import FlowResult, FlowsFunctionSchema
 
+from app.ai.voice.agents.breeze_buddy.mcp.cache import get_or_discover_server_tools
 from app.ai.voice.agents.breeze_buddy.template.types import (
     HttpAuthType,
     McpConfig,
@@ -70,7 +71,7 @@ def _create_mcp_tool_handler(
     return handler
 
 
-def _resolve_placeholders(value: str, template_vars: Dict[str, str]) -> str:
+def _resolve_placeholders(value: str, template_vars: Dict[str, Any]) -> str:
     """Substitute {variable} placeholders in a string using template_vars.
 
     Uses single-pass regex substitution to prevent cascading substitution
@@ -90,7 +91,7 @@ def _resolve_placeholders(value: str, template_vars: Dict[str, str]) -> str:
 
 def _build_auth_headers(
     server: McpServerConfig,
-    template_vars: Dict[str, str],
+    template_vars: Dict[str, Any],
 ) -> Dict[str, str]:
     """Resolve auth config into HTTP headers, substituting {variable} placeholders."""
     if not server.auth or server.auth.type == HttpAuthType.NONE:
@@ -117,6 +118,38 @@ def _build_auth_headers(
     return {}
 
 
+def _build_server_params(
+    server: McpServerConfig,
+    template_vars: Dict[str, Any],
+) -> StreamableHttpParameters:
+    """Resolve a server config + template_vars into StreamableHttpParameters.
+
+    Shared by the voice loader (per-call clients) and the chat session pool
+    (per-turn persistent clients). Substitutes ``{variable}`` placeholders in
+    the URL and auth fields from ``template_vars``.
+    """
+    resolved_url = _resolve_placeholders(server.url, template_vars)
+    if resolved_url != server.url:
+        # Don't log the resolved URL — it can contain customer-identifying
+        # values (e.g. shop subdomain). Operators can correlate via the
+        # stable label logged at the call site.
+        logger.debug(
+            f"[BUDDY_MCP] Resolved URL placeholder for server {server.name or '<unnamed>'!r}"
+        )
+
+    headers: Dict[str, str] = {"Content-Type": "application/json"}
+    headers.update(server.headers)  # static headers from config
+    headers.update(_build_auth_headers(server, template_vars))  # auth headers
+
+    return StreamableHttpParameters(
+        url=resolved_url,
+        headers=headers,
+        timeout=timedelta(seconds=server.timeout),
+        sse_read_timeout=timedelta(seconds=server.timeout),
+        terminate_on_close=True,
+    )
+
+
 async def _load_server_tools(
     server: McpServerConfig,
     template_vars: Dict[str, str],
@@ -136,28 +169,12 @@ async def _load_server_tools(
 
     Each tool handler creates a fresh MCPClient per invocation for thread safety.
     """
-    # Resolve {variable} placeholders in the URL from template_vars.
-    # This allows dynamic MCP URLs such as https://{shop_url}/ai/mcp.
-    resolved_url = _resolve_placeholders(server.url, template_vars)
-    if resolved_url != server.url:
-        logger.info(
-            f"[BUDDY_MCP] Resolved MCP URL placeholder: {server.url!r} -> {resolved_url!r}"
-        )
-
-    label = server.name or resolved_url
+    server_params = _build_server_params(server, template_vars)
+    # Prefer the stable name; fall back to the raw template URL (with
+    # placeholders) rather than the resolved URL to avoid logging
+    # customer-identifying substitutions.
+    label = server.name or server.url
     logger.info(f"[BUDDY_MCP] Connecting to {label}")
-
-    headers: Dict[str, str] = {"Content-Type": "application/json"}
-    headers.update(server.headers)  # static headers from config
-    headers.update(_build_auth_headers(server, template_vars))  # auth headers
-
-    server_params = StreamableHttpParameters(
-        url=resolved_url,
-        headers=headers,
-        timeout=timedelta(seconds=server.timeout),
-        sse_read_timeout=timedelta(seconds=server.timeout),
-        terminate_on_close=True,
-    )
 
     # Use a temporary client just to fetch the tools schema
     async with MCPClient(server_params=server_params) as temp_client:
@@ -182,6 +199,9 @@ async def _load_server_tools(
                 handler=_create_mcp_tool_handler(server_params, func_schema.name),
             )
         )
+        # Track the chosen name so a subsequent tool from the same server
+        # with a duplicate name also gets prefixed.
+        existing_names.add(tool_name)
         logger.info(f"[BUDDY_MCP] Registered tool: {tool_name} (from {label})")
 
     logger.info(f"[BUDDY_MCP] Loaded {len(functions)} tools from {label}")
@@ -211,10 +231,78 @@ async def get_mcp_global_functions(
             )
             tools = await asyncio.shield(task)
             all_functions.extend(tools)
-        except BaseException as e:
+        except Exception as e:
             logger.error(
                 f"[BUDDY_MCP] Failed to load tools from {label}, skipping: {type(e).__name__}: {e}"
             )
 
     logger.info(f"[BUDDY_MCP] Total tools loaded: {len(all_functions)}")
+    return all_functions
+
+
+async def get_mcp_global_functions_cached(
+    mcp_config: McpConfig,
+    template_vars: Dict[str, Any],
+    template_id: str,
+) -> List[FlowsFunctionSchema]:
+    """Cache-aware variant for chat mode.
+
+    Reads tool metadata from Redis (per-template + URL hash, see
+    ``mcp/cache.py``) and rebuilds ``FlowsFunctionSchema`` using the same
+    ``_create_mcp_tool_handler`` voice uses (per-invocation MCPClient — no
+    private API, no shared session). Auth headers are rebuilt from
+    ``template_vars`` on every call so credential rotation takes effect on
+    the next turn without cache invalidation.
+    """
+    all_functions: List[FlowsFunctionSchema] = []
+
+    for server in mcp_config.servers:
+        if not server.enabled:
+            continue
+
+        try:
+            server_params = _build_server_params(server, template_vars)
+        except Exception as e:
+            logger.error(
+                f"[BUDDY_MCP] chat: failed to build server params for "
+                f"{server.name or server.url}: {type(e).__name__}: {e}"
+            )
+            continue
+
+        # Stable label: prefer server.name; fall back to the raw template
+        # URL (placeholder form) rather than the resolved URL.
+        label = server.name or server.url
+        try:
+            tools_meta = await get_or_discover_server_tools(
+                template_id=template_id,
+                server=server,
+                server_params=server_params,
+            )
+        except Exception as e:
+            logger.error(
+                f"[BUDDY_MCP] chat: failed to load tools from {label}, "
+                f"skipping: {type(e).__name__}: {e}"
+            )
+            continue
+
+        existing_names = {f.name for f in all_functions}
+        for meta in tools_meta:
+            tool_name = meta["name"]
+            if tool_name in existing_names and server.name:
+                tool_name = f"{server.name}_{tool_name}"
+            all_functions.append(
+                FlowsFunctionSchema(
+                    name=tool_name,
+                    description=meta["description"],
+                    properties=meta["properties"],
+                    required=meta["required"],
+                    handler=_create_mcp_tool_handler(server_params, meta["name"]),
+                )
+            )
+            existing_names.add(tool_name)
+            logger.debug(
+                f"[BUDDY_MCP] chat: registered tool: {tool_name} (from {label})"
+            )
+
+    logger.info(f"[BUDDY_MCP] chat: total tools loaded: {len(all_functions)}")
     return all_functions

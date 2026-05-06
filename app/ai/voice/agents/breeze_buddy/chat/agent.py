@@ -17,6 +17,7 @@ from pipecat_flows import FlowsFunctionSchema
 from app.ai.voice.agents.breeze_buddy.chat import llm_driver
 from app.ai.voice.agents.breeze_buddy.chat.disabled import CHAT_DISABLED_NAMES
 from app.ai.voice.agents.breeze_buddy.chat.sse import SSEEvent
+from app.ai.voice.agents.breeze_buddy.mcp import get_mcp_global_functions_cached
 from app.ai.voice.agents.breeze_buddy.template.builder import FlowConfigBuilder
 from app.ai.voice.agents.breeze_buddy.template.context import with_context
 from app.ai.voice.agents.breeze_buddy.template.types import TemplateModel
@@ -117,6 +118,25 @@ class ChatAgent:
         global_funcs: List[FlowsFunctionSchema] = flow_builder.build_global_functions(
             self.template.flow, bot_instance=self
         )
+
+        # Append MCP tools (no CHAT_DISABLED_NAMES filtering — MCP names are
+        # external/dynamic and never overlap the voice-only set). Discovery
+        # is cached per (template_id, URL hash) in Redis with a 300s TTL,
+        # so the list_tools round-trip happens at most once per template
+        # per TTL window across the whole pod fleet — not per turn.
+        mcp_config = (
+            self.template.configurations.mcp if self.template.configurations else None
+        )
+        if mcp_config and mcp_config.servers:
+            mcp_funcs = await get_mcp_global_functions_cached(
+                mcp_config, self.template_vars, self.template.id
+            )
+            existing_names = {fn.name for fn in global_funcs}
+            unique = [fn for fn in mcp_funcs if fn.name not in existing_names]
+            global_funcs.extend(unique)
+            logger.info(
+                f"[BUDDY_MCP] chat: added {len(unique)} MCP tools as global functions"
+            )
 
         node = self._resolve_node(flow_config, current_node)
         node_name = cast(str, node["name"])
