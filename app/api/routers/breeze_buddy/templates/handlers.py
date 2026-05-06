@@ -110,10 +110,15 @@ async def create_template_handler(
         # Create the template
         now = datetime.now(timezone.utc)
 
-        # Build configurations dict from the ConfigurationModel
+        # Build configurations dict from the ConfigurationModel.
+        # mode="json" unwraps SecretStr fields (e.g. mcp.servers[*].auth.token)
+        # to their string value so the downstream json.dumps in
+        # ``create_template`` doesn't choke on a SecretStr instance.
         configurations = None
         if template_data.configurations:
-            configurations = template_data.configurations.model_dump(exclude_none=True)
+            configurations = template_data.configurations.model_dump(
+                exclude_none=True, mode="json"
+            )
 
         template = await create_template(
             template_id=str(uuid4()),
@@ -398,11 +403,15 @@ async def replace_template_handler(
         # Update the template
         now = datetime.now(timezone.utc)
 
-        # Build configurations dict from the ConfigurationModel
-        # If configurations is explicitly provided, use it; otherwise set to None (NULL)
+        # Build configurations dict from the ConfigurationModel.
+        # mode="json" unwraps SecretStr fields (e.g. mcp.servers[*].auth.token)
+        # to their string value so the downstream json.dumps in
+        # ``replace_template`` doesn't choke on a SecretStr instance.
         configurations = None
         if template_data.configurations:
-            configurations = template_data.configurations.model_dump(exclude_none=True)
+            configurations = template_data.configurations.model_dump(
+                exclude_none=True, mode="json"
+            )
 
         # Merge secrets: preserve **** values from existing, update real values
         merged_secrets = merge_secrets(
