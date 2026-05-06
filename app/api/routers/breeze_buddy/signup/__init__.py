@@ -14,8 +14,10 @@ Endpoints:
 """
 
 from fastapi import APIRouter, Depends
+from pydantic import BaseModel
 
 from app.api.security.breeze_buddy.rbac_token import get_current_user_with_rbac
+from app.core.config.static import GOOGLE_CLIENT_ID
 from app.schemas import TokenResponse, UserInfo
 from app.schemas.breeze_buddy.signup import (
     AccountsResponse,
@@ -112,3 +114,17 @@ async def switch_account(
         account_id=request.account_id,
         current_user=current_user,
     )
+
+
+class PublicConfigResponse(BaseModel):
+    google_client_id: str
+
+
+@router.get(
+    "/config",
+    response_model=PublicConfigResponse,
+    summary="Public client configuration (Google Client ID, etc.)",
+    tags=["signup"],
+)
+async def get_public_config() -> PublicConfigResponse:
+    return PublicConfigResponse(google_client_id=GOOGLE_CLIENT_ID)
