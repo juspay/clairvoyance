@@ -63,9 +63,18 @@ async def get_template_by_id_cached(template_id: str) -> Optional[TemplateModel]
         return None
 
     try:
+        # ``reveal_secrets`` lets HttpAuthConfig's field_serializer (see
+        # template/types.py) emit the underlying string for
+        # ``token``/``password``/``api_key_value`` rather than the masked
+        # ``"**********"`` form. Without it, cache writes would store a
+        # masked auth value, and the next cache HIT would reconstruct
+        # ``SecretStr("**********")`` — runtime would then send
+        # ``Authorization: Bearer **********`` to the upstream server.
+        # The Redis cache is internal/private; the masking only belongs
+        # in API responses, where the lack of context preserves it.
         await redis.setex(
             cache_key,
-            template.model_dump_json(),
+            template.model_dump_json(context={"reveal_secrets": True}),
             ttl_seconds=CACHE_TTL_SECONDS,
         )
         logger.debug(f"template cache populated: {template_id}")
