@@ -10,6 +10,8 @@ from pydantic import (
     ConfigDict,
     Field,
     SecretStr,
+    SerializationInfo,
+    field_serializer,
     model_validator,
 )
 
@@ -1049,6 +1051,28 @@ class HttpAuthConfig(BaseModel):
     password: Optional[SecretStr] = None  # For basic auth
     api_key_name: Optional[str] = None  # Header name for API key
     api_key_value: Optional[SecretStr] = None  # API key value
+
+    # Templates are persisted to Postgres as JSON. Pydantic's default
+    # JSON serialization for SecretStr produces the masked form
+    # ("**********"), which silently corrupts the stored value — the
+    # template would then send `Authorization: Bearer **********` at
+    # call time. We unmask **only** when an explicit
+    # ``context={"reveal_secrets": True}`` flag is passed to model_dump
+    # (the create/replace handlers do this on the persistence path).
+    # All other JSON serialization paths — notably FastAPI response
+    # encoding for GET / PUT — see no context, fall through to the
+    # masked form, and so do not leak literal tokens that an operator
+    # may have embedded directly (vs. the intended
+    # ``{credential_name}`` placeholder pattern).
+    @field_serializer("token", "password", "api_key_value", when_used="json")
+    def _reveal_secret(
+        self, value: Optional[SecretStr], info: SerializationInfo
+    ) -> Optional[str]:
+        if value is None:
+            return None
+        if info.context and info.context.get("reveal_secrets"):
+            return value.get_secret_value()
+        return "**********"
 
 
 class HttpRequestConfig(BaseModel):

@@ -17,6 +17,7 @@ from app.ai.voice.agents.breeze_buddy.template.types import (
 )
 from app.ai.voice.agents.breeze_buddy.utils.secrets import (
     mask_template_secrets,
+    merge_masked_mcp_auth,
     merge_secrets,
 )
 from app.core.logger import logger
@@ -111,13 +112,19 @@ async def create_template_handler(
         now = datetime.now(timezone.utc)
 
         # Build configurations dict from the ConfigurationModel.
-        # mode="json" unwraps SecretStr fields (e.g. mcp.servers[*].auth.token)
-        # to their string value so the downstream json.dumps in
-        # ``create_template`` doesn't choke on a SecretStr instance.
+        # mode="json" + reveal_secrets context unwraps SecretStr fields
+        # (e.g. mcp.servers[*].auth.token) to their underlying string so
+        # the downstream json.dumps in ``create_template`` writes the
+        # real value (typically a ``{credential_name}`` placeholder).
+        # Without the context flag, HttpAuthConfig's serializer falls
+        # back to the masked "**********" form, which is what we want
+        # everywhere except this persistence path.
         configurations = None
         if template_data.configurations:
             configurations = template_data.configurations.model_dump(
-                exclude_none=True, mode="json"
+                exclude_none=True,
+                mode="json",
+                context={"reveal_secrets": True},
             )
 
         template = await create_template(
@@ -404,13 +411,39 @@ async def replace_template_handler(
         now = datetime.now(timezone.utc)
 
         # Build configurations dict from the ConfigurationModel.
-        # mode="json" unwraps SecretStr fields (e.g. mcp.servers[*].auth.token)
-        # to their string value so the downstream json.dumps in
-        # ``replace_template`` doesn't choke on a SecretStr instance.
+        # mode="json" + reveal_secrets context unwraps SecretStr fields
+        # (e.g. mcp.servers[*].auth.token) to their underlying string so
+        # the downstream json.dumps in ``replace_template`` writes the
+        # real value (typically a ``{credential_name}`` placeholder).
+        # Without the context flag, HttpAuthConfig's serializer falls
+        # back to the masked "**********" form, which is what we want
+        # everywhere except this persistence path.
         configurations = None
         if template_data.configurations:
             configurations = template_data.configurations.model_dump(
-                exclude_none=True, mode="json"
+                exclude_none=True,
+                mode="json",
+                context={"reveal_secrets": True},
+            )
+            # GET /templates returns auth secrets as "**********" (the
+            # field_serializer masks when no reveal_secrets context).
+            # A typical UI does GET → edit-one-unrelated-field → PUT,
+            # which sends the masked literal back. Without this merge
+            # the masked literal would land in DB and silently break
+            # auth (runtime would emit ``Bearer **********``). Treat
+            # masked auth values as "unchanged" — same shape as the
+            # ``merge_secrets`` call below for top-level secrets.
+            existing_configurations = (
+                existing_template.configurations.model_dump(
+                    exclude_none=True,
+                    mode="json",
+                    context={"reveal_secrets": True},
+                )
+                if existing_template.configurations
+                else None
+            )
+            configurations = merge_masked_mcp_auth(
+                configurations, existing_configurations
             )
 
         # Merge secrets: preserve **** values from existing, update real values
