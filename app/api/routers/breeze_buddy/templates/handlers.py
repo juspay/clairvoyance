@@ -12,6 +12,7 @@ from fastapi import HTTPException, status
 from app.ai.voice.agents.breeze_buddy.template.cache import invalidate_template
 from app.ai.voice.agents.breeze_buddy.template.types import (
     CreateTemplateRequest,
+    FlowMode,
     ReplaceTemplateRequest,
 )
 from app.ai.voice.agents.breeze_buddy.utils.secrets import (
@@ -65,11 +66,20 @@ async def create_template_handler(
         if not flow:
             raise ValueError("Flow structure is required")
 
-        if "initial_node" not in flow:
-            raise ValueError("initial_node must be specified in flow structure")
-
-        if "nodes" not in flow or not flow["nodes"]:
-            raise ValueError("nodes must be specified in flow structure")
+        # Direct-mode flows have a flat ``system_prompt`` + ``functions`` list
+        # and no ``initial_node`` / ``nodes``. The legacy node-based check
+        # below would reject them despite the runtime supporting them
+        # (``template/builder.py:_build_direct_flow_config``).
+        if flow.get("mode") == FlowMode.DIRECT.value:
+            if "system_prompt" not in flow:
+                raise ValueError(
+                    "system_prompt must be specified in direct-mode flow structure"
+                )
+        else:
+            if "initial_node" not in flow:
+                raise ValueError("initial_node must be specified in flow structure")
+            if "nodes" not in flow or not flow["nodes"]:
+                raise ValueError("nodes must be specified in flow structure")
 
         # Check if template already exists
         existing = await get_template_by_merchant(
@@ -357,16 +367,22 @@ async def replace_template_handler(
             operation="access template",
         )
 
-        # Validate flow structure
+        # Validate flow structure (direct mode has a different shape — see
+        # the create handler for the matching branch).
         flow = template_data.flow
         if not flow:
             raise ValueError("Flow structure is required")
 
-        if "initial_node" not in flow:
-            raise ValueError("initial_node must be specified in flow structure")
-
-        if "nodes" not in flow or not flow["nodes"]:
-            raise ValueError("nodes must be specified in flow structure")
+        if flow.get("mode") == FlowMode.DIRECT.value:
+            if "system_prompt" not in flow:
+                raise ValueError(
+                    "system_prompt must be specified in direct-mode flow structure"
+                )
+        else:
+            if "initial_node" not in flow:
+                raise ValueError("initial_node must be specified in flow structure")
+            if "nodes" not in flow or not flow["nodes"]:
+                raise ValueError("nodes must be specified in flow structure")
 
         # Validate outbound_number_id if provided
         if template_data.outbound_number_id:
