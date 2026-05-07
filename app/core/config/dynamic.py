@@ -33,6 +33,11 @@ BB_SPEECH_PROVIDER_DEFAULTS: dict[str, dict] = {
         "speed": 0.9,
         "pitch": 0.0,
     },
+    "soniox": {
+        "voice_id": "Priya",
+        "model": "tts-rt-v1",
+        "language": "en",
+    },
 }
 
 

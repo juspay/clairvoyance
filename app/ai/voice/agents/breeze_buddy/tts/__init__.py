@@ -14,15 +14,18 @@ from app.ai.voice.tts import (
     ElevenLabsConfig,
     GeminiConfig,
     SarvamTTSConfig,
+    SonioxTTSConfig,
     build_cartesia_tts,
     build_elevenlabs_tts,
     build_gemini_tts,
     build_sarvam_tts,
+    build_soniox_tts,
 )
 from app.ai.voice.tts.cartesia import _generate_cartesia_audio
 from app.ai.voice.tts.elevenlabs import _generate_elevenlabs_audio
 from app.ai.voice.tts.gemini import _generate_gemini_audio
 from app.ai.voice.tts.sarvam import _generate_sarvam_audio
+from app.ai.voice.tts.soniox import _generate_soniox_audio
 from app.core.config.dynamic import (
     BB_AGGREGATE_SENTENCES,
     BB_ENABLE_ELEVENLABS_INDIAN_RESIDENCY,
@@ -37,6 +40,7 @@ from app.core.config.static import (
     ELEVENLABS_INDIAN_RESIDENCY_WEBSOCKET_URL,
     GOOGLE_CREDENTIALS_JSON,
     SARVAM_API_KEY,
+    SONIOX_API_KEY,
 )
 from app.core.logger import logger
 
@@ -206,6 +210,22 @@ async def get_tts_service(voice_config: TTSConfig):
             )
         )
 
+    elif provider == "soniox":
+        if not SONIOX_API_KEY:
+            raise ValueError("SONIOX_API_KEY is required for Soniox TTS")
+
+        aggregate = await BB_AGGREGATE_SENTENCES("soniox")
+
+        return build_soniox_tts(
+            SonioxTTSConfig(
+                api_key=SONIOX_API_KEY,
+                voice=voice_config.voice_id or "Priya",
+                model=voice_config.model or "tts-rt-v1",
+                language=_parse_language(voice_config.language, Language.EN),
+                aggregate_sentences=aggregate,
+            )
+        )
+
     else:
         raise ValueError(f"Unsupported TTS provider: {provider}")
 
@@ -267,6 +287,14 @@ async def generate_audio(
             style_prompt=getattr(resolved, "style_prompt", None),
         )
         # _generate_gemini_audio already downsamples to 16 kHz PCM
+        input_format = "raw"
+    elif provider == "soniox":
+        audio_data = await _generate_soniox_audio(
+            text=text,
+            voice=resolved.voice_id,
+            model=resolved.model,
+            language=resolved.language,
+        )
         input_format = "raw"
     else:
         raise ValueError(f"Unsupported TTS provider: {provider}")
