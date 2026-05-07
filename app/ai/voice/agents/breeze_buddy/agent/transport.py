@@ -27,10 +27,36 @@ from app.core.logger import logger
 
 # Constants
 TRANSPORT_TYPE_DAILY = "daily"
+TRANSPORT_TYPE_TELEPHONY = "telephony"
+
+
+def _get_aic_model_path(transport_type: str) -> Path:
+    """Select appropriate AIC model based on transport.
+
+    Auto-selects the AIC model's input processing rate based on transport:
+    - Daily (web): 16kHz AIC model
+    - Telephony (Twilio/Plivo/Exotel): 8kHz AIC model
+
+    Note:
+        These rates describe the selected AIC model's expected processing rate,
+        not the transport's native audio sample rate. For example, Daily may
+        operate at 24kHz elsewhere in the pipeline while still using the
+        16kHz AIC model here.
+
+    Args:
+        transport_type: The transport type (e.g. TRANSPORT_TYPE_DAILY, TRANSPORT_TYPE_TELEPHONY).
+
+    Returns:
+        Path to the selected AIC model file.
+    """
+    if transport_type == TRANSPORT_TYPE_DAILY:
+        return Path(static.AIC_MODEL_PATH_16KHZ)
+    return Path(static.AIC_MODEL_PATH)
 
 
 def _create_audio_input_filter(
     configurations: Optional[ConfigurationModel] = None,
+    transport_type: str = TRANSPORT_TYPE_DAILY,
 ) -> Optional[BaseAudioFilter]:
     """Create audio input filter based on configuration.
 
@@ -41,6 +67,7 @@ def _create_audio_input_filter(
 
     Args:
         configurations: The configuration model containing noise filter settings.
+        transport_type: The transport type to determine model selection.
 
     Returns:
         Audio filter instance if enabled and successfully created, None otherwise.
@@ -58,11 +85,14 @@ def _create_audio_input_filter(
         if not static.BREEZE_BUDDY_AIC_LICENSE_KEY:
             logger.warning("AIC filter enabled but license key not configured")
             return None
+        model_path = _get_aic_model_path(transport_type)
         try:
-            return AICFilter(
+            aic_filter = AICFilter(
                 license_key=static.BREEZE_BUDDY_AIC_LICENSE_KEY,
-                model_path=Path(static.AIC_MODEL_PATH),
+                model_path=model_path,
             )
+            logger.info(f"AIC filter initialized successfully with model: {model_path}")
+            return aic_filter
         except Exception as e:
             logger.warning(
                 f"Failed to initialize AIC filter, proceeding without it: {e}"
@@ -93,14 +123,15 @@ def get_transport_params(
     telephony_mixer = create_background_sound_mixer(
         template, sample_rate=TELEPHONY_SAMPLE_RATE
     )
-    audio_in_filter = _create_audio_input_filter(configurations)
 
     return {
         "daily": lambda: DailyParams(
             audio_in_enabled=True,
             audio_out_enabled=True,
-            audio_in_filter=audio_in_filter,
             audio_out_mixer=daily_mixer,
+            audio_in_filter=_create_audio_input_filter(
+                configurations, TRANSPORT_TYPE_DAILY
+            ),
         ),
         "twilio": lambda: FastAPIWebsocketParams(
             audio_in_enabled=True,
@@ -108,7 +139,9 @@ def get_transport_params(
             audio_in_sample_rate=TELEPHONY_SAMPLE_RATE,
             audio_out_sample_rate=TELEPHONY_SAMPLE_RATE,
             audio_out_mixer=telephony_mixer,
-            audio_in_filter=audio_in_filter,
+            audio_in_filter=_create_audio_input_filter(
+                configurations, TRANSPORT_TYPE_TELEPHONY
+            ),
         ),
         "exotel": lambda: FastAPIWebsocketParams(
             audio_in_enabled=True,
@@ -116,7 +149,9 @@ def get_transport_params(
             audio_in_sample_rate=TELEPHONY_SAMPLE_RATE,
             audio_out_sample_rate=TELEPHONY_SAMPLE_RATE,
             audio_out_mixer=telephony_mixer,
-            audio_in_filter=audio_in_filter,
+            audio_in_filter=_create_audio_input_filter(
+                configurations, TRANSPORT_TYPE_TELEPHONY
+            ),
         ),
         "telnyx": lambda: FastAPIWebsocketParams(
             audio_in_enabled=True,
@@ -124,7 +159,9 @@ def get_transport_params(
             audio_in_sample_rate=TELEPHONY_SAMPLE_RATE,
             audio_out_sample_rate=TELEPHONY_SAMPLE_RATE,
             audio_out_mixer=telephony_mixer,
-            audio_in_filter=audio_in_filter,
+            audio_in_filter=_create_audio_input_filter(
+                configurations, TRANSPORT_TYPE_TELEPHONY
+            ),
         ),
         "plivo": lambda: FastAPIWebsocketParams(
             audio_in_enabled=True,
@@ -132,6 +169,8 @@ def get_transport_params(
             audio_in_sample_rate=TELEPHONY_SAMPLE_RATE,
             audio_out_sample_rate=TELEPHONY_SAMPLE_RATE,
             audio_out_mixer=telephony_mixer,
-            audio_in_filter=audio_in_filter,
+            audio_in_filter=_create_audio_input_filter(
+                configurations, TRANSPORT_TYPE_TELEPHONY
+            ),
         ),
     }

@@ -57,6 +57,10 @@ AIC_NOISE_GATE_ENABLE = (
 AIC_MODEL_PATH = os.environ.get(
     "AIC_MODEL_PATH", "/app/models/voice/aic/quail_l_8khz.aicmodel"
 )
+AIC_MODEL_PATH_16KHZ = os.environ.get(
+    "AIC_MODEL_PATH_16KHZ",
+    "/app/models/voice/aic/quail_l_16khz.aicmodel",
+)
 
 # TTS Configuration
 ELEVENLABS_API_KEY = os.environ.get("ELEVENLABS_API_KEY")
