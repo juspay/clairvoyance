@@ -800,12 +800,14 @@ class Agent:
             self.lead.metaData = {}
         self.lead.metaData["node_traversal"] = []
 
-        await self.flow_manager.initialize(initial_node_config)
-
-        # Record initial node entry after FlowManager is initialized
+        # Record initial node entry BEFORE flow_manager.initialize so that any
+        # global function called during the first LLM turn (e.g. get_driver_info
+        # on the initial node) finds an active node entry to record against.
         initial_node_name = self.flow_config["initial_node"]
         context = TemplateContext(self)
         context.record_node_entry(initial_node_name)
+
+        await self.flow_manager.initialize(initial_node_config)
         logger.info(
             f"FlowManager initialized with initial node: {self.flow_config['initial_node']}"
         )

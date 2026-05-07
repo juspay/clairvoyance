@@ -3,7 +3,7 @@ Pydantic models for the dynamic workflow engine.
 """
 
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, Union
 
 from pydantic import (
     BaseModel,
@@ -619,13 +619,7 @@ class HoldTransferConfig(BaseModel):
             "outbound_number_id": "uuid-of-outbound-number",
             "hold_music": "typing",
             "hold_timeout_seconds": 180,
-            "summarize": true,
-            "payload_schema": {
-                "customer_name": "lead.customer_name",
-                "customer_language": "lead.customer_language",
-                "trip_id": "lead.trip_id",
-                "agent_name": "Rhea"
-            }
+            "summarize": true
         }
     """
 
@@ -661,14 +655,6 @@ class HoldTransferConfig(BaseModel):
         ge=0.0,
         le=1.0,
         description="Volume for hold music playback (0.0–1.0). Default 0.4.",
-    )
-    payload_schema: Optional[Dict[str, str]] = Field(
-        None,
-        description="Mapping of outbound template variable names to values. "
-        "Use 'lead.<field>' to reference the inbound lead's payload field "
-        "(e.g. 'lead.customer_name'), or a plain string for a literal value "
-        "(e.g. 'Rhea'). Missing 'lead.<field>' references are logged as "
-        "warnings and resolved to None — the outbound call still proceeds.",
     )
 
 
@@ -1212,8 +1198,9 @@ class GlobalHttpFunction(BaseGlobalFunction):
     # talking while the request runs and the result is injected as a developer
     # message that re-triggers inference. Templates can override per-function.
     cancel_on_interruption: Optional[bool] = False
-    expected_response_schema: Dict[str, str] = {}
-    """Whitelist of fields to extract from the HTTP response before feeding to the LLM.
+    expected_response_schema: Union[Dict[str, str], Literal["full"]] = {}
+    """Whitelist of fields to extract from the HTTP response before feeding to the LLM,
+    or ``"full"`` to pass the entire response to the LLM and store it in node traversal.
 
     Key   = name as it will appear in the LLM payload.
     Value = JMESPath expression (https://jmespath.org) evaluated against the
@@ -1227,7 +1214,18 @@ class GlobalHttpFunction(BaseGlobalFunction):
         - Multi-field project: ``"rides[*].{rideId: rideId, area: pickup.area}"``
         - Filter with arg:     ``"coinEarnHistory[?rideId=='{ride_id}']"``
 
-    When empty (default), the full response data is passed to the LLM unchanged.
+    Behaviour by value:
+
+    - **Dict of JMESPath expressions** (e.g. ``{"driverId": "driverId"}``):
+      Response is filtered to only those fields before being sent to the LLM.
+      The filtered dict is also stored in node traversal. On 4xx/5xx the raw
+      error body is stored instead (filtering is skipped for error responses).
+
+    - **``"full"``**: The entire response is passed to the LLM unchanged and
+      stored in node traversal. On 4xx/5xx the raw error body is stored.
+
+    - **Empty dict ``{}`` (default)**: The full response is passed to the LLM
+      unchanged, but **nothing is stored** in node traversal.
     """
 
 

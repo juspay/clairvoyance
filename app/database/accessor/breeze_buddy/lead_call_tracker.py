@@ -32,6 +32,7 @@ from app.database.queries.breeze_buddy.lead_call_tracker import (
     update_lead_call_initiated_time_query,
     update_lead_call_recording_url_query,
     update_lead_payload_query,
+    update_lead_request_id_query,
 )
 from app.schemas import (
     CallDirection,
@@ -681,3 +682,23 @@ async def append_metadata_field(
     except Exception as e:
         logger.error(f"Error updating lead metadata for ID {lead_id}: {e}")
         return None
+
+
+async def update_lead_request_id(lead_id: str, request_id: str) -> None:
+    """
+    Update the request_id column for a lead.
+
+    Used to link an inbound lead to its associated outbound (hold-transfer)
+    lead after the outbound leg is created.
+
+    Args:
+        lead_id: UUID of the lead to update (inbound lead)
+        request_id: Value to set as request_id (outbound lead UUID)
+    """
+    logger.info(f"Updating request_id for lead ID: {lead_id} → {request_id}")
+    try:
+        query_text, values = update_lead_request_id_query(lead_id, request_id)
+        await run_parameterized_query(query_text, values)
+        logger.info(f"request_id updated successfully for lead ID: {lead_id}")
+    except Exception as e:
+        logger.error(f"Error updating request_id for lead ID {lead_id}: {e}")

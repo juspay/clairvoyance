@@ -35,48 +35,12 @@ from app.database.accessor.breeze_buddy.hold_transfer import (
 from app.database.accessor.breeze_buddy.lead_call_tracker import (
     create_lead_call_tracker,
     update_lead_call_id_by_id,
+    update_lead_request_id,
 )
 from app.schemas import CallDirection, ExecutionMode, LeadCallStatus
 
 # Channel name pattern for Redis pub/sub
 _CHANNEL_PREFIX = "hold_transfer:result"
-
-
-def _resolve_payload_from_schema(
-    schema: Dict[str, str],
-    inbound_payload: Dict[str, Any],
-    call_sid: str,
-) -> Dict[str, Any]:
-    """Resolve outbound payload fields from payload_schema config.
-
-    For each key in schema:
-      - If value starts with "lead." → read from inbound_payload using the
-        remainder as the key. Logs a warning if the key is absent.
-      - Otherwise → treat the value as a literal string.
-
-    Args:
-        schema: Mapping of outbound variable name → "lead.<field>" or literal.
-        inbound_payload: The inbound lead's payload dict.
-        call_sid: Used in log messages.
-
-    Returns:
-        Resolved dict to merge into the outbound payload.
-    """
-    resolved: Dict[str, Any] = {}
-    for outbound_key, spec in schema.items():
-        if spec.startswith("lead."):
-            inbound_key = spec[len("lead.") :]
-            value = inbound_payload.get(inbound_key)
-            if value is None:
-                logger.warning(
-                    f"[hold_and_consult] payload_schema: inbound payload missing "
-                    f"'{inbound_key}' for outbound field '{outbound_key}' "
-                    f"(call {call_sid}). Proceeding with None."
-                )
-            resolved[outbound_key] = value
-        else:
-            resolved[outbound_key] = spec
-    return resolved
 
 
 async def hold_and_consult(
@@ -190,23 +154,12 @@ async def hold_and_consult(
     logger.info(f"[hold_and_consult] Subscribed to '{pub_channel}' for call {call_sid}")
 
     # ── 8. Create outbound lead with hold-transfer metadata ────────────
-    inbound_payload: Dict[str, Any] = {}
-    if context.lead and context.lead.payload:
-        inbound_payload = context.lead.payload
-
     outbound_payload: Dict[str, Any] = {}
 
-    # 1. Config-level payload_schema fields (lowest priority)
-    if hold_config.payload_schema:
-        schema_fields = _resolve_payload_from_schema(
-            hold_config.payload_schema, inbound_payload, call_sid
-        )
-        outbound_payload.update(schema_fields)
-
-    # 2. LLM-provided outbound_payload fields (overrides schema)
+    # LLM-provided outbound_payload fields
     outbound_payload.update(args_payload)
 
-    # 3. Internal keys always win — injected by system, not LLM
+    # Internal keys always win — injected by system, not LLM
     outbound_payload["_hold_transfer_pub_channel"] = pub_channel
     if hold_config.summarize:
         outbound_payload["_hold_transfer_summarize"] = True
@@ -255,6 +208,12 @@ async def hold_and_consult(
                 "status": "error",
                 "message": "Failed to create outbound lead.",
             }
+
+        # Link inbound lead → outbound lead by storing the outbound lead UUID
+        # in the inbound lead's request_id. The reverse link (outbound → inbound)
+        # is already set via request_id=inbound_lead_id above.
+        if inbound_lead_id:
+            await update_lead_request_id(str(inbound_lead_id), outbound_lead_id)
     except Exception as e:
         subscribe_task.cancel()
         logger.error(
