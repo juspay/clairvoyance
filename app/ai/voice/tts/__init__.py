@@ -11,6 +11,7 @@ from .elevenlabs import ElevenLabsConfig, build_elevenlabs_tts
 from .gemini import GeminiConfig, build_gemini_tts
 from .google import GoogleConfig, build_google_tts
 from .sarvam import SarvamTTSConfig, build_sarvam_tts, get_sarvam_language
+from .soniox import SonioxTTSConfig, build_soniox_tts
 
 __all__ = [
     # Cartesia
@@ -29,4 +30,7 @@ __all__ = [
     "SarvamTTSConfig",
     "build_sarvam_tts",
     "get_sarvam_language",
+    # Soniox
+    "SonioxTTSConfig",
+    "build_soniox_tts",
 ]
