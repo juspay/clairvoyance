@@ -27,8 +27,8 @@ BB_SPEECH_PROVIDER_DEFAULTS: dict[str, dict] = {
         "language": "en",
     },
     "sarvam": {
-        "voice_id": "manisha",
-        "model": "bulbul:v2",
+        "voice_id": "shreya",
+        "model": "bulbul:v3",
         "language": "en-IN",
         "speed": 0.9,
         "pitch": 0.0,

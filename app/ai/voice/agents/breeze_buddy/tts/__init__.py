@@ -178,8 +178,8 @@ async def get_tts_service(voice_config: TTSConfig):
         return build_sarvam_tts(
             SarvamTTSConfig(
                 api_key=SARVAM_API_KEY,
-                model=voice_config.model or "bulbul:v2",
-                voice_id=voice_config.voice_id or "manisha",
+                model=voice_config.model or "bulbul:v3",
+                voice_id=voice_config.voice_id or "shreya",
                 language_code=voice_config.language or "en-IN",
                 pitch=voice_config.pitch or 0.0,
                 pace=voice_config.speed or 0.9,
