@@ -205,6 +205,7 @@ async def http_function_handler(
         if (
             is_success
             and config.expected_response_schema
+            and config.expected_response_schema != "full"
             and isinstance(data, (dict, list))
         ):
             data = apply_response_schema(
@@ -218,15 +219,27 @@ async def http_function_handler(
         logger.debug(f"[{function_name}] data going to LLM: {data}")
 
         # Record global function call in node traversal path.
-        # Store the filtered response only when expected_response_schema is
-        # defined — that's the curated subset we want to persist. For plain
-        # HTTP calls without a schema the raw response may be large / noisy,
-        # so we store None in that case.
-        response_to_store = (
-            data
-            if is_success and config.expected_response_schema and isinstance(data, dict)
-            else None
-        )
+        # Storage rules (controlled by expected_response_schema on the function):
+        #
+        #   Dict of JMESPath expressions  → store the already-filtered dict on 2xx;
+        #                                   store raw error body on 4xx/5xx
+        #   "full"                         → store the full raw response on 2xx;
+        #                                   store raw error body on 4xx/5xx
+        #   Empty {} (default / not set)   → store nothing
+        #
+        # For non-JSON error responses (e.g. plain "Not found" text on 404),
+        # wrap in a dict so they are always storable.
+        if config.expected_response_schema:
+            if isinstance(data, dict):
+                response_to_store: Optional[Dict[str, Any]] = data
+            elif is_success:
+                # 2xx non-dict (e.g. plain string or list) — wrap so it can be persisted
+                response_to_store = {"response": data, "status_code": status_code}
+            else:
+                # Non-JSON error body — wrap so it can be persisted
+                response_to_store = {"error": data, "status_code": status_code}
+        else:
+            response_to_store = None  # no schema — never store
         context.record_global_function_call(
             function_name=function_name,
             function_args=args,

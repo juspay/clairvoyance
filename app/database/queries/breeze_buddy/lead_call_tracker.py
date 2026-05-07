@@ -610,6 +610,30 @@ def update_lead_payload_query(
     return text, values
 
 
+def update_lead_request_id_query(
+    lead_id: str, request_id: str
+) -> Tuple[str, List[Any]]:
+    """
+    Update the request_id column for a specific lead.
+
+    Args:
+        lead_id: Lead UUID
+        request_id: The value to set as request_id (e.g. linked outbound lead UUID)
+
+    Returns:
+        Tuple of (query_text, values)
+    """
+    text = f"""
+        UPDATE "{LEAD_CALL_TRACKER_TABLE}"
+        SET
+            "request_id" = $1,
+            "updated_at" = NOW()
+        WHERE "id" = $2;
+    """
+    values = [request_id, lead_id]
+    return text, values
+
+
 def append_metadata_field_query(
     lead_id: str, field_updates: Dict[str, Any]
 ) -> Tuple[str, List[Any]]:
