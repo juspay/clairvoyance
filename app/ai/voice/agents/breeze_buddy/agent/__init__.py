@@ -914,6 +914,7 @@ class Agent:
                     None if is_stream else self._handle_user_idle_timeout
                 ),
                 mode="stream" if is_stream else "agent",
+                is_daily_mode=self.is_daily_mode,
             )
             self._context_aggregator = context_aggregator
 

@@ -43,6 +43,7 @@ from pipecat.turns.user_turn_strategies import UserTurnStrategies
 from app.ai.voice.agents.breeze_buddy.llm import get_llm_service
 from app.ai.voice.agents.breeze_buddy.observability.tracing_setup import setup_tracing
 from app.ai.voice.agents.breeze_buddy.processors import (
+    AudioPreBufferProcessor,
     TranscriptCollectorProcessor,
     TranscriptionGateProcessor,
     UserIdleCallbackHandler,
@@ -199,6 +200,7 @@ async def build_pipeline(
     configurations: Optional[ConfigurationModel] = None,
     on_user_idle_timeout: Optional[Callable[[int], Any]] = None,
     mode: Literal["agent", "stream"] = "agent",
+    is_daily_mode: bool = False,
 ) -> tuple[
     Pipeline,
     LLMContext,
@@ -475,6 +477,14 @@ async def build_pipeline(
     # UserTurnStrategies — no custom response gate needed.
     # Note: RTVIProcessor is added automatically by PipelineTask (pipecat v0.0.102+)
     # when enable_rtvi=True (default). No need to add it to the pipeline manually.
+
+    # Audio pre-buffer for Daily mode: sits between TTS and transport output.
+    # Buffers the first few audio frames per bot turn to give the Daily SDK's
+    # WebRTC play cursor a head start, preventing initial-buffer starvation gaps.
+    audio_pre_buffer: Optional[AudioPreBufferProcessor] = None
+    if is_daily_mode and not is_stream:
+        audio_pre_buffer = AudioPreBufferProcessor(pre_buffer_count=3)
+
     pipeline_parts: list[Any] = [transport.input(), stt, transcription_gate]
     if is_stream:
         assert transcript_collector is not None
@@ -483,9 +493,12 @@ async def build_pipeline(
     if is_stream:
         pipeline_parts.extend([tts, transport.output()])
     else:
-        pipeline_parts.extend(
-            [llm, tts, transport.output(), context_aggregator.assistant()]
-        )
+        pipeline_parts.append(llm)
+        pipeline_parts.append(tts)
+        if audio_pre_buffer:
+            pipeline_parts.append(audio_pre_buffer)
+        pipeline_parts.append(transport.output())
+        pipeline_parts.append(context_aggregator.assistant())
 
     return (
         Pipeline(pipeline_parts),

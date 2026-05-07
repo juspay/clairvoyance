@@ -101,6 +101,7 @@ def get_transport_params(
             audio_out_enabled=True,
             audio_in_filter=audio_in_filter,
             audio_out_mixer=daily_mixer,
+            audio_out_10ms_chunks=2,  # 20ms chunks for smoother Daily WebRTC cadence
         ),
         "twilio": lambda: FastAPIWebsocketParams(
             audio_in_enabled=True,
