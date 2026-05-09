@@ -1,7 +1,8 @@
 import re
 
 
-def indian_number_to_speech(number: int) -> str:
+def indian_number_to_speech(number: int | float) -> str:
+    number = round(number)
     if number <= 0:
         return "0 rupees"
     parts = []
