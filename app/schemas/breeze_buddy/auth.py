@@ -87,6 +87,22 @@ class S2STokenRequest(BaseModel):
     token_lifetime_days: int = Field(
         default=365, ge=1, le=365000, description="Token lifetime in days (1-365000)"
     )
+    reseller_ids: Optional[List[str]] = Field(
+        default=None,
+        description=(
+            "Restrict token scope to these reseller IDs. "
+            "Must be a subset of the admin's own reseller access. "
+            "Omit to inherit all admin scopes."
+        ),
+    )
+    merchant_ids: Optional[List[str]] = Field(
+        default=None,
+        description=(
+            "Restrict token scope to these merchant IDs. "
+            "Must be a subset of the admin's own merchant access. "
+            "Omit to inherit all admin scopes."
+        ),
+    )
 
 
 class S2STokenResponse(BaseModel):
