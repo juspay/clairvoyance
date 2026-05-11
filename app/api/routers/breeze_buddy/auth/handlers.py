@@ -236,38 +236,45 @@ async def generate_s2s_token_handler(request: S2STokenRequest) -> S2STokenRespon
     # Generate long-lived token
     expires_delta = timedelta(days=request.token_lifetime_days)
 
-    # Resolve wildcard scopes for S2S tokens too
+    # Start with the admin's own scopes
     resolved_reseller_ids = user.reseller_ids
     resolved_merchant_ids = user.merchant_ids
 
-    if user.role != UserRole.ADMIN:
-        temp_user_info = UserInfo(
-            id=user.id,
-            username=user.username,
-            role=user.role,
-            email=user.email,
-            reseller_ids=user.reseller_ids,
-            merchant_ids=user.merchant_ids,
-            permissions=[],
-            owner_id=user.owner_id,
-        )
+    # Apply caller-requested scope restrictions.
+    # Prevent escalation: requested scopes must be a subset of the admin's own scopes.
+    if request.reseller_ids is not None:
+        if "*" not in resolved_reseller_ids:
+            invalid = set(request.reseller_ids) - set(resolved_reseller_ids)
+            if invalid:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail=f"Cannot grant reseller access beyond your own scope: {sorted(invalid)}",
+                )
+        resolved_reseller_ids = request.reseller_ids
 
-        resolved_r = await resolve_reseller_ids(temp_user_info)
-        if resolved_r is not None:
-            resolved_reseller_ids = resolved_r
-        else:
-            resolved_reseller_ids = ["*"]
+    if request.merchant_ids is not None:
+        if "*" not in resolved_merchant_ids:
+            invalid = set(request.merchant_ids) - set(resolved_merchant_ids)
+            if invalid:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail=f"Cannot grant merchant access beyond your own scope: {sorted(invalid)}",
+                )
+        resolved_merchant_ids = request.merchant_ids
 
-        resolved_m = await resolve_merchant_ids(temp_user_info)
-        if resolved_m is not None:
-            resolved_merchant_ids = resolved_m
-        else:
-            resolved_merchant_ids = ["*"]
+    # If scopes are restricted (not wildcard), downgrade the token role
+    # from ADMIN to RESELLER. RBAC checks short-circuit on role == "admin"
+    # before inspecting reseller_ids/merchant_ids, so an ADMIN-role token
+    # would bypass those restrictions entirely.
+    scopes_are_restricted = (
+        "*" not in resolved_reseller_ids or "*" not in resolved_merchant_ids
+    )
+    token_role = UserRole.RESELLER if scopes_are_restricted else user.role
 
     access_token = rbac_token_manager.create_access_token_with_rbac(
         user_id=user.id,
         username=user.username,
-        role=user.role,
+        role=token_role,
         reseller_ids=resolved_reseller_ids,
         merchant_ids=resolved_merchant_ids,
         email=user.email,
@@ -280,9 +287,9 @@ async def generate_s2s_token_handler(request: S2STokenRequest) -> S2STokenRespon
     expires_at = (datetime.now(timezone.utc) + expires_delta).isoformat()
 
     logger.info(
-        f"S2S token generated successfully for user: {user.username} "
-        f"(role: {user.role}, lifetime: {request.token_lifetime_days} days, "
-        f"expires: {expires_at})"
+        f"S2S token generated for user: {user.username} "
+        f"(auth_role: {user.role}, token_role: {token_role}, "
+        f"lifetime: {request.token_lifetime_days} days)"
     )
 
     return S2STokenResponse(
@@ -292,7 +299,8 @@ async def generate_s2s_token_handler(request: S2STokenRequest) -> S2STokenRespon
         expires_in=expires_in_seconds,
         expires_at=expires_at,
         note=(
-            f"Long-lived S2S token valid for {request.token_lifetime_days} days. "
+            f"Long-lived S2S token valid for {request.token_lifetime_days} days "
+            f"(effective role: {token_role.value}). "
             f"Store securely and rotate before expiration!"
         ),
     )
