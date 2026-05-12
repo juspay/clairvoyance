@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from .cartesia import CartesiaConfig, build_cartesia_tts
 from .elevenlabs import ElevenLabsConfig, build_elevenlabs_tts
+from .gemini import GeminiConfig, build_gemini_tts
 from .google import GoogleConfig, build_google_tts
 from .sarvam import SarvamTTSConfig, build_sarvam_tts, get_sarvam_language
 
@@ -18,7 +19,10 @@ __all__ = [
     # ElevenLabs
     "ElevenLabsConfig",
     "build_elevenlabs_tts",
-    # Google
+    # Gemini
+    "GeminiConfig",
+    "build_gemini_tts",
+    # Google (Chirp3 HD)
     "GoogleConfig",
     "build_google_tts",
     # Sarvam

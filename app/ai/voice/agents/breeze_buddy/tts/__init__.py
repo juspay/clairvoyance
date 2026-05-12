@@ -12,13 +12,16 @@ from app.ai.voice.agents.breeze_buddy.utils.common import convert_to_mulaw
 from app.ai.voice.tts import (
     CartesiaConfig,
     ElevenLabsConfig,
+    GeminiConfig,
     SarvamTTSConfig,
     build_cartesia_tts,
     build_elevenlabs_tts,
+    build_gemini_tts,
     build_sarvam_tts,
 )
 from app.ai.voice.tts.cartesia import _generate_cartesia_audio
 from app.ai.voice.tts.elevenlabs import _generate_elevenlabs_audio
+from app.ai.voice.tts.gemini import _generate_gemini_audio
 from app.ai.voice.tts.sarvam import _generate_sarvam_audio
 from app.core.config.dynamic import (
     BB_AGGREGATE_SENTENCES,
@@ -32,6 +35,7 @@ from app.core.config.static import (
     ELEVENLABS_API_KEY,
     ELEVENLABS_INDIAN_RESIDENCY_API_KEY,
     ELEVENLABS_INDIAN_RESIDENCY_WEBSOCKET_URL,
+    GOOGLE_CREDENTIALS_JSON,
     SARVAM_API_KEY,
 )
 from app.core.logger import logger
@@ -44,6 +48,7 @@ _VOICE_CONFIG_FIELDS = (
     "volume",
     "emotion",
     "pitch",
+    "style_prompt",
 )
 
 
@@ -187,6 +192,20 @@ async def get_tts_service(voice_config: TTSConfig):
             )
         )
 
+    elif provider == "gemini":
+        if not GOOGLE_CREDENTIALS_JSON:
+            raise ValueError("GOOGLE_CREDENTIALS_JSON is required for Gemini TTS")
+
+        return await build_gemini_tts(
+            GeminiConfig(
+                voice_id=voice_config.voice_id or "Kore",
+                model=voice_config.model,  # None → build_gemini_tts resolves via BB_GEMINI_TTS_MODEL()
+                language=_parse_language(voice_config.language, Language.EN_IN),
+                style_prompt=getattr(voice_config, "style_prompt", None),
+                credentials=GOOGLE_CREDENTIALS_JSON,
+            )
+        )
+
     else:
         raise ValueError(f"Unsupported TTS provider: {provider}")
 
@@ -238,6 +257,16 @@ async def generate_audio(
             voice_id=resolved.voice_id,
             model=resolved.model,
         )
+        input_format = "raw"
+    elif provider == "gemini":
+        audio_data = await _generate_gemini_audio(
+            text=text,
+            voice_id=resolved.voice_id,
+            model=resolved.model,
+            language=resolved.language,
+            style_prompt=getattr(resolved, "style_prompt", None),
+        )
+        # _generate_gemini_audio already downsamples to 16 kHz PCM
         input_format = "raw"
     else:
         raise ValueError(f"Unsupported TTS provider: {provider}")
