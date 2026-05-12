@@ -176,10 +176,8 @@ async def end_conversation(context: TemplateContext, args, transition_to=None):
         # Store errors collected during the call
         context.lead.metaData["errors"] = context.bot.errors
 
-        # Update OpenTelemetry span with comprehensive evaluation data for LLM-as-a-Judge
-        update_span_with_evaluation_data(context)
-
-        # Update database
+        # Update database first so the span picks up the final outcome from the DB response
+        # (fire-and-forget outcome updates from update_outcome handler may not have completed yet)
         # For Daily mode: use lead.id (no telephony call_sid exists)
         # For telephony: use call_sid (how completion_function looks up the lead)
         is_daily_mode = getattr(context.bot, "transport_type", None) == "daily"
@@ -189,27 +187,35 @@ async def end_conversation(context: TemplateContext, args, transition_to=None):
             logger.info(
                 f"Updating database with call completion details for lead {context.lead.id}"
             )
-            context.lead = await context.completion_function(
+            updated_lead = await context.completion_function(
                 call_id=context.lead.id,
                 outcome=context.lead.outcome,
                 call_end_time=datetime.now(),
                 meta_data=context.lead.metaData,
             )
+            if updated_lead:
+                context.lead = updated_lead
             logger.info(f"Successfully updated database for lead {context.lead.id}")
         elif context.call_sid:
             # Telephony mode: update by call_sid (original behavior)
             logger.info(
                 f"Updating database with call completion details for call {context.call_sid}"
             )
-            context.lead = await context.completion_function(
+            updated_lead = await context.completion_function(
                 call_id=context.call_sid,
                 outcome=context.lead.outcome,
                 call_end_time=datetime.now(),
                 meta_data=context.lead.metaData,
             )
+            if updated_lead:
+                context.lead = updated_lead
             logger.info(f"Successfully updated database for call {context.call_sid}")
         else:
             logger.warning("No call_sid or lead found, skipping database update")
+
+        # Update OpenTelemetry span with evaluation data AFTER DB write,
+        # so context.lead.outcome reflects the final persisted value.
+        update_span_with_evaluation_data(context)
 
         # Execute end_conversation_callbacks
         if context.end_conversation_callbacks:
