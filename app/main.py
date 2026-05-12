@@ -18,6 +18,9 @@ from app.ai.voice.agents.breeze_buddy.chat.cleanup import end_idle_chat_sessions
 from app.ai.voice.agents.breeze_buddy.services.agent_router.client import (
     close_smart_router_client,
 )
+from app.ai.voice.agents.breeze_buddy.utils.pipecat_log_filter import (
+    install_pipecat_log_filter,
+)
 
 # Database imports
 from app.ai.voice.llm._pools import close_all_pools as close_llm_http_pools
@@ -97,6 +100,10 @@ async def room_cleanup_callback(session_id: str):
 async def lifespan(_app: FastAPI):
     """FastAPI lifespan manager that handles startup and shutdown tasks."""
     logger.info("Application startup...")
+
+    # Suppress known-harmless Pipecat WS close error on client-initiated disconnect.
+    # Must be called before any pipeline runs.
+    install_pipecat_log_filter()
 
     # Initialize database and create tables if needed
     try:

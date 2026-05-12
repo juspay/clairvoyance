@@ -110,6 +110,19 @@ def _setup_logger_sinks(
 
         logger_name = record["name"]
         message = record["message"]
+
+        # Suppress known-harmless Pipecat WS close error (transport-layer race on disconnect).
+        # Pipecat's FastAPIWebsocketClient.disconnect() calls ws.close() after EndFrame; when
+        # the remote client has already closed first, Starlette raises RuntimeError which Pipecat
+        # catches and logs at ERROR. Zero impact on call flow or data integrity.
+        # See: app/ai/voice/agents/breeze_buddy/utils/pipecat_log_filter.py
+        if (
+            logger_name.startswith("pipecat")
+            and "exception while closing the websocket" in message
+            and 'Cannot call "send" once a close message has been sent' in message
+        ):
+            return False
+
         return not (
             logger_name.startswith("websockets")
             or logger_name.startswith("daily_core")
