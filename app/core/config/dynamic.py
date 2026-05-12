@@ -241,6 +241,15 @@ async def BB_TTS_SERVICE() -> str:
     return await get_config("BREEZE_BUDDY_TTS_SERVICE", "elevenlabs", str)
 
 
+async def GEMINI_TTS_MODEL() -> str:
+    """Returns the default Gemini TTS model name from Redis.
+
+    Override via Redis key GEMINI_TTS_MODEL.
+    Default: gemini-3.1-flash-tts-preview
+    """
+    return await get_config("GEMINI_TTS_MODEL", "gemini-3.1-flash-tts-preview", str)
+
+
 async def BB_VOICE_PROVIDER_DEFAULTS(provider: str) -> dict:
     """Returns merged provider defaults: Redis overrides > hardcoded defaults.
 

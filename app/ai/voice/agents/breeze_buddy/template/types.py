@@ -271,6 +271,7 @@ class TTSProvider(str, Enum):
     ELEVENLABS = "elevenlabs"
     CARTESIA = "cartesia"
     SARVAM = "sarvam"
+    GEMINI = "gemini"
 
 
 # Maps legacy tts_voice_name values to current provider strings for backward compat.
@@ -320,12 +321,12 @@ class TTSConfig(BaseModel):
     """
 
     provider: TTSProvider = Field(
-        ..., description="TTS provider (elevenlabs, cartesia, sarvam)"
+        ..., description="TTS provider (elevenlabs, cartesia, sarvam, gemini)"
     )
     voice_id: Optional[str] = Field(None, description="Provider-specific voice ID")
     model: Optional[str] = Field(
         None,
-        description="Provider model (e.g. 'eleven_flash_v2_5', 'sonic-3', 'bulbul:v2')",
+        description="Provider model (e.g. 'eleven_flash_v2_5', 'sonic-3', 'bulbul:v2', 'gemini-3.1-flash-tts-preview')",
     )
     language: Optional[str] = Field(
         None, description="TTS language code (e.g. 'en', 'hi', 'en-IN')"
@@ -339,6 +340,13 @@ class TTSConfig(BaseModel):
         description="Voice emotion (Cartesia only, e.g. 'neutral', 'excited', 'happy')",
     )
     pitch: Optional[float] = Field(None, description="Pitch adjustment (Sarvam only)")
+    style_prompt: Optional[str] = Field(
+        None,
+        description=(
+            "Natural-language style instruction for Gemini TTS "
+            "(e.g. 'Speak in a warm, enthusiastic tone'). Ignored by other providers."
+        ),
+    )
 
 
 class TTSSelectionConfig(BaseModel):
