@@ -138,7 +138,7 @@ async def create_services(
         logger.info(
             f"Using template STT configuration: provider={stt_configuration.provider.value}"
         )
-        stt = await get_stt_service(stt_configuration=stt_configuration)
+        stt_result = await get_stt_service(stt_configuration=stt_configuration)
     else:
         # Legacy path: build from scattered fields
         stt_language = getattr(configurations, "stt_language", None)
@@ -149,7 +149,7 @@ async def create_services(
             logger.info(f"Using STT language from template: {stt_language}")
         if soniox_context:
             logger.info("Using Soniox context from template")
-        stt = await get_stt_service(
+        stt_result = await get_stt_service(
             language_hints=stt_language, soniox_context=soniox_context
         )
 
@@ -169,7 +169,7 @@ async def create_services(
     logger.info(f"Resolved voice config: provider={voice_config.provider.value}")
     tts = await get_tts_service(voice_config)
 
-    return stt, llm, tts
+    return stt_result, llm, tts
 
 
 def _wire_user_idle_event(

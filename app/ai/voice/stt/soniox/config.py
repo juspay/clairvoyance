@@ -39,6 +39,7 @@ class SonioxConfig:
     client_reference_id: Optional[str] = None
     log_context: str = "Soniox"
     language_hints_strict: bool = False
+    reconnect_on_error: bool = True
 
 
 def _parse_soniox_context(
@@ -169,4 +170,5 @@ def build_soniox_stt(config: SonioxConfig):
         settings=soniox_settings,
         vad_force_turn_endpoint=config.vad_force_turn_endpoint,
         max_endpoint_delay_ms=config.max_endpoint_delay_ms,
+        reconnect_on_error=config.reconnect_on_error,
     )

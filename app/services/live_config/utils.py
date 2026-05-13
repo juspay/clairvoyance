@@ -5,6 +5,7 @@ Contains helper functions for data type conversion, key normalization,
 and DevCycle value processing.
 """
 
+import json
 import os
 from typing import Any, Dict, Optional
 
@@ -35,6 +36,13 @@ def convert_type(value: Any, target_type: type) -> Any:
             return value
         str_value = str(value) if value else ""
         return [item.strip() for item in str_value.split(",") if item.strip()]
+    elif target_type == dict:
+        if isinstance(value, dict):
+            return value
+        try:
+            return json.loads(value)
+        except (ValueError, TypeError):
+            return None
     else:  # str
         return str(value)
 

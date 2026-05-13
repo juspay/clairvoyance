@@ -1,3 +1,4 @@
+import asyncio
 import audioop
 import base64
 import json
@@ -14,6 +15,16 @@ from app.core.config.static import ORDER_CONFIRMATION_WEBHOOK_SECRET_KEY
 from app.core.logger import logger
 from app.core.security.sha import calculate_hmac_sha256
 from app.services.redis.client import get_redis_service
+
+# Background task references to prevent premature GC of fire-and-forget tasks
+_background_tasks: set[asyncio.Task] = set()
+
+
+def fire_and_forget(coro) -> None:
+    """Schedule a coroutine as a fire-and-forget task, preventing GC."""
+    task = asyncio.create_task(coro)
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
 
 
 def track_error(
