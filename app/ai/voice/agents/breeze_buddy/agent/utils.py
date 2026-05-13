@@ -268,6 +268,20 @@ def validate_template_compat(template: TemplateModel) -> None:
             "realtime."
         )
 
+    wake_phrase = (
+        getattr(configurations, "wake_phrase", None)
+        if configurations is not None
+        else None
+    )
+    if wake_phrase is not None and getattr(wake_phrase, "enabled", False):
+        raise ValueError(
+            "Realtime LLMs (llm_configurations.realtime set) cannot be "
+            "combined with configurations.wake_phrase — the realtime pipeline "
+            "builds its own turn strategies and WakePhraseUserTurnStartStrategy "
+            f"is never installed. Disable wake_phrase on template {template.id} "
+            "or disable realtime."
+        )
+
     logger.info(
         f"Template {template.id} validated: realtime LLM + direct mode "
         f"(provider={realtime.provider.value})"
