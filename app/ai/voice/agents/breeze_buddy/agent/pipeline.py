@@ -33,6 +33,7 @@ from pipecat.turns.user_start import (
     MinWordsUserTurnStartStrategy,
     TranscriptionUserTurnStartStrategy,
     VADUserTurnStartStrategy,
+    WakePhraseUserTurnStartStrategy,
 )
 from pipecat.turns.user_stop import (
     BaseUserTurnStopStrategy,
@@ -354,6 +355,27 @@ async def build_pipeline(
 
     # --- User turn start strategies ---
     start_strategies: list[BaseUserTurnStartStrategy] = []
+
+    # Wake phrase: prepended first so it gates all subsequent strategies.
+    wake_cfg = getattr(configurations, "wake_phrase", None)
+    if wake_cfg and wake_cfg.enabled:
+        if is_realtime:
+            logger.warning(
+                "Wake phrase is not supported in realtime mode. wake_phrase.enabled will be ignored."
+            )
+        elif wake_cfg.phrases:
+            start_strategies.append(
+                WakePhraseUserTurnStartStrategy(
+                    phrases=wake_cfg.phrases,
+                    timeout=wake_cfg.timeout,
+                    single_activation=wake_cfg.single_activation,
+                )
+            )
+            logger.info(
+                f"WakePhrase: enabled with {len(wake_cfg.phrases)} phrase(s), "
+                f"single_activation={wake_cfg.single_activation}, timeout={wake_cfg.timeout}s"
+            )
+
     if vad_analyzer is not None:
         start_strategies.append(VADUserTurnStartStrategy())
 

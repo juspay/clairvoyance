@@ -407,6 +407,36 @@ class KeywordMatchType(str, Enum):
     INCLUDES = "includes"  # Transcription must contain the keyword (case-insensitive)
 
 
+class WakePhraseConfig(BaseModel):
+    """Require a wake phrase before the bot responds.
+
+    Wraps pipecat's WakePhraseUserTurnStartStrategy. Placed first in start
+    strategies so no other strategy evaluates until the phrase is heard.
+
+    Example::
+
+        {"enabled": true, "phrases": ["yes", "haan"], "single_activation": true}
+    """
+
+    enabled: bool = False
+    phrases: List[str] = Field(default_factory=list, min_length=1)
+    timeout: float = Field(
+        10.0, ge=0.0, le=300.0, description="Seconds to stay awake after phrase."
+    )
+    single_activation: bool = Field(
+        False,
+        description="If true, wake phrase required only once per session; if false, required before every turn.",
+    )
+
+    @model_validator(mode="after")
+    def validate_phrases_when_enabled(self):
+        if self.enabled and not self.phrases:
+            raise ValueError(
+                "phrases must contain at least one item when enabled is true"
+            )
+        return self
+
+
 class KeywordFilterConfig(BaseModel):
     """Configuration for filtering out specific transcriptions during bot activity.
 
@@ -1410,6 +1440,10 @@ class ConfigurationModel(BaseModel):
     keyword_filter: Optional[KeywordFilterConfig] = Field(
         None,
         description="Keyword filter to suppress specific transcriptions while bot is active",
+    )
+    wake_phrase: Optional[WakePhraseConfig] = Field(
+        None,
+        description="Wake phrase config — bot only responds after hearing a trigger phrase",
     )
     mcp: Optional[McpConfig] = Field(
         None,
