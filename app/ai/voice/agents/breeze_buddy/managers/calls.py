@@ -576,7 +576,9 @@ async def process_backlog_leads():
                     await _release_number(number_to_use.id, number_to_use.provider)
                     await release_lock_on_lead_by_id(locked_lead.id)
                     continue
-                if locked_lead.execution_mode == ExecutionMode.TELEPHONY:
+                if locked_lead.execution_mode == ExecutionMode.TELEPHONY and (
+                    template is None or template.is_active
+                ):
                     rate_limit_allowed, defer_seconds = (
                         await check_outbound_rate_limit_and_alert(
                             customer_phone=customer_mobile,
