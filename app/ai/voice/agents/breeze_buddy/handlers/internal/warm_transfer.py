@@ -172,6 +172,25 @@ async def connect_to_live_agent(
                     context.lead.metaData = {}
                 context.lead.metaData["transfer"] = transfer_meta
 
+            # For Plivo: suppress the serializer's auto hang-up before ending
+            # the conversation. When end_conversation pushes EndFrame through
+            # the pipeline the Plivo serializer would normally call _hang_up_call(),
+            # which drops the caller from the conference. Setting _hangup_attempted=True
+            # tells the serializer that a hang-up has already been handled so it
+            # skips the API call.
+            if context.provider == CallProvider.PLIVO:
+                try:
+                    plivo_serializer = context.bot.transport.output()._params.serializer
+                    if plivo_serializer is not None:
+                        plivo_serializer._hangup_attempted = True
+                        logger.info(
+                            f"[transfer_to_agent] Suppressed Plivo auto-hangup for call {context.call_sid}"
+                        )
+                except Exception as suppress_err:
+                    logger.warning(
+                        f"[transfer_to_agent] Could not suppress Plivo hangup: {suppress_err}"
+                    )
+
             # End the AI conversation
             await end_conversation(context, None)
 
