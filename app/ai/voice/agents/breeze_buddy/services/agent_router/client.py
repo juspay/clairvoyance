@@ -202,6 +202,7 @@ class SmartRouterClient:
         self,
         call_sid: str,
         reseller_id: Optional[str] = None,
+        merchant_id: Optional[str] = None,
         provider: str = "exotel",
         flow: str = "v2",
         template: str = "",
@@ -211,7 +212,10 @@ class SmartRouterClient:
 
         Args:
             call_sid: Unique call identifier
-            reseller_id: Optional merchant ID for tiered routing
+            reseller_id: Optional reseller ID for tiered routing
+            merchant_id: Optional merchant ID — when present AND a merchant pool
+                         exists on Smart Router, the call is routed to a dedicated
+                         merchant pod pool with 3-step fallback.
             provider: Provider name (twilio, plivo, exotel)
             flow: WebSocket handler version ("v1" or "v2")
             template: Template name for WebSocket path (e.g., "order-confirmation").
@@ -232,6 +236,8 @@ class SmartRouterClient:
         }
         if template:
             payload["template"] = template
+        if merchant_id:
+            payload["merchant_id"] = merchant_id
 
         start_time = time.time()
 
@@ -514,6 +520,7 @@ async def safe_allocate_pod(
     call_sid: str,
     provider: str,
     reseller_id: Optional[str] = None,
+    merchant_id: Optional[str] = None,
     flow: str = "v2",
     template: str = "",
 ) -> Optional[PodAllocation]:
@@ -522,6 +529,9 @@ async def safe_allocate_pod(
 
     Returns PodAllocation on success, None if isolation disabled,
     no pods available, or any error.
+
+    When merchant_id is provided, Smart Router will attempt to allocate from
+    the merchant's dedicated pod pool (with fallback to standard pools).
     """
     if not ENABLE_VOICE_AGENT_POD_ISOLATION:
         return None
@@ -530,6 +540,7 @@ async def safe_allocate_pod(
     allocation = await client.allocate_pod(
         call_sid=call_sid,
         reseller_id=reseller_id,
+        merchant_id=merchant_id,
         provider=provider,
         flow=flow,
         template=template,
@@ -537,7 +548,11 @@ async def safe_allocate_pod(
     if allocation:
         logger.info(
             f"Allocated pod {allocation.pod_name} for call {call_sid}",
-            extra={"provider": provider, "ws_url": allocation.ws_url},
+            extra={
+                "provider": provider,
+                "ws_url": allocation.ws_url,
+                "merchant_id": merchant_id,
+            },
         )
     else:
         logger.warning(f"No pod allocated for call {call_sid}")

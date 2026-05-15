@@ -53,6 +53,7 @@ class PlivoProvider(VoiceCallProvider):
         customer_mobile_number: str,
         outbound_number: str,
         reseller_id: Optional[str] = None,
+        merchant_id: Optional[str] = None,
         template_name: Optional[str] = None,
     ):
         """

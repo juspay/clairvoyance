@@ -79,6 +79,7 @@ class TwilioProvider(VoiceCallProvider):
         customer_mobile_number: str,
         outbound_number: str,
         reseller_id: Optional[str] = None,
+        merchant_id: Optional[str] = None,
         template_name: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """
@@ -89,6 +90,8 @@ class TwilioProvider(VoiceCallProvider):
           Twilio calls this webhook ONLY when the customer answers, so the pod
           is allocated at answer time (not at ring time). Smart Router returns
           TwiML with a pod-specific WebSocket URL.
+        - When merchant_id is provided, uses /api/v1/twilio/merchant-allocate
+          to route through the merchant-specific pod pool (with fallback).
 
         When pod isolation is disabled:
         - Uses twiml= with inline TwiML containing a static WebSocket URL.
@@ -97,7 +100,8 @@ class TwilioProvider(VoiceCallProvider):
         Args:
             customer_mobile_number: Phone number to call
             outbound_number: Caller ID / outbound number
-            reseller_id: Optional merchant ID for tiered pod allocation
+            reseller_id: Optional reseller ID for tiered pod allocation
+            merchant_id: Optional merchant ID — routes to dedicated merchant pool
             template_name: Optional template name for WebSocket path routing
         """
         try:
@@ -111,9 +115,18 @@ class TwilioProvider(VoiceCallProvider):
                     query_params["reseller_id"] = reseller_id
                 if template_name:
                     query_params["template"] = template_name
-                webhook_url = (
-                    f"{self.APP_BASE_URL}/api/v1/twilio/allocate?"
-                    + urlencode(query_params)
+
+                # Use merchant-specific endpoint when merchant_id is available.
+                # This endpoint allocates from the merchant's dedicated pod pool
+                # with 3-step fallback (merchant → standard → shared).
+                if merchant_id:
+                    query_params["merchant_id"] = merchant_id
+                    allocate_path = "/api/v1/twilio/merchant-allocate"
+                else:
+                    allocate_path = "/api/v1/twilio/allocate"
+
+                webhook_url = f"{self.APP_BASE_URL}{allocate_path}?" + urlencode(
+                    query_params
                 )
 
                 # Fallback URL: if Smart Router is unreachable, Twilio hits
