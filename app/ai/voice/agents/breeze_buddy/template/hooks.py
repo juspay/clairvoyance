@@ -244,6 +244,12 @@ class UpdateOutcomeInDatabaseHook(Hook):
                 )
                 outcome = "TRANSFERRED"
 
+            # Set in-memory outcome AFTER transfer override but BEFORE the
+            # async DB write.  This prevents a race condition in Direct Mode
+            # where end_conversation_global checks context.lead.outcome and
+            # defaults to BUSY because the async DB write hasn't completed yet.
+            context.lead.outcome = outcome
+
             # Update lead in database with outcome
             logger.info(
                 f"Updating lead {context.lead.id} in database with outcome: {outcome}, "
