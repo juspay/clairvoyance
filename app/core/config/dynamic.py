@@ -46,6 +46,60 @@ async def ENABLE_BACKGROUND_TASKS() -> bool:
     return await get_config("ENABLE_BACKGROUND_TASKS", "false", bool)
 
 
+# ----------------------------------------------------------------------------
+# Dispatcher dials. Re-read on every invocation, so DevCycle / Redis changes
+# propagate without a pod restart. See docs/BACKLOG_DISPATCHER_REDESIGN.md
+# §7.2 for alert wiring and §2 for the kill switch.
+# ----------------------------------------------------------------------------
+
+
+async def BB_DISPATCH_ENABLED() -> bool:
+    """Global kill-switch for the dispatcher (default: True = enabled).
+
+    When False, workers short-circuit their loop and stop consuming from
+    the ready list — leads stay queued until the switch flips back on.
+    Used for incident response; operators flip via DevCycle UI or by
+    overriding ``BB_DISPATCH_ENABLED`` in the Redis feature-flag blob.
+    """
+    return await get_config("BB_DISPATCH_ENABLED", True, bool)
+
+
+async def BB_SCHEDULE_DEPTH_ALERT_THRESHOLD() -> int:
+    """ZCARD threshold above which `schedule_depth_high` Slack alert fires
+    (`monitor_dispatch_health`). Raise during planned re-imports to silence
+    alerts; lower to get earlier signal on ingest outpacing dispatch."""
+    return await get_config("BB_SCHEDULE_DEPTH_ALERT_THRESHOLD", 50000, int)
+
+
+async def BB_SCHEDULE_OVERDUE_ALERT_THRESHOLD() -> int:
+    """Overdue (ZCOUNT 0..now) count above which `dispatch_halted` Slack
+    alert fires when a leader is present. Tunes alert sensitivity without
+    a redeploy."""
+    return await get_config("BB_SCHEDULE_OVERDUE_ALERT_THRESHOLD", 100, int)
+
+
+async def BB_CHANNEL_DRIFT_ALERT_THRESHOLD() -> int:
+    """Per-number drift (|expected - actual| tokens) above which
+    `channel_drift` Slack alert fires. Raise when provider webhooks are
+    flaky in volume to suppress per-number noise."""
+    return await get_config("BB_CHANNEL_DRIFT_ALERT_THRESHOLD", 5, int)
+
+
+async def BB_STALE_LOCK_THRESHOLD_MINUTES() -> int:
+    """Minutes a BACKLOG row may remain `is_locked=TRUE` before
+    `clean_stale_bb_locks` unlocks it. Controls the §7.1 trade-off:
+    lower = faster recovery, higher rare-duplicate rate; higher = stronger
+    duplicate-call bound, slower recovery from worker crashes."""
+    return await get_config("BB_STALE_LOCK_THRESHOLD_MINUTES", 10, int)
+
+
+async def BB_RECONCILE_BACKLOG_LIMIT() -> int:
+    """Maximum BACKLOG rows `reconcile_backlog_to_zset` ZADDs per tick.
+    Crank up to drain a Redis-loss event faster; lower if the DB is under
+    pressure and the scan is expensive."""
+    return await get_config("BB_RECONCILE_BACKLOG_LIMIT", 1000, int)
+
+
 async def DAILY_SUMMARY_HOUR() -> int:
     """Returns DAILY_SUMMARY_HOUR from Redis (24-hour format: 0-23)"""
     return await get_config("DAILY_SUMMARY_HOUR", 21, int)

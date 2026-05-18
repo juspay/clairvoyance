@@ -20,7 +20,6 @@ from app.database.queries.breeze_buddy.lead_call_tracker import (
     get_lead_by_call_id_query,
     get_lead_by_id_query,
     get_lead_call_trackers_count_query,
-    get_leads_based_on_status_and_next_attempt_query,
     get_leads_by_status_and_time_before_query,
     insert_lead_call_tracker_query,
     release_lock_on_lead_by_id_query,
@@ -123,30 +122,6 @@ async def create_lead_call_tracker(
         return None
 
 
-async def get_leads_based_on_status_and_next_attempt(
-    status: LeadCallStatus, time: datetime
-) -> List[LeadCallTracker]:
-    """
-    Get leads based on status and next attempt time.
-    """
-    logger.info(f"Getting leads with status {status} and next attempt at {time}")
-
-    try:
-        query_text, values = get_leads_based_on_status_and_next_attempt_query(
-            status, time
-        )
-        result = await run_parameterized_query(query_text, values)
-        if result:
-            decoded = [decode_lead_call_tracker(row) for row in result]
-            return [item for item in decoded if item is not None]
-        else:
-            logger.info("No leads found matching criteria")
-        return []
-    except Exception as e:
-        logger.error(f"Error getting leads: {e}")
-        return []
-
-
 async def acquire_lock_on_lead_by_id(
     lead_id: str, expected_status: Optional[LeadCallStatus] = None
 ) -> Optional[LeadCallTracker]:
@@ -210,9 +185,10 @@ async def defer_lead_next_attempt_and_release_lock(
 ) -> Optional[LeadCallTracker]:
     """
     Release the lock on a lead and push next_attempt_at out by at least
-    defer_seconds. Used when the cron must release a lead it cannot dispatch
-    (e.g. blocked by the outbound rate limiter) without making it eligible
-    for immediate re-pickup on the next cron cycle.
+    defer_seconds. Used by the dispatcher worker when it can't place a
+    call right now (rate-limited, outside calling hours, no channel
+    available, etc.) — the DB write survives Redis loss; the matching
+    ZADD onto the schedule is the fast path.
     """
     logger.info(
         f"Deferring next_attempt_at by {defer_seconds}s and releasing lock "

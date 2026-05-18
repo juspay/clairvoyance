@@ -10,6 +10,11 @@ from uuid import uuid4
 
 from fastapi import HTTPException, status
 
+from app.ai.voice.agents.breeze_buddy.dispatch import (
+    cancel_scheduled_lead,
+    is_dispatchable,
+    schedule_lead,
+)
 from app.ai.voice.agents.breeze_buddy.services.daily.recording import (
     download_call_recording as download_call_recording_daily,
 )
@@ -54,6 +59,9 @@ from app.database.accessor import (
     get_template_by_merchant,
     handle_lead_abort,
     is_number_blacklisted,
+)
+from app.database.accessor.breeze_buddy.dispatch import (
+    update_lead_next_attempt_at_now,
 )
 from app.schemas import ExecutionMode, LeadCallStatus, UserInfo
 from app.schemas.breeze_buddy.core import LeadCallTracker
@@ -340,6 +348,18 @@ async def push_lead_handler(req: PushLeadRequest, current_user: UserInfo) -> Dic
                 detail=f"Failed to add lead call tracker for request_id: {req.request_id}",
             )
 
+        # Event-driven dispatch: drop a scheduling sticky note onto
+        # bb:schedule:leads. Best-effort — DB is authoritative; the
+        # reconciler heals any dropped ZADDs within 60s.
+        # Gated on execution_mode so we only dispatch TELEPHONY leads;
+        # DAILY / DAILY_STREAM are handled by separate web-mode flows
+        # (customer-initiated room join) and would otherwise cause a
+        # phantom Plivo/Twilio dial via the worker's make_call path.
+        # See docs/BACKLOG_DISPATCHER_REDESIGN.md §2 Plane 1.
+        lead_execution_mode = req.execution_mode or ExecutionMode.TELEPHONY
+        if next_attempt_at is not None and is_dispatchable(lead_execution_mode):
+            await schedule_lead(lead_id=uuid, next_attempt_at=next_attempt_at)
+
         logger.info(f"Lead call tracker {req.request_id} added to queue with ID {uuid}")
 
         return {
@@ -582,6 +602,10 @@ async def delete_lead_handler(
                     f"Lead {lead_id} successfully aborted by user {current_user.username}"
                 )
 
+                # Event-driven dispatch: ZREM from bb:schedule:leads so the
+                # promoter doesn't pull a zombie. Safe if not present.
+                await cancel_scheduled_lead(lead_id)
+
                 lead_responses.append(
                     {
                         "id": lead_id,
@@ -712,3 +736,79 @@ async def translate_lead_transcript_handler(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Unexpected error during translation: {str(e)}",
         )
+
+
+async def dispatch_now_lead_handler(lead_id: str, current_user: UserInfo) -> Dict:
+    """
+    Manual operator endpoint: force-schedule a BACKLOG lead to fire now.
+
+    Goes through every normal dispatch guard (pre-checks, calling-hours,
+    rate-limit, channel capacity, idempotency CAS). No bypass code path.
+
+    See docs/BACKLOG_DISPATCHER_REDESIGN.md §2 Plane 1 "Manual dispatch".
+
+    Status guards:
+      PROCESSING       -> 409 (call already in flight)
+      FINISHED         -> 400 (re-create a new lead for re-attempt)
+      is_locked=TRUE   -> 409 (locked by another dispatcher)
+      BACKLOG          -> proceed
+
+    Returns:
+        {"status": "queued", "lead_id": ..., "expected_dispatch_within_ms": 200}
+    """
+    lead = await get_lead_by_id(lead_id)
+    if not lead:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Lead not found for ID: {lead_id}",
+        )
+
+    if lead.status == LeadCallStatus.PROCESSING:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Lead is currently being dispatched",
+        )
+    if lead.status == LeadCallStatus.FINISHED:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Lead is finished; create a new lead for re-attempt",
+        )
+    if getattr(lead, "is_locked", False):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Lead is locked by another dispatcher",
+        )
+    if not is_dispatchable(lead.execution_mode):
+        # /dispatch-now is a TELEPHONY-only endpoint. DAILY / DAILY_STREAM
+        # leads are handled by web-mode flows (customer-initiated room
+        # join) and would phantom-dial via the worker if scheduled here.
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"Lead execution_mode '{lead.execution_mode.value}' is not "
+                "dispatchable via /dispatch-now (telephony-only endpoint)"
+            ),
+        )
+
+    now = datetime.now(timezone.utc)
+    updated = await update_lead_next_attempt_at_now(lead_id, now)
+    if not updated:
+        # CAS lost — status changed between the load and the update.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Lead state changed during dispatch-now; please retry",
+        )
+
+    # No jitter — operator intent is literally "now".
+    await schedule_lead(lead_id=lead_id, next_attempt_at=now, jitter_ms=0)
+
+    logger.info(
+        f"User {current_user.username} (role: {current_user.role}) "
+        f"manually dispatched lead {lead_id}"
+    )
+
+    return {
+        "status": "queued",
+        "lead_id": lead_id,
+        "expected_dispatch_within_ms": 200,
+    }
