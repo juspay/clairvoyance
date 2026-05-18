@@ -321,8 +321,9 @@ class Agent:
             raise
 
         # Synthesize and cache the initial greeting in Redis so it can be
-        # played out on client-connect. Idempotent: if cron pre-synthesized
-        # the audio at lead-push time (outbound), this is a Redis hit and
+        # played out on client-connect. Idempotent: if the dispatch worker
+        # pre-synthesized the audio at dispatch time (outbound), this is a
+        # Redis hit and
         # skips TTS. Bounded by a short timeout so a hung TTS does not block
         # the room from accepting the client. Stream mode skips this — no
         # LLM/template playback in passthrough mode.
@@ -520,8 +521,9 @@ class Agent:
 
         # Inbound calls have no pre-call window to synthesize the greeting
         # (lead is created on-the-fly here), so do it before send_initial_greeting
-        # to avoid the dial-tone fallback. Idempotent for outbound — cron has
-        # already populated the cache, so this is a Redis hit and no-op.
+        # to avoid the dial-tone fallback. Idempotent for outbound — the
+        # dispatch worker has already populated the cache, so this is a
+        # Redis hit and no-op.
         # Bounded by a short timeout: if TTS hangs, the WS is already accepted
         # and the customer would hear dead air. On timeout/error, fall through
         # to send_initial_greeting which plays the dial-tone fallback.

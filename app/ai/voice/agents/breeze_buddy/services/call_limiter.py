@@ -86,8 +86,8 @@ async def check_outbound_rate_limit_and_alert(
     Returns (allow, defer_seconds):
       - allow=True, defer_seconds=0 — call may proceed.
       - allow=False, defer_seconds>0 — call blocked; the caller should push
-        next_attempt_at out by defer_seconds so the cron does not immediately
-        re-pick the lead and re-trigger the alert.
+        next_attempt_at out by defer_seconds so the dispatcher does not
+        immediately re-pick the lead and re-trigger the alert.
       - allow=True, defer_seconds=0 (alert-only mode) — limit exceeded but
         block is disabled; call may proceed without deferral.
 

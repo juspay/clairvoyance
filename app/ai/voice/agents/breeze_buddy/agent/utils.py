@@ -149,9 +149,10 @@ async def send_initial_greeting_daily(
     24 kHz to match the Daily transport's output sample rate, and queues an
     ``OutputAudioRawFrame`` through the pipeline for playback.
 
-    The cache keys are identical to telephony, so cron pre-synthesis (which
-    runs for outbound) populates the cache for both transport types. Inbound
-    Daily calls fall back to lazy synthesis via ``prepare_and_store_initial_greeting``
+    The cache keys are identical to telephony, so the dispatch worker's
+    pre-synthesis (which runs for outbound) populates the cache for both
+    transport types. Inbound Daily calls fall back to lazy synthesis via
+    ``prepare_and_store_initial_greeting``
     in the agent setup, same pattern as inbound telephony.
 
     Args:

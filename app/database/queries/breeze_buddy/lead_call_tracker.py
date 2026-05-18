@@ -105,36 +105,30 @@ def insert_lead_call_tracker_query(
     return text, values
 
 
-def get_leads_based_on_status_and_next_attempt_query(
-    status: LeadCallStatus, time: datetime
-) -> Tuple[str, List[Any]]:
-    """
-    Generate query to select leads based on status and next attempt time.
-    Selects TELEPHONY and TELEPHONY_TEST execution_mode leads for cron processing.
-    """
-    text = f"""
-        SELECT * FROM "{LEAD_CALL_TRACKER_TABLE}"
-        WHERE "status" = $1
-        AND "next_attempt_at" <= $2
-        AND "is_locked" = FALSE
-        AND "execution_mode" IN ('TELEPHONY', 'TELEPHONY_TEST');
-    """
-    values = [status.value, time]
-    return text, values
-
-
 def acquire_lock_on_lead_by_id_query(
     lead_id: str, expected_status: Optional[LeadCallStatus] = None
 ) -> Tuple[str, List[Any]]:
     """
     Generate query to atomically acquire lock on a lead by ID.
+
     If expected_status is provided, only acquires the lock when the lead's current
     status matches — combining lock + status verification in a single atomic query.
-    Returns the lead if successfully locked, empty result if already locked or status mismatched.
+    Returns the lead if successfully locked, empty result if already locked or
+    status mismatched.
+
+    When the BACKLOG variant is used (dispatcher path), this also stamps
+    ``dispatched_at = COALESCE(dispatched_at, NOW())`` — the first BACKLOG
+    lock wins; subsequent locks (e.g. by ``reconcile_stuck_processing_leads``
+    on a PROCESSING row) preserve the original timestamp. See
+    docs/BACKLOG_DISPATCHER_REDESIGN.md.
     """
+    set_clause = '"is_locked" = TRUE, "updated_at" = NOW()'
+    if expected_status == LeadCallStatus.BACKLOG:
+        set_clause += ', "dispatched_at" = COALESCE("dispatched_at", NOW())'
+
     text = f"""
         UPDATE "{LEAD_CALL_TRACKER_TABLE}"
-        SET "is_locked" = TRUE, "updated_at" = NOW()
+        SET {set_clause}
         WHERE "id" = $1
         AND "is_locked" = FALSE
     """
@@ -165,9 +159,10 @@ def defer_lead_next_attempt_and_release_lock_query(
 ) -> Tuple[str, List[Any]]:
     """
     Generate query to release the lock on a lead and push next_attempt_at
-    forward by at least defer_seconds. Used when a backlog lead cannot be
-    dispatched right now (e.g. blocked by the outbound rate limiter) so the
-    cron does not immediately re-pick it on the next cycle.
+    forward by at least defer_seconds. Used when a dispatch worker cannot
+    place the call right now (rate-limited, outside calling hours, channel
+    saturated, etc.) so the next promoter tick doesn't immediately re-pick
+    the same lead.
 
     GREATEST() preserves any further-in-the-future schedule already on the
     row, and COALESCE() guards against NULL next_attempt_at so the deferral
