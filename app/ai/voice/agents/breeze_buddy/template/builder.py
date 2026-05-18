@@ -309,12 +309,25 @@ class FlowConfigBuilder:
             {"role": "system", "content": system_prompt}
         ]
 
+        pre_actions = []
+        raw_pre_actions = filter_disabled_identifiers(
+            flow.get("pre_actions") or [],
+            self._disabled_names,
+            "action",
+        )
+        if raw_pre_actions:
+            self._log(f"Direct mode: parsing {len(raw_pre_actions)} pre_actions")
+            pre_actions = [
+                self._build_action(FlowAction.model_validate(act))
+                for act in raw_pre_actions
+            ]
+
         node_config = NodeConfig(  # type: ignore[no-matching-overload]
             name=DIRECT_MODE_NODE_NAME,
             task_messages=[],
             role_messages=role_messages,
             functions=cast(List[FlowsFunctionSchema], []),
-            pre_actions=cast(List[ActionConfig], []),
+            pre_actions=cast(List[ActionConfig], pre_actions),
             post_actions=cast(List[ActionConfig], []),
         )
 
