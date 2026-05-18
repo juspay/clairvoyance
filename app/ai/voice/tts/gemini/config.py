@@ -20,7 +20,8 @@ from google.oauth2 import service_account
 from pipecat.services.google.tts import GeminiTTSService
 from pipecat.transcriptions.language import Language
 
-from app.core.config.dynamic import GEMINI_TTS_MODEL
+from app.ai.voice.tts.gemini.service import LowLatencyGeminiTTSService
+from app.core.config.dynamic import BB_GEMINI_TTS_LOW_LATENCY, GEMINI_TTS_MODEL
 from app.core.config.static import GOOGLE_CREDENTIALS_JSON
 from app.core.logger import logger
 
@@ -48,19 +49,42 @@ class GeminiConfig:
     style_prompt: Optional[str] = None
     credentials: Optional[str] = None
     text_filters: Optional[Sequence] = None
+    aggregate_sentences: bool = True
 
 
 async def build_gemini_tts(config: GeminiConfig) -> GeminiTTSService:
-    """Create a GeminiTTSService for use in a real-time pipeline.
+    """Create a Gemini TTS service for use in a real-time pipeline.
 
-    The service is configured at 24 kHz (Gemini's native rate).
-    When used with a telephony transport (8 kHz) pipecat's transport
-    layer handles the resampling.
+    The service is configured at 24 kHz (Gemini's native rate). When used
+    with a telephony transport (8 kHz) pipecat's transport layer handles
+    the resampling.
+
+    By default returns :class:`LowLatencyGeminiTTSService`, which overrides
+    pipecat's hardcoded ~500 ms first-frame audio buffer to ~100 ms — saves
+    ~400 ms of mouth-to-ear latency per turn. Set the Redis flag
+    ``BB_GEMINI_TTS_LOW_LATENCY`` to ``False`` to fall back to the stock
+    :class:`GeminiTTSService` (e.g. if the smaller buffer causes audio
+    glitches on a specific transport).
+
+    ``aggregate_sentences`` MUST stay True for Gemini. Each ``run_tts()``
+    call opens a fresh gRPC ``streaming_synthesize`` stream, so TOKEN mode
+    would mean a new stream + ~1 s first-audio latency per LLM token.
+    For further latency reduction, prefix LLM responses with a short
+    period-terminated acknowledgement (``Okay.``, ``സർ.``) so the first
+    sentence flushes to TTS after a few tokens instead of ~25.
     """
     text_filters = list(config.text_filters) if config.text_filters else None
     model = config.model or await GEMINI_TTS_MODEL()
+    use_low_latency = await BB_GEMINI_TTS_LOW_LATENCY()
 
-    return GeminiTTSService(
+    service_cls = LowLatencyGeminiTTSService if use_low_latency else GeminiTTSService
+    logger.info(
+        f"Building Gemini TTS service: {service_cls.__name__} "
+        f"(low_latency={use_low_latency}, model={model}, voice={config.voice_id}, "
+        f"aggregate_sentences={config.aggregate_sentences})"
+    )
+
+    return service_cls(
         credentials=config.credentials or GOOGLE_CREDENTIALS_JSON or None,
         settings=GeminiTTSService.Settings(
             model=model,
@@ -69,6 +93,7 @@ async def build_gemini_tts(config: GeminiConfig) -> GeminiTTSService:
             prompt=config.style_prompt,
         ),
         text_filters=text_filters,
+        aggregate_sentences=config.aggregate_sentences,
     )
 
 

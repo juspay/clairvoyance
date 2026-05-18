@@ -196,6 +196,8 @@ async def get_tts_service(voice_config: TTSConfig):
         if not GOOGLE_CREDENTIALS_JSON:
             raise ValueError("GOOGLE_CREDENTIALS_JSON is required for Gemini TTS")
 
+        aggregate = await BB_AGGREGATE_SENTENCES("gemini")
+
         return await build_gemini_tts(
             GeminiConfig(
                 voice_id=voice_config.voice_id or "Kore",
@@ -203,6 +205,7 @@ async def get_tts_service(voice_config: TTSConfig):
                 language=_parse_language(voice_config.language, Language.EN_IN),
                 style_prompt=getattr(voice_config, "style_prompt", None),
                 credentials=GOOGLE_CREDENTIALS_JSON,
+                aggregate_sentences=aggregate,
             )
         )
 
