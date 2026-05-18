@@ -27,6 +27,7 @@ from app.schemas import UserInfo
 
 from .handlers import (
     delete_lead_handler,
+    dispatch_now_lead_handler,
     get_call_recording_handler,
     get_lead_handler,
     push_lead_handler,
@@ -133,6 +134,49 @@ async def get_lead(
 
     # Get sanitized lead data
     return await get_lead_handler(lead_id, current_user)
+
+
+@router.post("/leads/{lead_id}/dispatch-now")
+async def dispatch_now_lead(
+    lead_id: str,
+    current_user: UserInfo = Depends(get_current_user_with_rbac),
+):
+    """
+    Manually dispatch a BACKLOG lead immediately (operator endpoint).
+
+    Force-schedules the lead's ``next_attempt_at`` to NOW and ZADDs it onto
+    the schedule. Goes through every normal dispatch guard (pre-checks,
+    calling-hours, rate-limit, channel capacity, idempotency). No bypass
+    code path — operator preferences override scheduling, not correctness.
+
+    See docs/BACKLOG_DISPATCHER_REDESIGN.md §2 Plane 1.
+
+    Path Parameters:
+    - lead_id: Lead UUID
+
+    Status guards:
+    - PROCESSING: 409 (call already in flight)
+    - FINISHED: 400 (create a new lead for re-attempt)
+    - is_locked=TRUE: 409 (locked by another dispatcher)
+
+    RBAC:
+    - Admin: Can dispatch any lead
+    - Merchant: Can only dispatch own merchants/shops
+
+    Returns:
+        {"status": "queued", "lead_id": "uuid", "expected_dispatch_within_ms": 200}
+    """
+    lead = await get_lead_by_id(lead_id)
+    if not lead:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Lead not found for ID: {lead_id}",
+        )
+
+    # RBAC: returns 404 on access denial to avoid leaking existence.
+    validate_lead_read_access(current_user, lead, operation="dispatch")
+
+    return await dispatch_now_lead_handler(lead_id, current_user)
 
 
 @router.post("/leads/{lead_id}/translate")

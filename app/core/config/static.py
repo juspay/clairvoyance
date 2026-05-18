@@ -401,6 +401,80 @@ GCP_BREEZE_PORTAL_URL = os.environ.get(
 )
 AUTOMATIC_OPENAI_STT_PROMPT = os.environ.get("AUTOMATIC_OPENAI_STT_PROMPT", "")
 
+# -----------------------------------------------------------------------------
+# Event-Driven Dispatch (Breeze Buddy backlog dispatcher)
+# See docs/BACKLOG_DISPATCHER_REDESIGN.md
+# -----------------------------------------------------------------------------
+
+# Pod-role split. Same code runs as two k8s workloads today.
+#   main_server  -> serves HTTP, runs dispatcher + reconcilers
+#   agent_pool   -> runs voice agent subprocesses + Daily room pool only
+POD_ROLE = os.environ.get("POD_ROLE", "main_server").lower()
+
+
+def _flag(env_var: str, default_main_server: bool, default_agent_pool: bool) -> bool:
+    """
+    Component flags default from POD_ROLE; explicit env var overrides.
+    """
+    val = os.environ.get(env_var)
+    if val is not None:
+        return val.lower() == "true"
+    if POD_ROLE == "agent_pool":
+        return default_agent_pool
+    return default_main_server
+
+
+ENABLE_DISPATCHER = _flag("ENABLE_DISPATCHER", True, False)
+ENABLE_VOICE_AGENT_POOL = _flag("ENABLE_VOICE_AGENT_POOL", False, True)
+ENABLE_DAILY_ROOM_POOL = _flag("ENABLE_DAILY_ROOM_POOL", False, True)
+
+# Promoter
+BB_PROMOTER_TICK_MS = int(os.environ.get("BB_PROMOTER_TICK_MS", 200))
+BB_PROMOTER_BATCH = int(os.environ.get("BB_PROMOTER_BATCH", 500))
+BB_PROMOTER_LEADER_TTL_S = int(os.environ.get("BB_PROMOTER_LEADER_TTL_S", 5))
+BB_PROMOTER_LEADER_RENEW_S = int(os.environ.get("BB_PROMOTER_LEADER_RENEW_S", 2))
+
+# Workers
+BB_WORKER_COUNT = int(os.environ.get("BB_WORKER_COUNT", 20))
+BB_WORKER_BLPOP_TIMEOUT_S = int(os.environ.get("BB_WORKER_BLPOP_TIMEOUT_S", 30))
+BB_WORKER_HEARTBEAT_TTL_S = int(os.environ.get("BB_WORKER_HEARTBEAT_TTL_S", 60))
+BB_WORKER_HEARTBEAT_REFRESH_S = int(os.environ.get("BB_WORKER_HEARTBEAT_REFRESH_S", 10))
+
+# Channel semaphore
+BB_CHANNEL_BLPOP_TIMEOUT_S = int(os.environ.get("BB_CHANNEL_BLPOP_TIMEOUT_S", 10))
+BB_CHANNEL_WAIT_BACKOFF_MAX_S = int(os.environ.get("BB_CHANNEL_WAIT_BACKOFF_MAX_S", 3))
+
+# Reconcilers
+BB_RECONCILE_BACKLOG_INTERVAL_S = int(
+    os.environ.get("BB_RECONCILE_BACKLOG_INTERVAL_S", 60)
+)
+BB_REAP_PROCESSING_INTERVAL_S = int(os.environ.get("BB_REAP_PROCESSING_INTERVAL_S", 30))
+BB_RECONCILE_CHANNELS_INTERVAL_S = int(
+    os.environ.get("BB_RECONCILE_CHANNELS_INTERVAL_S", 60)
+)
+BB_CLEAN_STALE_LOCKS_INTERVAL_S = int(
+    os.environ.get("BB_CLEAN_STALE_LOCKS_INTERVAL_S", 300)
+)
+# Stuck-PROCESSING reconciler — closes calls whose end-webhook never arrived.
+BB_RECONCILE_STUCK_PROCESSING_INTERVAL_S = int(
+    os.environ.get("BB_RECONCILE_STUCK_PROCESSING_INTERVAL_S", 60)
+)
+
+# Health monitor — periodic Slack alerter (alert-only, no state mutation).
+BB_HEALTH_MONITOR_INTERVAL_S = int(os.environ.get("BB_HEALTH_MONITOR_INTERVAL_S", 60))
+
+# Ingest / retry jitter (±ms applied to every ZADD score). Smooths bursts.
+BB_DISPATCH_QPS_JITTER_MS = int(os.environ.get("BB_DISPATCH_QPS_JITTER_MS", 200))
+
+# NOTE: the following dispatcher dials moved to app/core/config/dynamic.py so
+# ops can tune them at runtime via DevCycle without a redeploy:
+#   - BB_SCHEDULE_DEPTH_ALERT_THRESHOLD
+#   - BB_SCHEDULE_OVERDUE_ALERT_THRESHOLD
+#   - BB_CHANNEL_DRIFT_ALERT_THRESHOLD
+#   - BB_STALE_LOCK_THRESHOLD_MINUTES
+#   - BB_RECONCILE_BACKLOG_LIMIT
+
+
 # Announcement Banner Configuration
 DEFAULT_ANNOUNCEMENT_BANNER_TEXT_COLOR = os.environ.get(
     "DEFAULT_ANNOUNCEMENT_BANNER_TEXT_COLOR", "white"

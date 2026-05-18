@@ -15,6 +15,20 @@ from pipecat.transports.daily.utils import DailyRESTHelper
 
 from app import __version__
 from app.ai.voice.agents.breeze_buddy.chat.cleanup import end_idle_chat_sessions
+from app.ai.voice.agents.breeze_buddy.dispatch import (
+    clean_stale_bb_locks,
+    monitor_dispatch_health,
+    reap_stuck_processing_lists,
+    reconcile_backlog_to_zset,
+    reconcile_channel_tokens,
+    start_promoter,
+    start_workers,
+    stop_promoter,
+    stop_workers,
+)
+from app.ai.voice.agents.breeze_buddy.managers.calls import (
+    reconcile_stuck_processing_leads,
+)
 from app.ai.voice.agents.breeze_buddy.services.agent_router.client import (
     close_smart_router_client,
 )
@@ -30,6 +44,12 @@ from app.core.config.dynamic import (
 )
 from app.core.config.static import (
     BACKGROUND_TASKS_LOOP_INTERVAL_SECONDS,
+    BB_CLEAN_STALE_LOCKS_INTERVAL_S,
+    BB_HEALTH_MONITOR_INTERVAL_S,
+    BB_REAP_PROCESSING_INTERVAL_S,
+    BB_RECONCILE_BACKLOG_INTERVAL_S,
+    BB_RECONCILE_CHANNELS_INTERVAL_S,
+    BB_RECONCILE_STUCK_PROCESSING_INTERVAL_S,
     BOT_MAX_DRAIN_SECONDS,
     CHAT_SESSION_END_TIMEOUT_LOOP_INTERVAL_SECONDS,
     CORS_ALLOWED_ORIGINS,
@@ -38,9 +58,13 @@ from app.core.config.static import (
     DAILY_ROOM_MAX_POOL_SIZE,
     DAILY_ROOM_POOL_SIZE,
     ENABLE_AUTOMATIC_DAILY_RECORDING,
+    ENABLE_DAILY_ROOM_POOL,
+    ENABLE_DISPATCHER,
     ENABLE_SIGTERM_HANDLER,
+    ENABLE_VOICE_AGENT_POOL,
     HOST,
     MAX_DAILY_SESSION_LIMIT,
+    POD_ROLE,
     PORT,
     VOICE_AGENT_MAX_POOL_SIZE,
     VOICE_AGENT_POOL_SIZE,
@@ -96,7 +120,7 @@ async def room_cleanup_callback(session_id: str):
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     """FastAPI lifespan manager that handles startup and shutdown tasks."""
-    logger.info("Application startup...")
+    logger.info(f"Application startup... (POD_ROLE={POD_ROLE})")
 
     # Initialize database and create tables if needed
     try:
@@ -129,36 +153,43 @@ async def lifespan(_app: FastAPI):
     )
     logger.info("Daily REST helper initialized with proxy support.")
 
-    # Initialize Daily room pool
-    try:
-        await initialize_room_pool(
-            daily_rest_helper=daily_helpers["rest"],
-            pool_size=DAILY_ROOM_POOL_SIZE,
-            max_pool_size=DAILY_ROOM_MAX_POOL_SIZE,
-            max_session_limit=MAX_DAILY_SESSION_LIMIT,
-            enable_recording=ENABLE_AUTOMATIC_DAILY_RECORDING,
-        )
-        logger.info("Daily room pool initialized")
-    except Exception as e:
-        logger.error(f"Failed to initialize room pool: {e}")
+    # Initialize Daily room pool — agent_pool workload only by default.
+    # See docs/BACKLOG_DISPATCHER_REDESIGN.md §3 (pod-role split).
+    if ENABLE_DAILY_ROOM_POOL:
+        try:
+            await initialize_room_pool(
+                daily_rest_helper=daily_helpers["rest"],
+                pool_size=DAILY_ROOM_POOL_SIZE,
+                max_pool_size=DAILY_ROOM_MAX_POOL_SIZE,
+                max_session_limit=MAX_DAILY_SESSION_LIMIT,
+                enable_recording=ENABLE_AUTOMATIC_DAILY_RECORDING,
+            )
+            logger.info("Daily room pool initialized")
+        except Exception as e:
+            logger.error(f"Failed to initialize room pool: {e}")
+    else:
+        logger.info("Daily room pool init skipped (ENABLE_DAILY_ROOM_POOL=false)")
 
-    # Initialize voice agent process pool
-    try:
-        await initialize_voice_agent_pool(
-            pool_size=VOICE_AGENT_POOL_SIZE, max_pool_size=VOICE_AGENT_MAX_POOL_SIZE
-        )
+    # Initialize voice agent process pool — agent_pool workload only by default.
+    if ENABLE_VOICE_AGENT_POOL:
+        try:
+            await initialize_voice_agent_pool(
+                pool_size=VOICE_AGENT_POOL_SIZE, max_pool_size=VOICE_AGENT_MAX_POOL_SIZE
+            )
 
-        # Set up callbacks to avoid circular imports
-        pool = get_voice_agent_pool()
-        pool.room_cleanup_callback = room_cleanup_callback
-        pool.session_cleanup_callback = session_cleanup_callback
+            # Set up callbacks to avoid circular imports
+            pool = get_voice_agent_pool()
+            pool.room_cleanup_callback = room_cleanup_callback
+            pool.session_cleanup_callback = session_cleanup_callback
 
-        logger.info("Voice agent process pool initialized with callbacks")
+            logger.info("Voice agent process pool initialized with callbacks")
 
-        # Start background task to monitor session cleanup
-        asyncio.create_task(monitor_session_cleanup())
-    except Exception as e:
-        logger.error(f"Failed to initialize voice agent pool: {e}")
+            # Start background task to monitor session cleanup
+            asyncio.create_task(monitor_session_cleanup())
+        except Exception as e:
+            logger.error(f"Failed to initialize voice agent pool: {e}")
+    else:
+        logger.info("Voice agent pool init skipped (ENABLE_VOICE_AGENT_POOL=false)")
 
     # Start background task scheduler if enabled
     global _background_scheduler
@@ -181,6 +212,48 @@ async def lifespan(_app: FastAPI):
                 interval_seconds=CHAT_SESSION_END_TIMEOUT_LOOP_INTERVAL_SECONDS,
             )
 
+            # Event-driven dispatch reconcilers (Plane 5). Only registered on
+            # main-server pods; the scheduler's SET NX EX lock further
+            # guarantees one-pod-per-tick across the fleet. See
+            # docs/BACKLOG_DISPATCHER_REDESIGN.md §2.
+            if ENABLE_DISPATCHER:
+                _background_scheduler.register_task(
+                    name="bb_reconcile_backlog_to_zset",
+                    func=reconcile_backlog_to_zset,
+                    interval_seconds=BB_RECONCILE_BACKLOG_INTERVAL_S,
+                )
+                _background_scheduler.register_task(
+                    name="bb_reap_stuck_processing_lists",
+                    func=reap_stuck_processing_lists,
+                    interval_seconds=BB_REAP_PROCESSING_INTERVAL_S,
+                )
+                _background_scheduler.register_task(
+                    name="bb_reconcile_channel_tokens",
+                    func=reconcile_channel_tokens,
+                    interval_seconds=BB_RECONCILE_CHANNELS_INTERVAL_S,
+                )
+                _background_scheduler.register_task(
+                    name="bb_clean_stale_locks",
+                    func=clean_stale_bb_locks,
+                    interval_seconds=BB_CLEAN_STALE_LOCKS_INTERVAL_S,
+                )
+                # Stuck-PROCESSING reconciler: closes leads whose call-end
+                # webhook never arrived. Inherited from the deleted cron
+                # path; same 10-min staleness threshold.
+                _background_scheduler.register_task(
+                    name="bb_reconcile_stuck_processing_leads",
+                    func=reconcile_stuck_processing_leads,
+                    interval_seconds=BB_RECONCILE_STUCK_PROCESSING_INTERVAL_S,
+                )
+                # Health monitor: alert-only periodic check for no-leader /
+                # dispatch-halted / schedule-depth-high. Slack alerts are
+                # throttled by the alerts module; this task is safe at 60s.
+                _background_scheduler.register_task(
+                    name="bb_monitor_dispatch_health",
+                    func=monitor_dispatch_health,
+                    interval_seconds=BB_HEALTH_MONITOR_INTERVAL_S,
+                )
+
             # Start the scheduler only if tasks are registered
             if _background_scheduler.tasks:
                 await _background_scheduler.start()
@@ -194,9 +267,59 @@ async def lifespan(_app: FastAPI):
             "Background task scheduler disabled (ENABLE_BACKGROUND_TASKS=false)"
         )
 
+    # Start the event-driven dispatcher (promoter + workers). Main-server
+    # workload only by default. Channel-semaphore init is handled by the
+    # reconciler — no separate boot-time initialisation logic. See §2.
+    if ENABLE_DISPATCHER:
+        try:
+            # Fast cold-start: trigger one reconcile_channel_tokens immediately
+            # so workers don't BLPOP on empty channel LISTs while waiting for
+            # the periodic reconciler tick. Share the same SET NX EX lock key
+            # the BackgroundTaskScheduler uses for the periodic tick — that
+            # way the boot reconcile and the first scheduled tick can't run
+            # concurrently and double-topup token counts.
+            try:
+                redis_svc = await get_redis_service()
+                acquired = await redis_svc.set(
+                    key="background:task:bb_reconcile_channel_tokens:lock",
+                    value="locked",
+                    nx=True,
+                    ex=BB_RECONCILE_CHANNELS_INTERVAL_S,
+                )
+                if acquired:
+                    await reconcile_channel_tokens()
+                else:
+                    logger.info(
+                        "Boot-time channel-tokens reconcile already running on "
+                        "another pod; skipping (scheduled tick will heal)."
+                    )
+            except Exception as e:
+                logger.warning(
+                    f"Initial channel-tokens reconcile failed (will retry "
+                    f"on scheduled tick): {e}"
+                )
+
+            await start_promoter()
+            await start_workers()
+            logger.info("Event-driven dispatcher started")
+        except Exception as e:
+            logger.error(f"Failed to start event-driven dispatcher: {e}", exc_info=True)
+    else:
+        logger.info("Event-driven dispatcher disabled (ENABLE_DISPATCHER=false)")
+
     yield
 
     logger.info("Application shutdown event triggered...")
+
+    # Stop the event-driven dispatcher before scheduler/db close so any
+    # in-flight workers get their locks/tokens released cleanly.
+    if ENABLE_DISPATCHER:
+        try:
+            logger.info("Stopping event-driven dispatcher...")
+            await stop_workers()
+            await stop_promoter()
+        except Exception as e:
+            logger.error(f"Error stopping dispatcher: {e}", exc_info=True)
 
     # Stop background task scheduler if running
     if _background_scheduler:
