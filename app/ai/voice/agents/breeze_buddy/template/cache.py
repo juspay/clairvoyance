@@ -91,6 +91,7 @@ async def invalidate_template(template_id: str) -> None:
     try:
         redis = await get_redis_service()
         await redis.delete(_key(template_id))
+        await redis.delete(f"greeting:template:{template_id}")
         logger.info(f"template cache invalidated: {template_id}")
     except Exception as exc:
         logger.warning(f"template cache invalidate failed for {template_id}: {exc}")
