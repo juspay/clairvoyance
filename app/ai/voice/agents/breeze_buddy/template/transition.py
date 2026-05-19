@@ -58,14 +58,21 @@ async def transition_handler(
         f"transition_to: '{transition_to}', hooks: {hooks}, args: {args}"
     )
 
-    # Schedule hooks to run asynchronously (fire and forget)
+    # Execute hooks synchronously (awaited) or asynchronously (fire and forget)
     if hooks:
-        logger.info(
-            f"Scheduling {len(hooks)} hook(s) to execute asynchronously for function '{function_name}'"
-        )
-        asyncio.create_task(
-            _execute_hooks_async(context, args, hooks, function_name or "unknown")
-        )
+        awaited = hooks[0].get("awaited", False)
+        if awaited:
+            logger.info(
+                f"Executing {len(hooks)} hook(s) synchronously (awaited) for function '{function_name}'"
+            )
+            await _execute_hooks_async(context, args, hooks, function_name or "unknown")
+        else:
+            logger.info(
+                f"Scheduling {len(hooks)} hook(s) to execute asynchronously for function '{function_name}'"
+            )
+            asyncio.create_task(
+                _execute_hooks_async(context, args, hooks, function_name or "unknown")
+            )
     else:
         logger.debug(f"No hooks to execute for function '{function_name}'")
 
