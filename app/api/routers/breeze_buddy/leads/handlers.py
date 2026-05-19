@@ -252,6 +252,27 @@ async def push_lead_handler(req: PushLeadRequest, current_user: UserInfo) -> Dic
             )
 
         if not config:
+            # Step 3: fall back to the default config (template IS NULL)
+            # Prefer merchant-specific default, then reseller-wide default
+            if req.merchant_id:
+                config = next(
+                    (
+                        c
+                        for c in call_execution_configs
+                        if c.template is None and c.merchant_id == req.merchant_id
+                    ),
+                    None,
+                )
+            if not config:
+                config = next(
+                    (
+                        c
+                        for c in call_execution_configs
+                        if c.template is None and c.merchant_id is None
+                    ),
+                    None,
+                )
+        if not config:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Call execution config not found for template: {template.name}",

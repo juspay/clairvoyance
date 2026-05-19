@@ -216,7 +216,7 @@ class CreateCallExecutionConfigRequest(BaseModel):
     max_retry: int
     calling_provider: CallProvider
     reseller_id: str
-    template: str
+    template: Optional[str] = None
     merchant_id: Optional[str] = None
     enable_international_call: bool = True
     enable_calling: Optional[bool] = True
@@ -262,7 +262,7 @@ class UpdateCallExecutionConfigRequest(BaseModel):
     """Request to update call execution configuration"""
 
     reseller_id: str
-    template: str
+    template: Optional[str] = None
     merchant_id: Optional[str] = None
     initial_offset: Optional[int] = None
     retry_offset: Optional[int] = None
@@ -323,7 +323,7 @@ class CallExecutionConfig(BaseModel):
     max_retry: int
     calling_provider: CallProvider
     reseller_id: str
-    template: str
+    template: Optional[str] = None
     template_id: Optional[str] = None
     merchant_id: Optional[str] = None
     enable_international_call: bool = True
