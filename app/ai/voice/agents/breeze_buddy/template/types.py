@@ -1113,6 +1113,7 @@ class HookConfig(BaseModel):
     name: str
     expected_fields: Dict[str, FieldConfig] = {}
     http_request: Optional[HttpRequestConfig] = None  # For send_http_request hook
+    awaited: bool = False
 
 
 class FlowFunction(BaseModel):

@@ -15,6 +15,7 @@ from typing import Any, Dict
 from app.ai.voice.agents.breeze_buddy.handlers.internal.end_conversation import (
     end_conversation,
 )
+from app.ai.voice.agents.breeze_buddy.handlers.internal.stt import mute_stt
 from app.ai.voice.agents.breeze_buddy.template.context import TemplateContext
 from app.core.logger import logger
 
@@ -42,6 +43,12 @@ async def end_conversation_global(
     Returns:
         Result from end_conversation (empty dict)
     """
+    # Mute STT immediately so any customer speech during the goodbye
+    # does not trigger another LLM turn.  In normal (node-based) mode
+    # this is handled by the end_conversation_node's mute_stt pre_action;
+    # in direct mode no such node exists, so we do it here.
+    await mute_stt(context, {})
+
     if context.lead:
         if context.lead.metaData is None:
             context.lead.metaData = {}
