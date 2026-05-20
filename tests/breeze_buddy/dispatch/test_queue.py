@@ -114,3 +114,26 @@ async def test_schedule_lead_does_not_raise_on_redis_error(monkeypatch):
     ok = await queue.schedule_lead("lead-x", when)
 
     assert ok is False
+
+
+# ---------------------------------------------------------------------------
+# Execution-mode gating
+# ---------------------------------------------------------------------------
+
+
+def test_is_dispatchable_telephony_modes_only():
+    """Only TELEPHONY and TELEPHONY_TEST should pass the gate.
+
+    DAILY / DAILY_TEST / DAILY_STREAM are web-mode (customer joins a Daily
+    room) — they must NOT enter the dispatcher's PSTN-dial path. HOLD_TRANSFER
+    is a mid-call leg, not a standalone outbound to schedule. This filter
+    mirrors the SQL WHERE clause in get_unscheduled_backlog_leads_query.
+    """
+    from app.schemas import ExecutionMode
+
+    assert queue.is_dispatchable(ExecutionMode.TELEPHONY) is True
+    assert queue.is_dispatchable(ExecutionMode.TELEPHONY_TEST) is True
+    assert queue.is_dispatchable(ExecutionMode.DAILY) is False
+    assert queue.is_dispatchable(ExecutionMode.DAILY_TEST) is False
+    assert queue.is_dispatchable(ExecutionMode.DAILY_STREAM) is False
+    assert queue.is_dispatchable(ExecutionMode.HOLD_TRANSFER) is False
