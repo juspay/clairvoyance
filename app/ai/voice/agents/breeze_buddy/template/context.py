@@ -228,8 +228,13 @@ class TemplateContext:
         if "node_traversal" not in self.lead.metaData:
             self.lead.metaData["node_traversal"] = []
 
+        # Tag the node entry with the currently active template_id so node
+        # traversal is distinguishable across orchestrator and agent phases.
+        active_template_id = getattr(getattr(self.bot, "template", None), "id", None)
+
         entry = {
             "node_name": node_name,
+            "template_id": active_template_id,
             "entered_at": self._get_ist_timestamp(),
             "entered_at_epoch": self._get_epoch_timestamp(),
             "exited_at": None,

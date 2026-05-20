@@ -6,7 +6,6 @@ from pipecat.services.azure.llm import AzureLLMService
 from pipecat_flows import FlowManager, NodeConfig
 from pipecat_flows.types import FlowsDirectFunction, FlowsFunctionSchema
 
-from app.ai.voice.agents.breeze_buddy.agent.utils import validate_template_compat
 from app.ai.voice.agents.breeze_buddy.services.knowledge_base import (
     build_kb_system_message,
 )
@@ -16,6 +15,7 @@ from app.ai.voice.agents.breeze_buddy.template.types import (
     ConfigurationModel,
     TemplateModel,
 )
+from app.ai.voice.agents.breeze_buddy.template.utils import validate_template_compat
 from app.ai.voice.agents.breeze_buddy.utils.language_utils.prompt_injections import (
     inject_language_rules,
 )

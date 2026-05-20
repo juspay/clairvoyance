@@ -119,7 +119,8 @@
   "GlobalBuiltinFunction": {
     "_parent": "BaseGlobalFunction",
     "handler":          { "description": "Key in the builtin handler registry. Common values: 'end_conversation' (ends the call), 'connect_to_live_agent' (warm transfer), 'get_current_time' (returns UTC timestamp), 'hold_and_consult' (places caller on hold).", "example": "end_conversation" },
-    "pre_tts_message":  { "description": "TTS text to speak and wait for before the handler executes. Useful for handlers that terminate the pipeline (e.g. transfer) where the LLM's utterance might get cut off mid-sentence.", "example": "Please hold while I connect you to an agent." }
+    "pre_tts_message":  { "description": "TTS text to speak and wait for before the handler executes. Useful for handlers that terminate the pipeline (e.g. transfer) where the LLM's utterance might get cut off mid-sentence.", "example": "Please hold while I connect you to an agent." },
+    "agent_transfer":   { "description": "Agent-to-agent transfer config. Only read when handler is 'connect_to_agent'. targets allow-lists alias -> target template_id (the LLM picks an alias, never a raw id); max_transfers bounds A->B->A ping-pong; context_mode controls what the next agent inherits (summary | full | fresh). Triggers a full pipeline rebuild — new prompts, tools, STT/TTS/LLM.", "example": { "targets": { "sales": "3f1c2d9a-1111-2222-3333-444455556666", "support": "8a4b7e21-1111-2222-3333-444455556666" }, "max_transfers": 5, "context_mode": "summary" } }
   },
 
   "GlobalCustomFunction": {

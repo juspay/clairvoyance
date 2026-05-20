@@ -19,6 +19,9 @@ from pipecat.frames.frames import (
     TTSSpeakFrame,
 )
 
+from app.ai.voice.agents.breeze_buddy.handlers.internal.agent_transfer import (
+    connect_to_agent,
+)
 from app.ai.voice.agents.breeze_buddy.handlers.internal.end_conversation_global import (
     end_conversation_global,
 )
@@ -49,6 +52,7 @@ from app.core.logger import logger
 # Each handler has signature: (context: TemplateContext, args: Dict) -> Dict
 # To add a new built-in function, import it and add an entry here.
 BUILTIN_HANDLERS: Dict[str, Callable] = {
+    "connect_to_agent": connect_to_agent,
     "connect_to_live_agent": connect_to_live_agent,
     "end_conversation": end_conversation_global,
     "get_current_time": get_current_time,
@@ -56,6 +60,12 @@ BUILTIN_HANDLERS: Dict[str, Callable] = {
     "query_knowledge_base": query_knowledge_base,
     "update_outcome": update_outcome,
 }
+
+# Handlers that receive their own function-entry config. The transfer
+# targets/limits live on the connect_to_agent function entry (not on
+# ConfigurationModel), so this handler needs function_config forwarded to it.
+# Every other builtin keeps the plain (context, args) contract.
+_CONFIG_AWARE_HANDLERS = {"connect_to_agent"}
 
 
 async def _speak_and_wait(context: TemplateContext, message: str) -> None:
@@ -115,7 +125,7 @@ async def builtin_function_dispatcher(
     context: TemplateContext,
     args: Dict[str, Any],
     function_config: Optional[GlobalBuiltinFunction] = None,
-) -> Tuple[Dict[str, Any], None]:
+) -> Tuple[Dict[str, Any], Optional[Any]]:
     """
     Dispatch to the correct built-in handler based on function_config.handler.
 
@@ -129,7 +139,9 @@ async def builtin_function_dispatcher(
         function_config: GlobalBuiltinFunction with handler name
 
     Returns:
-        Tuple of (result_dict, None) - None means stay on current node
+        Tuple of (result_dict, None). The second element is always None — built-in
+        handlers stay on the current node. (Agent-to-agent transfer is handled by
+        connect_to_agent ending the pipeline task, not by a node transition.)
     """
     if function_config is None:
         logger.error("[builtin_dispatcher] function_config is required but was None")
@@ -163,7 +175,10 @@ async def builtin_function_dispatcher(
         if function_config.pre_tts_message:
             await _speak_and_wait(context, function_config.pre_tts_message)
 
-        result = await handler(context, args)
+        if handler_name in _CONFIG_AWARE_HANDLERS:
+            result = await handler(context, args, function_config)
+        else:
+            result = await handler(context, args)
         # Ensure consistent return format (result, None) for global functions
         if isinstance(result, tuple):
             result_dict, next_node = result

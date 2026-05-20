@@ -559,6 +559,9 @@ async def handle_call_completion(
     if is_transfer:
         outcome = "TRANSFERRED"
 
+    # Persist the call record unconditionally — config lookup must not gate this.
+    # _get_lead_config can fail (e.g. unknown provider enum value in the DB) for
+    # reasons unrelated to recording the call outcome, transcription, and metadata.
     updated_lead = await update_lead_call_completion_details(
         id=lead.id,
         status=LeadCallStatus.FINISHED,
@@ -566,6 +569,12 @@ async def handle_call_completion(
         meta_data=meta_data,
         call_end_time=call_end_time,
     )
+
+    # Config is only needed for retry scheduling — a failure here must not
+    # prevent the lead record from being marked FINISHED above.
+    config = await _get_lead_config(lead)
+    if not config:
+        return updated_lead
 
     # Only retry outbound telephony calls - inbound and test calls should not be retried
     if (

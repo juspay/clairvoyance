@@ -3,7 +3,7 @@
 import asyncio
 import time
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, cast
 
 from fastapi import WebSocket
 from opentelemetry import trace
@@ -43,6 +43,7 @@ from app.ai.voice.agents.breeze_buddy.agent.pipeline import (
     create_services,
     generate_conversation_id,
 )
+from app.ai.voice.agents.breeze_buddy.agent.transfer import apply_transfer
 from app.ai.voice.agents.breeze_buddy.agent.transport import (
     TRANSPORT_TYPE_DAILY,
     get_transport_params,
@@ -103,8 +104,19 @@ from app.ai.voice.agents.breeze_buddy.template.types import (
     TTSProvider,
 )
 from app.ai.voice.agents.breeze_buddy.template.vad import create_vad_analyzer
+from app.ai.voice.agents.breeze_buddy.utils.agent_transfer import (
+    PendingAgentTransfer,
+    TransportRebuildContext,
+)
 from app.ai.voice.agents.breeze_buddy.utils.common import (
     track_error,
+)
+from app.ai.voice.agents.breeze_buddy.utils.transport.daily_keepalive import (
+    force_teardown_daily_client,
+    hold_daily_client,
+)
+from app.ai.voice.agents.breeze_buddy.utils.transport.nonclosing import (
+    NonClosingWebSocket,
 )
 from app.ai.voice.agents.breeze_buddy.utils.transport.websockets import (
     close_websocket_safely,
@@ -229,6 +241,31 @@ class Agent:
         # those cases differently (telephony on_no_channel vs daily deny).
         self.approval_manager: Optional[ApprovalManager] = None
 
+        # ── Agent-to-agent transfer (generation loop) ──
+        # Set by the connect_to_agent handler; consumed by run()'s loop.
+        self.pending_transfer: Optional[PendingAgentTransfer] = None
+        self.transfer_count: int = 0
+        self.generation: int = 1
+        # Transcript snapshots from completed generations, merged at final end.
+        self.prior_generation_messages: List[Dict[str, Any]] = []
+        # Handoff system messages to seed the NEXT generation's initial node.
+        self._handoff_messages: List[Dict[str, str]] = []
+        # Capture-once recipe for rebuilding the transport on each generation.
+        # (See TransportRebuildContext for why these can't be re-derived.)
+        self._rebuild = TransportRebuildContext()
+        # Per-generation guard for flow init (see _handle_client_connected).
+        self._flow_initialized: bool = False
+        # Daily-only: the joined DailyTransportClient preserved across pipeline
+        # generations (kept alive by hold_daily_client, which no-ops its
+        # leave()/cleanup()), plus the restore() to undo that suppression. None
+        # for telephony. See utils/transport/daily_keepalive.py.
+        self._daily_client: Any = None
+        self._daily_restore: Optional[Callable[[], None]] = None
+
+    # ══════════════════════════════════════════════════════════════════════
+    # Properties
+    # ══════════════════════════════════════════════════════════════════════
+
     @property
     def is_daily_mode(self) -> bool:
         return self.transport_type == TRANSPORT_TYPE_DAILY
@@ -239,6 +276,10 @@ class Agent:
             self.lead is not None
             and self.lead.execution_mode == ExecutionMode.DAILY_STREAM
         )
+
+    # ══════════════════════════════════════════════════════════════════════
+    # Real-time events & idle handling
+    # ══════════════════════════════════════════════════════════════════════
 
     async def _emit_rtvi_event(
         self, event_type: str, payload: Optional[Dict[str, Any]] = None
@@ -328,6 +369,10 @@ class Agent:
             logger.debug("Post-greeting idle timer cancelled.")
             return
 
+    # ══════════════════════════════════════════════════════════════════════
+    # Transport setup (daily / telephony)
+    # ══════════════════════════════════════════════════════════════════════
+
     async def _setup_daily_transport(self, runner_args: RunnerArguments) -> None:
         """Initialize transport for Daily mode."""
         if not runner_args or not runner_args.body:
@@ -410,6 +455,15 @@ class Agent:
 
         transport_params = get_transport_params(self.template, self.configurations)
         self.transport = await create_transport(runner_args, transport_params)
+
+        # Keep-alive: preserve the joined DailyTransportClient across pipeline
+        # generations so an agent-transfer rebuild never leaves the room / ejects
+        # the browser client (Daily analog of NonClosingWebSocket). Neutralises
+        # the client's leave()/cleanup(); the one real teardown happens at true
+        # call end in run(). See utils/transport/daily_keepalive.py.
+        daily_transport: Any = self.transport
+        self._daily_client = daily_transport._client
+        self._daily_restore = hold_daily_client(self._daily_client)
 
     async def _setup_telephony_transport(self) -> bool:
         """Initialize transport for telephony mode. Returns False if setup fails."""
@@ -671,9 +725,19 @@ class Agent:
         transport_params = get_transport_params(self.template, self.configurations)
         params = transport_params[transport_type]()
 
-        # Create transport with the call data
+        # Store for transport rebuilds on agent-to-agent transfer (generation >= 2).
+        self._rebuild.telephony_transport_type = transport_type
+        self._rebuild.telephony_call_data = call_data
+        # Hand pipecat a proxy whose close() is a no-op so its teardown can't drop
+        # the call; the Agent owns the real close. self.ws stays raw for
+        # pre-pipeline error paths (close_websocket_safely).
+        assert self.ws is not None
+        self._rebuild.ws_proxy = NonClosingWebSocket(self.ws)
+
+        # Create transport with the call data. Cast: the proxy forwards every
+        # attribute so it quacks like a WebSocket, but isn't a subclass.
         self.transport = await _create_telephony_transport(
-            self.ws, params, transport_type, call_data
+            cast(WebSocket, self._rebuild.ws_proxy), params, transport_type, call_data
         )
 
         logger.info(f"Created transport: {self.transport.__class__.__name__}")
@@ -731,6 +795,10 @@ class Agent:
         if self.ws:
             await close_websocket_safely(self.ws, code=1000, reason="Block redirect")
         return True
+
+    # ══════════════════════════════════════════════════════════════════════
+    # Pipeline event handlers
+    # ══════════════════════════════════════════════════════════════════════
 
     def _register_event_handlers(self) -> None:
         """Register transport and task event handlers."""
@@ -929,6 +997,48 @@ class Agent:
                 f"{widget_session_id}"
             )
 
+    # ══════════════════════════════════════════════════════════════════════
+    # Client connected / flow initialization
+    # ══════════════════════════════════════════════════════════════════════
+
+    async def _drive_client_connected_after_start(self, task: Any) -> None:
+        """Daily transfer (gen>1): re-establish audio capture + flow-init once ready.
+
+        The reused, already-joined DailyTransportClient never re-fires
+        _on_participant_joined for the rebuilt transport, so the new input
+        transport never captures the existing participant's mic (dead STT) and
+        on_client_connected (flow-init / the new agent's first turn) never fires.
+        Wait for the StartFrame to reach the pipeline end
+        (PipelineTask._pipeline_start_event) so queued frames aren't dropped, then
+        replay pipecat's participant-joined handling for each participant already
+        in the room — one call restores BOTH capture_participant_audio (at the
+        correct in_sample_rate) and on_client_connected -> _handle_client_connected,
+        exactly as a fresh gen-1 join. Idempotent via _flow_initialized.
+        """
+        start_event = getattr(task, "_pipeline_start_event", None)
+        if start_event is not None:
+            await start_event.wait()
+
+        transport = self.transport
+        on_join = getattr(transport, "_on_participant_joined", None)
+        participants_fn = getattr(transport, "participants", None)
+        replayed = False
+        if on_join is not None and participants_fn is not None:
+            for pid, pdata in (participants_fn() or {}).items():
+                if pid == "local" or not isinstance(pdata, dict) or not pdata.get("id"):
+                    continue
+                try:
+                    await on_join(pdata)
+                    replayed = True
+                except Exception as exc:
+                    logger.warning(
+                        f"[daily transfer] replay participant-joined failed "
+                        f"for {pid}: {exc}"
+                    )
+        if not replayed:
+            # No remote participant found — still drive flow-init directly.
+            await self._handle_client_connected()
+
     async def _handle_client_connected(self) -> None:
         """Handle client connection and initialize flow."""
         if self.is_stream_mode:
@@ -943,6 +1053,13 @@ class Agent:
             if self._voice_bridge is not None:
                 await self._voice_bridge.maybe_speak_greeting()
             return
+
+        # Per-generation guard: on a transfer rebuild a fresh transport fires
+        # on_client_connected again (and Daily may re-deliver participant
+        # events); initialize the flow exactly once per generation.
+        if self._flow_initialized:
+            return
+        self._flow_initialized = True
 
         if (
             not self.flow_builder
@@ -1011,10 +1128,24 @@ class Agent:
             kb_text=kb_text,
         )
 
-        # Initialize node traversal tracking
+        # Agent-to-agent transfer: seed the incoming generation's initial node
+        # with the handoff note (and, in "full" mode, the prior transcript) so
+        # the new agent knows it was transferred in. Cleared after use.
+        if self._handoff_messages:
+            initial_node_config["task_messages"] = list(self._handoff_messages) + list(
+                initial_node_config.get("task_messages", [])
+            )
+            self._handoff_messages = []
+
+        # Initialize node traversal tracking. Only reset on the first generation;
+        # a transfer rebuild (generation >= 2) must PRESERVE prior generations'
+        # nodes (the first template's node + its connect_to_agent call).
         if self.lead.metaData is None:
             self.lead.metaData = {}
-        self.lead.metaData["node_traversal"] = []
+        if self.generation == 1:
+            self.lead.metaData["node_traversal"] = []
+        else:
+            self.lead.metaData.setdefault("node_traversal", [])
 
         # Record initial-node entry BEFORE flow_manager.initialize so that any
         # global function called during the first LLM turn (e.g. get_driver_info
@@ -1025,6 +1156,10 @@ class Agent:
 
         await self.flow_manager.initialize(initial_node_config)
         logger.info(f"FlowManager initialized at node: {initial_node_name}")
+
+    # ══════════════════════════════════════════════════════════════════════
+    # Run loop & pipeline generation
+    # ══════════════════════════════════════════════════════════════════════
 
     async def _run_with_tracing(self, runner: PipelineRunner) -> None:
         """Run the pipeline with OpenTelemetry tracing."""
@@ -1062,6 +1197,7 @@ class Agent:
             runner_args: Required for Daily mode, contains room info and lead data
         """
         try:
+            self._rebuild.runner_args = runner_args
             # Setup transport based on mode
             if self.is_daily_mode:
                 if not runner_args:
@@ -1129,189 +1265,234 @@ class Agent:
                 await IvrWalker(self).run()
                 return
 
-            # Build services and pipeline. Stream mode skips LLM creation and
-            # runs build_pipeline with mode="stream" (no LLM processor, no
-            # assistant aggregator, transcript collector inserted, no user idle).
-            # All other wiring is identical.
-            is_stream = self.is_stream_mode
-            stt, llm, tts = await create_services(
-                self.configurations, include_llm=not is_stream
-            )
-            if not is_stream:
-                assert llm is not None, "LLM is required in agent mode"
+            # One connection, N pipeline generations. Each generation is the
+            # same cold-start build path; a connect_to_agent transfer ends the
+            # current pipeline task (without hanging up) and loops back here.
+            while True:
+                await self._run_generation()
+                if not self.pending_transfer or self.conversation_ended:
+                    break
+                transfer = self.pending_transfer
+                self.pending_transfer = None
+                await apply_transfer(self, transfer)
 
-            # Knowledge base runtime resolution (fail-open). Stream mode goes
-            # through the chat brain, which has its own KB hooks; realtime
-            # LLMs have no pre-LLM text hop (auto/auto_retrieve is rejected
-            # for them at template save by ConfigurationModel's validator and
-            # re-checked at call load by validate_template_compat).
-            is_realtime_llm = stt is None and tts is None and llm is not None
-            if not is_stream:
-                self.kb_runtime = await resolve_kb_runtime(self.configurations)
-            if self.kb_runtime:
-                if self.kb_runtime.mode == "auto_retrieve" and not is_realtime_llm:
-                    self._kb_processor = KnowledgeRetrievalProcessor(
-                        self.kb_runtime.config
-                    )
-                    logger.info("KB auto_retrieve enabled for this call")
-                elif self.kb_runtime.mode == "full_injection":
-                    # Fetch concurrently with pipeline build / greeting prep;
-                    # awaited (with a short shield) in _handle_client_connected.
-                    self._kb_text_task = asyncio.create_task(
-                        fetch_full_kb_text_cached(self.kb_runtime.config)
-                    )
-                    logger.info("KB full_injection enabled for this call")
-
-            (
-                pipeline,
-                context,
-                context_aggregator,
-                user_idle_callback_handler,
-                self.speech_gate,
-                self._transcript_collector,
-            ) = await build_pipeline(
-                self.transport,
-                stt,
-                llm,
-                tts,
-                self.vad_analyzer,
-                self.configurations,
-                on_user_idle_timeout=(
-                    None if is_stream else self._handle_user_idle_timeout
-                ),
-                mode="stream" if is_stream else "agent",
-                kb_processor=self._kb_processor,
-            )
-            self._context_aggregator = context_aggregator
-
-            # Stream mode deliberately leaves self.context=None so end_conversation
-            # falls back to the transcript collector (captures both user turns AND
-            # client-driven bot TTS text). The aggregator writes user turns into
-            # the LLMContext, but nothing writes bot TTS text — using the context
-            # would lose the bot side of the transcript.
-            if not is_stream:
-                self.context = context
-                self._user_idle_callback_handler = user_idle_callback_handler
-                self.default_interruption_config = (
-                    getattr(self.configurations, "interruption", None)
-                    or InterruptionConfig()
+            # The Agent owns the ONE real teardown at true call end — per-generation
+            # teardown is suppressed so transfers never drop the connection.
+            # Telephony: close the raw ws (NonClosingWebSocket swallowed pipecat's
+            # close). Daily: force the room leave + client release that
+            # hold_daily_client neutralised.
+            if not self.is_daily_mode and self.ws:
+                await close_websocket_safely(
+                    self.ws, code=1000, reason="Conversation ended"
                 )
-
-            lead_payload = self.lead.payload if self.lead else None
-            self.conversation_id = generate_conversation_id(lead_payload)
-            update_log_context(conversation_id=self.conversation_id)
-
-            self.task = await create_pipeline_task(
-                pipeline,
-                self.conversation_id,
-                is_daily_mode=self.is_daily_mode,
-            )
-
-            if self.is_daily_mode and hasattr(self.task, "rtvi") and self.task.rtvi:
-                self._rtvi_processor = self.task.rtvi
-                # HITL approval channel (Pattern C — the in-handler gate that
-                # blocks a voice global-function on a live RTVI card). This is
-                # AGENT-mode only: stream-mode widget voice has no FlowManager /
-                # global-function wrapper to ever reach the gate, and it gates
-                # approvals through the chat brain instead (Pattern B). So only
-                # non-widget daily agent-mode calls get an ApprovalManager.
-                # RTVI requires ENABLE_BREEZE_BUDDY_DAILY_EVENTS=true; without it
-                # approval_manager stays None and gated calls are denied.
-                if not is_stream:
-                    self.approval_manager = ApprovalManager(emit=self._emit_rtvi_event)
-                    if self._user_idle_callback_handler:
-                        # While an approval card is showing, the user is silently
-                        # reading — idle prompts/end-call must not fire (idle
-                        # re-inference can also spawn duplicate gated calls).
-                        approval_manager = self.approval_manager
-                        self._user_idle_callback_handler.suppress_when = (
-                            approval_manager.has_pending
-                        )
-
-            # Flow manager is agent-mode only (stream mode has no LLM to drive
-            # node transitions or function calls).
-            if not is_stream:
-                if not self.template:
-                    logger.error("Template is not set, cannot setup flow manager")
-                    return
-
-                # Fetch MCP tools if configured in template configuration
-                mcp_global_functions = []
-                mcp_config = self.configurations.mcp if self.configurations else None
-                if mcp_config and mcp_config.servers:
-                    try:
-                        mcp_global_functions = await get_mcp_global_functions(
-                            mcp_config=mcp_config,
-                            template_vars=self.template_vars,
-                            # Thread the bot so a gated MCP tool can reach the
-                            # ApprovalManager and block in-process (Pattern C).
-                            bot_instance=self,
-                        )
-                    except Exception as e:
-                        logger.error(
-                            f"[BUDDY_MCP] Failed to load MCP tools, continuing without them: {e}"
-                        )
-
-                assert llm is not None  # narrowed: non-stream path always has LLM
-                self.flow_manager = setup_flow_manager(
-                    task=self.task,
-                    llm=llm,
-                    context_aggregator=context_aggregator,
-                    transport=self.transport,
-                    flow_builder=self.flow_builder,
-                    template=self.template,
-                    bot_instance=self,
-                    mcp_global_functions=mcp_global_functions,
-                )
-
-            # ── Real-time observers ──────────────────────────────────
-            observers_config = (
-                self.configurations.observers if self.configurations else None
-            )
-            logger.info(
-                f"Observer setup: "
-                f"observers_count={len(observers_config) if observers_config else 0}, "
-                f"is_stream={is_stream}"
-            )
-            if observers_config and not is_stream:
-                try:
-                    observer_instances = await build_observers(
-                        configs=observers_config,
-                        template=self.template,
-                        agent_context=self,
-                        handler_map=self.flow_builder.handler_map,
-                    )
-                    if observer_instances:
-                        self._observer_manager = ObserverManager(
-                            observer_instances, context
-                        )
-                        logger.info(
-                            f"Initialized {len(observer_instances)} "
-                            f"real-time observer(s)"
-                        )
-                except Exception as e:
-                    logger.error(f"Failed to initialize observers: {e}")
-                    self._observer_manager = None
-
-            self._register_event_handlers()
-
-            runner = PipelineRunner(handle_sigint=False, force_gc=True)
-            log_prefix = "[STREAM] " if is_stream else ""
-            try:
-                if ENABLE_BREEZE_BUDDY_TRACING:
-                    await self._run_with_tracing(runner)
-                else:
-                    logger.info(
-                        f"{log_prefix}Running pipeline for conversation: {self.conversation_id}"
-                    )
-                    await runner.run(self.task)
-            except asyncio.CancelledError:
-                logger.info(f"{log_prefix}Pipeline task cancelled. Exiting gracefully.")
+            elif self.is_daily_mode and self._daily_client is not None:
+                await force_teardown_daily_client(self._daily_client)
         finally:
+            clear_log_context()
+
+    async def _run_generation(self) -> None:
+        """Build and run one pipeline generation via the cold-start path.
+
+        Blocks until the pipeline reaches a terminal frame — real call end, or a
+        connect_to_agent transfer that queued an EndFrame via stop_when_done().
+        run()'s loop then either finalizes (real end) or applies the transfer and
+        re-invokes this method for the next generation.
+        """
+        # Stream mode skips LLM creation and runs build_pipeline with
+        # mode="stream" (no LLM processor, no assistant aggregator, transcript
+        # collector inserted, no user idle). All other wiring is identical.
+        is_stream = self.is_stream_mode
+        stt, llm, tts = await create_services(
+            self.configurations, include_llm=not is_stream
+        )
+        if not is_stream:
+            assert llm is not None, "LLM is required in agent mode"
+
+        # Knowledge base runtime resolution (fail-open). Stream mode goes
+        # through the chat brain, which has its own KB hooks; realtime LLMs
+        # have no pre-LLM text hop (auto/auto_retrieve is rejected for them at
+        # template save by ConfigurationModel's validator and re-checked at
+        # call load by validate_template_compat). Re-resolved every generation:
+        # an agent-transfer target may have a different KB (or none), so clear
+        # the prior generation's processor + fetch task before resolving.
+        self._kb_processor = None
+        self._kb_text_task = None
+        is_realtime_llm = stt is None and tts is None and llm is not None
+        if not is_stream:
+            self.kb_runtime = await resolve_kb_runtime(self.configurations)
+        if self.kb_runtime:
+            if self.kb_runtime.mode == "auto_retrieve" and not is_realtime_llm:
+                self._kb_processor = KnowledgeRetrievalProcessor(self.kb_runtime.config)
+                logger.info("KB auto_retrieve enabled for this call")
+            elif self.kb_runtime.mode == "full_injection":
+                # Fetch concurrently with pipeline build / greeting prep;
+                # awaited (with a short shield) in _handle_client_connected.
+                self._kb_text_task = asyncio.create_task(
+                    fetch_full_kb_text_cached(self.kb_runtime.config)
+                )
+                logger.info("KB full_injection enabled for this call")
+
+        (
+            pipeline,
+            context,
+            context_aggregator,
+            user_idle_callback_handler,
+            self.speech_gate,
+            self._transcript_collector,
+        ) = await build_pipeline(
+            self.transport,
+            stt,
+            llm,
+            tts,
+            self.vad_analyzer,
+            self.configurations,
+            on_user_idle_timeout=(
+                None if is_stream else self._handle_user_idle_timeout
+            ),
+            mode="stream" if is_stream else "agent",
+            kb_processor=self._kb_processor,
+        )
+        self._context_aggregator = context_aggregator
+
+        # Stream mode deliberately leaves self.context=None so end_conversation
+        # falls back to the transcript collector (captures both user turns AND
+        # client-driven bot TTS text). The aggregator writes user turns into
+        # the LLMContext, but nothing writes bot TTS text — using the context
+        # would lose the bot side of the transcript.
+        if not is_stream:
+            self.context = context
+            self._user_idle_callback_handler = user_idle_callback_handler
+            self.default_interruption_config = (
+                getattr(self.configurations, "interruption", None)
+                or InterruptionConfig()
+            )
+
+        lead_payload = self.lead.payload if self.lead else None
+        self.conversation_id = generate_conversation_id(lead_payload)
+        update_log_context(conversation_id=self.conversation_id)
+
+        self.task = await create_pipeline_task(
+            pipeline,
+            self.conversation_id,
+            is_daily_mode=self.is_daily_mode,
+        )
+
+        if self.is_daily_mode and hasattr(self.task, "rtvi") and self.task.rtvi:
+            self._rtvi_processor = self.task.rtvi
+            # HITL approval channel (Pattern C — the in-handler gate that
+            # blocks a voice global-function on a live RTVI card). This is
+            # AGENT-mode only: stream-mode widget voice has no FlowManager /
+            # global-function wrapper to ever reach the gate, and it gates
+            # approvals through the chat brain instead (Pattern B). So only
+            # non-widget daily agent-mode calls get an ApprovalManager.
+            # RTVI requires ENABLE_BREEZE_BUDDY_DAILY_EVENTS=true; without it
+            # approval_manager stays None and gated calls are denied.
+            if not is_stream:
+                self.approval_manager = ApprovalManager(emit=self._emit_rtvi_event)
+                if self._user_idle_callback_handler:
+                    # While an approval card is showing, the user is silently
+                    # reading — idle prompts/end-call must not fire (idle
+                    # re-inference can also spawn duplicate gated calls).
+                    approval_manager = self.approval_manager
+                    self._user_idle_callback_handler.suppress_when = (
+                        approval_manager.has_pending
+                    )
+
+        # Flow manager is agent-mode only (stream mode has no LLM to drive
+        # node transitions or function calls).
+        if not is_stream:
+            if not self.template:
+                logger.error("Template is not set, cannot setup flow manager")
+                return
+
+            # Fetch MCP tools if configured in template configuration
+            mcp_global_functions = []
+            mcp_config = self.configurations.mcp if self.configurations else None
+            if mcp_config and mcp_config.servers:
+                try:
+                    mcp_global_functions = await get_mcp_global_functions(
+                        mcp_config=mcp_config,
+                        template_vars=self.template_vars,
+                        # Thread the bot so a gated MCP tool can reach the
+                        # ApprovalManager and block in-process (Pattern C).
+                        bot_instance=self,
+                    )
+                except Exception as e:
+                    logger.error(
+                        f"[BUDDY_MCP] Failed to load MCP tools, continuing without them: {e}"
+                    )
+
+            assert llm is not None  # narrowed: non-stream path always has LLM
+            self.flow_manager = setup_flow_manager(
+                task=self.task,
+                llm=llm,
+                context_aggregator=context_aggregator,
+                transport=self.transport,
+                flow_builder=self.flow_builder,
+                template=self.template,
+                bot_instance=self,
+                mcp_global_functions=mcp_global_functions,
+            )
+
+        # ── Real-time observers ──────────────────────────────────
+        observers_config = (
+            self.configurations.observers if self.configurations else None
+        )
+        logger.info(
+            f"Observer setup: "
+            f"observers_count={len(observers_config) if observers_config else 0}, "
+            f"is_stream={is_stream}"
+        )
+        if observers_config and not is_stream:
+            try:
+                observer_instances = await build_observers(
+                    configs=observers_config,
+                    template=self.template,
+                    agent_context=self,
+                    handler_map=self.flow_builder.handler_map,
+                )
+                if observer_instances:
+                    self._observer_manager = ObserverManager(
+                        observer_instances, context
+                    )
+                    logger.info(
+                        f"Initialized {len(observer_instances)} "
+                        f"real-time observer(s)"
+                    )
+            except Exception as e:
+                logger.error(f"Failed to initialize observers: {e}")
+                self._observer_manager = None
+
+        self._register_event_handlers()
+
+        # Daily transfer (gen>1): the reused, already-joined DailyTransportClient
+        # never re-fires on_client_connected (its normal trigger), so drive
+        # flow-init explicitly once the rebuilt pipeline is ready. gen-1 and
+        # telephony still go through the on_client_connected event.
+        if self.is_daily_mode and self.generation > 1:
+            asyncio.create_task(self._drive_client_connected_after_start(self.task))
+
+        runner = PipelineRunner(handle_sigint=False, force_gc=True)
+        log_prefix = "[STREAM] " if is_stream else ""
+        try:
+            if ENABLE_BREEZE_BUDDY_TRACING:
+                await self._run_with_tracing(runner)
+            else:
+                logger.info(
+                    f"{log_prefix}Running pipeline for conversation: {self.conversation_id}"
+                )
+                await runner.run(self.task)
+        except asyncio.CancelledError:
+            logger.info(f"{log_prefix}Pipeline task cancelled. Exiting gracefully.")
+        finally:
+            # Per-generation observer teardown (each generation builds its own).
             if self._observer_manager:
                 await self._observer_manager.stop()
                 self._observer_manager = None
-            clear_log_context()
+
+    # ══════════════════════════════════════════════════════════════════════
+    # Cleanup
+    # ══════════════════════════════════════════════════════════════════════
 
     async def _handle_unexpected_disconnect(self, reason: str) -> None:
         """Handle unexpected disconnection and cleanup."""
@@ -1345,6 +1526,11 @@ class Agent:
 
         context = TemplateContext(self)
         await end_conversation(context, {})
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Module entry points (telephony / daily)
+# ══════════════════════════════════════════════════════════════════════════
 
 
 async def telephony_bot(

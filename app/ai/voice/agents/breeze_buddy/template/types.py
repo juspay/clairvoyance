@@ -1451,6 +1451,28 @@ class KnowledgeBaseConfig(BaseModel):
         return self
 
 
+class AgentTransferConfig(BaseModel):
+    """Configuration for agent-to-agent transfer (connect_to_agent builtin)."""
+
+    targets: Dict[str, str] = Field(
+        ...,
+        description="Alias -> target template id. The LLM selects an alias "
+        "(e.g. 'sales'); the template controls which template it maps to.",
+    )
+    max_transfers: int = Field(
+        5,
+        ge=1,
+        le=20,
+        description="Max transfers per call — loop guard against A->B->A ping-pong.",
+    )
+    context_mode: Literal["summary", "full", "fresh"] = Field(
+        "summary",
+        description="What the next agent inherits: 'summary' = handoff note with "
+        "the LLM-provided summary; 'full' = replay entire message history; "
+        "'fresh' = nothing but a transfer marker.",
+    )
+
+
 class ConfigurationModel(BaseModel):
     # --- Agent session state (generic) ---
     state_reducers: List[StateReducer] = Field(
@@ -2186,6 +2208,16 @@ class GlobalBuiltinFunction(BaseGlobalFunction):
     # (warm_transfer, end_conversation, etc.) — the LLM must NOT keep talking
     # over the handler. Force sync execution to preserve pre-1.0 behavior.
     cancel_on_interruption: Optional[bool] = True
+    # Agent-to-agent transfer config (single source of truth — lives on the
+    # function entry, not on ConfigurationModel). Only read when
+    # handler == "connect_to_agent"; inert on every other builtin.
+    agent_transfer: Optional[AgentTransferConfig] = Field(
+        None,
+        description="Config for the connect_to_agent handler: targets allow-list "
+        "(alias -> template_id), max_transfers loop guard, and context_mode "
+        "(what the next agent inherits: summary | full | fresh). Ignored by "
+        "other builtins.",
+    )
 
 
 class GlobalCustomFunction(BaseGlobalFunction):
