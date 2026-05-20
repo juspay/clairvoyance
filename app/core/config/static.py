@@ -383,6 +383,11 @@ HITL_ACTIONS = [
     action.strip().lower() for action in _hitl_actions_str.split(",") if action.strip()
 ]
 
+# Breeze Buddy HITL Configuration
+BREEZE_BUDDY_HITL_DEFAULT_TIMEOUT = int(
+    os.environ.get("BREEZE_BUDDY_HITL_DEFAULT_TIMEOUT", "10")
+)
+
 # Chart Generation Configuration
 ENABLE_CHARTS = os.environ.get("ENABLE_CHARTS", "false").lower() == "true"
 MAX_CHARTS_PER_TURN = int(os.environ.get("MAX_CHARTS_PER_TURN", "1"))

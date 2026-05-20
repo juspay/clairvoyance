@@ -1485,6 +1485,32 @@ class HookConfig(BaseModel):
     awaited: bool = False
 
 
+class HITLConfig(BaseModel):
+    """Configuration for Human-in-the-Loop voice confirmation.
+
+    When enabled, the function execution is paused and the user is asked
+    for verbal confirmation before proceeding.
+    """
+
+    enabled: bool = False
+    confirmation_message: Optional[str] = Field(
+        None,
+        description="Custom TTS prompt for confirmation. If not provided, a default message is used.",
+    )
+    timeout_seconds: Optional[int] = Field(
+        None,
+        description="Seconds to wait for user response before timing out. If omitted, the runtime default is used.",
+    )
+    accepted_responses: List[str] = Field(
+        default=["yes", "yeah", "sure", "confirm"],
+        description="Keywords that indicate user approval.",
+    )
+    rejected_responses: List[str] = Field(
+        default=["no", "nah", "cancel", "reject"],
+        description="Keywords that indicate user rejection.",
+    )
+
+
 class FlowFunction(BaseModel):
     name: str
     description: str
@@ -1492,6 +1518,11 @@ class FlowFunction(BaseModel):
     required: List[str] = []
     transition_to: Optional[str] = None
     hooks: List[HookConfig] = []
+    hitl_config: Optional[HITLConfig] = Field(
+        None,
+        alias="hitl",
+        description="Human-in-the-Loop confirmation configuration for this function.",
+    )
 
 
 class GlobalFunctionType(str, Enum):
@@ -1549,6 +1580,11 @@ class BaseGlobalFunction(BaseModel):
             "any future channel benefit uniformly. Use the registered transform "
             "names from handlers/transport/utils/response_transform.py."
         ),
+    )
+    hitl_config: Optional[HITLConfig] = Field(
+        None,
+        alias="hitl",
+        description="Human-in-the-Loop confirmation configuration for this function.",
     )
 
 

@@ -34,6 +34,7 @@ async def transition_handler(
     transition_to: Optional[str] = None,
     hooks: Optional[List[Dict[str, Any]]] = None,
     function_name: Optional[str] = None,
+    hitl_config: Optional[Dict[str, Any]] = None,
 ):
     """
     Unified handler for all workflow transitions.
@@ -58,7 +59,43 @@ async def transition_handler(
         f"transition_to: '{transition_to}', hooks: {hooks}, args: {args}"
     )
 
-    # Execute hooks synchronously (awaited) or asynchronously (fire and forget)
+    # Check for HITL confirmation if enabled
+
+    if hitl_config and hitl_config.get("enabled"):
+        logger.info(f"DEBUG: function_name={function_name}, hitl_config={hitl_config}")
+        from app.ai.voice.agents.breeze_buddy.features.hitl.manager import (
+            get_hitl_manager,
+        )
+        from app.ai.voice.agents.breeze_buddy.template.types import HITLConfig
+
+        hitl_manager = get_hitl_manager()
+        config = HITLConfig.model_validate(hitl_config)
+
+        confirmation = await hitl_manager.request_confirmation(
+            context=context,
+            config=config,
+            function_name=function_name or "unknown",
+            arguments=args,
+        )
+        logger.info(f"HITL DEBUG transition.py: HITL result={confirmation}")
+
+        if not confirmation.get("approved"):
+            logger.info(
+                f"HITL rejected for {function_name}: {confirmation.get('reason')}"
+            )
+            # Return success response but stay in current node
+            # This allows LLM to continue and handle rejection gracefully
+            return {
+                "status": "success",
+                "result": "Function confirmation was rejected by user",
+                "confirmation_result": confirmation,
+            }, None
+        else:
+            logger.info(
+                f"HITL APPROVED for {function_name}: {confirmation.get('reason')}"
+            )
+
+    # Schedule hooks to run asynchronously (fire and forget)
     if hooks:
         awaited = hooks[0].get("awaited", False)
         if awaited:
@@ -118,7 +155,11 @@ async def transition_handler(
         # Record entry into new node (pass the function that brought us here)
         context.record_node_entry(transition_to, function_name, args)
 
-        return {}, next_node
+        result_message = {
+            "result": f"Successfully executed {function_name}",
+            "status": "success",
+        }
+        return result_message, next_node
     else:
         logger.info(
             f"No transition specified for function '{function_name}', staying in current node"
