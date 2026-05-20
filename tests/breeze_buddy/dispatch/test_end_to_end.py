@@ -381,3 +381,43 @@ async def test_reaper_drops_already_processing_lead(harness, fake_redis, monkeyp
         proc_key not in fake_redis.client.lists
         or fake_redis.client.lists[proc_key] == []
     )
+
+
+# ---------------------------------------------------------------------------
+# Execution-mode gate (Daily / web-mode leads must not dial PSTN)
+# ---------------------------------------------------------------------------
+
+
+async def test_daily_lead_reaching_worker_is_dropped(harness, fake_redis):
+    """
+    Defensive backstop: if a DAILY-mode lead somehow gets on the ready list
+    (e.g., a bypassed ingest path), the worker drops it BEFORE acquiring a
+    channel token and BEFORE calling make_call. No phantom Plivo/Twilio dial.
+
+    This is the test that pins the fix for the reported bug:
+        "When tested with daily, this lead is also getting scheduled and a
+         Plivo call is getting initiated."
+    """
+    from app.schemas import ExecutionMode
+
+    lead = make_lead("lead-daily")
+    lead.execution_mode = ExecutionMode.DAILY  # ← key difference
+    harness.add_lead(lead)
+
+    await init_channel_semaphore(harness.number.id, 1)
+    await fake_redis.client.rpush(READY_LIST, lead.id)
+
+    worker = w.Worker(worker_uuid="w-daily-drop")
+    await worker._iteration(session=None)
+
+    # Worker did NOT call make_call — no phantom telephony dial.
+    assert harness.call_recorder.calls == []
+    # Channel token NEVER consumed.
+    assert await channel_tokens_available(harness.number.id) == 1
+    # Lead was NOT locked, NOT deferred, NOT released — worker exited before
+    # acquire_lock_on_lead_by_id.
+    assert lead.id not in harness.locked_lead_ids
+    assert harness.deferred == []
+    assert lead.id not in harness.released_locks
+    # Status untouched.
+    assert lead.status == LeadCallStatus.BACKLOG

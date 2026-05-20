@@ -16,7 +16,25 @@ from typing import Any, Optional, cast
 from app.ai.voice.agents.breeze_buddy.dispatch.keys import SCHEDULE_ZSET
 from app.core.config.static import BB_DISPATCH_QPS_JITTER_MS
 from app.core.logger import logger
+from app.schemas import ExecutionMode
 from app.services.redis import get_redis_service
+
+# Execution modes the event-driven dispatcher places outbound calls for.
+# Mirrors the WHERE clause in ``get_unscheduled_backlog_leads_query`` so the
+# ingest path, retry path, and dispatch-now path all match the reconciler.
+# DAILY/DAILY_TEST/DAILY_STREAM are web-only — they're either customer-
+# initiated (inbound) or handled by a separate room-creation + notification
+# flow, NOT by the worker's ``provider.make_call`` PSTN dial. HOLD_TRANSFER
+# is a transient mid-call leg, not a standalone outbound to schedule.
+DISPATCHABLE_EXECUTION_MODES = frozenset(
+    {ExecutionMode.TELEPHONY, ExecutionMode.TELEPHONY_TEST}
+)
+
+
+def is_dispatchable(execution_mode: ExecutionMode) -> bool:
+    """Return True if a lead with this execution_mode should be put on the
+    dispatch schedule (and processed by a worker)."""
+    return execution_mode in DISPATCHABLE_EXECUTION_MODES
 
 
 def _to_unix_ms(when: datetime) -> int:

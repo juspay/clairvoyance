@@ -22,7 +22,10 @@ from app.ai.voice.agents.breeze_buddy.dispatch.alerts import raise_orphan_webhoo
 from app.ai.voice.agents.breeze_buddy.dispatch.channel_semaphore import (
     release_channel_token,
 )
-from app.ai.voice.agents.breeze_buddy.dispatch.queue import schedule_lead
+from app.ai.voice.agents.breeze_buddy.dispatch.queue import (
+    is_dispatchable,
+    schedule_lead,
+)
 from app.ai.voice.agents.breeze_buddy.managers.pre_checks import run_pre_checks
 from app.ai.voice.agents.breeze_buddy.services.agent_router.client import (
     safe_release_pod,
@@ -394,8 +397,12 @@ async def _retry_call(
 
         # Event-driven dispatch: ZADD the retry onto the schedule. Best-effort
         # — DB is authoritative; reconciler heals dropped ZADDs.
+        # Gated on execution_mode — only telephony retries flow through the
+        # worker's make_call path. DAILY retries (if any) are handled by the
+        # web-mode flow, not by phantom-dialling via Plivo/Twilio.
         # See docs/BACKLOG_DISPATCHER_REDESIGN.md §4 (retry semantics).
-        await schedule_lead(lead_id=retry_id, next_attempt_at=next_attempt_at)
+        if is_dispatchable(lead.execution_mode):
+            await schedule_lead(lead_id=retry_id, next_attempt_at=next_attempt_at)
 
 
 async def reconcile_stuck_processing_leads():

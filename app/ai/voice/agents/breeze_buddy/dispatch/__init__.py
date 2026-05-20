@@ -18,7 +18,9 @@ from app.ai.voice.agents.breeze_buddy.dispatch.promoter import (
     stop_promoter,
 )
 from app.ai.voice.agents.breeze_buddy.dispatch.queue import (
+    DISPATCHABLE_EXECUTION_MODES,
     cancel_scheduled_lead,
+    is_dispatchable,
     schedule_lead,
 )
 from app.ai.voice.agents.breeze_buddy.dispatch.reconcilers import (
@@ -34,11 +36,13 @@ from app.ai.voice.agents.breeze_buddy.dispatch.worker import (
 )
 
 __all__ = [
+    "DISPATCHABLE_EXECUTION_MODES",
     "LeaderElection",
     "acquire_channel_token",
     "cancel_scheduled_lead",
     "clean_stale_bb_locks",
     "init_channel_semaphore",
+    "is_dispatchable",
     "monitor_dispatch_health",
     "reap_stuck_processing_lists",
     "reconcile_backlog_to_zset",

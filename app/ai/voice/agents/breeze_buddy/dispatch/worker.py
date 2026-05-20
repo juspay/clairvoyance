@@ -37,7 +37,10 @@ from app.ai.voice.agents.breeze_buddy.dispatch.keys import (
     reseller_paused_key,
     worker_heartbeat_key,
 )
-from app.ai.voice.agents.breeze_buddy.dispatch.queue import schedule_lead
+from app.ai.voice.agents.breeze_buddy.dispatch.queue import (
+    is_dispatchable,
+    schedule_lead,
+)
 from app.ai.voice.agents.breeze_buddy.managers.calls import (
     _acquire_number,
     _get_available_number,
@@ -249,6 +252,18 @@ class Worker:
             logger.info(
                 f"Worker {self._uuid}: lead {lead_id} status is "
                 f"{lead.status.value}, skipping"
+            )
+            return
+        if not is_dispatchable(lead.execution_mode):
+            # Defensive backstop. The ingest paths (handler, retry,
+            # dispatch-now) and the reconciler query all filter non-
+            # dispatchable modes out, so this should never fire. If it
+            # does, drop the lead with a loud log rather than dialling
+            # a phantom PSTN call for a DAILY/web-mode lead.
+            logger.error(
+                f"Worker {self._uuid}: lead {lead_id} has non-dispatchable "
+                f"execution_mode={lead.execution_mode.value}; dropping without "
+                "dispatch (someone bypassed the schedule_lead gate)."
             )
             return
         if await self._reseller_paused(lead.reseller_id):

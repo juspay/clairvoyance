@@ -12,6 +12,7 @@ from fastapi import HTTPException, status
 
 from app.ai.voice.agents.breeze_buddy.dispatch import (
     cancel_scheduled_lead,
+    is_dispatchable,
     schedule_lead,
 )
 from app.ai.voice.agents.breeze_buddy.services.daily.recording import (
@@ -350,8 +351,13 @@ async def push_lead_handler(req: PushLeadRequest, current_user: UserInfo) -> Dic
         # Event-driven dispatch: drop a scheduling sticky note onto
         # bb:schedule:leads. Best-effort — DB is authoritative; the
         # reconciler heals any dropped ZADDs within 60s.
+        # Gated on execution_mode so we only dispatch TELEPHONY leads;
+        # DAILY / DAILY_STREAM are handled by separate web-mode flows
+        # (customer-initiated room join) and would otherwise cause a
+        # phantom Plivo/Twilio dial via the worker's make_call path.
         # See docs/BACKLOG_DISPATCHER_REDESIGN.md §2 Plane 1.
-        if next_attempt_at is not None:
+        lead_execution_mode = req.execution_mode or ExecutionMode.TELEPHONY
+        if next_attempt_at is not None and is_dispatchable(lead_execution_mode):
             await schedule_lead(lead_id=uuid, next_attempt_at=next_attempt_at)
 
         logger.info(f"Lead call tracker {req.request_id} added to queue with ID {uuid}")
@@ -771,6 +777,17 @@ async def dispatch_now_lead_handler(lead_id: str, current_user: UserInfo) -> Dic
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Lead is locked by another dispatcher",
+        )
+    if not is_dispatchable(lead.execution_mode):
+        # /dispatch-now is a TELEPHONY-only endpoint. DAILY / DAILY_STREAM
+        # leads are handled by web-mode flows (customer-initiated room
+        # join) and would phantom-dial via the worker if scheduled here.
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"Lead execution_mode '{lead.execution_mode.value}' is not "
+                "dispatchable via /dispatch-now (telephony-only endpoint)"
+            ),
         )
 
     now = datetime.now(timezone.utc)
