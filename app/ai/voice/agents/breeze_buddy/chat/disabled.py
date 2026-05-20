@@ -16,6 +16,10 @@ Why each entry is disabled:
 - ``warm_transfer`` / ``connect_to_live_agent``: chat-to-human handoff is
   not implemented in v1; see ``docs/CHAT_MODE.md §15`` for the Phase 2
   plan.
+- ``connect_to_agent``: agent-to-agent transfer rebuilds a voice pipeline
+  (new STT/LLM/TTS). Chat agents are constructed-and-discarded per turn, so a
+  "transfer" there is just changing the session's template id — a different,
+  much smaller feature. Voice-only in v1.
 - ``end_conversation``: voice templates wire this as a post-action on the
   closing node to push ``EndFrame()`` and tear down the long-lived call
   pipeline. Chat agents are constructed-and-discarded per turn — the
@@ -38,6 +42,7 @@ CHAT_DISABLED_NAMES: frozenset[str] = frozenset(
         "play_audio_sound",
         "warm_transfer",
         "connect_to_live_agent",
+        "connect_to_agent",
         "end_conversation",
         "hold_and_consult",
     }

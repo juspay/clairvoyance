@@ -50,6 +50,18 @@ async def end_conversation(context: TemplateContext, args, transition_to=None):
         )
         return {}
 
+    # Agent-to-agent transfer in progress: this EndFrame is a transfer teardown,
+    # not a real call end. Skip finalization — run()'s loop rebuilds the pipeline
+    # and end_conversation runs once at the true end. Defensive: the transfer path
+    # (connect_to_agent -> stop_when_done) never calls this handler; this guards a
+    # race (e.g. the idle timer firing in the same tick as the transfer commit).
+    if getattr(context.bot, "pending_transfer", None):
+        logger.info(
+            f"Agent transfer in progress for {context.call_sid}; "
+            "skipping finalization (defensive guard)"
+        )
+        return {}
+
     context.conversation_ended = True
     logger.debug(f"Set conversation_ended flag to True for call {context.call_sid}")
 
@@ -70,8 +82,10 @@ async def end_conversation(context: TemplateContext, args, transition_to=None):
                 f"Set call_ended_by to 'agent' for normal flow completion in call {context.call_sid}"
             )
 
-        # Collect transcription
-        transcription = []
+        # Collect transcription. Seed with completed generations' messages
+        # (agent-to-agent transfer merge); the loop below appends the final
+        # generation's messages on top.
+        transcription = list(getattr(context.bot, "prior_generation_messages", []))
         filtered_transcript = []
         # Ephemeral knowledge-base context blocks (auto_retrieve injections /
         # full_injection role message) start with the configured header —
@@ -120,8 +134,9 @@ async def end_conversation(context: TemplateContext, args, transition_to=None):
 
             context.lead.metaData["transcription"] = transcription
             logger.info(
-                f"Collected {len(transcription)} total messages "
-                f"({len(filtered_transcript)} user/assistant) for call {context.call_sid}"
+                f"Collected {len(filtered_transcript)} user/assistant message(s) "
+                f"in the final generation; {len(transcription)} total messages "
+                f"(all generations) stored for call {context.call_sid}"
             )
 
         else:
