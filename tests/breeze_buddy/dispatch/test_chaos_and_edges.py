@@ -457,10 +457,16 @@ async def test_worker_main_loop_stops_on_event(fake_redis, monkeypatch):
         iteration_count += 1
         await asyncio.sleep(0.01)
 
+    # _loop() now pulls the process-wide shared aiohttp session via
+    # get_shared_aiohttp_session(); in tests no lifespan has initialised
+    # it, so stub the getter to return None — the fake_iteration above
+    # never actually uses the session value.
+    monkeypatch.setattr(w, "get_shared_aiohttp_session", lambda: None)
+
     worker = w.Worker(worker_uuid="w-exit")
     monkeypatch.setattr(worker, "_iteration", fake_iteration)
     worker._stopping.clear()
-    # Drive the loop body inline; skip create_aiohttp_session.
+    # Drive the loop body inline; skip the real shared-session lookup.
     task = asyncio.create_task(worker._loop())
 
     await asyncio.sleep(0.05)

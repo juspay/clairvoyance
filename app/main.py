@@ -73,7 +73,10 @@ from app.core.config.static import (
 # Import necessary components from the new structure
 from app.core.logger import logger
 from app.core.security.jwt import validate_automatic_request
-from app.core.transport.http_client import create_aiohttp_session
+from app.core.transport.http_client import (
+    close_shared_aiohttp_session,
+    init_shared_aiohttp_session,
+)
 from app.database import close_db_pool, init_db_pool
 from app.helpers.automatic.daily_room_pool import (
     cleanup_room_pool,
@@ -144,8 +147,9 @@ async def lifespan(_app: FastAPI):
         "Worker process: DevCycle flags pre-loaded by parent process, reading from Redis"
     )
 
-    # Initialize aiohttp session with proxy support for Daily API
-    aiohttp_session = create_aiohttp_session()
+    # Process-wide shared aiohttp session; consumed by dispatch workers
+    # via get_shared_aiohttp_session() and the Daily REST helper below.
+    aiohttp_session = await init_shared_aiohttp_session()
     daily_helpers["rest"] = DailyRESTHelper(
         daily_api_key=DAILY_API_KEY,
         daily_api_url=DAILY_API_URL,
@@ -352,9 +356,8 @@ async def lifespan(_app: FastAPI):
     await close_db_pool()
     # Close Redis connections
     await close_redis_connections()
-    # Close aiohttp session
-    await aiohttp_session.close()
-    logger.info("Aiohttp session closed.")
+    # Close the shared aiohttp session (drains the TCP connector)
+    await close_shared_aiohttp_session()
 
 
 app = FastAPI(title="Breeze Automatic Server", version=__version__, lifespan=lifespan)
