@@ -1,6 +1,6 @@
 # TODO
 
-Living index of follow-ups for this repo. Append new items at the bottom of the relevant section. Remove rows when the underlying work lands. Last updated: 2026-05-02 (post pipecat-ai 1.1.0 + pipecat-ai-flows 1.0.0 migration).
+Living index of follow-ups for this repo. Append new items at the bottom of the relevant section. Remove rows when the underlying work lands. Last updated: 2026-05-21 (post PR #779 event-driven-dispatcher rate-limit and number-unavailable fix).
 
 ---
 
@@ -73,6 +73,39 @@ Discovered during the 1.1.0 review pass. None of these are blockers; tracking so
 **Step 3 — delete `LanguageAwareSarvamTTS` + `detect_script` + `SCRIPT_RANGES` + `SCRIPT_TO_SARVAM_LANG`** from `app/ai/voice/tts/sarvam.py` (~115 lines, one file). Only safe if step 2 confirms zero cross-Indian-script flows. If step 2 finds even one, leave the wrapper — V3's text-normalization is still driven by the per-request `target_language_code` and would mangle off-script text.
 
 Also worth fixing as a one-liner whether or not we delete the wrapper: `_switch_language_if_needed` assigns a bare `str` into `self._settings.language` after the first script switch, while `build_sarvam_tts` initializes it as a `Language` enum. Cosmetic type drift only — `Language` is a `StrEnum` so equality and JSON serialization both work — but if pipecat ever tightens the field type to `Language` only, this breaks. Fix at `app/ai/voice/tts/sarvam.py:161`: wrap the lookup in `Language(...)`.
+
+### Twilio — `_get_available_number` treats transient IN_USE as permanent
+
+PR #779 (2026-05-21) collapsed any `None` return from `_get_available_number` into a terminal `FINISHED + NUMBER_UNAVAILABLE` outcome plus a throttled P1 alert. Correct for the permanent cases (template's `outbound_number_id` deleted/disabled, empty unassigned-default fallback pool). **Wrong for Twilio.**
+
+Twilio uses the DB `outbound_number.status` column as a binary 1-bit lock: `_acquire_number` flips `AVAILABLE → IN_USE` at call-start, `_release_number` flips back via the call-end webhook (could be minutes later). While a Twilio call is in flight, every concurrent dispatch for the same number sees `status != AVAILABLE` → returns `None` from `_get_available_number` → now gets marked `FINISHED` instead of the prior 10s defer.
+
+Deterministic for any Twilio number with `maximum_channels >= 2`. At `maximum_channels = 1` the Redis channel-token semaphore (`dispatch/channel_semaphore.py`) mostly defends it (a narrow race window remains between gate-1 and gate-2). Plivo/Exotel are unaffected — they increment a counter on `_acquire_number` and don't touch the `status` column during normal calls, so `status` stays AVAILABLE throughout.
+
+**Impact**: Twilio tenants with multi-channel numbers silently drop all-but-one of concurrent leads. Not observed in production yet — the 2026-05-21 incident that motivated PR #779 was Plivo/Exotel traffic only (Indian shop "Amir and Sons" via `BB_SHOPIFY`). Re-verify before any Twilio onboarding.
+
+**Suggested fix** (in `app/ai/voice/agents/breeze_buddy/managers/calls.py`, `_get_available_number`): when the only reason for `None` is `status == IN_USE` on Twilio, log it and return the number anyway — let the Redis semaphore plus the worker's existing `_acquire_number`-failure branch (already defers 5s, `worker.py:413-421`) handle capacity. Alternatively distinguish "permanent" vs "transient capacity" via a sentinel return so the worker can defer for IN_USE and `_fail_and_release` for the rest. Also tighten the `raise_no_outbound_number` alert guidance not to fire for transient IN_USE.
+
+**Defer-and-fix gate**: cheap SQL check first — `SELECT COUNT(*) FROM outbound_number WHERE provider='TWILIO' AND maximum_channels >= 2`. Empty → safe to leave as follow-up. Non-empty → fix before next deploy.
+
+### Dispatch — atomic record bucket inflation on `make_call` failure
+
+In `app/ai/voice/agents/breeze_buddy/services/call_limiter.py`, `record_outbound_call_attempt` runs the atomic ZADD **before** `provider.make_call` (intentional — strict cap requires rejecting before the customer's phone rings). If `make_call` then raises or returns no SID, the bucket has been incremented for a call that didn't reach the customer. Matches pre-PR semantics (pre-PR also counted attempts that didn't reach `make_call`) and only triggers on rare provider failures, so deferred from PR #779.
+
+**Suggested fix**: on the `make_call`-failure branches in `worker.py:445-465` (exception and no-SID paths), call a new `undo_outbound_call_attempt(phone, lead_id)` helper that `ZREM`s the specific member `{now}:{lead_id}` from the bucket. ~10 lines in `call_limiter.py` + 1 test in `tests/breeze_buddy/dispatch/test_end_to_end.py`. Defer until production telemetry shows actual inflation (i.e., a phone hitting the limit when the operator can confirm the customer wasn't actually dialed that many times).
+
+### Dispatcher comment drift — "record runs after make_call success"
+
+PR #779 moved `record_outbound_call_attempt` from after `make_call` to before `make_call` (between `_acquire_number` success and `provider.make_call`) to restore the strict cap. Four comments/docstrings still describe the old placement:
+
+| File:line | Stale text |
+|---|---|
+| `app/ai/voice/agents/breeze_buddy/dispatch/worker.py:351-352` | "The matching record_outbound_call_attempt() runs only after provider.make_call succeeds." |
+| `tests/breeze_buddy/dispatch/test_end_to_end.py:104-105` | "record runs once (only after make_call success)" |
+| `tests/breeze_buddy/dispatch/test_end_to_end.py:178-179` | "record (ZADD, runs only after provider.make_call succeeds)" |
+| `tests/breeze_buddy/dispatch/test_end_to_end.py:332-333` | "only record does, and record runs only after a successful provider.make_call" |
+
+Tests pass (they assert call counts, not order). Pure documentation drift. Trivial cleanup — fix next time the file is touched.
 
 ### Soniox STT — `SonioxSTTServiceWithEndpointDelay` is fragile
 

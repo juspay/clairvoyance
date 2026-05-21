@@ -207,10 +207,25 @@ async def _get_available_number(
     template: Optional[TemplateModel],
 ) -> Optional[OutboundNumber]:
     """
-    Finds an available outbound number for a given configuration.
+    Resolve the outbound number to dial from. Returns None only for
+    permanent / semi-permanent failures:
 
-    First tries the new approach (template with outbound_number_id).
-    Falls back to backward compatible approach (matching by reseller/shop).
+      - template.outbound_number_id points at a row that doesn't exist
+      - the row's status is not AVAILABLE (manually disabled, or — for
+        Twilio's legacy 1-bit gate — currently IN_USE on another call)
+      - fallback search found nothing for this reseller/merchant pool
+
+    Capacity exhaustion is NOT a reason to return None: the Redis
+    channel-token semaphore is now the authoritative gate (see
+    ``dispatch/channel_semaphore.py``) and is checked one step downstream
+    in the worker. The old Exotel ``channels < maximum_channels`` check
+    here was redundant with that semaphore and caused permanent
+    misconfigurations and transient capacity issues to be indistinguishable
+    to the caller — both surfaced as None and were retried forever every
+    10s.
+
+    Callers should treat a None return as a terminal condition for the
+    lead (mark FINISHED + alert), not as something to retry.
     """
 
     number = None
@@ -222,22 +237,27 @@ async def _get_available_number(
         outbound_number = await get_outbound_number_by_id(template.outbound_number_id)
 
         if outbound_number and outbound_number.status == OutboundNumberStatus.AVAILABLE:
-            if outbound_number.provider == CallProvider.EXOTEL:
-                if (
-                    outbound_number.channels is not None
-                    and outbound_number.maximum_channels is not None
-                    and outbound_number.channels < outbound_number.maximum_channels
-                ):
-                    number = outbound_number
-            elif outbound_number.provider == CallProvider.TWILIO:
-                number = outbound_number
-            elif outbound_number.provider == CallProvider.PLIVO:
-                number = outbound_number
+            number = outbound_number
+        elif outbound_number is None:
+            logger.error(
+                f"_get_available_number: template {config.template} references "
+                f"outbound_number_id {template.outbound_number_id} which does not "
+                "exist. This is a misconfiguration that will not self-heal."
+            )
+        else:
+            logger.warning(
+                f"_get_available_number: outbound number {outbound_number.id} "
+                f"is in status {outbound_number.status.value} (not AVAILABLE) "
+                f"for template {config.template}."
+            )
 
     else:
         logger.info(
-            f"Using backward compatible approach: looking for outbound number "
-            f"matching reseller {config.reseller_id}, shop {config.merchant_id}"
+            f"Using backward compatible approach for reseller "
+            f"{config.reseller_id}, shop {config.merchant_id}: scanning the "
+            f"unassigned-default pool (outbound_number rows with reseller_id "
+            f"and merchant_id both NULL) on provider "
+            f"{config.calling_provider}."
         )
 
         # Get all available numbers
@@ -245,7 +265,12 @@ async def _get_available_number(
             OutboundNumberStatus.AVAILABLE, config.calling_provider
         )
 
-        # Filter by reseller_id and merchant_id as none for fallback
+        # Legacy fallback: any number with no explicit reseller/merchant
+        # assignment serves as a shared default. The caller's reseller_id /
+        # merchant_id from `config` are intentionally NOT used as a filter
+        # here — the fallback is the unassigned-default pool, not a per-
+        # tenant pool. See raise_no_outbound_number() in dispatch/alerts.py
+        # for the operator guidance that matches this behavior.
         matching_numbers = [
             n
             for n in all_available_numbers
@@ -253,18 +278,7 @@ async def _get_available_number(
         ]
 
         if matching_numbers:
-            for num in matching_numbers:
-                if num.provider == CallProvider.EXOTEL:
-                    if (
-                        num.channels is not None
-                        and num.maximum_channels is not None
-                        and num.channels < num.maximum_channels
-                    ):
-                        number = num
-                        break
-                else:
-                    number = num
-                    break
+            number = matching_numbers[0]
 
     if not number:
         # Support both new and old field names for config

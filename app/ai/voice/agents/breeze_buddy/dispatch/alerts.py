@@ -19,7 +19,7 @@ underlying observation is also logged at the source.
 
 from __future__ import annotations
 
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from app.ai.voice.agents.breeze_buddy.dispatch.keys import alert_throttle_key
 from app.core.logger import logger
@@ -165,6 +165,55 @@ async def raise_channel_drift(
                 "value": (
                     "Reconciler will top-up/trim automatically. If drift persists "
                     "tick over tick, check provider call-end webhook delivery."
+                ),
+            },
+        ],
+    )
+
+
+async def raise_no_outbound_number(
+    reseller_id: str,
+    template: str,
+    merchant_id: Optional[str],
+) -> None:
+    """
+    P1 — a dispatchable lead has no usable outbound number to dial from.
+
+    Raised when ``_get_available_number`` returns None: the template's
+    assigned ``outbound_number_id`` is missing/disabled, or — for templates
+    on the legacy fallback path — the unassigned-default pool
+    (``outbound_number`` rows where both ``reseller_id`` and ``merchant_id``
+    are NULL) is empty. This is a misconfiguration that will not self-heal
+    — every lead for this (reseller, template) is being marked FINISHED
+    with outcome NUMBER_UNAVAILABLE until it's fixed.
+
+    Throttled per (reseller, template) so a misconfigured template doesn't
+    page repeatedly while we're working through its backlog.
+    """
+    await _send(
+        alert_name=f"no_outbound_number:{reseller_id}:{template}",
+        throttle_seconds=_THROTTLE_P1,
+        title="[P1] Breeze Buddy: no outbound number for lead",
+        fields=[
+            {"name": "Reseller", "value": reseller_id},
+            {"name": "Template", "value": template},
+            {"name": "Merchant", "value": merchant_id or "n/a"},
+            {
+                "name": "Effect",
+                "value": (
+                    "Leads matching this (reseller, template) are being marked "
+                    "FINISHED with outcome=NUMBER_UNAVAILABLE without dialing."
+                ),
+            },
+            {
+                "name": "Action",
+                "value": (
+                    "Verify `template.outbound_number_id` points to an existing "
+                    "`outbound_number` row in status AVAILABLE. If using the "
+                    "legacy fallback path, confirm the unassigned-default pool "
+                    "(rows with both `reseller_id` and `merchant_id` NULL) has "
+                    "at least one AVAILABLE number on the requested provider. "
+                    "Re-push affected leads after the fix."
                 ),
             },
         ],

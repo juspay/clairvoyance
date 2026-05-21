@@ -417,8 +417,24 @@ class DispatchHarness:
         self.is_blacklisted: bool = False
         self.rate_limit_ok: bool = True
         self.rate_limit_defer_seconds: int = 0
+        # Atomic-record (cross-lead race) toggle. When False, the harness
+        # simulates the case where another concurrent worker filled the
+        # bucket between our peek and our atomic record — the production
+        # Lua's check-and-set rejects this attempt and the worker must
+        # release channel + number + defer by the rate-limit window.
+        self.rate_limit_record_accepts: bool = True
+        self.rate_limit_record_defer_seconds: int = 0
+        # Track each invocation so tests can assert on call-order
+        # invariants (peek runs every dispatch; record runs only after
+        # channel-token + number acquisition succeed; rejected records
+        # are still observed here so we can pin the race-rejection path).
+        self.rate_limit_peeks: list[dict[str, str]] = []
+        self.rate_limit_records: list[dict[str, str]] = []
         self.cas_succeeds: bool = True
         self.get_available_returns_none: bool = False
+        # Captured alerts so tests can assert no-outbound-number throttled
+        # alerts fired without needing a real Slack/Redis round-trip.
+        self.no_outbound_number_alerts: list[dict[str, str]] = []
         # Failure injection — tests assign callables to raise on demand.
         self.get_lead_by_id_raises: Optional[Exception] = None
         self.acquire_lock_raises: Optional[Exception] = None
@@ -540,10 +556,27 @@ class DispatchHarness:
 
     # ---- telephony / rate-limit / greeting --------------------------------
 
-    async def check_outbound_rate_limit_and_alert(
+    async def peek_outbound_rate_limit_and_alert(
         self, customer_phone: str, lead_id: str, reseller_id: str
     ) -> tuple[bool, int]:
+        """Read-only rate-limit check. NEVER mutates state."""
+        self.rate_limit_peeks.append(
+            {"phone": customer_phone, "lead_id": lead_id, "reseller_id": reseller_id}
+        )
         return (self.rate_limit_ok, self.rate_limit_defer_seconds)
+
+    async def record_outbound_call_attempt(
+        self, customer_phone: str, lead_id: str, reseller_id: str
+    ) -> tuple[bool, int]:
+        """Atomic check-and-record. Runs after channel-token + DB number
+        acquisition, BEFORE make_call. Returns (allow, defer_seconds) so
+        the worker can release resources and defer on race-rejection."""
+        self.rate_limit_records.append(
+            {"phone": customer_phone, "lead_id": lead_id, "reseller_id": reseller_id}
+        )
+        if not self.rate_limit_record_accepts:
+            return (False, self.rate_limit_record_defer_seconds)
+        return (True, 0)
 
     async def prepare_and_store_initial_greeting(
         self, lead_id: str, payload: Dict[str, Any], template: Any
@@ -612,8 +645,28 @@ def harness(monkeypatch, fake_redis) -> DispatchHarness:
     # Telephony + rate limit + greeting.
     monkeypatch.setattr(
         worker_mod,
-        "check_outbound_rate_limit_and_alert",
-        h.check_outbound_rate_limit_and_alert,
+        "peek_outbound_rate_limit_and_alert",
+        h.peek_outbound_rate_limit_and_alert,
+    )
+    monkeypatch.setattr(
+        worker_mod,
+        "record_outbound_call_attempt",
+        h.record_outbound_call_attempt,
+    )
+
+    async def _capture_no_outbound_number_alert(
+        reseller_id: str, template: str, merchant_id: object
+    ) -> None:
+        h.no_outbound_number_alerts.append(
+            {
+                "reseller_id": reseller_id,
+                "template": template,
+                "merchant_id": str(merchant_id) if merchant_id is not None else "",
+            }
+        )
+
+    monkeypatch.setattr(
+        worker_mod, "raise_no_outbound_number", _capture_no_outbound_number_alert
     )
     monkeypatch.setattr(
         worker_mod,
