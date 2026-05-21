@@ -40,6 +40,7 @@ from app.ai.voice.agents.breeze_buddy.dispatch.keys import (
 )
 from app.ai.voice.agents.breeze_buddy.dispatch.leader import LeaderElection
 from app.ai.voice.agents.breeze_buddy.dispatch.queue import schedule_lead
+from app.core.config.static import BB_CHANNEL_WAIT_BACKOFF_MAX_S
 from app.schemas import LeadCallStatus
 from tests.breeze_buddy.dispatch.conftest import (
     AlwaysLeader,
@@ -98,6 +99,110 @@ async def test_full_round_trip_happy_path(harness, fake_redis):
 
     # Lock was NOT released by the worker (waiting on call-end webhook).
     assert "lead-happy" not in harness.released_locks
+
+    # Rate-limit accounting: peek runs once (before channel), record runs
+    # once (only after make_call success). The peek-vs-record split is the
+    # invariant that fixed the spurious-BLOCKED-alert regression.
+    assert len(harness.rate_limit_peeks) == 1
+    assert len(harness.rate_limit_records) == 1
+    assert harness.rate_limit_records[0]["lead_id"] == "lead-happy"
+
+
+async def test_atomic_record_rejection_releases_resources_and_defers(
+    harness, fake_redis
+):
+    """
+    Cross-lead race regression guard.
+
+    Scenario: this worker's peek saw count < max_calls (the bucket had
+    room), but between the peek and the atomic-record point another
+    concurrent worker on the same customer phone won the race and filled
+    the bucket. Our atomic-record returns rejected.
+
+    Required behavior — restores the pre-PR strict cap that the initial
+    peek/record split silently relaxed:
+
+      - Channel token MUST be released (so other leads on this number
+        aren't starved by a rejected-but-still-holding-the-slot worker).
+      - DB outbound_number MUST be released (mirror of the channel
+        release; keeps the operator-visible counter consistent).
+      - Lead MUST be deferred by the rate-limit window (default 3600s)
+        so the dispatcher doesn't immediately re-pick and burn through
+        the next window of attempts.
+      - provider.make_call MUST NOT run — the whole point of putting
+      the atomic gate before make_call is so the customer's phone
+      never rings on a race-loss.
+    """
+    lead = make_lead("lead-race")
+    harness.add_lead(lead)
+    # Peek under-limit, atomic-record rejected (race with another worker).
+    harness.rate_limit_ok = True
+    harness.rate_limit_record_accepts = False
+    harness.rate_limit_record_defer_seconds = 3600  # = window_seconds default
+
+    await init_channel_semaphore(harness.number.id, 1)
+    await fake_redis.client.rpush(READY_LIST, lead.id)
+
+    worker = w.Worker(worker_uuid="w-race")
+    await worker._iteration(session=None)
+
+    # No dial — make_call MUST NOT have run.
+    assert harness.call_recorder.calls == []
+    # Channel token restored to the pool (released after rejection).
+    assert await channel_tokens_available(harness.number.id) == 1
+    # DB number released too.
+    assert harness.released_numbers == [harness.number.id]
+    # Deferred by the rate-limit window.
+    assert harness.deferred == [(lead.id, 3600)]
+    # Peek ran once (allowed), record ran once (rejected).
+    assert len(harness.rate_limit_peeks) == 1
+    assert len(harness.rate_limit_records) == 1
+    # Lead is still BACKLOG (deferred, not finalized).
+    assert lead.status == LeadCallStatus.BACKLOG
+
+
+async def test_channel_exhaustion_does_not_record_rate_limit_attempt(
+    harness, fake_redis
+):
+    """
+    Regression guard for the BLOCKED-alert storm of 2026-05-21.
+
+    When every channel token is held by other in-flight calls, the worker
+    must defer WITHOUT having ZADDed the sliding-window bucket. Previously,
+    the rate-limit ZADD ran before ``acquire_channel_token``, so a single
+    lead retrying every 1-3s on exhaustion would self-fill its own bucket
+    in ~10 seconds, fire a false-positive Slack alert, and get pushed out
+    by 3600s — all without ever placing a call.
+
+    The fix splits peek (read-only, runs every dispatch) from record (ZADD,
+    runs only after provider.make_call succeeds). This test pins the
+    invariant: no call → no record, ever, regardless of how many times
+    the worker bounces on capacity.
+    """
+    lead = make_lead("lead-exhausted")
+    harness.add_lead(lead)
+
+    # Initialise with zero tokens — pretend the number is fully saturated.
+    await init_channel_semaphore(harness.number.id, 0)
+    await fake_redis.client.rpush(READY_LIST, lead.id)
+
+    worker = w.Worker(worker_uuid="w-exhausted")
+    await worker._iteration(session=None)
+
+    # No call, no number acquired, lead deferred with channel-wait jitter.
+    assert harness.call_recorder.calls == []
+    assert harness.released_numbers == []
+    assert len(harness.deferred) == 1
+    deferred_lead, defer_seconds = harness.deferred[0]
+    assert deferred_lead == "lead-exhausted"
+    # Defer is the channel-wait backoff: random.randint(1, MAX).
+    # Asserting against the actual config value (vs. a loose upper bound)
+    # so this test fails fast if the bound is ever silently tightened.
+    assert 1 <= defer_seconds <= BB_CHANNEL_WAIT_BACKOFF_MAX_S
+
+    # The critical invariant — peek can run, record must not.
+    assert len(harness.rate_limit_peeks) == 1
+    assert harness.rate_limit_records == []
 
 
 # ---------------------------------------------------------------------------
@@ -217,9 +322,14 @@ async def test_lock_acquire_fails_drops_lead(harness, fake_redis):
 
 async def test_rate_limit_blocks_before_channel_acquire(harness, fake_redis):
     """
-    Rate-limit deny → lead deferred WITHOUT holding a channel token.
-    Critical invariant: rate-limit check runs BEFORE channel BLPOP so a
-    rate-limited lead doesn't block other leads on the same number.
+    Rate-limit deny → lead deferred WITHOUT holding a channel token and
+    WITHOUT recording the attempt against the sliding window.
+
+    Critical invariants (post-PR-#776 split into peek + record):
+      - peek runs before channel BLPOP so a rate-limited lead doesn't
+        hold a channel token while it's bouncing.
+      - peek does NOT mutate the ZSET; only record does, and record runs
+        only after a successful provider.make_call.
     """
     lead = make_lead("lead-rl")
     harness.add_lead(lead)
@@ -238,6 +348,10 @@ async def test_rate_limit_blocks_before_channel_acquire(harness, fake_redis):
     assert harness.call_recorder.calls == []
     assert harness.released_numbers == []
     assert harness.deferred == [(lead.id, 30)]
+    # Peek ran exactly once; record never ran (this is the bug we fixed —
+    # the old code would have ZADDed here even though no call went out).
+    assert len(harness.rate_limit_peeks) == 1
+    assert harness.rate_limit_records == []
 
 
 async def test_blacklisted_phone_finalizes_lead(harness, fake_redis):
@@ -258,10 +372,21 @@ async def test_blacklisted_phone_finalizes_lead(harness, fake_redis):
     assert await channel_tokens_available(harness.number.id) == 1
 
 
-async def test_get_available_number_returns_none_defers_with_backoff(
+async def test_get_available_number_returns_none_marks_lead_finished(
     harness, fake_redis
 ):
-    """No outbound number free → short defer, no channel consumed."""
+    """
+    Permanent failure: ``_get_available_number`` returning None means the
+    template's outbound_number_id is missing/disabled (or the fallback pool
+    has nothing). The old behavior — defer 10s and retry forever — was a
+    hot loop on an unresolvable state.
+
+    Post-fix: mark the lead FINISHED with outcome NUMBER_UNAVAILABLE and
+    fire a throttled P1 alert. No defer, no channel consumed.
+
+    Capacity exhaustion is a *separate* path (channel-token gate); this
+    test pins the misconfiguration branch.
+    """
     lead = make_lead("lead-nonum")
     harness.add_lead(lead)
     harness.get_available_returns_none = True
@@ -272,9 +397,22 @@ async def test_get_available_number_returns_none_defers_with_backoff(
     worker = w.Worker(worker_uuid="w-nonum")
     await worker._iteration(session=None)
 
+    # No dial, no defer-retry, channel pool untouched.
     assert harness.call_recorder.calls == []
-    assert harness.deferred == [(lead.id, 10)]
+    assert harness.deferred == []
     assert await channel_tokens_available(harness.number.id) == 1
+    # Lead is finalized — exactly one completion write with the new outcome.
+    assert len(harness.completions) == 1
+    assert harness.completions[0]["outcome"] == "NUMBER_UNAVAILABLE"
+    assert harness.completions[0]["status"] == LeadCallStatus.FINISHED
+    assert lead.status == LeadCallStatus.FINISHED
+    assert lead.outcome == "NUMBER_UNAVAILABLE"
+    # Throttled alert fired once with the right scope.
+    assert len(harness.no_outbound_number_alerts) == 1
+    assert harness.no_outbound_number_alerts[0]["reseller_id"] == lead.reseller_id
+    assert harness.no_outbound_number_alerts[0]["template"] == lead.template
+    # Rate-limit ZSET untouched.
+    assert harness.rate_limit_records == []
 
 
 # ---------------------------------------------------------------------------

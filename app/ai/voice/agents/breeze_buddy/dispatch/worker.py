@@ -27,6 +27,9 @@ from typing import Any, List, Optional, cast
 
 import aiohttp
 
+from app.ai.voice.agents.breeze_buddy.dispatch.alerts import (
+    raise_no_outbound_number,
+)
 from app.ai.voice.agents.breeze_buddy.dispatch.channel_semaphore import (
     acquire_channel_token,
     release_channel_token,
@@ -53,7 +56,8 @@ from app.ai.voice.agents.breeze_buddy.managers.utils import (
     prepare_and_store_initial_greeting,
 )
 from app.ai.voice.agents.breeze_buddy.services.call_limiter import (
-    check_outbound_rate_limit_and_alert,
+    peek_outbound_rate_limit_and_alert,
+    record_outbound_call_attempt,
 )
 from app.ai.voice.agents.breeze_buddy.services.telephony.utils import get_voice_provider
 from app.ai.voice.agents.breeze_buddy.utils.playground import (
@@ -341,17 +345,20 @@ class Worker:
                     template=template,
                 )
 
-            # Rate-limit check BEFORE channel token — don't hold a channel for
-            # a lead we won't dial. Inactive templates skip the rate limit
-            # entirely (per release fix 2cd510d: inactive templates still
-            # proceed through the full call flow but bypass rate-limit eval).
-            if (
+            # Rate-limit PEEK before channel token. Read-only — we don't
+            # record the attempt here, because we may still bail downstream
+            # (channel-token exhaustion, provider error) without ever dialing.
+            # The matching record_outbound_call_attempt() runs only after
+            # provider.make_call succeeds. Inactive templates skip the
+            # rate limit entirely (per release fix 2cd510d).
+            rate_limited_phone = (
                 locked.execution_mode == ExecutionMode.TELEPHONY
                 and customer_phone
                 and (template is None or getattr(template, "is_active", True))
-            ):
-                rate_ok, defer_seconds = await check_outbound_rate_limit_and_alert(
-                    customer_phone=customer_phone,
+            )
+            if rate_limited_phone:
+                rate_ok, defer_seconds = await peek_outbound_rate_limit_and_alert(
+                    customer_phone=cast(str, customer_phone),
                     lead_id=str(locked.id),
                     reseller_id=locked.reseller_id,
                 )
@@ -363,7 +370,30 @@ class Worker:
 
             number = await _get_available_number(config, template)
             if not number:
-                lock_released = await self._defer_and_release(locked.id, 10)
+                # Permanent / semi-permanent failure: misconfigured template
+                # or no number in the fallback pool. Retrying every 10s would
+                # be a hot loop on an unresolvable state — instead, mark the
+                # lead FINISHED with a terminal outcome and alert ops.
+                logger.error(
+                    f"Worker {self._uuid}: no outbound number for lead "
+                    f"{locked.id} (template={config.template}, "
+                    f"reseller={config.reseller_id}, merchant={config.merchant_id}). "
+                    "Marking FINISHED with NUMBER_UNAVAILABLE."
+                )
+                try:
+                    await raise_no_outbound_number(
+                        reseller_id=config.reseller_id,
+                        template=config.template,
+                        merchant_id=config.merchant_id,
+                    )
+                except Exception as alert_exc:  # noqa: BLE001
+                    logger.warning(
+                        f"Worker {self._uuid}: raise_no_outbound_number "
+                        f"failed for lead {locked.id}: {alert_exc}"
+                    )
+                lock_released = await self._fail_and_release(
+                    locked.id, "NUMBER_UNAVAILABLE"
+                )
                 return
 
             # Channel token gate (Redis). Held until call-end webhook releases.
@@ -404,6 +434,36 @@ class Worker:
                 await _release_number(number.id, number.provider)
                 lock_released = await self._fail_and_release(locked.id, "INVALID_PHONE")
                 return
+
+            # Atomic check-and-record — the authoritative cap. Placement
+            # constraints (see record_outbound_call_attempt docstring):
+            #   1. After acquire_channel_token + _acquire_number, so a
+            #      channel-token-exhaustion retry loop can't ZADD on every
+            #      bounce (the pre-PR-#776 self-fill bug).
+            #   2. Before make_call, so we can still bail when the atomic
+            #      Lua detects a cross-lead race — once make_call is on the
+            #      wire, strict cap is meaningless (you can't un-dial).
+            # If rejected, release the channel token + DB number and defer
+            # by the rate-limit window so the dispatcher doesn't immediately
+            # re-pick this lead and burn through the next window of attempts.
+            if rate_limited_phone:
+                rl_ok, rl_defer = await record_outbound_call_attempt(
+                    customer_phone=cast(str, customer_phone),
+                    lead_id=str(locked.id),
+                    reseller_id=locked.reseller_id,
+                )
+                if not rl_ok:
+                    logger.warning(
+                        f"Worker {self._uuid}: rate-limit race rejected lead "
+                        f"{locked.id} at atomic record (another worker on the "
+                        f"same phone filled the bucket between our peek and "
+                        f"record). Releasing channel token + number, "
+                        f"deferring {rl_defer}s."
+                    )
+                    await release_channel_token(number.id, token)
+                    await _release_number(number.id, number.provider)
+                    lock_released = await self._defer_and_release(locked.id, rl_defer)
+                    return
 
             try:
                 call = call_provider.make_call(
