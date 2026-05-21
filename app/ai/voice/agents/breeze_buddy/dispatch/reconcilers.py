@@ -32,7 +32,10 @@ from app.ai.voice.agents.breeze_buddy.dispatch.keys import (
     SCHEDULE_ZSET,
     worker_heartbeat_key,
 )
-from app.ai.voice.agents.breeze_buddy.dispatch.queue import schedule_lead
+from app.ai.voice.agents.breeze_buddy.dispatch.queue import (
+    is_dispatchable,
+    schedule_lead,
+)
 from app.core.config import dynamic as dyn_cfg
 from app.core.logger import logger
 from app.database.accessor import (
@@ -127,7 +130,7 @@ async def reap_stuck_processing_lists() -> None:
         logger.error(f"reap_stuck_processing_lists: SCAN failed: {e}")
         return
 
-    fixed = 0
+    rescheduled = 0
     for proc_key in keys:
         worker_uuid = proc_key[len(PROCESSING_LIST_PREFIX) :]
         # If the worker is still alive (heartbeat key present), skip — its
@@ -169,13 +172,21 @@ async def reap_stuck_processing_lists() -> None:
                 continue
 
             if lead.status == LeadCallStatus.BACKLOG:
-                # Worker died before dialling. Re-ZADD with current
-                # next_attempt_at — promoter will pick it up. We do NOT
-                # unlock here (deliberate, see docstring).
-                if lead.next_attempt_at is not None:
+                # Worker died before dialling. Re-ZADD ONLY if the lead is
+                # still dispatchable — a DAILY / HOLD_TRANSFER lead that
+                # somehow ended up in a processing list (worker bug,
+                # pre-existing bad data, manual ZADD) must NOT be
+                # re-scheduled; that would create a one-cycle promote→drop
+                # loop and waste worker iterations. Tracking is still
+                # cleaned. Mirrors the worker's defensive backstop and the
+                # reconciler-SQL execution_mode filter. We do NOT unlock
+                # here (deliberate, see docstring).
+                if lead.next_attempt_at is not None and is_dispatchable(
+                    lead.execution_mode
+                ):
                     await schedule_lead(lead_id, lead.next_attempt_at)
+                    rescheduled += 1
                 await client.lrem(proc_key, 1, lead_id)
-                fixed += 1
                 continue
 
             # FINISHED or other terminal state — drop tracking.
@@ -188,8 +199,8 @@ async def reap_stuck_processing_lists() -> None:
         except Exception:  # noqa: BLE001
             pass
 
-    if fixed:
-        logger.info(f"reap_stuck_processing_lists: re-scheduled {fixed} leads")
+    if rescheduled:
+        logger.info(f"reap_stuck_processing_lists: re-scheduled {rescheduled} leads")
 
 
 # ---------------------------------------------------------------------------
