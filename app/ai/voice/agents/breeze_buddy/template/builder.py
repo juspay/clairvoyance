@@ -4,7 +4,7 @@ Flow Configuration Builder
 This module builds Pipecat flow configurations from database models.
 """
 
-from typing import AbstractSet, Any, Callable, Dict, List, cast
+from typing import AbstractSet, Any, Callable, Dict, List, Optional, Set, cast
 
 from pipecat_flows import (
     FlowManager,
@@ -41,12 +41,39 @@ from app.ai.voice.agents.breeze_buddy.template.types import (
     GlobalFunctionType,
     TemplateModel,
 )
+from app.ai.voice.agents.breeze_buddy.template.ui_prompt import (
+    render_primitives_section,
+)
 from app.core.logger import logger
 
 # Synthetic node name used in direct mode. There is only ever one node so the
 # concrete name does not matter, but it must be stable across the build/init
 # code paths and unlikely to collide with a user-defined node.
 DIRECT_MODE_NODE_NAME = "__direct__"
+
+# Literal placeholder in template prompts (system_prompt for direct mode,
+# task_messages / role_messages for flow mode) that the builder replaces
+# with the rendered "## Available primitives" section at build time.
+UI_PRIMITIVES_PLACEHOLDER = "{{ui_primitives_section}}"
+
+
+def _splice_ui_primitives(text: str, ui_allowlist: Optional[Set[str]]) -> str:
+    """Substitute ``{{ui_primitives_section}}`` with the rendered section.
+
+    When ``ui_allowlist`` is ``None`` the placeholder is replaced with an
+    empty string — keeps templates that haven't opted into the catalog
+    flow path working unchanged, and lets test fixtures opt out without
+    importing the catalog. When the placeholder isn't present the input
+    is returned untouched (fast path; most non-chat templates).
+    """
+    if UI_PRIMITIVES_PLACEHOLDER not in text:
+        return text
+    if ui_allowlist is None:
+        return text.replace(UI_PRIMITIVES_PLACEHOLDER, "")
+    return text.replace(
+        UI_PRIMITIVES_PLACEHOLDER, render_primitives_section(ui_allowlist)
+    )
+
 
 # Function dicts whose ``type`` is one of these are routed through the global
 # function adapter registry; everything else is treated as a FlowFunction.
@@ -149,12 +176,25 @@ class FlowConfigBuilder:
             "custom_python_code_handler": custom_python_code_handler,
         }
 
-    def build_flow_config(self, template: TemplateModel) -> Dict[str, Any]:
+    def build_flow_config(
+        self,
+        template: TemplateModel,
+        *,
+        ui_allowlist: Optional[Set[str]] = None,
+    ) -> Dict[str, Any]:
         """
         Convert database template to Pipecat flow format.
 
         Args:
             template: Template configuration from database
+            ui_allowlist: Optional set of UI-catalog primitive names the
+                LLM may emit on this session. When set, the builder
+                splices the rendered ``## Available primitives`` section
+                into every ``{{ui_primitives_section}}`` placeholder it
+                finds in the template's system_prompt / task_messages /
+                role_messages. When ``None`` (the voice / no-chat default),
+                the placeholder is replaced with an empty string so
+                templates remain channel-agnostic.
 
         Returns:
             Dictionary in Pipecat flow format with transitions
@@ -176,7 +216,7 @@ class FlowConfigBuilder:
         # prompt. Reuses the rest of the flow path unchanged so all features
         # (filler audio, hooks, evaluators, OTEL, greeting injection) work.
         if flow.get("mode") == FlowMode.DIRECT.value:
-            return self._build_direct_flow_config(template)
+            return self._build_direct_flow_config(template, ui_allowlist=ui_allowlist)
 
         initial_node_name = flow.get("initial_node")
         if not initial_node_name:
@@ -249,7 +289,7 @@ class FlowConfigBuilder:
         nodes = {}
         for node in flow_nodes:
             logger.debug(f"Building node: {node.node_name}")
-            nodes[node.node_name] = self._build_node(node)
+            nodes[node.node_name] = self._build_node(node, ui_allowlist=ui_allowlist)
 
         # Extract end_conversation_callbacks if present
         end_conversation_callbacks = flow.get("end_conversation_callbacks", [])
@@ -267,7 +307,12 @@ class FlowConfigBuilder:
             "expected_callback_response_schema": template.expected_callback_response_schema,
         }
 
-    def _build_direct_flow_config(self, template: TemplateModel) -> Dict[str, Any]:
+    def _build_direct_flow_config(
+        self,
+        template: TemplateModel,
+        *,
+        ui_allowlist: Optional[Set[str]] = None,
+    ) -> Dict[str, Any]:
         """
         Build a flow config for direct mode (one global system prompt, no nodes).
 
@@ -297,6 +342,13 @@ class FlowConfigBuilder:
             raise ValueError(
                 "Direct mode requires a non-empty 'system_prompt' string in flow"
             )
+
+        # Splice the rendered "## Available primitives" section into the
+        # template prompt before it reaches the LLM. Templates without the
+        # placeholder are untouched; templates with a placeholder but no
+        # allowlist (voice / pre-chat) get an empty-string replacement so
+        # the same template can serve both channels.
+        system_prompt = _splice_ui_primitives(system_prompt, ui_allowlist)
 
         # system_prompt goes into role_messages so pipecat-flows prepends it
         # ahead of task_messages. When a greeting is played, prepare_initial_node
@@ -450,12 +502,20 @@ class FlowConfigBuilder:
         )
         return result
 
-    def _build_node(self, node: FlowNodeModel) -> NodeConfig:
+    def _build_node(
+        self,
+        node: FlowNodeModel,
+        *,
+        ui_allowlist: Optional[Set[str]] = None,
+    ) -> NodeConfig:
         """
         Build NodeConfig from FlowNodeModel.
 
         Args:
             node: Flow node model from database
+            ui_allowlist: Optional UI primitive allowlist used to splice
+                ``{{ui_primitives_section}}`` placeholders in task /
+                role messages.
 
         Returns:
             NodeConfig object
@@ -463,12 +523,20 @@ class FlowConfigBuilder:
         logger.debug(f"Building NodeConfig for node: {node.node_name}")
 
         task_messages = [
-            {"role": msg.role, "content": msg.content} for msg in node.task_messages
+            {
+                "role": msg.role,
+                "content": _splice_ui_primitives(msg.content, ui_allowlist),
+            }
+            for msg in node.task_messages
         ]
         logger.debug(f"Node {node.node_name} has {len(task_messages)} task messages")
 
         role_messages = [
-            {"role": msg.role, "content": msg.content} for msg in node.role_messages
+            {
+                "role": msg.role,
+                "content": _splice_ui_primitives(msg.content, ui_allowlist),
+            }
+            for msg in node.role_messages
         ]
         logger.debug(f"Node {node.node_name} has {len(role_messages)} role messages")
 

@@ -1,0 +1,284 @@
+# pyrefly: ignore-errors
+# Same Pydantic dynamic-attr narrowing limitation as
+# test_tile_validation.py — validate_props returns _CatalogBase, concrete
+# subclass attrs read as missing to pyrefly.
+"""Tests for the SpecStream JSONL emission pipeline.
+
+Covers:
+  * UiStreamExtractor — token streaming around ``<ui_stream>`` markers
+  * parse_op_line — catalog validation, prop schema enforcement
+  * strip_ui_stream_markers — persistence-time prose extraction
+  * process_op_line — full healer + parse + validate flow
+"""
+
+from __future__ import annotations
+
+from app.ai.voice.agents.breeze_buddy.chat.ui_stream import (
+    JsonlOpLine,
+    TextOut,
+    UiStreamExtractor,
+    parse_op_line,
+    process_op_line,
+    strip_ui_stream_markers,
+)
+
+# Load template package first so its __init__ chain completes before any
+# `chat/*` module imports drag in `handlers.transport.utils.field_resolver`
+# mid-load and trip the circular-import guard (same trap as test_session_state).
+from app.ai.voice.agents.breeze_buddy.template.ui_catalog import (
+    UI_CATALOG,
+    is_known_type,
+    validate_props,
+)
+
+# ---------------------------------------------------------------------------
+# UiStreamExtractor
+# ---------------------------------------------------------------------------
+
+
+def _drain(extractor: UiStreamExtractor):
+    """Collect everything the extractor yields after a feed + flush cycle."""
+    out = list(extractor.flush())
+    return out
+
+
+def test_extractor_yields_prose_outside_markers():
+    ex = UiStreamExtractor()
+    items = list(ex.feed("hello world"))
+    items.extend(_drain(ex))
+    assert items == [TextOut(value="hello world")]
+
+
+def test_extractor_isolates_jsonl_lines_inside_marker():
+    ex = UiStreamExtractor()
+    items: list = []
+    items.extend(ex.feed("here you go <ui_stream>\n"))
+    items.extend(ex.feed('{"op":"add","id":"root","type":"Stack"}\n'))
+    items.extend(
+        ex.feed(
+            '{"op":"add","id":"a","type":"Text","parent":"root","props":{"text":"hi"}}\n'
+        )
+    )
+    items.extend(ex.feed("</ui_stream> done"))
+    items.extend(_drain(ex))
+
+    types = [type(i).__name__ for i in items]
+    assert types == ["TextOut", "JsonlOpLine", "JsonlOpLine", "TextOut"]
+    prose = [i.value for i in items if isinstance(i, TextOut)]
+    assert prose == ["here you go ", " done"]
+    op_lines = [i.raw for i in items if isinstance(i, JsonlOpLine)]
+    assert op_lines[0] == '{"op":"add","id":"root","type":"Stack"}'
+    assert "Text" in op_lines[1]
+
+
+def test_extractor_handles_split_marker_across_deltas():
+    ex = UiStreamExtractor()
+    items: list = []
+    # Marker split mid-tag.
+    for chunk in [
+        "pre <",
+        "ui_s",
+        "tream>\n",
+        '{"op":"remove","id":"x"}',
+        "\n</ui_st",
+        "ream>",
+    ]:
+        items.extend(ex.feed(chunk))
+    items.extend(_drain(ex))
+
+    text = "".join(i.value for i in items if isinstance(i, TextOut))
+    assert text.startswith("pre ")
+    ops = [i.raw for i in items if isinstance(i, JsonlOpLine)]
+    assert ops == ['{"op":"remove","id":"x"}']
+
+
+def test_extractor_drops_unclosed_block():
+    ex = UiStreamExtractor()
+    list(ex.feed('hi <ui_stream>\n{"op":"add","id":"root","type":"Stack"}\n'))
+    # Stream ends before </ui_stream>; flush should drop the partial body.
+    flushed = list(ex.flush())
+    # No JSONL emission from flush; partial line silently dropped (warning logged).
+    assert all(not isinstance(i, JsonlOpLine) for i in flushed)
+
+
+# ---------------------------------------------------------------------------
+# parse_op_line
+# ---------------------------------------------------------------------------
+
+
+def test_parse_add_op_validates_against_catalog():
+    line = '{"op":"add","id":"root","type":"Stack","props":{"gap":"md"}}'
+    r = parse_op_line(line)
+    assert r.error is None
+    assert r.op == {"op": "add", "id": "root", "type": "Stack", "props": {"gap": "md"}}
+
+
+def test_parse_add_op_with_typed_primitive():
+    line = '{"op":"add","id":"h","type":"Handoff","parent":"root","props":{"reason":"checkout","label":"Pay","url":"https://example.com/c","lifecycle":"popup"}}'
+    r = parse_op_line(line)
+    assert r.error is None
+    assert r.op["props"]["reason"] == "checkout"
+    assert r.op["props"]["lifecycle"] == "popup"
+
+
+def test_parse_rejects_unknown_type():
+    line = '{"op":"add","id":"x","type":"NotAPrimitive","parent":"root"}'
+    r = parse_op_line(line)
+    assert r.op is None
+    assert r.error and r.error.startswith("unknown_type")
+
+
+def test_parse_rejects_unknown_props_on_known_type():
+    line = '{"op":"add","id":"x","type":"Tag","parent":"root","props":{"text":"new","weight":"bold"}}'
+    r = parse_op_line(line)
+    assert r.op is None
+    assert r.error and r.error.startswith("props_validation_failed")
+
+
+def test_parse_rejects_non_root_without_parent():
+    line = '{"op":"add","id":"x","type":"Text","props":{"text":"hi"}}'
+    r = parse_op_line(line)
+    assert r.op is None
+    assert r.error == "missing_parent"
+
+
+def test_parse_root_op_does_not_require_parent():
+    line = '{"op":"add","id":"root","type":"Carousel"}'
+    r = parse_op_line(line)
+    assert r.error is None
+
+
+def test_parse_remove_op_is_minimal():
+    line = '{"op":"remove","id":"c1"}'
+    r = parse_op_line(line)
+    assert r.error is None
+    assert r.op == {"op": "remove", "id": "c1"}
+
+
+def test_parse_replace_op_requires_props():
+    line = '{"op":"replace","id":"c1"}'
+    r = parse_op_line(line)
+    assert r.error == "replace_missing_props"
+
+
+def test_parse_rejects_unknown_op_kind():
+    line = '{"op":"weird","id":"c1"}'
+    r = parse_op_line(line)
+    assert r.error and r.error.startswith("unknown_op")
+
+
+def test_parse_rejects_malformed_json():
+    line = '{"op":"add"'
+    r = parse_op_line(line)
+    assert r.error and r.error.startswith("malformed_json")
+
+
+# ---------------------------------------------------------------------------
+# Catalog manifest
+# ---------------------------------------------------------------------------
+
+
+def test_catalog_contains_all_v1_primitives():
+    expected = {
+        "Stack",
+        "Row",
+        "Card",
+        "CardHeader",
+        "Image",
+        "Text",
+        "Carousel",
+        "Tag",
+        "Button",
+        "Buttons",
+        "Table",
+        "Message",
+        "Handoff",
+        "Tile",
+    }
+    assert expected.issubset(set(UI_CATALOG.keys()))
+
+
+def test_catalog_does_not_contain_money_primitive():
+    """Money was a commerce-tinted typed primitive — runtime is now
+    fully commerce-agnostic; price display lives in template-emitted
+    key_value / text body rows."""
+    assert "Money" not in UI_CATALOG
+
+
+def test_is_known_type_negative():
+    assert is_known_type("Stack")
+    assert not is_known_type("ProductCarousel")
+    assert not is_known_type("Money")
+
+
+def test_validate_props_handoff():
+    h = validate_props(
+        "Handoff",
+        {
+            "reason": "checkout",
+            "label": "Pay",
+            "url": "https://example.com/c",
+            "lifecycle": "popup",
+        },
+    )
+    assert h.reason == "checkout"
+    assert h.lifecycle.value == "popup"
+
+
+# ---------------------------------------------------------------------------
+# strip_ui_stream_markers
+# ---------------------------------------------------------------------------
+
+
+def test_strip_ui_stream_markers_removes_block_only():
+    text = (
+        "Here you go:\n"
+        '<ui_stream>\n{"op":"add","id":"root","type":"Stack"}\n</ui_stream>\n'
+        "let me know if you need more."
+    )
+    out = strip_ui_stream_markers(text)
+    assert "ui_stream" not in out
+    assert "Here you go:" in out
+    assert "let me know" in out
+
+
+def test_strip_ui_stream_markers_handles_multiple_blocks():
+    text = "a <ui_stream>{}</ui_stream> b <ui_stream>{}</ui_stream> c"
+    out = strip_ui_stream_markers(text)
+    assert out == "a  b  c"
+
+
+def test_strip_ui_stream_markers_passthrough_empty():
+    assert strip_ui_stream_markers("") == ""
+    assert strip_ui_stream_markers("no markers here") == "no markers here"
+
+
+# ---------------------------------------------------------------------------
+# process_op_line — full healer→parse→validate pipeline
+# ---------------------------------------------------------------------------
+
+
+def test_process_emits_ui_op_event_on_clean_line():
+    line = '{"op":"add","id":"root","type":"Carousel"}'
+    events = process_op_line(line, session_state={}, healer=None, known_ids=set())
+    assert len(events) == 1
+    assert events[0].event == "ui_op"
+    assert events[0].data["op"]["type"] == "Carousel"
+
+
+def test_process_emits_dropped_event_on_unknown_type():
+    line = '{"op":"add","id":"x","type":"WidgetThatDoesntExist","parent":"root"}'
+    events = process_op_line(line, session_state={}, healer=None, known_ids={"root"})
+    assert any(e.event == "ui_op_dropped" for e in events)
+
+
+def test_process_known_ids_tracks_add_remove():
+    known: set = set()
+    process_op_line('{"op":"add","id":"root","type":"Stack"}', known_ids=known)
+    assert "root" in known
+    process_op_line(
+        '{"op":"add","id":"c1","type":"Card","parent":"root"}', known_ids=known
+    )
+    assert "c1" in known
+    process_op_line('{"op":"remove","id":"c1"}', known_ids=known)
+    assert "c1" not in known

@@ -845,3 +845,340 @@ loom/packages/client-sdk/src/chat/types.ts
 **Sign-off:** doc approved 2026-05-04. Implementation proceeds in the order listed in §16; Phase 1 ends at the §15 exit criteria.
 
 **2026-05-04 rewrite:** chat mode migrated from Pipecat-pipeline-based execution to a direct LLM driver. Voice path untouched. See §4, §7, §9, and §16 for the post-rewrite shape; §3 D3 retains the original decision row marked superseded for historical context.
+
+---
+
+## 14. Widget Public Mode (Unified Chat ↔ Voice)
+
+Production browser embeds drive a single conversation that can move
+between text and voice without losing context. **Not** a demo: there
+are no env-allowlisted slugs, no demo TTL, no per-session message
+caps. Per-merchant configuration (a `widget_config` row) gates which
+template runs, which origins may embed, and the per-IP rate limits.
+
+### 14.1 What it solves vs `/chat/demo` and `/demo/connect`
+
+| concern | `/chat/demo` | `/demo/connect` | `/widget/session/*` |
+|---|---|---|---|
+| audience | demo page visitors | demo page visitors | shoppers on merchant sites |
+| template selection | env-allowlisted slug | hardcoded `DEMO_TEMPLATE` | per-merchant `widget_config.template_id` |
+| reseller / merchant | none | hardcoded `website-demo` | per-merchant row |
+| origin allowlist | global CORS | global CORS | per-merchant `allowed_origins` |
+| per-IP caps | env defaults | hardcoded 10/h, 50/d | per-merchant `widget_config` columns |
+| session lifetime | demo TTL + msg cap | 7-day demo TTL on lead | until explicit `/end` (token TTL: 24h) |
+| chat ↔ voice | n/a | n/a | unified single session |
+
+A widget JWT carries `typ: "widget"` and is rejected by the RBAC
+verifier (`app/api/security/breeze_buddy/rbac_token.py`) and the demo
+verifier (`app/api/security/breeze_buddy/demo_token.py`). Widget
+tokens cannot drive any non-widget endpoint, and RBAC / demo tokens
+cannot drive any widget endpoint.
+
+### 14.2 Single-session model
+
+The conversation is one logical entity that the embed tracks via one
+`session_id`. Internally:
+
+```
+chat_session  (= widget conversation; promoted by migration 029)
+   id, template_id, current_node, current_channel, voice_lead_id,
+   metadata.template_vars, status
+   ├── chat_message rows ............ canonical message log
+   └── lead_call_tracker (ONE per     created lazily on the first
+        conversation, REUSED)         /voice/connect; reused for every
+                                      subsequent attachment via
+                                      attempt_count. voice_lead_id is
+                                      set on chat_session and stays
+                                      bound for the conversation's
+                                      lifetime.
+                                      lead.metaData.widget_session_id  ← back-link
+                                      lead.metaData.start_node          ← seed
+                                      lead.metaData.prior_history       ← seed
+                                      lead.metaData.seed_message_count  ← seed
+                                      at end_conversation: drain into
+                                      chat_message + flip channel back to CHAT
+                                      (voice_lead_id PRESERVED so the
+                                      next attachment reuses this lead)
+```
+
+**One lead per conversation, not per attachment.** A single widget
+conversation that toggles chat ↔ voice multiple times produces
+exactly ONE row in `lead_call_tracker`. Each `/voice/connect` after
+the first calls `reset_widget_voice_lead` which:
+
+- bumps `attempt_count` (this is the Nth voice attachment)
+- resets `status` to BACKLOG so the bot can run again
+- replaces `payload` with the latest template_vars
+- merges in a fresh `meta_data` seed (start_node, prior_history,
+  seed_message_count) — the chat_session may have advanced since the
+  prior voice attempt
+- clears per-call fields (call_id, outcome, recording_url,
+  call_initiated_time, call_end_time, cost) so they don't leak from
+  the prior attempt
+
+`chat_session` is the source of truth for conversation state. Voice
+"borrows" it for the duration of each Daily.co call; the bot's
+`end_conversation` handler drains the new turns back into
+`chat_message` and advances `current_node` to whatever node the
+voice flow ended on.
+
+### 14.3 State machine on `current_channel`
+
+| from | to | trigger |
+|---|---|---|
+| CHAT  | VOICE | `POST /widget/session/{id}/voice/connect` |
+| VOICE | CHAT  | `POST /widget/session/{id}/voice/end` *or* end_conversation drain |
+| CHAT  | ENDED | `POST /widget/session/{id}/end` |
+| VOICE | ENDED | `POST /widget/session/{id}/end` (also signals the voice bot) |
+
+Disallowed transitions return 409:
+- `POST /message` while channel ≠ CHAT
+- `POST /voice/connect` while channel ≠ CHAT (voice already live)
+
+The state machine is enforced by conditional `UPDATE … WHERE
+current_channel = …` queries in
+`app/database/queries/breeze_buddy/chat_session.py` so concurrent
+workers cannot push the row into an inconsistent state.
+`voice_lead_id` is set ONCE (via `bind_voice_lead_to_chat_session`,
+conditioned on `voice_lead_id IS NULL`) and stays set for the
+conversation's lifetime; the drain preserves it.
+
+### 14.4 Routes
+
+URL prefix `/agent/voice/breeze-buddy/widget`:
+
+| route | method | auth | notes |
+|---|---|---|---|
+| `/session` | POST | `public_widget_key` + Origin + per-IP RL | mints widget_token, returns greeting |
+| `/session/{id}/message` | POST | widget_token | SSE stream; 409 if channel ≠ CHAT |
+| `/session/{id}/voice/connect` | POST | widget_token | spins up Daily room + bot, seeds from chat history |
+| `/session/{id}/voice/end` | POST | widget_token | best-effort signal; drain runs in `end_conversation` |
+| `/session/{id}/end` | POST | widget_token | ends whole conversation; signals voice if live |
+| `/session/{id}` | GET | widget_token | resume payload for embed rehydrate |
+| OPTIONS on each | OPTIONS | none | permissive CORS preflight |
+
+CORS preflight returns permissive headers (`Origin: *`, methods/
+headers/max-age) so the browser preflight succeeds for any merchant
+site. The per-merchant `allowed_origins` check runs **inside** the
+POST handler — application-layer enforcement, not transport-layer.
+
+### 14.5 Tokens
+
+One widget JWT covers the whole conversation, both channels, the
+full 24-hour TTL. No re-mint at handoff. Claims:
+
+```json
+{
+  "sub": "widget-<12-hex>",
+  "typ": "widget",
+  "widget_session_id": "<chat_session.id>",
+  "widget_config_id": "<widget_config.id>",
+  "iat": ..., "exp": ...
+}
+```
+
+Voice attachments inside that 24h are bounded separately by Daily
+room expiry (1h, set in `start_daily_session`). The widget can
+reconnect voice (a new `/voice/connect` → new lead) up to the widget
+token's expiry.
+
+### 14.6 widget_config (per-merchant)
+
+Created by migration 029 (along with the chat_session columns).
+CRUD under `/agent/voice/breeze-buddy/widget-config`
+(admin / reseller-scoped). The `public_widget_key` is generated
+server-side by `secrets.token_urlsafe(32)` at create time and is
+never accepted from the client — the response is the only place a
+caller sees the key.
+
+```
+id                              uuid
+reseller_id                     varchar
+merchant_id                     varchar
+public_widget_key               varchar (server-generated, embedded in widget HTML)
+template_id                     uuid → template(id) ON DELETE RESTRICT
+allowed_origins                 text[]   (empty = deny all)
+max_sessions_per_ip_hour        int (default 60)
+max_messages_per_ip_hour        int (default 600)
+max_concurrent_per_ip           int (default 4, reserved for future use)
+max_voice_sessions_per_ip_hour  int (default 10)
+active                          bool
+```
+
+`UNIQUE (reseller_id, merchant_id)` — one widget per merchant.
+
+### 14.7 Voice runtime — resume + drain
+
+`/voice/connect` writes the resume seed into `lead.metaData` (fresh
+on first attachment via `create_lead_call_tracker`; refreshed on
+subsequent attachments via `reset_widget_voice_lead`):
+
+```
+{
+  is_widget: true,
+  widget_config_id: <uuid>,
+  widget_session_id: <chat_session.id>,
+  start_node:        <chat_session.current_node>,
+  prior_history:     [{role, content}, ...],   // full chat_message log
+  seed_message_count: <len(prior_history)>
+}
+```
+
+The seed advances on each /voice/connect: `prior_history` grows by
+whatever was added since the last attachment (chat turns + drained
+voice turns from prior attempts), and `start_node` reflects wherever
+the conversation last advanced to.
+
+The voice agent (`app/ai/voice/agents/breeze_buddy/agent/__init__.py`)
+reads the seed in `_setup_daily_transport` and:
+
+1. **Skips the greeting playback** — the prior turns already occupy
+   the user's screen; re-greeting feels broken.
+2. **Calls `prepare_resume_node` instead of `prepare_initial_node`**
+   to build the FlowManager's first NodeConfig.
+
+#### 14.7.0 Recordings disabled for widget voice
+
+`start_daily_session` accepts `enable_recording: bool = True`. The
+unified widget router passes `False` so widget voice sessions don't
+trigger Daily cloud recording and don't set the `recording_url`
+sentinel on the lead. Reason: with one lead reused across N voice
+attachments, the lead's single `recording_url` field cannot
+represent N recordings without a schema change. Telephony and demo
+paths default to `enable_recording=True` and behave exactly as
+before.
+
+#### 14.7.1 Sharp edge: pipecat resets context on first node
+
+`pipecat-flows`' `FlowManager._update_llm_context`
+(`.venv/lib/.../pipecat_flows/manager.py:712-825`) ALWAYS queues an
+`LLMMessagesUpdateFrame` (RESET) on the first `_set_node` call,
+regardless of `context_strategy` — the condition is
+`self._current_node is None`. A naive "pre-seed `LLMContext`, then
+call `initialize(node)`" would have the aggregator REPLACE the seed
+with `[role + task]` of the resume node, wiping our history.
+
+`prepare_resume_node` works around this inside the official API:
+**prior history is appended to the resume node's `task_messages`**.
+The RESET frame then sets context to
+`[role_messages, task_messages, ...prior_history]` in one shot — the
+order we want. Each prior history entry carries its own
+`{role: "user"|"assistant", content: str}` shape; the LLM doesn't
+require role-homogeneous task_messages.
+
+Implementation must run a real Daily-room round-trip to verify this
+holds — pipecat's downstream LLM service code may have hidden
+assumptions about task_messages roles.
+
+#### 14.7.2 Drain at end_conversation
+
+`handlers/internal/end_conversation.py` runs after Daily disconnects.
+After it collects `transcription` from `LLMContext.messages`, it
+checks for `lead.metaData.widget_session_id`. When present:
+
+1. Compute `new_messages = filtered_transcript[seed_message_count:]`
+   — only the turns past the seed boundary.
+2. Read `final_node = bot.flow_manager.current_node` (public property
+   on FlowManager — see `manager.py:189-219`).
+3. Call `drain_voice_into_chat_session(...)` which:
+   - INSERTs each new turn as a `chat_message` row (idempotent on
+     the `(session_id, idx)` PK).
+   - `UPDATE chat_session SET current_channel='CHAT',
+     current_node=$final_node WHERE id=$id AND current_channel='VOICE'
+     AND voice_lead_id=$lead_id` — conditioned on the lead we own so
+     a concurrent re-attach can't be clobbered. **`voice_lead_id` is
+     deliberately PRESERVED** so the next /voice/connect reuses this
+     same lead.
+
+The drain is wrapped in its own try/except so a failure cannot block
+the rest of `end_conversation` (lead UPDATE, callbacks, EndFrame).
+
+#### 14.7.3 Edge cases
+
+- **Bot crashes before drain.** Channel stays VOICE; `voice_lead_id`
+  points at a lead that's still in PROCESSING/BACKLOG. The next
+  `/voice/end` calls `flip_chat_session_to_chat` to roll back state.
+  A janitor sweep on `voice_lead_id IS NOT NULL AND
+  current_channel='VOICE' AND last_activity_at < now() - threshold`
+  (out of scope for this PR) is the long-term safety net.
+- **Daily room expires (1h)**. Pipecat's normal end-of-call flow
+  fires `end_conversation`, which executes the drain. No special
+  handling needed.
+- **Race between `/voice/end` and end_conversation drain**. Both
+  acquire the same per-session Redis lock (`chat:session:{id}:lock`),
+  so they serialize. The conditional UPDATE in the drain query
+  ensures only one writer can flip the channel.
+
+### 14.8 Manual verification checklist (no automated tests in this PR)
+
+1. `python scripts/migrate.py up` — 029 applies cleanly (creates
+   `widget_config` table + adds `chat_session.current_channel` and
+   `chat_session.active_lead_id`).
+2. RBAC unaffected: log in via existing
+   `POST /agent/voice/breeze-buddy/login`, hit
+   `GET /agent/voice/breeze-buddy/templates/list`, expect 200. The
+   token has no `typ` claim, so the new check is a no-op for it.
+3. Admin `POST /agent/voice/breeze-buddy/widget-config` returns a
+   row with a generated `public_widget_key`. Confirm: the request
+   body cannot supply or override the key.
+4. `POST /agent/voice/breeze-buddy/widget/session` with valid key +
+   matching `Origin` returns `widget_token`,
+   `current_channel='CHAT'`, optional greeting. With wrong `Origin`
+   returns 403; with missing/inactive key returns 404.
+5. `POST /agent/voice/breeze-buddy/widget/session/{id}/message` with
+   widget_token streams SSE. With a stale RBAC token returns 401.
+6. `POST /agent/voice/breeze-buddy/widget/session/{id}/voice/connect`
+   with a chat-only template returns 400; with a voice-enabled
+   template returns Daily creds and flips channel to VOICE.
+7. While channel=VOICE, `POST .../message` returns 409.
+8. Talk in the Daily room for 2-3 turns, then close the room. Within
+   a few seconds, `GET /widget/session/{id}` shows
+   `current_channel='CHAT'`, the new turns appear in `messages`,
+   `current_node` reflects wherever the voice flow ended.
+9. Reconnect voice via another `/voice/connect`. Confirm:
+   (a) the new Daily room is seeded with the FULL history (chat
+   turns + drained voice turns from the prior attempt);
+   (b) the **same lead row** is reused — query
+   `lead_call_tracker WHERE id = chat_session.voice_lead_id`,
+   `attempt_count` should be ≥ 2, `call_id` reflects the new room.
+   No new lead row should appear from this conversation.
+10. `POST /widget/session/{id}/end` ends the whole conversation;
+    channel goes to ENDED. Subsequent ops 410.
+11. RBAC tokens and demo tokens both 401 against
+    `/widget/session/*`. Widget tokens 401 against
+    `/chat/session/*` (RBAC routes).
+12. 61st `/widget/session` create from one IP within an hour
+    returns 429 with `Retry-After`.
+
+### 14.9 Files
+
+**New:**
+- `app/database/migrations/029_widget_public_mode.sql` (creates
+  `widget_config` table + adds `chat_session.current_channel` and
+  `chat_session.active_lead_id` — both ship together because each is
+  dead weight without the other)
+- `app/api/routers/breeze_buddy/widget/{__init__,handlers}.py`
+- `app/api/routers/breeze_buddy/widget_config/{__init__,handlers}.py`
+- `app/api/routers/breeze_buddy/widget_common.py`
+- `app/api/security/breeze_buddy/widget_token.py`
+- `app/database/{queries,accessor,decoder}/breeze_buddy/widget_config.py`
+- `app/schemas/breeze_buddy/widget_config.py`
+
+**Edited (additive):**
+- `app/api/routers/breeze_buddy/__init__.py` — include both widget routers.
+- `app/api/security/breeze_buddy/rbac_token.py` — reject `typ=widget`
+  and `demo=true` tokens.
+- `app/database/queries/breeze_buddy/chat_session.py` — `_SESSION_COLUMNS`
+  + state-mutation + drain query builders.
+- `app/database/accessor/breeze_buddy/chat_session.py` — attach /
+  detach / drain accessors.
+- `app/database/decoder/breeze_buddy/chat_session.py` — populate
+  `current_channel` + `active_lead_id`.
+- `app/schemas/breeze_buddy/chat.py` — `WidgetChannel` enum, widget
+  request/response shapes, `ChatSession` extra fields.
+- `app/ai/voice/agents/breeze_buddy/agent/flow.py` — `prepare_resume_node`.
+- `app/ai/voice/agents/breeze_buddy/agent/__init__.py` — read
+  `lead.metaData` widget seed; branch greeting + node prep.
+- `app/ai/voice/agents/breeze_buddy/handlers/internal/end_conversation.py`
+  — drain back to chat_session when widget_session_id present.
+

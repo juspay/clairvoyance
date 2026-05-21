@@ -32,6 +32,9 @@ from app.ai.voice.agents.breeze_buddy.handlers.transport.utils.field_resolver im
 from app.ai.voice.agents.breeze_buddy.handlers.transport.utils.response_filter import (
     apply_response_schema,
 )
+from app.ai.voice.agents.breeze_buddy.handlers.transport.utils.response_transform import (
+    apply_response_transforms,
+)
 from app.ai.voice.agents.breeze_buddy.template.context import TemplateContext
 from app.ai.voice.agents.breeze_buddy.template.types import (
     FieldSource,
@@ -215,6 +218,16 @@ async def http_function_handler(
                 f"[{function_name}] response filtered via expected_response_schema: "
                 f"{list(config.expected_response_schema.keys())}"
             )
+
+        # In-place response transforms — applied after projection so
+        # templates can both narrow AND mutate. Channel-agnostic: voice +
+        # chat both dispatch through this handler. Only 2xx — error
+        # bodies stay raw so the LLM can read them verbatim.
+        if is_success and config.response_transforms and isinstance(data, (dict, list)):
+            try:
+                apply_response_transforms(data, config.response_transforms)
+            except Exception as e:
+                logger.warning(f"[{function_name}] response_transforms failed: {e}")
 
         logger.debug(f"[{function_name}] data going to LLM: {data}")
 
