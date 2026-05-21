@@ -421,3 +421,69 @@ async def test_daily_lead_reaching_worker_is_dropped(harness, fake_redis):
     assert lead.id not in harness.released_locks
     # Status untouched.
     assert lead.status == LeadCallStatus.BACKLOG
+
+
+async def test_reaper_does_not_reschedule_non_dispatchable_lead(
+    harness, fake_redis, monkeypatch
+):
+    """
+    Defence-in-depth for the rare crash window: if a worker dies between
+    RPUSH-processing and LREM-processing while holding a DAILY lead (e.g.
+    crashed during the is_dispatchable defensive check), the reaper must
+    clean the tracking entry but NOT re-ZADD onto SCHEDULE_ZSET. Otherwise
+    the lead would loop: promote → worker drops → idle until reaper next
+    tick. The reaper mirrors the worker's defensive backstop.
+    """
+    from app.schemas import ExecutionMode
+
+    lead = make_lead("lead-stuck-daily")
+    lead.execution_mode = ExecutionMode.DAILY
+    harness.add_lead(lead)
+    monkeypatch.setattr(recon_mod, "get_lead_by_id", harness.get_lead_by_id)
+
+    worker_uuid = "w-crashed-with-daily"
+    proc_key = processing_list_for(worker_uuid)
+    await fake_redis.client.rpush(proc_key, lead.id)
+    # No heartbeat — worker is presumed dead.
+    assert worker_heartbeat_key(worker_uuid) not in fake_redis.client.kv
+
+    # Pre-condition: schedule is empty.
+    assert await fake_redis.client.zcard(SCHEDULE_ZSET) == 0
+
+    await recon_mod.reap_stuck_processing_lists()
+
+    # Reaper must NOT re-schedule the Daily lead (no phantom dial loop).
+    assert await fake_redis.client.zcard(SCHEDULE_ZSET) == 0
+    # Tracking entry IS cleaned.
+    assert (
+        proc_key not in fake_redis.client.lists
+        or fake_redis.client.lists[proc_key] == []
+    )
+
+
+async def test_reaper_still_reschedules_dispatchable_lead(
+    harness, fake_redis, monkeypatch
+):
+    """
+    Regression guard: the new is_dispatchable filter must NOT break the
+    happy-path recovery for TELEPHONY leads. A crashed worker's TELEPHONY
+    BACKLOG lead must still get re-ZADD'd onto SCHEDULE_ZSET.
+    """
+    lead = make_lead("lead-stuck-tel")  # default execution_mode = TELEPHONY
+    harness.add_lead(lead)
+    monkeypatch.setattr(recon_mod, "get_lead_by_id", harness.get_lead_by_id)
+
+    worker_uuid = "w-crashed-with-tel"
+    proc_key = processing_list_for(worker_uuid)
+    await fake_redis.client.rpush(proc_key, lead.id)
+    # No heartbeat.
+
+    await recon_mod.reap_stuck_processing_lists()
+
+    # TELEPHONY lead IS re-scheduled.
+    assert await fake_redis.client.zcard(SCHEDULE_ZSET) == 1
+    assert lead.id in fake_redis.client.zsets[SCHEDULE_ZSET]
+    assert (
+        proc_key not in fake_redis.client.lists
+        or fake_redis.client.lists[proc_key] == []
+    )
