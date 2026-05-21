@@ -353,6 +353,17 @@ async def BREEZE_BUDDY_AZURE_TEMPERATURE() -> float:
     return await get_config("BREEZE_BUDDY_AZURE_TEMPERATURE", 0.7, float)
 
 
+# --- OpenAI LLM Configuration ---
+async def OPENAI_MAX_COMPLETION_TOKENS() -> int:
+    """Returns OPENAI_MAX_COMPLETION_TOKENS from Redis"""
+    return await get_config("OPENAI_MAX_COMPLETION_TOKENS", 300, int)
+
+
+async def OPENAI_TEMPERATURE() -> float:
+    """Returns OPENAI_TEMPERATURE from Redis"""
+    return await get_config("OPENAI_TEMPERATURE", 0.7, float)
+
+
 # --- Google Vertex AI Credentials ---
 async def GOOGLE_VERTEX_CREDENTIALS_JSON() -> str:
     """Returns GOOGLE_VERTEX_CREDENTIALS_JSON from Redis"""
