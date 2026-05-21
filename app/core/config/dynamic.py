@@ -457,6 +457,44 @@ async def BB_ENABLE_ELEVENLABS_INDIAN_RESIDENCY() -> bool:
     return await get_config("BB_ENABLE_ELEVENLABS_INDIAN_RESIDENCY", True, bool)
 
 
+# --- Breeze Buddy STT Service & Fallback Configuration ---
+async def BB_STT_SERVICE() -> str:
+    """Returns BB_STT_SERVICE from Redis (soniox, deepgram, sarvam, openai, google)"""
+    return await get_config("BB_STT_SERVICE", "soniox", str)
+
+
+async def BB_FALLBACK_RAW_CONFIG(service: str) -> dict:
+    """Return the raw fallback config dict for the given service from Redis.
+
+    Reads the ``BB_FALLBACK`` DevCycle/Redis flag (a JSON string encoding an
+    object keyed by service name) and returns the service sub-dict.
+
+    Example flag value::
+
+        {
+          "stt": {
+            "enabled": true,
+            "fallback_provider": "deepgram",
+            "threshold": 2,
+            "duration_secs": 1800,
+            "window_secs": 240
+          }
+        }
+
+    Returns an empty dict when the flag is absent or the service key is missing.
+    Consumers (e.g. ``app.services.fallback``) apply defaults and type the result.
+    """
+    redis_json = await get_config("BB_FALLBACK", None, str)
+    if redis_json:
+        try:
+            raw = json.loads(redis_json)
+            if isinstance(raw, dict):
+                return raw.get(service, {})
+        except (json.JSONDecodeError, TypeError) as e:
+            logger.warning(f"Failed to parse BB_FALLBACK from Redis: {e}")
+    return {}
+
+
 # --- Breeze Buddy Transfer Configuration ---
 async def BB_TRANSFER_CONFERENCE_TIMEOUT() -> int:
     """Seconds to wait for agent to join conference"""

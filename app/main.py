@@ -94,6 +94,7 @@ from app.helpers.automatic.session_manager import (
 from app.schemas import (
     AutomaticVoiceUserConnectRequest,
 )
+from app.services.fallback import initialize_fallback_tasks
 from app.services.langfuse.tasks.task import initialize_langfuse_tasks
 from app.services.redis import (
     close_redis_connections,
@@ -211,6 +212,10 @@ async def lifespan(_app: FastAPI):
                 func=end_idle_chat_sessions,
                 interval_seconds=CHAT_SESSION_END_TIMEOUT_LOOP_INTERVAL_SECONDS,
             )
+            # Initialize STT fallback reset tasks
+            await initialize_fallback_tasks(_background_scheduler)
+
+            ### Register new tasks here
 
             # Event-driven dispatch reconcilers (Plane 5). Only registered on
             # main-server pods; the scheduler's SET NX EX lock further

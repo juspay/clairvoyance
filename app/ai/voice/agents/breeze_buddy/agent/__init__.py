@@ -9,7 +9,7 @@ from fastapi import WebSocket
 from opentelemetry import trace
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.vad.vad_analyzer import VADParams
-from pipecat.frames.frames import LLMMessagesAppendFrame, TTSSpeakFrame
+from pipecat.frames.frames import EndFrame, LLMMessagesAppendFrame, TTSSpeakFrame
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineTask
 from pipecat.processors.aggregators.llm_context import LLMContext
@@ -83,12 +83,14 @@ from app.ai.voice.agents.breeze_buddy.template.types import (
 )
 from app.ai.voice.agents.breeze_buddy.template.vad import create_vad_analyzer
 from app.ai.voice.agents.breeze_buddy.utils.common import (
+    fire_and_forget,
     track_error,
 )
 from app.ai.voice.agents.breeze_buddy.utils.transport.websockets import (
     close_websocket_safely,
 )
 from app.ai.voice.agents.breeze_buddy.utils.warm_transfer import set_transfer_flag
+from app.core.config.dynamic import BB_STT_SERVICE
 from app.core.config.static import ENABLE_BREEZE_BUDDY_TRACING
 from app.core.logger import logger
 from app.core.logger.context import (
@@ -102,6 +104,12 @@ from app.database.accessor.breeze_buddy.lead_call_tracker import (
 )
 from app.schemas import CallProvider
 from app.schemas.breeze_buddy.core import ExecutionMode, LeadCallTracker
+from app.services.fallback import (
+    BB_FALLBACK_CONFIG,
+    ServiceFallback,
+    ServiceFallbackConfig,
+)
+from app.services.slack import slack_alert
 
 DEFAULT_OUTCOME = "BUSY"
 TTS_SPEAK_MAX_CHARS = 2000
@@ -173,6 +181,12 @@ class Agent:
 
         # Error tracking
         self.errors: List[Dict[str, Any]] = []
+
+        # STT fallback state
+        self.stt_provider: Optional[str] = None
+        self._stt_service: Any = None
+        self._stt_failure_recorded: bool = False
+        self._mid_call_alert_sent: bool = False
 
     @property
     def is_daily_mode(self) -> bool:
@@ -272,6 +286,32 @@ class Agent:
         except asyncio.CancelledError:
             logger.debug("Post-greeting idle timer cancelled.")
             return
+
+    async def _send_mid_call_stt_alert(self) -> None:
+        """Send Slack alert when STT fails mid-call and call must end."""
+        from app.core.config.static import SLACK_TAG_USERS
+
+        _fallback_tag = "@breeze-sentinals"
+        tag = f"{_fallback_tag},{SLACK_TAG_USERS}" if SLACK_TAG_USERS else _fallback_tag
+        provider = (self.stt_provider or "unknown").capitalize()
+        try:
+            await slack_alert.send(
+                title="🚨 STT Failed — Call Ended (Breeze Buddy)",
+                fields=[
+                    {"name": "Provider", "value": provider},
+                    {"name": "Call SID", "value": self.call_sid or "unknown"},
+                ],
+                sections=[
+                    {
+                        "title": "What Happened",
+                        "text": "STT failed mid-call. Call could not continue.",
+                    }
+                ],
+                fallback_text=f"STT failed, call ended — {self.call_sid or 'unknown'}",
+                tag_users=tag,
+            )
+        except Exception as e:
+            logger.warning(f"Failed to send mid-call STT alert: {e}")
 
     async def _setup_daily_transport(self, runner_args: RunnerArguments) -> None:
         """Initialize transport for Daily mode."""
@@ -646,7 +686,7 @@ class Agent:
 
         @self.task.event_handler("on_pipeline_error")
         async def on_pipeline_error(task, error):
-            """Capture TTS/STT/LLM pipeline failures."""
+            """Handle pipeline errors — record STT failures in circuit breaker and end call."""
             processor = getattr(error, "processor", "unknown")
             error_msg = getattr(error, "error", str(error))
             detailed_msg = f"[PIPELINE] {processor}: {error_msg}"
@@ -657,6 +697,57 @@ class Agent:
                     "pipeline-error",
                     {"processor": str(processor), "error": error_msg},
                 )
+
+            # Detect STT errors by processor name keywords
+            processor_str = str(processor).lower()
+            stt_keywords = (
+                "stt",
+                "soniox",
+                "deepgram",
+                "transcri",
+                "google",
+                "sarvam",
+            )
+            is_stt_error = any(kw in processor_str for kw in stt_keywords)
+
+            if not is_stt_error:
+                return
+
+            logger.warning(f"STT error detected from processor: {processor}")
+
+            # Record failure in fallback system (once per call, any STT provider)
+            if not self._stt_failure_recorded:
+                self._stt_failure_recorded = True
+                try:
+                    cfg = await BB_FALLBACK_CONFIG("stt")
+                    if cfg.enabled:
+                        primary_provider = await BB_STT_SERVICE()
+                        fb = ServiceFallback(
+                            ServiceFallbackConfig(
+                                service_name="stt",
+                                failure_threshold=cfg.threshold,
+                                failure_window_secs=cfg.window_secs,
+                                fallback_duration_secs=cfg.duration_secs,
+                                primary_provider_name=primary_provider,
+                                fallback_provider_name=cfg.fallback_provider,
+                            )
+                        )
+                        await fb.record_failure(
+                            error_msg=str(error_msg)[:200],
+                            call_sid=self.call_sid or "",
+                            context="mid-call",
+                        )
+                except Exception as fb_err:
+                    logger.warning(f"STT fallback record_failure failed: {fb_err}")
+
+            # Alert and end call — no mid-call swap in Phase 1
+            if not self._mid_call_alert_sent:
+                self._mid_call_alert_sent = True
+                fire_and_forget(self._send_mid_call_stt_alert())
+            try:
+                await task.queue_frames([EndFrame()])
+            except Exception as e:
+                logger.warning(f"Failed to queue EndFrame after STT error: {e}")
 
         @self.transport.event_handler("on_client_connected")
         async def on_client_connected(transport, client):
@@ -679,6 +770,7 @@ class Agent:
                 logger.info(
                     "Cancelling the post greeting task due to client disconnect"
                 )
+
             await self._handle_unexpected_disconnect("client_disconnected")
 
         @self.task.event_handler("on_idle_timeout")
@@ -890,17 +982,18 @@ class Agent:
                             f"Invalid TTS provider '{payload_provider}' in payload, keeping existing config"
                         )
 
-            # Build services and pipeline. Stream mode skips LLM creation and
-            # runs build_pipeline with mode="stream" (no LLM processor, no
-            # assistant aggregator, transcript collector inserted, no user idle).
-            # All other wiring is identical.
+            # Create services and pipeline
+            # VAD analyzer is passed to build_pipeline where it's configured inside the
+            # LLMUserAggregator. This enables UserTurnStrategies (VAD + Transcription fallback).
             is_stream = self.is_stream_mode
-            stt, llm, tts = await create_services(
+            stt_result, llm, tts = await create_services(
                 self.configurations, include_llm=not is_stream
             )
             if not is_stream:
                 assert llm is not None, "LLM is required in agent mode"
-
+            if stt_result is not None:
+                self.stt_provider = stt_result.provider
+                self._stt_service = stt_result.service
             (
                 pipeline,
                 context,
@@ -910,7 +1003,7 @@ class Agent:
                 self._transcript_collector,
             ) = await build_pipeline(
                 self.transport,
-                stt,
+                stt_result.service if stt_result is not None else None,
                 llm,
                 tts,
                 self.vad_analyzer,
