@@ -17,6 +17,9 @@ from app.ai.voice.agents.breeze_buddy.utils.hold_transfer import (
 )
 from app.core.logger import logger
 from app.core.logger.context import clear_log_context
+from app.database.accessor.breeze_buddy.chat_session import (
+    drain_voice_into_chat_session,
+)
 
 callback_map = {
     "service_callback": service_callback,
@@ -113,6 +116,45 @@ async def end_conversation(context: TemplateContext, args, transition_to=None):
             logger.warning(
                 f"No context found for transcription collection in call {context.call_sid}"
             )
+
+        # ── Widget-mode drain ─────────────────────────────────────────────
+        # If this voice call was a transient attachment to a widget chat
+        # session (CHAT_MODE.md §14), drain the new turns back into the
+        # canonical chat_session so chat resumes with full conversation
+        # history. The drain is idempotent and best-effort — a failure
+        # here must NOT block the rest of end_conversation (DB lead
+        # update, callbacks, EndFrame), so it's wrapped in its own try.
+        widget_session_id = context.lead.metaData.get("widget_session_id")
+        if widget_session_id:
+            try:
+                seed_count = int(
+                    context.lead.metaData.get("seed_message_count", 0) or 0
+                )
+                # New voice turns = everything past the seed boundary in
+                # filtered_transcript (user/assistant only — the same
+                # shape chat_message stores).
+                new_messages = filtered_transcript[seed_count:]
+                final_node = None
+                if context.bot and getattr(context.bot, "flow_manager", None):
+                    final_node = context.bot.flow_manager.current_node
+                if not final_node:
+                    final_node = context.lead.metaData.get("start_node")
+                logger.info(
+                    f"widget drain: chat_session={widget_session_id} "
+                    f"new_turns={len(new_messages)} final_node={final_node!r}"
+                )
+                await drain_voice_into_chat_session(
+                    chat_session_id=str(widget_session_id),
+                    lead_id=str(context.lead.id),
+                    new_messages=new_messages,
+                    final_node=final_node,
+                )
+            except Exception as drain_err:
+                logger.error(
+                    f"widget drain: failed for chat_session "
+                    f"{widget_session_id} / lead {context.lead.id}: {drain_err}",
+                    exc_info=True,
+                )
 
         # ── Hold-transfer: publish outbound result to inbound pod ──────────
         # Runs regardless of whether context.context exists so that outbound

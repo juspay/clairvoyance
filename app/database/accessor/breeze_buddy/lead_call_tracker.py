@@ -23,6 +23,7 @@ from app.database.queries.breeze_buddy.lead_call_tracker import (
     get_leads_by_status_and_time_before_query,
     insert_lead_call_tracker_query,
     release_lock_on_lead_by_id_query,
+    reset_widget_voice_lead_query,
     update_langfuse_scores_query,
     update_lead_call_completion_details_query,
     update_lead_call_details_query,
@@ -678,3 +679,34 @@ async def update_lead_request_id(lead_id: str, request_id: str) -> None:
         logger.info(f"request_id updated successfully for lead ID: {lead_id}")
     except Exception as e:
         logger.error(f"Error updating request_id for lead ID {lead_id}: {e}")
+
+
+async def reset_widget_voice_lead(
+    lead_id: str,
+    payload: Dict[str, Any],
+    meta_data_seed: Dict[str, Any],
+) -> Optional[LeadCallTracker]:
+    """Reset a widget voice lead so the next /voice/connect can reuse it.
+
+    Used only by the unified widget router (CHAT_MODE.md §14): one
+    chat_session has ONE voice lead (set in chat_session.voice_lead_id)
+    that persists for the conversation's lifetime. Each /voice/connect
+    after the first reuses this lead — bumps attempt_count, refreshes
+    the seed (start_node, prior_history), clears per-call fields
+    (call_id, outcome, etc.) so they don't leak from the previous
+    attempt.
+    """
+    logger.info(
+        f"Resetting widget voice lead {lead_id} for next attempt "
+        f"(seed: {sorted(meta_data_seed.keys())})"
+    )
+    query_text, values = reset_widget_voice_lead_query(lead_id, payload, meta_data_seed)
+    try:
+        result = await run_parameterized_query(query_text, values)
+        if result and get_row_count(result) > 0:
+            return decode_lead_call_tracker(result[0])
+        logger.error(f"Failed to reset widget voice lead {lead_id} (no row updated)")
+        return None
+    except Exception as e:
+        logger.error(f"Error resetting widget voice lead {lead_id}: {e}")
+        raise

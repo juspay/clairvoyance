@@ -435,7 +435,11 @@ BB_PROMOTER_LEADER_TTL_S = int(os.environ.get("BB_PROMOTER_LEADER_TTL_S", 5))
 BB_PROMOTER_LEADER_RENEW_S = int(os.environ.get("BB_PROMOTER_LEADER_RENEW_S", 2))
 
 # Workers
-BB_WORKER_COUNT = int(os.environ.get("BB_WORKER_COUNT", 20))
+# Default count is environment-aware: dev pods only need a couple of BLPOP
+# loops for smoke-testing the dispatcher path; production sizes for real
+# outbound load. Explicit BB_WORKER_COUNT in the env wins over the default.
+_BB_WORKER_COUNT_DEFAULT = 2 if ENVIRONMENT == "dev" else 20
+BB_WORKER_COUNT = int(os.environ.get("BB_WORKER_COUNT", _BB_WORKER_COUNT_DEFAULT))
 BB_WORKER_BLPOP_TIMEOUT_S = int(os.environ.get("BB_WORKER_BLPOP_TIMEOUT_S", 30))
 BB_WORKER_HEARTBEAT_TTL_S = int(os.environ.get("BB_WORKER_HEARTBEAT_TTL_S", 60))
 BB_WORKER_HEARTBEAT_REFRESH_S = int(os.environ.get("BB_WORKER_HEARTBEAT_REFRESH_S", 10))

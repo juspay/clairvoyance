@@ -14,7 +14,7 @@ exposes no public streaming-with-tools entry point. Tested with pipecat 1.1.0
 from __future__ import annotations
 
 import json
-from typing import Any, AsyncIterator, Literal, Tuple, Union
+from typing import Any, AsyncIterator, Dict, Literal, Optional, Tuple, Union
 
 from pipecat.frames.frames import FunctionCallFromLLM
 from pipecat.processors.aggregators.llm_context import LLMContext
@@ -22,6 +22,9 @@ from pipecat.services.anthropic.llm import AnthropicLLMService
 from pipecat.services.google.llm import GoogleLLMService
 from pipecat.services.openai.base_llm import BaseOpenAILLMService
 
+from app.ai.voice.agents.breeze_buddy.chat.context_compactor import (
+    compact_tool_results,
+)
 from app.core.logger import logger
 
 DriverEvent = Tuple[Literal["text", "tool_call"], Union[str, FunctionCallFromLLM]]
@@ -35,18 +38,26 @@ async def stream(
     context: LLMContext,
     *,
     log_label: str = "chat",
+    tool_context_retention: Optional[Dict[str, str]] = None,
 ) -> AsyncIterator[DriverEvent]:
     """Issue one streaming LLM call; yield text deltas + tool calls.
 
     The caller owns ``context`` mutation between turns of the tool-call loop.
     This function only reads it.
+
+    ``tool_context_retention`` is an optional per-tool policy map (currently
+    honoured only by the Anthropic path) that lets the compactor rewrite
+    stale ``tool_result`` blocks into 1-line stubs — bounding input-token
+    cost across long sessions. ``None`` or an empty map is a no-op.
     """
     if isinstance(llm_service, BaseOpenAILLMService):
         async for event in _stream_openai(llm_service, context, log_label):
             yield event
         return
     if isinstance(llm_service, AnthropicLLMService):
-        async for event in _stream_anthropic(llm_service, context, log_label):
+        async for event in _stream_anthropic(
+            llm_service, context, log_label, tool_context_retention
+        ):
             yield event
         return
     if isinstance(llm_service, GoogleLLMService):
@@ -180,6 +191,7 @@ async def _stream_anthropic(
     service: AnthropicLLMService,
     context: LLMContext,
     log_label: str,
+    tool_context_retention: Optional[Dict[str, str]] = None,
 ) -> AsyncIterator[DriverEvent]:
     """Mirror AnthropicLLMService._process_context minus frame pushes.
 
@@ -211,6 +223,18 @@ async def _stream_anthropic(
         params["thinking"] = thinking.model_dump(exclude_unset=True)
     params.update(invocation_params)
     params.update(getattr(settings, "extra", None) or {})
+
+    # Compact stale tool_result blocks per the template's retention policy.
+    # Applied AFTER invocation_params/settings.extra are merged in, so the
+    # compaction reflects exactly what's about to go on the wire. The most
+    # recent tool_result stays intact (``recent_keep=1``) so the LLM can
+    # reason about the call its current turn just made.
+    if tool_context_retention and isinstance(params.get("messages"), list):
+        params["messages"] = compact_tool_results(
+            params["messages"],
+            retention=tool_context_retention,
+            recent_keep=1,
+        )
 
     logger.debug(f"[{log_label}] llm_driver: anthropic stream model={settings.model}")
 

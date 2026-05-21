@@ -201,3 +201,95 @@ def prepare_initial_node(
         post_actions=node_config.get("post_actions", []),
         respond_immediately=not has_greeting_source,
     )
+
+
+def prepare_resume_node(
+    flow_config: Dict[str, Any],
+    lead_payload: dict,
+    configurations: Optional[ConfigurationModel],
+    *,
+    start_node_name: Optional[str],
+    prior_history: List[Dict[str, Any]],
+) -> NodeConfig:
+    """Prepare a NodeConfig that resumes an existing conversation.
+
+    Used by the unified widget mode (CHAT_MODE.md §14) when voice is
+    attached to an in-progress chat session: we want the bot to start
+    at ``start_node_name`` with the chat's full message history
+    already in the LLM context.
+
+    Why this works (verified against pipecat-flows source at
+    .venv/lib/.../pipecat_flows/manager.py:712-825):
+
+      FlowManager always queues an ``LLMMessagesUpdateFrame`` (RESET)
+      on the FIRST ``_set_node`` call, regardless of context_strategy
+      — the condition is ``self._current_node is None``. A naive
+      "pre-seed LLMContext, then call initialize(node)" would have
+      the aggregator REPLACE the seed with [role + task] of the node,
+      wiping our history.
+
+      The clean workaround stays inside the official API: we put
+      ``prior_history`` at the tail of ``task_messages``. The RESET
+      frame then sets context to
+      [role_messages, task_messages, ...prior_history] in one shot —
+      the order we want. Each prior_history entry already has its own
+      ``{role: "user"|"assistant", content: str}``; the LLM doesn't
+      require role-homogeneous task_messages.
+
+    ``start_node_name`` defaults to ``flow_config["initial_node"]``
+    when None — covers the case where chat hadn't transitioned past
+    the initial node yet.
+
+    No greeting injection: when resuming we never want the bot to
+    re-greet (the greeting is already in prior_history if the chat
+    had one). ``respond_immediately=True`` so the bot responds to
+    whatever the user says first instead of speaking an empty turn.
+    """
+    node_name = start_node_name or flow_config["initial_node"]
+    if node_name not in flow_config["nodes"]:
+        # Defensive fallback — chat may have persisted a current_node
+        # that doesn't exist in this template version. Falling back to
+        # initial keeps the bot functional; we log loudly so operators
+        # notice template drift.
+        logger.warning(
+            f"prepare_resume_node: start_node {node_name!r} not in flow; "
+            f"falling back to initial_node {flow_config['initial_node']!r}"
+        )
+        node_name = flow_config["initial_node"]
+
+    node_config = flow_config["nodes"][node_name]
+
+    role_messages = inject_language_rules(
+        node_config.get("role_messages", []),
+        lead_payload.get("language_name", "English"),
+        getattr(configurations, "payload_based_language_selection", False),
+    )
+
+    task_messages: List[Dict[str, Any]] = list(node_config["task_messages"])
+    # Tail-append prior history so the RESET frame's payload becomes
+    # [role + task + history] in a single context replacement. Filter
+    # out any malformed entries defensively.
+    for entry in prior_history or []:
+        if not isinstance(entry, dict):
+            continue
+        role = entry.get("role")
+        content = entry.get("content")
+        if role not in ("user", "assistant") or not content:
+            continue
+        task_messages.append({"role": role, "content": content})
+
+    logger.info(
+        f"prepare_resume_node: resuming at {node_name!r} with "
+        f"{len(prior_history or [])} prior messages"
+    )
+
+    return NodeConfig(
+        name=node_config["name"],
+        task_messages=task_messages,
+        role_messages=role_messages,
+        functions=node_config.get("functions", []),
+        pre_actions=node_config.get("pre_actions", []),
+        post_actions=node_config.get("post_actions", []),
+        # No greeting on resume — let the user speak first.
+        respond_immediately=True,
+    )

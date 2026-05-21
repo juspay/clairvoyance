@@ -6,12 +6,16 @@ per-session Redis lock + agent lifecycle. Routes in ``__init__.py``
 stay thin: validate auth, then delegate.
 """
 
+import asyncio
 from typing import Any, AsyncIterator, Callable, Dict, Optional
 
 from fastapi import HTTPException, status
 from fastapi.responses import StreamingResponse
 
 from app.ai.voice.agents.breeze_buddy.chat.agent import ChatAgent
+from app.ai.voice.agents.breeze_buddy.chat.block_codec import (
+    blocks_to_llm_context_messages,
+)
 from app.ai.voice.agents.breeze_buddy.chat.sse import SSEEvent, format_sse
 from app.ai.voice.agents.breeze_buddy.llm import get_llm_service
 from app.ai.voice.agents.breeze_buddy.template.cache import get_template_by_id_cached
@@ -24,6 +28,7 @@ from app.core.logger import logger
 from app.database.accessor.breeze_buddy.chat_session import (
     create_chat_session,
     end_chat_session,
+    get_agent_session_state,
     get_chat_session_by_id,
     insert_chat_message,
     list_chat_messages_for_session,
@@ -46,6 +51,8 @@ from app.schemas.breeze_buddy.chat import (
     SendChatMessageRequest,
 )
 from app.services.redis.locks import LockAcquireError, RedisLock
+
+from . import cancel_bus
 
 # Per-session lock TTL. A single chat turn (LLM call + tool round-trips)
 # is well under this — if it isn't, the upstream LLM is hung and we
@@ -381,12 +388,27 @@ async def send_chat_message_handler(
         history_rows = await list_chat_messages_for_session(
             session_id, limit=history_limit
         )
-        history: list = [
-            {"role": row.role.value, "content": row.content}
-            for row in history_rows
-            if row.role in (ChatMessageRole.USER, ChatMessageRole.ASSISTANT)
-            and row.content
-        ]
+        # Replay the canonical Anthropic-shape blocks if present (post-
+        # migration 030), falling back to the denormalised prose for
+        # any legacy rows. Tool_use / tool_result blocks survive so the
+        # LLM sees its own prior identifiers (cart_id, etc.) verbatim.
+        history: list = blocks_to_llm_context_messages(
+            [
+                {
+                    "role": row.role.value,
+                    "content": row.content,
+                    "content_blocks": row.content_blocks,
+                }
+                for row in history_rows
+                if row.role in (ChatMessageRole.USER, ChatMessageRole.ASSISTANT)
+            ]
+        )
+
+        # Load per-session agent state (cart_id, customer_id, etc. for
+        # commerce templates). Generic — the runtime doesn't read the
+        # keys; the template's tool_arg_injection rules do.
+        state_row = await get_agent_session_state(session_id)
+        agent_state: Dict[str, Any] = state_row.data if state_row else {}
 
         persisted_template_vars = (
             fresh.metadata.get("template_vars", {})
@@ -413,41 +435,104 @@ async def send_chat_message_handler(
             template=template,
             llm=llm,
             template_vars=template_vars,
+            agent_state=agent_state,
         )
         # Snapshot into a local so the closure below doesn't have to rely
         # on Optional narrowing surviving the boundary.
         resume_node = fresh.current_node
 
         async def stream() -> AsyncIterator[str]:
+            # Register ourselves so /cancel can find and cancel this task
+            # cross-pod. The registration MUST happen inside the generator
+            # body (not in the outer handler) — the task that actually
+            # drives ``yield`` is the StreamingResponse iterator task, and
+            # that's the only one whose cancel() reliably propagates into
+            # ``agent.run_turn()``.
+            current_task = asyncio.current_task()
+            registered = False
+            if current_task is not None:
+                cancel_bus.register(session_id, current_task)
+                registered = True
             try:
-                async for event in agent.run_turn(
-                    user_content=req.content,
-                    history=history,
-                    current_node=resume_node,
-                ):
-                    yield format_sse(event)
-            except Exception as exc:
-                # Full exception (incl. SDK / DB internals) goes to logs; the
-                # SSE payload is intentionally generic — provider stack traces,
-                # internal URLs, and SQL strings should not reach the client.
-                logger.error(
-                    f"send_message stream for session {session_id} crashed: {exc}",
-                    exc_info=True,
-                )
-                yield format_sse(
-                    SSEEvent(
-                        event="error",
-                        data={
-                            "code": "internal",
-                            "message": "Internal server error",
-                        },
+                try:
+                    async for event in agent.run_turn(
+                        user_content=req.content,
+                        history=history,
+                        current_node=resume_node,
+                    ):
+                        yield format_sse(event)
+                except asyncio.CancelledError:
+                    # User clicked Stop. Emit a clean turn_end so the client
+                    # sees a structured end (the SDK's turn engine maps this
+                    # to ``turn-end: CANCELED`` and flips status back to
+                    # ready). Don't re-raise — letting CancelledError
+                    # propagate would tear down the StreamingResponse mid-
+                    # write, which Starlette logs as an error.
+                    #
+                    # Python 3.11+ asyncio gotcha: simply catching
+                    # CancelledError leaves the task's cancel-counter > 0,
+                    # so the NEXT await in this generator (the finally's
+                    # ``lock.release()``) is re-raised as CancelledError
+                    # before the Redis DEL goes out. Result: the lock stays
+                    # held until its 180s TTL and the next /message gets
+                    # 409. Calling ``uncancel()`` decrements the counter
+                    # so cleanup can complete. Symptom this fixes:
+                    # "cancelled by user" log fires, but follow-up sends
+                    # still see HTTP 409.
+                    if current_task is not None:
+                        try:
+                            current_task.uncancel()
+                        except AttributeError:
+                            # Python <3.11 — no uncancel; rely on the
+                            # ``shield`` in the finally below.
+                            pass
+                    logger.info(
+                        f"send_message stream for session {session_id} cancelled by user"
                     )
-                )
-                yield format_sse(
-                    SSEEvent(event="turn_end", data={"session_status": "FAILED"})
-                )
+                    yield format_sse(
+                        SSEEvent(event="turn_end", data={"session_status": "CANCELED"})
+                    )
+                except Exception as exc:
+                    # Full exception (incl. SDK / DB internals) goes to logs; the
+                    # SSE payload is intentionally generic — provider stack traces,
+                    # internal URLs, and SQL strings should not reach the client.
+                    logger.error(
+                        f"send_message stream for session {session_id} crashed: {exc}",
+                        exc_info=True,
+                    )
+                    yield format_sse(
+                        SSEEvent(
+                            event="error",
+                            data={
+                                "code": "internal",
+                                "message": "Internal server error",
+                            },
+                        )
+                    )
+                    yield format_sse(
+                        SSEEvent(event="turn_end", data={"session_status": "FAILED"})
+                    )
             finally:
-                await lock.release()
+                if registered and current_task is not None:
+                    cancel_bus.unregister(session_id, current_task)
+                # Shield the release: on a natural client disconnect path
+                # (Starlette cancels the generator without our explicit
+                # except-CancelledError running), the bare ``await
+                # lock.release()`` would be re-cancelled before the Redis
+                # DEL goes out. ``shield`` lets the DEL complete; the
+                # surrounding cancellation still propagates afterwards.
+                try:
+                    await asyncio.shield(lock.release())
+                except asyncio.CancelledError:
+                    # Cancellation arrived after the shielded release
+                    # already kicked off. Don't swallow it — re-raise so
+                    # the generator exits cleanly.
+                    raise
+                except Exception as release_exc:
+                    logger.warning(
+                        f"send_message stream for session {session_id}: "
+                        f"lock release failed in finally: {release_exc}"
+                    )
 
         response = StreamingResponse(
             stream(),
@@ -463,6 +548,28 @@ async def send_chat_message_handler(
     finally:
         if not lock_handed_off:
             await lock.release()
+
+
+async def cancel_chat_turn_handler(session_id: str) -> None:
+    """Best-effort cancel of an in-flight ``send_message`` turn.
+
+    Publishes the session id on the cancel pubsub channel; whichever
+    pod owns the running stream task receives it, calls
+    ``task.cancel()``, and the stream's ``finally`` releases the lock.
+
+    Returns nothing (route returns 202). The cancel is best-effort:
+    - If the session isn't running anywhere, this is a no-op (the
+      lock isn't held, the next /message proceeds normally).
+    - If Redis is down, this is a no-op + warning log — the lock
+      will still release on TTL (180s).
+
+    We do NOT touch the lock here: the running task's ``finally``
+    block holds the unique token and is the only safe releaser.
+    Force-deleting the key from here would let the next /message
+    start while the old agent is still mid-LLM-call, racing on DB
+    writes for the same session.
+    """
+    await cancel_bus.cancel(session_id)
 
 
 async def end_chat_session_handler(

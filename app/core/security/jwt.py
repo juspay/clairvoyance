@@ -26,10 +26,41 @@ CREDENTIALS_EXCEPTION = HTTPException(
 )
 
 
+# Algorithms PyJWT is allowed to honor. Explicit allowlist — never
+# include "none" (would accept unsigned tokens), and never trust the
+# `alg` claim in the token header itself. If the env var ``JWT_ALGORITHM``
+# is set to anything outside this set, the process refuses to start.
+_ALLOWED_JWT_ALGORITHMS = {
+    "HS256",
+    "HS384",
+    "HS512",
+    "RS256",
+    "RS384",
+    "RS512",
+    "ES256",
+}
+
+
 class JWTManager:
     """JWT token management class"""
 
     def __init__(self):
+        # Fail-fast on misconfiguration. Empty secret → PyJWT would
+        # validate against an empty key (catastrophic). Empty / "none"
+        # algorithm → PyJWT could accept unsigned tokens. Either is a
+        # production-critical foot-gun; we refuse to start instead of
+        # discovering it on the first auth request.
+        if not JWT_SECRET_KEY:
+            raise RuntimeError(
+                "JWT_SECRET_KEY env var is empty. Set it to a strong random "
+                "secret before starting the service."
+            )
+        if JWT_ALGORITHM not in _ALLOWED_JWT_ALGORITHMS:
+            raise RuntimeError(
+                f"JWT_ALGORITHM env var is {JWT_ALGORITHM!r}; must be one of "
+                f"{sorted(_ALLOWED_JWT_ALGORITHMS)}. The value 'none' is "
+                "explicitly forbidden — it would accept unsigned tokens."
+            )
         self.secret_key = JWT_SECRET_KEY
         self.algorithm = JWT_ALGORITHM
         self.access_token_expire_minutes = JWT_ACCESS_TOKEN_EXPIRE_MINUTES
@@ -297,6 +328,15 @@ async def get_breeze_buddy_session(request: Request):
     if not session_cookie:
         return None
     try:
+        # Algorithm goes through the same allowlist as JWTManager —
+        # JWT_ALGORITHM is validated at JWTManager construction, but
+        # this decode bypasses the manager, so we re-assert here.
+        if JWT_ALGORITHM not in _ALLOWED_JWT_ALGORITHMS:
+            logger.error(
+                f"get_breeze_buddy_session: JWT_ALGORITHM={JWT_ALGORITHM!r} "
+                "not in allowlist — refusing to decode."
+            )
+            return None
         payload = jwt.decode(
             session_cookie, BREEZE_BUDDY_SESSION_SECRET_KEY, algorithms=[JWT_ALGORITHM]
         )
