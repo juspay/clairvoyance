@@ -9,6 +9,7 @@ from __future__ import annotations
 # Export all builder functions, config classes, and types
 from .azure import AzureConfig, build_azure_llm
 from .claude_vertex import ClaudeVertexConfig, build_claude_vertex_llm
+from .openai import OpenAIConfig, build_openai_llm
 from .types import (
     LLMConfiguration,
     LLMProvider,
@@ -36,4 +37,7 @@ __all__ = [
     # Claude on Vertex
     "ClaudeVertexConfig",
     "build_claude_vertex_llm",
+    # OpenAI
+    "OpenAIConfig",
+    "build_openai_llm",
 ]

@@ -16,6 +16,7 @@ class LLMProvider(str, Enum):
 
     AZURE = "azure"
     GOOGLE_VERTEX = "google_vertex"
+    OPENAI = "openai"
 
 
 class RealtimeLLMProvider(str, Enum):

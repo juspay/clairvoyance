@@ -15,6 +15,7 @@ from typing import Union
 
 from pipecat.services.azure.llm import AzureLLMService
 from pipecat.services.google.vertex.llm import GoogleVertexLLMService
+from pipecat.services.openai.llm import OpenAILLMService
 
 from app.ai.voice.llm import (
     AzureConfig,
@@ -22,9 +23,11 @@ from app.ai.voice.llm import (
     LLMConfiguration,
     LLMProvider,
     LLMSdk,
+    OpenAIConfig,
     VertexConfig,
     build_azure_llm,
     build_claude_vertex_llm,
+    build_openai_llm,
     build_vertex_llm,
 )
 from app.ai.voice.llm.claude_vertex import VertexAnthropicLLMService
@@ -33,11 +36,15 @@ from app.core.config.dynamic import (
     BREEZE_BUDDY_AZURE_TEMPERATURE,
     GOOGLE_VERTEX_CREDENTIALS_JSON,
     GOOGLE_VERTEX_PROJECT_ID,
+    OPENAI_MAX_COMPLETION_TOKENS,
+    OPENAI_TEMPERATURE,
 )
 from app.core.config.static import (
     AZURE_BREEZE_BUDDY_OPENAI_MODEL,
     AZURE_OPENAI_API_KEY,
     AZURE_OPENAI_ENDPOINT,
+    OPENAI_API_KEY,
+    OPENAI_MODEL,
 )
 from app.core.logger import logger
 from app.services.live_config.store import get_config
@@ -110,6 +117,49 @@ async def _resolve_azure(
             ),
         ),
         pooled=pooled,
+    )
+
+
+async def _resolve_openai(llm_config: LLMConfiguration | None) -> OpenAILLMService:
+    """Build direct OpenAI LLM."""
+    if llm_config and llm_config.api_key_name:
+        api_key = await get_config(llm_config.api_key_name, "", str)
+        if not api_key:
+            raise ValueError(
+                f"API key not found for config key: {llm_config.api_key_name}"
+            )
+    else:
+        api_key = OPENAI_API_KEY
+
+    model = llm_config.model if llm_config and llm_config.model else OPENAI_MODEL
+    temperature = (
+        llm_config.temperature
+        if llm_config and llm_config.temperature is not None
+        else await OPENAI_TEMPERATURE()
+    )
+    max_tokens = (
+        llm_config.max_tokens
+        if llm_config and llm_config.max_tokens
+        else await OPENAI_MAX_COMPLETION_TOKENS()
+    )
+
+    reasoning_effort = None
+    if llm_config and llm_config.thinking and llm_config.thinking.enabled:
+        reasoning_effort = llm_config.thinking.reasoning_effort
+
+    return build_openai_llm(
+        OpenAIConfig(
+            api_key=api_key,
+            model=model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            reasoning_effort=reasoning_effort,
+            function_call_timeout_secs=(
+                llm_config.function_call_timeout_secs
+                if llm_config and llm_config.function_call_timeout_secs
+                else 10.0
+            ),
+        )
     )
 
 
@@ -245,7 +295,12 @@ async def get_llm_service(
     llm_config: LLMConfiguration | None = None,
     *,
     pooled: bool = False,
-) -> Union[AzureLLMService, GoogleVertexLLMService, VertexAnthropicLLMService]:
+) -> Union[
+    AzureLLMService,
+    GoogleVertexLLMService,
+    VertexAnthropicLLMService,
+    OpenAILLMService,
+]:
     """Get LLM service instance based on configuration.
 
     Dispatch:
@@ -278,6 +333,10 @@ async def get_llm_service(
     ):
         _dispatch_log("Using Azure LLM provider")
         return await _resolve_azure(llm_config, pooled=pooled)
+
+    if llm_config.provider == LLMProvider.OPENAI:
+        _dispatch_log("Using OpenAI LLM provider")
+        return await _resolve_openai(llm_config)
 
     if llm_config.provider == LLMProvider.GOOGLE_VERTEX:
         if llm_config.sdk == LLMSdk.ANTHROPIC:
