@@ -36,6 +36,7 @@ from app.ai.voice.agents.breeze_buddy.services.agent_router.client import (
 # Database imports
 from app.ai.voice.llm._pools import close_all_pools as close_llm_http_pools
 from app.api.routers import automatic, breeze_buddy, devcycle, feature_flags, systems
+from app.api.routers.breeze_buddy.chat import cancel_bus as chat_cancel_bus
 
 # Import background task scheduler
 from app.core.background_tasks import BackgroundTaskScheduler
@@ -137,6 +138,15 @@ async def lifespan(_app: FastAPI):
             logger.info("Redis not configured - skipping Redis initialization")
     except Exception as e:
         logger.error(f"Failed to initialize Redis client: {e}")
+
+    # Start the chat cancel-bus pubsub subscriber. Fans cross-pod cancel
+    # publishes out to the local in-flight task registry so the widget
+    # Stop button releases the per-session Redis lock immediately instead
+    # of waiting on TTL. No-op + warning log if Redis isn't reachable.
+    try:
+        await chat_cancel_bus.start_subscriber()
+    except Exception as e:
+        logger.error(f"Failed to start chat cancel-bus subscriber: {e}")
 
     # DevCycle feature flags are initialized by parent process (run.py) before uvicorn starts
     # Worker processes only need to read from Redis using get_config()
@@ -325,6 +335,12 @@ async def lifespan(_app: FastAPI):
     if _background_scheduler:
         logger.info("Stopping background task scheduler...")
         await _background_scheduler.stop()
+
+    # Stop chat cancel-bus subscriber
+    try:
+        await chat_cancel_bus.stop_subscriber()
+    except Exception as e:
+        logger.error(f"Error stopping chat cancel-bus subscriber: {e}")
 
     # Graceful drain period - wait for active sessions to complete if enabled
     if ENABLE_SIGTERM_HANDLER and _is_draining:

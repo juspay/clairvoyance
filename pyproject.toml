@@ -68,3 +68,8 @@ combine_as_imports = true
 
 [tool.pyrefly]
 project-excludes = ["**/automatic/**"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+]

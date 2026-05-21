@@ -26,6 +26,7 @@ from app.ai.voice.agents.breeze_buddy.agent.flow import (
     build_flow_config,
     load_template_config,
     prepare_initial_node,
+    prepare_resume_node,
     setup_flow_manager,
 )
 from app.ai.voice.agents.breeze_buddy.agent.inbound import (
@@ -174,6 +175,13 @@ class Agent:
         # Error tracking
         self.errors: List[Dict[str, Any]] = []
 
+        # Widget-mode resume seed (CHAT_MODE.md §14). Populated from
+        # lead.metaData in _setup_*_transport when this voice call is a
+        # transient attachment to an in-progress chat_session. When set,
+        # the agent skips greeting playback and starts the FlowManager
+        # at start_node with prior_history pre-loaded into LLM context.
+        self._widget_resume_seed: Optional[Dict[str, Any]] = None
+
     @property
     def is_daily_mode(self) -> bool:
         return self.transport_type == TRANSPORT_TYPE_DAILY
@@ -297,6 +305,26 @@ class Agent:
             self.lead.call_id or f"daily-{datetime.now().strftime('%Y%m%d%H%M%S')}"
         )
         update_log_context(call_sid=self.call_sid)
+
+        # Widget-mode resume seed: see CHAT_MODE.md §14. When this voice
+        # call is a transient attachment to an in-progress chat_session,
+        # the unified widget router stuffs the seed into lead.metaData.
+        # We capture it here so the greeting / initial-node code paths
+        # below can branch on it cleanly.
+        meta = self.lead.metaData or {}
+        widget_session_id = meta.get("widget_session_id")
+        if widget_session_id:
+            self._widget_resume_seed = {
+                "widget_session_id": str(widget_session_id),
+                "start_node": meta.get("start_node"),
+                "prior_history": list(meta.get("prior_history") or []),
+                "seed_message_count": int(meta.get("seed_message_count", 0) or 0),
+            }
+            logger.info(
+                f"Widget voice resume: chat_session={widget_session_id} "
+                f"start_node={self._widget_resume_seed['start_node']!r} "
+                f"prior_msgs={len(self._widget_resume_seed['prior_history'])}"
+            )
 
         logger.info(
             f"Starting Daily bot for lead_id: {lead_id}, call_sid: {self.call_sid}"
@@ -761,7 +789,15 @@ class Agent:
         # DAILY_STREAM also uses a Daily transport but is client-driven STT/
         # TTS-only (no LLM, no template playback) — explicitly skip greeting
         # injection there so we don't push audio into a passthrough pipeline.
-        if self.is_daily_mode and not self.is_stream_mode and self.task:
+        # Widget-mode resume: skip the greeting too. Prior chat history is
+        # already in the seed; re-greeting would repeat what the user
+        # already saw and feels broken (CHAT_MODE.md §14).
+        if (
+            self.is_daily_mode
+            and not self.is_stream_mode
+            and not self._widget_resume_seed
+            and self.task
+        ):
             greeting_result = await send_initial_greeting_daily(
                 task=self.task,
                 lead=self.lead,
@@ -789,29 +825,60 @@ class Agent:
         ) = build_flow_config(self.flow_builder, self.template)
 
         lead_payload = self.lead.payload or {}
-        initial_node_config = prepare_initial_node(
-            flow_config=self.flow_config,
-            lead_payload=lead_payload,
-            configurations=self.configurations,
-            has_greeting_source=bool(self.greeting_source),
-            greeting_text=self.greeting_text,
-        )
+
+        # Widget-mode resume: start at the chat's current_node with the
+        # chat's history pre-seeded. See prepare_resume_node for why
+        # the history goes inside task_messages (FlowManager always
+        # RESETs context on first node init — we have to put the seed
+        # inside the same frame to survive).
+        if self._widget_resume_seed:
+            initial_node_config = prepare_resume_node(
+                flow_config=self.flow_config,
+                lead_payload=lead_payload,
+                configurations=self.configurations,
+                start_node_name=self._widget_resume_seed.get("start_node"),
+                prior_history=self._widget_resume_seed.get("prior_history") or [],
+            )
+        else:
+            initial_node_config = prepare_initial_node(
+                flow_config=self.flow_config,
+                lead_payload=lead_payload,
+                configurations=self.configurations,
+                has_greeting_source=bool(self.greeting_source),
+                greeting_text=self.greeting_text,
+            )
 
         # Initialize node traversal tracking
         if self.lead.metaData is None:
             self.lead.metaData = {}
         self.lead.metaData["node_traversal"] = []
 
-        # Record initial node entry BEFORE flow_manager.initialize so that any
+        # Record initial-node entry BEFORE flow_manager.initialize so that any
         # global function called during the first LLM turn (e.g. get_driver_info
         # on the initial node) finds an active node entry to record against.
-        initial_node_name = self.flow_config["initial_node"]
+        # For widget resume we use the resume node name (which falls back to
+        # initial_node if start_node is missing — see prepare_resume_node).
+        if self._widget_resume_seed:
+            initial_node_name = (
+                self._widget_resume_seed.get("start_node")
+                or self.flow_config["initial_node"]
+            )
+            if initial_node_name not in self.flow_config["nodes"]:
+                initial_node_name = self.flow_config["initial_node"]
+        else:
+            initial_node_name = self.flow_config["initial_node"]
         context = TemplateContext(self)
         context.record_node_entry(initial_node_name)
 
         await self.flow_manager.initialize(initial_node_config)
         logger.info(
-            f"FlowManager initialized with initial node: {self.flow_config['initial_node']}"
+            f"FlowManager initialized at node: {initial_node_name}"
+            + (
+                f" (widget resume from chat_session "
+                f"{self._widget_resume_seed['widget_session_id']})"
+                if self._widget_resume_seed
+                else ""
+            )
         )
 
     async def _run_with_tracing(self, runner: PipelineRunner) -> None:

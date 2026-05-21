@@ -50,6 +50,7 @@ async def check_rate_limit(
     limit: int,
     window_seconds: int,
     prefix: str = "ratelimit",
+    fail_closed: bool = False,
 ) -> RateLimitDecision:
     """Increment the counter for ``(bucket, identifier)``; deny when over.
 
@@ -63,13 +64,30 @@ async def check_rate_limit(
             ``floor(now / window_seconds)``.
         prefix: Redis key prefix. Override only if you need to isolate
             tests from prod (the default is fine for everything else).
+        fail_closed: When True, Redis unavailability / errors block the
+            request (returns ``allowed=False`` with a short retry-after).
+            Use this for production traffic where unbounded fallthrough
+            would be costly — widget endpoints in particular accept
+            anonymous traffic and back LLM-cost-amplification risk on a
+            Redis blip. Default ``False`` preserves the legacy fail-open
+            posture for demo endpoints where availability beats abuse
+            protection.
 
     Returns ``allowed=True`` (and increments) when count <= limit, else
-    ``allowed=False``. Fails *open* — if Redis is unconfigured or errors,
-    we let the request through and log a warning. Demo abuse is preferable
-    to a Redis hiccup taking down the demo entirely.
+    ``allowed=False``.
     """
     if not is_redis_configured():
+        if fail_closed:
+            logger.warning(
+                f"rate_limit: Redis not configured; bucket={bucket!r} "
+                f"id={identifier!r} fail-closed (denying)"
+            )
+            return RateLimitDecision(
+                allowed=False,
+                count=0,
+                limit=limit,
+                retry_after_seconds=30,
+            )
         logger.warning(
             f"rate_limit: Redis not configured; bucket={bucket!r} "
             f"id={identifier!r} fail-open"
@@ -99,6 +117,17 @@ async def check_rate_limit(
             # is readable for the full window before Redis evicts it.
             await redis.expire(key, window_seconds + 5)
     except Exception as exc:
+        if fail_closed:
+            logger.warning(
+                f"rate_limit: Redis error for bucket={bucket!r} id={identifier!r}: "
+                f"{exc} (fail-closed, denying)"
+            )
+            return RateLimitDecision(
+                allowed=False,
+                count=0,
+                limit=limit,
+                retry_after_seconds=30,
+            )
         logger.warning(
             f"rate_limit: Redis error for bucket={bucket!r} id={identifier!r}: "
             f"{exc} (fail-open)"

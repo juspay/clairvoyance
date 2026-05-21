@@ -701,6 +701,110 @@ class IvrConfig(BaseModel):
     )
 
 
+class ResponseTransform(BaseModel):
+    """One in-place response-transform rule declared in a template.
+
+    Sibling to ``expected_response_schema`` (projection): where projection
+    reshapes the response into a new dict, transforms mutate specific paths
+    and pass the rest through. Both are applied inside the tool handler
+    closure, so voice + chat + any future channel benefit uniformly.
+
+    Runtime registry + walker + the first built-in (``scale_by_exponent``)
+    live in ``handlers/transport/utils/response_transform.py``.
+    """
+
+    path: str = Field(
+        ...,
+        description=(
+            "Dotted path to the field(s) to transform. "
+            "Use [*] to iterate array elements. "
+            "Examples: 'order.total', 'products[*].price_range.min', 'items[*]'."
+        ),
+    )
+    fn: str = Field(
+        ...,
+        description=(
+            "Registered transform name "
+            "(see handlers/transport/utils/response_transform.py)."
+        ),
+    )
+    args: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Optional arguments forwarded to the transform fn.",
+    )
+
+
+class ToolUiTrigger(str, Enum):
+    """When the JIT UI hint should ship with this tool's response.
+
+    * ``on_success`` — append only when the tool returns success.
+    * ``on_any`` — append regardless of status (errors too).
+    * ``skip_ui`` — never emit UI for this tool's result. Hint payload is
+      ignored; only the ``_ui_skip`` flag is appended so the LLM knows.
+    """
+
+    ON_SUCCESS = "on_success"
+    ON_ANY = "on_any"
+    SKIP_UI = "skip_ui"
+
+
+class ToolUiExample(BaseModel):
+    """A short worked example the LLM can crib from when authoring a
+    ``<ui_stream>`` block for this tool's result. Optional but recommended
+    — Sidekick-style few-shot in the tool response itself."""
+
+    scenario: str = Field(
+        ..., description="Short label for the example (e.g. '3 products, INR')."
+    )
+    input_sketch: Optional[str] = Field(
+        None,
+        description=(
+            "Pseudocode for the shape of the tool result this example "
+            "applies to (e.g. '{products: [{id, title, price_range}…]}')."
+        ),
+    )
+    expected_jsonl: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description=(
+            "List of expected SpecStream ops the LLM should emit. Each "
+            "entry is a JSON dict with op/id/type/parent/props."
+        ),
+    )
+
+
+class ToolUiHint(BaseModel):
+    """Per-tool UI authoring guidance — Sidekick-pattern JIT instructions
+    that ride along with the tool result instead of bloating the system
+    prompt.
+
+    At dispatch time, the matching hint's ``instructions`` (and optional
+    ``examples``) are spliced into the tool result envelope under
+    ``_ui_instructions`` / ``_ui_examples`` so the LLM sees them as part
+    of the tool's payload. The LLM then emits a ``<ui_stream>`` block
+    using SpecStream JSONL ops grounded in the data it just received.
+
+    Commerce flavour lives in template JSON; engine + injection point are
+    commerce-agnostic.
+    """
+
+    trigger: ToolUiTrigger = Field(
+        ToolUiTrigger.ON_SUCCESS,
+        description="When the hint fires (see ToolUiTrigger).",
+    )
+    instructions: str = Field(
+        "",
+        description=(
+            "Free-text guidance shown to the LLM with the tool result. "
+            "Tell it which primitives to use, what to skip, what tone to "
+            "strike. Keep under ~2KB per tool."
+        ),
+    )
+    examples: List[ToolUiExample] = Field(
+        default_factory=list,
+        description="Optional few-shot examples appended to the hint.",
+    )
+
+
 class McpServerConfig(BaseModel):
     """Configuration for a single MCP tool server.
 
@@ -775,6 +879,71 @@ class McpServerConfig(BaseModel):
     headers: Dict[str, str] = Field(
         default_factory=dict, description="Additional static headers to send"
     )
+    tool_response_transforms: Dict[str, List["ResponseTransform"]] = Field(
+        default_factory=dict,
+        description=(
+            "Per-tool in-place response transforms applied after the MCP tool "
+            "call returns, before the result is fed to the LLM. Keys are the "
+            "raw MCP tool names (e.g. 'search_catalog'); values are lists of "
+            "ResponseTransform rules. Channel-agnostic — applied inside the "
+            "tool handler closure, so voice + chat + any future channel "
+            "benefit uniformly. Use the registered transform names from "
+            "handlers/transport/utils/response_transform.py."
+        ),
+    )
+    tool_ui_instructions: Dict[str, "ToolUiHint"] = Field(
+        default_factory=dict,
+        description=(
+            "Per-tool JIT UI authoring guidance (Sidekick pattern). Keys "
+            "are raw MCP tool names; values declare what UI the LLM "
+            "should emit for that tool's result. Injected into the tool "
+            "response envelope under '_ui_instructions' / '_ui_examples' "
+            "/ '_ui_skip' before the LLM sees it, so per-tool guidance "
+            "doesn't bloat the system prompt."
+        ),
+    )
+    tool_context_retention: Dict[str, Literal["last_turn_only", "session"]] = Field(
+        default_factory=dict,
+        description=(
+            "Per-tool conversation-context retention policy, applied at "
+            "message-prep time before the LLM call. Keys are raw MCP tool "
+            "names; values are:\n"
+            "  - ``last_turn_only``: the tool_result content is replaced "
+            "    with a 1-line stub once it's no longer the most-recent "
+            "    tool_result in history. Forces the agent to re-call the "
+            "    tool for grounding rather than relying on stale memory. "
+            "    Best for high-token / fast-changing data (catalog "
+            "    searches, lookups).\n"
+            "  - ``session``: tool_result is kept full for the whole "
+            "    session. Best for state-bearing tools (cart calls — "
+            "    line_items + totals shape later turns).\n"
+            "Tools not listed default to ``session`` (current behavior)."
+        ),
+    )
+    default_args: Dict[str, Any] = Field(
+        default_factory=dict,
+        description=(
+            "Static arguments deep-merged into every tool call's `arguments` "
+            "object before the call is dispatched. Caller-provided values win "
+            "(only_if_missing semantics). Used for protocol-level metadata "
+            "that every tool on this server needs — e.g. Shopify UCP requires "
+            "`meta.ucp-agent.profile` to be present on every tools/call. "
+            "Channel-agnostic; applied inside the handler closure for both "
+            "voice and chat."
+        ),
+    )
+    tool_schemas: Optional[List[Dict[str, Any]]] = Field(
+        default=None,
+        description=(
+            "When set, skip MCP discovery (initialize + tools/list) entirely "
+            "and register the declared schemas instead. Tool calls go via a "
+            "direct JSON-RPC HTTP POST to `url`, bypassing pipecat's MCPClient "
+            "session. Required for Shopify UCP, which rejects `initialize` "
+            "and `tools/list` without an agent profile we can only attach to "
+            "individual `tools/call` requests. Each entry: "
+            "`{name, description, properties, required}`."
+        ),
+    )
 
 
 class McpConfig(BaseModel):
@@ -785,7 +954,203 @@ class McpConfig(BaseModel):
     )
 
 
+class UiCatalogConfig(BaseModel):
+    """Per-template selection of which generative-UI primitives the LLM
+    may emit and the widget will render.
+
+    Resolution at session start (see ``ui_catalog.resolve_allowlist``):
+      1. Start with every primitive in ``enabled_groups``.
+      2. Union in any ``enabled_primitives`` one-offs.
+      3. Subtract ``disabled_primitives``.
+
+    The resolved allowlist drives three things:
+      * Server-side ``ui_op`` validation — disabled types drop with
+        reason ``primitive_disabled:<type>`` (distinct from
+        ``unknown_type`` so telemetry tells the difference).
+      * The auto-rendered "## Available primitives" section spliced
+        into the system prompt — the LLM never even sees disabled
+        primitives, so it can't accidentally emit them.
+      * The widget's render path (no change — widget compiles in all
+        primitives; server filtering is the gate).
+
+    Example::
+
+        "configurations": {
+            "ui_catalog": {
+                "enabled_groups": ["core", "composite"],
+                "enabled_primitives": [],
+                "disabled_primitives": []
+            }
+        }
+
+    Default behaviour (config absent): ``enabled_groups = ["core"]`` so
+    pre-Tile templates keep working unchanged.
+    """
+
+    enabled_groups: List[str] = Field(
+        default_factory=lambda: ["core"],
+        description=(
+            "Primitive groups the LLM may emit. Known groups: 'core', "
+            "'composite', 'graphs', 'metrics', 'forms', 'media', 'data'. "
+            "Unknown groups are silently ignored."
+        ),
+    )
+    enabled_primitives: List[str] = Field(
+        default_factory=list,
+        description=(
+            "Explicit one-off primitives to enable beyond what the groups "
+            "provide. Useful for trying a single new primitive without "
+            "enabling its whole group."
+        ),
+    )
+    disabled_primitives: List[str] = Field(
+        default_factory=list,
+        description=(
+            "Explicit overrides to remove from the resolved set, e.g. "
+            "disable 'Table' on a voice-first template even though it's "
+            "in the 'core' group."
+        ),
+    )
+
+
+class StateReducer(BaseModel):
+    """One per-tool rule that maps a tool result onto session state.
+
+    Generic — Python runtime knows nothing about which keys mean what.
+    Each rule names one tool and a set of (state_key → JMESPath) pairs;
+    when that tool returns, every matching JMESPath is evaluated against
+    the parsed tool payload and the result is merged into the session's
+    ``data`` dict (see migration 030 / agent_session_state).
+
+    Commerce flavour lives in the template JSON, e.g.::
+
+        "state_reducers": [
+            {"tool_name": "update_cart",
+             "set_paths": {"cart_id": "cart.id",
+                           "checkout_url": "cart.checkout_url"}}
+        ]
+
+    A future flavour (travel, tickets) ships different reducers — same
+    engine, same schema.
+    """
+
+    tool_name: str = Field(
+        ...,
+        description="Raw MCP tool name (or HTTP function name) the reducer fires on.",
+    )
+    set_paths: Dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "Map of state_key → JMESPath expression evaluated against the "
+            "parsed tool payload. Missing matches / lookup failures are "
+            "silently skipped so a stale rule never crashes a turn."
+        ),
+    )
+    only_on_success: bool = Field(
+        True,
+        description=(
+            "When true (default), skip the rule if the tool envelope's "
+            "status indicates an error — keeps state out of the way of "
+            "obviously-failed calls."
+        ),
+    )
+
+
+class ToolArgInjection(BaseModel):
+    """One per-tool rule that injects session state into outgoing tool args.
+
+    The companion to :class:`StateReducer` — where the reducer captures
+    server-side identifiers off tool results, this rule reads them back
+    out of session state and stamps them onto the next tool's arguments.
+    The LLM never has to thread the identifier through prose.
+
+    Two sources are supported, both commerce-agnostic:
+
+    - ``set_paths`` — read from context (state / args / session_id) via
+      JMESPath. Used for things the runtime already knows (e.g. a cart
+      id captured by a reducer on the previous turn).
+    - ``generators`` — produce a value at call time (uuid_v4, uuid_v7,
+      timestamp_iso8601, timestamp_unix_ms). Used for idempotency keys,
+      request ids, client-side timestamps — values the LLM shouldn't be
+      asked to invent. Any MCP server that follows the Stripe-style
+      Idempotency-Key convention can re-use this without code changes.
+
+    Default behaviour (``only_if_missing=True``) is to fill ONLY when the
+    LLM didn't pass the field — explicit LLM intent always wins.
+
+    Commerce flavour in template JSON::
+
+        "tool_arg_injection": [
+            {"tool_name": "update_cart",
+             "set_paths": {"cart_id": "state.data.cart_id"},
+             "generators": {"idempotency_key": "uuid_v4"}}
+        ]
+    """
+
+    tool_name: str = Field(
+        ...,
+        description="Raw MCP tool name (or HTTP function name) the rule fires on.",
+    )
+    set_paths: Dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "Map of arg_key → JMESPath expression evaluated against the "
+            "context ``{session_id, state.data, args}``. Use "
+            "`state.data.cart_id` for state lookups, `args.foo` to "
+            "post-process an LLM-provided arg, or `session_id` for the "
+            "raw chat session id."
+        ),
+    )
+    generators: Dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "Map of arg_key → generator name. Generator produces a value "
+            "at call time. Supported: 'uuid_v4', 'uuid_v7', "
+            "'timestamp_iso8601', 'timestamp_unix_ms'. Honours "
+            "``only_if_missing`` like ``set_paths``."
+        ),
+    )
+    only_if_missing: bool = Field(
+        True,
+        description=(
+            "When true (default), skip the rule if the LLM already "
+            "passed a non-null value for the arg key — the LLM's "
+            "explicit intent wins. Set to false to force-override."
+        ),
+    )
+
+
 class ConfigurationModel(BaseModel):
+    # --- Agent session state (generic) ---
+    state_reducers: List[StateReducer] = Field(
+        default_factory=list,
+        description=(
+            "Declarative rules that lift identifiers from tool results "
+            "into a per-session `agent_session_state.data` JSONB. "
+            "Generic engine — the template decides which keys matter."
+        ),
+    )
+    tool_arg_injection: List[ToolArgInjection] = Field(
+        default_factory=list,
+        description=(
+            "Declarative rules that stamp session-state values onto "
+            "outgoing MCP tool arguments (e.g. cart_id from prior turn). "
+            "Generic engine — the template decides which args matter."
+        ),
+    )
+
+    # --- Generative-UI primitive selection (per-template, per-merchant) ---
+    ui_catalog: Optional["UiCatalogConfig"] = Field(
+        None,
+        description=(
+            "Optional. Selects which UI primitives the LLM may emit and "
+            "the widget will render. Resolution + rendering happens at "
+            "session start; the resolved allowlist drives both server "
+            "validation and the system-prompt 'Available primitives' "
+            "section. When absent, defaults to enabling the 'core' group."
+        ),
+    )
+
     # --- STT (provider + turn detection) ---
     stt_configuration: Optional[STTConfiguration] = Field(
         None,
@@ -1169,6 +1534,17 @@ class BaseGlobalFunction(BaseModel):
         default=None,
         description="Per-function timeout override in seconds. Falls back to "
         "the LLM service's function_call_timeout_secs when unset.",
+    )
+    response_transforms: List["ResponseTransform"] = Field(
+        default_factory=list,
+        description=(
+            "Optional in-place transforms applied to the tool result before "
+            "the LLM sees it. Complements expected_response_schema (projection): "
+            "transforms mutate specific paths and pass everything else through. "
+            "Channel-agnostic — applied inside the handler, so voice + chat + "
+            "any future channel benefit uniformly. Use the registered transform "
+            "names from handlers/transport/utils/response_transform.py."
+        ),
     )
 
 

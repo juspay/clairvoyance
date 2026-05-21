@@ -28,7 +28,7 @@ For module layout this mirrors the leads router:
 - ``rbac.py`` — reseller / merchant access validators.
 """
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 
 from app.ai.voice.agents.breeze_buddy.template.cache import get_template_by_id_cached
 from app.api.security.breeze_buddy.rbac_token import get_current_user_with_rbac
@@ -44,6 +44,7 @@ from app.schemas.breeze_buddy.chat import (
 
 from .demo import router as demo_router
 from .handlers import (
+    cancel_chat_turn_handler,
     create_chat_session_handler,
     end_chat_session_handler,
     get_chat_session_handler,
@@ -153,6 +154,39 @@ async def send_message(
         validate_chat_session_access(current_user, session, operation="send_message")
 
     return await send_chat_message_handler(session_id, req, access_check=_check)
+
+
+@router.post(
+    "/session/{session_id}/cancel",
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Cancel an in-flight chat turn (Stop button)",
+)
+async def cancel_turn(
+    session_id: str,
+    current_user: UserInfo = Depends(get_current_user_with_rbac),
+) -> Response:
+    """Cancel the in-flight ``/message`` SSE stream for ``session_id``.
+
+    Best-effort and idempotent — returns 202 regardless of whether a
+    turn was actually running. The owning pod cancels its asyncio task;
+    the stream's ``finally`` releases the per-session Redis lock so the
+    next ``/message`` can proceed immediately instead of waiting on
+    the lock TTL.
+
+    RBAC:
+    - Admin: Can cancel any session
+    - Reseller / Merchant: Must own the session (404 otherwise)
+
+    The earlier "auth-only" model (skip the session lookup, treat cancel
+    as harmless) was a DoS / griefing vector — any authenticated user
+    could cancel any tenant's in-flight turn by guessing/leaking session
+    UUIDs. The cost of one indexed SELECT is well under the LLM round-trip
+    we're cancelling.
+    """
+    session = await load_chat_session_or_404(session_id)
+    validate_chat_session_access(current_user, session, operation="cancel_turn")
+    await cancel_chat_turn_handler(session_id)
+    return Response(status_code=status.HTTP_202_ACCEPTED)
 
 
 @router.post("/session/{session_id}/end", response_model=EndChatSessionResponse)

@@ -88,6 +88,28 @@ class BreezeBuddyRBACTokenManager:
                 algorithms=[self.jwt_manager.algorithm],
             )
 
+            # Reject non-RBAC token types up front. Widget tokens (typ="widget",
+            # see ``widget_token.py``) and demo tokens (``demo: true``, see
+            # ``demo_token.py``) are signed by the same key but must never be
+            # accepted on RBAC routes — they carry no reseller/merchant scopes
+            # and would otherwise authenticate as a UserInfo with empty
+            # arrays. All existing RBAC/s2s tokens are minted without these
+            # claims, so the check is backward-compatible.
+            if payload.get("typ") == "widget":
+                logger.warning("RBAC verifier: rejected widget token")
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Could not validate credentials",
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+            if payload.get("demo") is True:
+                logger.warning("RBAC verifier: rejected demo token")
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Could not validate credentials",
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+
             # Check if token has expired (redundant with jwt.decode but explicit)
             exp = payload.get("exp")
             if exp is None:
