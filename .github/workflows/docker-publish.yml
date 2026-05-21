@@ -9,6 +9,10 @@ permissions:
   id-token: write
   contents: read
 
+concurrency:
+  group: docker-publish-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
@@ -52,3 +56,28 @@ jobs:
             gcp_token=${{ env.GCP_ACCESS_TOKEN }}
           provenance: false
           sbom: false
+
+      # =================================================================
+      # AUTOMATED BETA DEPLOYMENT
+      # =================================================================
+      
+      - name: Deploy to GKE Beta Namespace
+        env:
+          USE_GKE_GCLOUD_AUTH_PLUGIN: "true"
+        run: |
+          # 1. Install the GKE authentication plugin via apt (bypasses GitHub component manager lock)
+          sudo apt-get update && sudo apt-get install -y google-cloud-cli-gke-gcloud-auth-plugin
+          
+          # 2. Fetch the GKE cluster credentials and write kubeconfig entries for kubectl using the already authenticated service account
+          gcloud container clusters get-credentials breeze-automatic-mum-01 --region=asia-south1 --project=breeze-automatic-prod
+          
+          echo "🚀 Updating beta deployment to tag: ${{ env.SHORT_SHA }}"
+          
+          # 3. Seamlessly switch the deployment container image over to the fresh git commit hash
+          kubectl set image deployment/clairvoyance-beta \
+            clairvoyance-beta=asia-south1-docker.pkg.dev/breeze-automatic-prod/clairvoyance/clairvoyance:${{ env.SHORT_SHA }} \
+            -n beta
+            
+          # 4. Watch the deployment update progress live to ensure a healthy rolling update
+          kubectl rollout status deployment/clairvoyance-beta -n beta --timeout=2m
+          echo "🎉 Automated deployment to beta namespace completed successfully!"
