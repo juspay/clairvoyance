@@ -226,6 +226,20 @@ def get_lead_by_call_id_query(call_id: str) -> Tuple[str, List[Any]]:
     return text, values
 
 
+def get_leads_by_request_id_query(request_id: str) -> Tuple[str, List[Any]]:
+    """
+    Generate query to get all leads by request_id.
+    """
+    text = f"""
+        SELECT *
+        FROM "{LEAD_CALL_TRACKER_TABLE}"
+        WHERE "request_id" = $1
+        ORDER BY "created_at" DESC;
+    """
+    values = [request_id]
+    return text, values
+
+
 def get_lead_by_id_query(lead_id: str) -> Tuple[str, List[Any]]:
     """
     Generate query to get lead by ID.

@@ -20,6 +20,7 @@ from app.database.queries.breeze_buddy.lead_call_tracker import (
     get_lead_by_call_id_query,
     get_lead_by_id_query,
     get_lead_call_trackers_count_query,
+    get_leads_by_request_id_query,
     get_leads_by_status_and_time_before_query,
     insert_lead_call_tracker_query,
     release_lock_on_lead_by_id_query,
@@ -294,6 +295,26 @@ async def get_lead_by_id(lead_id: str) -> Optional[LeadCallTracker]:
     except Exception as e:
         logger.error(f"Error getting lead: {e}")
         return None
+
+
+async def get_leads_by_request_id(
+    request_id: str,
+) -> List[LeadCallTracker]:
+    """
+    Get all leads by request_id.
+    """
+    logger.info(f"Getting leads with request_id {request_id}")
+
+    query_text, values = get_leads_by_request_id_query(request_id)
+    result = await run_parameterized_query(query_text, values)
+    if result and get_row_count(result) > 0:
+        decoded_results = [decode_lead_call_tracker(row) for row in result]
+        decoded_results = [r for r in decoded_results if r is not None]
+        logger.info(f"Found {len(decoded_results)} leads for request_id {request_id}")
+        return decoded_results
+
+    logger.info(f"No leads found for request_id {request_id}")
+    return []
 
 
 async def update_lead_call_initiated_time(
