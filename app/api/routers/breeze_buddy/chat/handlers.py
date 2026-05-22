@@ -15,6 +15,7 @@ from fastapi.responses import StreamingResponse
 from app.ai.voice.agents.breeze_buddy.chat.agent import ChatAgent
 from app.ai.voice.agents.breeze_buddy.chat.block_codec import (
     blocks_to_llm_context_messages,
+    filter_visible_blocks,
 )
 from app.ai.voice.agents.breeze_buddy.chat.sse import SSEEvent, format_sse
 from app.ai.voice.agents.breeze_buddy.llm import get_llm_service
@@ -63,6 +64,43 @@ _SESSION_LOCK_TTL_SECONDS = 180
 def _lock_key(session_id: str) -> str:
     """Redis key for the per-session distributed lock."""
     return f"chat:session:{session_id}:lock"
+
+
+def _sanitize_messages_for_widget(messages: list) -> list:
+    """Strip LLM-context-only blocks before responding to widget callers.
+
+    The chat agent persists certain blocks tagged ``visibility=internal``
+    (rendered-UI summaries today; tool-intent and refine_ui breadcrumbs
+    tomorrow) so the LLM keeps referential memory across turns. Widget
+    transcripts must never see those.
+
+    Scope is intentionally forward-only: rows written before the
+    visibility split still carry the summary inline and pass through
+    unchanged. They'll age out of view as conversations turn over.
+    """
+    cleaned = []
+    for msg in messages:
+        blocks = msg.content_blocks
+        if not blocks:
+            cleaned.append(msg)
+            continue
+        visible_blocks = filter_visible_blocks(blocks)
+        if not visible_blocks:
+            # No visible text blocks left after filtering. Keep the row
+            # iff it carries ui_blocks the widget needs for tile/carousel
+            # repaint on resume (UI-only turns: the LLM rendered a
+            # Carousel with no narration; only the internal summary +
+            # ui_blocks are stored). Clear content_blocks to None so the
+            # widget doesn't render an empty chat bubble — it'll see the
+            # row, replay ui_blocks into ui_state, and skip the bubble.
+            # When ui_blocks is also empty, drop the row entirely.
+            if msg.ui_blocks:
+                cleaned.append(
+                    msg.model_copy(update={"content": None, "content_blocks": None})
+                )
+            continue
+        cleaned.append(msg.model_copy(update={"content_blocks": visible_blocks}))
+    return cleaned
 
 
 # ---------------------------------------------------------------------------
@@ -305,7 +343,7 @@ async def get_chat_session_handler(session: ChatSession) -> GetChatSessionRespon
         session_id=session.id,
         status=session.status,
         current_node=session.current_node,
-        messages=messages,
+        messages=_sanitize_messages_for_widget(messages),
         metadata=session.metadata,
     )
 
@@ -631,5 +669,5 @@ async def get_chat_transcript_handler(
         session_id=session.id,
         template_id=session.template_id,
         status=session.status,
-        messages=messages,
+        messages=_sanitize_messages_for_widget(messages),
     )
