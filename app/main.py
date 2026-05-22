@@ -9,7 +9,6 @@ from typing import Any, Dict
 
 import uvicorn
 from fastapi import Depends, FastAPI
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pipecat.transports.daily.utils import DailyRESTHelper
 
@@ -73,6 +72,7 @@ from app.core.config.static import (
 
 # Import necessary components from the new structure
 from app.core.logger import logger
+from app.core.middleware.widget_cors_bypass import CustomWidgetCorsBypassMiddleware
 from app.core.security.jwt import validate_automatic_request
 from app.core.transport.http_client import create_aiohttp_session
 from app.database import close_db_pool, init_db_pool
@@ -375,13 +375,20 @@ async def lifespan(_app: FastAPI):
 
 app = FastAPI(title="Breeze Automatic Server", version=__version__, lifespan=lifespan)
 
-# Add CORS middleware
+# CORS — path-aware. The strict static allowlist (CORS_ALLOWED_ORIGINS)
+# still gates admin/RBAC/portal traffic, but the public widget surface
+# (/agent/voice/breeze-buddy/widget/…) bypasses it: those routes carry
+# their own permissive @router.options handlers and enforce per-merchant
+# allowed_origins inside the POST handler via widget_config. Without
+# this bypass, onboarding each new merchant would require editing this
+# env var and a rolling restart — defeating the whole point of the
+# per-widget allowlist.
 app.add_middleware(
-    CORSMiddleware,
+    CustomWidgetCorsBypassMiddleware,
     allow_origins=CORS_ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],  # Allows all methods
-    allow_headers=["*"],  # Allows all headers
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 app.include_router(
