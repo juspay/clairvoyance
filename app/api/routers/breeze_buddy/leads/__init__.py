@@ -30,6 +30,7 @@ from .handlers import (
     dispatch_now_lead_handler,
     get_call_recording_handler,
     get_lead_handler,
+    get_leads_by_request_id_handler,
     push_lead_handler,
     translate_lead_transcript_handler,
 )
@@ -96,6 +97,35 @@ async def push_lead(
     )
 
     return await push_lead_handler(req, current_user)
+
+
+@router.get("/leads/request/{request_id}")
+async def get_leads_by_request_id(
+    request_id: str,
+    current_user: UserInfo = Depends(get_current_user_with_rbac),
+):
+    """
+    Get all leads by request_id.
+
+    Returns all leads associated with a given request_id (e.g., order_id).
+    Useful for tracking all call attempts made for a single order/request.
+
+    Path Parameters:
+    - request_id: The request/order ID to look up
+
+    RBAC:
+    - Admin: Can access any leads
+    - Merchant: Can only access leads for authorized merchants/shops
+
+    Returns:
+        {
+            "request_id": "order_456",
+            "count": 3,
+            "leads": [...]
+        }
+        404 if no leads found for the request_id
+    """
+    return await get_leads_by_request_id_handler(request_id, current_user)
 
 
 @router.get("/leads/{lead_id}")

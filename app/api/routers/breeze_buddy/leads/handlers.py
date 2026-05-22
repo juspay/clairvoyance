@@ -54,6 +54,7 @@ from app.database.accessor import (
     get_call_execution_config_by_merchant_id,
     get_lead_by_call_id,
     get_lead_by_id,
+    get_leads_by_request_id,
     get_outbound_number_by_id,
     get_template_by_id,
     get_template_by_merchant,
@@ -66,7 +67,7 @@ from app.database.accessor.breeze_buddy.dispatch import (
 from app.schemas import ExecutionMode, LeadCallStatus, UserInfo
 from app.schemas.breeze_buddy.core import LeadCallTracker
 
-from .rbac import validate_recording_access
+from .rbac import validate_lead_read_access, validate_recording_access
 
 
 async def get_lead_handler(lead_id: str, current_user: UserInfo) -> Dict:
@@ -102,6 +103,69 @@ async def get_lead_handler(lead_id: str, current_user: UserInfo) -> Dict:
         raise
     except Exception as e:
         logger.error(f"Error getting lead {lead_id}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Unexpected error: {str(e)}",
+        )
+
+
+async def get_leads_by_request_id_handler(
+    request_id: str, current_user: UserInfo
+) -> Dict:
+    """
+    Get all leads by request_id.
+
+    Args:
+        request_id: The request_id to look up
+        current_user: Current authenticated user
+
+    Returns:
+        List of lead objects for the given request_id
+
+    Raises:
+        HTTPException: 404 if no leads found
+    """
+    logger.info(
+        f"User {current_user.username} (role: {current_user.role}) requesting leads for request_id: {request_id}"
+    )
+
+    try:
+        leads = await get_leads_by_request_id(request_id)
+
+        if not leads:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"No leads found for request_id: {request_id}",
+            )
+
+        # Filter leads by RBAC — non-admin users only see leads they have
+        # access to. validate_lead_read_access raises 404 on denial.
+        accessible_leads = []
+        for lead in leads:
+            try:
+                validate_lead_read_access(current_user, lead, operation="access")
+                accessible_leads.append(lead)
+            except HTTPException:
+                continue
+
+        if not accessible_leads:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"No leads found for request_id: {request_id}",
+            )
+
+        return {
+            "request_id": request_id,
+            "count": len(accessible_leads),
+            "leads": [lead.model_dump() for lead in accessible_leads],
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(
+            f"Error getting leads for request_id {request_id}: {e}", exc_info=True
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Unexpected error: {str(e)}",
