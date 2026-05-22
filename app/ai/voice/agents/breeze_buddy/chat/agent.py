@@ -18,6 +18,7 @@ from pipecat_flows import FlowsFunctionSchema
 from app.ai.voice.agents.breeze_buddy.chat import llm_driver
 from app.ai.voice.agents.breeze_buddy.chat.block_codec import (
     assistant_turn_to_blocks,
+    internal_text_block,
     plain_text_blocks,
     tool_results_to_user_blocks,
 )
@@ -327,26 +328,38 @@ class ChatAgent:
                 break
 
             # Strip <ui_stream> markers before persistence so the LLM
-            # doesn't see its own prior JSONL ops on replay. Append a
-            # compact summary of what tiles/handoffs the user actually
-            # saw — without it the LLM has no memory of its own UI and
-            # must reason from prose alone (which can drift from reality).
-            assistant_text = strip_ui_stream_markers("".join(turn_text))
+            # doesn't see its own prior JSONL ops on replay. The compact
+            # UI summary rides on a separate visibility=internal text
+            # block — the LLM keeps the referential memory ("the green
+            # one") on its next turn, but every widget-facing read path
+            # filters it out so it never shows up in the chat bubble.
+            visible_text = strip_ui_stream_markers("".join(turn_text))
             ui_summary = summarize_ui_ops(turn_ui_ops)
+
+            # In-memory LLM context still gets the augmented text — this
+            # branch loops back into another LLM call within the same
+            # /message, so the model needs the rendered-UI memory now.
+            llm_context_text = visible_text
             if ui_summary:
-                assistant_text = (assistant_text.rstrip() + "\n\n" + ui_summary).strip()
+                llm_context_text = (visible_text.rstrip() + "\n\n" + ui_summary).strip()
 
             # Persist the assistant turn-step with full Anthropic-shape
             # blocks [text? + tool_use*]. This is the load-bearing fix
             # for cross-turn identifier loss — on the next /message the
             # history loader replays tool_use.input verbatim, so the
             # LLM sees its own prior cart_id / checkout_id / etc.
-            assistant_blocks = assistant_turn_to_blocks(assistant_text, tool_calls)
+            assistant_blocks = assistant_turn_to_blocks(visible_text, tool_calls)
+            if ui_summary and assistant_blocks:
+                # Insert the internal summary block right after the
+                # visible text block so concatenation order on read
+                # matches what the LLM previously saw in-context.
+                insert_at = 1 if assistant_blocks[0].get("type") == "text" else 0
+                assistant_blocks.insert(insert_at, internal_text_block(ui_summary))
             if assistant_blocks:
                 await insert_chat_message(
                     session_id=self.session_id,
                     role=ChatMessageRole.ASSISTANT,
-                    content=assistant_text or None,
+                    content=visible_text or None,
                     content_blocks=assistant_blocks,
                     ui_blocks=turn_ui_ops or None,
                 )
@@ -359,7 +372,7 @@ class ChatAgent:
                     LLMContextMessage,
                     {
                         "role": "assistant",
-                        "content": assistant_text or None,
+                        "content": llm_context_text or None,
                         "tool_calls": [
                             {
                                 "id": call.tool_call_id,
@@ -496,29 +509,38 @@ class ChatAgent:
 
         # Reconstruct prose-only history (strips every
         # <ui_stream>…</ui_stream>) so saved messages never carry SpecStream
-        # ops forward into future turns. The canonical [text] block keeps
-        # history replay uniform on subsequent loads. A compact UI summary
-        # is appended so the LLM still has referential memory of what the
-        # shopper actually saw (titles, handoffs) on the next turn.
-        assistant_text = strip_ui_stream_markers("".join(assistant_text_chunks)).strip()
+        # ops forward into future turns. A compact UI summary rides on a
+        # separate visibility=internal block so the LLM keeps referential
+        # memory of what the shopper saw ("the green one"), while every
+        # widget-facing read path filters it out. The SSE wire and the
+        # denormalised `content` column both carry visible prose only.
+        visible_text = strip_ui_stream_markers("".join(assistant_text_chunks)).strip()
         ui_summary = summarize_ui_ops(turn_ui_ops)
+        persisted_blocks: List[Dict[str, Any]] = []
+        if visible_text:
+            persisted_blocks.extend(plain_text_blocks(visible_text))
         if ui_summary:
-            assistant_text = (assistant_text + "\n\n" + ui_summary).strip()
-        if assistant_text:
+            persisted_blocks.append(internal_text_block(ui_summary))
+        if persisted_blocks:
             stored = await insert_chat_message(
                 session_id=self.session_id,
                 role=ChatMessageRole.ASSISTANT,
-                content=assistant_text,
-                content_blocks=plain_text_blocks(assistant_text),
+                content=visible_text or None,
+                content_blocks=persisted_blocks,
                 ui_blocks=turn_ui_ops or None,
             )
-            yield SSEEvent(
-                event="assistant_message",
-                data={
-                    "idx": stored.idx if stored else None,
-                    "content": assistant_text,
-                },
-            )
+            # Only emit a bubble when there's actual visible prose. A
+            # summary-only row (the LLM rendered UI without narrating)
+            # still gets persisted for next-turn LLM memory but doesn't
+            # create an empty chat bubble on the wire.
+            if visible_text:
+                yield SSEEvent(
+                    event="assistant_message",
+                    data={
+                        "idx": stored.idx if stored else None,
+                        "content": visible_text,
+                    },
+                )
 
         await update_chat_session_after_turn(
             session_id=self.session_id, current_node=node_name or None

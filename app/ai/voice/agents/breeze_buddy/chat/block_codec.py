@@ -46,6 +46,14 @@ from pipecat.processors.aggregators.llm_context import LLMContextMessage
 
 from app.core.logger import logger
 
+# A content_block carrying this visibility marker is LLM-context only:
+# the history loader concatenates it into the LLM's prior-turn memory,
+# but every widget-facing read path strips it before responding. This
+# is how internal-only memory (rendered-UI summaries today; tool-intent
+# traces, refine_ui hints, eval breadcrumbs tomorrow) rides on the
+# canonical content_blocks pipe without leaking onto the user's screen.
+VISIBILITY_INTERNAL = "internal"
+
 # ---------------------------------------------------------------------------
 # Encoding: write side (turn-loop → DB)
 # ---------------------------------------------------------------------------
@@ -109,6 +117,33 @@ def plain_text_blocks(text: str) -> List[Dict[str, Any]]:
     """Single-element [text] block. Used for the user's prose question
     and for the final assistant prose reply."""
     return [{"type": "text", "text": text}]
+
+
+def internal_text_block(text: str) -> Dict[str, Any]:
+    """A text block flagged visibility=internal — LLM-context only.
+
+    The history loader concatenates this into the LLM's prior-turn
+    memory; widget-facing read paths strip it via [[filter_visible_blocks]].
+    """
+    return {"type": "text", "text": text, "visibility": VISIBILITY_INTERNAL}
+
+
+# ---------------------------------------------------------------------------
+# Visibility filtering: widget-facing read side
+# ---------------------------------------------------------------------------
+
+
+def filter_visible_blocks(blocks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Drop any block tagged ``visibility=internal``.
+
+    Pre-fix rows that carried the summary inline in a normal text block
+    are left untouched — minimal-blast-radius fix that only governs new
+    writes. Existing transcripts continue to display the legacy
+    ``[ui rendered: …]`` tail until they age out.
+    """
+    if not blocks:
+        return blocks
+    return [b for b in blocks if b.get("visibility") != VISIBILITY_INTERNAL]
 
 
 # ---------------------------------------------------------------------------
@@ -238,8 +273,11 @@ def _user_row_to_openai(
 
 
 __all__ = [
+    "VISIBILITY_INTERNAL",
     "assistant_turn_to_blocks",
     "tool_results_to_user_blocks",
     "plain_text_blocks",
+    "internal_text_block",
+    "filter_visible_blocks",
     "blocks_to_llm_context_messages",
 ]
