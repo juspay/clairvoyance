@@ -127,6 +127,7 @@ async def create_stt_from_config(config: STTConfiguration):
             logger.info("Using template-specific Soniox context")
 
         language = _normalize_language(config.language)
+        enable_lang_id = sx.enable_language_identification if sx else None
         return build_soniox_stt(
             SonioxConfig(
                 api_key=SONIOX_API_KEY,
@@ -137,6 +138,7 @@ async def create_stt_from_config(config: STTConfiguration):
                 max_endpoint_delay_ms=BREEZE_BUDDY_SONIOX_MAX_ENDPOINT_DELAY_MS,
                 log_context="Breeze Buddy",
                 language_hints_strict=bool(language),
+                enable_language_identification=enable_lang_id,
             )
         )
 

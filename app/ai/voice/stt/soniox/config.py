@@ -39,6 +39,7 @@ class SonioxConfig:
     client_reference_id: Optional[str] = None
     log_context: str = "Soniox"
     language_hints_strict: bool = False
+    enable_language_identification: Optional[bool] = None
 
 
 def _parse_soniox_context(
@@ -138,12 +139,15 @@ def build_soniox_stt(config: SonioxConfig):
 
     context = _parse_soniox_context(config.context_json, config.log_context)
 
+    enable_lang_id = config.enable_language_identification
+
     soniox_settings = SonioxSTTService.Settings(
         model=config.model,
         language_hints=language_hints,
         context=context,
         client_reference_id=config.client_reference_id,
         language_hints_strict=config.language_hints_strict,
+        enable_language_identification=enable_lang_id,
     )
 
     # Format language hints for logging
