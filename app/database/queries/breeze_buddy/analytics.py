@@ -436,6 +436,8 @@ def get_call_details_records_query(
             lct.template,
             lct.payload,
             lct.meta_data->>'outcome' as meta_data_outcome,
+            lct.meta_data->>'call_ended_by' as meta_data_call_ended_by,
+            lct.recording_url,
             lct.call_initiated_time,
             lct.call_end_time,
             lct.outcome,

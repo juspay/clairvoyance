@@ -614,6 +614,8 @@ EXPORT_COLUMNS = [
     "Duration",
     "Outcome",
     "Metadata Outcome",
+    "Call Ended By",
+    "Recording URL",
     "Attempt Count",
     "Record",
 ]
@@ -708,6 +710,8 @@ async def download_call_details(
                     ),
                     "Outcome": tracker.get("outcome", ""),
                     "Metadata Outcome": tracker.get("meta_data_outcome", ""),
+                    "Call Ended By": tracker.get("meta_data_call_ended_by", ""),
+                    "Recording URL": tracker.get("recording_url", ""),
                     "Attempt Count": tracker.get("attempt_count", ""),
                     "Record": (
                         f"https://buddy.breezelabs.app/calls/records/{tracker.get('id')}"
