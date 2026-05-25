@@ -3,6 +3,7 @@ Database accessor functions for analytics with generic filtering.
 All queries are optimized to filter at database level.
 """
 
+import asyncio
 from typing import Any, Dict, List, Optional
 
 from app.core.logger import logger
@@ -15,9 +16,11 @@ from app.database.queries.breeze_buddy.analytics import (
     get_analytics_lead_status_counts_query,
     get_analytics_lead_status_counts_total_query,
     get_analytics_outbound_numbers_query,
+    get_analytics_outcome_breakdown_query,
     get_analytics_summary_query,
     get_analytics_trends_query,
     get_call_details_records_query,
+    get_dashboard_counts_query,
     get_distinct_merchant_ids_query,
     get_distinct_outcomes_query,
     get_distinct_resellers_query,
@@ -52,32 +55,19 @@ async def get_summary_analytics_from_db(
     )
 
     try:
-        query_text, values = get_analytics_summary_query(filters, group_by)
-        result = await run_parameterized_query(query_text, values)
-
-        logger.debug(
-            f"[Analytics DB] Summary query returned {len(result) if result else 0} rows"
-        )
-
-        if not result or len(result) == 0:
-            logger.warning("[Analytics DB] Summary query returned no results")
-            if group_by:
-                return []
-            return {
-                "total_calls": 0,
-                "outbound_calls": 0,
-                "inbound_calls": 0,
-                "completed_calls": 0,
-                "failed_calls": 0,
-                "success_rate": 0.0,
-                "average_duration": None,
-                "total_templates": 0,
-                "total_shops": 0,
-                "outcome_breakdown": {},
-            }
-
         if group_by:
-            # Return list of grouped results
+            # Grouped mode: single query (paginated groups, already fast enough)
+            query_text, values = get_analytics_summary_query(filters, group_by)
+            result = await run_parameterized_query(query_text, values)
+
+            logger.debug(
+                f"[Analytics DB] Summary query returned {len(result) if result else 0} rows"
+            )
+
+            if not result or len(result) == 0:
+                logger.warning("[Analytics DB] Summary query returned no results")
+                return []
+
             grouped_results = []
             for row in result:
                 total_calls = row["total_calls"] or 0
@@ -102,8 +92,8 @@ async def get_summary_analytics_from_db(
                             if row["average_duration"]
                             else None
                         ),
-                        "total_templates": row["total_templates"] or 0,
-                        "total_shops": row["total_shops"] or 0,
+                        "total_templates": row.get("total_templates") or 0,
+                        "total_shops": row.get("total_shops") or 0,
                         "outcome_breakdown": row["outcome_breakdown"] or {},
                     }
                 )
@@ -112,36 +102,52 @@ async def get_summary_analytics_from_db(
                 f"[Analytics DB] Grouped summary returned {len(grouped_results)} groups"
             )
             return grouped_results
-        else:
-            # Return single aggregate result
-            row = result[0]
-            total_calls = row["total_calls"] or 0
-            completed_calls = row["completed_calls"] or 0
-            failed_calls = row["failed_calls"] or 0
-            success_rate = (
-                (completed_calls / total_calls * 100) if total_calls > 0 else 0.0
-            )
 
-            logger.info(
-                f"[Analytics DB] Summary result: {total_calls} total calls, {completed_calls} completed ({success_rate:.2f}% success)"
-            )
+        # Aggregate mode (dashboard cards): run counts and outcome breakdown in
+        # parallel so the slower jsonb_object_agg doesn't block the counts.
+        summary_q, summary_v = get_analytics_summary_query(filters)
+        outcome_q, outcome_v = get_analytics_outcome_breakdown_query(filters)
 
-            return {
-                "total_calls": total_calls,
-                "outbound_calls": row["outbound_calls"] or 0,
-                "inbound_calls": row["inbound_calls"] or 0,
-                "completed_calls": completed_calls,
-                "failed_calls": failed_calls,
-                "success_rate": round(success_rate, 2),
-                "average_duration": (
-                    round(float(row["average_duration"]), 2)
-                    if row["average_duration"]
-                    else None
-                ),
-                "total_templates": row["total_templates"] or 0,
-                "total_shops": row["total_shops"] or 0,
-                "outcome_breakdown": row["outcome_breakdown"] or {},
-            }
+        summary_res, outcome_res = await asyncio.gather(
+            run_parameterized_query(summary_q, summary_v),
+            run_parameterized_query(outcome_q, outcome_v),
+        )
+
+        logger.debug(
+            f"[Analytics DB] Summary query returned {len(summary_res) if summary_res else 0} rows, "
+            f"outbreakdown query returned {len(outcome_res) if outcome_res else 0} rows"
+        )
+
+        row = dict(summary_res[0]) if summary_res and len(summary_res) > 0 else {}
+        outcome_row = (
+            dict(outcome_res[0]) if outcome_res and len(outcome_res) > 0 else {}
+        )
+
+        total_calls = row.get("total_calls") or 0
+        completed_calls = row.get("completed_calls") or 0
+        failed_calls = row.get("failed_calls") or 0
+        success_rate = (completed_calls / total_calls * 100) if total_calls > 0 else 0.0
+
+        logger.info(
+            f"[Analytics DB] Summary result: {total_calls} total calls, {completed_calls} completed ({success_rate:.2f}% success)"
+        )
+
+        return {
+            "total_calls": total_calls,
+            "outbound_calls": row.get("outbound_calls") or 0,
+            "inbound_calls": row.get("inbound_calls") or 0,
+            "completed_calls": completed_calls,
+            "failed_calls": failed_calls,
+            "success_rate": round(success_rate, 2),
+            "average_duration": (
+                round(float(row["average_duration"]), 2)
+                if row.get("average_duration")
+                else None
+            ),
+            "total_templates": 0,
+            "total_shops": 0,
+            "outcome_breakdown": outcome_row.get("outcome_breakdown") or {},
+        }
 
     except Exception as e:
         logger.error(f"Error getting summary analytics: {e}", exc_info=True)
@@ -441,6 +447,41 @@ async def get_lead_status_counts_from_db(
 
     except Exception as e:
         logger.error(f"Error getting lead status counts: {e}", exc_info=True)
+        raise
+
+
+async def get_dashboard_counts_from_db(
+    filters: Dict[str, Any],
+) -> Dict[str, int]:
+    """
+    Get lightweight dashboard card counts from DB.
+    """
+    logger.info(f"[Analytics DB] Getting dashboard counts with filters: {filters}")
+
+    try:
+        query_text, values = get_dashboard_counts_query(filters)
+        result = await run_parameterized_query(query_text, values)
+
+        if not result or len(result) == 0:
+            return {
+                "outbound_calls": 0,
+                "inbound_calls": 0,
+                "no_answer_calls": 0,
+                "busy_calls": 0,
+                "calls_with_outcomes": 0,
+            }
+
+        row = result[0]
+        return {
+            "outbound_calls": row["outbound_calls"] or 0,
+            "inbound_calls": row["inbound_calls"] or 0,
+            "no_answer_calls": row["no_answer_calls"] or 0,
+            "busy_calls": row["busy_calls"] or 0,
+            "calls_with_outcomes": row["calls_with_outcomes"] or 0,
+        }
+
+    except Exception as e:
+        logger.error(f"Error getting dashboard counts: {e}", exc_info=True)
         raise
 
 

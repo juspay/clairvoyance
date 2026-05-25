@@ -22,6 +22,7 @@ class AnalyticsType(str, Enum):
     OUTCOME_COUNTS = "outcome-counts"
     DISTINCT_RESELLERS = "distinct-resellers"
     DISTINCT_MERCHANT_IDS = "distinct-merchant-ids"
+    DASHBOARD_COUNTS = "dashboard-counts"
 
 
 class TimeGranularity(str, Enum):

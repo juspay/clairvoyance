@@ -15,6 +15,7 @@ from app.database.accessor.breeze_buddy.analytics import (
     get_analytics_count_from_db,
     get_call_detail_records,
     get_call_details_from_db,
+    get_dashboard_counts_from_db,
     get_distinct_merchant_ids_from_db,
     get_distinct_outcomes_from_db,
     get_distinct_resellers_from_db,
@@ -546,6 +547,24 @@ async def get_performance_analytics(
         "type": "performance",
         "filters_applied": filters,
         "results": performance_data,
+    }
+
+
+async def get_dashboard_counts(
+    filters: Dict[str, Any],
+    options: Dict[str, Any],
+    current_user: UserInfo,
+) -> Dict[str, Any]:
+    """
+    Get lightweight dashboard card counts.
+    Optimised for the top-row analytics cards on the Loom dashboard.
+    """
+    counts = await get_dashboard_counts_from_db(filters)
+
+    return {
+        "type": "dashboard-counts",
+        "filters_applied": filters,
+        "results": [counts],
     }
 
 
