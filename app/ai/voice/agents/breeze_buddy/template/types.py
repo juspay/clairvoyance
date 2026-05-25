@@ -69,6 +69,10 @@ class SonioxSTTConfig(BaseModel):
     model: Optional[str] = Field(
         None, description="Soniox model (e.g. 'stt-rt-v4'). Defaults from env."
     )
+    enable_language_identification: Optional[bool] = Field(
+        None,
+        description="Enable automatic language identification. Defaults to None.",
+    )
 
 
 class DeepgramSTTConfig(BaseModel):
