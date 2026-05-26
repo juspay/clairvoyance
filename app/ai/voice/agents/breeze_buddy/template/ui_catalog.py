@@ -41,7 +41,14 @@ from __future__ import annotations
 from enum import Enum
 from typing import Any, Dict, List, Literal, Optional, Set, Type, Union
 
-from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    HttpUrl,
+    field_validator,
+    model_validator,
+)
 
 CATALOG_VERSION: str = "v1"
 
@@ -442,6 +449,124 @@ class Tile(_CatalogBase):
 
 
 # ---------------------------------------------------------------------------
+# Effects primitives (group: effects)
+#
+# Invisible primitives that run a browser-side side-effect when mounted.
+# Distinct from UI primitives — they render no DOM. Used for things the
+# server can describe but cannot do itself (set a host-page cookie, ping
+# a host-only endpoint, etc.) and are auditable as ops in the SpecStream.
+# ---------------------------------------------------------------------------
+
+
+class SideEffectKind(str, Enum):
+    """What a SideEffect op does on mount. Closed set keeps the surface
+    small and the side-effects auditable.
+
+    * ``fetch`` — fire-and-forget ``fetch(url, …)``. Same-origin or
+      CORS-enabled URLs only. Used to ping host-only endpoints, trigger
+      session-bound mutations, or kick off prefetches. Requires ``url``.
+    * ``set_cookie`` — write a cookie on the host page via
+      ``document.cookie`` (same-origin only — the browser enforces this).
+      Used to pin host-page state to server-built identifiers (e.g.
+      pointing a storefront's cookie cart at a server-created cart).
+      Requires ``name`` and ``value``.
+    """
+
+    fetch = "fetch"
+    set_cookie = "set_cookie"
+
+
+class SideEffect(_CatalogBase):
+    """Invisible primitive that runs a browser-side side-effect on mount.
+
+    Renders nothing. Used for things the server can describe but cannot do
+    itself — e.g. pinning a host-page cookie to a server-built identifier,
+    pinging a host-only endpoint, prefetching.
+
+    Field requirements vary by ``kind`` — ``fetch`` uses ``url`` (+ method
+    / credentials), ``set_cookie`` uses ``name`` / ``value`` (+ path /
+    samesite / secure). Other fields are ignored.
+
+    Idempotency: the widget dedupes by ``(kind, …action-fingerprint…)``
+    per page session so re-renders of the same op — or the same value
+    emitted across multiple turns / multiple widget instances — fire the
+    side-effect at most once. Set ``once=False`` to opt out (e.g. for
+    periodic pings).
+
+    Errors are swallowed and logged by the widget so a failed side-effect
+    never breaks the conversation flow.
+    """
+
+    kind: SideEffectKind = SideEffectKind.fetch
+    # --- kind=fetch fields ---
+    url: Optional[str] = Field(
+        None,
+        description=(
+            "Target URL (required when ``kind='fetch'``). Same-origin paths"
+            " or absolute URLs. Cross-origin requires server CORS."
+        ),
+    )
+    method: Optional[Literal["GET", "POST"]] = "GET"
+    credentials: Optional[Literal["omit", "same-origin", "include"]] = "include"
+    # --- kind=set_cookie fields ---
+    name: Optional[str] = Field(
+        None,
+        description="Cookie name (required when ``kind='set_cookie'``).",
+    )
+    value: Optional[str] = Field(
+        None,
+        description="Cookie value (required when ``kind='set_cookie'``).",
+    )
+    path: Optional[str] = Field(
+        "/",
+        description="Cookie path (``kind='set_cookie'``). Default '/'.",
+    )
+    samesite: Optional[Literal["Strict", "Lax", "None"]] = Field(
+        "Lax",
+        description="Cookie SameSite (``kind='set_cookie'``).",
+    )
+    secure: bool = Field(
+        True,
+        description="Cookie Secure flag (``kind='set_cookie'``). Default True.",
+    )
+    # --- common ---
+    once: bool = Field(
+        default=True,
+        description=("Dedupe by (kind, fingerprint) per page session. Default true."),
+    )
+
+    @model_validator(mode="after")
+    def _require_kind_specific_fields(self) -> "SideEffect":
+        """Enforce kind-specific required fields.
+
+        The fields are declared ``Optional[...]`` on the model so that one
+        Pydantic class can carry both ``fetch`` and ``set_cookie`` shapes,
+        but the contract is that ``url`` is required for ``fetch`` and
+        ``name`` + ``value`` are required for ``set_cookie``. Without this
+        validator, ``validate_props`` would silently accept malformed
+        ops (e.g. a ``fetch`` op with no url, or a ``set_cookie`` op with
+        no name) and the widget would no-op them — which is graceful at
+        runtime but masks template-author bugs. Validate them at parse
+        time so the healer rejects them before they reach the widget.
+        """
+        if self.kind == SideEffectKind.fetch:
+            if not self.url:
+                raise ValueError(
+                    "SideEffect kind='fetch' requires a non-empty 'url' prop"
+                )
+        elif self.kind == SideEffectKind.set_cookie:
+            if not self.name:
+                raise ValueError(
+                    "SideEffect kind='set_cookie' requires a non-empty 'name' prop"
+                )
+            if not self.value:
+                raise ValueError(
+                    "SideEffect kind='set_cookie' requires a non-empty 'value' prop"
+                )
+        return self
+
+
+# ---------------------------------------------------------------------------
 # Catalog manifest + group registry
 # ---------------------------------------------------------------------------
 
@@ -467,6 +592,8 @@ UI_CATALOG: Dict[str, Type[_CatalogBase]] = {
     "Handoff": Handoff,
     # Composite
     "Tile": Tile,
+    # Effects (invisible)
+    "SideEffect": SideEffect,
 }
 
 
@@ -500,6 +627,9 @@ PRIMITIVE_GROUPS: Dict[str, List[str]] = {
     ],
     "composite": [
         "Tile",
+    ],
+    "effects": [
+        "SideEffect",
     ],
     # Reserved for future expansion — schemas + widget components land
     # behind these group flags so existing templates aren't affected.
@@ -546,6 +676,8 @@ PRIMITIVE_RENDER_ORDER: List[str] = [
     "Table",
     # Notifications
     "Message",
+    # Effects (invisible — last so it doesn't crowd the visual catalog)
+    "SideEffect",
 ]
 
 
