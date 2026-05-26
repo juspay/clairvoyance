@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import base64
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Sequence
 
 import httpx
 from pipecat.services.sarvam.tts import SarvamTTSService
@@ -36,6 +36,7 @@ class SarvamTTSConfig:
     pace: float
     language_code: Optional[str] = None
     enable_preprocessing: bool = True
+    text_filters: Optional[Sequence] = None
 
 
 def get_sarvam_language(language_code: Optional[str]) -> Language:
@@ -76,6 +77,7 @@ def build_sarvam_tts(config: SarvamTTSConfig):
             pace=config.pace,
             enable_preprocessing=config.enable_preprocessing,
         ),
+        text_filters=list(config.text_filters) if config.text_filters else None,
     )
 
 

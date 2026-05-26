@@ -3,6 +3,10 @@
 from pipecat.services.cartesia.tts import GenerationConfig
 from pipecat.transcriptions.language import Language
 
+from app.ai.voice.agents.breeze_buddy.processors.emoji_text_filter import (
+    EmojiTextFilter,
+    strip_emoji,
+)
 from app.ai.voice.agents.breeze_buddy.template.types import (
     ConfigurationModel,
     TTSConfig,
@@ -148,6 +152,7 @@ async def get_tts_service(voice_config: TTSConfig):
                 speed=voice_config.speed or 1.0,
                 language=_parse_language(voice_config.language, Language.EN_IN),
                 aggregate_sentences=aggregate,
+                text_filters=[EmojiTextFilter()],
             )
         )
 
@@ -171,6 +176,7 @@ async def get_tts_service(voice_config: TTSConfig):
                 language=_parse_language(voice_config.language),
                 generation_config=generation_config,
                 aggregate_sentences=aggregate,
+                text_filters=[EmojiTextFilter()],
             )
         )
 
@@ -189,6 +195,7 @@ async def get_tts_service(voice_config: TTSConfig):
                 pitch=voice_config.pitch or 0.0,
                 pace=voice_config.speed or 0.9,
                 enable_preprocessing=enable_preprocessing,
+                text_filters=[EmojiTextFilter()],
             )
         )
 
@@ -203,6 +210,7 @@ async def get_tts_service(voice_config: TTSConfig):
                 language=_parse_language(voice_config.language, Language.EN_IN),
                 style_prompt=getattr(voice_config, "style_prompt", None),
                 credentials=GOOGLE_CREDENTIALS_JSON,
+                text_filters=[EmojiTextFilter()],
             )
         )
 
@@ -231,6 +239,10 @@ async def generate_audio(
     overrides = configurations.tts_configuration_overrides if configurations else None
     resolved = await resolve_voice_config(voice_config, overrides)
     provider = resolved.provider.value
+
+    # Strip emoji before sending to any provider — TTS APIs either speak the
+    # codepoint name aloud or produce garbled audio when emoji are present.
+    text = strip_emoji(text)
 
     if provider == "sarvam":
         audio_data = await _generate_sarvam_audio(
