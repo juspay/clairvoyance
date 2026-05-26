@@ -124,21 +124,29 @@ async def create_lead_call_tracker(
 
 
 async def acquire_lock_on_lead_by_id(
-    lead_id: str, expected_status: Optional[LeadCallStatus] = None
+    lead_id: str,
+    expected_status: Optional[LeadCallStatus] = None,
+    force: bool = False,
 ) -> Optional[LeadCallTracker]:
     """
     Atomically acquire lock on a lead by ID.
     If expected_status is provided, only acquires when the lead's status matches —
     combining lock + status check in one DB round-trip instead of three (lock, check, release).
     Returns the locked lead if successful, None if already locked or status mismatched.
+
+    ``force=True`` bypasses the ``is_locked = FALSE`` guard for the reconciler
+    to reclaim dangling locks left by crashed pods.
     """
     logger.info(
         f"Attempting to acquire lock on lead with ID: {lead_id}"
         + (f" (expected_status={expected_status.value})" if expected_status else "")
+        + (" [force]" if force else "")
     )
 
     try:
-        query_text, values = acquire_lock_on_lead_by_id_query(lead_id, expected_status)
+        query_text, values = acquire_lock_on_lead_by_id_query(
+            lead_id, expected_status, force=force
+        )
         result = await run_parameterized_query(query_text, values)
         if result and get_row_count(result) > 0:
             decoded_result = decode_lead_call_tracker(result[0])
@@ -481,15 +489,18 @@ async def get_all_lead_call_trackers(
 
 
 async def get_leads_by_status_and_time_before(
-    status: LeadCallStatus, time: datetime
+    status: LeadCallStatus, time: datetime, include_locked: bool = False
 ) -> List[LeadCallTracker]:
     """
     Get leads based on their status and a time before which they were initiated.
+    Pass include_locked=True to include locked rows (used by the PROCESSING reconciler).
     """
     logger.info(f"Getting leads with status {status} initiated before {time}")
 
     try:
-        query_text, values = get_leads_by_status_and_time_before_query(status, time)
+        query_text, values = get_leads_by_status_and_time_before_query(
+            status, time, include_locked=include_locked
+        )
         result = await run_parameterized_query(query_text, values)
         if result:
             decoded = [decode_lead_call_tracker(row) for row in result]
