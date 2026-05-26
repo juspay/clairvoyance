@@ -327,10 +327,86 @@ def strip_html(value: Any, args: Dict[str, Any]) -> Any:
     return plain
 
 
+@register_transform("derive_field")
+def derive_field(value: Any, args: Dict[str, Any]) -> Any:
+    """Derive a new field on a dict via regex-capture + format-template.
+
+    Reads a string field, runs a regex (positional or named groups), and
+    writes the formatted result to a destination field on the same dict.
+    Purely a shape op — no domain knowledge — so templates can use it to
+    build any derived string (URLs, IDs, display labels) from any existing
+    string field on a response object.
+
+    Args:
+        from     — source field name (default: ``"id"``)
+        pattern  — regex with capture groups. Named groups (``(?P<name>…)``)
+                   substitute by ``{name}`` in ``template``; positional
+                   groups substitute by ``{0}``, ``{1}``, …
+        template — format string applied to the captured groups.
+        to       — destination field name (required). Existing values at
+                   ``to`` are overwritten.
+        overwrite — bool, default ``True``. When ``False``, only write if
+                    the destination is missing/None.
+
+    Behavior:
+        - Non-dict ``value``: pass-through.
+        - Source missing / not a string / regex doesn't match: no-op.
+        - Bad regex or template placeholder mismatch: logged warning, no-op.
+    """
+    if not isinstance(value, dict):
+        return value
+
+    src_field = args.get("from", "id")
+    pattern = args.get("pattern")
+    template = args.get("template")
+    dst_field = args.get("to")
+    overwrite = args.get("overwrite", True)
+
+    if not pattern or not template or not dst_field:
+        return value
+
+    if not overwrite and value.get(dst_field) is not None:
+        return value
+
+    src = value.get(src_field)
+    if not isinstance(src, str):
+        return value
+
+    try:
+        match = re.search(pattern, src)
+    except re.error as e:
+        logger.warning(
+            f"[derive_field] bad regex {pattern!r} for field {src_field!r}: {e}"
+        )
+        return value
+    if not match:
+        return value
+
+    try:
+        named = match.groupdict()
+        if named and all(v is not None for v in named.values()):
+            value[dst_field] = template.format(**named)
+        else:
+            value[dst_field] = template.format(*match.groups())
+    except (IndexError, KeyError, ValueError) as e:
+        # IndexError/KeyError: template references a capture group that
+        # doesn't exist. ValueError: malformed format string (e.g. a bare
+        # "{" or unbalanced braces). All are template-author bugs that
+        # should no-op per this fn's documented contract, not abort the
+        # whole transform pass for the response.
+        logger.warning(
+            f"[derive_field] template {template!r} does not fit captures of "
+            f"{pattern!r}: {e}"
+        )
+
+    return value
+
+
 __all__ = [
     "TRANSFORM_REGISTRY",
     "TransformFn",
     "apply_response_transforms",
+    "derive_field",
     "omit_fields",
     "pick_fields",
     "register_transform",

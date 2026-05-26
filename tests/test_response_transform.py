@@ -12,19 +12,23 @@ arithmetic rules for the first built-in op.
 
 from __future__ import annotations
 
+# isort: off
+# Order matters: template.types fully loads the `template` package (whose
+# __init__ pulls in hooks/http_requester) BEFORE the utility import
+# triggers handlers.transport.utils.__init__ → field_resolver →
+# template.types again. Reversing these triggers a circular-import error.
+from app.ai.voice.agents.breeze_buddy.template.types import ResponseTransform
+
 from app.ai.voice.agents.breeze_buddy.handlers.transport.utils.response_transform import (
     apply_response_transforms,
+    derive_field,
     omit_fields,
     pick_fields,
     scale_by_exponent,
     strip_html,
 )
 
-# Order matters: template.types fully loads the `template` package (whose
-# __init__ pulls in hooks/http_requester) BEFORE the utility import
-# triggers handlers.transport.utils.__init__ → field_resolver →
-# template.types again. Reversing these triggers a circular-import error.
-from app.ai.voice.agents.breeze_buddy.template.types import ResponseTransform
+# isort: on
 
 # ---------------------------------------------------------------------------
 # scale_by_exponent — pure arithmetic, no domain knowledge
@@ -515,3 +519,237 @@ def test_walker_mutates_caller_payload_in_place():
     # i.e. the http_handler's `transformed = copy.deepcopy(data)` pattern
     # produces a value the original input is decoupled from.
     assert snapshot["order"]["total"]["amount"] == 5000
+
+
+# ---------------------------------------------------------------------------
+# derive_field — regex-capture + format-template, no domain knowledge
+# ---------------------------------------------------------------------------
+
+
+def test_derive_field_positional_captures_format_into_template():
+    value = {"id": "gid://shopify/Cart/AbCdEf?key=XyZ789"}
+    derive_field(
+        value,
+        {
+            "from": "id",
+            "pattern": r"Cart/([^?]+)\?key=(.+)$",
+            "template": "/cart/c/{0}?key={1}",
+            "to": "claim_url",
+        },
+    )
+    assert value["claim_url"] == "/cart/c/AbCdEf?key=XyZ789"
+    # Source untouched.
+    assert value["id"] == "gid://shopify/Cart/AbCdEf?key=XyZ789"
+
+
+def test_derive_field_named_captures_format_into_template():
+    value = {"id": "gid://shopify/Cart/AbCdEf?key=XyZ789"}
+    derive_field(
+        value,
+        {
+            "from": "id",
+            "pattern": r"Cart/(?P<token>[^?]+)\?key=(?P<key>.+)$",
+            "template": "/cart/c/{token}?key={key}",
+            "to": "claim_url",
+        },
+    )
+    assert value["claim_url"] == "/cart/c/AbCdEf?key=XyZ789"
+
+
+def test_derive_field_via_walker_writes_sibling_field():
+    data = {"cart": {"id": "gid://shopify/Cart/T?key=K", "checkout_url": "https://x"}}
+    apply_response_transforms(
+        data,
+        [
+            ResponseTransform(
+                path="cart",
+                fn="derive_field",
+                args={
+                    "from": "id",
+                    "pattern": r"Cart/([^?]+)\?key=(.+)$",
+                    "template": "/cart/c/{0}?key={1}",
+                    "to": "claim_url",
+                },
+            )
+        ],
+    )
+    assert data["cart"]["claim_url"] == "/cart/c/T?key=K"
+    # Adjacent fields preserved.
+    assert data["cart"]["checkout_url"] == "https://x"
+
+
+def test_derive_field_at_root_path_writes_root_field():
+    # UCP cart shape: id lives at root, not under a `cart` wrapper.
+    data = {"id": "gid://shopify/Cart/Tok123?key=abc", "line_items": []}
+    apply_response_transforms(
+        data,
+        [
+            ResponseTransform(
+                path="",
+                fn="derive_field",
+                args={
+                    "from": "id",
+                    "pattern": r"Cart/([^?]+)\?key=",
+                    "template": "{0}",
+                    "to": "cart_token",
+                },
+            )
+        ],
+    )
+    assert data["cart_token"] == "Tok123"
+
+
+def test_derive_field_no_match_is_noop():
+    value = {"id": "not-a-shopify-cart"}
+    derive_field(
+        value,
+        {
+            "from": "id",
+            "pattern": r"Cart/([^?]+)\?key=(.+)$",
+            "template": "/cart/c/{0}?key={1}",
+            "to": "claim_url",
+        },
+    )
+    assert "claim_url" not in value
+
+
+def test_derive_field_missing_source_is_noop():
+    value = {"unrelated": "x"}
+    derive_field(
+        value,
+        {
+            "from": "id",
+            "pattern": r".*",
+            "template": "{0}",
+            "to": "claim_url",
+        },
+    )
+    assert value == {"unrelated": "x"}
+
+
+def test_derive_field_non_string_source_is_noop():
+    value = {"id": 123}
+    derive_field(
+        value,
+        {
+            "from": "id",
+            "pattern": r".*",
+            "template": "{0}",
+            "to": "claim_url",
+        },
+    )
+    assert "claim_url" not in value
+
+
+def test_derive_field_missing_required_args_is_noop():
+    value = {"id": "anything"}
+    # No template
+    derive_field(value, {"from": "id", "pattern": r".*", "to": "out"})
+    assert "out" not in value
+    # No pattern
+    derive_field(value, {"from": "id", "template": "{0}", "to": "out"})
+    assert "out" not in value
+    # No `to`
+    derive_field(value, {"from": "id", "pattern": r".*", "template": "{0}"})
+    assert value == {"id": "anything"}
+
+
+def test_derive_field_overwrite_false_skips_existing_destination():
+    value = {"id": "abc-123", "out": "preexisting"}
+    derive_field(
+        value,
+        {
+            "from": "id",
+            "pattern": r"(\w+)-(\d+)",
+            "template": "{0}_{1}",
+            "to": "out",
+            "overwrite": False,
+        },
+    )
+    assert value["out"] == "preexisting"
+
+
+def test_derive_field_overwrite_true_replaces_existing():
+    value = {"id": "abc-123", "out": "preexisting"}
+    derive_field(
+        value,
+        {
+            "from": "id",
+            "pattern": r"(\w+)-(\d+)",
+            "template": "{0}_{1}",
+            "to": "out",
+        },
+    )
+    assert value["out"] == "abc_123"
+
+
+def test_derive_field_non_dict_returns_unchanged():
+    assert derive_field("hello", {}) == "hello"
+    assert derive_field(None, {}) is None
+    assert derive_field([1, 2], {}) == [1, 2]
+
+
+def test_derive_field_bad_regex_logs_and_is_noop():
+    value = {"id": "x"}
+    derive_field(
+        value,
+        {
+            "from": "id",
+            "pattern": r"(unclosed",
+            "template": "{0}",
+            "to": "out",
+        },
+    )
+    assert "out" not in value
+
+
+def test_derive_field_template_placeholder_mismatch_is_noop():
+    value = {"id": "abc-123"}
+    # Template references {5} but only 2 groups captured.
+    derive_field(
+        value,
+        {
+            "from": "id",
+            "pattern": r"(\w+)-(\d+)",
+            "template": "{5}",
+            "to": "out",
+        },
+    )
+    assert "out" not in value
+
+
+def test_derive_field_malformed_template_is_noop():
+    """Malformed format strings (bare ``{``, unbalanced braces, …) raise
+    ValueError from ``str.format`` — must be caught and no-op'd per the
+    documented contract, not propagate and abort the whole pass.
+    """
+    value = {"id": "abc-123"}
+    derive_field(
+        value,
+        {
+            "from": "id",
+            "pattern": r"(\w+)-(\d+)",
+            "template": "{",
+            "to": "out",
+        },
+    )
+    assert "out" not in value
+    # And as part of a larger transform pass — must not raise upstream.
+    data = {"products": [{"id": "ok-1"}, {"id": "ok-2"}]}
+    apply_response_transforms(
+        data,
+        [
+            ResponseTransform(
+                path="products[*]",
+                fn="derive_field",
+                args={
+                    "from": "id",
+                    "pattern": r"(\w+)-(\d+)",
+                    "template": "{",
+                    "to": "out",
+                },
+            )
+        ],
+    )
+    # Original values preserved, no "out" field added.
+    assert data["products"] == [{"id": "ok-1"}, {"id": "ok-2"}]

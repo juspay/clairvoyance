@@ -10,9 +10,14 @@ from __future__ import annotations
 
 # Load template package first so its __init__ chain completes before any
 # `chat/*` module imports (mirrors test_ui_stream / test_session_state).
+import pytest
+from pydantic import ValidationError
+
 from app.ai.voice.agents.breeze_buddy.template.ui_catalog import (
     PRIMITIVE_GROUPS,
     UI_CATALOG,
+    SideEffect,
+    SideEffectKind,
     group_for,
     resolve_allowlist,
 )
@@ -123,3 +128,53 @@ def test_every_group_member_is_registered_in_catalog():
                 f"group {group_name!r} references {prim!r} "
                 f"which is not registered in UI_CATALOG"
             )
+
+
+# ---------------------------------------------------------------------------
+# SideEffect — kind-specific required fields enforced at validation time
+# ---------------------------------------------------------------------------
+
+
+def test_sideeffect_fetch_requires_url():
+    """``kind='fetch'`` without a non-empty ``url`` is invalid — the widget
+    would silently no-op, but the contract should reject at parse time."""
+    with pytest.raises(ValidationError, match="kind='fetch' requires"):
+        SideEffect(kind=SideEffectKind.fetch)
+    with pytest.raises(ValidationError, match="kind='fetch' requires"):
+        SideEffect(kind=SideEffectKind.fetch, url="")
+
+
+def test_sideeffect_fetch_with_url_is_valid():
+    op = SideEffect(kind=SideEffectKind.fetch, url="/cart/sync")
+    assert op.url == "/cart/sync"
+    assert op.method == "GET"
+    assert op.credentials == "include"
+
+
+def test_sideeffect_set_cookie_requires_name_and_value():
+    with pytest.raises(ValidationError, match="kind='set_cookie' requires"):
+        SideEffect(kind=SideEffectKind.set_cookie)
+    with pytest.raises(ValidationError, match="kind='set_cookie' requires.*name"):
+        SideEffect(kind=SideEffectKind.set_cookie, value="abc")
+    with pytest.raises(ValidationError, match="kind='set_cookie' requires.*value"):
+        SideEffect(kind=SideEffectKind.set_cookie, name="cart")
+    with pytest.raises(ValidationError, match="kind='set_cookie' requires.*name"):
+        SideEffect(kind=SideEffectKind.set_cookie, name="", value="abc")
+    with pytest.raises(ValidationError, match="kind='set_cookie' requires.*value"):
+        SideEffect(kind=SideEffectKind.set_cookie, name="cart", value="")
+
+
+def test_sideeffect_set_cookie_with_name_and_value_is_valid():
+    op = SideEffect(kind=SideEffectKind.set_cookie, name="cart", value="abc123")
+    assert op.name == "cart"
+    assert op.value == "abc123"
+    assert op.path == "/"
+    assert op.samesite == "Lax"
+    assert op.secure is True
+
+
+def test_sideeffect_default_kind_is_fetch_so_url_required():
+    """``kind`` defaults to ``fetch`` — a bare ``SideEffect()`` must reject
+    for the same reason ``SideEffect(kind=fetch)`` does."""
+    with pytest.raises(ValidationError, match="kind='fetch' requires"):
+        SideEffect()
