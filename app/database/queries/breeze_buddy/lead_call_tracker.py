@@ -106,7 +106,9 @@ def insert_lead_call_tracker_query(
 
 
 def acquire_lock_on_lead_by_id_query(
-    lead_id: str, expected_status: Optional[LeadCallStatus] = None
+    lead_id: str,
+    expected_status: Optional[LeadCallStatus] = None,
+    force: bool = False,
 ) -> Tuple[str, List[Any]]:
     """
     Generate query to atomically acquire lock on a lead by ID.
@@ -121,6 +123,11 @@ def acquire_lock_on_lead_by_id_query(
     lock wins; subsequent locks (e.g. by ``reconcile_stuck_processing_leads``
     on a PROCESSING row) preserve the original timestamp. See
     docs/BACKLOG_DISPATCHER_REDESIGN.md.
+
+    ``force=True`` skips the ``is_locked = FALSE`` guard, allowing the
+    reconciler to reclaim a lock left dangling by a crashed pod. Only safe
+    because the BackgroundTaskScheduler's distributed lock ensures a single
+    reconciler runs at a time and only calls this after a 10-minute timeout.
     """
     set_clause = '"is_locked" = TRUE, "updated_at" = NOW()'
     if expected_status == LeadCallStatus.BACKLOG:
@@ -130,8 +137,9 @@ def acquire_lock_on_lead_by_id_query(
         UPDATE "{LEAD_CALL_TRACKER_TABLE}"
         SET {set_clause}
         WHERE "id" = $1
-        AND "is_locked" = FALSE
     """
+    if not force:
+        text += '        AND "is_locked" = FALSE\n'
     values: List[Any] = [lead_id]
     if expected_status is not None:
         text += f'        AND "status" = ${len(values) + 1}\n'
@@ -429,18 +437,22 @@ def get_all_lead_call_trackers_query(
 
 
 def get_leads_by_status_and_time_before_query(
-    status: LeadCallStatus, time: datetime
+    status: LeadCallStatus, time: datetime, include_locked: bool = False
 ) -> Tuple[str, List[Any]]:
     """
-    Generate query to select leads based on their status and a time before which they were initiated.
-    Only returns unlocked leads to prevent race conditions.
+    Generate query to select leads based on their status and a time before which
+    they were initiated. By default excludes locked rows (safe for BACKLOG/RETRY).
+    Pass include_locked=True for the PROCESSING reconciler path where leads are
+    always locked by design.
     """
     text = f"""
         SELECT * FROM "{LEAD_CALL_TRACKER_TABLE}"
         WHERE "status" = $1
         AND "call_initiated_time" < $2
-        AND "is_locked" = FALSE;
     """
+    if not include_locked:
+        text += '        AND "is_locked" = FALSE\n'
+    text += ";"
     values = [status.value, time]
     return text, values
 

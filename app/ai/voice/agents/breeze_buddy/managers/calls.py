@@ -433,7 +433,7 @@ async def reconcile_stuck_processing_leads():
     logger.info("Cleaning up stuck leads...")
     stale_time = datetime.now(timezone.utc) - timedelta(minutes=10)
     stale_leads = await get_leads_by_status_and_time_before(
-        LeadCallStatus.PROCESSING, stale_time
+        LeadCallStatus.PROCESSING, stale_time, include_locked=True
     )
 
     logger.info(f"Found {len(stale_leads)} stuck leads to clean up.")
@@ -441,9 +441,13 @@ async def reconcile_stuck_processing_leads():
     for lead in stale_leads:
         locked_lead = None
         try:
-            # Atomically acquire lock AND verify still in PROCESSING (single DB trip)
+            # Forcefully acquire the lock — the lead may still be marked
+            # is_locked=TRUE from a crashed pod. Safe here because the
+            # BackgroundTaskScheduler distributed lock ensures only one
+            # reconciler runs at a time, and we only reach this path after
+            # a 10-minute staleness timeout.
             locked_lead = await acquire_lock_on_lead_by_id(
-                lead.id, expected_status=LeadCallStatus.PROCESSING
+                lead.id, expected_status=LeadCallStatus.PROCESSING, force=True
             )
             if not locked_lead:
                 logger.info(
