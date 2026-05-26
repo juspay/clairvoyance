@@ -62,11 +62,12 @@ jobs:
       # =================================================================
       
       - name: Get GKE Credentials
-        uses: google-github-actions/get-gke-credentials@v2
+        uses: google-github-actions/get-gke-credentials@v3
         with:
           cluster_name: breeze-automatic-mum-01
           location: asia-south1
           project_id: breeze-automatic-prod
+          use_dns_based_endpoint: true
 
       - name: Deploy to GKE Beta Namespace
         run: |
