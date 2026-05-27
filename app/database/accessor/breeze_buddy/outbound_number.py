@@ -14,10 +14,12 @@ from app.database.decoder.breeze_buddy.outbound_number import (
 )
 from app.database.queries import run_parameterized_query
 from app.database.queries.breeze_buddy.outbound_number import (
+    claim_outbound_number_if_available_query,
     decrement_outbound_number_channels_query,
     disable_outbound_number_query,
     get_all_outbound_numbers_query,
     get_all_outbound_numbers_with_call_count_query,
+    get_available_outbound_numbers_by_provider_and_reseller_query,
     get_outbound_number_based_on_status_and_provider_query,
     get_outbound_number_by_id_query,
     get_outbound_number_by_number_query,
@@ -98,6 +100,36 @@ async def get_outbound_number_by_id(
 
     except Exception as e:
         logger.error(f"Error getting outbound number by ID: {e}")
+        return None
+
+
+async def claim_outbound_number_if_available(
+    outbound_number_id: str,
+) -> Optional[OutboundNumber]:
+    """
+    Atomically claim an outbound number (Twilio) by setting status to IN_USE
+    only when the current status is AVAILABLE.
+
+    Returns the updated record on success, or None if the number was already
+    claimed by a concurrent worker (or doesn't exist).
+    """
+    logger.info(f"Claiming outbound number (if available) for ID: {outbound_number_id}")
+    try:
+        query_text, values = claim_outbound_number_if_available_query(
+            outbound_number_id
+        )
+        result = await run_parameterized_query(query_text, values)
+        if result and get_row_count(result) > 0:
+            decoded_result = decode_outbound_number(result)
+            logger.info(f"Outbound number claimed atomically: {decoded_result}")
+            return decoded_result
+        logger.warning(
+            f"Could not claim outbound number {outbound_number_id} — "
+            "already in use or does not exist"
+        )
+        return None
+    except Exception as e:
+        logger.error(f"Error claiming outbound number {outbound_number_id}: {e}")
         return None
 
 
@@ -318,3 +350,32 @@ async def get_outbound_number_by_number(number: str) -> Optional[OutboundNumber]
     except Exception as e:
         logger.error(f"Error getting outbound number by number: {e}")
         return None
+
+
+async def get_available_outbound_numbers_by_provider_and_reseller(
+    provider: CallProvider, reseller_id: str
+) -> List[OutboundNumber]:
+    """
+    Return AVAILABLE outbound numbers for a provider scoped to a reseller.
+
+    Reseller-specific numbers are returned before generic ones (reseller_id IS NULL),
+    with least-loaded numbers first within each tier. Used by the Daily warm-transfer
+    handler to pick and claim a number from the pool when the lead has no
+    outbound_number_id.
+    """
+    try:
+        query_text, values = (
+            get_available_outbound_numbers_by_provider_and_reseller_query(
+                provider, reseller_id
+            )
+        )
+        result = await run_parameterized_query(query_text, values)
+        if result and get_row_count(result) > 0:
+            return decode_outbound_number_list(result)
+        return []
+    except Exception as e:
+        logger.error(
+            f"Error fetching available outbound numbers for provider={provider} "
+            f"reseller={reseller_id}: {e}"
+        )
+        return []
