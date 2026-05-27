@@ -22,11 +22,21 @@ from app.ai.voice.agents.breeze_buddy.managers.calls import (
 from app.ai.voice.agents.breeze_buddy.services.agent_router.client import (
     safe_release_pod,
 )
+from app.ai.voice.agents.breeze_buddy.services.daily.transfer_bridge import (
+    terminate_bridge,
+)
 from app.ai.voice.agents.breeze_buddy.services.telephony.exotel.exotel import (
     exotel_dial_text,
 )
 from app.ai.voice.agents.breeze_buddy.services.telephony.plivo.plivo import (
     plivo_dial_xml,
+)
+from app.ai.voice.agents.breeze_buddy.utils.bridge_flag import (
+    STATUS_DISCONNECTED,
+    STATUS_FAILED,
+    STATUS_JOINED,
+    get_bridge_flag,
+    update_bridge_status,
 )
 from app.ai.voice.agents.breeze_buddy.utils.hold_transfer import (
     publish_hold_transfer_result,
@@ -240,18 +250,20 @@ async def handle_callback_status(request: Request, provider: str) -> Response:
         200 OK response
     """
     form = await request.form()
+    params = dict(request.query_params)
+    params.update(dict(form))
     logger.info(f"Received callback from {provider} with form data: {form}")
 
-    call_sid = form.get("CallSid")
+    call_sid = params.get("CallSid")
     call_status = None
 
     if provider.lower() == "twilio":
-        call_status = form.get("CallStatus")
+        call_status = params.get("CallStatus")
     elif provider.lower() == "exotel":
-        call_status = form.get("Status")
+        call_status = params.get("Status")
     elif provider.lower() == "plivo":
-        call_sid = form.get("CallUUID")
-        call_status = form.get("CallStatus")
+        call_sid = params.get("CallUUID")
+        call_status = params.get("CallStatus")
 
     # Terminal call statuses across all providers:
     # - completed, busy, failed, no-answer: universal (Twilio, Plivo, Exotel)
@@ -271,6 +283,7 @@ async def handle_callback_status(request: Request, provider: str) -> Response:
 
     if call_sid and call_status:
         call_status = str(call_status)
+        call_status_lower = call_status.lower()
         logger.info(
             f"Status callback: {call_status} for call {call_sid} from {provider}",
             extra={"call_sid": call_sid, "status": call_status, "provider": provider},
@@ -278,13 +291,58 @@ async def handle_callback_status(request: Request, provider: str) -> Response:
 
         # Backup release: notify Smart Router when call ends.
         # Idempotent — safe even if WebSocket already released the pod.
-        if call_status.lower() in ended_statuses:
+        if call_status_lower in ended_statuses:
             await safe_release_pod(
                 call_sid=str(call_sid), reason=f"status_{call_status}"
             )
 
+            # Bridge call (agent leg of a Daily warm transfer): the dial puts
+            # bridge_id in the callback URL's query params, so normal calls
+            # never enter this branch (and skip the Redis lookup entirely).
+            # Update the flag if it still exists, terminate the in-process
+            # pipeline, and skip retry logic — the agent leg has no lead.
+            bridge_id = params.get("bridge_id")
+            if bridge_id:
+                bridge_flag = await get_bridge_flag(bridge_id)
+                if bridge_flag:
+                    bridge_already_joined = (
+                        bridge_flag.get("status") == STATUS_JOINED
+                    )
+                    terminal_status = (
+                        STATUS_FAILED
+                        if call_status_lower
+                        in (
+                            "no-answer",
+                            "failed",
+                            "busy",
+                            "timeout",
+                            "cancel",
+                            "canceled",
+                            "cancelled",
+                        )
+                        or not bridge_already_joined
+                        else STATUS_DISCONNECTED
+                    )
+                    await update_bridge_status(
+                        bridge_id,
+                        terminal_status,
+                        failure_reason=(
+                            f"status_{call_status_lower}"
+                            if terminal_status == STATUS_FAILED
+                            else None
+                        ),
+                    )
+
+                terminated = await terminate_bridge(bridge_id)
+                logger.info(
+                    f"[BridgeRun] Status callback ({call_status}) for bridge "
+                    f"{bridge_id}, call {call_sid}: "
+                    f"{'pipeline terminated' if terminated else 'no local pipeline'}"
+                )
+                return Response(status_code=200)
+
         # Handle failed calls for retry logic
-        if call_status.lower() in (
+        if call_status_lower in (
             "no-answer",
             "failed",
             "busy",
@@ -315,9 +373,9 @@ async def handle_callback_status(request: Request, provider: str) -> Response:
                                 pub_channel,
                                 {
                                     "status": status_map.get(
-                                        call_status.lower(), call_status.lower()
+                                        call_status_lower, call_status_lower
                                     ),
-                                    "summary": f"Outbound call {call_status.lower()}",
+                                    "summary": f"Outbound call {call_status_lower}",
                                 },
                             )
                             logger.info(

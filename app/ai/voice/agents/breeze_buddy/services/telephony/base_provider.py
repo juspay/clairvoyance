@@ -36,6 +36,7 @@ class VoiceCallProvider(ABC):
         outbound_number: str,
         reseller_id: Optional[str] = None,
         template_name: Optional[str] = None,
+        extra_params: Optional[Dict[str, str]] = None,
     ) -> Optional[Dict[str, Any]]:
         """
         Initiate a call.
@@ -49,6 +50,7 @@ class VoiceCallProvider(ABC):
             outbound_number: Caller ID / outbound number
             reseller_id: Optional merchant ID for tiered pod allocation
             template_name: Optional template name for WebSocket path routing
+            extra_params: Optional provider webhook query params
         """
 
     def set_completion_callback(self, callback):

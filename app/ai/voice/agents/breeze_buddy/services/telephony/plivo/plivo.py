@@ -54,6 +54,7 @@ class PlivoProvider(VoiceCallProvider):
         outbound_number: str,
         reseller_id: Optional[str] = None,
         template_name: Optional[str] = None,
+        extra_params: Optional[dict[str, str]] = None,
     ):
         """
         Initiate an outbound call via Plivo.
@@ -69,6 +70,7 @@ class PlivoProvider(VoiceCallProvider):
             outbound_number: Caller ID / outbound number
             reseller_id: Optional merchant ID for tiered pod allocation
             template_name: Optional template name for WebSocket path routing
+            extra_params: Optional query params for answer/status callbacks
         """
         answer_url = f"{self.APP_BASE_URL}/agent/voice/breeze-buddy/plivo/answer"
         params = {}
@@ -76,15 +78,23 @@ class PlivoProvider(VoiceCallProvider):
             params["reseller_id"] = reseller_id
         if template_name:
             params["template"] = template_name
+        if extra_params:
+            params.update(extra_params)
         if params:
             answer_url += "?" + urlencode(params)
+
+        hangup_url = (
+            f"{self.APP_BASE_URL}/agent/voice/breeze-buddy/plivo/callback/status"
+        )
+        if extra_params:
+            hangup_url += "?" + urlencode(extra_params)
 
         try:
             response = self.client.calls.create(
                 from_=outbound_number,
                 to_=customer_mobile_number,
                 answer_url=answer_url,
-                hangup_url=f"{self.APP_BASE_URL}/agent/voice/breeze-buddy/plivo/callback/status",
+                hangup_url=hangup_url,
             )
 
             logger.info(f"Plivo call initiated with answer_url: {answer_url}")

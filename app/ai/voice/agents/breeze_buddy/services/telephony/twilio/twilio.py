@@ -80,6 +80,7 @@ class TwilioProvider(VoiceCallProvider):
         outbound_number: str,
         reseller_id: Optional[str] = None,
         template_name: Optional[str] = None,
+        extra_params: Optional[Dict[str, str]] = None,
     ) -> Optional[Dict[str, Any]]:
         """
         Initiate an outbound call via Twilio.
@@ -99,6 +100,7 @@ class TwilioProvider(VoiceCallProvider):
             outbound_number: Caller ID / outbound number
             reseller_id: Optional merchant ID for tiered pod allocation
             template_name: Optional template name for WebSocket path routing
+            extra_params: Optional webhook query params
         """
         try:
             if ENABLE_VOICE_AGENT_POD_ISOLATION:
@@ -111,6 +113,8 @@ class TwilioProvider(VoiceCallProvider):
                     query_params["reseller_id"] = reseller_id
                 if template_name:
                     query_params["template"] = template_name
+                if extra_params:
+                    query_params.update(extra_params)
                 webhook_url = (
                     f"{self.APP_BASE_URL}/api/v1/twilio/allocate?"
                     + urlencode(query_params)

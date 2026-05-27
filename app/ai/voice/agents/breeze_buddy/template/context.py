@@ -139,6 +139,11 @@ class TemplateContext:
         return getattr(self.bot, "telephony_service", None)
 
     @property
+    def room_url(self):
+        """Daily room URL (only set in Daily mode)."""
+        return getattr(self.bot, "room_url", None)
+
+    @property
     def end_conversation_callbacks(self):
         """Get end conversation callbacks"""
         return self.bot.end_conversation_callbacks

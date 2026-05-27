@@ -1241,6 +1241,13 @@ class ConfigurationModel(BaseModel):
     transfer_number: Optional[str] = Field(
         None, description="Phone number to transfer the call to"
     )
+    transfer_provider: Optional[str] = Field(
+        None,
+        description=(
+            "Telephony provider pool to use for Daily warm-transfer PSTN dial "
+            "(PLIVO / EXOTEL / TWILIO). Required when the lead has no outbound_number_id."
+        ),
+    )
     vad_config: Optional[VadConfig] = Field(
         None, description="Default VAD configuration for the template"
     )

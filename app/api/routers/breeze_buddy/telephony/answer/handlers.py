@@ -53,6 +53,7 @@ from app.ai.voice.agents.breeze_buddy.services.telephony.plivo.recording import 
     start_call_recording,
 )
 from app.ai.voice.agents.breeze_buddy.template.types import TTSConfig
+from app.ai.voice.agents.breeze_buddy.utils.bridge_flag import get_bridge_flag
 from app.core.config.dynamic import (
     BB_NOISE_CANCELLATION_ENABLED,
     BB_NOISE_CANCELLATION_LEVEL,
@@ -271,8 +272,15 @@ def _build_websocket_url(
 # ---------------------------------------------------------------------------
 
 
-async def _build_plivo_stream_xml(ws_url: str) -> str:
-    """Build Plivo XML response with Stream element for WebSocket connection."""
+async def _build_plivo_stream_xml(ws_url: str, audio_track: str = "") -> str:
+    """Build Plivo XML response with Stream element for WebSocket connection.
+
+    ``audio_track`` (e.g. "inbound") pins the Stream's audioTrack attribute.
+    The warm-transfer bridge sets it explicitly so the WS media can never
+    contain audio we injected via playAudio (which would loop the customer's
+    voice back into the Daily room). Empty string omits the attribute,
+    preserving the existing AI-bot behavior.
+    """
     noise_cancellation_enabled = await BB_NOISE_CANCELLATION_ENABLED()
     noise_cancellation_level = await BB_NOISE_CANCELLATION_LEVEL()
     noise_cancellation_attr = (
@@ -289,13 +297,15 @@ async def _build_plivo_stream_xml(ws_url: str) -> str:
             f'noiseCancellationLevel="{noise_cancellation_level}"'
         )
 
+    audio_track_attr = f'audioTrack="{audio_track}" ' if audio_track else ""
+
     # Escape special XML characters in URL (primarily & -> &amp;)
     # Using html_escape with quote=False to avoid escaping quotes in the URL
     ws_url_escaped = html_escape(ws_url, quote=False)
 
     return f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Stream {noise_cancellation_attr} bidirectional="true" keepCallAlive="true" contentType="audio/x-mulaw;rate=8000">
+    <Stream {noise_cancellation_attr} {audio_track_attr}bidirectional="true" keepCallAlive="true" contentType="audio/x-mulaw;rate=8000">
         {ws_url_escaped}
     </Stream>
 </Response>"""
@@ -348,9 +358,9 @@ def _build_json_response(ws_url: str) -> Response:
     )
 
 
-async def _build_xml_response(ws_url: str) -> HTMLResponse:
+async def _build_xml_response(ws_url: str, audio_track: str = "") -> HTMLResponse:
     """Build Plivo XML response."""
-    xml = await _build_plivo_stream_xml(ws_url)
+    xml = await _build_plivo_stream_xml(ws_url, audio_track=audio_track)
     return HTMLResponse(content=xml, media_type="application/xml")
 
 
@@ -519,11 +529,11 @@ async def handle_provider_answer(request: Request, provider: str) -> Response:
     """
     tag = f"Answer:{provider}"
 
-    # Extract call params
-    if request.method == "GET":
-        params = dict(request.query_params)
-    else:
-        params = dict(await request.form())
+    # Extract call params. Keep query params even for POST callbacks because
+    # provider answer URLs can include our routing metadata (e.g. bridge_id).
+    params = dict(request.query_params)
+    if request.method != "GET":
+        params.update(dict(await request.form()))
 
     call_id, from_number, to_number = _extract_call_params(params, provider)
     logger.info(f"[{tag}] call_id={call_id}, from={from_number}, to={to_number}")
@@ -531,6 +541,32 @@ async def handle_provider_answer(request: Request, provider: str) -> Response:
     if not call_id:
         logger.error(f"[{tag}] Missing call ID")
         return _error_response(provider, "Missing call identifier", 400)
+
+    # Daily warm-transfer bridge: when the AI bot dials a human agent, it
+    # writes a bridge flag keyed by a generated bridge_id and passes that id
+    # through the provider answer URL. Detect that here and route the WS to
+    # the bridge endpoint instead of the AI bot.
+    # Skips pod allocation, IVR, inbound policy — none apply to the bridge.
+    # Only route to the bridge endpoint for providers whose serializer is
+    # implemented (V1: Plivo only). Other providers fall through to the
+    # normal AI-bot path and the bridge will have already failed at the
+    # outbound-number selection stage in the warm-transfer handler.
+    _BRIDGE_SUPPORTED_PROVIDERS = {"plivo"}
+    bridge_id = str(params.get("bridge_id") or "")
+    bridge_flag = await get_bridge_flag(bridge_id) if bridge_id else None
+    if bridge_flag and provider in _BRIDGE_SUPPORTED_PROVIDERS:
+        ws_base = APP_BASE_URL.replace("https://", "wss://").replace("http://", "ws://")
+        bridge_ws_url = (
+            f"{ws_base}/agent/voice/breeze-buddy/{provider}/bridge/v2"
+            f"?bridge_id={quote(bridge_id, safe='')}"
+        )
+        logger.info(
+            f"[{tag}] Bridge flag found for {call_id} "
+            f"(bridge_id={bridge_id}); routing WS to {bridge_ws_url}"
+        )
+        # audioTrack pinned to inbound: the bridge republishes this WS media
+        # into the Daily room, so it must only ever contain the agent's mic.
+        return await _build_xml_response(bridge_ws_url, audio_track="inbound")
 
     # Plivo-specific: start recording
     if provider == "plivo":
