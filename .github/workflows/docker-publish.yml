@@ -79,5 +79,5 @@ jobs:
             -n beta
             
           # 4. Watch the deployment update progress live to ensure a healthy rolling update
-          kubectl rollout status deployment/clairvoyance-beta -n beta --timeout=2m
+          kubectl rollout status deployment/clairvoyance-beta -n beta --timeout=5m
           echo "🎉 Automated deployment to beta namespace completed successfully!"
