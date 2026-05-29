@@ -910,8 +910,12 @@ class McpServerConfig(BaseModel):
         default_factory=dict,
         description=(
             "Per-tool conversation-context retention policy, applied at "
-            "message-prep time before the LLM call. Keys are raw MCP tool "
-            "names; values are:\n"
+            "message-prep time before the LLM call. Keys are the registered "
+            "tool names: the raw upstream MCP name, except a tool whose name "
+            "collides across multiple servers is registered as "
+            "``<server.name>_<name>`` and must be keyed by that prefixed name "
+            "(single-server templates never collide, so keys are raw). "
+            "Values are:\n"
             "  - ``last_turn_only``: the tool_result content is replaced "
             "    with a 1-line stub once it's no longer the most-recent "
             "    tool_result in history. Forces the agent to re-call the "
@@ -922,6 +926,26 @@ class McpServerConfig(BaseModel):
             "    session. Best for state-bearing tools (cart calls — "
             "    line_items + totals shape later turns).\n"
             "Tools not listed default to ``session`` (current behavior)."
+        ),
+    )
+    tool_context_projection: Dict[str, List[str]] = Field(
+        default_factory=dict,
+        description=(
+            "Per-tool identity keep-list, paired with ``last_turn_only`` "
+            "retention. Keys follow the same rule as ``tool_context_retention`` "
+            "(raw upstream MCP tool name; ``<server.name>_<name>`` only when "
+            "the name collides across servers). Values are lists of "
+            "keep-paths (same grammar as tool_response_transforms: ``a.b`` "
+            "descends keys, ``a[*].b`` iterates a list at ``a``). When a "
+            "``last_turn_only`` tool has a keep-list, its stale tool_result is "
+            "compacted to ONLY those paths (an identity projection) instead of "
+            "a 1-line stub — so durable referents (product url/handle/price, "
+            "variant ids) survive across turns at ~1% of the original tokens, "
+            "while heavy fields (descriptions, media, full variant blobs) are "
+            "dropped. The most-recent result is always kept full; only older "
+            "ones are projected. Tools without a keep-list fall back to the "
+            "stub. Engine-generic — the field list is the only domain-specific "
+            "part and it lives here in the template."
         ),
     )
     default_args: Dict[str, Any] = Field(

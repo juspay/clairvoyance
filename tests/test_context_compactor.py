@@ -216,3 +216,137 @@ def test_does_not_mutate_input_messages():
     )
     # Input list untouched (compactor returns a new list, copy-on-write).
     assert messages[1]["content"][0]["content"] == original_blob
+
+
+# ---------------------------------------------------------------------------
+# Identity projection — keep durable referents instead of a bare stub
+# ---------------------------------------------------------------------------
+
+import json  # noqa: E402
+
+# A realistic-ish search_catalog result: heavy fields (description, media,
+# full variant blobs) + the identity we must preserve (url/handle/price +
+# variant ids). The projection should keep the latter and drop the former.
+_SEARCH_RESULT = json.dumps(
+    {
+        "ucp": {
+            "version": "2026-04-08",
+            "capabilities": {"x": ["lots", "of", "boilerplate"]},
+        },
+        "products": [
+            {
+                "id": "gid://shopify/Product/1",
+                "title": "Crossover Bra - Pink",
+                "handle": "crossover-bra-pink",
+                "url": "https://shop.example.com/products/crossover-bra-pink",
+                "description": "A very long description " * 50,
+                "price_range": {"min": {"amount": "1,699.00", "currency": "INR"}},
+                "media": [{"url": "https://cdn/x.jpg"}] * 10,
+                "variants": [
+                    {
+                        "id": "gid://shopify/ProductVariant/11",
+                        "title": "Pink / S",
+                        "available": True,
+                        "media": [{"url": "https://cdn/v.jpg"}] * 5,
+                    },
+                    {
+                        "id": "gid://shopify/ProductVariant/12",
+                        "title": "Pink / M",
+                        "available": False,
+                        "media": [{"url": "https://cdn/v2.jpg"}] * 5,
+                    },
+                ],
+            }
+        ],
+        "pagination": {"has_next_page": False},
+        "_ui_instructions": {"big": "blob " * 100},
+    }
+)
+
+_KEEP = [
+    "products[*].id",
+    "products[*].title",
+    "products[*].handle",
+    "products[*].url",
+    "products[*].price_range.min.amount",
+    "products[*].variants[*].id",
+    "products[*].variants[*].title",
+    "products[*].variants[*].available",
+    "pagination",
+]
+
+
+def test_projection_keeps_identity_and_drops_heavy_fields():
+    messages = [
+        _assistant_with_tool_use("u1", "search_catalog", {"query": "pink bra"}),
+        _user_with_tool_result("u1", _SEARCH_RESULT),
+        _assistant_with_tool_use("u2", "search_catalog", {"query": "leggings"}),
+        _user_with_tool_result("u2", _SEARCH_RESULT),  # newest, kept full
+    ]
+    out = compact_tool_results(
+        messages,
+        retention={"search_catalog": "last_turn_only"},
+        recent_keep=1,
+        projection={"search_catalog": _KEEP},
+    )
+    # Older result (u1) is PROJECTED, not stubbed.
+    projected_raw = out[1]["content"][0]["content"]
+    assert "[pruned:" not in projected_raw
+    proj = json.loads(projected_raw)
+    p = proj["products"][0]
+    # identity preserved
+    assert p["url"] == "https://shop.example.com/products/crossover-bra-pink"
+    assert p["handle"] == "crossover-bra-pink"
+    assert p["price_range"]["min"]["amount"] == "1,699.00"
+    # variant ids preserved (needed to re-add to cart without re-search)
+    assert [v["id"] for v in p["variants"]] == [
+        "gid://shopify/ProductVariant/11",
+        "gid://shopify/ProductVariant/12",
+    ]
+    assert p["variants"][0]["available"] is True
+    # heavy fields dropped
+    assert "description" not in p
+    assert "media" not in p
+    assert "media" not in p["variants"][0]
+    assert "ucp" not in proj
+    assert "_ui_instructions" not in proj
+    # carries the re-call hint
+    assert "_pruned" in proj
+    # massively smaller than the original
+    assert len(projected_raw) < len(_SEARCH_RESULT) // 5
+    # newest (u2) kept full
+    assert out[3]["content"][0]["content"] == _SEARCH_RESULT
+
+
+def test_projection_absent_falls_back_to_stub():
+    # last_turn_only tool with NO projection keep-list → still stubbed.
+    messages = [
+        _assistant_with_tool_use("u1", "search_catalog", {"query": "x"}),
+        _user_with_tool_result("u1", _SEARCH_RESULT),
+        _assistant_with_tool_use("u2", "search_catalog", {"query": "y"}),
+        _user_with_tool_result("u2", "newest"),
+    ]
+    out = compact_tool_results(
+        messages,
+        retention={"search_catalog": "last_turn_only"},
+        recent_keep=1,
+        projection={"get_cart": ["line_items[*].id"]},  # different tool
+    )
+    assert "[pruned: search_catalog" in out[1]["content"][0]["content"]
+
+
+def test_projection_non_json_content_falls_back_to_stub():
+    messages = [
+        _assistant_with_tool_use("u1", "search_catalog", {"query": "x"}),
+        _user_with_tool_result("u1", "not-json-just-text" * 50),
+        _assistant_with_tool_use("u2", "search_catalog", {"query": "y"}),
+        _user_with_tool_result("u2", "newest"),
+    ]
+    out = compact_tool_results(
+        messages,
+        retention={"search_catalog": "last_turn_only"},
+        recent_keep=1,
+        projection={"search_catalog": _KEEP},
+    )
+    # Unparseable content can't be projected → stub keeps it bounded.
+    assert "[pruned: search_catalog" in out[1]["content"][0]["content"]

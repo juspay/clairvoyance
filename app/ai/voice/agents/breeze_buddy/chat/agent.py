@@ -62,10 +62,16 @@ from app.database.accessor.breeze_buddy.chat_session import (
 )
 from app.schemas.breeze_buddy.chat import ChatMessageRole
 
-# Each tool-call → handler → re-invoke counts as one cycle. Real flows rarely
-# cross 3; this guard stops a pathological template (handler always returns
-# a transition that loops back) from burning unbounded LLM calls.
-_MAX_TOOL_CYCLES = 8
+# Each tool-call → handler → re-invoke counts as one cycle. The guard stops a
+# pathological template (handler always returns a transition that loops back)
+# from burning unbounded LLM calls. Set to 20 (was 8): legitimate multi-item
+# flows — e.g. "build a pink combo: top + bottom + socks" — fan out several
+# searches plus cart calls in a single turn and were tripping the old cap
+# mid-task, ending the turn with no reply. Identity projection (see
+# ``tool_context_projection``) keeps prior-search data in context so the model
+# stops re-searching what it already found, which keeps real turns well under
+# this ceiling; 20 is headroom, not a target.
+_MAX_TOOL_CYCLES = 20
 
 
 class ChatAgent:
@@ -229,11 +235,21 @@ class ChatAgent:
         # tool_result blocks in the messages array before each LLM call —
         # bounds input-token cost as a session accumulates tool calls.
         # Tools not in the map default to ``session`` (no compaction).
+        #
+        # ``tool_projection`` is the companion keep-list map: for a
+        # ``last_turn_only`` tool with an entry, the compactor keeps an identity
+        # projection (whitelisted paths) instead of a bare stub, so durable
+        # referents (product url/handle/price, variant ids) survive across
+        # turns at ~1% of the tokens — fixing "give me the link"/"re-add it"
+        # follow-ups that would otherwise force a re-search or a hallucinated URL.
         tool_retention: Dict[str, str] = {}
+        tool_projection: Dict[str, List[str]] = {}
         if mcp_config and mcp_config.servers:
             for server in mcp_config.servers:
                 if server.tool_context_retention:
                     tool_retention.update(server.tool_context_retention)
+                if server.tool_context_projection:
+                    tool_projection.update(server.tool_context_projection)
 
         node = self._resolve_node(flow_config, current_node)
         node_name = cast(str, node["name"])
@@ -272,6 +288,7 @@ class ChatAgent:
                 context,
                 log_label=f"chat#{self.session_id[:8]}",
                 tool_context_retention=tool_retention or None,
+                tool_context_projection=tool_projection or None,
             ):
                 if kind == "text":
                     text = cast(str, payload)
