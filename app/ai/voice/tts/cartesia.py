@@ -33,7 +33,7 @@ class CartesiaConfig:
 
     api_key: str
     voice_id: str
-    model: str = "sonic-3"
+    model: str = "sonic-3.5"
     language: Language = Language.EN
     generation_config: Optional[GenerationConfig] = None
     aggregate_sentences: bool = True
@@ -86,7 +86,7 @@ async def _generate_cartesia_audio(
     # Use provided values or fall back to Redis/hardcoded defaults
     defaults = await BB_VOICE_PROVIDER_DEFAULTS("cartesia")
     final_voice_id = voice_id or defaults.get("voice_id", "")
-    final_model = model or defaults.get("model", "sonic-3")
+    final_model = model or defaults.get("model", "sonic-3.5")
     language = defaults.get("language", "en")
 
     url = "https://api.cartesia.ai/tts/bytes"

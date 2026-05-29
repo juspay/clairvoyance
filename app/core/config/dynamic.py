@@ -20,7 +20,7 @@ BB_SPEECH_PROVIDER_DEFAULTS: dict[str, dict] = {
     },
     "cartesia": {
         "voice_id": "bec003e2-3cb3-429c-8468-206a393c67ad",
-        "model": "sonic-3",
+        "model": "sonic-3.5",
         "speed": 1.0,
         "volume": 1.0,
         "emotion": "neutral",
