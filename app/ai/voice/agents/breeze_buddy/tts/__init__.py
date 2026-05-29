@@ -167,7 +167,7 @@ async def get_tts_service(voice_config: TTSConfig):
             CartesiaConfig(
                 api_key=CARTESIA_API_KEY,
                 voice_id=voice_config.voice_id or "",
-                model=voice_config.model or "sonic-3",
+                model=voice_config.model or "sonic-3.5",
                 language=_parse_language(voice_config.language),
                 generation_config=generation_config,
                 aggregate_sentences=aggregate,
