@@ -14,7 +14,7 @@ exposes no public streaming-with-tools entry point. Tested with pipecat 1.1.0
 from __future__ import annotations
 
 import json
-from typing import Any, AsyncIterator, Dict, Literal, Optional, Tuple, Union
+from typing import Any, AsyncIterator, Dict, List, Literal, Optional, Tuple, Union
 
 from pipecat.frames.frames import FunctionCallFromLLM
 from pipecat.processors.aggregators.llm_context import LLMContext
@@ -39,6 +39,7 @@ async def stream(
     *,
     log_label: str = "chat",
     tool_context_retention: Optional[Dict[str, str]] = None,
+    tool_context_projection: Optional[Dict[str, List[str]]] = None,
 ) -> AsyncIterator[DriverEvent]:
     """Issue one streaming LLM call; yield text deltas + tool calls.
 
@@ -47,8 +48,14 @@ async def stream(
 
     ``tool_context_retention`` is an optional per-tool policy map (currently
     honoured only by the Anthropic path) that lets the compactor rewrite
-    stale ``tool_result`` blocks into 1-line stubs — bounding input-token
-    cost across long sessions. ``None`` or an empty map is a no-op.
+    stale ``tool_result`` blocks — bounding input-token cost across long
+    sessions. ``None`` or an empty map is a no-op.
+
+    ``tool_context_projection`` is the companion per-tool keep-list map: when a
+    ``last_turn_only`` tool has an entry, its stale results are compacted to an
+    identity projection (whitelisted paths only) instead of a bare stub, so the
+    LLM keeps durable referents (product url/handle/price, variant ids) at a
+    fraction of the tokens. Honoured only by the Anthropic path.
     """
     if isinstance(llm_service, BaseOpenAILLMService):
         async for event in _stream_openai(llm_service, context, log_label):
@@ -56,7 +63,11 @@ async def stream(
         return
     if isinstance(llm_service, AnthropicLLMService):
         async for event in _stream_anthropic(
-            llm_service, context, log_label, tool_context_retention
+            llm_service,
+            context,
+            log_label,
+            tool_context_retention,
+            tool_context_projection,
         ):
             yield event
         return
@@ -192,6 +203,7 @@ async def _stream_anthropic(
     context: LLMContext,
     log_label: str,
     tool_context_retention: Optional[Dict[str, str]] = None,
+    tool_context_projection: Optional[Dict[str, List[str]]] = None,
 ) -> AsyncIterator[DriverEvent]:
     """Mirror AnthropicLLMService._process_context minus frame pushes.
 
@@ -234,6 +246,7 @@ async def _stream_anthropic(
             params["messages"],
             retention=tool_context_retention,
             recent_keep=1,
+            projection=tool_context_projection,
         )
 
     logger.debug(f"[{log_label}] llm_driver: anthropic stream model={settings.model}")

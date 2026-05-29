@@ -72,6 +72,130 @@ def _stub_for(tool_name: str, tool_args: Any) -> str:
     )
 
 
+# ---------------------------------------------------------------------------
+# Identity projection — keep a slim, durable view instead of a bare stub
+# ---------------------------------------------------------------------------
+#
+# A full stub drops *everything* a tool returned, which is fine for
+# easy-to-re-derive blobs but catastrophic when the result carried stable
+# identity the shopper will ask about later (a product's URL/handle, price,
+# or the variant id needed to re-add it to cart). Re-deriving those costs a
+# whole tool round-trip — and when the data isn't in context the model tends
+# to refuse or *guess* (e.g. fabricate a product URL).
+#
+# Projection is the middle path: for a ``last_turn_only`` tool that declares a
+# keep-list, the stale result is rewritten to ONLY the whitelisted paths
+# (identity) and everything heavy (descriptions, media, full variant blobs) is
+# dropped. Typically ~1% of the original tokens while preserving 100% of what
+# follow-up turns need. The whitelist lives in the template (engine stays
+# domain-blind); the grammar mirrors response_transform paths: ``a.b`` descends
+# keys, ``a[*].b`` iterates a list at ``a`` and descends ``b`` on each item.
+
+_PROJECTION_MARKER = "_pruned"
+
+
+def _parse_keep_path(path: str) -> List[tuple]:
+    """Parse a dotted keep-path into ``(key, is_array)`` segments.
+
+    ``products[*].variants[*].id`` → ``[("products",True),("variants",True),
+    ("id",False)]``. Returns ``[]`` for an empty path (caller skips it).
+    """
+    if not path:
+        return []
+    segments: List[tuple] = []
+    for part in path.split("."):
+        if part.endswith("[*]"):
+            segments.append((part[:-3], True))
+        else:
+            segments.append((part, False))
+    return segments
+
+
+def _copy_path(src: Any, out: Dict[str, Any], segments: List[tuple]) -> None:
+    """Copy the value(s) at ``segments`` from ``src`` into ``out``, building the
+    nested dict/list structure on demand.
+
+    Array segments are index-aligned across calls, so ``products[*].id`` and
+    ``products[*].url`` land their fields on the *same* projected product
+    objects. Silently no-ops on any shape mismatch (missing key, non-list under
+    ``[*]``, non-dict mid-path) so a malformed result can never raise here.
+    """
+    if not segments or not isinstance(src, dict):
+        return
+    key, is_array = segments[0]
+    rest = segments[1:]
+    if key not in src:
+        return
+    val = src[key]
+
+    if is_array:
+        if not isinstance(val, list):
+            return
+        existing = out.get(key)
+        if not isinstance(existing, list):
+            existing = []
+            out[key] = existing
+        while len(existing) < len(val):
+            existing.append({})
+        if rest:
+            for i, item in enumerate(val):
+                _copy_path(item, existing[i], rest)
+        # A terminal ``[*]`` (no rest) would copy whole list items, defeating
+        # the projection — keep-lists always end on a scalar field, so ignore.
+        return
+
+    if rest:
+        child = out.get(key)
+        if not isinstance(child, dict):
+            child = {}
+            out[key] = child
+        _copy_path(val, child, rest)
+    else:
+        # Terminal scalar/subtree: copy the value as-is. Safe to share the
+        # reference — the projected message is only ever serialised, never
+        # mutated, downstream.
+        out[key] = val
+
+
+def _project_keep(src: Dict[str, Any], paths: List[str]) -> Dict[str, Any]:
+    """Build a new dict containing only the whitelisted ``paths`` of ``src``."""
+    out: Dict[str, Any] = {}
+    for p in paths:
+        segs = _parse_keep_path(p)
+        if segs:
+            _copy_path(src, out, segs)
+    return out
+
+
+def _project_content(content: Any, paths: List[str]) -> Optional[str]:
+    """Project a tool_result ``content`` string down to the keep-``paths``.
+
+    Returns the compact JSON string of the projection, or ``None`` when the
+    content isn't a JSON object we can project, or the projection came back
+    empty (e.g. the result shape changed) — in which case the caller falls
+    back to the 1-line stub so the block is still bounded.
+    """
+    if not isinstance(content, str):
+        return None
+    try:
+        obj = json.loads(content)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(obj, dict):
+        return None
+    projected = _project_keep(obj, paths)
+    if not projected:
+        return None
+    projected[_PROJECTION_MARKER] = (
+        "identity-only view (heavy fields pruned to save context) — "
+        "re-call this tool if you need full detail"
+    )
+    try:
+        return json.dumps(projected, ensure_ascii=False, separators=(",", ":"))
+    except (TypeError, ValueError):
+        return None
+
+
 def _is_tool_result_block(block: Any) -> bool:
     return isinstance(block, dict) and block.get("type") == "tool_result"
 
@@ -84,8 +208,9 @@ def compact_tool_results(
     messages: List[Dict[str, Any]],
     retention: Optional[Dict[str, str]] = None,
     recent_keep: int = 1,
+    projection: Optional[Dict[str, List[str]]] = None,
 ) -> List[Dict[str, Any]]:
-    """Return a copy of ``messages`` with stale tool_results rewritten to stubs.
+    """Return a copy of ``messages`` with stale tool_results compacted.
 
     Args:
         messages: Anthropic-format conversation list. Each message has a
@@ -100,6 +225,13 @@ def compact_tool_results(
             tool result intact (the one its current turn is reasoning
             about). Increase to 2 for "I might re-reference the last two
             calls" workflows.
+        projection: Optional map of tool name → list of keep-paths. When a
+            ``last_turn_only`` tool has a keep-list here, its stale results are
+            rewritten to an *identity projection* (only the whitelisted paths)
+            instead of a bare stub — so the LLM keeps durable referents
+            (product url/handle/price, variant ids) at ~1% of the tokens and
+            never has to refuse or guess on follow-up turns. Tools without a
+            keep-list fall back to the 1-line stub (prior behavior).
 
     Returns:
         A new list of messages (input is not mutated). Tool_use blocks are
@@ -183,11 +315,19 @@ def compact_tool_results(
             policy = retention.get(tool_name, _DEFAULT_RETENTION)
             if policy != "last_turn_only":
                 continue
-            # Compact this one.
+            # Compact this one. Prefer an identity projection when the tool
+            # declares a keep-list (preserves url/handle/price/variant ids for
+            # follow-up turns); otherwise fall back to the 1-line stub.
             tool_args = tool_meta.get("input") if tool_meta else None
+            keep_paths = (projection or {}).get(tool_name)
+            new_text: Optional[str] = None
+            if keep_paths:
+                new_text = _project_content(block.get("content"), keep_paths)
+            if new_text is None:
+                new_text = _stub_for(tool_name, tool_args)
             new_content[j] = {
                 **block,
-                "content": _stub_for(tool_name, tool_args),
+                "content": new_text,
             }
             rewrote = True
             n_compacted += 1
@@ -200,7 +340,7 @@ def compact_tool_results(
     if n_compacted:
         logger.debug(
             f"[context_compactor] rewrote {n_compacted} stale tool_result "
-            f"block(s) to stubs (retention map: "
+            f"block(s) to stubs/projections (retention map: "
             f"{ {k: v for k, v in retention.items() if v != _DEFAULT_RETENTION} })"
         )
     return out
