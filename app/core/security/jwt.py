@@ -1,12 +1,12 @@
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
 import jwt
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from app.core.config import (
+from app.core.config.static import (
     AUTOMATIC_CONNECT_BLOCKED_ORIGINS,
     BREEZE_BUDDY_SESSION_SECRET_KEY,
     ENABLE_LIGHTHOUSE_AUTH,
@@ -26,10 +26,41 @@ CREDENTIALS_EXCEPTION = HTTPException(
 )
 
 
+# Algorithms PyJWT is allowed to honor. Explicit allowlist — never
+# include "none" (would accept unsigned tokens), and never trust the
+# `alg` claim in the token header itself. If the env var ``JWT_ALGORITHM``
+# is set to anything outside this set, the process refuses to start.
+_ALLOWED_JWT_ALGORITHMS = {
+    "HS256",
+    "HS384",
+    "HS512",
+    "RS256",
+    "RS384",
+    "RS512",
+    "ES256",
+}
+
+
 class JWTManager:
     """JWT token management class"""
 
     def __init__(self):
+        # Fail-fast on misconfiguration. Empty secret → PyJWT would
+        # validate against an empty key (catastrophic). Empty / "none"
+        # algorithm → PyJWT could accept unsigned tokens. Either is a
+        # production-critical foot-gun; we refuse to start instead of
+        # discovering it on the first auth request.
+        if not JWT_SECRET_KEY:
+            raise RuntimeError(
+                "JWT_SECRET_KEY env var is empty. Set it to a strong random "
+                "secret before starting the service."
+            )
+        if JWT_ALGORITHM not in _ALLOWED_JWT_ALGORITHMS:
+            raise RuntimeError(
+                f"JWT_ALGORITHM env var is {JWT_ALGORITHM!r}; must be one of "
+                f"{sorted(_ALLOWED_JWT_ALGORITHMS)}. The value 'none' is "
+                "explicitly forbidden — it would accept unsigned tokens."
+            )
         self.secret_key = JWT_SECRET_KEY
         self.algorithm = JWT_ALGORITHM
         self.access_token_expire_minutes = JWT_ACCESS_TOKEN_EXPIRE_MINUTES
@@ -50,13 +81,13 @@ class JWTManager:
         to_encode = data.copy()
 
         if expires_delta:
-            expire = datetime.utcnow() + expires_delta
+            expire = datetime.now(timezone.utc) + expires_delta
         else:
-            expire = datetime.utcnow() + timedelta(
+            expire = datetime.now(timezone.utc) + timedelta(
                 minutes=self.access_token_expire_minutes
             )
 
-        to_encode.update({"exp": expire, "iat": datetime.utcnow()})
+        to_encode.update({"exp": expire, "iat": datetime.now(timezone.utc)})
 
         try:
             encoded_jwt = jwt.encode(
@@ -95,7 +126,7 @@ class JWTManager:
                 logger.warning("Token missing expiration claim")
                 raise CREDENTIALS_EXCEPTION
 
-            if datetime.utcnow() > datetime.fromtimestamp(exp):
+            if datetime.now(timezone.utc) > datetime.fromtimestamp(exp, timezone.utc):
                 logger.warning("Token has expired")
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
@@ -297,6 +328,15 @@ async def get_breeze_buddy_session(request: Request):
     if not session_cookie:
         return None
     try:
+        # Algorithm goes through the same allowlist as JWTManager —
+        # JWT_ALGORITHM is validated at JWTManager construction, but
+        # this decode bypasses the manager, so we re-assert here.
+        if JWT_ALGORITHM not in _ALLOWED_JWT_ALGORITHMS:
+            logger.error(
+                f"get_breeze_buddy_session: JWT_ALGORITHM={JWT_ALGORITHM!r} "
+                "not in allowlist — refusing to decode."
+            )
+            return None
         payload = jwt.decode(
             session_cookie, BREEZE_BUDDY_SESSION_SECRET_KEY, algorithms=[JWT_ALGORITHM]
         )

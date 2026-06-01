@@ -35,10 +35,15 @@ from loguru import logger as subprocess_logger
 
 from app.core.logger import logger
 
-# Configure a dedicated logger for raw subprocess output.
-# This uses loguru's optimized async sink but prevents it from adding any formatting.
-subprocess_logger.remove()
-subprocess_logger.add(sys.stdout, format="{message}", enqueue=True)
+# Configure a FILTERED sink for raw subprocess output.
+# This sink ONLY handles logs marked with subprocess_raw=True in their extras.
+# It does NOT remove any existing sinks, preserving all other logging.
+_subprocess_sink_id = subprocess_logger.add(
+    sys.stdout,
+    format="{message}",
+    filter=lambda record: record["extra"].get("subprocess_raw", False),
+    enqueue=True,
+)
 
 
 class VoiceAgentProcess:
@@ -176,8 +181,9 @@ class VoiceAgentPool:
                     logger.info("Stopping subprocess log writer")
                     break
                 proc_id, line = item
-                # Use the dedicated, non-blocking logger to print the raw, prefixed line.
-                subprocess_logger.info(f"{line}")
+                # Use bind() to mark this log for the subprocess-only sink.
+                # This outputs just the raw line without any additional formatting.
+                subprocess_logger.bind(subprocess_raw=True).info(line)
             except Exception as e:
                 logger.error(f"Error in log writer: {e}")
 
@@ -207,8 +213,10 @@ class VoiceAgentPool:
         process_id = str(uuid.uuid4())
 
         try:
-            cmd = f"python3 -u -m app.agents.voice.automatic --pool-mode --process-id {process_id}"
+            # Use the same Python interpreter as the parent process (respects virtualenv)
+            cmd = f"{sys.executable} -u -m app.ai.voice.agents.automatic --pool-mode --process-id {process_id}"
 
+            # Increase stream limit to 10MB to handle large log outputs (default is 64KB)
             proc = await asyncio.create_subprocess_shell(
                 cmd,
                 cwd=Path(__file__).parent.parent.parent.parent,
@@ -216,6 +224,7 @@ class VoiceAgentPool:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,  # Merge stderr for easier logging
                 env=os.environ,
+                limit=10 * 1024 * 1024,  # 10MB limit for subprocess streams
             )
 
             voice_process = VoiceAgentProcess(proc, process_id, is_managed=True)
@@ -322,6 +331,19 @@ class VoiceAgentPool:
                                     )
 
                 except asyncio.TimeoutError:
+                    continue
+                except asyncio.LimitOverrunError as e:
+                    # Handle oversized lines gracefully - read and discard the oversized chunk
+                    logger.warning(
+                        f"Process {voice_process.process_id[:8]} output line exceeds limit ({e.consumed} bytes). "
+                        f"Truncating and continuing. This may indicate very large log output."
+                    )
+                    try:
+                        # Read and discard the remaining data up to the separator
+                        await voice_process.process.stdout.readuntil(b"\n")
+                    except Exception:
+                        # If we can't recover, just continue monitoring
+                        pass
                     continue
                 except Exception as e:
                     logger.debug(
@@ -505,7 +527,8 @@ class VoiceAgentPool:
         process_id = str(uuid.uuid4())
 
         try:
-            cmd = f"python3 -u -m app.agents.voice.automatic --pool-mode --process-id {process_id}"
+            # Use the same Python interpreter as the parent process (respects virtualenv)
+            cmd = f"{sys.executable} -u -m app.ai.voice.agents.automatic --pool-mode --process-id {process_id}"
 
             proc = await asyncio.create_subprocess_shell(
                 cmd,

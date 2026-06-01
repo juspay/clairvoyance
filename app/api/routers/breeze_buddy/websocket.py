@@ -1,0 +1,65 @@
+from fastapi import APIRouter, WebSocket
+from starlette.websockets import WebSocketDisconnect
+
+from app.ai.voice.agents.breeze_buddy.managers.calls import handle_call_completion
+from app.ai.voice.agents.breeze_buddy.services.telephony.utils import get_voice_provider
+from app.core.logger import logger
+from app.core.transport.http_client import create_aiohttp_session
+from app.schemas import CallProvider
+
+router = APIRouter()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# WebSocket endpoints
+#
+# Pod lifecycle (allocation/release) is managed entirely by Smart Router:
+#   - Allocation: telephony webhook → allocate.py → Smart Router HTTP API
+#   - Release (primary): status callback → handlers.py → Smart Router release
+#   - Release (backup): call completion → calls.py → Smart Router release
+#   - Release (safety net): Smart Router zombie cleanup (every 30s)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@router.websocket("/{service_provider}/callback/{template}/v2")
+async def telephony_websocket_handler_v2(
+    service_provider: str, template: str, websocket: WebSocket
+):
+    """
+    WebSocket endpoint v2 that accepts a connection and passes it to the
+    agent.py main function.
+
+    Pod allocation is handled upstream by Smart Router before the provider
+    connects here. Pod release is handled by status callbacks and call
+    completion handlers (both call Smart Router's release endpoint).
+    """
+    logger.info("Handling v2 websocket for %s", template)
+
+    async with create_aiohttp_session() as session:
+        try:
+            provider_enum = CallProvider(service_provider.upper())
+            provider = get_voice_provider(provider_enum, session)
+            provider.set_completion_callback(handle_call_completion)
+            await provider.handle_websocket(websocket, provider_enum)
+        except WebSocketDisconnect:
+            logger.warning("WebSocket v2 client disconnected.")
+        except Exception as e:
+            error_type = type(e).__name__
+            error_message = str(e)
+            logger.error(
+                "An error occurred in the WebSocket v2 handler - Type: %s, Message: '%s', Args: %s",
+                error_type,
+                error_message,
+                e.args,
+                exc_info=True,
+            )
+            try:
+                if websocket.client_state.name != "DISCONNECTED":
+                    await websocket.close(code=1011, reason="Internal Server Error")
+            except Exception as close_error:
+                logger.warning(
+                    "Could not close websocket v2 (likely already closed): %s",
+                    close_error,
+                )
+        finally:
+            logger.info("WebSocket v2 client connection closed.")

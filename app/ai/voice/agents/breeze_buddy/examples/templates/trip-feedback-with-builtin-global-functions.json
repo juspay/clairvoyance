@@ -1,0 +1,231 @@
+{
+  "merchant": "breeze",
+  "template_name": "trip-feedback-with-builtin-global-functions",
+  "identifier": "rnr",
+  "is_active": false,
+  "description": "Trip feedback collection demonstrating builtin global functions. Features: 1) Builtin global function (transfer_to_agent) - warm transfer available from any node, 2) Builtin global function (get_current_time) - returns current IST time, 3) HTTP global function (refund_trip_amount) - waits for API response. Shows how to combine builtin and HTTP global function types.",
+  "expected_payload_schema": {
+    "trip_date": {
+      "type": "string",
+      "example": "2024-05-01"
+    },
+    "booking_id": {
+      "type": "string",
+      "example": "ABC123"
+    },
+    "customer_name": {
+      "type": "string",
+      "example": "John Doe"
+    },
+    "destination_to": {
+      "type": "string",
+      "example": "MG Road, Bangalore"
+    },
+    "destination_from": {
+      "type": "string",
+      "example": "Whitefield, Bangalore"
+    },
+    "customer_mobile_number": {
+      "type": "string",
+      "example": "9876543210"
+    }
+  },
+  "configurations": {
+    "stt_language": "en",
+    "tts_configuration": {
+      "provider": "elevenlabs"
+    },
+    "transfer_number": "+1234567890",
+    "payload_based_language_selection": false
+  },
+  "expected_callback_response_schema": {
+    "feedback": {
+      "type": "string",
+      "optional": true
+    },
+    "rating": {
+      "type": "string",
+      "optional": true
+    }
+  },
+  "secrets": {
+    "api_base_url": "https://webhook.site/efb71df1-97f5-4b24-9158-620d1450496d",
+    "api_s2s_token": "api_secret"
+  },
+  "flow": {
+    "initial_node": "initial",
+    "end_conversation_callbacks": ["service_callback"],
+
+    "global_functions": [
+      {
+        "type": "builtin",
+        "name": "transfer_to_agent",
+        "handler": "connect_to_live_agent",
+        "description": "Transfer the call to a human agent. Call this ONLY when the customer explicitly asks to speak with a human agent, supervisor, manager, or real person."
+      },
+      {
+        "type": "builtin",
+        "name": "get_current_time",
+        "handler": "get_current_time",
+        "description": "Get the current time in Indian Standard Time. Call this when the customer asks what time it is."
+      },
+      {
+        "name": "refund_trip_amount",
+        "type": "http",
+        "description": "Call this function when user asks for refund if user tries escalating and giving negative review",
+        "properties": {
+          "refund_reason": {
+            "type": "string",
+            "description": "Ask the refund reason from the customer"
+          }
+        },
+        "required": ["refund_reason"],
+        "expected_fields": {
+          "booking_id": {
+            "source": "static",
+            "value": "{booking_id}"
+          },
+          "api_base_url": {
+            "source": "static",
+            "value": "{api_base_url}"
+          },
+          "api_s2s_token": {
+            "source": "static",
+            "value": "{api_s2s_token}"
+          },
+          "customer_name": {
+            "source": "static",
+            "value": "{customer_name}"
+          },
+          "refund_reason": {
+            "source": "llm"
+          }
+        },
+        "http_request": {
+          "url": "{api_base_url}/refund",
+          "method": "POST",
+          "auth": {
+            "type": "bearer",
+            "token": "{api_s2s_token}"
+          },
+          "body": {
+            "trip_id": "{booking_id}",
+            "customer_name": "{customer_name}",
+            "refund_reason": "{refund_reason}",
+            "refund_type": "FULL"
+          },
+          "timeout": 10,
+          "max_retries": 3
+        }
+      }
+    ],
+
+    "nodes": [
+      {
+        "node_name": "initial",
+        "task_messages": [
+          {
+            "role": "system",
+            "content": "Start the call by greeting the customer and asking about their trip experience:\n\"Hi {customer_name}, Namaste! I am calling from FreshBus. I hope you had a wonderful trip from {destination_from} to {destination_to}. How was your experience?\"\n\nAfter they share their response, ask for specific feedback.\nOnce they provide feedback, thank them and end the call."
+          }
+        ],
+        "role_messages": [
+          {
+            "role": "system",
+            "content": "You are Rhea, a friendly feedback collection agent from FreshBus.\n\nIMPORTANT: You are a text-to-speech voice agent. Generate all responses as plain text without special characters or markdown.\n\n=== GLOBAL FUNCTIONS (available anytime) ===\n- transfer_to_agent: If customer explicitly asks to speak with a human, say you are connecting them and call this function.\n- get_current_time: If customer asks what time it is, call this function and tell them the time.\n- refund_trip_amount: If customer asks for a refund, ask for the reason and call this function.\n\nAfter using any global function, continue the main conversation naturally.\n\n=== CONVERSATION FLOW ===\n1. Greet and ask about trip experience\n2. Listen and acknowledge their response\n3. Ask for specific feedback or suggestions\n4. Call save_feedback with their feedback and inferred rating\n5. Thank them and end\n\n=== HANDLING USER BUSY ===\nIf user is busy, say you understand and call user_busy function.\n\n=== RATING INFERENCE ===\n- \"positive\" - good, wonderful, amazing, smooth ride, etc.\n- \"negative\" - bad, terrible, rude, late, problems, etc.\n- \"neutral\" - mixed feelings, just okay, average"
+          }
+        ],
+        "pre_actions": [
+          {
+            "type": "function",
+            "handler": "mute_stt"
+          }
+        ],
+        "post_actions": [
+          {
+            "type": "function",
+            "handler": "unmute_stt"
+          }
+        ],
+        "functions": [
+          {
+            "function_name": "user_busy",
+            "description": "Call this when the user is busy or cannot talk right now.",
+            "properties": {},
+            "required": [],
+            "transition_to": "end_call",
+            "hooks": [
+              {
+                "name": "update_outcome_in_database",
+                "expected_fields": {
+                  "outcome": {
+                    "source": "static",
+                    "value": "BUSY"
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "function_name": "save_feedback",
+            "description": "Call this after the customer has shared their trip feedback. Thank them before calling.",
+            "properties": {
+              "feedback": {
+                "type": "string",
+                "description": "The customer's feedback about their trip experience"
+              },
+              "rating": {
+                "type": "string",
+                "enum": ["positive", "negative", "neutral"],
+                "description": "Inferred rating based on customer's sentiment"
+              }
+            },
+            "required": ["feedback", "rating"],
+            "transition_to": "end_call",
+            "hooks": [
+              {
+                "name": "update_outcome_in_database",
+                "expected_fields": {
+                  "outcome": {
+                    "source": "static",
+                    "value": "FEEDBACK_COLLECTED"
+                  },
+                  "feedback": {
+                    "source": "llm"
+                  },
+                  "rating": {
+                    "source": "llm"
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "node_name": "end_call",
+        "task_messages": [
+          {
+            "role": "system",
+            "content": "Thank the customer one final time and say goodbye warmly."
+          }
+        ],
+        "role_messages": [
+          {
+            "role": "system",
+            "content": "You are Rhea from FreshBus. Say a warm goodbye to the customer."
+          }
+        ],
+        "pre_actions": [
+          {
+            "type": "function",
+            "handler": "end_conversation"
+          }
+        ],
+        "post_actions": [],
+        "functions": []
+      }
+    ]
+  }
+}
+

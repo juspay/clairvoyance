@@ -1,0 +1,663 @@
+"""Business logic for the unified widget endpoints (CHAT_MODE.md §14).
+
+The chat_session row is the canonical conversation backbone. Voice is
+a transient attachment: ONE lead_call_tracker row per conversation,
+set in chat_session.voice_lead_id on the first /voice/connect and
+REUSED for every subsequent attachment via attempt_count. Recordings
+are intentionally disabled for widget voice — the lead has only one
+recording_url field, and reusing the lead across N attempts means we
+can't represent N recordings without a schema change. Product can
+add per-attempt recording later (e.g., metaData.attempts list) if
+needed.
+
+``current_channel`` is the state-machine field that gates valid
+transitions. Per-session Redis lock (``chat:session:{id}:lock``)
+coordinates ``/message``, ``/voice/connect``, ``/voice/end``,
+``/end``, and the end_conversation drain so they can't race on the
+same session.
+"""
+
+from __future__ import annotations
+
+import uuid
+from typing import Any, Dict, List, Optional
+
+from fastapi import HTTPException, Request, status
+
+from app.ai.voice.agents.breeze_buddy.services.daily.daily import (
+    daily_completion_function,
+    start_daily_session,
+)
+from app.ai.voice.agents.breeze_buddy.template.cache import get_template_by_id_cached
+from app.api.routers.breeze_buddy.chat.handlers import (
+    cancel_chat_turn_handler,
+    create_chat_session_handler,
+    end_chat_session_handler,
+    load_chat_session_or_404,
+    send_chat_message_handler,
+    validate_template_for_chat,
+)
+from app.api.routers.breeze_buddy.widget_common import (
+    enforce_widget_ip_limit,
+    resolve_widget_config_for_request,
+)
+from app.api.security.breeze_buddy.widget_token import (
+    DEFAULT_WIDGET_TOKEN_TTL_MINUTES,
+    WidgetSessionContext,
+    assert_widget_session_ownership,
+    mint_widget_token,
+)
+from app.core.logger import logger
+from app.database.accessor import create_lead_call_tracker, get_lead_by_id
+from app.database.accessor.breeze_buddy.chat_session import (
+    bind_voice_lead_to_chat_session,
+    flip_chat_session_to_chat,
+    flip_chat_session_to_voice,
+    get_chat_session_by_id,
+    list_chat_messages_for_session,
+)
+from app.database.accessor.breeze_buddy.lead_call_tracker import (
+    handle_lead_abort,
+    reset_widget_voice_lead,
+)
+from app.database.accessor.breeze_buddy.widget_config import (
+    get_widget_config_by_id,
+)
+from app.schemas import (
+    CallDirection,
+    ExecutionMode,
+    LeadCallStatus,
+    UserInfo,
+    UserRole,
+)
+from app.schemas.breeze_buddy.chat import (
+    ChatMessage,
+    ChatSessionStatus,
+    CreateChatSessionRequest,
+    CreateWidgetSessionRequest,
+    CreateWidgetSessionResponse,
+    SendChatMessageRequest,
+    WidgetChannel,
+    WidgetSessionStateResponse,
+    WidgetVoiceConnectResponse,
+    WidgetVoiceEndResponse,
+)
+from app.services.redis.locks import LockAcquireError, RedisLock
+
+# Per-session Redis lock TTL — same as the chat sender's lock so the
+# two paths can serialise on the same key. Voice connect / end is fast
+# (DB writes + a Daily REST call), well under this.
+_SESSION_LOCK_TTL_SECONDS = 180
+
+# The Daily room itself expires after 1h (set in start_daily_session).
+# Surface that to the client so the embed knows when to reconnect.
+_DAILY_ROOM_TTL_SECONDS = 3600
+
+
+def _session_lock(session_id: str) -> RedisLock:
+    """Same key shape as chat handlers' ``_lock_key`` so all five
+    widget operations + the existing chat handlers serialise."""
+    return RedisLock(
+        f"chat:session:{session_id}:lock",
+        ttl_seconds=_SESSION_LOCK_TTL_SECONDS,
+    )
+
+
+def _synthetic_widget_user(widget_config_id: str) -> UserInfo:
+    """Minimal UserInfo for the chat handlers' log line.
+
+    Carries no scopes — the widget_token (separate concept) is what
+    authenticates follow-up calls. Mirrors ``chat/demo.py``'s
+    ``synthetic_user`` pattern.
+    """
+    return UserInfo(
+        id="widget",
+        username=f"widget:{widget_config_id}",
+        role=UserRole.USER,
+        reseller_ids=[],
+        merchant_ids=[],
+        permissions=[],
+    )
+
+
+# ---------------------------------------------------------------------------
+# POST /widget/session
+# ---------------------------------------------------------------------------
+
+
+async def create_widget_session_handler(
+    body: CreateWidgetSessionRequest, request: Request
+) -> CreateWidgetSessionResponse:
+    """Create a widget session backed by a chat_session row."""
+    cfg = await resolve_widget_config_for_request(
+        request=request,
+        public_widget_key=body.public_widget_key,
+        rate_bucket="session_create",
+        rate_limit=None,  # use cfg.max_sessions_per_ip_hour default
+    )
+
+    template = await get_template_by_id_cached(cfg.template_id)
+    if template is None:
+        # Template was deleted out from under the widget_config. The
+        # FK on widget_config(template_id) is RESTRICT but a misconfig
+        # is still possible during teardown — log + 500.
+        logger.error(
+            f"widget: template {cfg.template_id!r} from widget_config "
+            f"{cfg.id} is missing in DB"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Widget template misconfigured",
+        )
+    # Chat is the entry channel; voice opt-in is checked at /voice/connect.
+    validate_template_for_chat(template)
+
+    synthetic_user = _synthetic_widget_user(cfg.id)
+    create_req = CreateChatSessionRequest(
+        template_id=cfg.template_id,
+        template_vars=body.template_vars,
+        # Server-owned widget marker beats anything the client supplies
+        # via metadata — same precedence rule as ``template_vars`` in
+        # ``create_chat_session_handler``.
+        metadata={
+            **(body.metadata or {}),
+            "widget": {
+                "widget_config_id": cfg.id,
+                "public_widget_key_prefix": cfg.public_widget_key[:6],
+            },
+        },
+    )
+    create_resp = await create_chat_session_handler(
+        create_req, template, synthetic_user
+    )
+
+    widget_token = mint_widget_token(
+        widget_session_id=create_resp.session_id,
+        widget_config_id=cfg.id,
+        ttl_minutes=DEFAULT_WIDGET_TOKEN_TTL_MINUTES,
+    )
+
+    return CreateWidgetSessionResponse(
+        session_id=create_resp.session_id,
+        status=create_resp.status,
+        # Migration 029 default; the row was just created so it's CHAT.
+        current_channel=WidgetChannel.CHAT,
+        current_node=create_resp.current_node,
+        greeting=create_resp.greeting,
+        widget_token=widget_token,
+        ttl_seconds=DEFAULT_WIDGET_TOKEN_TTL_MINUTES * 60,
+    )
+
+
+# ---------------------------------------------------------------------------
+# POST /widget/session/{id}/message
+# ---------------------------------------------------------------------------
+
+
+async def send_widget_message_handler(
+    session_id: str,
+    req: SendChatMessageRequest,
+    request: Request,
+    ctx: WidgetSessionContext,
+):
+    """Drive one chat turn. 409 if voice is currently active."""
+    cfg = await get_widget_config_by_id(ctx.widget_config_id)
+    if cfg is None or not cfg.active:
+        # Token's widget_config_id is stale — probably deleted via the
+        # admin CRUD. 401 so the client knows to abandon the token.
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Widget configuration not found or inactive",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    await enforce_widget_ip_limit(
+        request=request,
+        bucket="message",
+        limit=cfg.max_messages_per_ip_hour,
+        widget_config_id=cfg.id,
+    )
+
+    # Cheap pre-check before delegating — the chat handler will reload
+    # the session under its own lock, but we want a clean 409 for
+    # "voice is live" before the SSE stream opens.
+    session = await get_chat_session_by_id(session_id)
+    if session is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Widget session '{session_id}' not found",
+        )
+    assert_widget_session_ownership(session, ctx)
+    if session.status == ChatSessionStatus.ENDED:
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail=f"Widget session '{session_id}' has ended",
+        )
+    if session.current_channel != WidgetChannel.CHAT:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Widget session is on channel {session.current_channel.value}; "
+                "end the voice attachment first."
+            ),
+        )
+
+    return await send_chat_message_handler(session_id, req, access_check=None)
+
+
+# ---------------------------------------------------------------------------
+# POST /widget/session/{id}/cancel
+# ---------------------------------------------------------------------------
+
+
+async def cancel_widget_message_handler(
+    session_id: str, ctx: WidgetSessionContext
+) -> None:
+    """Cancel the in-flight chat turn for a widget session (Stop button).
+
+    Widget auth is provided by the session-scoped widget_token via the
+    route's ``Depends(require_widget_session)``. We DO pre-load the
+    session row — the token claim binds to ``widget_session_id`` but a
+    leaked token + a discovered session UUID could still drive a
+    cross-tenant cancel if we don't verify ``widget_config_id`` ownership
+    here. One indexed SELECT << the LLM round-trip we're cancelling.
+    """
+    session = await get_chat_session_by_id(session_id)
+    if session is None:
+        # Session vanished — nothing to cancel; treat as success.
+        return
+    assert_widget_session_ownership(session, ctx)
+    await cancel_chat_turn_handler(session_id)
+
+
+# ---------------------------------------------------------------------------
+# POST /widget/session/{id}/voice/connect
+# ---------------------------------------------------------------------------
+
+
+async def voice_connect_handler(
+    session_id: str,
+    request: Request,
+    ctx: WidgetSessionContext,
+) -> WidgetVoiceConnectResponse:
+    """Open a voice attachment on the chat_session.
+
+    A widget conversation gets exactly ONE voice lead (set in
+    ``chat_session.voice_lead_id`` on the first /voice/connect) and
+    REUSED for every subsequent attachment. ``attempt_count`` on the
+    lead row records how many times the user switched to voice within
+    the conversation. See CHAT_MODE.md §14 for why we reuse instead
+    of creating a new lead per attachment.
+
+    The lead carries seed metadata so the voice runtime resumes at
+    the chat's ``current_node`` with the chat's full message history
+    pre-loaded into the LLM context. See agent/__init__.py + flow.py
+    + end_conversation.py for the resume + drain mechanics.
+    """
+    cfg = await get_widget_config_by_id(ctx.widget_config_id)
+    if cfg is None or not cfg.active:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Widget configuration not found or inactive",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    await enforce_widget_ip_limit(
+        request=request,
+        bucket="voice_connect",
+        limit=cfg.max_voice_sessions_per_ip_hour,
+        widget_config_id=cfg.id,
+    )
+
+    template = await get_template_by_id_cached(cfg.template_id)
+    if template is None:
+        logger.error(
+            f"widget voice: template {cfg.template_id!r} from widget_config "
+            f"{cfg.id} is missing in DB"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Widget template misconfigured",
+        )
+
+    supported: List[str] = list(getattr(template, "supported_channels", []) or []) or [
+        "voice"
+    ]
+    if "voice" not in supported:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Template does not include 'voice' in supported_channels.",
+        )
+
+    lock = _session_lock(session_id)
+    try:
+        await lock.acquire()
+    except LockAcquireError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Another operation is in flight for this session. Wait and retry.",
+        )
+
+    try:
+        session = await get_chat_session_by_id(session_id)
+        if session is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Widget session '{session_id}' not found",
+            )
+        assert_widget_session_ownership(session, ctx)
+        if session.status == ChatSessionStatus.ENDED:
+            raise HTTPException(
+                status_code=status.HTTP_410_GONE,
+                detail=f"Widget session '{session_id}' has ended",
+            )
+        if session.current_channel != WidgetChannel.CHAT:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "A voice attachment is already active for this session; "
+                    "end it first."
+                ),
+            )
+
+        # ── Build seed -----------------------------------------------------
+        history = await list_chat_messages_for_session(session_id)
+        prior_history: List[Dict[str, Any]] = [
+            {"role": m.role.value, "content": m.content} for m in history if m.content
+        ]
+        seed_message_count = len(prior_history)
+        template_vars: Dict[str, Any] = (
+            session.metadata.get("template_vars", {})
+            if isinstance(session.metadata, dict)
+            else {}
+        )
+
+        # ``payload`` flows into voice's load_template_config — so the
+        # template_vars from chat must be here for the renderer.
+        payload: Dict[str, Any] = {
+            **template_vars,
+            "is_widget": True,
+            "widget_config_id": cfg.id,
+            "source": "widget",
+        }
+        # ``meta_data`` carries the voice-runtime seed (read by the
+        # agent's _setup_*_transport). The widget_session_id back-link
+        # is what the end_conversation drain uses to find the
+        # chat_session to drain into.
+        meta_data_seed: Dict[str, Any] = {
+            "is_widget": True,
+            "widget_config_id": cfg.id,
+            "widget_session_id": session_id,
+            "start_node": session.current_node,
+            "prior_history": prior_history,
+            "seed_message_count": seed_message_count,
+        }
+        template_name = getattr(template, "name", None) or "widget"
+
+        # ── Branch: reuse existing voice lead vs create a new one ----------
+        is_new_lead = False
+        lead_id: Optional[str] = session.voice_lead_id
+        if lead_id:
+            # 2nd+ attachment: reuse the bound lead. The reset bumps
+            # attempt_count, refreshes the seed, and clears per-call
+            # fields (call_id, outcome, recording_url, etc.) so they
+            # don't leak from the previous attempt.
+            reset_lead = await reset_widget_voice_lead(lead_id, payload, meta_data_seed)
+            if reset_lead is None:
+                # Lead was archived / hard-deleted. Fall through to
+                # create a fresh one and rebind. Shouldn't normally
+                # happen but recovering keeps the widget functional.
+                logger.warning(
+                    f"widget voice: bound lead {lead_id} missing; recreating"
+                )
+                lead_id = None
+
+        if lead_id is None:
+            # First attachment (or recovery from a missing lead).
+            new_lead_id = str(uuid.uuid4())
+            new_lead = await create_lead_call_tracker(
+                id=new_lead_id,
+                reseller_id=cfg.reseller_id,
+                template=template_name,
+                template_id=str(template.id),
+                merchant_id=cfg.merchant_id,
+                next_attempt_at=None,
+                payload=payload,
+                attempt_count=0,
+                meta_data=meta_data_seed,
+                request_id=f"widget-{new_lead_id}",
+                execution_mode=ExecutionMode.DAILY,
+                status=LeadCallStatus.BACKLOG,
+                call_direction=CallDirection.INBOUND,
+            )
+            if new_lead is None:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Failed to create voice attachment lead",
+                )
+            lead_id = new_lead_id
+            is_new_lead = True
+
+            # Bind voice_lead_id to the chat_session — only succeeds
+            # when voice_lead_id IS NULL (no concurrent /voice/connect
+            # already bound a lead). Returns None on conflict.
+            bound = await bind_voice_lead_to_chat_session(session_id, lead_id)
+            if bound is None:
+                try:
+                    await handle_lead_abort(lead_id, "widget_bind_race")
+                except Exception as abort_err:
+                    logger.error(
+                        f"widget voice: failed to abort lead {lead_id} after "
+                        f"bind race: {abort_err}"
+                    )
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Voice attachment lost a race; retry.",
+                )
+
+        # ── Flip CHAT → VOICE ----------------------------------------------
+        flipped = await flip_chat_session_to_voice(session_id)
+        if flipped is None:
+            # Channel changed under us. If we just created a fresh
+            # lead, abort it; for a reused lead, leave it BACKLOG —
+            # the next /voice/connect will reset it again.
+            if is_new_lead:
+                try:
+                    await handle_lead_abort(lead_id, "widget_attach_conflict")
+                except Exception as abort_err:
+                    logger.error(
+                        f"widget voice: failed to abort lead {lead_id} after "
+                        f"flip conflict: {abort_err}"
+                    )
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Voice attachment lost a race; retry.",
+            )
+
+        # ── Start Daily room (no recording for widget mode; see §14) -------
+        try:
+            session_info = await start_daily_session(lead_id, enable_recording=False)
+        except Exception as exc:
+            logger.error(
+                f"widget voice: start_daily_session failed for lead {lead_id}: "
+                f"{exc}",
+                exc_info=True,
+            )
+            # Rollback channel back to CHAT so the user can retry.
+            try:
+                await flip_chat_session_to_chat(session_id, lead_id)
+            except Exception as flip_err:
+                logger.error(
+                    f"widget voice: rollback flip failed for {session_id} / "
+                    f"{lead_id}: {flip_err}"
+                )
+            # Only abort if we just created the lead — for reuse, keep
+            # voice_lead_id bound so the next attempt can reset.
+            if is_new_lead:
+                try:
+                    await handle_lead_abort(lead_id, "widget_voice_start_failed")
+                except Exception as abort_err:
+                    logger.error(
+                        f"widget voice: rollback abort failed for {lead_id}: "
+                        f"{abort_err}"
+                    )
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Failed to start widget voice session. Try again shortly.",
+            )
+
+        return WidgetVoiceConnectResponse(
+            room_url=session_info["room_url"],
+            daily_token=session_info["token"],
+            lead_id=lead_id,
+            ttl_seconds=_DAILY_ROOM_TTL_SECONDS,
+        )
+    finally:
+        await lock.release()
+
+
+# ---------------------------------------------------------------------------
+# POST /widget/session/{id}/voice/end
+# ---------------------------------------------------------------------------
+
+
+async def voice_end_handler(
+    session_id: str, ctx: WidgetSessionContext
+) -> WidgetVoiceEndResponse:
+    """Best-effort end of the voice attachment.
+
+    Two paths run the actual drain (transcripts back into chat_message,
+    flip channel back to CHAT):
+      1. The bot's ``end_conversation`` handler, when Daily disconnects.
+      2. This route, as a fallback (e.g., user closed tab; bot is
+         still up but the user is gone) — we signal the bot via the
+         existing daily_completion_function and return immediately.
+    Both paths are guarded by the same per-session Redis lock and the
+    conditional UPDATE in ``drain_voice_into_chat_session_query``.
+
+    Idempotent: if channel is already CHAT (drain already ran) we
+    return success without doing anything. ``voice_lead_id`` stays
+    bound on the chat_session so the next /voice/connect reuses
+    the same lead.
+    """
+    lock = _session_lock(session_id)
+    try:
+        await lock.acquire()
+    except LockAcquireError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Another operation is in flight for this session.",
+        )
+
+    try:
+        session = await get_chat_session_by_id(session_id)
+        if session is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Widget session '{session_id}' not found",
+            )
+        assert_widget_session_ownership(session, ctx)
+        if session.current_channel != WidgetChannel.VOICE:
+            # Already drained or never voice — no-op.
+            return WidgetVoiceEndResponse(
+                status="not_active", lead_id=session.voice_lead_id
+            )
+
+        lead_id = session.voice_lead_id
+        if not lead_id:
+            # Inconsistent state — channel says VOICE but no bound
+            # lead. Force-flip back so the session isn't stuck; without
+            # this call /message and /voice/connect would 409 forever
+            # because the channel guard sees VOICE indefinitely.
+            logger.warning(
+                f"widget voice: chat_session {session_id} on VOICE with no "
+                "voice_lead_id; clearing"
+            )
+            await flip_chat_session_to_chat(
+                session_id=session_id,
+                voice_lead_id=None,
+            )
+            return WidgetVoiceEndResponse(status="cleared_orphan_state", lead_id=None)
+
+        # Signal the bot to wind down. The bot's end_conversation
+        # handler will run the drain when its pipeline tears down.
+        # We don't block on it — return optimistically. If the bot
+        # crashed and never drains, the conditional UPDATE in
+        # ``flip_chat_session_to_chat`` (or a janitor sweep) is the
+        # safety net.
+        lead = await get_lead_by_id(lead_id)
+        call_id = lead.call_id if lead and lead.call_id else lead_id
+        try:
+            await daily_completion_function(
+                call_id=call_id,
+                outcome="ended_by_widget",
+            )
+        except Exception as exc:
+            logger.warning(
+                f"widget voice: daily_completion_function failed for "
+                f"call_id={call_id}: {exc} (continuing)"
+            )
+
+        return WidgetVoiceEndResponse(status="end_requested", lead_id=lead_id)
+    finally:
+        await lock.release()
+
+
+# ---------------------------------------------------------------------------
+# POST /widget/session/{id}/end
+# ---------------------------------------------------------------------------
+
+
+async def end_widget_session_handler(session_id: str, ctx: WidgetSessionContext):
+    """End the whole conversation.
+
+    If voice is live, signal it to wind down first (best-effort, same
+    as /voice/end); then mark the chat_session ENDED via the existing
+    end_chat_session_handler. The voice_lead_id stays on the
+    chat_session for audit / analytics.
+    """
+    # Pre-check before locking — if voice is live, signal the bot first
+    # so we don't deadlock with the bot's drain holding the lock.
+    session_pre = await get_chat_session_by_id(session_id)
+    if session_pre is not None:
+        assert_widget_session_ownership(session_pre, ctx)
+    if session_pre and session_pre.current_channel == WidgetChannel.VOICE:
+        try:
+            await voice_end_handler(session_id, ctx)
+        except HTTPException as exc:
+            if exc.status_code != status.HTTP_409_CONFLICT:
+                raise
+            # Lock was contended — proceed; end_chat_session_handler
+            # will acquire its own lock and serialise after.
+
+    session = await load_chat_session_or_404(session_id)
+    assert_widget_session_ownership(session, ctx)
+    return await end_chat_session_handler(session_id, session)
+
+
+# ---------------------------------------------------------------------------
+# GET /widget/session/{id}
+# ---------------------------------------------------------------------------
+
+
+async def get_widget_session_state_handler(
+    session_id: str, ctx: WidgetSessionContext
+) -> WidgetSessionStateResponse:
+    """Resume payload for the embed after a page reload."""
+    session = await load_chat_session_or_404(session_id)
+    assert_widget_session_ownership(session, ctx)
+    messages: List[ChatMessage] = await list_chat_messages_for_session(session_id)
+    template_vars: Dict[str, Any] = (
+        session.metadata.get("template_vars", {})
+        if isinstance(session.metadata, dict)
+        else {}
+    )
+    return WidgetSessionStateResponse(
+        session_id=session_id,
+        status=session.status,
+        current_channel=session.current_channel,
+        current_node=session.current_node,
+        messages=messages,
+        template_vars=template_vars,
+        metadata=session.metadata or {},
+    )

@@ -1,0 +1,80 @@
+name: PR Build Check
+
+on:
+  pull_request_target:
+    branches:
+      - main
+      - release
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      # Step 1: Checkout code from the PR head
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      # Step 2: Set up Python
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # Step 3: Install uv
+      - name: Install uv
+        run: curl -LsSf https://astral.sh/uv/install.sh | sh
+
+      # Step 4: Install dependencies (dev extras for formatters)
+      - name: Install dependencies
+        run: |
+          export PATH="$HOME/.cargo/bin:$PATH"
+          uv sync --extra dev
+
+      # Step 5: Check code formatting with black (check-only mode)
+      - name: Check black formatting
+        run: |
+          export PATH="$HOME/.cargo/bin:$PATH"
+          uv run black --check --diff .
+        continue-on-error: false
+
+      # Step 6: Check import sorting with isort (check-only mode)
+      - name: Check isort formatting
+        run: |
+          export PATH="$HOME/.cargo/bin:$PATH"
+          uv run isort --check --diff . --profile black
+        continue-on-error: false
+
+      # Step 7: Check for unused imports with autoflake (check-only mode)
+      - name: Check autoflake
+        run: |
+          export PATH="$HOME/.cargo/bin:$PATH"
+          uv run autoflake --check --remove-all-unused-imports --remove-unused-variables --exclude "app/__init__.py,.venv/*,venv/*" -r app/
+        continue-on-error: false
+
+      # Step 8: Run pyrefly type check
+      - name: Check pyrefly
+        run: |
+          export PATH="$HOME/.cargo/bin:$PATH"
+          uv run pyrefly check
+        continue-on-error: false
+
+      # Step 9: Check commit count (must be exactly 1)
+      - name: Check commit count
+        run: |
+          COMMIT_COUNT=${{ github.event.pull_request.commits }}
+          echo "Commit count: $COMMIT_COUNT"
+
+          if [ "$COMMIT_COUNT" -gt 1 ]; then
+            echo "PR must contain exactly one commit."
+            exit 1
+          fi
+
+          echo "Commit count is 1. Build successful."

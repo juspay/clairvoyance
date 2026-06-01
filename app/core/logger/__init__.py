@@ -1,21 +1,40 @@
 import json
 import logging
 import sys
+from typing import Optional
 
 from loguru import logger
 
 # Remove the default sink to have full control over logging.
 logger.remove()
 
-from app.core.config import ENVIRONMENT, PROD_LOG_LEVEL
+# Use environment variables directly to avoid circular import
+from app.core.config.static import ENVIRONMENT, PROD_LOG_LEVEL
+from app.core.logger.context import get_log_context
+
+
+# Patcher to inject log context into extra BEFORE enqueueing
+# This is critical because enqueue=True processes logs in a background thread
+# where contextvars are not propagated. The patcher runs in the calling thread.
+# Defined at module level so it can be reused in configure_session_logger()
+def log_context_patcher(record):
+    """Inject log context into record['extra'] for both dev and prod formatting."""
+    ctx = get_log_context()
+    record["extra"]["_log_context"] = ctx
 
 
 def json_sink(message):
     """
     Custom sink function for JSON output in production environments.
     This enables structured logging for log aggregation systems like ELK, Grafana, Datadog.
+
+    Log context fields are injected by the patcher into record['extra']['_log_context']
+    BEFORE enqueueing, so they're available here.
     """
     record = message.record
+    extra = record["extra"]
+
+    # Build log entry
     log_entry = {
         "timestamp": record["time"].isoformat(),
         "level": record["level"].name,
@@ -26,8 +45,20 @@ def json_sink(message):
         "module": record["module"],
         "process": record["process"].id if record["process"] else None,
         "thread": record["thread"].id if record["thread"] else None,
-        **record["extra"],  # Include any additional context data
     }
+
+    # Add log context fields (injected by patcher)
+    log_ctx = extra.pop("_log_context", {})
+    for key, value in log_ctx.items():
+        if (
+            value is not None
+        ):  # Only exclude None; keep falsy-but-valid values like 0, False, and ""
+            log_entry[key] = value
+
+    # Add any other extra fields
+    for key, value in extra.items():
+        log_entry[key] = value
+
     print(json.dumps(log_entry))
 
 
@@ -45,14 +76,21 @@ class InterceptHandler(logging.Handler):
             level = record.levelno
 
         # Find caller from where originated the logged message
-        frame, depth = logging.currentframe(), 2
-        while frame.f_code.co_filename == logging.__file__:
-            frame = frame.f_back
+        frame = logging.currentframe()
+        depth = 2
+        while frame is not None and frame.f_code.co_filename == logging.__file__:
+            next_frame = frame.f_back
+            if next_frame is None:
+                break
+            frame = next_frame
             depth += 1
 
-        logger.opt(depth=depth, exception=record.exc_info).log(
-            level, record.getMessage()
-        )
+        # Bind log context to forwarded logs
+        # This ensures pipecat/library logs also get the log context
+        log_context = get_log_context()
+        logger.opt(depth=depth, exception=record.exc_info).bind(
+            _log_context=log_context
+        ).log(level, record.getMessage())
 
 
 def _setup_logger_sinks(
@@ -63,30 +101,47 @@ def _setup_logger_sinks(
     Reduces code duplication between initial setup and session configuration.
     """
 
-    # Filter function to completely block websockets, daily_core, and specific openai spam logs
+    # Filter function to completely block websockets, daily_core, audio logs, specific spam logs,
+    # and raw subprocess output (which has its own dedicated passthrough sink in process_pool.py)
     def filter_spam_logs(record):
+        # Exclude raw subprocess output - these go through a separate passthrough sink
+        if record["extra"].get("subprocess_raw", False):
+            return False
+
         logger_name = record["name"]
+        message = record["message"]
         return not (
             logger_name.startswith("websockets")
             or logger_name.startswith("daily_core")
-            or logger_name.startswith(
-                "openai._base_client"
-            )  # Only block _base_client logs, not all openai logs
+            or logger_name.startswith("openai._base_client")
+            or logger_name.startswith("chunk")
+            or (logger_name.startswith("logging") and 'TEXT \'{"audio":' in message)
+            or (logger_name.startswith("logging") and message.startswith("> BINARY"))
+            or (logger_name.startswith("logging") and message.startswith("< BINARY"))
+            or (logger_name.startswith("logging") and message.startswith("< TEXT"))
+            or (logger_name.startswith("logging") and message.startswith("> TEXT"))
         )
 
+    # Configure logger with patcher BEFORE adding sinks (applies to all environments)
+    # Uses module-level log_context_patcher defined above
+    logger.configure(patcher=log_context_patcher)
+
     if ENVIRONMENT == "dev":
-        # Development mode format
+        # Development mode format with log context for log isolation
         session_part = (
             "<cyan>[{extra[session_id]}]</cyan> | " if include_session_id else ""
         )
         client_sid_part = (
             "<yellow>[{extra[client_sid]}]</yellow> | " if include_client_sid else ""
         )
+        # Log context part - dynamically shows all context fields when available
+        # Using a simpler format that shows all fields (empty if not set)
         stdout_fmt = (
             "<green>{time:YYYY-MM-DD HH:mm:ss}</green> | "
             "<level>{level: <8}</level> | "
             f"{session_part}"
             f"{client_sid_part}"
+            "<magenta>[{extra[_log_context]}]</magenta> | "
             "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - "
             "<level>{message}</level>"
         )
@@ -118,6 +173,7 @@ def _setup_logger_sinks(
         logger.add(
             json_sink,
             level=PROD_LOG_LEVEL,  # Configurable log level via PROD_LOG_LEVEL env var defaulting to INFO
+            filter=filter_spam_logs,  # Also filter spam and subprocess_raw logs in production
             enqueue=True,
             backtrace=False,  # Keep JSON logs concise and predictable
             diagnose=False,  # Prevent sensitive data leakage and performance overhead
@@ -150,7 +206,7 @@ def _setup_logger_sinks(
         )
 
 
-def configure_session_logger(session_id: str, client_sid: str = None):
+def configure_session_logger(session_id: str, client_sid: Optional[str] = None):
     """
     Configure the logger to automatically include session_id and client_sid in all log entries.
     This should be called once at the start of a subprocess.
@@ -162,7 +218,8 @@ def configure_session_logger(session_id: str, client_sid: str = None):
     if client_sid:
         extra_context["client_sid"] = client_sid
 
-    logger.configure(extra=extra_context)
+    # Must include patcher to preserve log context injection (configure() replaces all settings)
+    logger.configure(patcher=log_context_patcher, extra=extra_context)
     # Also set up logging interception for session-based logging
     setup_logging_interception()
 
@@ -184,6 +241,12 @@ def setup_logging_interception():
     # Completely disable logs from websockets and daily_core to avoid spamming
     logging.getLogger("websockets").disabled = True
     logging.getLogger("daily_core").disabled = True
+
+    # HTTP transport / SDK chatter — at DEBUG these dump every HPACK header
+    # table entry, every chunk, the full LLM request body, etc. Useful when
+    # debugging the connection layer; pure noise in normal operation.
+    for noisy in ("h2", "hpack", "hyperframe", "httpcore", "httpx", "openai"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
 
 
 # Initial logger configuration

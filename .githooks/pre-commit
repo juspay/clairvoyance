@@ -1,18 +1,34 @@
 #!/bin/sh
-echo "Running Black formatter before commit..."
+set -e
 
-# Activate virtual environment
-source venv/bin/activate
+echo "Running formatters before commit..."
 
-# Ensure dependencies are installed
-pip install -r requirements-dev.txt
+# Ensure dev dependencies are available (uv handles venv automatically)
+uv sync --extra dev > /dev/null 2>&1
 
-# Format all python files
-python -m isort . --profile black
+# Run autoflake to remove unused imports and variables
+uv run autoflake --in-place --remove-all-unused-imports --remove-unused-variables --exclude "app/__init__.py,.venv/*,venv/*" -r app/
 
-python -m black .
+# Format all python files with isort
+uv run isort . --profile black
 
-# Stage updated files (if black changed them)
+# Format all python files with black
+uv run black .
+
+echo "Running pyrefly check..."
+
+TMP_ERR_FILE="$(mktemp)"
+
+if ! uv run pyrefly check > "$TMP_ERR_FILE" 2>&1; then
+  echo "❌ Pyrefly check failed. Commit aborted."
+  mv "$TMP_ERR_FILE" error.txt
+  exit 1
+fi
+
+# No errors → clean up temp file
+rm "$TMP_ERR_FILE"
+
+# Stage updated files (if formatters changed them)
 git add -u
 
-echo "Black formatting complete."
+echo "Formatting complete."

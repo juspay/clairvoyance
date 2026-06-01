@@ -1,0 +1,129 @@
+{
+  "merchant": "breeze",
+  "template_name": "elevenlabs-voice-config-example",
+  "identifier": "elevenlabs-demo",
+  "is_active": true,
+  "description": "Example template demonstrating ElevenLabs voice configuration parameters",
+  "expected_payload_schema": {
+    "customer_name": {
+      "type": "string",
+      "example": "John Doe"
+    },
+    "order_id": {
+      "type": "string",
+      "example": "12345"
+    }
+  },
+  "configurations": {
+    "tts_configuration": {
+      "provider": "elevenlabs",
+      "voice_id": "fG9s0SXJb213f4UxVHyG",
+      "model": "eleven_flash_v2_5",
+      "speed": 1.2,
+      "language": "en"
+    },
+    "stt_language": "en",
+    "enable_background_sound": false,
+    "background_sound_volume": 2.0
+  },
+  "expected_callback_response_schema": {
+    "status": {
+      "type": "string"
+    }
+  },
+  "flow": {
+    "initial_node": "greeting",
+    "end_conversation_callbacks": ["service_callback"],
+    "nodes": [
+      {
+        "node_name": "greeting",
+        "task_messages": [
+          {
+            "role": "system",
+            "content": "Greet the customer warmly:\n\"Hello {customer_name}! Your order #{order_id} has been confirmed. Would you like me to share the order details?\""
+          }
+        ],
+        "role_messages": [
+          {
+            "role": "system",
+            "content": "You are a friendly customer service representative.\n\nIMPORTANT: This template demonstrates ElevenLabs voice configuration:\n- Voice ID: Custom voice for this template\n- Model: eleven_flash_v2_5 (low-latency model)\n- Speed: 1.2 (slightly faster for efficiency)\n- Language: en (English TTS)\n\nThese settings override the global Redis defaults for this specific template.\n\nSpeak naturally in English. Keep responses concise and friendly."
+          }
+        ],
+        "pre_actions": [
+          {
+            "type": "function",
+            "handler": "mute_stt"
+          }
+        ],
+        "post_actions": [
+          {
+            "type": "function",
+            "handler": "unmute_stt"
+          }
+        ],
+        "functions": [
+          {
+            "function_name": "user_wants_details",
+            "description": "Call when user wants to hear order details",
+            "properties": {},
+            "required": [],
+            "transition_to": "order_details",
+            "hooks": []
+          },
+          {
+            "function_name": "user_not_interested",
+            "description": "Call when user doesn't want to continue",
+            "properties": {},
+            "required": [],
+            "transition_to": "end_call",
+            "hooks": []
+          }
+        ]
+      },
+      {
+        "node_name": "order_details",
+        "task_messages": [
+          {
+            "role": "system",
+            "content": "Provide order details:\n\"Your order will be delivered in 2-3 business days. Thank you!\""
+          }
+        ],
+        "role_messages": [
+          {
+            "role": "system",
+            "content": "Provide the delivery information and thank the customer."
+          }
+        ],
+        "pre_actions": [],
+        "post_actions": [
+          {
+            "type": "end_conversation"
+          }
+        ],
+        "functions": []
+      },
+      {
+        "node_name": "end_call",
+        "task_messages": [
+          {
+            "role": "system",
+            "content": "End the call politely:\n\"Alright, thank you! Have a great day.\""
+          }
+        ],
+        "role_messages": [
+          {
+            "role": "system",
+            "content": "Thank the customer and end the call."
+          }
+        ],
+        "pre_actions": [],
+        "post_actions": [
+          {
+            "type": "end_conversation"
+          }
+        ],
+        "functions": []
+      }
+    ]
+  }
+}

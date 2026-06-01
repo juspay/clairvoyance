@@ -5,6 +5,9 @@ ENV/
 .venv/
 virtualenv/
 
+# UV cache and state
+.uv/
+
 # Python bytecode
 __pycache__/
 *.py[cod]
@@ -44,3 +47,11 @@ logs/
 # OS specific files
 .DS_Store
 Thumbs.db
+
+logs
+
+# Claude (share settings.json and rules/ with team, keep personal files local)
+.claude/settings.local.json
+.claude/memory/
+CLAUDE.local.md
+.claude/settings.json

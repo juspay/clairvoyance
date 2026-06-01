@@ -1,9 +1,18 @@
-import json
-from datetime import datetime
-from typing import Any, Dict, Optional
+"""
+Common utilities for validation, parsing, and helper functions.
+"""
 
-from app.core.config import AWS_BREEZE_PORTAL_URL, GCP_BREEZE_PORTAL_URL
+import json
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
+
+from app.core.config.static import AWS_BREEZE_PORTAL_URL, GCP_BREEZE_PORTAL_URL
 from app.core.logger import logger
+
+
+def utcnow() -> datetime:
+    """Tz-aware UTC now — use for any column declared ``timestamptz``."""
+    return datetime.now(timezone.utc)
 
 
 def parse_iso_datetime(iso_string: Optional[str]) -> Optional[datetime]:
@@ -75,3 +84,34 @@ def get_breeze_portal_url(reseller_id: str | None = None) -> str:
         return GCP_BREEZE_PORTAL_URL
     else:
         return AWS_BREEZE_PORTAL_URL
+
+
+def parse_json_field(value) -> List[str]:
+    """Parse JSON field from database, handling both string and list types.
+
+    Args:
+        value: The value to parse (can be str, list, or None)
+
+    Returns:
+        List of strings, empty list if parsing fails or value is None
+
+    Examples:
+        >>> parse_json_field('["a", "b", "c"]')
+        ['a', 'b', 'c']
+        >>> parse_json_field(["a", "b"])
+        ['a', 'b']
+        >>> parse_json_field(None)
+        []
+        >>> parse_json_field("invalid json")
+        []
+    """
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+            return parsed if isinstance(parsed, list) else []
+        except json.JSONDecodeError:
+            logger.warning(f"Invalid JSON in database field: {value}")
+            return []
+    if isinstance(value, list):
+        return [str(item) for item in value]
+    return []

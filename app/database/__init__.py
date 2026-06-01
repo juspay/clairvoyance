@@ -5,7 +5,7 @@ This module contains database connection and models.
 
 import asyncpg
 
-from app.core.config import (
+from app.core.config.static import (
     POSTGRES_DB,
     POSTGRES_HOST,
     POSTGRES_MAX_OVERFLOW,
@@ -67,8 +67,12 @@ async def get_db_connection():
     """
     Get a database connection from the pool.
     """
+    global pool
     if pool is None:
         await init_db_pool()
+
+    if pool is None:
+        raise RuntimeError("Database pool is not initialized")
 
     async with pool.acquire() as connection:
         yield connection

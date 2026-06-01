@@ -1,0 +1,53 @@
+from typing import Any, Dict, List, Optional
+
+from app.core.config.static import (
+    AUTOMATIC_ACTIONS_REQUIRE_AUTH,
+    AUTOMATIC_WRITE_ACTIONS_AUTHORIZED_USERS,
+    ENABLE_WRITE_ACTIONS_FOR_MERCHANTS,
+)
+from app.core.logger import logger
+
+
+def is_user_authorized_for_actions(email: Optional[str]) -> bool:
+    if ENABLE_WRITE_ACTIONS_FOR_MERCHANTS and email and "@juspay.in" not in email:
+        return True
+    if not AUTOMATIC_WRITE_ACTIONS_AUTHORIZED_USERS:
+        return True
+    return bool(email and email in AUTOMATIC_WRITE_ACTIONS_AUTHORIZED_USERS)
+
+
+def is_tool_actionable(tool_name: Optional[str]) -> bool:
+    return bool(tool_name and tool_name in AUTOMATIC_ACTIONS_REQUIRE_AUTH)
+
+
+def filter_tools_by_authorization(
+    tools: List[Any], tool_functions: Dict[str, Any], email: Optional[str] = None
+) -> tuple[List[Any], Dict[str, Any]]:
+    if is_user_authorized_for_actions(email):
+        return tools, tool_functions
+
+    filtered_tools = [
+        tool for tool in tools if not is_tool_actionable(getattr(tool, "name", None))
+    ]
+    filtered_tool_functions = {
+        name: fn for name, fn in tool_functions.items() if not is_tool_actionable(name)
+    }
+
+    logger.info(
+        f"User {email} is not authorized for write tools. Filtered {len(tools) - len(filtered_tools)} tools."
+    )
+    return filtered_tools, filtered_tool_functions
+
+
+def _rupees_to_paisa(rupees):
+    """Convert rupees to paisa (1 rupee = 100 paisa). Returns None if input is None."""
+    if rupees is None:
+        return None
+    return round(rupees * 100)
+
+
+def _paisa_to_rupees(paisa):
+    """Convert paisa to rupees (100 paisa = 1 rupee). Returns None if input is None."""
+    if paisa is None:
+        return None
+    return paisa / 100
