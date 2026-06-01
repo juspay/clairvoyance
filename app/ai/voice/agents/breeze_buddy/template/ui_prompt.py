@@ -31,6 +31,7 @@ from __future__ import annotations
 import enum
 import json
 import typing
+from functools import lru_cache
 from typing import Any, Dict, List, Set, Type, TypeGuard, Union, get_args, get_origin
 
 from pydantic import BaseModel
@@ -41,126 +42,65 @@ from app.ai.voice.agents.breeze_buddy.template.ui_catalog import (
 )
 
 # ---------------------------------------------------------------------------
-# Hard-coded minimal-but-realistic examples per primitive. The LLM cribs from
-# these for the JIT few-shot pattern, so they must round-trip through
+# Hard-coded minimal-but-realistic examples per primitive, shown in the
+# compact wire form (A3). The LLM cribs from these for the JIT few-shot
+# pattern, so each must round-trip through ``expand_compact_op`` ->
 # ``validate_props`` cleanly. Keep them small — one op per primitive.
 # ---------------------------------------------------------------------------
 
 
 _EXAMPLES: Dict[str, Dict[str, Any]] = {
     "Tile": {
-        "op": "add",
-        "id": "p1",
-        "type": "Tile",
-        "parent": "root",
-        "props": {
-            "media": {"src": "https://x/y.jpg", "alt": "snowboard"},
-            "title": "The Complete Snowboard",
-            "body": [{"kind": "key_value", "key": "Price", "value": "₹699.95"}],
-            "attributes": [{"label": "Premium", "tone": "info"}],
-            "actions": [
-                {
-                    "label": "View",
-                    "action": {
-                        "type": "to_assistant",
-                        "msg": "Tell me about <id>",
-                    },
-                }
-            ],
-        },
+        "+": "p1:Tile@root",
+        "media": {"src": "https://x/y.jpg", "alt": "snowboard"},
+        "title": "The Complete Snowboard",
+        "body": [{"kv": ["Price", "₹699.95"]}],
+        "attributes": [{"label": "Premium", "tone": "info"}],
+        "actions": [
+            {
+                "label": "View",
+                "action": {"type": "to_assistant", "msg": "Tell me about <id>"},
+            }
+        ],
     },
-    "Carousel": {
-        "op": "add",
-        "id": "c1",
-        "type": "Carousel",
-        "parent": "root",
-        "props": {"snap": True},
-    },
-    "Stack": {
-        "op": "add",
-        "id": "s1",
-        "type": "Stack",
-        "parent": "root",
-        "props": {"gap": "md"},
-    },
-    "Card": {
-        "op": "add",
-        "id": "card1",
-        "type": "Card",
-        "parent": "root",
-        "props": {"variant": "default"},
-    },
+    "Carousel": {"+": "c1:Carousel@root", "snap": True},
+    "Stack": {"+": "s1:Stack@root", "gap": "md"},
+    "Card": {"+": "card1:Card@root", "variant": "default"},
     "Image": {
-        "op": "add",
-        "id": "img1",
-        "type": "Image",
-        "parent": "card1",
-        "props": {
-            "src": "https://x/y.jpg",
-            "alt": "snowboard",
-            "aspect": "4:3",
-        },
+        "+": "img1:Image@card1",
+        "src": "https://x/y.jpg",
+        "alt": "snowboard",
+        "aspect": "4:3",
     },
     "Text": {
-        "op": "add",
-        "id": "t1",
-        "type": "Text",
-        "parent": "card1",
-        "props": {"text": "Limited edition release", "variant": "body"},
+        "+": "t1:Text@card1",
+        "text": "Limited edition release",
+        "variant": "body",
     },
-    "Tag": {
-        "op": "add",
-        "id": "tag1",
-        "type": "Tag",
-        "parent": "card1",
-        "props": {"text": "New", "tone": "info"},
-    },
+    "Tag": {"+": "tag1:Tag@card1", "text": "New", "tone": "info"},
     "Button": {
-        "op": "add",
-        "id": "btn1",
-        "type": "Button",
-        "parent": "card1",
-        "props": {
-            "label": "View",
-            "action": {
-                "type": "to_assistant",
-                "msg": "Tell me more about <id>",
-            },
-            "variant": "primary",
-        },
+        "+": "btn1:Button@card1",
+        "label": "View",
+        "action": {"type": "to_assistant", "msg": "Tell me more about <id>"},
+        "variant": "primary",
     },
     "Handoff": {
-        "op": "add",
-        "id": "h1",
-        "type": "Handoff",
-        "parent": "root",
-        "props": {
-            "reason": "<intent>",
-            "label": "Continue",
-            "url": "https://example/handoff/abc",
-            "lifecycle": "popup",
-        },
+        "+": "h1:Handoff@root",
+        "reason": "<intent>",
+        "label": "Continue",
+        "url": "https://example/handoff/abc",
+        "lifecycle": "popup",
     },
     "Message": {
-        "op": "add",
-        "id": "msg1",
-        "type": "Message",
-        "parent": "root",
-        "props": {
-            "severity": "warning",
-            "resolution": "recoverable",
-            "content": "Temporary issue retrieving data.",
-        },
+        "+": "msg1:Message@root",
+        "severity": "warning",
+        "resolution": "recoverable",
+        "content": "Temporary issue retrieving data.",
     },
     "Table": {
-        "op": "add",
-        "id": "tbl1",
-        "type": "Table",
-        "parent": "root",
-        "props": {
-            "columns": ["Item", "Qty", "Total"],
-            "rows": [["Item A", "1", "100"]],
-        },
+        "+": "tbl1:Table@root",
+        "columns": ["Item", "Qty", "Total"],
+        "rows": [["Item A", "1", "100"]],
     },
 }
 
@@ -383,7 +323,24 @@ _HEADER = (
     "## Available primitives\n"
     "\n"
     "Use ONLY these primitive types in <ui_stream> ops. The server drops "
-    "unknown or disabled types silently. Asterisk (*) marks required props."
+    "unknown or disabled types silently. Asterisk (*) marks required props.\n"
+    "\n"
+    "Emit each op in COMPACT wire form (fewer tokens):\n"
+    '  add:     {"+":"<id>:<Type>@<parent>", <prop>:<val>, ...}   '
+    '(props are top-level keys; a root op drops "@<parent>")\n'
+    '  replace: {"~":"<id>", <prop>:<val>, ...}\n'
+    '  remove:  {"-":"<id>"}\n'
+    '  body key/value row: {"kv":["Label","Value"]}\n'
+    "Each Example below uses this form. The canonical "
+    '{"op":"add","id":...,"type":...,"props":{...}} shape is also accepted.\n'
+    "\n"
+    "Lists — render N similar items with ONE element, not N (far fewer tokens):\n"
+    '  {"+":"tile:Tile@root", "repeat":{"items":[<rows>],"key":"id"}, '
+    '"title":{"$item":"title"}, "media":{"src":{"$item":"image"}}}\n'
+    "  `repeat.items` is your data array — YOU pick the rows and which fields "
+    "to surface (so per-item choices like the matching variant's image/price "
+    'still apply); `{"$item":"<field>"}` binds that row\'s value (dotted '
+    "paths ok). The server expands it to one op per row, so all rows render."
 )
 
 _FOOTER = (
@@ -396,14 +353,41 @@ _FOOTER = (
     '  - Root id is always "root"; root op omits `parent`.\n'
     "  - All non-root `add` ops MUST have `parent`.\n"
     "  - `replace` swaps props on an existing id; `remove` deletes a node.\n"
-    '  - For "items in a list", emit ONE Tile per item — never compose '
-    "Card+Image+Text manually."
+    '  - For "items in a list", emit ONE Tile per item via a `repeat` '
+    "template (see Lists above) — never compose Card+Image+Text manually."
 )
 
 _EMPTY_BODY = (
     "(No primitives are enabled for this template. The widget will render "
     "nothing — keep responses prose-only.)"
 )
+
+
+@lru_cache(maxsize=64)
+def _render_primitives_section_cached(allowlist_key: frozenset) -> str:
+    """Pure render keyed by a hashable allowlist (D1, see
+    ``docs/widget/UI_FAST_RELIABLE_GENERIC_PLAN.md``).
+
+    The catalog (``UI_CATALOG`` / ``PRIMITIVE_RENDER_ORDER`` / ``_EXAMPLES``)
+    is static at module load, so the rendered section is a deterministic
+    function of the allowlist — safe to memoise for the process lifetime.
+    Keyed by ``frozenset`` so templates sharing a UI allowlist share one
+    rendered section (and one Pydantic-introspection pass), instead of
+    re-walking the catalog on every ``_splice_ui_primitives`` call (up to
+    several per turn).
+    """
+    allowlist = set(allowlist_key)
+    entries: List[str] = []
+    for name in PRIMITIVE_RENDER_ORDER:
+        if name not in allowlist:
+            continue
+        model = UI_CATALOG.get(name)
+        if model is None:
+            continue
+        entries.append(_render_entry(name, model))
+
+    body = "\n\n".join(entries) if entries else _EMPTY_BODY
+    return f"{_HEADER}\n\n{body}\n\n{_FOOTER}"
 
 
 def render_primitives_section(allowlist: Set[str]) -> str:
@@ -419,18 +403,12 @@ def render_primitives_section(allowlist: Set[str]) -> str:
     "nothing enabled" note + the footer, so the prompt still parses and
     the LLM understands the situation rather than crashing on missing
     text.
-    """
-    entries: List[str] = []
-    for name in PRIMITIVE_RENDER_ORDER:
-        if name not in allowlist:
-            continue
-        model = UI_CATALOG.get(name)
-        if model is None:
-            continue
-        entries.append(_render_entry(name, model))
 
-    body = "\n\n".join(entries) if entries else _EMPTY_BODY
-    return f"{_HEADER}\n\n{body}\n\n{_FOOTER}"
+    Memoised by allowlist (see :func:`_render_primitives_section_cached`):
+    the section is rebuilt from the static catalog once per distinct
+    allowlist, not per turn.
+    """
+    return _render_primitives_section_cached(frozenset(allowlist))
 
 
 __all__ = ["render_primitives_section"]

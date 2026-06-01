@@ -7,6 +7,7 @@ stay thin: validate auth, then delegate.
 """
 
 import asyncio
+import time
 from typing import Any, AsyncIterator, Callable, Dict, Optional
 
 from fastapi import HTTPException, status
@@ -17,6 +18,7 @@ from app.ai.voice.agents.breeze_buddy.chat.block_codec import (
     blocks_to_llm_context_messages,
     filter_visible_blocks,
 )
+from app.ai.voice.agents.breeze_buddy.chat.metrics import TurnMetrics
 from app.ai.voice.agents.breeze_buddy.chat.sse import SSEEvent, format_sse
 from app.ai.voice.agents.breeze_buddy.llm import get_llm_service
 from app.ai.voice.agents.breeze_buddy.template.cache import get_template_by_id_cached
@@ -479,6 +481,15 @@ async def send_chat_message_handler(
         # on Optional narrowing surviving the boundary.
         resume_node = fresh.current_node
 
+        # Phase-0 measurement (docs/widget/UI_FAST_RELIABLE_GENERIC_PLAN.md):
+        # observe the turn's SSE stream and log one [CHAT_METRICS] line at the
+        # end. Passive — never mutates the events the widget receives.
+        turn_metrics = TurnMetrics(
+            session_id=session_id,
+            template_id=template.id,
+            t0=time.monotonic(),
+        )
+
         async def stream() -> AsyncIterator[str]:
             # Register ourselves so /cancel can find and cancel this task
             # cross-pod. The registration MUST happen inside the generator
@@ -498,6 +509,7 @@ async def send_chat_message_handler(
                         history=history,
                         current_node=resume_node,
                     ):
+                        turn_metrics.observe(event)
                         yield format_sse(event)
                 except asyncio.CancelledError:
                     # User clicked Stop. Emit a clean turn_end so the client
@@ -527,6 +539,7 @@ async def send_chat_message_handler(
                     logger.info(
                         f"send_message stream for session {session_id} cancelled by user"
                     )
+                    turn_metrics.status = "CANCELED"
                     yield format_sse(
                         SSEEvent(event="turn_end", data={"session_status": "CANCELED"})
                     )
@@ -547,10 +560,12 @@ async def send_chat_message_handler(
                             },
                         )
                     )
+                    turn_metrics.status = "FAILED"
                     yield format_sse(
                         SSEEvent(event="turn_end", data={"session_status": "FAILED"})
                     )
             finally:
+                turn_metrics.emit()
                 if registered and current_task is not None:
                     cancel_bus.unregister(session_id, current_task)
                 # Shield the release: on a natural client disconnect path
