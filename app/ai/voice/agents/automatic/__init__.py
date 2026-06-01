@@ -8,7 +8,6 @@ import wave
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from langfuse import get_client
 from opentelemetry import trace
 from pipecat.audio.filters.aic_filter import AICFilter
 from pipecat.audio.vad.silero import SileroVADAnalyzer
@@ -287,7 +286,7 @@ async def run_normal_mode(args):
     )
 
     # Personalize the system prompt if a user name is provided
-    system_prompt = get_system_prompt(args.user_name, tts_provider, args.shop_id)
+    system_prompt = await get_system_prompt(args.user_name, tts_provider, args.shop_id)
 
     # Configure VAD - use pre-initialized model if available
     global _silero_vad_cache
@@ -549,6 +548,7 @@ async def run_normal_mode(args):
     )
 
     pipeline = Pipeline(pipeline_components)
+    llm._llm_service._prev = context_aggregator.user()
 
     user_name = args.user_name or "guest"
     shopId = (
@@ -701,12 +701,12 @@ async def run_normal_mode(args):
                     logger.warning(f"Error closing MCP client: {close_err}")
 
     if static.ENABLE_TRACING:
-        langfuse_client = get_client()
         tracer = trace.get_tracer(__name__)
         with tracer.start_as_current_span(conversation_id) as root_span:
             logger.info(
                 f"Starting current span with conversation ID: {conversation_id}"
             )
+            root_span.set_attribute("langfuse.trace.name", conversation_id)
             root_span.set_attribute("conversation_id", conversation_id)
             root_span.set_attribute("conversation_type", "voice")
             root_span.set_attribute("user_name", user_name)
@@ -720,16 +720,11 @@ async def run_normal_mode(args):
                 "application_logs",
                 generate_open_observer_url_for_session_id(args.client_sid),
             )
-            langfuse_client.update_current_trace(
-                user_id=args.user_email,
-                session_id=args.session_id,
-                tags=[
-                    (
-                        voice_name.value
-                        if hasattr(voice_name, "value")
-                        else str(voice_name)
-                    )
-                ],
+            root_span.set_attribute("user.id", args.user_email or "")
+            root_span.set_attribute("session.id", args.session_id or "")
+            root_span.set_attribute(
+                "langfuse.trace.tags",
+                [voice_name.value if hasattr(voice_name, "value") else str(voice_name)],
             )
 
             await run_pipeline()
