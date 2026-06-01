@@ -21,7 +21,7 @@ The background reset task fires the reset Slack alert when it detects expiry.
 from dataclasses import dataclass
 
 from app.core.background_tasks import BackgroundTaskScheduler
-from app.core.config.dynamic import BB_FALLBACK_RAW_CONFIG, BB_STT_SERVICE
+from app.core.config.dynamic import BB_FALLBACK_RAW_CONFIG, BB_STT_SERVICE, BB_TTS_SERVICE
 from app.core.config.static import SLACK_TAG_USERS
 from app.core.logger import logger
 from app.services.redis.client import get_redis_service
@@ -66,11 +66,10 @@ class FallbackSettings:
 
 
 # Per-service sensible defaults for fallback_provider.
-# Add "tts" and "llm" entries in their respective future PRs.
 _FALLBACK_DEFAULTS: dict[str, FallbackSettings] = {
     "stt": FallbackSettings(fallback_provider="deepgram"),
-    # "tts": FallbackSettings(fallback_provider="cartesia"),  # future PR
-    # "llm": FallbackSettings(fallback_provider="openai"),    # future PR
+    "tts": FallbackSettings(fallback_provider="cartesia"),
+    # "llm": FallbackSettings(fallback_provider="openai"),  # future PR
 }
 
 
@@ -423,7 +422,7 @@ class ServiceFallback:
 
 
 # ---------------------------------------------------------------------------
-#  STT Fallback Background Task
+#  STT / TTS Fallback Background Tasks
 # ---------------------------------------------------------------------------
 
 
@@ -454,16 +453,52 @@ async def check_and_reset_stt_fallback() -> None:
         logger.error(f"STT fallback reset task failed: {e}")
 
 
-async def initialize_fallback_tasks(scheduler: BackgroundTaskScheduler) -> None:
-    """Register STT fallback reset task if fallback is enabled."""
-    cfg = await BB_FALLBACK_CONFIG("stt")
-    if not cfg.enabled:
-        logger.info("STT fallback disabled — skipping fallback task registration")
-        return
+async def check_and_reset_tts_fallback() -> None:
+    """Poll TTS fallback state and fire the reset alert when TTL expires.
 
-    scheduler.register_task(
-        name="stt_fallback_reset",
-        func=check_and_reset_stt_fallback,
-        interval_seconds=60,
-    )
-    logger.info("Registered STT fallback reset task (interval=60s)")
+    Mirrors ``check_and_reset_stt_fallback`` exactly — delegates to
+    ``ServiceFallback.notify_on_expiry()`` which sets a sentinel while the
+    fallback is active and fires the ✅ reset alert the first time it
+    observes the active key has expired.
+    """
+    try:
+        cfg = await BB_FALLBACK_CONFIG("tts")
+        primary_provider = await BB_TTS_SERVICE()
+        fallback = ServiceFallback(
+            ServiceFallbackConfig(
+                service_name="tts",
+                failure_threshold=cfg.threshold,
+                failure_window_secs=cfg.window_secs,
+                fallback_duration_secs=cfg.duration_secs,
+                primary_provider_name=primary_provider,
+                fallback_provider_name=cfg.fallback_provider,
+            )
+        )
+        await fallback.notify_on_expiry()
+    except Exception as e:
+        logger.error(f"TTS fallback reset task failed: {e}")
+
+
+async def initialize_fallback_tasks(scheduler: BackgroundTaskScheduler) -> None:
+    """Register STT and TTS fallback reset tasks if fallback is enabled."""
+    stt_cfg = await BB_FALLBACK_CONFIG("stt")
+    if stt_cfg.enabled:
+        scheduler.register_task(
+            name="stt_fallback_reset",
+            func=check_and_reset_stt_fallback,
+            interval_seconds=60,
+        )
+        logger.info("Registered STT fallback reset task (interval=60s)")
+    else:
+        logger.info("STT fallback disabled — skipping STT fallback task registration")
+
+    tts_cfg = await BB_FALLBACK_CONFIG("tts")
+    if tts_cfg.enabled:
+        scheduler.register_task(
+            name="tts_fallback_reset",
+            func=check_and_reset_tts_fallback,
+            interval_seconds=60,
+        )
+        logger.info("Registered TTS fallback reset task (interval=60s)")
+    else:
+        logger.info("TTS fallback disabled — skipping TTS fallback task registration")

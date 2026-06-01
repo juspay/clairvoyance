@@ -90,7 +90,7 @@ from app.ai.voice.agents.breeze_buddy.utils.transport.websockets import (
     close_websocket_safely,
 )
 from app.ai.voice.agents.breeze_buddy.utils.warm_transfer import set_transfer_flag
-from app.core.config.dynamic import BB_STT_SERVICE
+from app.core.config.dynamic import BB_STT_SERVICE, BB_TTS_SERVICE
 from app.core.config.static import ENABLE_BREEZE_BUDDY_TRACING
 from app.core.logger import logger
 from app.core.logger.context import (
@@ -182,11 +182,14 @@ class Agent:
         # Error tracking
         self.errors: List[Dict[str, Any]] = []
 
-        # STT fallback state
+        # STT / TTS fallback state
         self.stt_provider: Optional[str] = None
         self._stt_service: Any = None
         self._stt_failure_recorded: bool = False
         self._mid_call_alert_sent: bool = False
+        self.tts_provider: Optional[str] = None
+        self._tts_failure_recorded: bool = False
+        self._mid_call_tts_alert_sent: bool = False
 
     @property
     def is_daily_mode(self) -> bool:
@@ -312,6 +315,32 @@ class Agent:
             )
         except Exception as e:
             logger.warning(f"Failed to send mid-call STT alert: {e}")
+
+    async def _send_mid_call_tts_alert(self) -> None:
+        """Send Slack alert when TTS fails mid-call and call must end."""
+        from app.core.config.static import SLACK_TAG_USERS
+
+        _fallback_tag = "@breeze-sentinals"
+        tag = f"{_fallback_tag},{SLACK_TAG_USERS}" if SLACK_TAG_USERS else _fallback_tag
+        provider = (self.tts_provider or "unknown").capitalize()
+        try:
+            await slack_alert.send(
+                title="🚨 TTS Failed — Call Ended (Breeze Buddy)",
+                fields=[
+                    {"name": "Provider", "value": provider},
+                    {"name": "Call SID", "value": self.call_sid or "unknown"},
+                ],
+                sections=[
+                    {
+                        "title": "What Happened",
+                        "text": "TTS failed mid-call. Call could not continue.",
+                    }
+                ],
+                fallback_text=f"TTS failed, call ended — {self.call_sid or 'unknown'}",
+                tag_users=tag,
+            )
+        except Exception as e:
+            logger.warning(f"Failed to send mid-call TTS alert: {e}")
 
     async def _setup_daily_transport(self, runner_args: RunnerArguments) -> None:
         """Initialize transport for Daily mode."""
@@ -706,46 +735,87 @@ class Agent:
                 "google",
                 "sarvam",
             )
+            tts_keywords = (
+                "tts",
+                "elevenlabs",
+                "cartesia",
+                "gemini",
+            )
             is_stt_error = any(kw in processor_str for kw in stt_keywords)
+            is_tts_error = any(kw in processor_str for kw in tts_keywords)
 
-            if not is_stt_error:
+            if not is_stt_error and not is_tts_error:
                 return
 
-            logger.warning(f"STT error detected from processor: {processor}")
+            if is_stt_error:
+                logger.warning(f"STT error detected from processor: {processor}")
 
-            # Record failure in fallback system (once per call, any STT provider)
-            if not self._stt_failure_recorded:
-                self._stt_failure_recorded = True
-                try:
-                    cfg = await BB_FALLBACK_CONFIG("stt")
-                    if cfg.enabled:
-                        primary_provider = await BB_STT_SERVICE()
-                        fb = ServiceFallback(
-                            ServiceFallbackConfig(
-                                service_name="stt",
-                                failure_threshold=cfg.threshold,
-                                failure_window_secs=cfg.window_secs,
-                                fallback_duration_secs=cfg.duration_secs,
-                                primary_provider_name=primary_provider,
-                                fallback_provider_name=cfg.fallback_provider,
+                # Record failure in fallback system (once per call, any STT provider)
+                if not self._stt_failure_recorded:
+                    self._stt_failure_recorded = True
+                    try:
+                        cfg = await BB_FALLBACK_CONFIG("stt")
+                        if cfg.enabled:
+                            primary_provider = await BB_STT_SERVICE()
+                            fb = ServiceFallback(
+                                ServiceFallbackConfig(
+                                    service_name="stt",
+                                    failure_threshold=cfg.threshold,
+                                    failure_window_secs=cfg.window_secs,
+                                    fallback_duration_secs=cfg.duration_secs,
+                                    primary_provider_name=primary_provider,
+                                    fallback_provider_name=cfg.fallback_provider,
+                                )
                             )
-                        )
-                        await fb.record_failure(
-                            error_msg=str(error_msg)[:200],
-                            call_sid=self.call_sid or "",
-                            context="mid-call",
-                        )
-                except Exception as fb_err:
-                    logger.warning(f"STT fallback record_failure failed: {fb_err}")
+                            await fb.record_failure(
+                                error_msg=str(error_msg)[:200],
+                                call_sid=self.call_sid or "",
+                                context="mid-call",
+                            )
+                    except Exception as fb_err:
+                        logger.warning(f"STT fallback record_failure failed: {fb_err}")
 
-            # Alert and end call — no mid-call swap in Phase 1
-            if not self._mid_call_alert_sent:
-                self._mid_call_alert_sent = True
-                fire_and_forget(self._send_mid_call_stt_alert())
+                # Alert and end call — no mid-call swap in Phase 1
+                if not self._mid_call_alert_sent:
+                    self._mid_call_alert_sent = True
+                    fire_and_forget(self._send_mid_call_stt_alert())
+
+            elif is_tts_error:
+                logger.warning(f"TTS error detected from processor: {processor}")
+
+                # Record failure in fallback system (once per call, any TTS provider)
+                if not self._tts_failure_recorded:
+                    self._tts_failure_recorded = True
+                    try:
+                        cfg = await BB_FALLBACK_CONFIG("tts")
+                        if cfg.enabled:
+                            primary_provider = await BB_TTS_SERVICE()
+                            fb = ServiceFallback(
+                                ServiceFallbackConfig(
+                                    service_name="tts",
+                                    failure_threshold=cfg.threshold,
+                                    failure_window_secs=cfg.window_secs,
+                                    fallback_duration_secs=cfg.duration_secs,
+                                    primary_provider_name=primary_provider,
+                                    fallback_provider_name=cfg.fallback_provider,
+                                )
+                            )
+                            await fb.record_failure(
+                                error_msg=str(error_msg)[:200],
+                                call_sid=self.call_sid or "",
+                                context="mid-call",
+                            )
+                    except Exception as fb_err:
+                        logger.warning(f"TTS fallback record_failure failed: {fb_err}")
+
+                # Alert and end call — no mid-call swap in Phase 1
+                if not self._mid_call_tts_alert_sent:
+                    self._mid_call_tts_alert_sent = True
+                    fire_and_forget(self._send_mid_call_tts_alert())
             try:
                 await task.queue_frames([EndFrame()])
             except Exception as e:
-                logger.warning(f"Failed to queue EndFrame after STT error: {e}")
+                logger.warning(f"Failed to queue EndFrame after pipeline error: {e}")
 
         @self.transport.event_handler("on_client_connected")
         async def on_client_connected(transport, client):
@@ -984,7 +1054,7 @@ class Agent:
             # VAD analyzer is passed to build_pipeline where it's configured inside the
             # LLMUserAggregator. This enables UserTurnStrategies (VAD + Transcription fallback).
             is_stream = self.is_stream_mode
-            stt_result, llm, tts = await create_services(
+            stt_result, llm, tts_result = await create_services(
                 self.configurations, include_llm=not is_stream
             )
             if not is_stream:
@@ -992,6 +1062,8 @@ class Agent:
             if stt_result is not None:
                 self.stt_provider = stt_result.provider
                 self._stt_service = stt_result.service
+            if tts_result is not None:
+                self.tts_provider = tts_result.provider
             (
                 pipeline,
                 context,
@@ -1003,7 +1075,7 @@ class Agent:
                 self.transport,
                 stt_result.service if stt_result is not None else None,
                 llm,
-                tts,
+                tts_result.service if tts_result is not None else None,
                 self.vad_analyzer,
                 self.configurations,
                 on_user_idle_timeout=(

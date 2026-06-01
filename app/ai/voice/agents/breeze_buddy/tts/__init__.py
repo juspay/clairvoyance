@@ -39,6 +39,7 @@ from app.core.config.static import (
     SARVAM_API_KEY,
 )
 from app.core.logger import logger
+from app.services.fallback import BB_FALLBACK_CONFIG, ServiceFallback, ServiceFallbackConfig
 
 _VOICE_CONFIG_FIELDS = (
     "voice_id",
@@ -208,6 +209,97 @@ async def get_tts_service(voice_config: TTSConfig):
 
     else:
         raise ValueError(f"Unsupported TTS provider: {provider}")
+
+
+class TTSServiceResult:
+    """Wraps a TTS service instance with the resolved provider name."""
+
+    def __init__(self, provider: str, service: object):
+        self.provider = provider
+        self.service = service
+
+
+async def get_tts_service_with_fallback(voice_config: TTSConfig) -> TTSServiceResult:
+    """Build a TTS service, routing to fallback provider if circuit is open.
+
+    When ``BB_FALLBACK.tts.enabled`` is true:
+    1. If fallback is currently active, proactively route to the fallback provider.
+    2. Otherwise, try the primary provider.  On init failure, record the failure
+       (may trip the circuit) and attempt the fallback provider for this call.
+
+    When disabled, builds directly — same as calling ``get_tts_service()`` directly.
+    """
+    cfg = await BB_FALLBACK_CONFIG("tts")
+    provider_name = voice_config.provider.value
+
+    if not cfg.enabled:
+        service = await get_tts_service(voice_config)
+        return TTSServiceResult(provider=provider_name, service=service)
+
+    fallback_provider = cfg.fallback_provider
+    primary_provider = await BB_TTS_SERVICE()
+
+    def _make_fallback_obj() -> ServiceFallback:
+        return ServiceFallback(
+            ServiceFallbackConfig(
+                service_name="tts",
+                failure_threshold=cfg.threshold,
+                failure_window_secs=cfg.window_secs,
+                fallback_duration_secs=cfg.duration_secs,
+                primary_provider_name=primary_provider,
+                fallback_provider_name=fallback_provider,
+            )
+        )
+
+    # Proactive routing: if fallback is active, skip primary entirely.
+    if provider_name != fallback_provider:
+        fb = _make_fallback_obj()
+        if await fb.is_active():
+            logger.info(
+                f"TTS fallback active — using {fallback_provider} "
+                f"instead of {provider_name}"
+            )
+            fallback_config = TTSConfig(
+                provider=TTSProvider(fallback_provider),
+                language=voice_config.language,
+            )
+            service = await get_tts_service(fallback_config)
+            return TTSServiceResult(provider=fallback_provider, service=service)
+
+    # Try primary, with init-time fallback on failure.
+    try:
+        service = await get_tts_service(voice_config)
+    except Exception as primary_err:
+        if provider_name == fallback_provider:
+            raise  # Nothing to fall back to.
+
+        logger.error(
+            f"{provider_name.capitalize()} TTS initialization failed, "
+            f"falling back to {fallback_provider.capitalize()}: {primary_err}"
+        )
+
+        fb = _make_fallback_obj()
+        await fb.record_failure(error_msg=str(primary_err)[:200], context="init")
+
+        fallback_config = TTSConfig(
+            provider=TTSProvider(fallback_provider),
+            language=voice_config.language,
+        )
+        try:
+            fallback_service = await get_tts_service(fallback_config)
+            logger.info(
+                f"Successfully initialized {fallback_provider.capitalize()} TTS "
+                f"as fallback for {provider_name.capitalize()} failure"
+            )
+            return TTSServiceResult(provider=fallback_provider, service=fallback_service)
+        except Exception as fallback_err:
+            logger.error(
+                f"{fallback_provider.capitalize()} fallback also failed: {fallback_err}. "
+                f"Original {provider_name.capitalize()} error: {primary_err}"
+            )
+            raise primary_err from fallback_err
+
+    return TTSServiceResult(provider=provider_name, service=service)
 
 
 async def generate_audio(

@@ -59,7 +59,11 @@ from app.ai.voice.agents.breeze_buddy.template.types import (
     TurnDetectionMode,
 )
 from app.ai.voice.agents.breeze_buddy.template.vad import TELEPHONY_SAMPLE_RATE
-from app.ai.voice.agents.breeze_buddy.tts import get_tts_service, resolve_voice_config
+from app.ai.voice.agents.breeze_buddy.tts import (
+    TTSServiceResult,
+    get_tts_service_with_fallback,
+    resolve_voice_config,
+)
 from app.ai.voice.llm.realtime import get_realtime_llm_service
 from app.core.config.static import (
     ENABLE_BREEZE_BUDDY_DAILY_EVENTS,
@@ -167,9 +171,9 @@ async def create_services(
         template_voice_config, voice_config_overrides
     )
     logger.info(f"Resolved voice config: provider={voice_config.provider.value}")
-    tts = await get_tts_service(voice_config)
+    tts_result: TTSServiceResult = await get_tts_service_with_fallback(voice_config)
 
-    return stt_result, llm, tts
+    return stt_result, llm, tts_result
 
 
 def _wire_user_idle_event(
