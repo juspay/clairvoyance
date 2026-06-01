@@ -22,6 +22,7 @@ one char at a time) — we keep a bounded carry buffer.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
@@ -208,6 +209,209 @@ class OpResult:
     healed_notes: List[str] = field(default_factory=list)
 
 
+# ---------------------------------------------------------------------------
+# Compact wire form (A3) — a terse shorthand the LLM emits, expanded
+# server-side to the canonical op shape *before* healing/validation. See
+# docs/widget/UI_FAST_RELIABLE_GENERIC_PLAN.md. Pure encoding change: the
+# canonical ops downstream — and the persisted ui_blocks the widget reads —
+# are unchanged. Both forms are accepted, so partial LLM adoption is always
+# safe; a malformed compact op falls through to the normal dropped path.
+#
+#   add:     {"+":"<id>:<Type>@<parent>", <prop>:<val>, ...}   (root drops "@<parent>")
+#   replace: {"~":"<id>", <prop>:<val>, ...}
+#   remove:  {"-":"<id>"}
+#   body row shorthand: {"kv":["Price","₹699"]} -> {"kind":"key_value","key":"Price","value":"₹699"}
+# ---------------------------------------------------------------------------
+
+_COMPACT_ADD_RE = re.compile(r"^\s*([^:@\s]+)\s*:\s*([^:@\s]+)\s*(?:@\s*(.+?))?\s*$")
+
+
+def _expand_body_shorthand(props: Dict[str, Any]) -> Dict[str, Any]:
+    """Expand ``{"kv":[k, v]}`` body items into canonical ``key_value`` items.
+
+    Only touches a list-valued ``body``; any item already in canonical
+    ``{"kind": ...}`` form (or any other shape) is left untouched.
+    """
+    body = props.get("body")
+    if not isinstance(body, list):
+        return props
+    new_body: List[Any] = []
+    changed = False
+    for item in body:
+        kv = item.get("kv") if isinstance(item, dict) else None
+        if isinstance(kv, list) and len(kv) == 2:
+            new_body.append({"kind": "key_value", "key": kv[0], "value": kv[1]})
+            changed = True
+        else:
+            new_body.append(item)
+    if not changed:
+        return props
+    return {**props, "body": new_body}
+
+
+def expand_compact_op(op: Dict[str, Any]) -> Dict[str, Any]:
+    """Expand one compact-form op dict to canonical shape.
+
+    Returns the input unchanged when it already carries an ``op`` key
+    (canonical) or is not a recognised compact form — so the two forms
+    coexist and a malformed compact op flows on to the normal parser, which
+    drops it with telemetry.
+    """
+    if not isinstance(op, dict) or "op" in op:
+        return op
+
+    spec = op.get("+")
+    if isinstance(spec, str):
+        m = _COMPACT_ADD_RE.match(spec)
+        if not m:
+            return op
+        out: Dict[str, Any] = {"op": "add", "id": m.group(1), "type": m.group(2)}
+        if m.group(3):
+            out["parent"] = m.group(3)
+        props = {k: v for k, v in op.items() if k != "+"}
+        # `repeat` is a structural directive (A1), not a visual prop — hoist it
+        # to the op level so the repeat expander sees it.
+        if "repeat" in props:
+            out["repeat"] = props.pop("repeat")
+        out["props"] = _expand_body_shorthand(props)
+        return out
+
+    rid = op.get("~")
+    if isinstance(rid, str):
+        return {
+            "op": "replace",
+            "id": rid,
+            "props": _expand_body_shorthand({k: v for k, v in op.items() if k != "~"}),
+        }
+
+    did = op.get("-")
+    if isinstance(did, str):
+        return {"op": "remove", "id": did}
+
+    return op
+
+
+def expand_compact_line(raw_line: str) -> str:
+    """Expand a compact-form JSONL line to canonical JSONL.
+
+    Pass-through (returns ``raw_line`` verbatim) for canonical lines and for
+    anything that doesn't parse as a JSON object — the downstream healer /
+    parser handle those exactly as before.
+    """
+    try:
+        op = json.loads(raw_line)
+    except (json.JSONDecodeError, ValueError):
+        return raw_line
+    if not isinstance(op, dict):
+        return raw_line
+    expanded = expand_compact_op(op)
+    if expanded is op:
+        return raw_line
+    return json.dumps(expanded, ensure_ascii=False)
+
+
+# ---------------------------------------------------------------------------
+# A1 — data/structure split (repeat + $item). The LLM emits ONE element with a
+# ``repeat`` directive carrying an inline data array; the server instantiates
+# the element once per row, binding ``{"$item":"<path>"}`` placeholders to that
+# row's value, and emits N canonical flat ops. The widget is unchanged (it gets
+# the same flat ops). Domain-blind: the engine only does "template x array -> N
+# ops"; what to show and which data live in the LLM-authored element + array, so
+# emergent per-item choices (e.g. binding the red variant's image) survive.
+# See docs/widget/UI_FAST_RELIABLE_GENERIC_PLAN.md.
+#
+#   {"op":"add","id":"tile","type":"Tile","parent":"root",
+#    "repeat":{"items":[{...},{...}],"key":"id"},
+#    "props":{"title":{"$item":"title"}, "media":{"src":{"$item":"image"}}}}
+# ---------------------------------------------------------------------------
+
+
+def _lookup_item_path(item: Any, path: str) -> Any:
+    """Resolve a dotted path (``a.b.c``) against one repeat row. A missing key
+    or a non-dict mid-path yields ``None`` (the prop is then dropped by
+    ``exclude_none`` at validation)."""
+    cur = item
+    for part in path.split("."):
+        if isinstance(cur, dict) and part in cur:
+            cur = cur[part]
+        else:
+            return None
+    return cur
+
+
+def _resolve_item_refs(value: Any, item: Any) -> Any:
+    """Recursively replace ``{"$item":"<path>"}`` placeholders with the value
+    at that path in ``item``. Everything else passes through unchanged, so a
+    template can freely mix bound and literal props."""
+    if isinstance(value, dict):
+        ref = value.get("$item")
+        if len(value) == 1 and isinstance(ref, str):
+            return _lookup_item_path(item, ref)
+        return {k: _resolve_item_refs(v, item) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_resolve_item_refs(v, item) for v in value]
+    return value
+
+
+def expand_repeat_line(line: str) -> List[str]:
+    """Expand a ``repeat`` template line into N canonical instance lines.
+
+    A line without ``repeat`` returns ``[line]`` unchanged (the common case).
+    A well-formed ``repeat`` returns one canonical op line per data row, with a
+    unique id derived from ``key`` (or the row index) and every ``{"$item":...}``
+    placeholder resolved. A ``repeat`` whose ``items`` isn't a list returns
+    ``[]`` — the bare template is never emitted, so it can't leak to the widget.
+    """
+    try:
+        op = json.loads(line)
+    except (json.JSONDecodeError, ValueError):
+        return [line]
+    if not isinstance(op, dict) or "repeat" not in op:
+        return [line]
+
+    rep = op.get("repeat")
+    items = rep.get("items") if isinstance(rep, dict) else None
+    if not isinstance(items, list):
+        return []
+    key = rep.get("key") if isinstance(rep, dict) else None
+    base = {k: v for k, v in op.items() if k != "repeat"}
+    tpl_id = base.get("id") or "item"
+    tpl_props = base.get("props")
+
+    out: List[str] = []
+    for idx, item in enumerate(items):
+        inst = dict(base)
+        suffix: Optional[str] = None
+        if isinstance(key, str) and isinstance(item, dict):
+            kv = item.get(key)
+            if kv is not None:
+                suffix = str(kv)
+        inst["id"] = f"{tpl_id}-{suffix if suffix is not None else idx}"
+        if isinstance(tpl_props, (dict, list)):
+            inst["props"] = _resolve_item_refs(tpl_props, item)
+        out.append(json.dumps(inst, ensure_ascii=False))
+    return out
+
+
+def _repeat_with_nonlist_items(line: str) -> bool:
+    """True when ``line`` is a ``repeat`` op whose ``items`` isn't a list.
+
+    Distinguishes a *malformed* repeat (which ``expand_repeat_line`` drops to
+    ``[]``) from a legitimately *empty* ``items: []`` (also ``[]`` but valid,
+    nothing to render). Lets ``process_op_line`` surface the malformed case as
+    an observable ``ui_op_dropped`` instead of a silent no-op.
+    """
+    try:
+        op = json.loads(line)
+    except (json.JSONDecodeError, ValueError):
+        return False
+    if not isinstance(op, dict) or "repeat" not in op:
+        return False
+    rep = op.get("repeat")
+    items = rep.get("items") if isinstance(rep, dict) else None
+    return not isinstance(items, list)
+
+
 def parse_op_line(line: str, *, allowlist: Optional[Set[str]] = None) -> OpResult:
     """Parse one JSONL line into a structured op dict; validate shape.
 
@@ -305,21 +509,56 @@ def ui_op_event(op: Dict[str, Any]) -> SSEEvent:
     return SSEEvent(event="ui_op", data={"op": op})
 
 
+def _op_signature(line: str) -> Dict[str, Any]:
+    """Structural-only descriptor of an op line for telemetry.
+
+    After ``repeat`` expansion a line carries resolved per-row props (titles,
+    prices, image URLs, …). Telemetry events must never forward that content,
+    so we surface only the structural keys (``op``/``id``/``type`` — ids and
+    type names, never payload), falling back to a short content hash so a
+    malformed/unparseable line is still correlatable without exposing data.
+    """
+    try:
+        obj = json.loads(line)
+    except (json.JSONDecodeError, ValueError):
+        obj = None
+    if isinstance(obj, dict):
+        sig = {
+            k: obj[k]
+            for k in ("op", "id", "type")
+            if isinstance(obj.get(k), (str, int))
+        }
+        if sig:
+            return sig
+    digest = hashlib.sha1(line.encode("utf-8", "replace")).hexdigest()[:12]
+    return {"hash": digest}
+
+
 def healer_applied_event(line: str, note: str) -> SSEEvent:
     """Observability event — fired when the healer fixed an incoming line.
 
-    Carries the original ``line`` (truncated) and a short ``note`` describing
-    the rule that fired. Widget ignores; server-side telemetry consumes.
+    Carries a structural-only op signature (never the resolved payload) and a
+    short ``note`` describing the rule that fired. Widget ignores; server-side
+    telemetry consumes.
     """
-    truncated = line if len(line) <= 200 else line[:200] + "…"
-    return SSEEvent(event="healer_applied", data={"raw": truncated, "note": note})
+    return SSEEvent(
+        event="healer_applied", data={"op": _op_signature(line), "note": note}
+    )
 
 
 def ui_op_dropped_event(line: str, reason: str) -> SSEEvent:
     """Observability event — fired when a line failed validation and was
-    dropped. Widget ignores."""
-    truncated = line if len(line) <= 200 else line[:200] + "…"
-    return SSEEvent(event="ui_op_dropped", data={"raw": truncated, "reason": reason})
+    dropped. Widget ignores.
+
+    Emits a structural-only op signature (never the resolved payload) and the
+    first line of ``reason`` — Pydantic errors echo ``input_value`` on later
+    lines, so we drop those here too (defense-in-depth alongside the metrics
+    layer's own truncation).
+    """
+    first_reason = reason.split("\n", 1)[0][:200]
+    return SSEEvent(
+        event="ui_op_dropped", data={"op": _op_signature(line), "reason": first_reason}
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -352,7 +591,8 @@ def process_op_line(
 ) -> List[SSEEvent]:
     """Run one raw JSONL line through (healer →) parse → validate → SSE.
 
-    Returns a list of SSE events (0 to ~3) to forward to the client:
+    Returns a list of SSE events to forward to the client (0 to many — a
+    ``repeat`` template fans out to one ``ui_op`` per data row):
       * ``healer_applied`` — one per applied healer note (telemetry)
       * ``ui_op_dropped`` — when validation fails (telemetry)
       * ``ui_op`` — the validated op, ready for the widget
@@ -367,30 +607,40 @@ def process_op_line(
     no template-level filtering applies.
     """
     events: List[SSEEvent] = []
-    line = raw_line
-
-    if healer is not None:
-        result = healer(line, session_state or {})
-        for note in result.notes:
-            events.append(healer_applied_event(line, note))
-        if result.drop:
-            return events
-        if result.line is not None:
-            line = result.line
-
-    parsed = parse_op_line(line, allowlist=allowlist)
-    if parsed.error:
-        events.append(ui_op_dropped_event(line, parsed.error))
+    # A3 — expand the compact wire form to canonical; then A1 — fan a `repeat`
+    # template out into one canonical line per data row. A plain op is a single
+    # line; canonical/unparseable lines pass through untouched.
+    compact_line = expand_compact_line(raw_line)
+    expanded = expand_repeat_line(compact_line)
+    # A malformed `repeat` (items not a list) expands to nothing. Surface it as
+    # an observable drop rather than rendering silently — keeps the reliability
+    # metrics honest. A legitimately empty `items: []` is not flagged.
+    if not expanded and _repeat_with_nonlist_items(compact_line):
+        events.append(ui_op_dropped_event(compact_line, "repeat_items_not_list"))
         return events
+    for line in expanded:
+        if healer is not None:
+            result = healer(line, session_state or {})
+            for note in result.notes:
+                events.append(healer_applied_event(line, note))
+            if result.drop:
+                continue
+            if result.line is not None:
+                line = result.line
 
-    op = parsed.op  # type: ignore[assignment]
-    if known_ids is not None and op is not None:
-        if op["op"] == "add":
-            known_ids.add(op["id"])
-        elif op["op"] == "remove":
-            known_ids.discard(op["id"])
+        parsed = parse_op_line(line, allowlist=allowlist)
+        if parsed.error:
+            events.append(ui_op_dropped_event(line, parsed.error))
+            continue
 
-    events.append(ui_op_event(op))  # type: ignore[arg-type]
+        op = parsed.op  # type: ignore[assignment]
+        if known_ids is not None and op is not None:
+            if op["op"] == "add":
+                known_ids.add(op["id"])
+            elif op["op"] == "remove":
+                known_ids.discard(op["id"])
+
+        events.append(ui_op_event(op))  # type: ignore[arg-type]
     return events
 
 
@@ -480,6 +730,9 @@ __all__ = [
     "OpResult",
     "HealerResult",
     "HealerFn",
+    "expand_compact_op",
+    "expand_compact_line",
+    "expand_repeat_line",
     "parse_op_line",
     "process_op_line",
     "ui_op_event",

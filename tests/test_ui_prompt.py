@@ -89,17 +89,25 @@ def test_tile_entry_marks_media_optional():
 
 
 def test_tile_example_validates_against_catalog():
-    """The hard-coded example must round-trip through validate_props
-    cleanly, otherwise we'd be teaching the LLM an invalid shape."""
+    """The hard-coded compact example must round-trip through
+    expand_compact_op -> validate_props cleanly, otherwise we'd be teaching
+    the LLM an invalid shape."""
+    # Local import: the chat package must load after the template package
+    # (circular-import precaution above), so don't hoist this to module top.
+    from app.ai.voice.agents.breeze_buddy.chat.ui_stream import expand_compact_op
+
     section = render_primitives_section({"Tile"})
     # Pull the JSON after the "Example: " marker for the Tile entry.
     tile_block = section.split("**Tile**", 1)[1]
     example_line = next(
         line for line in tile_block.splitlines() if line.strip().startswith("Example:")
     )
-    payload = json.loads(example_line.split("Example:", 1)[1].strip())
+    # Example is in compact wire form — expand to canonical before validating.
+    payload = expand_compact_op(
+        json.loads(example_line.split("Example:", 1)[1].strip())
+    )
     assert payload["type"] == "Tile"
-    # Server-side validator must accept the example props.
+    # Server-side validator must accept the expanded example props.
     validate_props("Tile", payload["props"])
 
 
