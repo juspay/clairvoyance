@@ -1387,6 +1387,7 @@ class HttpAuthType(str, Enum):
     BEARER = "bearer"
     BASIC = "basic"
     API_KEY = "api_key"
+    WISMO = "wismo"
 
 
 class SseResponseMode(str, Enum):

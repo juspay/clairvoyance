@@ -423,6 +423,16 @@ class HttpRequestExecutor:
             else:
                 logger.warning("API Key auth configured but name/value missing")
 
+        elif auth_config.type == HttpAuthType.WISMO:
+            from app.core.config.static import ORDER_CONFIRMATION_WEBHOOK_SECRET_KEY
+
+            if ORDER_CONFIRMATION_WEBHOOK_SECRET_KEY:
+                headers["Authorization"] = ORDER_CONFIRMATION_WEBHOOK_SECRET_KEY
+            else:
+                logger.warning(
+                    "WISMO auth configured but ORDER_CONFIRMATION_WEBHOOK_SECRET_KEY is not set"
+                )
+
         return headers
 
     @staticmethod
