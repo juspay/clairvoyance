@@ -34,7 +34,7 @@ from app.ai.voice.agents.breeze_buddy.services.agent_router.client import (
 
 # Database imports
 from app.ai.voice.llm._pools import close_all_pools as close_llm_http_pools
-from app.api.routers import automatic, breeze_buddy, devcycle, feature_flags, systems
+from app.api.routers import automatic, breeze_buddy, feature_flags, systems
 from app.api.routers.breeze_buddy.chat import cancel_bus as chat_cancel_bus
 
 # Import background task scheduler
@@ -397,7 +397,6 @@ app.include_router(
 app.include_router(
     automatic.router, prefix="/agent/voice/automatic", tags=["Automatic Agent"]
 )
-app.include_router(devcycle.router, prefix="", tags=["DevCycle"])
 app.include_router(
     feature_flags.router,
     prefix="/agent/voice/breeze-buddy",

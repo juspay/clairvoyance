@@ -65,7 +65,7 @@ async def mint_demo_token(*, session_id: str, message_cap: int) -> str:
     ``sub`` is a fresh anonymous identifier (``demo-<short-uuid>``) — useful
     in logs but never used for authorization. The actual gate is the
     ``demo_session_id`` claim verified below. Async because the TTL is a
-    Redis/DevCycle-backed dynamic knob.
+    Redis-backed dynamic knob.
     """
     ttl_minutes = await DEMO_TOKEN_TTL_MINUTES()
     subject = f"demo-{uuid.uuid4().hex[:12]}"

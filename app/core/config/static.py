@@ -626,10 +626,6 @@ ENABLE_REDIS_DYNAMIC_CONFIG = (
     os.getenv("ENABLE_REDIS_DYNAMIC_CONFIG", "true").lower() == "true"
 )
 
-# DevCycle Configuration
-DEVCYCLE_WEBHOOK_SECRET = os.getenv("DEVCYCLE_WEBHOOK_SECRET", "")
-DEVCYCLE_SERVER_KEY = os.getenv("DEVCYCLE_SERVER_KEY", "")
-
 # Slack Webhook Configuration
 SLACK_WEBHOOK_URL = os.environ.get("SLACK_WEBHOOK_URL", "")
 SLACK_TAG_USERS = os.environ.get("SLACK_TAG_USERS", "narsimha.reddy")

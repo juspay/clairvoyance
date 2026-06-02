@@ -1,31 +1,30 @@
 """
-DevCycle Feature Flag Store with Redis
+Feature Flag Store - Pure Redis
 
-Redis-based feature flag storage:
-1. One API call to DevCycle at startup
-2. Store all flags in Redis
-3. Fast Redis lookup for flag access
-4. Fallback: Redis -> environment -> default
+All feature flags are stored in a single Redis key as a flat JSON dict:
+  { "FLAG_KEY": <value>, ... }
+
+Simple flags store a plain scalar value.
+Targeting / A-B test flags store a dict with ``has_targeting: true``,
+a list of audience targeting rules, distribution percentages, and per-
+variation values. get_config() evaluates the rules deterministically via
+SHA-256 bucketing when user context is supplied. Bucket computation is a
+fast pure-CPU operation (~0.1ms); no caching layer is needed on top of Redis.
+
+The frontend/admin API writes directly to Redis via the feature-flags
+endpoints. At runtime, get_config() reads: Redis -> env var -> default.
 """
 
+import hashlib
 import json
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
-import aiohttp
-
-# Get basic environment variables directly (to avoid circular imports)
-from app.core.config.static import DEVCYCLE_SERVER_KEY, ENABLE_REDIS_DYNAMIC_CONFIG
+from app.core.config.static import ENABLE_REDIS_DYNAMIC_CONFIG
 from app.core.logger import logger
-from app.services.live_config.utils import (
-    build_variable_mapping,
-    convert_type,
-    get_env_value,
-    normalize_key,
-    process_devcycle_value,
-)
+from app.services.live_config.utils import convert_type, get_env_value
 from app.services.redis.client import get_redis_service
 
-# Constants
+# Single Redis key that holds all flags as a flat JSON object
 FEATURE_FLAGS_KEY = "devcycle:flags"
 
 # Init state
@@ -33,162 +32,116 @@ _INITIALIZED = False
 
 
 # ---------------------------------------------------------------------------
-#  PROCESS INDIVIDUAL FEATURE VARIABLES
+#  DETERMINISTIC USER BUCKETING
 # ---------------------------------------------------------------------------
 
 
-async def process_feature_variables(
-    feature: dict,
-    variable_mapping: Dict[str, Dict[str, str]],
-    setter,
-) -> None:
-    """Extract variables from the highest-percentage variation."""
+def _get_user_bucket(user_id: str, feature_key: str) -> int:
+    """Return a stable bucket [0, 100) for (user_id, feature_key).
 
-    targets = feature.get("configuration", {}).get("targets") or []
-    if not targets:
-        return
+    SHA-256 gives uniform distribution so the same user always lands in the
+    same bucket for the same flag, and different flags distribute
+    independently (no correlated assignment across features).
+    """
+    hash_hex = hashlib.sha256(f"{user_id}:{feature_key}".encode()).hexdigest()
+    return int(hash_hex[:8], 16) % 100
 
-    distribution = targets[0].get("distribution") or []
-    if not distribution:
-        return
 
-    # Highest weight variation
-    primary_var_id = max(distribution, key=lambda d: d.get("percentage", 0)).get(
-        "_variation"
-    )
-    if not primary_var_id:
-        return
+# ---------------------------------------------------------------------------
+#  AUDIENCE FILTER EVALUATION
+# ---------------------------------------------------------------------------
 
-    # Find variation object
-    variations = feature.get("variations") or []
-    primary = next((v for v in variations if v.get("_id") == primary_var_id), None)
-    if not primary:
-        return
 
-    for var in primary.get("variables") or []:
-        var_id = var.get("_var")
-        if not var_id or var_id not in variable_mapping:
+def _matches_filter(
+    f: dict,
+    user_id: Optional[str],
+    user_email: Optional[str],
+    custom_data: Optional[Dict[str, Any]],
+) -> bool:
+    """Evaluate a single audience filter dict against the supplied user context."""
+    ftype = f.get("type", "")
+    sub = f.get("subType", "")
+    comp = f.get("comparator", "=")
+    values: List[str] = [str(v) for v in f.get("values", [])]
+
+    if ftype == "user":
+        if sub == "email":
+            candidate = user_email or ""
+        elif sub == "userId":
+            candidate = user_id or ""
+        else:
+            return False
+    elif ftype == "customData":
+        candidate = str((custom_data or {}).get(sub, ""))
+    else:
+        return False
+
+    if comp == "=":
+        return candidate in values
+    if comp == "!=":
+        return candidate not in values
+    if comp == "contain":
+        return any(v in candidate for v in values)
+    if comp == "!contain":
+        return all(v not in candidate for v in values)
+    return False
+
+
+def _evaluate_targeting(
+    flag_data: dict,
+    key: str,
+    user_id: Optional[str],
+    user_email: Optional[str],
+    custom_data: Optional[Dict[str, Any]],
+) -> Any:
+    """Resolve a targeting-based flag to the appropriate variation value.
+
+    Walk ``targets`` in order. The first target whose audience matches the
+    user determines the variation via SHA-256 bucketing. If no target
+    matches (or no user context is available), the top-level ``value``
+    (global default) is returned.
+    """
+    default = flag_data.get("value")
+    targets: List[dict] = flag_data.get("targets", [])
+    variation_values: Dict[str, Any] = flag_data.get("variation_values", {})
+
+    # Without a stable user identifier we cannot bucket — return default.
+    bucket_id = user_email or user_id
+    if not bucket_id:
+        return default
+
+    for target in targets:
+        audience = target.get("audience", {})
+        filters_obj = audience.get("filters", {})
+        raw_filters: List[dict] = filters_obj.get("filters", [])
+        operator: str = filters_obj.get("operator", "and")
+
+        results = [
+            _matches_filter(f, user_id, user_email, custom_data) for f in raw_filters
+        ]
+
+        if operator == "or":
+            matched = any(results) if results else False
+        else:  # "and" (default)
+            matched = all(results) if results else False
+
+        if not matched:
             continue
 
-        info = variable_mapping[var_id]
-        key = normalize_key(info["key"])
-        processed_val = process_devcycle_value(var.get("value"), info["type"])
+        # User is in this target's audience — bucket into a variation.
+        bucket = _get_user_bucket(bucket_id, key)
+        cumulative = 0.0
+        for entry in target.get("distribution", []):
+            variation_id = entry.get("_variation") or entry.get("variation", "")
+            pct = float(entry.get("percentage", 0))
+            cumulative += pct
+            if bucket < cumulative:
+                return variation_values.get(variation_id, default)
 
-        await setter(key, processed_val)
+        # Distribution didn't cover bucket (misconfigured) — fall through.
+        return default
 
-
-# ---------------------------------------------------------------------------
-#  FETCH + UPDATE FLAGS
-# ---------------------------------------------------------------------------
-
-
-async def fetch_and_update_feature_flags() -> bool:
-    """Fetch DevCycle config and update Redis (cluster safe)."""
-
-    if not DEVCYCLE_SERVER_KEY:
-        logger.warning("DEVCYCLE_SERVER_KEY missing")
-        return False
-
-    url = f"https://config-cdn.devcycle.com/config/v1/server/{DEVCYCLE_SERVER_KEY}.json"
-    timeout = aiohttp.ClientTimeout(total=30)
-
-    try:
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.get(url) as resp:
-                if resp.status != 200:
-                    logger.error(
-                        f"DevCycle CDN error {resp.status}: {await resp.text()}"
-                    )
-                    return False
-                data = await resp.json()
-        logger.debug("DevCycle config fetched successfully")
-        variables = data.get("variables") or []
-        features = data.get("features") or []
-
-        if not variables or not features:
-            logger.info("DevCycle response contains no features/variables")
-            return False
-        variable_map = build_variable_mapping(variables)
-
-        new_flags: Dict[str, Any] = {}
-
-        async def stash_flag(k, v):
-            new_flags[k] = v
-
-        for feat in features:
-            if isinstance(feat, dict):
-                await process_feature_variables(feat, variable_map, stash_flag)
-
-        # Load existing from Redis
-        old_flags = await _get_all_flags_from_redis()
-        logger.info(f"Old flags from Redis: {old_flags}")
-        logger.debug(
-            f"Loaded {len(old_flags)} existing flags from Redis: {list(old_flags.keys())}"
-        )
-        logger.debug(
-            f"Built {len(new_flags)} new flags from DevCycle: {list(new_flags.keys())}"
-        )
-
-        # Check if there are any changes
-        if old_flags == new_flags:
-            logger.info("No DevCycle changes detected")
-            return True
-
-        # Store all flags as a single JSON in Redis
-        redis = await get_redis_service()
-        client = await redis.get_client()
-
-        try:
-            await client.set(FEATURE_FLAGS_KEY, json.dumps(new_flags))
-            logger.info(
-                f"DevCycle Flags Updated total={len(new_flags)} flags stored in Redis"
-            )
-        except Exception as e:
-            logger.error(
-                f"FAILED to update feature flags in Redis: {type(e).__name__}: {e}"
-            )
-            raise
-
-        return True
-
-    except aiohttp.ClientError as e:
-        logger.error(f"DevCycle HTTP request failed: {type(e).__name__}: {e}")
-        return False
-    except Exception as e:
-        logger.error(f"DevCycle update failed at unknown step: {type(e).__name__}: {e}")
-        logger.exception("Full traceback:")
-        return False
-
-
-# ---------------------------------------------------------------------------
-#  INITIALIZE
-# ---------------------------------------------------------------------------
-
-
-async def initialize_feature_flags() -> None:
-    global _INITIALIZED
-    if _INITIALIZED:
-        return
-
-    logger.info("Initializing DevCycle feature flags…")
-
-    try:
-        if DEVCYCLE_SERVER_KEY:
-            response = await fetch_and_update_feature_flags()
-            if response:
-                logger.info(
-                    f"DevCycle initialized successfully ({await get_flag_count()} flags)"
-                )
-            else:
-                logger.error(
-                    "DevCycle init failed → falling back to environment variables"
-                )
-        else:
-            logger.info("DevCycle disabled (no server key)")
-    except Exception as e:
-        logger.error(f"DevCycle init error: {e}")
-
-    _INITIALIZED = True
+    return default
 
 
 # ---------------------------------------------------------------------------
@@ -208,48 +161,99 @@ async def get_all_flags() -> Dict[str, Any]:
     return await _get_all_flags_from_redis()
 
 
-async def get_config(key: str, default_value: Any, return_type: type = str) -> Any:
-    """Unified: Redis → Environment → Default (async version)
-
-    When ENABLE_REDIS_DYNAMIC_CONFIG is False, the Redis step is skipped entirely
-    and config resolves from Environment → Default only.
+async def get_config(
+    key: str,
+    default_value: Any,
+    return_type: type = str,
+    user_id: Optional[str] = None,
+    user_email: Optional[str] = None,
+    custom_data: Optional[Dict[str, Any]] = None,
+) -> Any:
     """
+    Unified config getter: Redis -> Environment -> Default.
 
-    # Try Redis first, unless Redis dynamic config is disabled
+    For simple flags the value stored in Redis is returned directly.
+    For targeting-based flags (``has_targeting: true``) the value is
+    resolved by evaluating the audience rules and bucketing the user
+    into the appropriate variation.  When no user context is supplied
+    the targeting flag's global default value is used.
+
+    When ENABLE_REDIS_DYNAMIC_CONFIG is False, the Redis step is skipped
+    entirely and config resolves from Environment -> Default only.
+
+    Args:
+        key:           Flag key (e.g. "GEMINI_TTS_MODEL").
+        default_value: Fallback if not found anywhere.
+        return_type:   Expected return type (bool, str, int, float).
+        user_id:       Stable user identifier for A/B bucketing.
+        user_email:    User e-mail (higher-priority bucket key).
+        custom_data:   Arbitrary key/value pairs for custom-data filters.
+
+    Returns:
+        Config value coerced to ``return_type``.
+    """
     if ENABLE_REDIS_DYNAMIC_CONFIG:
         try:
             val = await _get_flag_from_redis(key)
             if val is not None:
+                # Targeting-based flag — evaluate audience rules.
+                if isinstance(val, dict) and val.get("has_targeting"):
+                    resolved = _evaluate_targeting(
+                        val, key, user_id, user_email, custom_data
+                    )
+                    converted = convert_type(resolved, return_type)
+                    if converted is not None:
+                        logger.debug(
+                            f"get_config({key}): targeting -> {converted} "
+                            f"(user={user_email or user_id or 'anon'})"
+                        )
+                        return converted
+                    return default_value
+                # Simple flag — convert and return.
                 converted = convert_type(val, return_type)
                 if converted is not None:
-                    logger.debug(
-                        f"get_config({key}): Retrieved from Redis -> {converted}"
-                    )
+                    logger.debug(f"get_config({key}): Redis -> {converted}")
                     return converted
             else:
-                logger.debug(
-                    f"get_config({key}): Not found in Redis, checking environment"
-                )
+                logger.debug(f"get_config({key}): not in Redis, checking env")
         except Exception as e:
-            logger.warning(
-                f"get_config({key}): Redis lookup failed: {e}, falling back to environment"
-            )
+            logger.warning(f"get_config({key}): Redis failed: {e}, falling back to env")
 
     env_val = get_env_value(key, return_type)
     if env_val is not None:
-        logger.debug(f"get_config({key}): Retrieved from environment -> {env_val}")
+        logger.debug(f"get_config({key}): env -> {env_val}")
         return env_val
 
-    logger.debug(f"get_config({key}): Using default value -> {default_value}")
+    logger.debug(f"get_config({key}): default -> {default_value}")
     return default_value
 
 
 # ---------------------------------------------------------------------------
-#  REDIS OPERATIONS (CLUSTER SAFE)
+#  INITIALIZE  (no-op - flags are populated by frontend/admin API)
+# ---------------------------------------------------------------------------
+
+
+async def initialize_feature_flags() -> None:
+    """
+    Mark the store as initialized.
+    Flags are written directly to Redis via the feature-flags API endpoints.
+    Nothing to fetch at startup.
+    """
+    global _INITIALIZED
+    if _INITIALIZED:
+        return
+
+    logger.info("Feature flag store initialized (pure Redis mode)")
+    _INITIALIZED = True
+
+
+# ---------------------------------------------------------------------------
+#  REDIS INTERNALS
 # ---------------------------------------------------------------------------
 
 
 async def _get_flag_from_redis(key: str) -> Optional[Any]:
+    """Return the raw value for a single flag key from Redis."""
     try:
         redis = await get_redis_service()
         client = await redis.get_client()
@@ -260,13 +264,14 @@ async def _get_flag_from_redis(key: str) -> Optional[Any]:
 
         all_flags = json.loads(raw)
         return all_flags.get(key)
+
     except Exception as e:
         logger.error(f"Redis get error for {key}: {e}")
         return None
 
 
 async def _get_all_flags_from_redis() -> Dict[str, Any]:
-    """Load all flags from single Redis key."""
+    """Load all flags from the single Redis key."""
     try:
         redis = await get_redis_service()
         client = await redis.get_client()
