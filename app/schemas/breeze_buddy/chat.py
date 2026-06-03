@@ -118,6 +118,32 @@ class AgentSessionState(BaseModel):
     updated_at: Optional[datetime] = None
 
 
+class ChatTurnMetrics(BaseModel):
+    """One row of ``chat_turn_metrics`` (migration 032).
+
+    A joinable mirror of the structural ``[CHAT_METRICS]`` log line, keyed by
+    the assistant ``chat_message.idx`` the turn produced so the
+    conversational-log UI can show latency next to each assistant turn. Every
+    field is a timing, a count, or a status — no payload content.
+    """
+
+    session_id: str
+    idx: int
+    ttft_ms: Optional[float] = None
+    ttfui_ms: Optional[float] = None
+    ttlui_ms: Optional[float] = None
+    total_ms: Optional[float] = None
+    ui_ops: int = 0
+    ui_dropped: int = 0
+    healer_applied: int = 0
+    tool_calls: int = 0
+    prose_chars: int = 0
+    ui_chars: int = 0
+    status: Optional[str] = None
+    phase: str = "baseline"
+    created_at: Optional[datetime] = None
+
+
 # ---------------------------------------------------------------------------
 # API request / response models (chat router — task #9).
 #
@@ -240,6 +266,52 @@ class ChatTranscriptResponse(BaseModel):
     template_id: str
     status: ChatSessionStatus
     messages: List[ChatMessage]
+    turn_metrics: List[ChatTurnMetrics] = Field(
+        default_factory=list,
+        description="Per-turn latency/UI metrics (migration 032), one per "
+        "assistant turn, keyed by the assistant message idx. Empty for "
+        "sessions whose turns predate metrics persistence. Join client-side "
+        "by ChatMessage.idx == ChatTurnMetrics.idx.",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Conversational-log analytics: list sessions (CHAT_ANALYTICS_PLAN.md, Phase 1A)
+# ---------------------------------------------------------------------------
+
+
+class ChatSessionSummary(BaseModel):
+    """One row of ``GET /chat/sessions`` — a session as it appears in the
+    conversational-log list rail. Session lifecycle fields + a derived
+    ``message_count`` and last-message ``preview`` (prose only, truncated).
+    No transcript body — the detail view fetches ``/transcript`` on click.
+    """
+
+    id: str
+    template_id: str
+    reseller_id: str
+    merchant_id: Optional[str] = None
+    status: ChatSessionStatus
+    outcome: Optional[str] = None
+    current_channel: WidgetChannel = WidgetChannel.CHAT
+    message_count: int = 0
+    preview: Optional[str] = Field(
+        default=None,
+        description="Latest prose-bearing message, truncated. None for "
+        "sessions with only UI/tool turns.",
+    )
+    created_at: Optional[datetime] = None
+    last_activity_at: Optional[datetime] = None
+    ended_at: Optional[datetime] = None
+
+
+class ListChatSessionsResponse(BaseModel):
+    """Body of ``GET /chat/sessions`` — paginated session list."""
+
+    sessions: List[ChatSessionSummary]
+    total: int = Field(..., description="Total sessions matching the filters.")
+    page: int
+    limit: int
 
 
 # ---------------------------------------------------------------------------
@@ -477,6 +549,7 @@ __all__ = [
     "ChatSession",
     "ChatMessage",
     "AgentSessionState",
+    "ChatTurnMetrics",
     "CreateChatSessionRequest",
     "CreateChatSessionResponse",
     "GreetingMessage",
@@ -485,6 +558,8 @@ __all__ = [
     "GetChatSessionResponse",
     "EndChatSessionResponse",
     "ChatTranscriptResponse",
+    "ChatSessionSummary",
+    "ListChatSessionsResponse",
     "DemoTemplateInfo",
     "ListDemoTemplatesResponse",
     "CreateDemoSessionRequest",

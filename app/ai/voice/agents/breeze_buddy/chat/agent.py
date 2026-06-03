@@ -551,6 +551,7 @@ class ChatAgent:
             persisted_blocks.extend(plain_text_blocks(visible_text))
         if ui_summary:
             persisted_blocks.append(internal_text_block(ui_summary))
+        final_assistant_idx: Optional[int] = None
         if persisted_blocks:
             stored = await insert_chat_message(
                 session_id=self.session_id,
@@ -559,6 +560,7 @@ class ChatAgent:
                 content_blocks=persisted_blocks,
                 ui_blocks=turn_ui_ops or None,
             )
+            final_assistant_idx = stored.idx if stored else None
             # Only emit a bubble when there's actual visible prose. A
             # summary-only row (the LLM rendered UI without narrating)
             # still gets persisted for next-turn LLM memory but doesn't
@@ -567,7 +569,7 @@ class ChatAgent:
                 yield SSEEvent(
                     event="assistant_message",
                     data={
-                        "idx": stored.idx if stored else None,
+                        "idx": final_assistant_idx,
                         "content": visible_text,
                     },
                 )
@@ -575,7 +577,15 @@ class ChatAgent:
         await update_chat_session_after_turn(
             session_id=self.session_id, current_node=node_name or None
         )
-        yield SSEEvent(event="turn_end", data={"session_status": "ACTIVE"})
+        # ``assistant_idx`` (additive) keys this turn's metrics row
+        # (chat_turn_metrics, migration 032) to the assistant message it
+        # produced — including UI-only turns that emit no assistant_message
+        # bubble. ``None`` when the turn produced no assistant row. Existing
+        # clients ignore the extra field.
+        yield SSEEvent(
+            event="turn_end",
+            data={"session_status": "ACTIVE", "assistant_idx": final_assistant_idx},
+        )
 
     def _resolve_node(
         self, flow_config: Dict[str, Any], current_node: Optional[str]

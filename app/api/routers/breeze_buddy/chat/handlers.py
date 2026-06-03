@@ -8,6 +8,7 @@ stay thin: validate auth, then delegate.
 
 import asyncio
 import time
+from datetime import datetime
 from typing import Any, AsyncIterator, Callable, Dict, Optional
 
 from fastapi import HTTPException, status
@@ -30,15 +31,20 @@ from app.ai.voice.agents.breeze_buddy.template.transformation_function import (
     TEMPLATE_FUNCTION_REGISTRY,
 )
 from app.ai.voice.agents.breeze_buddy.template.types import TemplateModel
+from app.api.routers.breeze_buddy.analytics.rbac import apply_hierarchical_filters
 from app.core.config.dynamic import CHAT_HISTORY_REPLAY_LIMIT
 from app.core.logger import logger
 from app.database.accessor.breeze_buddy.chat_session import (
+    count_chat_sessions,
     create_chat_session,
     end_chat_session,
     get_agent_session_state,
     get_chat_session_by_id,
     insert_chat_message,
     list_chat_messages_for_session,
+    list_chat_sessions,
+    list_chat_turn_metrics_for_session,
+    record_chat_turn_metrics,
     upsert_agent_session_state,
 )
 from app.database.accessor.breeze_buddy.credentials import (
@@ -56,6 +62,7 @@ from app.schemas.breeze_buddy.chat import (
     EndChatSessionResponse,
     GetChatSessionResponse,
     GreetingMessage,
+    ListChatSessionsResponse,
     SendChatMessageRequest,
 )
 from app.services.redis.locks import LockAcquireError, RedisLock
@@ -71,6 +78,42 @@ _SESSION_LOCK_TTL_SECONDS = 180
 def _lock_key(session_id: str) -> str:
     """Redis key for the per-session distributed lock."""
     return f"chat:session:{session_id}:lock"
+
+
+async def _persist_turn_metrics(metrics: TurnMetrics) -> None:
+    """Best-effort write of one turn's metrics to chat_turn_metrics.
+
+    Never raises — telemetry must not affect the turn or the lock lifecycle.
+    Skipped when the turn produced no assistant row (no ``assistant_idx`` to
+    key on — failed/canceled before a reply); the ``[CHAT_METRICS]`` log line
+    still captured it. ``total_ms`` is stamped by ``emit()`` (called just
+    before this in the stream's ``finally``); fall back to a fresh read if
+    emit somehow didn't run.
+    """
+    if metrics.assistant_idx is None:
+        return
+    try:
+        await record_chat_turn_metrics(
+            metrics.session_id,
+            metrics.assistant_idx,
+            ttft_ms=metrics.ttft_ms,
+            ttfui_ms=metrics.ttfui_ms,
+            ttlui_ms=metrics.ttlui_ms,
+            total_ms=metrics.total_ms,
+            ui_ops=metrics.ui_ops,
+            ui_dropped=metrics.ui_dropped,
+            healer_applied=metrics.healer_applied,
+            tool_calls=metrics.tool_calls,
+            prose_chars=metrics.prose_chars,
+            ui_chars=metrics.ui_chars,
+            status=metrics.status,
+            phase=metrics.phase,
+        )
+    except Exception as exc:  # noqa: BLE001 - telemetry must not break a turn
+        logger.warning(
+            f"chat: failed to persist turn metrics for session "
+            f"{metrics.session_id} idx {metrics.assistant_idx}: {exc}"
+        )
 
 
 def _sanitize_messages_for_widget(messages: list) -> list:
@@ -621,6 +664,14 @@ async def send_chat_message_handler(
                         f"send_message stream for session {session_id}: "
                         f"lock release failed in finally: {release_exc}"
                     )
+                # Best-effort: mirror this turn's metrics into
+                # chat_turn_metrics (migration 032) so the conversational-log
+                # UI can show latency per turn without querying logs. Last in
+                # the finally — after lock release — so a DB blip never delays
+                # releasing the lock. No-op when the turn produced no assistant
+                # row (assistant_idx None); the [CHAT_METRICS] log already
+                # captured it either way.
+                await _persist_turn_metrics(turn_metrics)
 
         response = StreamingResponse(
             stream(),
@@ -710,14 +761,57 @@ async def end_chat_session_handler(
     )
 
 
+async def list_chat_sessions_handler(
+    current_user: UserInfo,
+    *,
+    template_id: Optional[str] = None,
+    session_status: Optional[ChatSessionStatus] = None,
+    date_from: Optional[datetime] = None,
+    date_to: Optional[datetime] = None,
+    page: int = 1,
+    limit: int = 20,
+) -> ListChatSessionsResponse:
+    """Paginated session list for the conversational-log rail.
+
+    Scoped to the caller's accessible resellers/merchants via the shared
+    analytics ``apply_hierarchical_filters`` (admins see all; a user with no
+    assignments gets 403). All filtering + pagination happens in SQL.
+    """
+    filters: Dict[str, Any] = {}
+    if template_id:
+        filters["template_id"] = template_id
+    if session_status is not None:
+        filters["status"] = session_status.value
+    if date_from is not None:
+        filters["date_from"] = date_from
+    if date_to is not None:
+        filters["date_to"] = date_to
+    filters = apply_hierarchical_filters(filters, current_user)
+
+    offset = (page - 1) * limit
+    sessions = await list_chat_sessions(filters, limit=limit, offset=offset)
+    total = await count_chat_sessions(filters)
+    return ListChatSessionsResponse(
+        sessions=sessions, total=total, page=page, limit=limit
+    )
+
+
 async def get_chat_transcript_handler(
     session: ChatSession,
 ) -> ChatTranscriptResponse:
-    """Plain JSON transcript export. Useful for audit / handoff."""
+    """Plain JSON transcript export. Useful for audit / handoff.
+
+    Includes per-turn latency/UI metrics (migration 032) so the
+    conversational-log detail view can show latency next to each assistant
+    turn — join client-side by ``ChatMessage.idx == ChatTurnMetrics.idx``.
+    Empty for sessions whose turns predate metrics persistence.
+    """
     messages = await list_chat_messages_for_session(session.id)
+    turn_metrics = await list_chat_turn_metrics_for_session(session.id)
     return ChatTranscriptResponse(
         session_id=session.id,
         template_id=session.template_id,
         status=session.status,
         messages=_sanitize_messages_for_widget(messages),
+        turn_metrics=turn_metrics,
     )

@@ -14,9 +14,12 @@ from app.database.decoder.breeze_buddy.chat_session import (
     decode_agent_session_state,
     decode_chat_message,
     decode_chat_session,
+    decode_chat_session_summary,
+    decode_chat_turn_metrics,
 )
 from app.database.queries import run_parameterized_query
 from app.database.queries.breeze_buddy.chat_session import (
+    count_chat_sessions_query,
     create_chat_session_query,
     drain_voice_into_chat_session_query,
     end_chat_session_query,
@@ -25,7 +28,10 @@ from app.database.queries.breeze_buddy.chat_session import (
     get_chat_session_by_id_query,
     insert_chat_message_query,
     list_chat_messages_for_session_query,
+    list_chat_sessions_query,
+    list_chat_turn_metrics_for_session_query,
     list_idle_chat_sessions_query,
+    record_chat_turn_metrics_query,
     set_chat_session_voice_lead_query,
     update_chat_session_after_turn_query,
     upsert_agent_session_state_query,
@@ -36,6 +42,8 @@ from app.schemas.breeze_buddy.chat import (
     ChatMessageRole,
     ChatSession,
     ChatSessionStatus,
+    ChatSessionSummary,
+    ChatTurnMetrics,
     WidgetChannel,
 )
 
@@ -146,6 +154,44 @@ async def list_idle_chat_sessions(
         return sessions
     except Exception as e:
         logger.error(f"Error listing idle chat sessions: {e}")
+        raise
+
+
+# -- conversational-log listing (CHAT_ANALYTICS_PLAN.md, Phase 1A) -----------
+
+
+async def list_chat_sessions(
+    filters: Dict[str, Any], limit: int, offset: int
+) -> List[ChatSessionSummary]:
+    """Paginated session summaries for the conversational-log rail.
+
+    ``filters`` is the post-RBAC dict (caller-scoped reseller/merchant already
+    applied). Returns most-recently-active sessions with derived
+    ``message_count`` + truncated ``preview``.
+    """
+    query, values = list_chat_sessions_query(filters, limit=limit, offset=offset)
+    try:
+        rows = await run_parameterized_query(query, values)
+        summaries: List[ChatSessionSummary] = []
+        for row in rows or []:
+            decoded = decode_chat_session_summary(row)
+            if decoded:
+                summaries.append(decoded)
+        return summaries
+    except Exception as e:
+        logger.error(f"Error listing chat sessions: {e}")
+        raise
+
+
+async def count_chat_sessions(filters: Dict[str, Any]) -> int:
+    """Total sessions matching the filters (pagination total)."""
+    query, values = count_chat_sessions_query(filters)
+    try:
+        rows = await run_parameterized_query(query, values)
+        row = rows[0] if rows else None
+        return int(row["total"]) if row else 0
+    except Exception as e:
+        logger.error(f"Error counting chat sessions: {e}")
         raise
 
 
@@ -408,4 +454,76 @@ async def upsert_agent_session_state(
         return decode_agent_session_state(row) if row else None
     except Exception as e:
         logger.error(f"Error upserting agent_session_state for {chat_session_id}: {e}")
+        raise
+
+
+# -- chat_turn_metrics (migration 032) --------------------------------------
+
+
+async def record_chat_turn_metrics(
+    session_id: str,
+    idx: int,
+    *,
+    ttft_ms: Optional[float],
+    ttfui_ms: Optional[float],
+    ttlui_ms: Optional[float],
+    total_ms: Optional[float],
+    ui_ops: int,
+    ui_dropped: int,
+    healer_applied: int,
+    tool_calls: int,
+    prose_chars: int,
+    ui_chars: int,
+    status: Optional[str],
+    phase: str,
+) -> Optional[ChatTurnMetrics]:
+    """Upsert one turn's structural metrics, keyed by the assistant idx.
+
+    Mirrors the router's ``[CHAT_METRICS]`` log line into a joinable row. The
+    caller (router stream ``finally``) treats this as best-effort — it wraps
+    the call so a write failure never affects the turn. Per accessor
+    convention this still logs + re-raises; the router swallows.
+    """
+    query, values = record_chat_turn_metrics_query(
+        session_id,
+        idx,
+        ttft_ms=ttft_ms,
+        ttfui_ms=ttfui_ms,
+        ttlui_ms=ttlui_ms,
+        total_ms=total_ms,
+        ui_ops=ui_ops,
+        ui_dropped=ui_dropped,
+        healer_applied=healer_applied,
+        tool_calls=tool_calls,
+        prose_chars=prose_chars,
+        ui_chars=ui_chars,
+        status=status,
+        phase=phase,
+    )
+    try:
+        result = await run_parameterized_query(query, values)
+        row = result[0] if result else None
+        return decode_chat_turn_metrics(row) if row else None
+    except Exception as e:
+        logger.error(
+            f"Error recording chat turn metrics (session={session_id}, idx={idx}): {e}"
+        )
+        raise
+
+
+async def list_chat_turn_metrics_for_session(
+    session_id: str,
+) -> List[ChatTurnMetrics]:
+    """All turn metrics for a session, ordered by idx — the transcript join."""
+    query, values = list_chat_turn_metrics_for_session_query(session_id)
+    try:
+        rows = await run_parameterized_query(query, values)
+        metrics: List[ChatTurnMetrics] = []
+        for row in rows or []:
+            decoded = decode_chat_turn_metrics(row)
+            if decoded:
+                metrics.append(decoded)
+        return metrics
+    except Exception as e:
+        logger.error(f"Error listing chat turn metrics for session {session_id}: {e}")
         raise

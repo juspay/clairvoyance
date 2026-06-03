@@ -58,6 +58,7 @@ class TurnMetrics:
         self.ttft_ms: Optional[float] = None  # first assistant_token (prose)
         self.ttfui_ms: Optional[float] = None  # first ui_op (rendered UI)
         self.ttlui_ms: Optional[float] = None  # last ui_op
+        self.total_ms: Optional[float] = None  # turn total, stamped at emit()
         self.ui_ops = 0
         self.ui_dropped = 0
         self.healer_applied = 0
@@ -66,6 +67,12 @@ class TurnMetrics:
         self.ui_chars = 0
         self.drop_reasons: List[str] = []
         self.status: Optional[str] = None
+        # The assistant chat_message.idx this turn produced (from the
+        # turn_end event). Keys the persisted chat_turn_metrics row
+        # (migration 032) so the conversational-log UI can join latency to
+        # the message. None on turns with no assistant row (failed/canceled
+        # before any reply).
+        self.assistant_idx: Optional[int] = None
         self._emitted = False
 
     def _ms(self) -> float:
@@ -112,6 +119,9 @@ class TurnMetrics:
                 self.tool_calls += 1
             elif name == "turn_end":
                 self.status = data.get("session_status")
+                idx_val = data.get("assistant_idx")
+                if isinstance(idx_val, int):
+                    self.assistant_idx = idx_val
         except Exception:  # noqa: BLE001 - telemetry must never break a turn
             pass
 
@@ -121,13 +131,14 @@ class TurnMetrics:
             return
         self._emitted = True
         try:
+            self.total_ms = self._ms()
             reasons = ";".join(self.drop_reasons) if self.drop_reasons else "-"
             logger.info(
                 "[CHAT_METRICS] "
                 f"session={self.session_id} template={self.template_id} "
                 f"phase={self.phase} status={self.status} "
                 f"ttft_ms={self.ttft_ms} ttfui_ms={self.ttfui_ms} "
-                f"ttlui_ms={self.ttlui_ms} total_ms={self._ms()} "
+                f"ttlui_ms={self.ttlui_ms} total_ms={self.total_ms} "
                 f"ui_ops={self.ui_ops} ui_dropped={self.ui_dropped} "
                 f"healer_applied={self.healer_applied} tool_calls={self.tool_calls} "
                 f"prose_chars={self.prose_chars} ui_chars={self.ui_chars} "

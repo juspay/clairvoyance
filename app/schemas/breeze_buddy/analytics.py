@@ -12,6 +12,7 @@ class AnalyticsType(str, Enum):
 
     CALL_BASED = "call-based"
     CALL_DETAILS = "call-details"
+    CHAT_BASED = "chat-based"
     LEAD_BASED = "lead-based"
     LEAD_STATUS_COUNTS = "lead-status-counts"
     OUTBOUND_NUMBERS = "outbound-numbers"
@@ -38,6 +39,10 @@ class AnalyticsFilters(BaseModel):
 
     template: Optional[str] = Field(
         None, description="Filter by template name (e.g., 'order-confirmation')"
+    )
+    template_id: Optional[str] = Field(
+        None,
+        description="Filter by template UUID (chat analytics key off template_id, which has no name column)",
     )
     # New field names
     merchant_id: Optional[str] = Field(
