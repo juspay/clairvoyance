@@ -619,6 +619,26 @@ class FillerAudioConfig(BaseModel):
         return self
 
 
+class QuickReplyOption(BaseModel):
+    """One quick-reply chicklet shown to the user on widget open.
+
+    ``label`` is the button text displayed in the UI and echoed as the
+    user's chat bubble. ``value`` is the text sent to the backend; when
+    omitted it falls back to ``label``, which lets the display text differ
+    from the agent instruction (e.g. label="Track my order" while the
+    backend receives a more explicit instruction).
+    """
+
+    label: str = Field(..., min_length=1, description="Button text shown to the user.")
+    value: Optional[str] = Field(
+        None,
+        description=(
+            "Payload sent to the backend. Defaults to label when absent "
+            "the fallback is applied server-side before the value reaches the client."
+        ),
+    )
+
+
 class HoldTransferConfig(BaseModel):
     """Configuration for hold & consultative transfer.
 
@@ -1256,6 +1276,22 @@ class ConfigurationModel(BaseModel):
 
     initial_greeting: Optional[str] = (
         None  # Initial greeting text template with variables (e.g., "Hi {customer_name}")
+    )
+    quick_replies: List[QuickReplyOption] = Field(
+        default_factory=list,
+        description=(
+            "Quick-reply chicklet buttons shown to the user on widget open. "
+            "Empty list = no chicklets, normal composer shown."
+        ),
+    )
+    enable_text_input: bool = Field(
+        True,
+        description=(
+            "Whether the free-text composer is shown. "
+            "True (default) = composer visible; user can type freely. "
+            "False = composer hidden for all turns; only quick replies or "
+            "agent-driven input is possible."
+        ),
     )
     ivr_configuration: Optional[IvrConfig] = None  # IVR-specific configuration
     # DEPRECATED: Use ivr_configuration.greeting / ivr_configuration.goodbye / ivr_configuration.priority
