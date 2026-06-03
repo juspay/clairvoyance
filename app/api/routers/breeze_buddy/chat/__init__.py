@@ -28,17 +28,22 @@ For module layout this mirrors the leads router:
 - ``rbac.py`` — reseller / merchant access validators.
 """
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from datetime import datetime
+from typing import Optional
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 
 from app.ai.voice.agents.breeze_buddy.template.cache import get_template_by_id_cached
 from app.api.security.breeze_buddy.rbac_token import get_current_user_with_rbac
 from app.schemas import UserInfo
 from app.schemas.breeze_buddy.chat import (
+    ChatSessionStatus,
     ChatTranscriptResponse,
     CreateChatSessionRequest,
     CreateChatSessionResponse,
     EndChatSessionResponse,
     GetChatSessionResponse,
+    ListChatSessionsResponse,
     SendChatMessageRequest,
 )
 
@@ -49,6 +54,7 @@ from .handlers import (
     end_chat_session_handler,
     get_chat_session_handler,
     get_chat_transcript_handler,
+    list_chat_sessions_handler,
     load_chat_session_or_404,
     send_chat_message_handler,
     validate_template_for_chat,
@@ -100,6 +106,48 @@ async def create_session(
     validate_template_for_chat(template)
 
     return await create_chat_session_handler(req, template, current_user)
+
+
+@router.get("/sessions", response_model=ListChatSessionsResponse)
+async def list_sessions(
+    template_id: Optional[str] = Query(
+        default=None, description="Filter to one agent/template."
+    ),
+    status_filter: Optional[ChatSessionStatus] = Query(
+        default=None, alias="status", description="Filter by session status."
+    ),
+    date_from: Optional[datetime] = Query(
+        default=None, description="Created at >= this ISO-8601 timestamp."
+    ),
+    date_to: Optional[datetime] = Query(
+        default=None, description="Created at < this ISO-8601 timestamp."
+    ),
+    page: int = Query(default=1, ge=1),
+    limit: int = Query(default=20, ge=1, le=100),
+    current_user: UserInfo = Depends(get_current_user_with_rbac),
+) -> ListChatSessionsResponse:
+    """
+    List chat sessions for the conversational-log view, most-recently-active
+    first. Filter by template (agent), status, and created-at date range;
+    paginated.
+
+    RBAC:
+    - Admin: sees all sessions (optionally filtered).
+    - Reseller / Merchant: scoped to their accessible resellers / merchants
+      (a user with no assignments gets 403).
+
+    The per-session transcript (with rendered UI + per-turn latency) is
+    fetched separately via ``GET /session/{id}/transcript``.
+    """
+    return await list_chat_sessions_handler(
+        current_user,
+        template_id=template_id,
+        session_status=status_filter,
+        date_from=date_from,
+        date_to=date_to,
+        page=page,
+        limit=limit,
+    )
 
 
 @router.get("/session/{session_id}", response_model=GetChatSessionResponse)

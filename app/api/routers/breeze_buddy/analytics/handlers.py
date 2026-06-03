@@ -28,6 +28,10 @@ from app.database.accessor.breeze_buddy.analytics import (
     get_summary_analytics_from_db,
     get_trends_analytics_from_db,
 )
+from app.database.accessor.breeze_buddy.chat_analytics import (
+    get_chat_summary_from_db,
+    get_chat_trends_from_db,
+)
 from app.schemas import CallDetailGroupedResult, CallDetailResult, UserInfo
 from app.utils.common import parse_json
 
@@ -139,6 +143,78 @@ async def get_call_based_analytics(
             "time_granularity": None,
             "results": results,
         }
+
+
+async def get_chat_based_analytics(
+    filters: Dict[str, Any], options: Dict[str, Any], current_user: UserInfo
+) -> Dict[str, Any]:
+    """Chat (text-mode) aggregate analytics for the Analytics → Chats view.
+
+    Aggregate (no ``time_granularity``): total conversations + messages, status
+    breakdown, agent count, and avg messages/conversation. With
+    ``group_by='template'`` returns one row per agent. With ``time_granularity``
+    returns the "chats started" time-series.
+    """
+    time_granularity = options.get("time_granularity")
+
+    if time_granularity:
+        trend_rows = await get_chat_trends_from_db(filters, time_granularity)
+        results = []
+        for row in trend_rows:
+            data_point: Dict[str, Any] = {
+                "conversations_started": row["conversations_started"] or 0,
+                "ended_conversations": row["ended_conversations"] or 0,
+            }
+            _format_time_bucket(data_point, row["time_bucket"], time_granularity)
+            results.append(data_point)
+        return {
+            "type": "chat-based",
+            "filters_applied": filters,
+            "time_granularity": time_granularity,
+            "results": results,
+        }
+
+    group_by = options.get("group_by")
+    rows = await get_chat_summary_from_db(filters, group_by)
+
+    if group_by == "template":
+        results = [
+            {
+                "template_id": row.get("template_id"),
+                "total_conversations": row["total_conversations"] or 0,
+                "active_conversations": row["active_conversations"] or 0,
+                "idle_conversations": row["idle_conversations"] or 0,
+                "ended_conversations": row["ended_conversations"] or 0,
+                "total_messages": row["total_messages"] or 0,
+            }
+            for row in rows
+        ]
+    else:
+        row = rows[0] if rows else {}
+        total_conversations = row.get("total_conversations") or 0
+        total_messages = row.get("total_messages") or 0
+        results = [
+            {
+                "total_conversations": total_conversations,
+                "active_conversations": row.get("active_conversations") or 0,
+                "idle_conversations": row.get("idle_conversations") or 0,
+                "ended_conversations": row.get("ended_conversations") or 0,
+                "total_agents": row.get("total_agents") or 0,
+                "total_messages": total_messages,
+                "avg_messages_per_conversation": (
+                    round(total_messages / total_conversations, 2)
+                    if total_conversations
+                    else 0.0
+                ),
+            }
+        ]
+
+    return {
+        "type": "chat-based",
+        "filters_applied": filters,
+        "time_granularity": None,
+        "results": results,
+    }
 
 
 async def get_call_details_analytics(
