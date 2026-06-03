@@ -76,6 +76,7 @@ from app.schemas.breeze_buddy.chat import (
     CreateChatSessionRequest,
     CreateWidgetSessionRequest,
     CreateWidgetSessionResponse,
+    QuickReplyWire,
     SendChatMessageRequest,
     WidgetChannel,
     WidgetSessionStateResponse,
@@ -118,6 +119,33 @@ def _synthetic_widget_user(widget_config_id: str) -> UserInfo:
         merchant_ids=[],
         permissions=[],
     )
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _extract_widget_config(
+    template: object,
+) -> tuple[List[QuickReplyWire], bool]:
+    """Extract quick-reply options and enable_text_input flag from a template.
+
+    Returns a ``(quick_replies, enable_text_input)`` tuple. Reads directly
+    from ``configurations.quick_replies`` and ``configurations.enable_text_input``;
+    both default to ``([], True)`` when the template defines neither.
+    """
+    configurations = getattr(template, "configurations", None)
+    if configurations is None:
+        return [], True
+    quick_replies: List[QuickReplyWire] = [
+        QuickReplyWire(
+            label=qr.label, value=qr.value if qr.value is not None else qr.label
+        )
+        for qr in (getattr(configurations, "quick_replies", None) or [])
+    ]
+    enable_text_input: bool = getattr(configurations, "enable_text_input", True)
+    return quick_replies, enable_text_input
 
 
 # ---------------------------------------------------------------------------
@@ -177,6 +205,8 @@ async def create_widget_session_handler(
         ttl_minutes=DEFAULT_WIDGET_TOKEN_TTL_MINUTES,
     )
 
+    quick_replies, enable_text_input = _extract_widget_config(template)
+
     return CreateWidgetSessionResponse(
         session_id=create_resp.session_id,
         status=create_resp.status,
@@ -186,6 +216,8 @@ async def create_widget_session_handler(
         greeting=create_resp.greeting,
         widget_token=widget_token,
         ttl_seconds=DEFAULT_WIDGET_TOKEN_TTL_MINUTES * 60,
+        quick_replies=quick_replies,
+        enable_text_input=enable_text_input,
     )
 
 
@@ -647,6 +679,10 @@ async def get_widget_session_state_handler(
     session = await load_chat_session_or_404(session_id)
     assert_widget_session_ownership(session, ctx)
     messages: List[ChatMessage] = await list_chat_messages_for_session(session_id)
+
+    template = await get_template_by_id_cached(session.template_id)
+    quick_replies, enable_text_input = _extract_widget_config(template)
+
     template_vars: Dict[str, Any] = (
         session.metadata.get("template_vars", {})
         if isinstance(session.metadata, dict)
@@ -658,6 +694,8 @@ async def get_widget_session_state_handler(
         current_channel=session.current_channel,
         current_node=session.current_node,
         messages=messages,
+        quick_replies=quick_replies,
+        enable_text_input=enable_text_input,
         template_vars=template_vars,
         metadata=session.metadata or {},
     )

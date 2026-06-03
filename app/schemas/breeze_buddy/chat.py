@@ -267,6 +267,24 @@ class CreateWidgetSessionRequest(BaseModel):
     )
 
 
+class QuickReplyWire(BaseModel):
+    """One quick-reply option returned in the widget session-create response.
+
+    Mirrors ``QuickReplyOption`` from the template ``ConfigurationModel``
+    but lives in the public API schema layer so the wire shape stays
+    stable independent of any internal model refactors.
+    """
+
+    label: str = Field(..., description="Button text displayed to the user.")
+    value: Optional[str] = Field(
+        None,
+        description=(
+            "Payload sent to the backend. Always populated — falls back to "
+            "label server-side when not explicitly set in the template."
+        ),
+    )
+
+
 class CreateWidgetSessionResponse(BaseModel):
     """Body of ``POST /widget/session``.
 
@@ -283,6 +301,23 @@ class CreateWidgetSessionResponse(BaseModel):
     widget_token: str = Field(..., description="Bearer token for follow-up calls.")
     ttl_seconds: int = Field(
         ..., description="Lifetime of widget_token in seconds (24h)."
+    )
+    quick_replies: List[QuickReplyWire] = Field(
+        default_factory=list,
+        description=(
+            "Quick-reply chicklet options defined in the template's "
+            "configurations.quick_replies section. "
+            "Empty list when the template defines no quick replies."
+        ),
+    )
+    enable_text_input: bool = Field(
+        True,
+        description=(
+            "Whether the free-text composer is shown. "
+            "False = composer hidden for all turns; only quick replies or "
+            "agent-driven input is possible. "
+            "Ignored by the client when quick_replies is empty."
+        ),
     )
 
 
@@ -319,6 +354,23 @@ class WidgetSessionStateResponse(BaseModel):
     current_channel: WidgetChannel
     current_node: Optional[str] = None
     messages: List[ChatMessage]
+    quick_replies: List[QuickReplyWire] = Field(
+        default_factory=list,
+        description=(
+            "Quick-reply chicklet options defined in the template's "
+            "configurations.quick_replies section. "
+            "Empty list when the template defines no quick replies."
+        ),
+    )
+    enable_text_input: bool = Field(
+        True,
+        description=(
+            "Whether the free-text composer is shown. "
+            "False = composer hidden for all turns; only quick replies or "
+            "agent-driven input is possible. "
+            "Ignored by the client when quick_replies is empty."
+        ),
+    )
     template_vars: Dict[str, Any] = Field(default_factory=dict)
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
@@ -343,6 +395,7 @@ __all__ = [
     "CreateDemoSessionRequest",
     "CreateDemoSessionResponse",
     "CreateWidgetSessionRequest",
+    "QuickReplyWire",
     "CreateWidgetSessionResponse",
     "WidgetVoiceConnectResponse",
     "WidgetVoiceEndResponse",
