@@ -1,9 +1,11 @@
 """Unified widget endpoints (CHAT_MODE.md §14).
 
-Six routes under ``/agent/voice/breeze-buddy/widget``:
+Routes under ``/agent/voice/breeze-buddy/widget``:
 
 - ``POST /widget/session``                              create
 - ``POST /widget/session/{id}/message``                 chat turn (SSE)
+- ``POST /widget/session/{id}/cancel``                  cancel in-flight turn
+- ``POST /widget/session/{id}/context``                 push state/facts (no LLM turn)
 - ``POST /widget/session/{id}/voice/connect``           open voice attachment
 - ``POST /widget/session/{id}/voice/end``               close voice attachment
 - ``POST /widget/session/{id}/end``                     end whole conversation
@@ -31,6 +33,8 @@ from app.schemas.breeze_buddy.chat import (
     CreateWidgetSessionResponse,
     EndChatSessionResponse,
     SendChatMessageRequest,
+    UpdateWidgetContextRequest,
+    UpdateWidgetContextResponse,
     WidgetSessionStateResponse,
     WidgetVoiceConnectResponse,
     WidgetVoiceEndResponse,
@@ -42,6 +46,7 @@ from .handlers import (
     end_widget_session_handler,
     get_widget_session_state_handler,
     send_widget_message_handler,
+    update_widget_context_handler,
     voice_connect_handler,
     voice_end_handler,
 )
@@ -71,6 +76,11 @@ async def widget_message_preflight(session_id: str) -> Response:
 
 @router.options("/session/{session_id}/cancel")
 async def widget_cancel_preflight(session_id: str) -> Response:
+    return options_cors_response()
+
+
+@router.options("/session/{session_id}/context")
+async def widget_context_preflight(session_id: str) -> Response:
     return options_cors_response()
 
 
@@ -142,6 +152,20 @@ async def cancel_widget_message(
     """
     await cancel_widget_message_handler(session_id, ctx)
     return Response(status_code=status.HTTP_202_ACCEPTED)
+
+
+@router.post(
+    "/session/{session_id}/context",
+    response_model=UpdateWidgetContextResponse,
+    summary="Push state/facts context into the widget session (no LLM turn)",
+)
+async def update_widget_context(
+    session_id: str,
+    body: UpdateWidgetContextRequest,
+    request: Request,
+    ctx: WidgetSessionContext = Depends(require_widget_session),
+) -> UpdateWidgetContextResponse:
+    return await update_widget_context_handler(session_id, body, request, ctx)
 
 
 @router.post(

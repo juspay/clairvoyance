@@ -22,6 +22,7 @@ from app.ai.voice.agents.breeze_buddy.chat.block_codec import (
     plain_text_blocks,
     tool_results_to_user_blocks,
 )
+from app.ai.voice.agents.breeze_buddy.chat.client_context import render_client_context
 from app.ai.voice.agents.breeze_buddy.chat.disabled import CHAT_DISABLED_NAMES
 from app.ai.voice.agents.breeze_buddy.chat.sse import SSEEvent
 from app.ai.voice.agents.breeze_buddy.chat.tool_result_normalizer import normalize
@@ -85,6 +86,7 @@ class ChatAgent:
         llm: Any,
         template_vars: Optional[dict] = None,
         agent_state: Optional[Dict[str, Any]] = None,
+        context_placement: Optional[str] = None,
     ) -> None:
         self.session_id = session_id
         self.template = template
@@ -97,6 +99,17 @@ class ChatAgent:
         # upserted to Postgres before the next turn. Empty dict on first
         # turn or when the row doesn't exist yet.
         self.agent_state: Dict[str, Any] = dict(agent_state or {})
+        # Client-pushed context (storefront → /widget/session/{id}/context).
+        # Policy comes off the template; ``context_placement`` is an optional
+        # per-turn render override carried by a piggyback ``context.placement``.
+        # Both feed render_client_context in _seed_context. config None →
+        # feature inert (no allowlist).
+        self._client_context_config = (
+            self.template.configurations.client_context
+            if self.template.configurations
+            else None
+        )
+        self._context_placement = context_placement
         # TemplateContext reads these off the bot. flow_config is set in
         # run_turn; vad_analyzer=None lets template/{vad,interruption}.py
         # bare-attribute checks short-circuit; lead/call_sid stay None
@@ -605,14 +618,30 @@ class ChatAgent:
         user_content: str,
         global_funcs: List[FlowsFunctionSchema],
     ) -> LLMContext:
-        """Build initial LLMContext: [role, task, …history…, new user]."""
+        """Build initial LLMContext: [role, task, …history…, new user].
+
+        Client-pushed facts (offers, cart summary, …) are rendered here:
+        ``user_block`` rides the user turn as untrusted data (cache-safe,
+        injection-safe); ``system_block`` (trusted, opt-in) is appended as
+        a system message right before the user turn. Both are EPHEMERAL —
+        never persisted to chat_message, re-derived from agent_state every
+        turn so they always reflect current truth (latest-wins).
+        """
         role_messages, task_messages = self._render_node_messages(node)
+        user_block, system_block = render_client_context(
+            self.agent_state,
+            self._client_context_config,
+            self._context_placement,
+        )
+        user_text = f"{user_block}\n\n{user_content}" if user_block else user_content
         messages: List[Dict[str, Any]] = [
             *role_messages,
             *task_messages,
             *history,
-            {"role": "user", "content": user_content},
         ]
+        if system_block:
+            messages.append({"role": "system", "content": system_block})
+        messages.append({"role": "user", "content": user_text})
         return LLMContext(
             messages=cast(List[LLMContextMessage], messages),
             tools=_tools_schema(node, global_funcs),

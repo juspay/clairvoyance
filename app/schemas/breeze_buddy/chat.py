@@ -160,10 +160,59 @@ class CreateChatSessionResponse(BaseModel):
     )
 
 
+class ClientContextPatch(BaseModel):
+    """A client-pushed context patch.
+
+    Used both as the standalone ``POST /widget/session/{id}/context`` body
+    (see :class:`UpdateWidgetContextRequest`) and as the optional
+    ``context`` piggyback field on :class:`SendChatMessageRequest`. All
+    fields optional; keys are allowlist-filtered server-side per the
+    template's ``configurations.client_context`` policy.
+    """
+
+    state: Optional[Dict[str, Any]] = Field(
+        None,
+        description=(
+            "Identifiers/flags merged into the top level of "
+            "agent_session_state.data (read by tool_arg_injection rules). "
+            "Allowlisted via configurations.client_context.state_allowlist."
+        ),
+    )
+    facts: Optional[Dict[str, Any]] = Field(
+        None,
+        description=(
+            "Ambient facts the LLM reasons over, merged into the reserved "
+            "client-context namespace and rendered each turn. Allowlisted "
+            "via configurations.client_context.facts_allowlist."
+        ),
+    )
+    merge: str = Field(
+        "shallow",
+        description='"shallow" (default, overlay) or "replace" (clear first).',
+    )
+    placement: Optional[str] = Field(
+        None,
+        description=(
+            "Optional per-turn render hint for the piggyback path: "
+            '"user_tail" | "system". Bounded by the template\'s '
+            "trusted_facts allowlist — a client can request system "
+            "framing, it can't grant it."
+        ),
+    )
+
+
 class SendChatMessageRequest(BaseModel):
     """Body of ``POST /session/{id}/message``."""
 
     content: str = Field(..., min_length=1, description="The user's message text.")
+    context: Optional[ClientContextPatch] = Field(
+        None,
+        description=(
+            "Optional context patch applied to this session (and persisted) "
+            "BEFORE the model runs this turn — lets a state/facts update ride "
+            "atomically with the message instead of a separate /context call."
+        ),
+    )
 
 
 class GetChatSessionResponse(BaseModel):
@@ -321,6 +370,43 @@ class CreateWidgetSessionResponse(BaseModel):
     )
 
 
+class UpdateWidgetContextRequest(ClientContextPatch):
+    """Body of ``POST /widget/session/{id}/context``.
+
+    A :class:`ClientContextPatch` plus an optional monotonic ``revision``
+    for last-writer-wins: a revision ``<=`` the last applied one is
+    ignored (returns ``applied=False``), so out-of-order pushes from a
+    racing storefront can't clobber newer context.
+    """
+
+    revision: Optional[int] = Field(
+        None,
+        description=(
+            "Optional monotonic revision. A stale (<= last applied) "
+            "revision is ignored. Omit for last-write-always semantics."
+        ),
+    )
+
+
+class UpdateWidgetContextResponse(BaseModel):
+    """Body of ``POST /widget/session/{id}/context``."""
+
+    applied: bool = Field(
+        ..., description="False when a stale revision was ignored (no-op)."
+    )
+    state_keys: List[str] = Field(
+        default_factory=list,
+        description="State keys accepted after allowlist filtering.",
+    )
+    facts_keys: List[str] = Field(
+        default_factory=list,
+        description="Fact keys accepted after allowlist filtering.",
+    )
+    revision: Optional[int] = Field(
+        None, description="Echo of the applied revision, if one was sent."
+    )
+
+
 class WidgetVoiceConnectResponse(BaseModel):
     """Body of ``POST /widget/session/{id}/voice/connect``."""
 
@@ -373,6 +459,14 @@ class WidgetSessionStateResponse(BaseModel):
     )
     template_vars: Dict[str, Any] = Field(default_factory=dict)
     metadata: Dict[str, Any] = Field(default_factory=dict)
+    client_context: Dict[str, Any] = Field(
+        default_factory=dict,
+        description=(
+            "Latest client-pushed facts namespace (from agent_session_state). "
+            "Lets the embed re-hydrate ambient context after a page reload. "
+            "Empty when none was pushed."
+        ),
+    )
 
 
 __all__ = [
@@ -386,6 +480,7 @@ __all__ = [
     "CreateChatSessionRequest",
     "CreateChatSessionResponse",
     "GreetingMessage",
+    "ClientContextPatch",
     "SendChatMessageRequest",
     "GetChatSessionResponse",
     "EndChatSessionResponse",
@@ -397,6 +492,8 @@ __all__ = [
     "CreateWidgetSessionRequest",
     "QuickReplyWire",
     "CreateWidgetSessionResponse",
+    "UpdateWidgetContextRequest",
+    "UpdateWidgetContextResponse",
     "WidgetVoiceConnectResponse",
     "WidgetVoiceEndResponse",
     "WidgetSessionStateResponse",

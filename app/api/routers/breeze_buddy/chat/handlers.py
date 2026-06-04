@@ -18,6 +18,10 @@ from app.ai.voice.agents.breeze_buddy.chat.block_codec import (
     blocks_to_llm_context_messages,
     filter_visible_blocks,
 )
+from app.ai.voice.agents.breeze_buddy.chat.client_context import (
+    ClientContextTooLarge,
+    apply_context_patch,
+)
 from app.ai.voice.agents.breeze_buddy.chat.metrics import TurnMetrics
 from app.ai.voice.agents.breeze_buddy.chat.sse import SSEEvent, format_sse
 from app.ai.voice.agents.breeze_buddy.llm import get_llm_service
@@ -35,6 +39,7 @@ from app.database.accessor.breeze_buddy.chat_session import (
     get_chat_session_by_id,
     insert_chat_message,
     list_chat_messages_for_session,
+    upsert_agent_session_state,
 )
 from app.database.accessor.breeze_buddy.credentials import (
     get_credentials_as_template_vars,
@@ -450,6 +455,35 @@ async def send_chat_message_handler(
         state_row = await get_agent_session_state(session_id)
         agent_state: Dict[str, Any] = state_row.data if state_row else {}
 
+        # Piggyback context patch (CLIENT_CONTEXT_UPDATES.md §5.2): an
+        # optional state/facts update riding with this message. Applied +
+        # persisted under the same lock BEFORE the turn builds, so it's
+        # effective on THIS turn (vs. the standalone /context endpoint, which
+        # lands on the next turn). Allowlist-gated by the template policy; an
+        # unconfigured template silently no-ops.
+        context_placement: Optional[str] = None
+        if req.context is not None:
+            cc_config = (
+                template.configurations.client_context
+                if template.configurations
+                else None
+            )
+            try:
+                agent_state, _, _ = apply_context_patch(
+                    agent_state,
+                    state=req.context.state,
+                    facts=req.context.facts,
+                    merge=req.context.merge,
+                    config=cc_config,
+                )
+            except ClientContextTooLarge as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                    detail=str(exc),
+                )
+            await upsert_agent_session_state(session_id, agent_state)
+            context_placement = req.context.placement
+
         persisted_template_vars = (
             fresh.metadata.get("template_vars", {})
             if isinstance(fresh.metadata, dict)
@@ -476,6 +510,7 @@ async def send_chat_message_handler(
             llm=llm,
             template_vars=template_vars,
             agent_state=agent_state,
+            context_placement=context_placement,
         )
         # Snapshot into a local so the closure below doesn't have to rely
         # on Optional narrowing surviving the boundary.

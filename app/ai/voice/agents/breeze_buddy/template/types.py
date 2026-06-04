@@ -1168,6 +1168,92 @@ class ToolArgInjection(BaseModel):
     )
 
 
+class ClientContextConfig(BaseModel):
+    """Per-template policy for client-pushed context updates.
+
+    The storefront embed can push context mid-session via
+    ``POST /widget/session/{id}/context`` (or the piggyback
+    ``SendChatMessageRequest.context`` field) — no LLM turn spent. Two
+    kinds, routed to the two existing sinks:
+
+    - **state** — identifiers/flags merged into the top level of
+      ``agent_session_state.data``, where the existing
+      :class:`ToolArgInjection` rules thread them into outgoing tool args
+      (e.g. a ``cart_id`` created client-side). Only keys in
+      ``state_allowlist`` are accepted.
+    - **facts** — ambient facts the LLM reasons over (offers, cart
+      summary, current page). Merged into the reserved
+      ``agent_session_state.data['_client_context']`` namespace and
+      rendered each turn as a delimited context block. Only keys in
+      ``facts_allowlist`` are accepted; the serialised namespace is
+      capped at ``max_bytes``.
+
+    Client data is **untrusted** — storefront JS is shopper-editable.
+    Facts render as ``user``-role data by default
+    (``facts_placement='user_tail'``): information to consider, never
+    instructions. A merchant may opt specific, curated keys into
+    stronger ``system``-role adherence via ``facts_placement='system'``
+    + ``trusted_facts``; keys NOT in ``trusted_facts`` always render
+    ``user_tail`` regardless, so shopper-supplied data can never be
+    elevated to instruction status. See docs/widget/CLIENT_CONTEXT_UPDATES.md.
+
+    Defaults are strict opt-in: with empty allowlists nothing is
+    accepted, so the feature is inert until a template enables it.
+    """
+
+    state_allowlist: List[str] = Field(
+        default_factory=list,
+        description=(
+            "Keys the client may write via `state`. Merged into the top "
+            "level of agent_session_state.data (read by tool_arg_injection "
+            "rules). Empty = reject all state writes."
+        ),
+    )
+    facts_allowlist: List[str] = Field(
+        default_factory=list,
+        description=(
+            "Top-level keys the client may write via `facts`. Non-listed "
+            "keys are dropped. Empty = reject all facts."
+        ),
+    )
+    max_bytes: int = Field(
+        4096,
+        ge=0,
+        description=(
+            "Hard cap on the serialised facts namespace so a buggy theme "
+            "can't blow the context window. Over-cap writes are rejected "
+            "with HTTP 413."
+        ),
+    )
+    render: bool = Field(
+        True,
+        description=(
+            "Whether the facts namespace is rendered into the turn at all. "
+            "False = state/tool-arg injection only, no prompt block."
+        ),
+    )
+    facts_placement: Literal["user_tail", "system"] = Field(
+        "user_tail",
+        description=(
+            "Default landing for rendered facts. 'user_tail' (default) = a "
+            "user-role data block in the volatile tail (cache-friendly, "
+            "injection-safe). 'system' = an appended system-role block for "
+            "instruction-strength adherence; only keys in `trusted_facts` "
+            "are elevated, everything else stays user_tail. Knowingly trades "
+            "prompt-prefix cache on Anthropic/Gemini."
+        ),
+    )
+    trusted_facts: List[str] = Field(
+        default_factory=list,
+        description=(
+            "Subset of `facts_allowlist` permitted to occupy `system` "
+            "placement. Only merchant-curated keys belong here — never "
+            "shopper-supplied ones. Empty = nothing may be elevated to "
+            "instructions."
+        ),
+    )
+
+
 class ConfigurationModel(BaseModel):
     # --- Agent session state (generic) ---
     state_reducers: List[StateReducer] = Field(
@@ -1184,6 +1270,16 @@ class ConfigurationModel(BaseModel):
             "Declarative rules that stamp session-state values onto "
             "outgoing MCP tool arguments (e.g. cart_id from prior turn). "
             "Generic engine — the template decides which args matter."
+        ),
+    )
+    client_context: Optional["ClientContextConfig"] = Field(
+        None,
+        description=(
+            "Optional. Policy for client-pushed context updates (the "
+            "storefront /widget/session/{id}/context channel). Allowlists "
+            "which state/facts keys the embed may write, caps facts size, "
+            "and chooses how facts render (data vs. instructions). Absent / "
+            "empty allowlists = feature inert."
         ),
     )
 
