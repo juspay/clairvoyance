@@ -334,13 +334,18 @@ _HEADER = (
     "Each Example below uses this form. The canonical "
     '{"op":"add","id":...,"type":...,"props":{...}} shape is also accepted.\n'
     "\n"
-    "Lists — render N similar items with ONE element, not N (far fewer tokens):\n"
-    '  {"+":"tile:Tile@root", "repeat":{"items":[<rows>],"key":"id"}, '
-    '"title":{"$item":"title"}, "media":{"src":{"$item":"image"}}}\n'
-    "  `repeat.items` is your data array — YOU pick the rows and which fields "
-    "to surface (so per-item choices like the matching variant's image/price "
-    'still apply); `{"$item":"<field>"}` binds that row\'s value (dotted '
-    "paths ok). The server expands it to one op per row, so all rows render."
+    "Lists/carousels — STREAM items progressively: emit the container op "
+    "FIRST, then ONE op per item, EACH ON ITS OWN LINE. The server forwards "
+    "each line the instant it completes, so items paint one-by-one as you "
+    "write them (fast first paint) instead of all landing at the end. You "
+    "still pick the items and each item's fields (e.g. the matching variant's "
+    "image/price). Example — container, then one compact op per item:\n"
+    '  {"+":"car:Carousel@root","snap":true}\n'
+    '  {"+":"p1:Tile@car","title":"Dawn","media":{"src":"https://x/1.jpg","alt":"Dawn"}}\n'
+    '  {"+":"p2:Tile@car","title":"Dusk","media":{"src":"https://x/2.jpg","alt":"Dusk"}}\n'
+    "Never pack a whole list into a single line (e.g. a `repeat` template with "
+    "an inline items array) — that holds the first item back until the entire "
+    "list is generated, defeating progressive rendering."
 )
 
 _FOOTER = (
@@ -353,8 +358,10 @@ _FOOTER = (
     '  - Root id is always "root"; root op omits `parent`.\n'
     "  - All non-root `add` ops MUST have `parent`.\n"
     "  - `replace` swaps props on an existing id; `remove` deletes a node.\n"
-    '  - For "items in a list", emit ONE Tile per item via a `repeat` '
-    "template (see Lists above) — never compose Card+Image+Text manually."
+    '  - For "items in a list", emit the container then ONE op per item, '
+    "each on its OWN line (see Lists above) so they stream in progressively "
+    "— never compose Card+Image+Text manually, and never pack the whole list "
+    "into one line."
 )
 
 _EMPTY_BODY = (
