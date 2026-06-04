@@ -139,7 +139,20 @@ def test_section_has_composition_rules_at_bottom():
     tail = section[rules_idx:]
     assert "Root id is always" in tail
     assert "non-root `add` ops MUST have `parent`" in tail
-    assert "ONE Tile per item" in tail
+    assert "ONE op per item" in tail
+
+
+def test_header_mandates_progressive_list_rendering():
+    # The shared prompt must steer the model toward streaming list items
+    # one-op-per-line (progressive paint), NOT packing them into a single
+    # `repeat` line (all-at-once). This is the load-bearing instruction for
+    # incremental rendering — pin it so a future prompt edit can't silently
+    # regress first-paint latency.
+    section = render_primitives_section({"Tile", "Carousel"})
+    assert "EACH ON ITS OWN LINE" in section
+    assert "progressive" in section.lower()
+    # And it must warn against the single-line / repeat batching form.
+    assert "Never pack a whole list into a single line" in section
 
 
 # ---------------------------------------------------------------------------
