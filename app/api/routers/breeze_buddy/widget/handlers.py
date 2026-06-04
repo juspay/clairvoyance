@@ -24,6 +24,12 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import HTTPException, Request, status
 
+from app.ai.voice.agents.breeze_buddy.chat.client_context import (
+    CLIENT_CONTEXT_KEY,
+    CLIENT_CONTEXT_REV_KEY,
+    ClientContextTooLarge,
+    apply_context_patch,
+)
 from app.ai.voice.agents.breeze_buddy.services.daily.daily import (
     daily_completion_function,
     start_daily_session,
@@ -53,8 +59,10 @@ from app.database.accessor.breeze_buddy.chat_session import (
     bind_voice_lead_to_chat_session,
     flip_chat_session_to_chat,
     flip_chat_session_to_voice,
+    get_agent_session_state,
     get_chat_session_by_id,
     list_chat_messages_for_session,
+    upsert_agent_session_state,
 )
 from app.database.accessor.breeze_buddy.lead_call_tracker import (
     handle_lead_abort,
@@ -78,6 +86,8 @@ from app.schemas.breeze_buddy.chat import (
     CreateWidgetSessionResponse,
     QuickReplyWire,
     SendChatMessageRequest,
+    UpdateWidgetContextRequest,
+    UpdateWidgetContextResponse,
     WidgetChannel,
     WidgetSessionStateResponse,
     WidgetVoiceConnectResponse,
@@ -300,6 +310,117 @@ async def cancel_widget_message_handler(
         return
     assert_widget_session_ownership(session, ctx)
     await cancel_chat_turn_handler(session_id)
+
+
+# ---------------------------------------------------------------------------
+# POST /widget/session/{id}/context
+# ---------------------------------------------------------------------------
+
+
+async def update_widget_context_handler(
+    session_id: str,
+    body: UpdateWidgetContextRequest,
+    request: Request,
+    ctx: WidgetSessionContext,
+) -> UpdateWidgetContextResponse:
+    """Push state/facts context into a live widget session — no LLM turn.
+
+    Applies to the NEXT ``/message`` turn (the standalone, out-of-band
+    update; use the message's ``context`` field to apply atomically with a
+    turn). Allowlist- + size-gated by the template's
+    ``configurations.client_context`` policy; an unconfigured template
+    accepts nothing. Serialised against an in-flight turn via the same
+    per-session Redis lock (see CLIENT_CONTEXT_UPDATES.md §5.1).
+    """
+    cfg = await get_widget_config_by_id(ctx.widget_config_id)
+    if cfg is None or not cfg.active:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Widget configuration not found or inactive",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    await enforce_widget_ip_limit(
+        request=request,
+        bucket="context",
+        limit=cfg.max_messages_per_ip_hour,
+        widget_config_id=cfg.id,
+    )
+
+    lock = _session_lock(session_id)
+    try:
+        await lock.acquire()
+    except LockAcquireError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Another operation is in flight for this session. Wait and retry.",
+        )
+
+    try:
+        session = await get_chat_session_by_id(session_id)
+        if session is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Widget session '{session_id}' not found",
+            )
+        assert_widget_session_ownership(session, ctx)
+        if session.status == ChatSessionStatus.ENDED:
+            raise HTTPException(
+                status_code=status.HTTP_410_GONE,
+                detail=f"Widget session '{session_id}' has ended",
+            )
+
+        template = await get_template_by_id_cached(session.template_id)
+        cc_config = (
+            template.configurations.client_context
+            if template is not None and template.configurations
+            else None
+        )
+
+        state_row = await get_agent_session_state(session_id)
+        state_data: Dict[str, Any] = state_row.data if state_row else {}
+
+        # Monotonic last-writer-wins: drop a stale revision so an
+        # out-of-order push from a racing storefront tab can't clobber
+        # newer context.
+        if body.revision is not None:
+            last_rev = state_data.get(CLIENT_CONTEXT_REV_KEY)
+            if isinstance(last_rev, int) and body.revision <= last_rev:
+                return UpdateWidgetContextResponse(
+                    applied=False, revision=body.revision
+                )
+
+        try:
+            next_state, state_keys, facts_keys = apply_context_patch(
+                state_data,
+                state=body.state,
+                facts=body.facts,
+                merge=body.merge,
+                config=cc_config,
+            )
+        except ClientContextTooLarge as exc:
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail=str(exc),
+            )
+
+        if body.revision is not None:
+            next_state[CLIENT_CONTEXT_REV_KEY] = body.revision
+
+        # Skip the write when nothing landed and there's no revision to
+        # record (e.g. template hasn't enabled the feature) — keeps inert
+        # pushes from churning the row.
+        if state_keys or facts_keys or body.revision is not None:
+            await upsert_agent_session_state(session_id, next_state)
+
+        return UpdateWidgetContextResponse(
+            applied=True,
+            state_keys=state_keys,
+            facts_keys=facts_keys,
+            revision=body.revision,
+        )
+    finally:
+        await lock.release()
 
 
 # ---------------------------------------------------------------------------
@@ -688,6 +809,17 @@ async def get_widget_session_state_handler(
         if isinstance(session.metadata, dict)
         else {}
     )
+
+    # Latest client-pushed facts so a reloaded page can re-hydrate ambient
+    # context without re-pushing. Identifiers in agent_session_state stay
+    # server-internal — only the facts namespace is surfaced.
+    state_row = await get_agent_session_state(session_id)
+    client_context: Dict[str, Any] = {}
+    if state_row and isinstance(state_row.data, dict):
+        facts = state_row.data.get(CLIENT_CONTEXT_KEY)
+        if isinstance(facts, dict):
+            client_context = facts
+
     return WidgetSessionStateResponse(
         session_id=session_id,
         status=session.status,
@@ -698,4 +830,5 @@ async def get_widget_session_state_handler(
         enable_text_input=enable_text_input,
         template_vars=template_vars,
         metadata=session.metadata or {},
+        client_context=client_context,
     )
