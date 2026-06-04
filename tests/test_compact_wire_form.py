@@ -263,3 +263,66 @@ def test_empty_repeat_items_is_not_flagged() -> None:
         }
     )
     assert process_op_line(line) == []
+
+
+# ---------------------------------------------------------------------------
+# Root anchoring — multiple top-level blocks in one turn (compound requests)
+# ---------------------------------------------------------------------------
+
+
+def test_root_anchor_injected_for_orphan_block() -> None:
+    # Block parents to `root` but the model never `add`ed root → inject a
+    # neutral Stack root first, so the block has an anchor (else it orphans
+    # and the widget renders nothing).
+    known: set = set()
+    line = (
+        '{"op":"add","id":"cart","type":"Stack","parent":"root","props":{"gap":"md"}}'
+    )
+    ops = [
+        e.data["op"]
+        for e in process_op_line(line, known_ids=known)
+        if e.event == "ui_op"
+    ]
+    assert [(o["op"], o["id"], o.get("type")) for o in ops] == [
+        ("add", "root", "Stack"),
+        ("add", "cart", "Stack"),
+    ]
+    assert "root" in known
+
+
+def test_replace_root_rescued_to_add_anchor() -> None:
+    # A `replace root` before root exists (model assumed a prior-turn root) is
+    # rescued into the anchoring add.
+    known: set = set()
+    line = '{"op":"replace","id":"root","props":{"gap":"md"}}'
+    ops = [
+        e.data["op"]
+        for e in process_op_line(line, known_ids=known)
+        if e.event == "ui_op"
+    ]
+    assert len(ops) == 1
+    assert (ops[0]["op"], ops[0]["id"], ops[0]["type"]) == ("add", "root", "Stack")
+
+
+def test_no_anchor_when_model_adds_root() -> None:
+    # Normal single-block render: the block IS root → no injection, untouched.
+    known: set = set()
+    line = '{"op":"add","id":"root","type":"Carousel","props":{"snap":true}}'
+    ops = [
+        e.data["op"]
+        for e in process_op_line(line, known_ids=known)
+        if e.event == "ui_op"
+    ]
+    assert len(ops) == 1 and ops[0]["id"] == "root" and ops[0]["type"] == "Carousel"
+
+
+def test_second_block_does_not_duplicate_root() -> None:
+    # Two top-level blocks → exactly one injected root; both attach as siblings.
+    known: set = set()
+    l1 = '{"op":"add","id":"cart","type":"Stack","parent":"root","props":{"gap":"md"}}'
+    l2 = '{"op":"add","id":"bottles","type":"Carousel","parent":"root","props":{"snap":true}}'
+    process_op_line(l1, known_ids=known)  # anchors root + adds cart
+    ops2 = [
+        e.data["op"] for e in process_op_line(l2, known_ids=known) if e.event == "ui_op"
+    ]
+    assert [(o["op"], o["id"]) for o in ops2] == [("add", "bottles")]  # no second root

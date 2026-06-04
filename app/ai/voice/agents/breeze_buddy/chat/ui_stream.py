@@ -635,10 +635,42 @@ def process_op_line(
 
         op = parsed.op  # type: ignore[assignment]
         if known_ids is not None and op is not None:
+            # Guarantee the conventional `root` container is anchored before any
+            # block attaches to it. The widget anchors its per-message tree on
+            # the first `add id="root"` and DROPS any add whose parent doesn't
+            # exist. A turn that renders MULTIPLE top-level blocks (e.g. a cart
+            # card AND a product carousel) can't make them all BE root, so the
+            # model parents each to `root` with its own id — but may forget to
+            # `add` root, which orphans the whole tree into a blank reply. Inject
+            # a neutral Stack root so no block orphans; rescue a stray
+            # `replace root` (model assuming a prior turn's root) into that
+            # anchoring add. Domain-blind; a no-op once root exists, so normal
+            # single-block renders (the block IS root) are untouched.
+            if "root" not in known_ids:
+                if op["op"] == "replace" and op["id"] == "root":
+                    op = {
+                        "op": "add",
+                        "id": "root",
+                        "type": "Stack",
+                        "props": op.get("props") or {"gap": "md"},
+                    }
+                elif op["op"] == "add" and op.get("parent") == "root":
+                    known_ids.add("root")
+                    events.append(
+                        ui_op_event(
+                            {
+                                "op": "add",
+                                "id": "root",
+                                "type": "Stack",
+                                "props": {"gap": "md"},
+                            }
+                        )
+                    )
+
             if op["op"] == "add":
-                known_ids.add(op["id"])
+                known_ids.add(str(op["id"]))
             elif op["op"] == "remove":
-                known_ids.discard(op["id"])
+                known_ids.discard(str(op["id"]))
 
         events.append(ui_op_event(op))  # type: ignore[arg-type]
     return events
