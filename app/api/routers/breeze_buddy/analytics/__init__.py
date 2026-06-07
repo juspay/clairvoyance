@@ -20,6 +20,7 @@ from .handlers import (
     download_call_details,
     get_call_based_analytics,
     get_call_details_analytics,
+    get_call_details_grouped_analytics,
     get_conversion_analytics,
     get_distinct_merchant_ids,
     get_distinct_outcomes,
@@ -39,6 +40,7 @@ router = APIRouter()
 _ANALYTICS_HANDLERS: Dict[AnalyticsType, Callable[..., Awaitable]] = {
     AnalyticsType.CALL_BASED: get_call_based_analytics,
     AnalyticsType.CALL_DETAILS: get_call_details_analytics,
+    AnalyticsType.CALL_DETAILS_GROUPED: get_call_details_grouped_analytics,
     AnalyticsType.LEAD_BASED: get_lead_based_analytics,
     AnalyticsType.LEAD_STATUS_COUNTS: get_lead_status_counts,
     AnalyticsType.OUTBOUND_NUMBERS: get_outbound_numbers_analytics,
