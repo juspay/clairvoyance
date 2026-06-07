@@ -20,6 +20,7 @@ class AnalyticsType(str, Enum):
     CALL_DETAILS_DOWNLOAD = "call-details-download"
     DISTINCT_OUTCOMES = "distinct-outcomes"
     OUTCOME_COUNTS = "outcome-counts"
+    CALL_DETAILS_GROUPED = "call-details-grouped"
     DISTINCT_RESELLERS = "distinct-resellers"
     DISTINCT_MERCHANT_IDS = "distinct-merchant-ids"
 
@@ -161,6 +162,14 @@ class CallDetailResult(BaseModel):
     updated_at: Optional[datetime] = None
     execution_mode: Optional[str] = None
     call_direction: Optional[str] = None
+
+
+class CallDetailGroupedResult(BaseModel):
+    """Grouped call details by request_id (order_id)."""
+
+    request_id: str
+    lead_ids: List[str]
+    leads: List[CallDetailResult]
 
 
 class TrendDataPoint(BaseModel):

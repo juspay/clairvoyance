@@ -8,6 +8,8 @@ from typing import Any, Dict, List, Optional
 from app.core.logger import logger
 from app.database.queries import run_parameterized_query
 from app.database.queries.breeze_buddy.analytics import (
+    get_analytics_call_details_grouped_count_query,
+    get_analytics_call_details_grouped_query,
     get_analytics_call_details_query,
     get_analytics_count_query,
     get_analytics_lead_based_query,
@@ -441,6 +443,48 @@ async def get_lead_status_counts_from_db(
 
     except Exception as e:
         logger.error(f"Error getting lead status counts: {e}", exc_info=True)
+        raise
+
+
+async def get_call_details_grouped_count_from_db(
+    filters: Dict[str, Any],
+) -> int:
+    """Count distinct request_ids matching filters for grouped pagination."""
+    logger.debug(f"[Analytics DB] Getting grouped count with filters: {filters}")
+    try:
+        query_text, values = get_analytics_call_details_grouped_count_query(filters)
+        result = await run_parameterized_query(query_text, values)
+        count = result[0]["count"] if result and len(result) > 0 else 0
+        logger.debug(f"[Analytics DB] Grouped count result: {count}")
+        return count or 0
+    except Exception as e:
+        logger.error(f"Error getting grouped count: {e}", exc_info=True)
+        raise
+
+
+async def get_call_details_grouped_from_db(
+    filters: Dict[str, Any],
+    limit: int = 50,
+    offset: int = 0,
+    sort_by: str = "call_initiated_time",
+    sort_order: str = "desc",
+) -> List[Dict[str, Any]]:
+    """Fetch all call detail records for paginated request_ids."""
+    logger.info(
+        f"[Analytics DB] Getting grouped call details with filters: {filters}, "
+        f"limit: {limit}, offset: {offset}"
+    )
+    try:
+        query_text, values = get_analytics_call_details_grouped_query(
+            filters, limit, offset, sort_by, sort_order
+        )
+        result = await run_parameterized_query(query_text, values)
+        logger.info(
+            f"[Analytics DB] Grouped call details returned {len(result) if result else 0} records"
+        )
+        return [dict(row) for row in result] if result else []
+    except Exception as e:
+        logger.error(f"Error getting grouped call details: {e}", exc_info=True)
         raise
 
 

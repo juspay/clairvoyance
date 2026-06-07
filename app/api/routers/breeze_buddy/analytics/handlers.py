@@ -15,6 +15,8 @@ from app.database.accessor.breeze_buddy.analytics import (
     get_analytics_count_from_db,
     get_call_detail_records,
     get_call_details_from_db,
+    get_call_details_grouped_count_from_db,
+    get_call_details_grouped_from_db,
     get_distinct_merchant_ids_from_db,
     get_distinct_outcomes_from_db,
     get_distinct_resellers_from_db,
@@ -26,7 +28,7 @@ from app.database.accessor.breeze_buddy.analytics import (
     get_summary_analytics_from_db,
     get_trends_analytics_from_db,
 )
-from app.schemas import CallDetailResult, UserInfo
+from app.schemas import CallDetailGroupedResult, CallDetailResult, UserInfo
 from app.utils.common import parse_json
 
 
@@ -164,67 +166,119 @@ async def get_call_details_analytics(
 
     results = []
     for tracker in trackers:
-        duration = None
-        if tracker.get("call_initiated_time") and tracker.get("call_end_time"):
-            duration = int(
-                (
-                    tracker["call_end_time"] - tracker["call_initiated_time"]
-                ).total_seconds()
-            )
-
-        payload = parse_json(tracker, "payload")
-        metadata = parse_json(tracker, "meta_data")
-
-        transcript = None
-        if metadata:
-            transcription_data = metadata.get("transcription")
-            if transcription_data:
-                if isinstance(transcription_data, dict):
-                    transcript = (
-                        transcription_data.get("transcript")
-                        or transcription_data.get("text")
-                        or transcription_data.get("content")
-                    )
-                elif isinstance(transcription_data, str):
-                    transcript = transcription_data
-
-        results.append(
-            CallDetailResult(
-                call_id=tracker.get("call_id") or tracker["id"],
-                lead_id=tracker["id"],
-                order_id=tracker.get("request_id"),
-                template=tracker["template"],
-                reseller_id=tracker["reseller_id"],
-                merchant_id=tracker.get("merchant_id"),
-                shop_name=payload.get("shop_name") if payload else None,
-                customer_name=payload.get("customer_name") if payload else None,
-                customer_phone=payload.get("phone") if payload else None,
-                customer_mobile_number=(
-                    payload.get("customer_mobile_number") if payload else None
-                ),
-                status=tracker.get("status", "UNKNOWN"),
-                outcome=tracker.get("outcome") if tracker.get("outcome") else "N/A",
-                duration=duration,
-                recording_url=tracker.get("recording_url"),
-                transcript=transcript,
-                calling_provider=tracker.get("calling_provider"),
-                attempt_count=tracker.get("attempt_count"),
-                cost=tracker.get("cost"),
-                payload=payload,
-                call_initiated_time=tracker.get("call_initiated_time"),
-                created_at=tracker.get("call_initiated_time")
-                or tracker.get("created_at")
-                or datetime.now(),
-                updated_at=tracker.get("updated_at"),
-                execution_mode=tracker.get("execution_mode"),
-                call_direction=tracker.get("call_direction"),
-            )
-        )
+        results.append(_build_call_detail_result(tracker))
 
     return {
         "type": "call-details",
         "filters_applied": filters,
         "results": [r.model_dump() for r in results],
+        "pagination": {
+            "page": page,
+            "limit": limit,
+            "total": total,
+            "total_pages": total_pages,
+        },
+    }
+
+
+def _build_call_detail_result(tracker: Dict[str, Any]) -> CallDetailResult:
+    """Build a CallDetailResult from a raw tracker dict."""
+    duration = None
+    if tracker.get("call_initiated_time") and tracker.get("call_end_time"):
+        duration = int(
+            (tracker["call_end_time"] - tracker["call_initiated_time"]).total_seconds()
+        )
+
+    payload = parse_json(tracker, "payload")
+    metadata = parse_json(tracker, "meta_data")
+
+    transcript = None
+    if metadata:
+        transcription_data = metadata.get("transcription")
+        if transcription_data:
+            if isinstance(transcription_data, dict):
+                transcript = (
+                    transcription_data.get("transcript")
+                    or transcription_data.get("text")
+                    or transcription_data.get("content")
+                )
+            elif isinstance(transcription_data, str):
+                transcript = transcription_data
+
+    return CallDetailResult(
+        call_id=tracker.get("call_id") or tracker["id"],
+        lead_id=tracker["id"],
+        order_id=tracker.get("request_id"),
+        template=tracker["template"],
+        reseller_id=tracker["reseller_id"],
+        merchant_id=tracker.get("merchant_id"),
+        shop_name=payload.get("shop_name") if payload else None,
+        customer_name=payload.get("customer_name") if payload else None,
+        customer_phone=payload.get("phone") if payload else None,
+        customer_mobile_number=(
+            payload.get("customer_mobile_number") if payload else None
+        ),
+        status=tracker.get("status", "UNKNOWN"),
+        outcome=tracker.get("outcome") if tracker.get("outcome") else "N/A",
+        duration=duration,
+        recording_url=tracker.get("recording_url"),
+        transcript=transcript,
+        calling_provider=tracker.get("calling_provider"),
+        attempt_count=tracker.get("attempt_count"),
+        cost=tracker.get("cost"),
+        payload=payload,
+        call_initiated_time=tracker.get("call_initiated_time"),
+        created_at=tracker.get("call_initiated_time")
+        or tracker.get("created_at")
+        or datetime.now(),
+        updated_at=tracker.get("updated_at"),
+        execution_mode=tracker.get("execution_mode"),
+        call_direction=tracker.get("call_direction"),
+    )
+
+
+async def get_call_details_grouped_analytics(
+    filters: Dict[str, Any], options: Dict[str, Any], current_user: UserInfo
+) -> Dict[str, Any]:
+    """Get paginated call details grouped by request_id (order_id)."""
+    page = options.get("page", 1)
+    limit = options.get("limit", 50)
+    sort_by = options.get("sort_by", "call_initiated_time")
+    sort_order = options.get("sort_order", "desc")
+
+    offset = (page - 1) * limit
+
+    total = await get_call_details_grouped_count_from_db(filters)
+    total_pages = (total + limit - 1) // limit if limit > 0 else 0
+
+    trackers = await get_call_details_grouped_from_db(
+        filters=filters,
+        limit=limit,
+        offset=offset,
+        sort_by=sort_by,
+        sort_order=sort_order,
+    )
+
+    grouped: Dict[str, CallDetailGroupedResult] = {}
+    for tracker in trackers:
+        request_id = tracker.get("request_id")
+        if not request_id:
+            continue
+
+        if request_id not in grouped:
+            grouped[request_id] = CallDetailGroupedResult(
+                request_id=request_id,
+                lead_ids=[],
+                leads=[],
+            )
+
+        grouped[request_id].lead_ids.append(tracker["id"])
+        grouped[request_id].leads.append(_build_call_detail_result(tracker))
+
+    return {
+        "type": "call-details-grouped",
+        "filters_applied": filters,
+        "results": [g.model_dump() for g in grouped.values()],
         "pagination": {
             "page": page,
             "limit": limit,

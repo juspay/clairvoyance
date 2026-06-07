@@ -1072,6 +1072,97 @@ def get_outcome_counts_total_query(
     return query, values
 
 
+def get_analytics_call_details_grouped_count_query(
+    filters: Dict[str, Any],
+) -> Tuple[str, List[Any]]:
+    """
+    Count distinct request_ids matching filters for grouped call details pagination.
+    """
+    conditions, values = build_analytics_where_clause(
+        filters, filter_execution_mode=False
+    )
+    conditions.append("lct.request_id IS NOT NULL")
+    where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
+
+    join_clause = (
+        f'LEFT JOIN "{OUTBOUND_NUMBER_TABLE}" ou ON lct.outbound_number_id = ou.id'
+        if "provider" in filters and filters["provider"]
+        else ""
+    )
+
+    text = f"""
+        SELECT COUNT(DISTINCT lct.request_id) as count
+        FROM "{LEAD_CALL_TRACKER_TABLE}" lct
+        {join_clause}
+        {where_clause};
+    """
+
+    return text, values
+
+
+def get_analytics_call_details_grouped_query(
+    filters: Dict[str, Any],
+    limit: int = 50,
+    offset: int = 0,
+    sort_by: str = "call_initiated_time",
+    sort_order: str = "desc",
+) -> Tuple[str, List[Any]]:
+    """
+    Fetch all call detail records for paginated request_ids.
+    Uses a CTE to first get paginated distinct request_ids, then fetches all
+    records belonging to those request_ids.
+    """
+    conditions, values = build_analytics_where_clause(
+        filters, filter_execution_mode=False
+    )
+    conditions.append("lct.request_id IS NOT NULL")
+    where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
+
+    allowed_sort_columns = [
+        "created_at",
+        "call_initiated_time",
+        "call_end_time",
+        "updated_at",
+    ]
+    if sort_by not in allowed_sort_columns:
+        sort_by = "call_initiated_time"
+
+    sort_direction = "DESC" if sort_order.lower() == "desc" else "ASC"
+
+    cte_join_clause = (
+        f'LEFT JOIN "{OUTBOUND_NUMBER_TABLE}" ou ON lct.outbound_number_id = ou.id'
+        if "provider" in filters and filters["provider"]
+        else ""
+    )
+
+    pagination_params_start = len(values) + 1
+
+    text = f"""
+        WITH paginated_request_ids AS (
+            SELECT lct.request_id
+            FROM "{LEAD_CALL_TRACKER_TABLE}" lct
+            {cte_join_clause}
+            {where_clause}
+            GROUP BY lct.request_id
+            ORDER BY MAX(lct.{sort_by}) {sort_direction}
+            LIMIT ${pagination_params_start}
+            OFFSET ${pagination_params_start + 1}
+        )
+        SELECT
+            lct.*,
+            ou.provider as calling_provider
+        FROM "{LEAD_CALL_TRACKER_TABLE}" lct
+        LEFT JOIN "{OUTBOUND_NUMBER_TABLE}" ou ON lct.outbound_number_id = ou.id
+        WHERE lct.request_id IN (SELECT request_id FROM paginated_request_ids)
+        ORDER BY MAX(lct.{sort_by}) OVER (PARTITION BY lct.request_id) {sort_direction},
+                 lct.call_initiated_time ASC;
+    """
+
+    values.extend([limit, offset])
+
+    return text, values
+
+
 def get_distinct_resellers_query(
     filters: Dict[str, Any],
 ) -> Tuple[str, List[Any]]:
