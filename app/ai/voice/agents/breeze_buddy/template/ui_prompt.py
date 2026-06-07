@@ -84,6 +84,14 @@ _EXAMPLES: Dict[str, Dict[str, Any]] = {
         "action": {"type": "to_assistant", "msg": "Tell me more about <id>"},
         "variant": "primary",
     },
+    "QuickReplies": {
+        "+": "qr1:QuickReplies@root",
+        "items": [
+            {"label": "Yes, confirm"},
+            {"label": "No, cancel", "value": "cancel_order_intent"},
+            {"label": "Show more options"},
+        ],
+    },
     "Handoff": {
         "+": "h1:Handoff@root",
         "reason": "<intent>",

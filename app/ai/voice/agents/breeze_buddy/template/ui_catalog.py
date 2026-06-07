@@ -205,6 +205,56 @@ class Buttons(_CatalogBase):
     align: Optional[Literal["start", "center", "end"]] = "start"
 
 
+class QuickReplyItem(BaseModel):
+    """One pill in a ``QuickReplies`` row.
+
+    ``value`` is what gets sent to the agent; ``label`` is what the user
+    sees. When ``value`` is absent the widget echoes ``label`` verbatim.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    label: str = Field(..., min_length=1, description="Button text shown to the user.")
+    value: Optional[str] = Field(
+        None,
+        description=(
+            "Payload sent to the agent. Falls back to ``label`` when absent — "
+            "lets the display text differ from the agent instruction."
+        ),
+    )
+
+
+class QuickReplies(_CatalogBase):
+    """Turn-scoped quick-reply row — the LLM-driven equivalent of startup
+    chicklets.
+
+    Emit at the end of any assistant turn where you want to suggest 2–5
+    follow-up options. The widget renders them as pill buttons right below
+    the message; clicking one fires a ``to_assistant`` action and disables
+    the whole row (one-shot).
+
+    Use ``QuickReplies`` instead of ``Buttons`` when the options are
+    *transient turn suggestions* (e.g. "Do you want to confirm?", "See
+    more options", "Back to menu"). Use ``Buttons``/``Button`` when the
+    action is a persistent CTA (checkout, product link, handoff).
+
+    Example::
+
+        {"op":"add","id":"qr1","type":"QuickReplies","props":{"items":[
+            {"label":"Yes, confirm"},
+            {"label":"No, cancel"},
+            {"label":"Show me alternatives"}
+        ]}}
+    """
+
+    items: List[QuickReplyItem] = Field(
+        ...,
+        min_length=2,
+        max_length=8,
+        description="2–8 reply options. Shown as pill buttons.",
+    )
+
+
 # ---------------------------------------------------------------------------
 # Data primitives (group: core)
 # ---------------------------------------------------------------------------
@@ -585,6 +635,7 @@ UI_CATALOG: Dict[str, Type[_CatalogBase]] = {
     # Actions (core)
     "Button": Button,
     "Buttons": Buttons,
+    "QuickReplies": QuickReplies,
     # Data (core)
     "Table": Table,
     # Typed (core)
@@ -621,6 +672,7 @@ PRIMITIVE_GROUPS: Dict[str, List[str]] = {
         "Tag",
         "Button",
         "Buttons",
+        "QuickReplies",
         "Table",
         "Message",
         "Handoff",
@@ -671,6 +723,7 @@ PRIMITIVE_RENDER_ORDER: List[str] = [
     # Actions
     "Button",
     "Buttons",
+    "QuickReplies",
     "Handoff",
     # Data
     "Table",
