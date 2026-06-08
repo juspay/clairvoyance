@@ -95,13 +95,72 @@ def search_active_memories_query(
         ORDER BY embedding <=> $4::halfvec(768)
         LIMIT $5;
     """
+    return (
+        text,
+        [
+            reseller_id,
+            merchant_id,
+            customer_key,
+            vector_literal(embedding),
+            max(1, limit),
+        ],
+    )
+
+
+def find_duplicate_memory_query(
+    reseller_id: str,
+    merchant_id: str,
+    customer_key: str,
+    fact: str,
+    embedding: Optional[List[float]],
+    distance_threshold: float = 0.08,
+) -> Tuple[str, List[Any]]:
+    text = f"""
+        SELECT {_FACT_COLUMNS} FROM "{USER_MEMORY_TABLE}"
+        WHERE reseller_id = $1
+          AND merchant_id = $2
+          AND customer_key = $3
+          AND superseded_at IS NULL
+          AND (expires_at IS NULL OR expires_at > now())
+          AND (
+              lower(btrim(fact)) = lower(btrim($4))
+              OR (
+                  $5::halfvec(768) IS NOT NULL
+                  AND embedding IS NOT NULL
+                  AND (embedding <=> $5::halfvec(768)) <= $6
+              )
+          )
+        ORDER BY confidence DESC, updated_at DESC
+        LIMIT 1
+        FOR UPDATE;
+    """
     return text, [
         reseller_id,
         merchant_id,
         customer_key,
-        vector_literal(embedding),
-        max(1, limit),
+        fact,
+        vector_literal(embedding) if embedding else None,
+        distance_threshold,
     ]
+
+
+def supersede_exact_fact_query(
+    reseller_id: str,
+    merchant_id: str,
+    customer_key: str,
+    fact: str,
+) -> Tuple[str, List[Any]]:
+    text = f"""
+        UPDATE "{USER_MEMORY_TABLE}"
+        SET superseded_at = now(), updated_at = now()
+        WHERE reseller_id = $1
+          AND merchant_id = $2
+          AND customer_key = $3
+          AND superseded_at IS NULL
+          AND lower(btrim(fact)) = lower(btrim($4))
+        RETURNING {_FACT_COLUMNS};
+    """
+    return text, [reseller_id, merchant_id, customer_key, fact]
 
 
 def supersede_memory_query(
@@ -110,6 +169,7 @@ def supersede_memory_query(
     customer_key: str,
     memory_id: str,
 ) -> Tuple[str, List[Any]]:
+    """Supersede one record while preserving the foundation's public query API."""
     text = f"""
         UPDATE "{USER_MEMORY_TABLE}"
         SET superseded_at = now(), updated_at = now()
@@ -121,6 +181,33 @@ def supersede_memory_query(
         RETURNING {_FACT_COLUMNS};
     """
     return text, [reseller_id, merchant_id, customer_key, memory_id]
+
+
+def prune_active_memories_query(
+    reseller_id: str,
+    merchant_id: str,
+    customer_key: str,
+    max_facts: int,
+) -> Tuple[str, List[Any]]:
+    text = f"""
+        WITH overflow AS (
+            SELECT id
+            FROM "{USER_MEMORY_TABLE}"
+            WHERE reseller_id = $1
+              AND merchant_id = $2
+              AND customer_key = $3
+              AND superseded_at IS NULL
+              AND (expires_at IS NULL OR expires_at > now())
+            ORDER BY confidence DESC, updated_at DESC, created_at DESC
+            OFFSET $4
+        )
+        UPDATE "{USER_MEMORY_TABLE}" AS memory
+        SET superseded_at = now(), updated_at = now()
+        FROM overflow
+        WHERE memory.id = overflow.id
+        RETURNING {_FACT_COLUMNS};
+    """
+    return text, [reseller_id, merchant_id, customer_key, max(1, max_facts)]
 
 
 def repoint_memory_key_query(
@@ -146,6 +233,53 @@ def repoint_memory_key_query(
         new_customer_key,
         new_key_type,
     ]
+
+
+def deduplicate_merged_memories_query(
+    reseller_id: str,
+    merchant_id: str,
+    customer_key: str,
+    distance_threshold: float = 0.08,
+) -> Tuple[str, List[Any]]:
+    text = f"""
+        UPDATE "{USER_MEMORY_TABLE}" AS loser
+        SET superseded_at = now(), updated_at = now()
+        WHERE loser.reseller_id = $1
+          AND loser.merchant_id = $2
+          AND loser.customer_key = $3
+          AND loser.superseded_at IS NULL
+          AND EXISTS (
+              SELECT 1
+              FROM "{USER_MEMORY_TABLE}" AS winner
+              WHERE winner.reseller_id = loser.reseller_id
+                AND winner.merchant_id = loser.merchant_id
+                AND winner.customer_key = loser.customer_key
+                AND winner.superseded_at IS NULL
+                AND winner.id <> loser.id
+                AND (
+                    lower(btrim(winner.fact)) = lower(btrim(loser.fact))
+                    OR (
+                        winner.embedding IS NOT NULL
+                        AND loser.embedding IS NOT NULL
+                        AND (winner.embedding <=> loser.embedding) <= $4
+                    )
+                )
+                AND (
+                    winner.confidence > loser.confidence
+                    OR (
+                        winner.confidence = loser.confidence
+                        AND winner.updated_at > loser.updated_at
+                    )
+                    OR (
+                        winner.confidence = loser.confidence
+                        AND winner.updated_at = loser.updated_at
+                        AND winner.id::text > loser.id::text
+                    )
+                )
+          )
+        RETURNING {_FACT_COLUMNS};
+    """
+    return text, [reseller_id, merchant_id, customer_key, distance_threshold]
 
 
 def purge_expired_memories_query(limit: int = 1000) -> Tuple[str, List[Any]]:

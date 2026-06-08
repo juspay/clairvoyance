@@ -126,6 +126,14 @@ ENABLE_MUTE_UNTIL_FIRST_BOT_COMPLETE = (
     os.environ.get("ENABLE_MUTE_UNTIL_FIRST_BOT_COMPLETE", "false").lower() == "true"
 )
 
+# Persistent user memory (Breeze Buddy). Runtime controls are dynamic; the
+# scheduler cadence and provider base URL are structural startup settings.
+MEMORY_EXTRACTION_INTERVAL_SECONDS = int(
+    os.environ.get("MEMORY_EXTRACTION_INTERVAL_SECONDS", "60")
+)
+SUPERMEMORY_BASE_URL = os.environ.get(
+    "SUPERMEMORY_BASE_URL", "https://api.supermemory.ai"
+)
 
 # Tracing
 ENABLE_TRACING = os.environ.get("ENABLE_TRACING", "false").lower() == "true"

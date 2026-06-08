@@ -1,44 +1,37 @@
-# Persistent User Memory — Foundation
+# Persistent User Memory — Runtime Core
 
-> **PR scope:** specification, final database schema, thin database access
-> layer, and configuration contracts only.
+> **Status:** This follow-up builds the runtime core on the foundation from PR
+> #800. Channel wiring and scheduler registration remain intentionally deferred
+> to the integration PR.
 >
-> Runtime extraction, queueing, backend adapters, read injection, and channel
-> wiring are intentionally deferred to the next PR.
+> **Scope:** Breeze Buddy voice and chat. The Automatic agent is unaffected.
 
-## Split and follow-up
+## Guarantees
 
-This PR establishes the stable foundation that the runtime implementation will
-consume. The already-built hardened runtime is preserved on
-`feat/memory-runtime-hardening` and will be rebased onto this foundation for the
-next PR. That follow-up will reuse the contracts here rather than duplicate or
-replace them.
-
-The next PR owns:
-
-1. Customer identity resolution and phone-to-customer merge orchestration.
-2. The Redis extraction queue, retry/lease behavior, and drain worker.
-3. Curator extraction and pluggable pgvector/Supermemory adapters.
-4. Voice/chat enqueue points and safe user-role memory injection.
-5. Scheduler registration, purge wiring, metrics, and operational alerts.
-
-Nothing in this PR reads, writes, extracts, or injects memory at runtime.
-
-## Product contract
-
-- Memory is shared across a merchant's opted-in voice and chat templates.
+- Memory is opt-in twice: the dynamic `BUDDY_MEMORY_ENABLED` kill switch and
+  `ConfigurationModel.memory.enabled` must both be true.
 - Every fact is scoped by `(reseller_id, merchant_id, customer_key)`.
-- Templates control participation only through `memory.enabled`.
-- Backend, identity policy, retention, limits, and embedding selection are
-  global engine settings.
-- The global `BUDDY_MEMORY_ENABLED` flag remains an incident-response kill
-  switch in addition to template opt-in.
-- Raw transcripts stay in their source lead/chat tables. Only curated facts
-  may enter a memory backend.
-- Retrieved facts are untrusted user data and must be appended as user-role
-  context, never as system instructions.
+- The worker sends only curator-produced facts to storage backends. Raw
+  transcripts remain in their source lead/chat tables.
+- Reads fail open. Failed writes raise into a crash-safe Redis retry path.
+- Conversational facts are untrusted user data. `render_memory_user_tail()`
+  produces a JSON-escaped user-role block; memory must never be injected as a
+  system instruction.
 
-Template configuration:
+## Runtime resolution
+
+`resolve_memory_runtime()` is the only runtime entry point. It applies:
+
+1. Template opt-in.
+2. Dynamic global kill switch.
+3. Non-empty reseller and merchant scope.
+4. Strict global engine and credential validation.
+5. Customer identity resolution using the global identity policy.
+
+The resulting `ResolvedMemoryRuntime` contains the validated global
+`MemoryEngineConfig` and resolved customer identity used by `MemoryService`.
+
+Template memory configuration:
 
 ```json
 {
@@ -48,85 +41,176 @@ Template configuration:
 }
 ```
 
-Unknown fields in the template memory object are rejected so backend or policy
-overrides cannot silently become template-specific.
-
-## Global configuration
-
-The following accessors use the standard Redis/DevCycle, environment, and
-default cascade:
+Templates cannot override engine policy. The global engine is resolved
+dynamically through the standard Redis/DevCycle, environment, and default
+cascade:
 
 ```text
-BUDDY_MEMORY_ENABLED=false
-BUDDY_MEMORY_BACKEND=pgvector
-BUDDY_MEMORY_IDENTITY_FIELD=customer_id
-BUDDY_MEMORY_PHONE_FIELD=customer_mobile_number
-BUDDY_MEMORY_PHONE_DEFAULT_REGION=
-BUDDY_MEMORY_ALLOW_PHONE_FALLBACK=true
-BUDDY_MEMORY_RETENTION_DAYS=180
-BUDDY_MEMORY_EMBEDDING_PROVIDER=azure_openai
-BUDDY_MEMORY_EMBEDDING_MODEL=text-embedding-3-large
-MEMORY_MAX_FACTS_PER_USER=100
+BUDDY_MEMORY_BACKEND
+BUDDY_MEMORY_IDENTITY_FIELD
+BUDDY_MEMORY_PHONE_FIELD
+BUDDY_MEMORY_PHONE_DEFAULT_REGION
+BUDDY_MEMORY_ALLOW_PHONE_FALLBACK
+BUDDY_MEMORY_RETENTION_DAYS
+BUDDY_MEMORY_EMBEDDING_PROVIDER
+BUDDY_MEMORY_EMBEDDING_MODEL
+MEMORY_MAX_FACTS_PER_USER
 ```
 
-`MemoryEngineConfig` validates the combined global policy. Embedding dimensions
-are fixed at 768 to match the shared knowledge-base embedding shape.
+Embedding dimensions remain fixed at 768. Unknown backends/providers, empty
+field names, invalid regions, and out-of-range retention or fact limits disable
+memory rather than silently falling back. The curator uses the existing global
+Breeze Buddy Azure LLM configuration and has no template override.
 
-The default phone region is empty, which means E.164-only. The runtime PR may
-accept local-format numbers only when operators explicitly configure a global
-ISO-3166 alpha-2 region.
+## Identity
 
-## Database schema
+`resolve_memory_identity()` returns the full observed identity:
 
-Migration `042_create_memory_tables.sql` is the only memory migration. The
-pgvector extension must be enabled out-of-band by a privileged database role
-before it runs.
+- A non-empty configured customer ID is canonical.
+- A phone must parse as a valid E.164 number. International input begins with
+  `+`; local-format input requires the global
+  `BUDDY_MEMORY_PHONE_DEFAULT_REGION`. Its default is empty, so memory is
+  E.164-only unless operators explicitly configure a region.
+- A known active phone alias resolves to its canonical customer ID.
+- An unknown valid phone may use provisional key `phone:+<country><number>`.
+- Alias database errors, invalid/ambiguous phones, missing tenant scope, and
+  conflicted aliases disable memory for that conversation.
 
-### `user_memory`
+When a conversation observes both a phone and explicit customer ID, the worker
+merges regardless of which identifier was selected initially. The alias upsert,
+provisional-row repoint, and fact deduplication are one transaction. Reusing a
+phone with another customer ID marks the alias `CONFLICTED`; the original
+mapping is not overwritten.
 
-Stores curated facts with:
+Logs use a short scope digest and never include phones, customer IDs, facts, or
+transcripts.
 
-- tenant/customer scope and canonical/provisional key type;
-- category, structured data, confidence, source channel, and audit timestamps;
-- `halfvec(768)` embedding for indexed cosine retrieval;
-- deterministic operation key for idempotent inserts;
-- expiry and supersession timestamps.
+## Extraction queue
 
-Constraints reject empty tenant/customer/fact values, invalid enum-like values,
-and confidence outside `[0, 1]`. Partial indexes support active identity reads,
-operation idempotency, expiry cleanup, and HNSW cosine search.
+`MemoryService.enqueue_extraction()` stores a validated
+`MemoryExtractionJob`. It contains a source-record reference and runtime
+snapshot, not transcript content. The worker re-reads the transcript from
+Postgres.
 
-### `customer_identity`
+The dedicated Redis queue uses one Cluster hash tag:
 
-Stores the tenant-scoped phone-to-customer alias. Reusing one phone with a
-different customer ID marks the alias `CONFLICTED` without overwriting its
-original customer ID. The runtime must fail closed for conflicted aliases.
+```text
+memory:{memory-extraction}:payloads
+memory:{memory-extraction}:scheduled
+memory:{memory-extraction}:processing
+memory:{memory-extraction}:leases
+memory:{memory-extraction}:completed
+```
 
-## Database layer
+Lua scripts make enqueue/dedup, claim, ack, retry, and poison transitions
+atomic:
 
-The standard query → accessor → decoder pattern provides:
+- The scheduled ZSET holds due jobs.
+- Claim moves jobs to a processing ZSET with a visibility deadline.
+- Claim tokens prevent an expired worker from acknowledging a newer lease.
+- A later claim recovers expired processing leases after worker/pod crashes.
+- Transient failures retry with bounded exponential backoff.
+- Success removes the payload and records bounded completion deduplication.
+- Exhausted, permanent, or malformed jobs discard the payload and retain only
+  TTL-bounded sanitized failure metadata.
 
-- tenant-scoped insert, profile listing, pgvector search, supersession, and
-  provisional-key repointing;
-- bounded expiry purge;
-- conflict-safe alias upsert and lookup;
-- typed `UserMemory`, `CustomerIdentity`, and `MemoryKey` records.
+`drain_memory_queue()` exists but is not registered with
+`BackgroundTaskScheduler` in this PR. Channel end handlers also do not enqueue
+yet. Both changes belong to the integration PR.
 
-All SQL values are parameterized. Embeddings use text parameters explicitly
-cast to `halfvec(768)`, so this foundation does not register a process-wide
-asyncpg pgvector codec.
+## Curator and backend contract
 
-## Acceptance boundary
+One structured tool call produces validated discriminated operations:
 
-This PR is complete when:
+```text
+ADD(fact, category?, structured?, confidence?)
+UPDATE(fact, supersedes_fact, category?, structured?, confidence?)
+DELETE(fact)
+```
 
-- migration `042` creates the final schema without corrective `ALTER`/`DROP`
-  steps or privileged `CREATE EXTENSION`;
-- every memory query includes the required tenant/customer scope;
-- similarity search executes in Postgres with `ORDER BY embedding <=> ...`;
-- alias conflict SQL never overwrites the original customer mapping;
-- templates expose only `memory.enabled`;
-- global configuration and field-reference coverage are documented and tested.
+The transcript and known facts are explicitly marked untrusted in the curator
+prompt. An empty `operations` array is a valid no-op. Missing tool calls,
+provider failures, and invalid operation shapes raise for queue retry.
 
-Runtime behavior is not an acceptance criterion for this PR; it belongs to the
-follow-up implementation described above.
+Extraction is backend-neutral. `MemoryBackend` stores already-extracted facts:
+
+```python
+list_facts(identity, limit) -> list[MemoryFact]
+apply_operations(identity, operations, source_channel, operation_key,
+                 retention_days, max_facts, embedding_config)
+search(identity, query, embedding_config, k) -> list[MemoryFact]
+merge_identity(identity) -> MemoryIdentity
+```
+
+## Pgvector backend
+
+Pgvector reuses the shared embedding provider registry:
+
+- Dynamic `KB_AZURE_OPENAI_ENDPOINT` and `KB_AZURE_OPENAI_API_KEY`.
+- Proxy-aware shared HTTP session.
+- `EmbeddingConfig` provider/model snapshot.
+- Matryoshka truncation and normalization to `halfvec(768)`.
+- Text vector parameters (`$N::halfvec(768)`), so no process-wide asyncpg
+  pgvector codec or Python `pgvector` package is needed.
+
+Each operation batch is one database transaction. It:
+
+1. Locks/supersedes exact update/delete targets.
+2. Deduplicates inserts by normalized text or cosine distance.
+3. Inserts with a deterministic operation key.
+4. Applies the active-fact cap after the complete batch.
+
+Reads filter superseded and expired rows and order profile facts by confidence
+then recency. Identity merges perform exact/semantic deduplication in the same
+transaction.
+
+Migration `042` creates the complete final-state schema, including
+`halfvec(768)`, operation idempotency, expiry, validation constraints,
+HNSW/expiry indexes, and alias-conflict state. It contains no corrective
+`ALTER` or `DROP` steps because the memory tables are new and have not been
+deployed.
+
+`purge_expired_user_memories()` hard-deletes a bounded batch. Reads enforce
+expiry immediately, but periodic hard deletion begins only when the integration
+PR registers the purge task.
+
+## Supermemory backend
+
+Supermemory uses the provider's direct extracted-memory APIs instead of raw
+document/conversation ingestion:
+
+- `POST /v4/memories` for extracted facts.
+- `PATCH /v4/memories` for versioned updates and `forgetAfter`.
+- `DELETE /v4/memories` for curator deletes.
+- `POST /v4/search` for scoped fact recall.
+- `POST /v3/container-tags/merge` for phone-to-customer merges.
+
+The adapter uses the shared proxy-aware aiohttp transport and resolves
+`SUPERMEMORY_API_KEY` dynamically for rotation. Container tags are opaque
+versioned SHA-256 values; hosted metadata contains operation/source metadata,
+never raw tenant/customer identifiers.
+
+Remote retries are idempotent through deterministic operation metadata and
+exact-result reconciliation. HTTP 429/5xx/transport errors retry; permanent
+4xx configuration/request errors go to the sanitized poison path.
+
+Supermemory documents `forgetAfter` and per-memory delete as **soft forget**:
+expired facts leave search results but may remain in the provider database.
+This limitation is accepted for tenants choosing this backend. Deployments
+requiring hard deletion must select pgvector.
+
+## Deferred integration PR
+
+The next PR must:
+
+1. Resolve runtime state and enqueue from both voice and chat end paths using
+   the same deterministic end-event key.
+2. Register the extraction drain and pgvector purge entrypoints with the
+   background scheduler.
+3. Fetch facts for voice/chat and append `render_memory_user_tail()` output as
+   user-role data.
+4. Add the optional scoped recall tool.
+5. Add rollout metrics, queue-depth/poison alerts, and an enablement runbook.
+
+Until those changes land, this foundation is inert in production even when a
+template opts into memory.

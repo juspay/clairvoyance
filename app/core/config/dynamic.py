@@ -767,8 +767,32 @@ async def BUDDY_MEMORY_EMBEDDING_MODEL() -> str:
     )
 
 
+async def MEMORY_EXTRACTION_BATCH_SIZE() -> int:
+    return max(1, await get_config("MEMORY_EXTRACTION_BATCH_SIZE", 20, int))
+
+
+async def MEMORY_EXTRACTION_MAX_ATTEMPTS() -> int:
+    return max(1, await get_config("MEMORY_EXTRACTION_MAX_ATTEMPTS", 3, int))
+
+
+async def MEMORY_EXTRACTION_VISIBILITY_TIMEOUT_SECONDS() -> int:
+    return max(
+        30,
+        await get_config("MEMORY_EXTRACTION_VISIBILITY_TIMEOUT_SECONDS", 300, int),
+    )
+
+
+async def MEMORY_EXTRACTION_RETRY_BASE_SECONDS() -> int:
+    return max(1, await get_config("MEMORY_EXTRACTION_RETRY_BASE_SECONDS", 30, int))
+
+
 async def MEMORY_MAX_FACTS_PER_USER() -> int:
     return await get_config("MEMORY_MAX_FACTS_PER_USER", 100, int)
+
+
+async def SUPERMEMORY_API_KEY() -> str:
+    """Hosted-backend credential, resolved per request for live rotation."""
+    return await get_config("SUPERMEMORY_API_KEY", "", str)
 
 
 # ----------------------------------------------------------------------------
