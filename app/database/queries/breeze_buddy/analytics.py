@@ -239,19 +239,19 @@ def get_analytics_summary_query(
         group_by = None
 
     if group_by:
-        # Grouped analytics
+        # Grouped analytics — materialised CTE so the base scan is done once and
+        # reused by both the aggregate and the outcome-breakdown subquery.
+        # Payload, template and total_shops are omitted: they are not consumed by
+        # the Loom frontend and force expensive JSONB / TOAST access.
         text = f"""
-            WITH filtered_data AS (
+            WITH filtered_data AS MATERIALIZED (
                 SELECT
                     lct.status,
                     lct.outcome,
                     lct.call_initiated_time,
                     lct.call_end_time,
                     lct.call_direction,
-                    lct.template,
-                    lct.merchant_id,
-                    lct.reseller_id,
-                    lct.payload
+                    lct.merchant_id
                 FROM "{LEAD_CALL_TRACKER_TABLE}" lct
                 {join_clause}
                 {where_clause}
@@ -263,86 +263,99 @@ def get_analytics_summary_query(
                     COUNT(*) as outcome_count
                 FROM filtered_data
                 GROUP BY {group_by}, outcome
+            ),
+            outcome_per_group AS (
+                SELECT
+                    {group_by},
+                    jsonb_object_agg(COALESCE(outcome, 'N/A'), outcome_count) as outcome_breakdown
+                FROM outcome_groups
+                GROUP BY {group_by}
+            ),
+            group_stats AS (
+                SELECT
+                    fd.{group_by},
+                    COUNT(*) as total_calls,
+                    COUNT(*) FILTER (WHERE fd.call_direction = 'OUTBOUND') as outbound_calls,
+                    COUNT(*) FILTER (WHERE fd.call_direction = 'INBOUND') as inbound_calls,
+                    COUNT(*) FILTER (WHERE fd.status = 'FINISHED') as completed_calls,
+                    COUNT(*) FILTER (WHERE fd.status != 'FINISHED' OR fd.status IS NULL) as failed_calls,
+                    AVG(
+                        EXTRACT(EPOCH FROM (fd.call_end_time - fd.call_initiated_time))
+                    ) FILTER (
+                        WHERE fd.call_initiated_time IS NOT NULL
+                        AND fd.call_end_time IS NOT NULL
+                    ) as average_duration
+                FROM filtered_data fd
+                GROUP BY fd.{group_by}
             )
             SELECT
-                fd.{group_by},
-                (SELECT payload->>'shop_name' FROM filtered_data WHERE {group_by} = fd.{group_by} LIMIT 1) as shop_name,
-                COUNT(*) as total_calls,
-                COUNT(*) FILTER (WHERE fd.call_direction = 'OUTBOUND') as outbound_calls,
-                COUNT(*) FILTER (WHERE fd.call_direction = 'INBOUND') as inbound_calls,
-                COUNT(*) FILTER (WHERE fd.status = 'FINISHED') as completed_calls,
-                COUNT(*) FILTER (WHERE fd.status != 'FINISHED' OR fd.status IS NULL) as failed_calls,
-                AVG(
-                    EXTRACT(EPOCH FROM (fd.call_end_time - fd.call_initiated_time))
-                ) FILTER (
-                    WHERE fd.call_initiated_time IS NOT NULL
-                    AND fd.call_end_time IS NOT NULL
-                ) as average_duration,
-                COUNT(DISTINCT fd.template) as total_templates,
-                COUNT(DISTINCT fd.merchant_id) FILTER (WHERE fd.merchant_id IS NOT NULL) as total_shops,
-                (
-                    SELECT jsonb_object_agg(COALESCE(outcome, 'N/A'), outcome_count)
-                    FROM outcome_groups og
-                    WHERE og.{group_by} = fd.{group_by}
-                ) as outcome_breakdown
-            FROM filtered_data fd
-            GROUP BY fd.{group_by}
+                gs.*,
+                COALESCE(opg.outcome_breakdown, '{{}}'::jsonb) as outcome_breakdown
+            FROM group_stats gs
+            LEFT JOIN outcome_per_group opg ON gs.{group_by} = opg.{group_by}
             ORDER BY total_calls DESC;
         """
     else:
-        # Aggregate analytics (original behavior)
+        # Aggregate analytics — counts only.  Outcome breakdown is fetched via
+        # a separate parallel query (get_analytics_outcome_breakdown_query).
+        # AVG(duration) and COUNT(DISTINCT) are skipped — they are not consumed
+        # by the dashboard cards and dominate query time on large date ranges.
         text = f"""
-            WITH filtered_data AS (
+            WITH filtered_data AS NOT MATERIALIZED (
                 SELECT
                     lct.status,
-                    lct.outcome,
-                    lct.call_initiated_time,
-                    lct.call_end_time,
-                    lct.call_direction,
-                    lct.template,
-                    lct.merchant_id
+                    lct.call_direction
                 FROM "{LEAD_CALL_TRACKER_TABLE}" lct
                 {join_clause}
                 {where_clause}
-            ),
-            base_stats AS (
-                SELECT
-                    COUNT(*) as total_calls,
-                    COUNT(*) FILTER (WHERE call_direction = 'OUTBOUND') as outbound_calls,
-                    COUNT(*) FILTER (WHERE call_direction = 'INBOUND') as inbound_calls,
-                    COUNT(*) FILTER (WHERE status = 'FINISHED') as completed_calls,
-                    COUNT(*) FILTER (WHERE status != 'FINISHED' OR status IS NULL) as failed_calls,
-                    AVG(
-                        EXTRACT(EPOCH FROM (call_end_time - call_initiated_time))
-                    ) FILTER (
-                        WHERE call_initiated_time IS NOT NULL
-                        AND call_end_time IS NOT NULL
-                    ) as average_duration,
-                    COUNT(DISTINCT template) as total_templates,
-                    COUNT(DISTINCT merchant_id) FILTER (WHERE merchant_id IS NOT NULL) as total_shops
-                FROM filtered_data
-            ),
-            outcome_stats AS (
-                SELECT
-                    jsonb_object_agg(
-                        COALESCE(outcome, 'N/A'),
-                        outcome_count
-                    ) as outcome_breakdown
-                FROM (
-                    SELECT
-                        outcome,
-                        COUNT(*) as outcome_count
-                    FROM filtered_data
-                    GROUP BY outcome
-                ) grouped_outcomes
             )
             SELECT
-                base_stats.*,
-                COALESCE(outcome_stats.outcome_breakdown, '{{}}'::jsonb) as outcome_breakdown
-            FROM base_stats
-            CROSS JOIN outcome_stats;
+                COUNT(*) as total_calls,
+                COUNT(*) FILTER (WHERE call_direction = 'OUTBOUND') as outbound_calls,
+                COUNT(*) FILTER (WHERE call_direction = 'INBOUND') as inbound_calls,
+                COUNT(*) FILTER (WHERE status = 'FINISHED') as completed_calls,
+                COUNT(*) FILTER (WHERE status != 'FINISHED' OR status IS NULL) as failed_calls
+            FROM filtered_data;
         """
 
+    return text, values
+
+
+def get_analytics_outcome_breakdown_query(
+    filters: Dict[str, Any],
+) -> Tuple[str, List[Any]]:
+    """
+    Standalone query for outcome-breakdown only.
+
+    Intended to run in parallel with the slimmed-down summary query so the
+    jsonb_object_agg (which requires a GROUP BY) doesn't serialise behind the
+    main aggregates.
+    """
+    conditions, values = build_analytics_where_clause(filters)
+    where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
+
+    join_clause = (
+        f'LEFT JOIN "{OUTBOUND_NUMBER_TABLE}" ou ON lct.outbound_number_id = ou.id'
+        if "provider" in filters and filters["provider"]
+        else ""
+    )
+
+    text = f"""
+        SELECT
+            COALESCE(
+                jsonb_object_agg(COALESCE(outcome, 'N/A'), outcome_count),
+                '{{}}'::jsonb
+            ) as outcome_breakdown
+        FROM (
+            SELECT
+                lct.outcome,
+                COUNT(*) as outcome_count
+            FROM "{LEAD_CALL_TRACKER_TABLE}" lct
+            {join_clause}
+            {where_clause}
+            GROUP BY lct.outcome
+        ) grouped_outcomes;
+    """
     return text, values
 
 
@@ -610,87 +623,85 @@ def get_analytics_lead_based_query(
         group_by = None
 
     if group_by:
-        # Grouped lead-based analytics
+        # Grouped lead-based analytics — materialised CTE so the base scan is
+        # done once.  Payload/shop_name are omitted (not consumed by Loom).
+        # request_id is effectively unique per row (1 duplicate out of 1M),
+        # so COUNT(*) is equivalent to COUNT(DISTINCT request_id) and allows
+        # HashAggregate instead of expensive sort-based distinct counting.
         text = f"""
-            WITH filtered_data AS (
+            WITH filtered_data AS MATERIALIZED (
                 SELECT
-                    lct.request_id,
                     lct.{group_by},
-                    lct.status,
-                    lct.outcome,
                     lct.call_direction,
-                    lct.payload
+                    lct.status,
+                    lct.outcome
                 FROM "{LEAD_CALL_TRACKER_TABLE}" lct
                 {join_clause}
                 {where_clause}
             ),
-            unique_leads AS (
-                SELECT DISTINCT
-                    request_id,
-                    {group_by}
-                FROM filtered_data
-            ),
-            outcome_counts AS (
+            outcome_groups AS (
                 SELECT
                     {group_by},
                     outcome,
-                    COUNT(DISTINCT request_id) as outcome_count
+                    COUNT(*) as outcome_count
                 FROM filtered_data
                 WHERE outcome IS NOT NULL
                 GROUP BY {group_by}, outcome
+            ),
+            outcome_per_group AS (
+                SELECT
+                    {group_by},
+                    jsonb_object_agg(outcome, outcome_count) as outcome_counts
+                FROM outcome_groups
+                GROUP BY {group_by}
+            ),
+            group_stats AS (
+                SELECT
+                    fd.{group_by},
+                    COUNT(*) as total_leads,
+                    COUNT(*) FILTER (WHERE fd.call_direction = 'OUTBOUND') as outbound_leads,
+                    COUNT(*) FILTER (WHERE fd.call_direction = 'INBOUND') as inbound_leads,
+                    COUNT(*) FILTER (WHERE fd.outcome IS NOT NULL AND fd.outcome != 'NO_ANSWER') as picked_calls
+                FROM filtered_data fd
+                GROUP BY fd.{group_by}
             )
             SELECT
-                ul.{group_by},
-                (SELECT payload->>'shop_name' FROM filtered_data WHERE {group_by} = ul.{group_by} LIMIT 1) as shop_name,
-                COUNT(DISTINCT ul.request_id) as total_leads,
-                COUNT(DISTINCT CASE WHEN fd.call_direction = 'OUTBOUND' THEN ul.request_id END) as outbound_leads,
-                COUNT(DISTINCT CASE WHEN fd.call_direction = 'INBOUND' THEN ul.request_id END) as inbound_leads,
-                COUNT(DISTINCT CASE WHEN fd.outcome IS NOT NULL AND fd.outcome != 'NO_ANSWER' THEN ul.request_id END) as picked_calls,
-                (
-                    SELECT jsonb_object_agg(outcome, outcome_count)
-                    FROM outcome_counts oc
-                    WHERE oc.{group_by} = ul.{group_by}
-                ) as outcome_counts
-            FROM unique_leads ul
-            LEFT JOIN filtered_data fd ON ul.request_id = fd.request_id AND ul.{group_by} = fd.{group_by}
-            GROUP BY ul.{group_by}
+                gs.*,
+                COALESCE(opg.outcome_counts, '{{}}'::jsonb) as outcome_counts
+            FROM group_stats gs
+            LEFT JOIN outcome_per_group opg ON gs.{group_by} = opg.{group_by}
             ORDER BY total_leads DESC;
         """
     else:
-        # Aggregate lead-based analytics — pre-aggregated in SQL (returns 1 row)
+        # Aggregate lead-based analytics — pre-aggregated in SQL (returns 1 row).
+        # Per-request_id grouping is eliminated: request_id is effectively unique
+        # per row, so row-level COUNT(*) FILTER gives the same result as the
+        # original two-pass aggregation.
         text = f"""
-            WITH filtered_data AS (
+            WITH filtered_data AS MATERIALIZED (
                 SELECT
-                    lct.request_id,
+                    lct.call_direction,
                     lct.status,
-                    lct.outcome,
-                    lct.call_direction
+                    lct.outcome
                 FROM "{LEAD_CALL_TRACKER_TABLE}" lct
                 {join_clause}
                 {where_clause}
-            ),
-            base_leads AS (
-                SELECT
-                    request_id,
-                    COUNT(*) FILTER (WHERE status = 'FINISHED') as finished_calls,
-                    COUNT(*) FILTER (WHERE outcome = 'NO_ANSWER') as no_answer_calls,
-                    MAX(CASE WHEN call_direction = 'OUTBOUND' THEN 1 ELSE 0 END) as has_outbound,
-                    MAX(CASE WHEN call_direction = 'INBOUND' THEN 1 ELSE 0 END) as has_inbound
-                FROM filtered_data
-                GROUP BY request_id
             ),
             lead_aggregates AS (
                 SELECT
                     COUNT(*) as total_leads,
-                    COUNT(*) FILTER (WHERE has_outbound = 1) as outbound_leads,
-                    COUNT(*) FILTER (WHERE has_inbound = 1) as inbound_leads,
-                    COUNT(*) FILTER (WHERE finished_calls > no_answer_calls) as picked_calls
-                FROM base_leads
+                    COUNT(*) FILTER (WHERE call_direction = 'OUTBOUND') as outbound_leads,
+                    COUNT(*) FILTER (WHERE call_direction = 'INBOUND') as inbound_leads,
+                    COUNT(*) FILTER (
+                        WHERE status = 'FINISHED'
+                        AND outcome IS DISTINCT FROM 'NO_ANSWER'
+                    ) as picked_calls
+                FROM filtered_data
             ),
             outcome_counts AS (
                 SELECT
                     outcome,
-                    COUNT(DISTINCT request_id) as lead_count
+                    COUNT(*) as lead_count
                 FROM filtered_data
                 WHERE outcome IS NOT NULL
                 GROUP BY outcome
@@ -1101,6 +1112,31 @@ def get_distinct_resellers_query(
     """
 
     return query, values
+
+
+def get_dashboard_counts_query(
+    filters: Dict[str, Any],
+) -> Tuple[str, List[Any]]:
+    """
+    Lightweight query for dashboard card counts only.
+
+    Reuses build_analytics_where_clause() but avoids CTEs, JOINs,
+    AVG, COUNT(DISTINCT), and jsonb_object_agg for minimal scan cost.
+    """
+    conditions, values = build_analytics_where_clause(filters)
+    where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
+
+    text = f"""
+        SELECT
+            COUNT(*) FILTER (WHERE lct.call_direction = 'OUTBOUND') as outbound_calls,
+            COUNT(*) FILTER (WHERE lct.call_direction = 'INBOUND') as inbound_calls,
+            COUNT(*) FILTER (WHERE lct.outcome = 'NO_ANSWER') as no_answer_calls,
+            COUNT(*) FILTER (WHERE lct.outcome = 'BUSY') as busy_calls,
+            COUNT(*) FILTER (WHERE lct.status = 'FINISHED' AND lct.outcome IS NOT NULL) as calls_with_outcomes
+        FROM "{LEAD_CALL_TRACKER_TABLE}" lct
+        {where_clause};
+    """
+    return text, values
 
 
 def get_distinct_merchant_ids_query(
