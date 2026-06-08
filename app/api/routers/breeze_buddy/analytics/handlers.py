@@ -6,11 +6,13 @@ Database access is delegated to the accessor layer.
 import csv
 import io
 import json
+import re
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 from starlette.responses import StreamingResponse
 
+from app.core.logger import logger
 from app.database.accessor.breeze_buddy.analytics import (
     get_analytics_count_from_db,
     get_call_detail_records,
@@ -26,8 +28,26 @@ from app.database.accessor.breeze_buddy.analytics import (
     get_summary_analytics_from_db,
     get_trends_analytics_from_db,
 )
+from app.database.accessor.breeze_buddy.template import get_template_by_id
 from app.schemas import CallDetailResult, UserInfo
 from app.utils.common import parse_json
+
+
+def _is_uuid(value: str) -> bool:
+    """Check if a string looks like a UUID."""
+    return bool(
+        re.match(
+            r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+            value.lower(),
+        )
+    )
+
+
+def _classify_outcome(outcome: str, success_outcomes: List[str]) -> str:
+    """Classify an outcome as 'success' or 'non-success'."""
+    if outcome in success_outcomes:
+        return "success"
+    return "non-success"
 
 
 def parse_outcome_breakdown(outcome_breakdown: Any) -> Dict[str, int]:
@@ -766,9 +786,28 @@ async def get_outcome_counts(
     options: Dict[str, Any],
     current_user: UserInfo,
 ) -> Dict[str, Any]:
-    """Get paginated outcome counts."""
+    """Get paginated outcome counts, optionally classified by template success_outcomes."""
     page = max(1, min(options.get("page", 1), 1000))
     limit = max(1, min(options.get("limit", 10), 100))
+
+    # --- Resolve success_outcomes from the template (if filtered) ---
+    success_outcomes: Optional[List[str]] = None
+    template_filter = filters.get("template")
+    if template_filter and _is_uuid(template_filter):
+        template_obj = await get_template_by_id(template_filter)
+        if (
+            template_obj
+            and template_obj.configurations
+            and template_obj.configurations.success_outcomes
+        ):
+            success_outcomes = template_obj.configurations.success_outcomes
+            # When a template is selected, fetch all outcomes (no pagination)
+            limit = 100
+            page = 1
+        logger.debug(
+            f"Outcome classification: template={template_filter}, "
+            f"success_outcomes={success_outcomes}"
+        )
 
     data = await get_outcome_counts_from_db(filters, page, limit)
 
@@ -779,21 +818,44 @@ async def get_outcome_counts(
         percentage = round(
             (call_count / page_total_calls * 100) if page_total_calls > 0 else 0.0, 2
         )
-        results.append(
-            {
-                "outcome": row["outcome"],
-                "count": call_count,
-                "percentage": percentage,
-            }
-        )
+        entry: Dict[str, Any] = {
+            "outcome": row["outcome"],
+            "count": call_count,
+            "percentage": percentage,
+        }
+        if success_outcomes is not None:
+            entry["category"] = _classify_outcome(row["outcome"], success_outcomes)
+        results.append(entry)
 
-    return {
+    response: Dict[str, Any] = {
         "type": "outcome-counts",
         "filters_applied": filters,
         "pagination": data["pagination"],
         "results": results,
         "page_total_calls": page_total_calls,
     }
+
+    # --- Build outcome_summary when classification is active ---
+    if success_outcomes is not None:
+        success_count = sum(
+            r["count"] for r in results if r.get("category") == "success"
+        )
+        non_success_count = sum(
+            r["count"] for r in results if r.get("category") == "non-success"
+        )
+        total = success_count + non_success_count
+        response["outcome_summary"] = {
+            "success_count": success_count,
+            "non_success_count": non_success_count,
+            "success_percentage": round(
+                (success_count / total * 100) if total > 0 else 0.0, 2
+            ),
+            "non_success_percentage": round(
+                (non_success_count / total * 100) if total > 0 else 0.0, 2
+            ),
+        }
+
+    return response
 
 
 async def get_distinct_resellers(
