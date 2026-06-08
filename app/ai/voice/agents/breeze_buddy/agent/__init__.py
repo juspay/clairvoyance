@@ -3,7 +3,7 @@
 import asyncio
 import time
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, cast
 
 from fastapi import WebSocket
 from opentelemetry import trace
@@ -61,6 +61,9 @@ from app.ai.voice.agents.breeze_buddy.managers.utils import (
     prepare_and_store_initial_greeting,
 )
 from app.ai.voice.agents.breeze_buddy.mcp import get_mcp_global_functions
+from app.ai.voice.agents.breeze_buddy.memory.backends import get_memory_backend
+from app.ai.voice.agents.breeze_buddy.memory.identity import resolve_customer_key
+from app.ai.voice.agents.breeze_buddy.memory.service import MemoryService
 from app.ai.voice.agents.breeze_buddy.observability.tracing_setup import (
     create_root_span,
 )
@@ -90,6 +93,10 @@ from app.ai.voice.agents.breeze_buddy.utils.transport.websockets import (
     close_websocket_safely,
 )
 from app.ai.voice.agents.breeze_buddy.utils.warm_transfer import set_transfer_flag
+from app.core.config.dynamic import (
+    BUDDY_MEMORY_BACKEND as resolve_memory_backend,
+    BUDDY_MEMORY_ENABLED as is_memory_enabled,
+)
 from app.core.config.static import ENABLE_BREEZE_BUDDY_TRACING
 from app.core.logger import logger
 from app.core.logger.context import (
@@ -869,6 +876,51 @@ class Agent:
             initial_node_name = self.flow_config["initial_node"]
         context = TemplateContext(self)
         context.record_node_entry(initial_node_name)
+
+        # ── Memory read: inject user profile into LLM context ────────────────
+        # Runs after node config is finalised, before flow_manager.initialize()
+        # so the <user_memory> block lands in the initial LLM context RESET.
+        # Gates: global kill-switch AND per-template opt-in (MemoryConfig.enabled).
+        # Best-effort — any failure logs a warning and the call proceeds normally.
+        _mem_cfg = getattr(self.configurations, "memory", None)
+        if await is_memory_enabled() and _mem_cfg and _mem_cfg.enabled and self.lead:
+            try:
+                _payload = self.lead.payload or {}
+                _resolved = await resolve_customer_key(
+                    reseller_id=self.lead.reseller_id or "",
+                    merchant_id=self.lead.merchant_id or "",
+                    payload=_payload,
+                )
+                if _resolved:
+                    _customer_key, _key_type = _resolved
+                    _backend_name = _mem_cfg.backend or await resolve_memory_backend()
+                    _memory_block = await MemoryService(
+                        backend=get_memory_backend(_backend_name)
+                    ).get_profile_block(
+                        reseller_id=self.lead.reseller_id or "",
+                        merchant_id=self.lead.merchant_id or "",
+                        customer_key=_customer_key,
+                        key_type=_key_type,
+                        max_facts=_mem_cfg.max_facts,
+                    )
+                    if _memory_block:
+                        _role_msgs = list(
+                            cast(Dict[str, Any], initial_node_config).get(
+                                "role_messages", []
+                            )
+                        )
+                        _role_msgs.append({"role": "system", "content": _memory_block})
+                        cast(Dict[str, Any], initial_node_config)[
+                            "role_messages"
+                        ] = _role_msgs
+                        logger.info(
+                            f"[memory] injected profile for lead {self.lead.id}: "
+                            f"key={_customer_key!r} chars={len(_memory_block)}"
+                        )
+            except Exception as _mem_err:
+                logger.warning(
+                    f"[memory] read-path failed for lead {self.lead.id}: {_mem_err}"
+                )
 
         await self.flow_manager.initialize(initial_node_config)
         logger.info(

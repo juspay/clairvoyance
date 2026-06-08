@@ -76,6 +76,7 @@ class MemoryService:
         phone: Optional[str] = None,
         explicit_customer_id: Optional[str] = None,
         backend: Optional[str] = None,
+        extraction_prompt: Optional[str] = None,
     ) -> None:
         """Push an extraction job onto the Redis queue.
 
@@ -111,6 +112,7 @@ class MemoryService:
                     "phone": phone,
                     "explicit_customer_id": explicit_customer_id,
                     "backend": backend,
+                    "extraction_prompt": extraction_prompt,
                 }
             )
             await client.rpush(_QUEUE_KEY, payload)  # type: ignore[union-attr]

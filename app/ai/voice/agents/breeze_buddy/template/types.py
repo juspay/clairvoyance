@@ -1271,6 +1271,23 @@ class MemoryConfig(BaseModel):
             "When None, falls back to the global BUDDY_MEMORY_BACKEND env."
         ),
     )
+    max_facts: int = Field(
+        20,
+        description=(
+            "Maximum number of memory facts injected into the LLM context at "
+            "call start. Increase for richer recall; decrease to keep the "
+            "context window tight. Default 20."
+        ),
+    )
+    extraction_prompt: Optional[str] = Field(
+        None,
+        description=(
+            "Override the default LLM extraction prompt used by the pgvector "
+            "backend when consolidating facts from a conversation. When None, "
+            "the built-in prompt is used. Has no effect on the supermemory "
+            "backend (extraction is server-side)."
+        ),
+    )
 
 
 class ConfigurationModel(BaseModel):

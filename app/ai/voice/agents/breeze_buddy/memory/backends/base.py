@@ -66,12 +66,16 @@ class MemoryBackend(ABC):
         identity: MemoryIdentity,
         transcript: List[Dict[str, Any]],
         source_channel: str,
+        extraction_prompt: Optional[str] = None,
     ) -> None:
         """Persist durable memory from a conversation transcript.
 
         The backend owns extraction: pgvector runs the LLM consolidation +
         embedding + dedup itself; supermemory hands the transcript off and
         lets the service extract.
+
+        `extraction_prompt` overrides the default LLM system prompt when set
+        (pgvector only; supermemory ignores it as extraction is server-side).
         """
 
     @abstractmethod

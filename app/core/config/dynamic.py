@@ -1,5 +1,9 @@
 import json
 
+from app.core.config.static import (
+    BUDDY_MEMORY_BACKEND as _STATIC_MEMORY_BACKEND,
+    BUDDY_MEMORY_ENABLED as _STATIC_MEMORY_ENABLED,
+)
 from app.core.logger import logger
 from app.services.live_config.store import get_config
 
@@ -44,6 +48,28 @@ async def BREEZE_MCP_ENDPOINT_PATH() -> str:
 async def ENABLE_BACKGROUND_TASKS() -> bool:
     """Returns ENABLE_BACKGROUND_TASKS from Redis"""
     return await get_config("ENABLE_BACKGROUND_TASKS", "false", bool)
+
+
+async def BUDDY_MEMORY_ENABLED() -> bool:
+    """Global persistent-memory kill-switch, Redis/DevCycle-overridable.
+
+    Defaults to the static BUDDY_MEMORY_ENABLED env (off unless explicitly
+    set). Ops can enable or disable memory across all calls at runtime by
+    flipping this key in Redis/DevCycle without a pod restart.
+    Note: the drain-worker registration in main.py and the pgvector codec
+    gate in database/__init__.py still read the static value at startup.
+    """
+    return await get_config("BUDDY_MEMORY_ENABLED", _STATIC_MEMORY_ENABLED, bool)
+
+
+async def BUDDY_MEMORY_BACKEND() -> str:
+    """Active persistent-memory backend ("pgvector" | "supermemory").
+
+    Redis/DevCycle-overridable so ops can switch backends at runtime without a
+    redeploy; defaults to the static BUDDY_MEMORY_BACKEND env. A template's
+    MemoryConfig.backend still takes precedence over this at the call-site.
+    """
+    return await get_config("BUDDY_MEMORY_BACKEND", _STATIC_MEMORY_BACKEND, str)
 
 
 # ----------------------------------------------------------------------------

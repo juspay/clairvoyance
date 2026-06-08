@@ -82,6 +82,7 @@ class SupermemoryMemoryBackend(MemoryBackend):
         identity: MemoryIdentity,
         transcript: List[dict],
         source_channel: str,
+        extraction_prompt: Optional[str] = None,
     ) -> None:
         if not transcript:
             return
@@ -93,8 +94,15 @@ class SupermemoryMemoryBackend(MemoryBackend):
             )
             if not convo_text.strip():
                 return
+            # Prepend the extraction prompt as a hint so supermemory's server-side
+            # AI sees the custom instructions when deciding what to extract.
+            content = (
+                f"{extraction_prompt}\n\nCONVERSATION:\n{convo_text}"
+                if extraction_prompt
+                else convo_text
+            )
             await self._client.add(
-                content=convo_text,
+                content=content,
                 container_tags=[identity.scope_tag],
                 metadata={
                     "source_channel": source_channel,

@@ -25,17 +25,25 @@ Given:
 
 Output a JSON list of memory operations. Each operation has:
   "op": "ADD" | "UPDATE" | "DELETE"
-  "fact": short sentence (one durable personalization/preference/attribute/outcome)
-  "category": one of ["preference","attribute","outcome","context"] (optional)
-  "structured": optional dict with machine-readable fields (optional)
-  "supersedes_fact": (UPDATE/DELETE only) the exact text of the KNOWN_FACT being replaced/removed
+  "fact": short sentence (one durable fact about the customer)
+  "category": one of ["preference", "attribute", "outcome", "context"]
+  "structured": optional dict with machine-readable fields, e.g. {"name": "Amreet"}
+  "supersedes_fact": (UPDATE/DELETE only) the closest matching text from KNOWN_FACTS
 
 Rules:
-- Only capture durable facts worth remembering across future conversations.
-- Ignore small talk, greetings, PII (passwords, full card numbers, OTPs).
-- If a new fact contradicts a known fact, emit UPDATE (not ADD).
-- If a known fact is confirmed still true, emit nothing (no op).
-- If no new facts are worth storing, return an empty list [].
+- Only capture facts durable enough to be useful in a future conversation.
+- ALWAYS capture: the customer's name or preferred form of address, any explicit
+  corrections they make to previously stated information, travel preferences,
+  stated outcomes, and personal attributes they volunteer.
+- A customer stating their name is NOT a greeting to ignore — it is a high-value
+  attribute. Capture it with category "attribute" and structured {"name": "<value>"}.
+- Ignore: passwords, full card numbers, OTPs, bank account numbers, and one-time
+  transactional details with no future value. Do NOT treat a customer's name or
+  identity as PII to ignore.
+- If a new fact contradicts or corrects a KNOWN_FACT, emit UPDATE (not ADD).
+  Set supersedes_fact to the closest matching text from KNOWN_FACTS.
+- If a known fact is confirmed still true, emit nothing.
+- If no facts are worth storing, return [].
 - Keep each fact concise (one sentence).
 
 Return ONLY valid JSON — a list of operation objects, no markdown fences."""
@@ -77,9 +85,12 @@ def _find_duplicate(
 async def consolidate(
     existing_facts: List[UserMemory],
     transcript: List[Dict[str, Any]],
+    extraction_prompt: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """Run the LLM extraction and return raw op dicts.
 
+    Uses `extraction_prompt` if provided (template-level override), otherwise
+    falls back to the built-in `_SYSTEM_PROMPT`.
     The worker applies these ops against the DB (insert/supersede).
     Returns [] on failure (safe to ignore).
     """
@@ -88,6 +99,8 @@ async def consolidate(
 
     try:
         llm = await _resolve_azure(None)
+
+        system_prompt = extraction_prompt or _SYSTEM_PROMPT
 
         known_lines = (
             "\n".join(f"- [{m.category or 'fact'}] {m.fact}" for m in existing_facts)
@@ -102,7 +115,7 @@ async def consolidate(
 
         params = OpenAILLMInvocationParams(  # type: ignore[call-overload]
             messages=[  # type: ignore[arg-type]
-                {"role": "system", "content": _SYSTEM_PROMPT},
+                {"role": "system", "content": system_prompt},
                 {
                     "role": "user",
                     "content": (

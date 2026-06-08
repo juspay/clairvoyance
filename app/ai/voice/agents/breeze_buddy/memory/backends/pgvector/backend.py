@@ -65,6 +65,7 @@ class PgVectorMemoryBackend(MemoryBackend):
         identity: MemoryIdentity,
         transcript: List[Dict[str, Any]],
         source_channel: str,
+        extraction_prompt: Optional[str] = None,
     ) -> None:
         """Extract durable facts from the transcript and upsert them."""
         if not transcript:
@@ -78,7 +79,11 @@ class PgVectorMemoryBackend(MemoryBackend):
             logger.error(f"[memory.pgvector] fetch existing facts failed: {e}")
             existing = []
 
-        ops = await consolidate(existing_facts=existing, transcript=transcript)
+        ops = await consolidate(
+            existing_facts=existing,
+            transcript=transcript,
+            extraction_prompt=extraction_prompt,
+        )
         if not ops:
             return
 
@@ -200,9 +205,30 @@ class PgVectorMemoryBackend(MemoryBackend):
 
         elif verb == "UPDATE":
             old_fact_text = (op.get("supersedes_fact") or "").strip()
+
+            # 1. Exact match (free, no embedding call)
             old_mem = next(
                 (m for m in existing if m.fact.strip() == old_fact_text), None
             )
+
+            # 2. Embedding similarity fallback — catches LLM paraphrases of the
+            #    stored fact (the LLM rarely reproduces exact stored text).
+            if not old_mem and old_fact_text and existing:
+                old_embedding = await embed_single(old_fact_text)
+                if old_embedding:
+                    best_sim, best_mem = 0.0, None
+                    for m in existing:
+                        if m.embedding:
+                            sim = _cosine_similarity(old_embedding, m.embedding)
+                            if sim > best_sim:
+                                best_sim, best_mem = sim, m
+                    if best_mem and best_sim >= 0.80:
+                        old_mem = best_mem
+                        logger.debug(
+                            f"[memory.pgvector] UPDATE fuzzy-matched supersedes_fact "
+                            f"sim={best_sim:.3f} old={old_mem.fact!r}"
+                        )
+
             if old_mem:
                 await supersede_memory(str(old_mem.id))
             embedding = await embed_single(fact)

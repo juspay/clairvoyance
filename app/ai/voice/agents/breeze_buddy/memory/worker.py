@@ -67,6 +67,7 @@ async def _process_item(item: Dict[str, Any]) -> None:
     phone: Optional[str] = item.get("phone") or None
     explicit_customer_id: Optional[str] = item.get("explicit_customer_id") or None
     backend_name: Optional[str] = item.get("backend") or None
+    extraction_prompt: Optional[str] = item.get("extraction_prompt") or None
 
     if not (kind and record_id and customer_key and reseller_id and merchant_id):
         logger.warning(f"[memory.worker] incomplete item, skipping: {item}")
@@ -94,7 +95,7 @@ async def _process_item(item: Dict[str, Any]) -> None:
     if phone and explicit_customer_id and key_type == "phone":
         identity = await backend.merge_identity(identity)
 
-    await backend.ingest(identity, transcript, source_channel)
+    await backend.ingest(identity, transcript, source_channel, extraction_prompt)
 
 
 async def _fetch_transcript(kind: str, record_id: str) -> List[Dict[str, Any]]:

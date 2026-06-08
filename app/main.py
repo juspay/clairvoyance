@@ -28,6 +28,7 @@ from app.ai.voice.agents.breeze_buddy.dispatch import (
 from app.ai.voice.agents.breeze_buddy.managers.calls import (
     reconcile_stuck_processing_leads,
 )
+from app.ai.voice.agents.breeze_buddy.memory.worker import drain_memory_queue
 from app.ai.voice.agents.breeze_buddy.services.agent_router.client import (
     close_smart_router_client,
 )
@@ -51,6 +52,7 @@ from app.core.config.static import (
     BB_RECONCILE_CHANNELS_INTERVAL_S,
     BB_RECONCILE_STUCK_PROCESSING_INTERVAL_S,
     BOT_MAX_DRAIN_SECONDS,
+    BUDDY_MEMORY_ENABLED,
     CHAT_SESSION_END_TIMEOUT_LOOP_INTERVAL_SECONDS,
     CORS_ALLOWED_ORIGINS,
     DAILY_API_KEY,
@@ -64,6 +66,7 @@ from app.core.config.static import (
     ENABLE_VOICE_AGENT_POOL,
     HOST,
     MAX_DAILY_SESSION_LIMIT,
+    MEMORY_EXTRACTION_INTERVAL_SECONDS,
     POD_ROLE,
     PORT,
     VOICE_AGENT_MAX_POOL_SIZE,
@@ -221,6 +224,16 @@ async def lifespan(_app: FastAPI):
                 func=end_idle_chat_sessions,
                 interval_seconds=CHAT_SESSION_END_TIMEOUT_LOOP_INTERVAL_SECONDS,
             )
+
+            # Persistent user memory extraction drain.
+            # Pops items from Redis queue, runs LLM extraction, upserts facts.
+            # Disabled unless BUDDY_MEMORY_ENABLED=true (see docs/PERSISTENT_USER_MEMORY.md).
+            if BUDDY_MEMORY_ENABLED:
+                _background_scheduler.register_task(
+                    name="memory_extraction_drain",
+                    func=drain_memory_queue,
+                    interval_seconds=MEMORY_EXTRACTION_INTERVAL_SECONDS,
+                )
 
             # Event-driven dispatch reconcilers (Plane 5). Only registered on
             # main-server pods; the scheduler's SET NX EX lock further
