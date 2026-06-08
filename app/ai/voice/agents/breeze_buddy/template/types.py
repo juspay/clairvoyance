@@ -1254,6 +1254,25 @@ class ClientContextConfig(BaseModel):
     )
 
 
+class MemoryConfig(BaseModel):
+    enabled: bool = Field(
+        False,
+        description=(
+            "Opt-in switch for persistent per-user memory on this template. "
+            "Memory also requires the global BUDDY_MEMORY_ENABLED kill-switch "
+            "and a resolvable customer identity (customer_id or phone)."
+        ),
+    )
+    backend: Optional[str] = Field(
+        None,
+        description=(
+            "Override the active memory backend for this template: "
+            "'pgvector' (DIY Postgres+pgvector) or 'supermemory'. "
+            "When None, falls back to the global BUDDY_MEMORY_BACKEND env."
+        ),
+    )
+
+
 class ConfigurationModel(BaseModel):
     # --- Agent session state (generic) ---
     state_reducers: List[StateReducer] = Field(
@@ -1292,6 +1311,15 @@ class ConfigurationModel(BaseModel):
             "session start; the resolved allowlist drives both server "
             "validation and the system-prompt 'Available primitives' "
             "section. When absent, defaults to enabling the 'core' group."
+        ),
+    )
+
+    # --- Persistent user memory ---
+    memory: Optional["MemoryConfig"] = Field(
+        None,
+        description=(
+            "Optional. Opt-in persistent per-user memory and per-template "
+            "backend selection. When absent, memory is off for this template."
         ),
     )
 

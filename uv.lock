@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 2
 requires-python = ">=3.11"
 resolution-markers = [
     "python_full_version >= '3.14'",
@@ -702,6 +702,7 @@ dependencies = [
     { name = "opentelemetry-api" },
     { name = "opentelemetry-exporter-otlp-proto-http" },
     { name = "opentelemetry-sdk" },
+    { name = "pgvector" },
     { name = "pipecat-ai", extra = ["aic", "anthropic", "assemblyai", "azure", "cartesia", "daily", "deepgram", "elevenlabs", "google", "mcp", "openai", "sarvam", "soniox"] },
     { name = "pipecat-ai-flows" },
     { name = "plivo" },
@@ -713,6 +714,7 @@ dependencies = [
     { name = "redis", extra = ["hiredis"] },
     { name = "soundfile" },
     { name = "starlette" },
+    { name = "supermemory" },
     { name = "twilio" },
     { name = "uvicorn" },
     { name = "websockets" },
@@ -754,6 +756,7 @@ requires-dist = [
     { name = "opentelemetry-api" },
     { name = "opentelemetry-exporter-otlp-proto-http" },
     { name = "opentelemetry-sdk" },
+    { name = "pgvector" },
     { name = "pipecat-ai", extras = ["daily", "google", "assemblyai", "silero", "openai", "azure", "elevenlabs", "aic", "anthropic", "deepgram", "soniox", "mcp", "sarvam", "cartesia"], specifier = "==1.1.0" },
     { name = "pipecat-ai-flows", specifier = "==1.0.0" },
     { name = "plivo" },
@@ -768,6 +771,7 @@ requires-dist = [
     { name = "redis", extras = ["hiredis"], specifier = ">=5.0.0" },
     { name = "soundfile" },
     { name = "starlette", specifier = ">=0.27.0" },
+    { name = "supermemory", specifier = ">=3.45.0" },
     { name = "twilio" },
     { name = "uvicorn", specifier = "==0.34.2" },
     { name = "websockets", specifier = ">=11.0.3" },
@@ -2328,6 +2332,18 @@ wheels = [
 ]
 
 [[package]]
+name = "pgvector"
+version = "0.4.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/25/6c/6d8b4b03b958c02fa8687ec6063c49d952a189f8c91ebbe51e877dfab8f7/pgvector-0.4.2.tar.gz", hash = "sha256:322cac0c1dc5d41c9ecf782bd9991b7966685dee3a00bc873631391ed949513a", size = 31354, upload-time = "2025-12-05T01:07:17.87Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/5a/26/6cee8a1ce8c43625ec561aff19df07f9776b7525d9002c86bceb3e0ac970/pgvector-0.4.2-py3-none-any.whl", hash = "sha256:549d45f7a18593783d5eec609ea1684a724ba8405c4cb182a0b2b08aeff04e08", size = 27441, upload-time = "2025-12-05T01:07:16.536Z" },
+]
+
+[[package]]
 name = "pillow"
 version = "11.3.0"
 source = { registry = "https://pypi.org/simple" }
@@ -3561,6 +3577,23 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/ce/20/08dfcd9c983f6a6f4a1000d934b9e6d626cff8d2eeb77a89a68eef20a2b7/starlette-0.46.2.tar.gz", hash = "sha256:7f7361f34eed179294600af672f565727419830b54b7b084efe44bb82d2fccd5", size = 2580846, upload-time = "2025-04-13T13:56:17.942Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/8b/0c/9d30a4ebeb6db2b25a841afbb80f6ef9a854fc3b41be131d249a977b4959/starlette-0.46.2-py3-none-any.whl", hash = "sha256:595633ce89f8ffa71a015caed34a5b2dc1c0cdb3f0f1fbd1e69339cf2abeec35", size = 72037, upload-time = "2025-04-13T13:56:16.21Z" },
+]
+
+[[package]]
+name = "supermemory"
+version = "3.45.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "anyio" },
+    { name = "distro" },
+    { name = "httpx" },
+    { name = "pydantic" },
+    { name = "sniffio" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/2b/09/0a1afbcb7d1f4527db41e1dcf35dfcf5793ffd033f826bce46b7f20406de/supermemory-3.45.0.tar.gz", hash = "sha256:11864b75442fec7d99b385ff73300f7c5d7d5fb51949e63c7af885f6c000cd4f", size = 173155, upload-time = "2026-06-03T04:31:46.811Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c5/d5/e8c1c097e1bf861fce1303f5266eefd4b957c275822cba2e7203e1c0163d/supermemory-3.45.0-py3-none-any.whl", hash = "sha256:6fff04ad145a27b6a6ecd33713fcd8c9dc02fa8688a539737370fc85b4a25386", size = 154273, upload-time = "2026-06-03T04:31:45.709Z" },
 ]
 
 [[package]]
