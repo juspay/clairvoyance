@@ -1588,6 +1588,21 @@ class AgentTransferConfig(BaseModel):
     )
 
 
+class MemoryConfig(BaseModel):
+    """Per-template participation in the global memory engine."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = Field(
+        False,
+        description=(
+            "Opt-in switch for persistent per-user memory on this template. "
+            "Memory also requires the global BUDDY_MEMORY_ENABLED kill-switch "
+            "and a resolvable customer identity (customer_id or phone)."
+        ),
+    )
+
+
 class ConfigurationModel(BaseModel):
     # --- Agent session state (generic) ---
     state_reducers: List[StateReducer] = Field(
@@ -1626,6 +1641,15 @@ class ConfigurationModel(BaseModel):
             "session start; the resolved allowlist drives both server "
             "validation and the system-prompt 'Available primitives' "
             "section. When absent, defaults to enabling the 'core' group."
+        ),
+    )
+
+    # --- Persistent user memory ---
+    memory: Optional["MemoryConfig"] = Field(
+        None,
+        description=(
+            "Optional. Opt this template into the globally configured persistent "
+            "user-memory engine. When absent or disabled, memory is off."
         ),
     )
 

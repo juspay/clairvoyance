@@ -8,6 +8,8 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
+from app.schemas.embeddings import EmbeddingConfig
+
 
 class KnowledgeBaseStatus(str, Enum):
     ACTIVE = "ACTIVE"
@@ -25,26 +27,6 @@ class KbDocumentStatus(str, Enum):
     PROCESSING = "PROCESSING"
     READY = "READY"
     ERROR = "ERROR"
-
-
-class EmbeddingConfig(BaseModel):
-    """Per-KB embedding provider configuration.
-
-    All providers are normalized to 768 dimensions (Matryoshka truncation +
-    L2 renorm) so a single ``halfvec(768)`` column/index serves every KB.
-
-    Defaults to the in-region Azure deployment — everything goes through
-    Azure unless a KB explicitly opts into another provider. The config is
-    persisted on the row at creation, so changing these defaults never
-    retroactively reinterprets existing KBs.
-    """
-
-    provider: str = Field("azure_openai", description="Embedding provider key.")
-    model: str = Field(
-        "text-embedding-3-large",
-        description="Provider model identifier (Azure: the deployment name).",
-    )
-    dimensions: int = Field(768, description="Stored vector dimensions (fixed).")
 
 
 class KnowledgeBase(BaseModel):
