@@ -8,7 +8,7 @@ entry -- retrieval and ingestion are provider-agnostic.
 
 from typing import Callable, Dict
 
-from app.schemas.breeze_buddy.knowledge_base import EmbeddingConfig
+from app.schemas.embeddings import EmbeddingConfig
 from app.services.embeddings.azure_openai_provider import (
     AzureOpenAIEmbeddingProvider,
 )
