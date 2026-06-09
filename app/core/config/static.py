@@ -510,6 +510,19 @@ AWS_PROXY_HOST = os.environ.get("AWS_PROXY_HOST")
 AWS_PROXY_PORT = os.environ.get("AWS_PROXY_PORT")
 CLOUD_ENVIRONMENT = os.environ.get("CLOUD_ENVIRONMENT", "GCP")  # AWS, GCP, AZURE, etc.
 
+# --- Google Vertex AI (template generator) ---
+# Credentials JSON and project ID stay in dynamic.py (Redis-backed).
+# Region and model are structural — a pod restart on change is acceptable.
+TEMPLATE_BUILDER_VERTEX_REGION = os.environ.get(
+    "TEMPLATE_BUILDER_VERTEX_REGION", "us-east5"
+)
+TEMPLATE_BUILDER_VERTEX_CLAUDE_MODEL = os.environ.get(
+    "TEMPLATE_BUILDER_VERTEX_CLAUDE_MODEL", "claude-sonnet-4@20250514"
+)
+TEMPLATE_BUILDER_MAX_TOKENS = int(
+    os.environ.get("TEMPLATE_BUILDER_MAX_TOKENS", "16000")
+)
+
 # LangFuse Configuration (for OpenTelemetry tracing only)
 LANGFUSE_SECRET_KEY = os.environ.get("LANGFUSE_SECRET_KEY", "")
 LANGFUSE_PUBLIC_KEY = os.environ.get("LANGFUSE_PUBLIC_KEY", "")

@@ -24,6 +24,9 @@ from app.api.routers.breeze_buddy.playground import router as playground_router
 # Self-service signup and Google SSO (public, unauthenticated)
 from app.api.routers.breeze_buddy.signup import router as signup_router
 from app.api.routers.breeze_buddy.telephony import router as telephony_router
+from app.api.routers.breeze_buddy.template_generator import (
+    router as template_generator_router,
+)
 from app.api.routers.breeze_buddy.templates import router as templates_router
 from app.api.routers.breeze_buddy.users import router as users_router
 from app.api.routers.breeze_buddy.websocket import router as websocket_router
@@ -63,6 +66,9 @@ router.include_router(numbers_router, prefix="", tags=["numbers"])
 
 # Templates (conversational flow definitions)
 router.include_router(templates_router, prefix="", tags=["templates"])
+
+# AI-assisted template generation / refinement (streaming SSE)
+router.include_router(template_generator_router, prefix="", tags=["template-generator"])
 
 # Playground (configuration exploration)
 router.include_router(playground_router, prefix="", tags=["playground"])

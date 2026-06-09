@@ -28,7 +28,15 @@ fi
 # No errors → clean up temp file
 rm "$TMP_ERR_FILE"
 
+echo "Running field_reference.json coverage check..."
+
+if ! uv run python -m pytest tests/test_field_reference_coverage.py -q --tb=short; then
+  echo "❌ field_reference.json is out of sync with ConfigurationModel. Commit aborted."
+  echo "   Add missing fields to app/ai/voice/agents/breeze_buddy/template/field_reference.json"
+  exit 1
+fi
+
 # Stage updated files (if formatters changed them)
 git add -u
 
-echo "Formatting complete."
+echo "All checks passed."
