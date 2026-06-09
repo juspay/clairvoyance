@@ -41,6 +41,15 @@ from app.schemas.breeze_buddy.core import (
     TelephonyConfig,
     UpdateCallExecutionConfigRequest,
 )
+from app.schemas.breeze_buddy.data_source import (
+    ColumnsResponse,
+    DataSourceCreate,
+    DataSourceListResponse,
+    DataSourceResponse,
+    DataSourceUpdate,
+    PreviewResponse,
+    TabsResponse,
+)
 from app.schemas.breeze_buddy.merchants import (
     MerchantCreate,
     MerchantListResponse,
@@ -53,11 +62,13 @@ from app.schemas.breeze_buddy.template import (
 )
 from app.schemas.breeze_buddy.users import (
     DeleteUserResponse,
-    UserCreate as UserAccountCreate,
+)
+from app.schemas.breeze_buddy.users import UserCreate as UserAccountCreate
+from app.schemas.breeze_buddy.users import (
     UserListResponse,
     UserResponse,
-    UserUpdate as UserAccountUpdate,
 )
+from app.schemas.breeze_buddy.users import UserUpdate as UserAccountUpdate
 
 __all__ = [
     # Auth
@@ -98,6 +109,14 @@ __all__ = [
     "OutboundNumberStatus",
     "TelephonyConfig",
     "UpdateCallExecutionConfigRequest",
+    # Data Sources
+    "DataSourceCreate",
+    "DataSourceListResponse",
+    "DataSourceResponse",
+    "DataSourceUpdate",
+    "TabsResponse",
+    "ColumnsResponse",
+    "PreviewResponse",
     # Template
     "TemplateListResponse",
     "TemplateMetadata",

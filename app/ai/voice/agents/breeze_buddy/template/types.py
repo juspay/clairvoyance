@@ -1991,6 +1991,31 @@ def _default_supported_channels() -> List[Literal["voice", "chat"]]:
     return ["voice"]
 
 
+# ─── Data Source Reference (stored inside template.data_sources) ────────────
+
+
+class DataSourceRef(BaseModel):
+    """
+    Reference to a data_source entity attached to a template.
+
+    data_source_id: FK to the data_source table
+    name: the {variable_name} placeholder (must be unique per template)
+    inject_as: how to land in LLM context
+    """
+
+    data_source_id: str = Field(description="UUID of the data_source entity")
+    name: str = Field(
+        description="Variable name used as {name} placeholder in template prompts"
+    )
+    inject_as: str = Field(
+        default="var",
+        description=(
+            '"var" — sheet content injected into template_vars as {name}. '
+            '"message" — prepended as a system message to the initial node.'
+        ),
+    )
+
+
 class TemplateModel(BaseModel):
     # Read-only fields (set by server, not editable via API).
     # These are intentionally excluded from ReplaceTemplateRequest so that
@@ -2008,6 +2033,10 @@ class TemplateModel(BaseModel):
     expected_callback_response_schema: Optional[Dict[str, Any]] = None
     configurations: Optional[ConfigurationModel] = None
     secrets: Optional[Dict[str, Any]] = None
+    data_sources: Optional[List["DataSourceRef"]] = Field(
+        None,
+        description="List of data source references attached to this template",
+    )
     outbound_number_id: Optional[str] = None
     is_active: bool = True
     # Channels this template is allowed to be served on. Defaults to
@@ -2052,6 +2081,7 @@ class CreateTemplateRequest(BaseModel):
     expected_callback_response_schema: Optional[Dict[str, Any]] = None
     configurations: Optional[ConfigurationModel] = None
     secrets: Optional[Dict[str, Any]] = None
+    data_sources: Optional[List["DataSourceRef"]] = None
     supported_channels: List[Literal["voice", "chat"]] = Field(
         default_factory=_default_supported_channels,
         min_length=1,
@@ -2093,6 +2123,7 @@ class ReplaceTemplateRequest(BaseModel):
     expected_callback_response_schema: Optional[Dict[str, Any]] = None
     configurations: Optional[ConfigurationModel] = None
     secrets: Optional[Dict[str, Any]] = None
+    data_sources: Optional[List["DataSourceRef"]] = None
     supported_channels: Optional[List[Literal["voice", "chat"]]] = Field(
         default=None,
         min_length=1,

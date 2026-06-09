@@ -46,10 +46,8 @@ from app.core.config.static import GOOGLE_CLIENT_ID, JWT_ACCESS_TOKEN_EXPIRE_MIN
 from app.core.logger import logger
 from app.core.security.password import verify_password
 from app.core.security.scope import resolve_merchant_ids, resolve_reseller_ids
-from app.database.accessor.breeze_buddy import (
-    merchants as merchant_accessors,
-    users as user_accessors,
-)
+from app.database.accessor.breeze_buddy import merchants as merchant_accessors
+from app.database.accessor.breeze_buddy import users as user_accessors
 from app.schemas import TokenResponse, UserInfo, UserRole
 from app.schemas.breeze_buddy.signup import (
     AccountSummary,

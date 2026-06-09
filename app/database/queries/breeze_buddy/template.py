@@ -31,7 +31,7 @@ def get_template_by_merchant_query(
         SELECT id,
                reseller_id,
                merchant_id,
-               name, flow, expected_payload_schema, expected_callback_response_schema, configurations, secrets, outbound_number_id, is_active, supported_channels, created_at, updated_at
+               name, flow, expected_payload_schema, expected_callback_response_schema, configurations, secrets, data_sources, outbound_number_id, is_active, supported_channels, created_at, updated_at
         FROM {TEMPLATE_TABLE}
         WHERE {" AND ".join(conditions)}
     """
@@ -57,6 +57,7 @@ def create_template_query(
     secrets: Optional[
         str
     ],  # JSON string containing secrets and variables for HTTP functions
+    data_sources: Optional[str],  # JSON string containing data source refs
     outbound_number_id: Optional[
         str
     ],  # Changed: moved before is_active to match SQL column order
@@ -67,9 +68,9 @@ def create_template_query(
 ) -> Tuple[str, List[Any]]:
     """Generate query to create a new template."""
     query = f"""
-        INSERT INTO {TEMPLATE_TABLE} (id, reseller_id, merchant_id, name, flow, expected_payload_schema, expected_callback_response_schema, configurations, secrets, outbound_number_id, is_active, supported_channels, created_at, updated_at)
-        VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7::jsonb, $8::jsonb, $9::jsonb, $10, $11, $12, $13, $14)
-        RETURNING id, reseller_id, merchant_id, name, flow, expected_payload_schema, expected_callback_response_schema, configurations, secrets, outbound_number_id, is_active, supported_channels, created_at, updated_at
+        INSERT INTO {TEMPLATE_TABLE} (id, reseller_id, merchant_id, name, flow, expected_payload_schema, expected_callback_response_schema, configurations, secrets, data_sources, outbound_number_id, is_active, supported_channels, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7::jsonb, $8::jsonb, $9::jsonb, $10::jsonb, $11, $12, $13, $14, $15)
+        RETURNING id, reseller_id, merchant_id, name, flow, expected_payload_schema, expected_callback_response_schema, configurations, secrets, data_sources, outbound_number_id, is_active, supported_channels, created_at, updated_at
     """
 
     return query, [
@@ -82,6 +83,7 @@ def create_template_query(
         expected_callback_response_schema,
         configurations,
         secrets,
+        data_sources,
         outbound_number_id,
         is_active,
         supported_channels,
@@ -184,7 +186,7 @@ def get_template_by_id_query(template_id: str) -> Tuple[str, List[Any]]:
         SELECT id,
                reseller_id,
                merchant_id,
-               name, flow, expected_payload_schema, expected_callback_response_schema, configurations, secrets, outbound_number_id, is_active, supported_channels, created_at, updated_at
+               name, flow, expected_payload_schema, expected_callback_response_schema, configurations, secrets, data_sources, outbound_number_id, is_active, supported_channels, created_at, updated_at
         FROM {TEMPLATE_TABLE}
         WHERE id = $1
         LIMIT 1
@@ -218,7 +220,7 @@ def get_template_by_outbound_number_id_query(
         SELECT id,
                reseller_id,
                merchant_id,
-               name, flow, expected_payload_schema, expected_callback_response_schema, configurations, secrets, outbound_number_id, is_active, supported_channels, created_at, updated_at
+               name, flow, expected_payload_schema, expected_callback_response_schema, configurations, secrets, data_sources, outbound_number_id, is_active, supported_channels, created_at, updated_at
         FROM {TEMPLATE_TABLE}
         WHERE {' AND '.join(conditions)}
         LIMIT 1
@@ -298,6 +300,7 @@ def replace_template_query(
     expected_callback_response_schema: Optional[str],
     configurations: Optional[str],
     secrets: Optional[str],
+    data_sources: Optional[str],
     outbound_number_id: Optional[str],
     is_active: bool,
     merchant_id: Optional[str],
@@ -315,6 +318,7 @@ def replace_template_query(
         expected_callback_response_schema: Expected callback response schema JSON string or None
         configurations: Configurations JSON string or None
         secrets: Secrets and variables JSON string or None
+        data_sources: Data source refs JSON string or None
         outbound_number_id: Outbound number ID or None
         is_active: Whether template is active
         merchant_id: Merchant identifier or None
@@ -332,16 +336,17 @@ def replace_template_query(
             expected_callback_response_schema = $4::jsonb,
             configurations = $5::jsonb,
             secrets = $6::jsonb,
-            outbound_number_id = $7,
-            is_active = $8,
-            merchant_id = $9,
-            supported_channels = $10,
-            updated_at = $11
-        WHERE id = $12
+            data_sources = $7::jsonb,
+            outbound_number_id = $8,
+            is_active = $9,
+            merchant_id = $10,
+            supported_channels = $11,
+            updated_at = $12
+        WHERE id = $13
         RETURNING id,
                   reseller_id,
                   merchant_id,
-                  name, flow, expected_payload_schema, expected_callback_response_schema, configurations, secrets, outbound_number_id, is_active, supported_channels, created_at, updated_at
+                  name, flow, expected_payload_schema, expected_callback_response_schema, configurations, secrets, data_sources, outbound_number_id, is_active, supported_channels, created_at, updated_at
     """
 
     return query, [
@@ -351,6 +356,7 @@ def replace_template_query(
         expected_callback_response_schema,
         configurations,
         secrets,
+        data_sources,
         outbound_number_id,
         is_active,
         merchant_id,

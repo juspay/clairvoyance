@@ -22,11 +22,9 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import cast
 
-from app.ai.voice.agents.breeze_buddy.dispatch import (
-    promoter as prom_mod,
-    reconcilers as recon_mod,
-    worker as w,
-)
+from app.ai.voice.agents.breeze_buddy.dispatch import promoter as prom_mod
+from app.ai.voice.agents.breeze_buddy.dispatch import reconcilers as recon_mod
+from app.ai.voice.agents.breeze_buddy.dispatch import worker as w
 from app.ai.voice.agents.breeze_buddy.dispatch.channel_semaphore import (
     channel_tokens_available,
     init_channel_semaphore,

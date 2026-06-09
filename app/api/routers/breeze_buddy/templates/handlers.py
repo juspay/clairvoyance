@@ -137,6 +137,11 @@ async def create_template_handler(
             expected_callback_response_schema=template_data.expected_callback_response_schema,
             configurations=configurations,
             secrets=template_data.secrets,
+            data_sources=(
+                [ds.model_dump() for ds in template_data.data_sources]
+                if template_data.data_sources
+                else None
+            ),
             outbound_number_id=template_data.outbound_number_id,
             is_active=template_data.is_active,
             supported_channels=list(template_data.supported_channels),
@@ -472,6 +477,11 @@ async def replace_template_handler(
             expected_callback_response_schema=template_data.expected_callback_response_schema,
             configurations=configurations,
             secrets=merged_secrets,
+            data_sources=(
+                [ds.model_dump() for ds in template_data.data_sources]
+                if template_data.data_sources
+                else None
+            ),
             outbound_number_id=template_data.outbound_number_id,
             is_active=template_data.is_active,
             merchant_id=template_data.merchant_id,
