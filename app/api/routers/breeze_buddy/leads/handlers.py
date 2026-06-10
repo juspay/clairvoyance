@@ -290,7 +290,7 @@ async def push_lead_handler(req: PushLeadRequest, current_user: UserInfo) -> Dic
 
         # Get call execution config
         call_execution_configs = await get_call_execution_config_by_merchant_id(
-            req.reseller_id, req.merchant_id
+            req.reseller_id, req.merchant_id, template_name=template.name
         )
 
         if not call_execution_configs:

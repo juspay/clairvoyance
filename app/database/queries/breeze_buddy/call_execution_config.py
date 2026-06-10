@@ -151,25 +151,52 @@ def insert_call_execution_config_query(
 def get_call_execution_config_by_merchant_id_query(
     reseller_id: str,
     merchant_id: Optional[str],
+    template_name: Optional[str] = None,
 ) -> Tuple[str, List[Any]]:
     """
     Generate query to get call execution config by reseller ID and merchant identifier.
+
+    When template_name is provided the query filters by template name, enabling
+    the accessor to apply a merchant→reseller fallback that is template-aware.
+    When template_name is omitted the query returns all configs for the given
+    scope (existing behaviour, used by admin listing and inbound handlers).
     """
     if merchant_id:
-        text = f"""
-            SELECT *
-            FROM "{CALL_EXECUTION_CONFIG_TABLE}" 
-            WHERE reseller_id = $1 
-            AND merchant_id = $2;
-        """
-        values: List[Any] = [reseller_id, merchant_id]
+        if template_name:
+            text = f"""
+                SELECT *
+                FROM "{CALL_EXECUTION_CONFIG_TABLE}"
+                WHERE reseller_id = $1
+                AND merchant_id = $2
+                AND template = $3;
+            """
+            values: List[Any] = [reseller_id, merchant_id, template_name]
+        else:
+            text = f"""
+                SELECT *
+                FROM "{CALL_EXECUTION_CONFIG_TABLE}" 
+                WHERE reseller_id = $1 
+                AND merchant_id = $2;
+            """
+            values = [reseller_id, merchant_id]
     else:
-        text = f"""
-            SELECT *
-            FROM "{CALL_EXECUTION_CONFIG_TABLE}" 
-            WHERE reseller_id = $1;
-        """
-        values = [reseller_id]
+        if template_name:
+            # Reseller-level fallback: only rows where merchant_id IS NULL
+            text = f"""
+                SELECT *
+                FROM "{CALL_EXECUTION_CONFIG_TABLE}"
+                WHERE reseller_id = $1
+                AND merchant_id IS NULL
+                AND template = $2;
+            """
+            values = [reseller_id, template_name]
+        else:
+            text = f"""
+                SELECT *
+                FROM "{CALL_EXECUTION_CONFIG_TABLE}" 
+                WHERE reseller_id = $1;
+            """
+            values = [reseller_id]
     return text, values
 
 
