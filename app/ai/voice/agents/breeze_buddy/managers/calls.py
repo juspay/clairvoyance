@@ -83,7 +83,7 @@ async def _get_lead_config(lead: LeadCallTracker) -> Optional[CallExecutionConfi
     """
 
     configs = await get_call_execution_config_by_merchant_id(
-        lead.reseller_id, lead.merchant_id
+        lead.reseller_id, lead.merchant_id, template_name=lead.template
     )
     if not configs:
         logger.warning(

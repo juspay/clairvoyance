@@ -125,15 +125,27 @@ async def create_call_execution_config(
 async def get_call_execution_config_by_merchant_id(
     reseller_id: str,
     merchant_id: Optional[str] = None,
+    template_name: Optional[str] = None,
 ) -> List[CallExecutionConfig]:
     """
     Get call execution config by reseller ID.
+
+    When template_name is provided the lookup is template-aware:
+      1. Query with reseller_id + merchant_id + template_name
+      2. If not found, retry with merchant_id=NULL (reseller-level fallback)
+
+    This mirrors the template accessor fallback so a merchant that shares a
+    reseller-level config for a given template is resolved correctly even
+    when the merchant has other merchant-specific configs for different templates.
+
+    When template_name is omitted the existing behaviour is preserved (returns
+    all configs for the merchant/reseller scope).
     """
     logger.info(f"Getting call execution config by reseller ID: {reseller_id}")
 
     try:
         query_text, values = get_call_execution_config_by_merchant_id_query(
-            reseller_id, merchant_id
+            reseller_id, merchant_id, template_name
         )
         result = await run_parameterized_query(query_text, values)
 
@@ -150,7 +162,7 @@ async def get_call_execution_config_by_merchant_id(
                 f"No config found for merchant_id {merchant_id}, trying generic config."
             )
             query_text, values = get_call_execution_config_by_merchant_id_query(
-                reseller_id, None
+                reseller_id, None, template_name
             )
             result = await run_parameterized_query(query_text, values)
             if result:
