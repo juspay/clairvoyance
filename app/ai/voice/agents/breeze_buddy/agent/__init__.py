@@ -97,10 +97,12 @@ from app.core.logger.context import (
     set_log_context,
     update_log_context,
 )
-from app.database.accessor import update_lead_call_initiated_time
+from app.database.accessor import get_lead_by_call_id, update_lead_call_initiated_time
 from app.database.accessor.breeze_buddy.lead_call_tracker import (
     update_lead_call_initiated_time_by_id,
+    update_lead_template,
 )
+from app.database.accessor.breeze_buddy.template import get_template_by_id
 from app.schemas import CallProvider
 from app.schemas.breeze_buddy.core import ExecutionMode, LeadCallTracker
 
@@ -423,13 +425,12 @@ class Agent:
         self.lead = await update_lead_call_initiated_time(
             self.call_sid, call_initiated_time
         )
-        if not self.lead:
-            # Extract URL query params for Plivo inbound (contains from_number, to_number)
-            url_query_params = dict(self.ws.query_params) if self.ws else {}
-            from_number = call_data.get("from") or url_query_params.get(
-                "from_number", ""
-            )
 
+        # Extract URL query params for Plivo inbound (contains from_number, to_number)
+        url_query_params = dict(self.ws.query_params) if self.ws else {}
+        from_number = call_data.get("from") or url_query_params.get("from_number", "")
+
+        if not self.lead:
             # Inbound call - extract template_id (handles IVR mode if enabled)
             (
                 template_id_from_query,
@@ -492,6 +493,46 @@ class Agent:
                     )
                     clear_log_context()
                     return False
+        else:
+            # Lead was already created in the answer handler (e.g. for inbound calls).
+            # If this is IVR mode, we still need to run template selection and update
+            # the lead if a different template was chosen.
+            ivr_mode = url_query_params.get("ivr_mode") == "true"
+            if ivr_mode:
+                (
+                    template_id_from_query,
+                    error_reason,
+                    _was_ivr,
+                ) = await get_template_id_from_call(
+                    ws=self.ws,
+                    stream_sid=self.stream_sid,
+                    call_sid=self.call_sid,
+                    call_data=call_data,
+                    provider=self.provider or "",
+                    telephony_service=self.telephony_service,
+                    from_number=from_number,
+                )
+                if error_reason:
+                    clear_log_context()
+                    return False
+                if (
+                    template_id_from_query
+                    and self.lead.template_id != template_id_from_query
+                ):
+                    template = await get_template_by_id(template_id_from_query)
+                    if template:
+                        updated_lead = await update_lead_template(
+                            lead_id=self.lead.id,
+                            template=template.name,
+                            template_id=str(template.id),
+                        )
+                        if updated_lead:
+                            self.lead = updated_lead
+                        else:
+                            logger.warning(
+                                f"Failed to update lead template to "
+                                f"{template_id_from_query} for lead {self.lead.id}"
+                            )
 
         # Update context with lead_id (call_sid already set above)
         update_log_context(lead_id=str(self.lead.id))
@@ -925,6 +966,17 @@ class Agent:
                 await self._setup_daily_transport(runner_args)
             else:
                 if not await self._setup_telephony_transport():
+                    if self.completion_function and self.call_sid:
+
+                        lead = await get_lead_by_call_id(self.call_sid)
+                        # If lead is None (not found), or it doesn't have an outcome,
+                        # or the outcome is not a BLOCKED_ outcome, then it's an early hangup.
+                        if not lead or not lead.outcome:
+                            await self.completion_function(
+                                call_id=self.call_sid,
+                                outcome="EARLY_HANGUP",
+                                call_end_time=datetime.now(timezone.utc),
+                            )
                     return
 
             # Override TTS provider if LLM-based selection was done at lead push time.

@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Any, Dict, Optional, Tuple
 
 from app.core.logger import logger
+from app.database.accessor import get_lead_by_call_id
 from app.database.accessor.breeze_buddy.lead_call_tracker import (
     create_lead_call_tracker,
 )
@@ -45,6 +46,14 @@ async def handle_inbound_call(
             f"Inbound calls not supported for {provider}. call_sid: {call_sid}"
         )
         return None, "Inbound calls not supported"
+
+    # Defensive guard: lead may have been created in the answer handler
+    existing_lead = await get_lead_by_call_id(call_sid)
+    if existing_lead:
+        logger.info(
+            f"Lead already exists for call_sid: {call_sid}, lead_id: {existing_lead.id}"
+        )
+        return existing_lead, None
 
     logger.info(f"No lead found for call_sid: {call_sid} - treating as inbound call")
 
@@ -123,6 +132,14 @@ async def create_lead_from_template_id(
         If failed, lead is None and error_reason contains the failure reason.
     """
     logger.info(f"Creating lead from template_id: {template_id}")
+
+    # Defensive guard: lead may have been created in the answer handler
+    existing_lead = await get_lead_by_call_id(call_sid)
+    if existing_lead:
+        logger.info(
+            f"Lead already exists for call_sid: {call_sid}, lead_id: {existing_lead.id}"
+        )
+        return existing_lead, None
 
     # Load template by ID
     template = await get_template_by_id(template_id)
