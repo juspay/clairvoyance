@@ -86,6 +86,10 @@ from app.ai.voice.agents.breeze_buddy.template.vad import create_vad_analyzer
 from app.ai.voice.agents.breeze_buddy.utils.common import (
     track_error,
 )
+from app.ai.voice.agents.breeze_buddy.utils.voice_restrictions import (
+    VOICE_REDIRECT_TTS_MESSAGE,
+    VOICE_RESTRICTED_TOOLS,
+)
 from app.ai.voice.agents.breeze_buddy.utils.transport.websockets import (
     close_websocket_safely,
 )
@@ -170,6 +174,9 @@ class Agent:
 
         # RTVI processor for daily mode real-time events
         self._rtvi_processor: Any = None
+
+        # LLM service (set after create_services; None in stream mode)
+        self._llm: Any = None
 
         # Stream mode transcript collector (replaces LLMContext for transcription)
         self._transcript_collector: Optional[TranscriptCollectorProcessor] = None
@@ -768,6 +775,44 @@ class Agent:
                     RTVIServerMessageFrame(data={"type": "bot-ready"})
                 )
 
+        # Voice-to-chat redirect: intercept restricted tool calls in daily mode
+        if self.is_daily_mode and self._rtvi_processor and not self.is_stream_mode and self._llm:
+
+            @self._llm.event_handler("on_function_calls_started")
+            async def on_function_calls_started(service, function_calls):
+                """Intercept voice-restricted tool calls and redirect to chat."""
+                for fc in function_calls:
+                    if fc.function_name not in VOICE_RESTRICTED_TOOLS:
+                        continue
+
+                    logger.info(
+                        f"[VOICE_REDIRECT] Intercepted restricted tool '{fc.function_name}' "
+                        f"in voice mode, emitting redirect event. "
+                        f"conversation_id={self.conversation_id}"
+                    )
+
+                    # Speak the redirect message via TTS
+                    if self.task:
+                        try:
+                            await self.task.queue_frame(
+                                TTSSpeakFrame(text=VOICE_REDIRECT_TTS_MESSAGE)
+                            )
+                        except Exception as e:
+                            logger.warning(
+                                f"[VOICE_REDIRECT] Failed to queue TTS redirect message: {e}"
+                            )
+
+                    # Emit the RTVI event to Lighthouse frontend
+                    await self._emit_rtvi_event(
+                        "voice-to-chat-redirect",
+                        {
+                            "tool": fc.function_name,
+                            "reason": "voice_restricted",
+                            "conversation_id": self.conversation_id or "",
+                        },
+                    )
+                    break  # Handle only the first restricted tool per batch
+
         # Stream mode: accept tts-speak via RTVI client-message (PipecatClient SDK)
         if self.is_stream_mode and self._rtvi_processor:
 
@@ -1017,6 +1062,7 @@ class Agent:
             stt, llm, tts = await create_services(
                 self.configurations, include_llm=not is_stream
             )
+            self._llm = llm  # May be None in stream mode
             if not is_stream:
                 assert llm is not None, "LLM is required in agent mode"
 
