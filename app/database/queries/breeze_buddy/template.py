@@ -113,6 +113,42 @@ def delete_template_if_not_referenced_query(template_id: str) -> tuple[str, list
     return query, [template_id]
 
 
+def _build_template_list_conditions(
+    filters: Dict[str, Any],
+) -> Tuple[List[str], List[Any]]:
+    """Shared WHERE builder for the templates list + count queries.
+
+    Keeps both in sync. Supports single/array reseller and merchant filters,
+    is_active, and a case-insensitive name search.
+    """
+    conditions: List[str] = []
+    values: List[Any] = []
+
+    if "reseller_ids" in filters and filters["reseller_ids"]:
+        values.append(filters["reseller_ids"])
+        conditions.append(f"reseller_id = ANY(${len(values)})")
+    elif "reseller_id" in filters and filters["reseller_id"]:
+        values.append(filters["reseller_id"])
+        conditions.append(f"reseller_id = ${len(values)}")
+
+    if "merchant_ids" in filters and filters["merchant_ids"]:
+        values.append(filters["merchant_ids"])
+        conditions.append(f"merchant_id = ANY(${len(values)})")
+    elif "merchant_id" in filters and filters["merchant_id"]:
+        values.append(filters["merchant_id"])
+        conditions.append(f"merchant_id = ${len(values)}")
+
+    if "is_active" in filters:
+        values.append(filters["is_active"])
+        conditions.append(f"is_active = ${len(values)}")
+
+    if filters.get("search"):
+        values.append(f"%{filters['search']}%")
+        conditions.append(f"name ILIKE ${len(values)}")
+
+    return conditions, values
+
+
 def get_templates_list_query(filters: Dict[str, Any]) -> Tuple[str, List[Any]]:
     """
     Generate query to list multiple templates (metadata only, no flow).
@@ -130,44 +166,44 @@ def get_templates_list_query(filters: Dict[str, Any]) -> Tuple[str, List[Any]]:
     Returns:
         Tuple of (query string, values list)
     """
-    conditions = []
-    values = []
-
-    # Handle reseller filtering (supports both single and multiple)
-    if "reseller_ids" in filters and filters["reseller_ids"]:
-        values.append(filters["reseller_ids"])
-        conditions.append(f"reseller_id = ANY(${len(values)})")
-    elif "reseller_id" in filters and filters["reseller_id"]:
-        values.append(filters["reseller_id"])
-        conditions.append(f"reseller_id = ${len(values)}")
-
-    # Handle merchant filtering (supports both single and multiple)
-    if "merchant_ids" in filters and filters["merchant_ids"]:
-        values.append(filters["merchant_ids"])
-        conditions.append(f"merchant_id = ANY(${len(values)})")
-    elif "merchant_id" in filters and filters["merchant_id"]:
-        values.append(filters["merchant_id"])
-        conditions.append(f"merchant_id = ${len(values)}")
-
-    # Handle is_active filter
-    if "is_active" in filters:
-        values.append(filters["is_active"])
-        conditions.append(f"is_active = ${len(values)}")
+    conditions, values = _build_template_list_conditions(filters)
 
     where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
 
+    # Paginated requests sort by name so the query can ride the
+    # (reseller_id, merchant_id, name) composite index. Unpaginated requests
+    # keep the original newest-first ordering for backward compatibility.
+    paginate = filters.get("limit") is not None
+    order_by = "name" if paginate else "created_at DESC"
+
     # Select only metadata columns (exclude flow and schema fields for performance)
     query = f"""
-        SELECT id, 
-               reseller_id, 
-               merchant_id, 
-               name, is_active, created_at, updated_at
+        SELECT id,
+               reseller_id,
+               merchant_id,
+               name, is_active, supported_channels, created_at, updated_at
         FROM {TEMPLATE_TABLE}
         {where_clause}
-        ORDER BY created_at DESC
+        ORDER BY {order_by}
     """
 
+    if paginate:
+        values.append(filters["limit"])
+        query += f"\n        LIMIT ${len(values)}"
+        values.append(filters.get("offset", 0))
+        query += f"\n        OFFSET ${len(values)}"
+
     return query, values
+
+
+def get_templates_count_query(filters: Dict[str, Any]) -> Tuple[str, List[Any]]:
+    """Generate a COUNT(*) query matching get_templates_list_query's filters.
+
+    Used for pagination totals. Ignores limit/offset/ordering.
+    """
+    conditions, values = _build_template_list_conditions(filters)
+    where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
+    return f"SELECT COUNT(*) AS total FROM {TEMPLATE_TABLE}{where_clause}", values
 
 
 def get_template_by_id_query(template_id: str) -> Tuple[str, List[Any]]:
