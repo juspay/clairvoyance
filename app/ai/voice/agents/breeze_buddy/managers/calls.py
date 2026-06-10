@@ -545,9 +545,15 @@ async def handle_call_completion(
         lead.metaData and lead.metaData.get("transfer", {}).get("status") == "success"
     )
 
-    config = await _get_lead_config(lead)
-    if not config:
-        return
+    config = None
+    if lead.template == "IVR-OPTIONS":
+        logger.info(
+            f"Skipping config check for template IVR-OPTIONS for lead {lead.id}"
+        )
+    else:
+        config = await _get_lead_config(lead)
+        if not config:
+            return
 
     # Override outcome to "TRANSFERRED" for transfer calls
     if is_transfer:
@@ -563,7 +569,8 @@ async def handle_call_completion(
 
     # Only retry outbound telephony calls - inbound and test calls should not be retried
     if (
-        outcome in ["BUSY", "NO_ANSWER"]
+        config
+        and outcome in ["BUSY", "NO_ANSWER"]
         and lead.call_direction == CallDirection.OUTBOUND
         and lead.execution_mode == ExecutionMode.TELEPHONY
     ):
@@ -634,9 +641,15 @@ async def handle_unanswered_calls(call_id: str):
         )
         return
 
-    config = await _get_lead_config(lead)
-    if not config:
-        return
+    config = None
+    if lead.template == "IVR-OPTIONS":
+        logger.info(
+            f"Skipping config check for template IVR-OPTIONS for lead {lead.id}"
+        )
+    else:
+        config = await _get_lead_config(lead)
+        if not config:
+            return
 
     await update_lead_call_completion_details(
         id=lead.id,
@@ -648,7 +661,8 @@ async def handle_unanswered_calls(call_id: str):
 
     # Only retry outbound telephony calls - inbound and test calls should not be retried
     if (
-        lead.call_direction == CallDirection.OUTBOUND
+        config
+        and lead.call_direction == CallDirection.OUTBOUND
         and lead.execution_mode == ExecutionMode.TELEPHONY
     ):
         await _retry_call(lead, config, "NO_ANSWER")

@@ -34,6 +34,7 @@ from app.database.queries.breeze_buddy.lead_call_tracker import (
     update_lead_call_recording_url_query,
     update_lead_payload_query,
     update_lead_request_id_query,
+    update_lead_template_query,
 )
 from app.schemas import (
     CallDirection,
@@ -275,7 +276,7 @@ async def get_lead_by_call_id(call_id: str) -> Optional[LeadCallTracker]:
             logger.info(f"Lead found: {decoded_result}")
             return decoded_result
 
-        logger.error("Lead not found")
+        logger.warning("Lead not found")
         return None
 
     except Exception as e:
@@ -462,6 +463,44 @@ async def update_lead_call_completion_details(
 
     except Exception as e:
         logger.error(f"Error updating lead call completion details: {e}")
+        return None
+
+
+async def update_lead_template(
+    lead_id: str, template: str, template_id: str
+) -> Optional[LeadCallTracker]:
+    """
+    Update the template name and template_id for a lead.
+
+    Used when an IVR selection results in a different template than the
+    one the lead was initially created with in the answer handler.
+
+    Args:
+        lead_id: Lead UUID
+        template: New template name
+        template_id: New template UUID
+
+    Returns:
+        Updated LeadCallTracker record if successful, None otherwise
+    """
+    logger.info(
+        f"Updating template for lead_id: {lead_id} to template: {template}, "
+        f"template_id: {template_id}"
+    )
+
+    try:
+        query_text, values = update_lead_template_query(lead_id, template, template_id)
+        result = await run_parameterized_query(query_text, values)
+        if result and get_row_count(result) > 0:
+            decoded_result = decode_lead_call_tracker(result[0])
+            logger.info(f"Lead template updated successfully: {decoded_result}")
+            return decoded_result
+
+        logger.error(f"Failed to update lead template for lead_id: {lead_id}")
+        return None
+
+    except Exception as e:
+        logger.error(f"Error updating lead template for lead_id {lead_id}: {e}")
         return None
 
 

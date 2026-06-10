@@ -17,6 +17,7 @@ import base64
 import hashlib
 import json
 import uuid
+from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple
 
 from fastapi import WebSocket
@@ -36,9 +37,14 @@ from app.ai.voice.agents.breeze_buddy.utils.transport.websockets import (
     send_message,
 )
 from app.core.logger import logger
-from app.database.accessor import get_call_execution_config_by_merchant_id
+from app.database.accessor import (
+    get_call_execution_config_by_merchant_id,
+    get_lead_by_call_id,
+    update_lead_call_completion_details,
+    update_lead_template,
+)
 from app.database.accessor.breeze_buddy.template import get_template_by_id
-from app.schemas import InboundBlockAction
+from app.schemas import InboundBlockAction, LeadCallStatus
 from app.services.redis.client import get_redis_service
 
 # Constants
@@ -123,7 +129,7 @@ async def get_template_id_from_call(
         )
 
         if not selected_template_id:
-            logger.error("[IVR] No valid template selected, ending call")
+            logger.warning("[IVR] No valid template selected, ending call")
             # WebSocket already closed by IVR menu after goodbye audio
             return None, "IVR failed - no template selected", True
 
@@ -233,12 +239,44 @@ async def _check_deferred_inbound_policy(
                 customer_phone_number=from_number,
             )
 
-        # Fire-and-forget: log blocked call to lead_call_tracker
-        asyncio.create_task(
-            log_blocked_call(
+        # Update the existing IVR-OPTIONS lead with the real template and blocked outcome.
+        # Fall back to creating a new lead if no existing lead found (legacy safety).
+        outcome = (
+            "BLOCKED_REDIRECT"
+            if policy.action == InboundBlockAction.REDIRECT and redirect_number
+            else "BLOCKED_REJECT"
+        )
+        meta_data = {
+            "block_reason": policy.reason,
+            "block_action": policy.action.value if policy.action else None,
+            "block_message": policy.message,
+            "redirect_number": redirect_number,
+            "provider": provider,
+            "from_number": from_number,
+            "to_number": "",
+        }
+        existing = await get_lead_by_call_id(call_sid)
+        if existing:
+            await update_lead_call_completion_details(
+                id=existing.id,
+                status=LeadCallStatus.FINISHED,
+                outcome=outcome,
+                meta_data=meta_data,
+                call_end_time=datetime.now(timezone.utc),
+            )
+            await update_lead_template(
+                lead_id=existing.id,
+                template=template.name,
+                template_id=str(template.id),
+            )
+            logger.info(
+                f"[IVR] Updated existing lead {existing.id} with outcome={outcome}"
+            )
+        else:
+            await log_blocked_call(
                 call_id=call_sid,
                 from_number=from_number,
-                to_number="",  # Not available in IVR context
+                to_number="",
                 provider=provider,
                 reseller_id=reseller_id,
                 merchant_id=template.merchant_id,
@@ -254,7 +292,6 @@ async def _check_deferred_inbound_policy(
                 block_message=policy.message,
                 redirect_number=redirect_number,
             )
-        )
 
         # Close WebSocket
         await close_websocket_safely(ws, code=4003, reason=policy.reason or "blocked")
@@ -679,7 +716,7 @@ async def _send_audio(
     if success:
         logger.info(f"[IVR] Sent audio ({len(audio_bytes)} bytes) via {provider_str}")
     else:
-        logger.error("[IVR] Failed to send audio")
+        logger.warning("[IVR] Failed to send audio")
 
 
 async def _wait_for_valid_dtmf(

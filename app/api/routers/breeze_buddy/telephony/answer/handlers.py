@@ -28,6 +28,8 @@ INBOUND (customer calls us):
 
 import asyncio
 import json
+import uuid
+from datetime import datetime, timezone
 from html import escape as html_escape
 from typing import Any, Dict, Optional
 from urllib.parse import quote
@@ -63,6 +65,9 @@ from app.database.accessor import (
     get_call_execution_config_by_merchant_id,
     get_lead_by_call_id,
 )
+from app.database.accessor.breeze_buddy.lead_call_tracker import (
+    create_lead_call_tracker,
+)
 from app.database.accessor.breeze_buddy.outbound_number import (
     get_outbound_number_by_number,
 )
@@ -70,7 +75,7 @@ from app.database.accessor.breeze_buddy.template import (
     get_all_templates_by_outbound_number_id,
     get_template_by_id_with_fallback,
 )
-from app.schemas import InboundBlockAction
+from app.schemas import CallDirection, InboundBlockAction, LeadCallStatus
 from app.services.redis.client import get_redis_service
 
 
@@ -397,6 +402,63 @@ def _build_block_response(
     )
 
 
+async def _create_inbound_lead_in_answer_handler(
+    call_id: str,
+    from_number: str,
+    templates: list,
+) -> None:
+    """Create an inbound lead in the answer handler before returning XML.
+
+    This ensures the lead exists in the database even if the caller hangs
+    up before the WebSocket connects, preventing orphan-call webhooks for
+    normal immediate-hangup behaviour.
+
+    Uses the first resolved template; IVR selection may update the template
+    later in the WebSocket handler if the user chooses a different one.
+
+    Errors are swallowed — the answer response must not be blocked by a
+    DB write failure.
+    """
+    if not templates:
+        return
+
+    first_template = templates[0]
+    is_ivr_mode = len(templates) > 1
+
+    if is_ivr_mode:
+        lead_template_name = "IVR-OPTIONS"
+        lead_template_id = None
+    else:
+        lead_template_name = first_template.name
+        lead_template_id = str(first_template.id)
+
+    lead_id = str(uuid.uuid4())
+    try:
+        await create_lead_call_tracker(
+            id=lead_id,
+            reseller_id=first_template.reseller_id,
+            template=lead_template_name,
+            template_id=lead_template_id,
+            merchant_id=first_template.merchant_id,
+            next_attempt_at=None,
+            payload={"customer_mobile_number": from_number},
+            call_initiated_time=datetime.now(timezone.utc),
+            status=LeadCallStatus.PROCESSING,
+            call_id=call_id,
+            outbound_number_id=(
+                str(first_template.outbound_number_id)
+                if first_template.outbound_number_id
+                else None
+            ),
+            call_direction=CallDirection.INBOUND,
+        )
+        logger.info(f"[Answer] Created inbound lead {lead_id} for call_id {call_id}")
+    except Exception as e:
+        logger.error(
+            f"[Answer] Failed to create inbound lead for call_id {call_id}: {e}"
+        )
+
+
 async def _build_provider_response(
     provider: str,
     result: dict,
@@ -689,6 +751,15 @@ async def handle_provider_answer(request: Request, provider: str) -> Response:
                 result["template_list"] = [
                     {"id": str(t.id), "name": t.name} for t in allowed_templates
                 ]
+
+        # Create inbound lead early so it exists even if caller hangs up before
+        # the WebSocket connects. This prevents orphan-call webhooks for normal
+        # immediate-hangup behaviour.
+        await _create_inbound_lead_in_answer_handler(
+            call_id=call_id,
+            from_number=from_number,
+            templates=result.get("templates", []),
+        )
 
     return await _build_provider_response(
         provider, result, call_id, from_number, to_number

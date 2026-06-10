@@ -655,6 +655,36 @@ def update_lead_request_id_query(
     return text, values
 
 
+def update_lead_template_query(
+    lead_id: str, template: str, template_id: str
+) -> Tuple[str, List[Any]]:
+    """
+    Update the template name and template_id for a lead.
+
+    Used when an IVR selection results in a different template than the
+    one the lead was initially created with in the answer handler.
+
+    Args:
+        lead_id: Lead UUID
+        template: New template name
+        template_id: New template UUID
+
+    Returns:
+        Tuple of (query_text, values)
+    """
+    text = f"""
+        UPDATE "{LEAD_CALL_TRACKER_TABLE}"
+        SET
+            "template" = $1,
+            "template_id" = $2,
+            "updated_at" = NOW()
+        WHERE "id" = $3
+        RETURNING *;
+    """
+    values = [template, template_id, lead_id]
+    return text, values
+
+
 def append_metadata_field_query(
     lead_id: str, field_updates: Dict[str, Any]
 ) -> Tuple[str, List[Any]]:
