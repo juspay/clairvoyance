@@ -230,6 +230,9 @@ async def list_templates_handler(
     merchant_id: Optional[str],
     include_inactive: bool,
     current_user: UserInfo,
+    page: Optional[int] = None,
+    limit: Optional[int] = None,
+    search: Optional[str] = None,
 ) -> TemplateListResponse:
     """
     List templates with RBAC enforcement.
@@ -266,14 +269,30 @@ async def list_templates_handler(
         # Apply RBAC filtering (validates access and injects user's accessible merchants/shops)
         filters = apply_hierarchical_template_filters(filters, current_user)
 
-        # Get templates from database
-        templates = await get_templates_list(filters)
+        # Optional search + pagination. Backward-compatible: when `limit` is
+        # omitted the query returns all rows (existing behavior).
+        if search:
+            filters["search"] = search
+        current_page = page if (page and page > 0) else 1
+        if limit is not None:
+            filters["limit"] = limit
+            filters["offset"] = (current_page - 1) * limit
+
+        # Get templates from database (total reflects the full filtered set)
+        templates, total = await get_templates_list(filters)
 
         logger.info(
-            f"Returning {len(templates)} templates for user {current_user.username}"
+            f"Returning {len(templates)} templates (total={total}) for user {current_user.username}"
         )
 
-        return TemplateListResponse(templates=templates, total=len(templates))
+        total_pages = max(1, (total + limit - 1) // limit) if limit else 1
+        return TemplateListResponse(
+            templates=templates,
+            total=total,
+            page=current_page if limit is not None else 1,
+            page_size=limit,
+            total_pages=total_pages,
+        )
 
     except HTTPException:
         raise

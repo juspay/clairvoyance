@@ -18,6 +18,7 @@ class TemplateMetadata(BaseModel):
     merchant_id: Optional[str] = None
     name: str
     is_active: bool
+    supported_channels: List[str] = ["voice"]
     created_at: datetime
     updated_at: datetime
 
@@ -30,6 +31,9 @@ class TemplateListResponse(BaseModel):
 
     templates: List[TemplateMetadata]
     total: int
+    page: int = 1
+    page_size: Optional[int] = None
+    total_pages: int = 1
 
 
 class DeleteTemplateResponse(BaseModel):

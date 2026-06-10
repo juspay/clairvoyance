@@ -103,6 +103,13 @@ async def list_templates(
     include_inactive: bool = Query(
         False, description="Include inactive templates (default: false)"
     ),
+    page: Optional[int] = Query(
+        None, ge=1, description="Page number (1-based). Omit to return all."
+    ),
+    limit: Optional[int] = Query(
+        None, ge=1, le=100, description="Page size. Omit to return all."
+    ),
+    search: Optional[str] = Query(None, description="Case-insensitive name search."),
     current_user: UserInfo = Depends(get_current_user_with_rbac),
 ):
     """
@@ -138,7 +145,13 @@ async def list_templates(
         TemplateListResponse with templates array and total count
     """
     return await list_templates_handler(
-        reseller_id, merchant_id, include_inactive, current_user
+        reseller_id,
+        merchant_id,
+        include_inactive,
+        current_user,
+        page=page,
+        limit=limit,
+        search=search,
     )
 
 

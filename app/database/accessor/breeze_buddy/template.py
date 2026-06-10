@@ -3,7 +3,7 @@ Database accessor functions for templates.
 """
 
 import json
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import asyncpg
 
@@ -25,6 +25,7 @@ from app.database.queries.breeze_buddy.template import (
     get_template_by_id_query,
     get_template_by_merchant_query,
     get_template_by_outbound_number_id_query,
+    get_templates_count_query,
     get_templates_list_query,
     replace_template_query,
 )
@@ -163,7 +164,9 @@ async def create_template(
         return None
 
 
-async def get_templates_list(filters: Dict[str, Any]) -> List[TemplateMetadata]:
+async def get_templates_list(
+    filters: Dict[str, Any],
+) -> Tuple[List[TemplateMetadata], int]:
     """
     Get list of templates (metadata only, no flow) based on filters.
 
@@ -224,6 +227,7 @@ async def get_templates_list(filters: Dict[str, Any]) -> List[TemplateMetadata]:
                     )
                     # Continue with original filters, will likely return empty
 
+        effective_filters = filters
         query, values = get_templates_list_query(filters)
         result = await run_parameterized_query(query, values)
 
@@ -241,12 +245,13 @@ async def get_templates_list(filters: Dict[str, Any]) -> List[TemplateMetadata]:
             }
 
             # Query for generic templates (merchant_id IS NULL)
+            effective_filters = fallback_filters
             query, values = get_templates_list_query(fallback_filters)
             result = await run_parameterized_query(query, values)
 
         if not result:
             logger.info("No templates found matching filters (including fallback)")
-            return []
+            return [], 0
 
         # Convert database records to TemplateMetadata objects
         templates = []
@@ -258,17 +263,27 @@ async def get_templates_list(filters: Dict[str, Any]) -> List[TemplateMetadata]:
                     merchant_id=row.get("merchant_id"),
                     name=row["name"],
                     is_active=row["is_active"],
+                    supported_channels=list(row["supported_channels"]),
                     created_at=row["created_at"],
                     updated_at=row["updated_at"],
                 )
             )
 
-        logger.info(f"Found {len(templates)} templates matching filters")
-        return templates
+        # Total for pagination: when a limit is set, `result` is a single page,
+        # so COUNT(*) gives the real total; otherwise the page is everything.
+        if effective_filters.get("limit") is not None:
+            count_query, count_values = get_templates_count_query(effective_filters)
+            count_result = await run_parameterized_query(count_query, count_values)
+            total = count_result[0]["total"] if count_result else len(templates)
+        else:
+            total = len(templates)
+
+        logger.info(f"Found {len(templates)} templates (total={total})")
+        return templates, total
 
     except Exception as e:
         logger.error(f"Error getting templates list: {e}", exc_info=True)
-        return []
+        return [], 0
 
 
 async def get_template_by_id_with_fallback(
