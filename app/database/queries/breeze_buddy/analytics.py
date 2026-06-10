@@ -1137,6 +1137,12 @@ def get_analytics_call_details_grouped_query(
 
     pagination_params_start = len(values) + 1
 
+    outer_conditions = [
+        "lct.request_id IN (SELECT request_id FROM paginated_request_ids)"
+    ]
+    outer_conditions.extend(conditions)
+    outer_where = " WHERE " + " AND ".join(outer_conditions)
+
     text = f"""
         WITH paginated_request_ids AS (
             SELECT lct.request_id
@@ -1153,7 +1159,7 @@ def get_analytics_call_details_grouped_query(
             ou.provider as calling_provider
         FROM "{LEAD_CALL_TRACKER_TABLE}" lct
         LEFT JOIN "{OUTBOUND_NUMBER_TABLE}" ou ON lct.outbound_number_id = ou.id
-        WHERE lct.request_id IN (SELECT request_id FROM paginated_request_ids)
+        {outer_where}
         ORDER BY MAX(lct.{sort_by}) OVER (PARTITION BY lct.request_id) {sort_direction},
                  lct.call_initiated_time ASC;
     """
