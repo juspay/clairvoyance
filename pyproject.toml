@@ -12,8 +12,8 @@ dependencies = [
     "websockets>=11.0.3",
     "starlette>=0.27.0",
     "python-dotenv>=1.0.0",
-    "pipecat-ai[daily,google,assemblyai,silero,openai,azure,elevenlabs,aic,anthropic,deepgram,soniox,mcp,sarvam,cartesia]==1.1.0",
-    "pipecat-ai-flows==1.0.0",
+    "pipecat-ai[daily,google,assemblyai,silero,openai,azure,elevenlabs,aic,anthropic,deepgram,soniox,mcp,sarvam,cartesia]",
+    "pipecat-ai-flows",
     "loguru",
     "opentelemetry-api",
     "opentelemetry-sdk",
@@ -33,7 +33,7 @@ dependencies = [
     "redis[hiredis]>=5.0.0",
     "nltk",
     "jmespath>=1.1.0",
-    "h2>=4.3.0",
+    "google-api-python-client>=2.197.0",
 ]
 
 [project.optional-dependencies]
@@ -41,14 +41,8 @@ dev = [
     "black",
     "isort",
     "autoflake",
-    "pyrefly",
-    "pytest>=9.0.3",
-    "pytest-asyncio>=1.3.0",
+    "pyrefly"
 ]
-
-[tool.pytest.ini_options]
-asyncio_mode = "auto"
-testpaths = ["tests"]
 
 [build-system]
 requires = ["hatchling"]
@@ -64,12 +58,6 @@ target-version = ['py311']
 [tool.isort]
 profile = "black"
 line_length = 88
-combine_as_imports = true
 
 [tool.pyrefly]
 project-excludes = ["**/automatic/**"]
-
-[dependency-groups]
-dev = [
-    "pytest>=9.0.3",
-]

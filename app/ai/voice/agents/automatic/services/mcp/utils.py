@@ -11,8 +11,8 @@ from app.ai.voice.agents.automatic.features.charts.chart_tools import (
 )
 from app.ai.voice.agents.automatic.tools.internet import (
     tool_functions as internet_tool_functions,
-    tools as internet_tools,
 )
+from app.ai.voice.agents.automatic.tools.internet import tools as internet_tools
 from app.ai.voice.agents.automatic.utils.session_context import get_current_session_id
 from app.core.config.static import ENABLE_SEARCH_GROUNDING
 from app.core.logger import logger
