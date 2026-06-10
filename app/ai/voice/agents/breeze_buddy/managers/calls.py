@@ -111,6 +111,23 @@ async def _get_lead_config(lead: LeadCallTracker) -> Optional[CallExecutionConfi
             None,
         )
     if not config:
+        # Step 3: fall back to the default config (template IS NULL)
+        # Prefer merchant-specific default, then reseller-wide default
+        if lead.merchant_id:
+            config = next(
+                (
+                    c
+                    for c in configs
+                    if c.template is None and c.merchant_id == lead.merchant_id
+                ),
+                None,
+            )
+        if not config:
+            config = next(
+                (c for c in configs if c.template is None and c.merchant_id is None),
+                None,
+            )
+    if not config:
         logger.warning(
             f"No call execution config found for template: {lead.template} (template_id={lead.template_id})"
         )

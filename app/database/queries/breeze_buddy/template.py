@@ -17,7 +17,7 @@ def get_template_by_merchant_query(
     conditions = ["reseller_id = $1"]
     values = [reseller_id]
 
-    if merchant_id:
+    if merchant_id is not None:
         conditions.append(f"merchant_id = ${len(values) + 1}")
         values.append(merchant_id)
     else:

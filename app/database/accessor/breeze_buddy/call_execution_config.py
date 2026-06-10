@@ -52,7 +52,7 @@ async def create_call_execution_config(
     max_retry: int,
     calling_provider: CallProvider,
     reseller_id: str,
-    template: str,
+    template: Optional[str],
     merchant_id: Optional[str],
     enable_international_call: bool,
     enable_calling: bool = True,
@@ -72,7 +72,9 @@ async def create_call_execution_config(
     pre_checks: Optional[List[Any]] = None,
     telephony_config: Optional[TelephonyConfig] = None,
 ) -> Optional[CallExecutionConfig]:
-    """Create a new call execution config record (upsert based on merchant_id + template)."""
+    """Create a new call execution config record (upsert based on partial unique indexes).
+    When template is None the row acts as the DEFAULT config for the merchant/reseller.
+    """
     logger.info(f"Creating call execution config for reseller ID: {reseller_id}")
 
     try:
@@ -144,7 +146,7 @@ async def get_call_execution_config_by_merchant_id(
             )
             return decoded_result
 
-        if merchant_id:
+        if merchant_id is not None:
             # If no config is found for the specific merchant_id, try with NULL
             logger.info(
                 f"No config found for merchant_id {merchant_id}, trying generic config."
@@ -193,7 +195,7 @@ async def get_all_call_execution_configs() -> List[CallExecutionConfig]:
 
 async def update_call_execution_config(
     reseller_id: str,
-    template: str,
+    template: Optional[str] = None,
     merchant_id: Optional[str] = None,
     initial_offset: Optional[int] = None,
     retry_offset: Optional[int] = None,

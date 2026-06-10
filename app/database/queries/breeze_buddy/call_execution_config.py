@@ -11,6 +11,26 @@ from app.schemas import CallProvider
 CALL_EXECUTION_CONFIG_TABLE = "call_execution_config"
 
 
+def _conflict_target(template: Optional[str], merchant_id: Optional[str]) -> str:
+    """
+    Return the ON CONFLICT partial-index target for an upsert into call_execution_config.
+
+    The migration created four partial unique indexes that cover all combinations of
+    nullable template and nullable merchant_id — this helper picks the right one.
+    """
+    if template is None:
+        return (
+            "(reseller_id, merchant_id) WHERE template IS NULL AND merchant_id IS NOT NULL"
+            if merchant_id is not None
+            else "(reseller_id) WHERE template IS NULL AND merchant_id IS NULL"
+        )
+    return (
+        "(merchant_id, template) WHERE template IS NOT NULL AND merchant_id IS NOT NULL"
+        if merchant_id is not None
+        else "(reseller_id, template) WHERE template IS NOT NULL AND merchant_id IS NULL"
+    )
+
+
 # Call execution config queries
 def insert_call_execution_config_query(
     id: str,
@@ -21,7 +41,7 @@ def insert_call_execution_config_query(
     max_retry: int,
     calling_provider: CallProvider,
     reseller_id: str,
-    template: str,
+    template: Optional[str],
     merchant_id: Optional[str],
     enable_international_call: bool,
     enable_calling: bool = True,
@@ -43,11 +63,11 @@ def insert_call_execution_config_query(
 ) -> Tuple[str, List[Any]]:
     """
     Generate query to insert call execution config record.
-    Uses ON CONFLICT to upsert based on (merchant_id, template) to prevent duplicates.
+    Uses ON CONFLICT to upsert based on unique constraints to prevent duplicates.
 
     Args:
         template_id: UUID of the template (preferred, for referential integrity)
-        template: Name of the template (kept for backward compatibility)
+        template: Name of the template (kept for backwards compatibility)
         pre_checks: JSON string of pre-check configurations
         telephony_config: JSON string of telephony provider overrides
     """
@@ -85,7 +105,7 @@ def insert_call_execution_config_query(
             "updated_at"
         )
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29)
-        ON CONFLICT (merchant_id, template) DO UPDATE SET
+        ON CONFLICT {_conflict_target(template, merchant_id)} DO UPDATE SET
             initial_offset = EXCLUDED.initial_offset,
             retry_offset = EXCLUDED.retry_offset,
             call_start_time = EXCLUDED.call_start_time,
@@ -155,7 +175,7 @@ def get_call_execution_config_by_merchant_id_query(
     """
     Generate query to get call execution config by reseller ID and merchant identifier.
     """
-    if merchant_id:
+    if merchant_id is not None:
         text = f"""
             SELECT *
             FROM "{CALL_EXECUTION_CONFIG_TABLE}" 
@@ -208,7 +228,7 @@ def delete_call_execution_config_query(config_id: str) -> Tuple[str, List[Any]]:
 
 def update_call_execution_config_query(
     reseller_id: str,
-    template: str,
+    template: Optional[str] = None,
     merchant_id: Optional[str] = None,
     initial_offset: Optional[int] = None,
     retry_offset: Optional[int] = None,
@@ -315,16 +335,20 @@ def update_call_execution_config_query(
     reseller_id_param = param_count
     param_count += 1
 
-    values.append(template)
-    template_param = param_count
-    param_count += 1
+    if template is not None:
+        values.append(template)
+        template_param = param_count
+        param_count += 1
+        template_clause = f'"template" = ${template_param}'
+    else:
+        template_clause = '"template" IS NULL'
 
-    if merchant_id:
+    if merchant_id is not None:
         values.append(merchant_id)
         merchant_identifier_param = param_count
-        where_clause = f'reseller_id = ${reseller_id_param} AND "template" = ${template_param} AND merchant_id = ${merchant_identifier_param}'
+        where_clause = f"reseller_id = ${reseller_id_param} AND {template_clause} AND merchant_id = ${merchant_identifier_param}"
     else:
-        where_clause = f'reseller_id = ${reseller_id_param} AND "template" = ${template_param} AND merchant_id IS NULL'
+        where_clause = f"reseller_id = ${reseller_id_param} AND {template_clause} AND merchant_id IS NULL"
 
     text = f"""
         UPDATE "{CALL_EXECUTION_CONFIG_TABLE}"
@@ -356,7 +380,7 @@ def calling_activation_for_merchant_query(
             SET "enable_calling" = $1, "updated_at" = $2
             RETURNING *;
         """
-    elif merchant_id:
+    elif merchant_id is not None:
         # Update specific merchant (we always have reseller_id for the merchant)
         text = f"""
             UPDATE "{CALL_EXECUTION_CONFIG_TABLE}"
