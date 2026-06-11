@@ -156,12 +156,16 @@ class FlowConfigLoader:
             # Check for function(s) in schema — supports a single string
             # or a list of function names applied sequentially as a pipeline.
             function_names = None
+            fn_params = {}
             if isinstance(field_schema, dict):
                 raw = field_schema.get("function")
                 if isinstance(raw, list):
                     function_names = raw
                 elif isinstance(raw, str):
                     function_names = [raw]
+                raw_params = field_schema.get("params")
+                if isinstance(raw_params, dict):
+                    fn_params = raw_params
             if function_names:
                 for fn_name in function_names:
                     if fn_name not in TEMPLATE_FUNCTION_REGISTRY:
@@ -173,9 +177,11 @@ class FlowConfigLoader:
                     try:
                         func = TEMPLATE_FUNCTION_REGISTRY[fn_name]
                         if value is None or value == "":
-                            value = func()
+                            value = func(**fn_params) if fn_params else func()
                         else:
-                            value = func(value)
+                            value = (
+                                func(value, **fn_params) if fn_params else func(value)
+                            )
                     except Exception as e:
                         logger.warning(
                             f"Error applying function '{fn_name}' to field '{field_name}': {e}"

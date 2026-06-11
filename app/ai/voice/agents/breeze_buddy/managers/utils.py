@@ -86,6 +86,10 @@ async def prepare_and_store_initial_greeting(
                         function_names = raw
                     elif isinstance(raw, str):
                         function_names = [raw]
+                    fn_params = {}
+                    raw_params = field_schema.get("params")
+                    if isinstance(raw_params, dict):
+                        fn_params = raw_params
 
                     if function_names:
                         for fn_name in function_names:
@@ -98,9 +102,15 @@ async def prepare_and_store_initial_greeting(
                             try:
                                 func = TEMPLATE_FUNCTION_REGISTRY[fn_name]
                                 if resolved_value is None or resolved_value == "":
-                                    resolved_value = func()
+                                    resolved_value = (
+                                        func(**fn_params) if fn_params else func()
+                                    )
                                 else:
-                                    resolved_value = func(resolved_value)
+                                    resolved_value = (
+                                        func(resolved_value, **fn_params)
+                                        if fn_params
+                                        else func(resolved_value)
+                                    )
                                 logger.info(
                                     f"Applied function '{fn_name}' to field '{key}', "
                                     f"result: '{resolved_value}'"
