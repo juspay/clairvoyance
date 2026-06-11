@@ -7,6 +7,7 @@ from .utils import (
     string_to_lowercase,
     string_to_uppercase,
     string_trim,
+    trim_words,
 )
 
 TEMPLATE_FUNCTION_REGISTRY = {}
@@ -24,6 +25,7 @@ register_template_function("digits_to_speech", digits_to_speech)
 register_template_function("date_to_speech", date_to_speech)
 register_template_function("extract_10_digit_mobile", extract_10_digit_mobile)
 register_template_function("expand_shorthand", expand_shorthand)
+register_template_function("trim_words", trim_words)
 
 __all__ = [
     "TEMPLATE_FUNCTION_REGISTRY",

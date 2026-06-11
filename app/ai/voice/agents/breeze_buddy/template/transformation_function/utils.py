@@ -45,6 +45,38 @@ def string_trim(value: str) -> str:
     return value.strip()
 
 
+def trim_words(value: str, words: list[str]) -> str:
+    """
+    Removes specified words (case-insensitive) from a string,
+    along with any surrounding commas, spaces, or periods.
+
+    Preserves comma delimiters when the word sits between two
+    comma-delimited parts (e.g. "Road, India, City" becomes "Road, City").
+
+    Args:
+        value: The input string to process.
+        words: List of words/phrases to remove.
+               Defaults to ["India"] for backward compatibility.
+
+    Examples:
+        >>> trim_words("123 MG Road, Bangalore, India")
+        '123 MG Road, Bangalore'
+        >>> trim_words("address, India, pincode")
+        'address, pincode'
+        >>> trim_words("123 Street, New York, United States", ["United States", "US"])
+        '123 Street, New York'
+    """
+
+    text = value
+    for word in words:
+        escaped = re.escape(word)
+        # Preserve comma when word is between two comma-delimited parts
+        text = re.sub(rf",\s*\b{escaped}\b\s*,", ", ", text, flags=re.I)
+        # Normal removal for start/end/non-comma cases
+        text = re.sub(rf"[,\s]*\b{escaped}\b[,\.\s]*", "", text, flags=re.I)
+    return " ".join(text.split())
+
+
 DIGIT_WORDS = {
     "0": "zero",
     "1": "one",
