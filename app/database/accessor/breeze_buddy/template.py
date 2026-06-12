@@ -362,6 +362,7 @@ async def get_template_by_id(template_id: str) -> Optional[TemplateModel]:
 
 async def replace_template(
     template_id: str,
+    reseller_id: str,
     name: str,
     flow: dict,
     expected_payload_schema: Optional[dict],
@@ -379,6 +380,8 @@ async def replace_template(
 
     Args:
         template_id: Template UUID
+        reseller_id: Reseller identifier (required, caller resolves omitted values
+            to the persisted one)
         name: Template name (required)
         flow: Flow structure (required)
         expected_payload_schema: Expected payload schema (optional, set to NULL if not provided)
@@ -419,6 +422,7 @@ async def replace_template(
 
         query, values = replace_template_query(
             template_id,
+            reseller_id,
             name,
             flow_json,
             expected_payload_schema_json,

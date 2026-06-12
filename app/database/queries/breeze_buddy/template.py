@@ -328,6 +328,7 @@ def check_template_usage_query(template_id: str) -> Tuple[str, List[Any]]:
 
 def replace_template_query(
     template_id: str,
+    reseller_id: str,
     name: str,
     flow: str,
     expected_payload_schema: Optional[str],
@@ -345,6 +346,7 @@ def replace_template_query(
 
     Args:
         template_id: Template UUID
+        reseller_id: Reseller identifier (required)
         name: Template name (required)
         flow: Flow JSON string (required)
         expected_payload_schema: Expected payload schema JSON string or None
@@ -370,10 +372,11 @@ def replace_template_query(
             secrets = $6::jsonb,
             outbound_number_id = $7,
             is_active = $8,
-            merchant_id = $9,
-            supported_channels = $10,
-            updated_at = $11
-        WHERE id = $12
+            reseller_id = $9,
+            merchant_id = $10,
+            supported_channels = $11,
+            updated_at = $12
+        WHERE id = $13
         RETURNING id,
                   reseller_id,
                   merchant_id,
@@ -389,6 +392,7 @@ def replace_template_query(
         secrets,
         outbound_number_id,
         is_active,
+        reseller_id,
         merchant_id,
         supported_channels,
         updated_at,
