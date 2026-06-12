@@ -341,7 +341,7 @@ def test_omit_fields_via_walker_at_root_strips_envelope():
 
 
 def test_strip_html_removes_tags_and_normalises_whitespace():
-    assert strip_html("<p>Hello   <b>world</b>!</p>", {}) == "Hello world !"
+    assert strip_html("<p>Hello   <b>world</b>!</p>", {}) == "Hello world!"
 
 
 def test_strip_html_truncates_at_word_boundary():

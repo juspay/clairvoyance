@@ -8,17 +8,23 @@ stay thin: validate auth, then delegate.
 
 import asyncio
 import time
-from datetime import datetime
-from typing import Any, AsyncIterator, Callable, Dict, Optional, cast
+from datetime import datetime, timezone
+from typing import Any, AsyncIterator, Callable, Dict, List, Optional, cast
 
 from fastapi import HTTPException, status
 from fastapi.responses import StreamingResponse
 
 from app.ai.voice.agents.breeze_buddy.chat.agent import ChatAgent
+from app.ai.voice.agents.breeze_buddy.chat.approvals import (
+    EXPIRED_RESULT,
+    WIRE_STATUS_BY_DB_STATUS,
+    resolve_dangling_approvals,
+)
 from app.ai.voice.agents.breeze_buddy.chat.block_codec import (
     blocks_to_llm_context_messages,
     filter_visible_blocks,
     repair_dangling_tool_uses,
+    tool_results_to_user_blocks,
 )
 from app.ai.voice.agents.breeze_buddy.chat.client_context import (
     ClientContextTooLarge,
@@ -27,6 +33,10 @@ from app.ai.voice.agents.breeze_buddy.chat.client_context import (
 from app.ai.voice.agents.breeze_buddy.chat.metrics import TurnMetrics
 from app.ai.voice.agents.breeze_buddy.chat.sse import SSEEvent, format_sse
 from app.ai.voice.agents.breeze_buddy.llm import get_llm_service
+from app.ai.voice.agents.breeze_buddy.template.approval import (
+    LLM_STATUS_DENIED,
+    WIRE_STATUS_SUPERSEDED,
+)
 from app.ai.voice.agents.breeze_buddy.template.cache import get_template_by_id_cached
 from app.ai.voice.agents.breeze_buddy.template.transformation_function import (
     TEMPLATE_FUNCTION_REGISTRY,
@@ -51,8 +61,14 @@ from app.database.accessor.breeze_buddy.chat_session import (
 from app.database.accessor.breeze_buddy.credentials import (
     get_credentials_as_template_vars,
 )
+from app.database.accessor.breeze_buddy.tool_approvals import (
+    decide_tool_approval,
+    get_tool_approval,
+    list_pending_tool_approvals,
+)
 from app.schemas import UserInfo
 from app.schemas.breeze_buddy.chat import (
+    ApproveToolRequest,
     ChatEndedReason,
     ChatMessageRole,
     ChatSession,
@@ -65,6 +81,7 @@ from app.schemas.breeze_buddy.chat import (
     GreetingMessage,
     ListChatSessionsResponse,
     SendChatMessageRequest,
+    ToolApprovalStatus,
 )
 from app.services.redis.locks import LockAcquireError, RedisLock
 
@@ -415,7 +432,8 @@ async def send_chat_message_handler(
     row, template, capped message history). No sticky LB or in-memory
     cache is involved.
 
-    Per-turn DB shape: 1 session read + 1 template read + 1 history
+    Per-turn DB shape: 1 session read + 1 template read + 1 approval-
+    supersede UPDATE (claims nothing when no approvals pend) + 1 history
     read (capped) + 2 message INSERTs + 1 combined session UPDATE.
     All round-trips constant per turn — none scale with conversation
     length.
@@ -473,6 +491,27 @@ async def send_chat_message_handler(
                 ),
             )
 
+        # HITL: a new user message supersedes every pending approval (the
+        # user moved on without deciding). MUST run under the lock and
+        # BEFORE the history load — it persists the synthetic tool_result
+        # rows that keep the replayed history fully answered. The resolved
+        # events ride at the start of this turn's stream so live cards
+        # flip to superseded without client-side inference.
+        # NOTE: requires migration 033 (tool_approvals) — run
+        # `python scripts/migrate.py up` before deploying this version.
+        superseded = await resolve_dangling_approvals(session_id, only_expired=False)
+        pre_events: List[SSEEvent] = [
+            SSEEvent(
+                event="function_approval_resolved",
+                data={
+                    "tool_call_id": row.tool_call_id,
+                    "status": WIRE_STATUS_SUPERSEDED,
+                    "reason": row.reason,
+                },
+            )
+            for row in superseded
+        ]
+
         history_limit = await CHAT_HISTORY_REPLAY_LIMIT()
         history_rows = await list_chat_messages_for_session(
             session_id, limit=history_limit
@@ -492,10 +531,11 @@ async def send_chat_message_handler(
                 if row.role in (ChatMessageRole.USER, ChatMessageRole.ASSISTANT)
             ]
         )
-        # Defensive both-direction repair: an unmatched tool_use (crash or
-        # cancel between the assistant-row persist and the tool-result
-        # persist) gets a synthetic error result; orphan tool_results from
-        # window truncation are dropped. No-op on well-formed history.
+        # Defensive both-direction repair: every pending approval was just
+        # resolved + persisted above, so nothing is legitimately dangling —
+        # any unmatched tool_use here is a decided-but-lost row (crash or
+        # cancel between claim and persist) and gets a synthetic error
+        # result; orphan tool_results from window truncation are dropped.
         history = cast(list, repair_dangling_tool_uses(history))
 
         # Load per-session agent state (cart_id, customer_id, etc. for
@@ -584,6 +624,7 @@ async def send_chat_message_handler(
                     history=history,
                     current_node=resume_node,
                 ),
+                pre_events=pre_events,
             ),
             media_type="text/event-stream",
             headers={
@@ -605,12 +646,15 @@ async def _turn_sse_stream(
     lock: RedisLock,
     turn_metrics: TurnMetrics,
     events: AsyncIterator[SSEEvent],
+    pre_events: Optional[List[SSEEvent]] = None,
 ) -> AsyncIterator[str]:
-    """SSE generator scaffolding for a chat turn stream.
+    """SSE generator scaffolding shared by ``/message`` and ``/approval``.
 
     Owns the cancel-bus registration, CancelledError → ``turn_end
     {CANCELED}`` mapping, generic error masking, the shielded lock
-    release, and the best-effort turn-metrics write.
+    release, and the best-effort turn-metrics write. ``pre_events`` are
+    emitted before the agent's stream (e.g. ``function_approval_resolved``
+    for rows the handler lazily expired/superseded under the lock).
     """
     # Register ourselves so /cancel can find and cancel this task
     # cross-pod. The registration MUST happen inside the generator
@@ -625,6 +669,9 @@ async def _turn_sse_stream(
         registered = True
     try:
         try:
+            for pre in pre_events or []:
+                turn_metrics.observe(pre)
+                yield format_sse(pre)
             async for event in events:
                 turn_metrics.observe(event)
                 yield format_sse(event)
@@ -709,6 +756,260 @@ async def _turn_sse_stream(
         # row (assistant_idx None); the [CHAT_METRICS] log already
         # captured it either way.
         await _persist_turn_metrics(turn_metrics)
+
+
+def _approval_conflict(code: str, message: str, wire_status: Optional[str] = None):
+    """409 with a machine-readable body for the approval route.
+
+    The SDK branches on ``detail.code`` (already_decided | lock_contended |
+    voice_live) — do NOT collapse these into the factories' blanket
+    409→voice-live-conflict mapping. ``status`` carries the winning wire
+    status for already_decided so the client can settle the card.
+    """
+    detail: Dict[str, Any] = {"code": code, "message": message}
+    if wire_status is not None:
+        detail["status"] = wire_status
+    return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=detail)
+
+
+async def approve_chat_tool_handler(
+    session_id: str,
+    req: ApproveToolRequest,
+    *,
+    access_check: Optional[Callable[[ChatSession], None]] = None,
+) -> StreamingResponse:
+    """Apply a HITL decision to a pending tool approval and stream the
+    resumed turn (same SSE shape as ``/message``).
+
+    Order is load-bearing (see plan review):
+    1. Atomically claim the target row (only a PENDING row can be decided;
+       a lost race 409s with ``already_decided`` + the winning status).
+    2. A decision arriving after ``expires_at`` claims the row as EXPIRED
+       (wire status ``timeout``) — the resume turn still runs so the LLM
+       can acknowledge the timeout.
+    3. Deny/expired: persist the synthetic tool_result row NOW, under the
+       lock, before the stream is constructed — no execution is needed, so
+       the decided-but-unpersisted crash window doesn't exist for them.
+    4. Lazily expire any OTHER pending rows past their TTL and emit their
+       ``function_approval_resolved {timeout}`` at stream start (this is
+       the one stream the widget is actively listening to).
+    5. Load history AFTER all the above so replay is fully answered, then
+       repair with the claimed id + still-pending siblings excluded.
+    """
+    lock = RedisLock(_lock_key(session_id), ttl_seconds=_SESSION_LOCK_TTL_SECONDS)
+    try:
+        await lock.acquire()
+    except LockAcquireError:
+        raise _approval_conflict(
+            "lock_contended",
+            "Another turn is already in flight for this session. "
+            "Wait for the in-flight stream to complete and retry.",
+        )
+
+    lock_handed_off = False
+    try:
+        fresh = await get_chat_session_by_id(session_id)
+        if fresh is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Chat session '{session_id}' not found",
+            )
+        if access_check is not None:
+            access_check(fresh)
+        if fresh.status == ChatSessionStatus.ENDED:
+            raise HTTPException(
+                status_code=status.HTTP_410_GONE,
+                detail=f"Chat session '{session_id}' has ended",
+            )
+
+        template = await get_template_by_id_cached(fresh.template_id)
+        if template is None:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=(
+                    f"Template '{fresh.template_id}' for chat session "
+                    f"'{session_id}' no longer exists"
+                ),
+            )
+
+        row = await get_tool_approval(session_id, req.tool_call_id)
+        if row is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=(
+                    f"No approval request with tool_call_id "
+                    f"'{req.tool_call_id}' for this session"
+                ),
+            )
+        if row.status != ToolApprovalStatus.PENDING:
+            raise _approval_conflict(
+                "already_decided",
+                f"This approval was already resolved ({row.status.value}).",
+                WIRE_STATUS_BY_DB_STATUS.get(row.status),
+            )
+
+        is_expired = row.expires_at <= datetime.now(timezone.utc)
+        if is_expired:
+            new_status = ToolApprovalStatus.EXPIRED
+            decision_reason: Optional[str] = "decision arrived after expiry"
+        elif req.approved:
+            new_status = ToolApprovalStatus.APPROVED
+            decision_reason = req.reason
+        else:
+            new_status = ToolApprovalStatus.DENIED
+            decision_reason = req.reason
+
+        claimed = await decide_tool_approval(
+            session_id, req.tool_call_id, new_status, decision_reason
+        )
+        if claimed is None:
+            # Lost the claim race to a concurrent decision.
+            relook = await get_tool_approval(session_id, req.tool_call_id)
+            raise _approval_conflict(
+                "already_decided",
+                "This approval was already resolved by a concurrent request.",
+                WIRE_STATUS_BY_DB_STATUS.get(relook.status) if relook else None,
+            )
+
+        effective_approved = req.approved and not is_expired
+        wire_status = WIRE_STATUS_BY_DB_STATUS[new_status]
+
+        logger.info(
+            f"[approval] session={session_id} tool_call_id={req.tool_call_id} "
+            f"function={claimed.function_name} decision={new_status.value}"
+            + (f" reason={decision_reason!r}" if decision_reason else "")
+        )
+
+        synthetic_result: Optional[Dict[str, Any]] = None
+        if not effective_approved:
+            synthetic_result = (
+                dict(EXPIRED_RESULT)
+                if is_expired
+                else {
+                    "status": LLM_STATUS_DENIED,
+                    "reason": req.reason or "the user did not approve this action",
+                }
+            )
+            # Persist under the lock, before streaming — the history load
+            # below already sees a fully-answered batch for this call.
+            await insert_chat_message(
+                session_id=session_id,
+                role=ChatMessageRole.USER,
+                content=None,
+                content_blocks=tool_results_to_user_blocks(
+                    [(req.tool_call_id, synthetic_result)]
+                ),
+            )
+
+        # Lazily expire the OTHER pending rows past their TTL (persists
+        # their synthetic timeout results) and surface them at stream start.
+        expired_siblings = await resolve_dangling_approvals(
+            session_id, only_expired=True
+        )
+        pre_events: List[SSEEvent] = [
+            SSEEvent(
+                event="function_approval_resolved",
+                data={
+                    "tool_call_id": sib.tool_call_id,
+                    "status": WIRE_STATUS_BY_DB_STATUS[ToolApprovalStatus.EXPIRED],
+                    "reason": sib.reason,
+                },
+            )
+            for sib in expired_siblings
+        ]
+
+        # include_expired: a sibling whose expires_at falls between the
+        # sweep above and this statement is still PENDING and decidable —
+        # it must stay in the exclude set (and keep the turn awaiting)
+        # rather than getting a fabricated "lost" answer; the next touch
+        # lazily expires it.
+        pending_siblings = await list_pending_tool_approvals(
+            session_id, include_expired=True
+        )
+        pending_sibling_ids = [sib.tool_call_id for sib in pending_siblings]
+
+        history_limit = await CHAT_HISTORY_REPLAY_LIMIT()
+        history_rows = await list_chat_messages_for_session(
+            session_id, limit=history_limit
+        )
+        history: list = blocks_to_llm_context_messages(
+            [
+                {
+                    "role": hist_row.role.value,
+                    "content": hist_row.content,
+                    "content_blocks": hist_row.content_blocks,
+                }
+                for hist_row in history_rows
+                if hist_row.role in (ChatMessageRole.USER, ChatMessageRole.ASSISTANT)
+            ]
+        )
+        # The claimed call (approve path answers it in-turn) and the
+        # still-pending siblings must STAY unanswered; anything else
+        # unmatched is decided-but-lost and gets a synthetic error.
+        history = cast(
+            list,
+            repair_dangling_tool_uses(
+                history, exclude_ids={req.tool_call_id, *pending_sibling_ids}
+            ),
+        )
+
+        state_row = await get_agent_session_state(session_id)
+        agent_state: Dict[str, Any] = state_row.data if state_row else {}
+
+        persisted_template_vars = (
+            fresh.metadata.get("template_vars", {})
+            if isinstance(fresh.metadata, dict)
+            else {}
+        )
+        template_vars = await _build_render_template_vars(
+            template, persisted_template_vars
+        )
+
+        llm = await get_llm_service(_resolve_llm_configuration(template), pooled=True)
+        agent = ChatAgent(
+            session_id=session_id,
+            template=template,
+            llm=llm,
+            template_vars=template_vars,
+            agent_state=agent_state,
+        )
+        resume_node = fresh.current_node
+
+        turn_metrics = TurnMetrics(
+            session_id=session_id,
+            template_id=template.id,
+            t0=time.monotonic(),
+        )
+
+        response = StreamingResponse(
+            _turn_sse_stream(
+                session_id=session_id,
+                lock=lock,
+                turn_metrics=turn_metrics,
+                events=agent.run_approval_turn(
+                    approval=claimed,
+                    approved=effective_approved,
+                    wire_status=wire_status,
+                    decision_reason=decision_reason,
+                    synthetic_result=synthetic_result,
+                    history=history,
+                    current_node=resume_node,
+                    pending_sibling_ids=pending_sibling_ids,
+                ),
+                pre_events=pre_events,
+            ),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache, no-transform",
+                "X-Accel-Buffering": "no",
+                "Connection": "keep-alive",
+            },
+        )
+        lock_handed_off = True
+        return response
+    finally:
+        if not lock_handed_off:
+            await lock.release()
 
 
 async def cancel_chat_turn_handler(session_id: str) -> None:

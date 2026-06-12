@@ -290,6 +290,9 @@ def omit_fields(value: Any, args: Dict[str, Any]) -> Any:
 
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 _WHITESPACE_RE = re.compile(r"\s+")
+# A stripped tag becomes a space, so ``word</b>.`` collapses to ``word .`` —
+# drop the space a removed tag leaves immediately before closing punctuation.
+_SPACE_BEFORE_PUNCT_RE = re.compile(r"\s+([.,;:!?)\]])")
 
 
 @register_transform("strip_html")
@@ -315,6 +318,7 @@ def strip_html(value: Any, args: Dict[str, Any]) -> Any:
         return value
     plain = _HTML_TAG_RE.sub(" ", value)
     plain = _WHITESPACE_RE.sub(" ", plain).strip()
+    plain = _SPACE_BEFORE_PUNCT_RE.sub(r"\1", plain)
     max_chars = args.get("max_chars")
     if isinstance(max_chars, int) and max_chars > 0 and len(plain) > max_chars:
         clipped = plain[:max_chars]

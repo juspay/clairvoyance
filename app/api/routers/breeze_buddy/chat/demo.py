@@ -29,6 +29,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from app.ai.voice.agents.breeze_buddy.template.cache import get_template_by_id_cached
 from app.api.routers.breeze_buddy.chat.handlers import (
+    approve_chat_tool_handler,
     create_chat_session_handler,
     end_chat_session_handler,
     load_chat_session_or_404,
@@ -52,6 +53,7 @@ from app.database.accessor.breeze_buddy.chat_session import (
 )
 from app.schemas import UserInfo, UserRole
 from app.schemas.breeze_buddy.chat import (
+    ApproveToolRequest,
     ChatEndedReason,
     ChatMessageRole,
     ChatSessionStatus,
@@ -242,6 +244,35 @@ async def _assistant_turn_count(session_id: str) -> int:
     return sum(1 for r in rows if r.role == ChatMessageRole.ASSISTANT)
 
 
+async def _enforce_demo_turn_budget(
+    request: Request, ctx: DemoSessionContext, session_id: str
+) -> None:
+    """Shared pre-gates for every demo turn-driving route (/message and
+    /approval): per-IP message rate limit, then the per-session
+    assistant-turn cap. Both raise 429.
+
+    Prefer the cap baked into the token (frozen at session-create); fall
+    back to the live dynamic value only if the token has none, so an old
+    token + new flag still gets a sensible cap.
+    """
+    await _enforce_ip_limit(
+        request=request,
+        bucket="message",
+        limit=await DEMO_MESSAGES_PER_IP_HOUR(),
+    )
+
+    cap = ctx.message_cap or await DEMO_MESSAGE_CAP_PER_SESSION()
+    used = await _assistant_turn_count(session_id)
+    if used >= cap:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=(
+                f"Demo session reached its {cap}-turn limit. "
+                "Start a new demo session to continue exploring."
+            ),
+        )
+
+
 @router.post(
     "/session/{session_id}/message",
     summary="Stream one demo turn (SSE) — capped per session",
@@ -266,27 +297,32 @@ async def demo_send_message(
     demo token already binds ``session_id``, so additional auth would
     be redundant.
     """
-    await _enforce_ip_limit(
-        request=request,
-        bucket="message",
-        limit=await DEMO_MESSAGES_PER_IP_HOUR(),
-    )
-
-    # Prefer the cap baked into the token (frozen at session-create); fall
-    # back to the live dynamic value only if the token has none, so an old
-    # token + new flag still gets a sensible cap.
-    cap = ctx.message_cap or await DEMO_MESSAGE_CAP_PER_SESSION()
-    used = await _assistant_turn_count(session_id)
-    if used >= cap:
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail=(
-                f"Demo session reached its {cap}-turn limit. "
-                "Start a new demo session to continue exploring."
-            ),
-        )
+    await _enforce_demo_turn_budget(request, ctx, session_id)
 
     return await send_chat_message_handler(session_id, req, access_check=None)
+
+
+@router.post(
+    "/session/{session_id}/approval",
+    summary="Decide a pending HITL tool approval (SSE resume) — demo surface",
+)
+async def demo_approve_tool(
+    session_id: str,
+    req: ApproveToolRequest,
+    request: Request,
+    ctx: DemoSessionContext = Depends(require_demo_session),
+):
+    """Demo-token variant of the approval route.
+
+    Same pre-gates as ``demo_send_message``: per-IP limit on the shared
+    "message" bucket AND the per-session assistant-turn cap — an approval
+    resume is a full LLM turn with a fresh tool-cycle budget, so skipping
+    the cap would let a looping template convert one capped session into
+    an hour-rate-limited stream of free turns.
+    """
+    await _enforce_demo_turn_budget(request, ctx, session_id)
+
+    return await approve_chat_tool_handler(session_id, req, access_check=None)
 
 
 @router.post(
