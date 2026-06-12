@@ -166,12 +166,14 @@ async def builtin_function_dispatcher(
         else:
             result_dict, next_node = result, None
 
-        # Record in node traversal path. Builtins have no expected_response_schema
-        # so function_response is always None.
+        # Record in node traversal path with the actual function response.
+        # This allows downstream logic (including the LLM via conversation
+        # context) to inspect the result of built-in calls such as
+        # transfer_to_agent for auditing and decision-making.
         context.record_global_function_call(
             function_name=function_config.name,
             function_args=args,
-            function_response=None,
+            function_response=result_dict,
         )
 
         return result_dict, next_node

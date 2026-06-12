@@ -42,16 +42,13 @@ async def redirect_call(
             return False
 
         provider_name = provider.lower()
-        status_callback_url = f"{APP_BASE_URL}/agent/voice/breeze-buddy/{provider_name}/callback/transfer/conference-end"
+        f"{APP_BASE_URL}/agent/voice/breeze-buddy/{provider_name}/callback/transfer/conference-end"
 
         result = await telephony_service.conference_service.handle_transfer(
             conference_name=f"redirect-{call_sid}",
             agent_phone_number=redirect_number,
             customer_call_sid=call_sid,
             outbound_number=outbound_record.number,
-            callback=None,
-            status_callback_url=status_callback_url,
-            customer_phone_number=customer_phone_number,
         )
 
         if result.get("success"):

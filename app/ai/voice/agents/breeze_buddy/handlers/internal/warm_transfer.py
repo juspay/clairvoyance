@@ -1,21 +1,35 @@
 """
 Transfer Handler
 
-Handles transfer to human agent by creating a conference call.
-On success, terminates the AI conversation. On failure, continues gracefully.
+Handles transfer to human agent using Plivo's MultiPartyCall (MPC).
+
+Flow (dial-first MPC):
+  1. Agent is dialled into a new MPC via add_participant(role='agent').
+     The customer's <Stream> is untouched and Buddy stays connected.
+  2. We subscribe to a Redis pub/sub channel and wait for the MPC
+     participant-state-changes webhook.
+  3. Agent answers → webhook moves customer into MPC, publishes "answered".
+     We end the AI conversation and close the WebSocket.
+  4. Agent no-answer → webhook publishes "unavailable".
+     Buddy continues the conversation seamlessly.
 """
 
+import asyncio
 from typing import Any, Dict, Optional
 
 from app.ai.voice.agents.breeze_buddy.handlers.internal.end_conversation import (
     end_conversation,
 )
+from app.ai.voice.agents.breeze_buddy.handlers.internal.stt import mute_stt, unmute_stt
 from app.ai.voice.agents.breeze_buddy.template.context import TemplateContext
+from app.ai.voice.agents.breeze_buddy.utils.hold_transfer import (
+    publish_hold_transfer_result,
+    subscribe_and_wait,
+)
 from app.ai.voice.agents.breeze_buddy.utils.transport.websockets import (
     close_websocket_safely,
 )
 from app.ai.voice.agents.breeze_buddy.utils.warm_transfer import set_transfer_flag
-from app.core.config.static import APP_BASE_URL
 from app.core.logger import logger
 from app.database.accessor import get_outbound_number_by_id
 from app.schemas import CallProvider
@@ -27,10 +41,10 @@ async def connect_to_live_agent(
     transition_to: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
-    Initiate transfer to human agent via conference call.
+    Initiate warm transfer to human agent via Plivo MPC.
 
-    On success: Terminates AI conversation by calling end_conversation
-    On failure: Returns gracefully, allowing AI conversation to continue
+    On success (agent answers): terminates AI conversation.
+    On failure (agent no-answer): returns gracefully, allowing AI to continue.
 
     Args:
         context: Handler context with bot state access
@@ -123,7 +137,12 @@ async def connect_to_live_agent(
                     f"Customer phone number not found in payload for call {context.call_sid}"
                 )
 
-        # Set transfer flag in Redis (includes customer phone for Plivo dial-back)
+        # Mute STT before initiating transfer to prevent audio capture
+        # during the ringing period (up to 35 seconds).
+        await mute_stt(context, None)
+        logger.info(f"STT muted for call {context.call_sid} before transfer")
+
+        # Set transfer flag in Redis
         await set_transfer_flag(
             call_sid=context.call_sid,
             reseller_id=context.lead.reseller_id,
@@ -133,40 +152,111 @@ async def connect_to_live_agent(
         )
         logger.info(f"Transfer flag set in Redis for call {context.call_sid}")
 
-        # Build status callback URL for conference events
-        provider_name = context.provider.lower() if context.provider else None
-        status_callback_url = f"{APP_BASE_URL}/agent/voice/breeze-buddy/{provider_name}/callback/transfer/conference-end"
+        # Background subscriber — listens for webhook outcome.
+        # Uses a generous timeout ceiling; the real deadline is enforced
+        # by _timeout_publish below so both success and timeout paths
+        # deliver a message to the same Redis channel.
+        outcome_channel = f"transfer_outcome:{context.call_sid}"
+        logger.info(f"[Transfer] Subscribing to outcome channel: {outcome_channel}")
+        outcome_task = asyncio.create_task(
+            subscribe_and_wait(outcome_channel, timeout_seconds=40)
+        )
 
-        logger.info(f"Using conference status callback URL: {status_callback_url}")
+        # Background timer — publishes "unavailable" after 35s if no
+        # webhook has fired yet.  This guarantees the subscriber always
+        # receives a message (either "answered" from Plivo or
+        # "unavailable" from us), eliminating a separate timeout branch.
+        async def _timeout_publish():
+            await asyncio.sleep(35)
+            await publish_hold_transfer_result(
+                outcome_channel, {"status": "unavailable"}
+            )
+            logger.info(
+                f"[Transfer] Published 'unavailable' for call {context.call_sid} "
+                f"after 35s timeout"
+            )
 
+        timeout_task = asyncio.create_task(_timeout_publish())
+
+        # Trigger MPC transfer (agent is dialled into MPC, customer stays on Stream)
         conference_result = (
             await context.telephony_service.conference_service.handle_transfer(
                 conference_name=conference_name,
                 agent_phone_number=agent_phone_number,
                 customer_call_sid=context.call_sid,
                 outbound_number=outbound_number,
-                callback=None,
-                status_callback_url=status_callback_url,
-                customer_phone_number=customer_phone_number,
             )
         )
 
-        if conference_result.get("success"):
+        if not conference_result.get("success"):
+            outcome_task.cancel()
+            timeout_task.cancel()
+            for task in (outcome_task, timeout_task):
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+            failure_reason = conference_result.get("reason", "unknown_error")
+            logger.warning(
+                f"[Transfer] MPC setup failed: {failure_reason}. AI continues."
+            )
+            # Unmute STT so the conversation can continue normally
+            await unmute_stt(context, None)
             logger.info(
-                f"Transfer successful: conference={conference_result.get('conference_id')}, "
-                f"agent_call={conference_result.get('agent_call_id')}"
+                f"STT unmuted for call {context.call_sid} after MPC setup failure"
+            )
+            return {
+                "status": "failed",
+                "reason": failure_reason,
+                "message": f"Transfer failed: {failure_reason}. Continuing with AI assistant.",
+            }
+
+        logger.info(
+            f"[Transfer] MPC transfer initiated: conference={conference_result.get('conference_id')}"
+        )
+
+        # Wait for MPC outcome — subscriber consumes whichever fires first
+        # (webhook "answered" or our own "unavailable" from _timeout_publish).
+        try:
+            outcome = await outcome_task
+        except asyncio.CancelledError:
+            timeout_task.cancel()
+            try:
+                await timeout_task
+            except asyncio.CancelledError:
+                pass
+            # Unmute STT so the conversation can continue normally
+            await unmute_stt(context, None)
+            logger.info(
+                f"STT unmuted for call {context.call_sid} after subscriber cancellation"
+            )
+            return {
+                "status": "failed",
+                "reason": "cancelled",
+                "message": "Transfer was cancelled. Continuing with AI assistant.",
+            }
+
+        # Cancel the timeout task if the webhook arrived first
+        timeout_task.cancel()
+        try:
+            await timeout_task
+        except asyncio.CancelledError:
+            pass
+
+        status = outcome.get("status") if outcome else "unavailable"
+
+        if status == "answered":
+            logger.info(
+                f"[Transfer] Agent answered for call {context.call_sid}. "
+                f"Ending AI conversation."
             )
 
-            agent_call_id = conference_result.get("agent_call_id")
-            conference_result.get("conference_id")
-
+            # Update lead metadata
             transfer_meta = {
                 "status": "success",
                 "conference_id": conference_result.get("conference_id"),
                 "agent_phone_number": agent_phone_number,
-                "agent_call_id": agent_call_id,
             }
-
             if context.lead and hasattr(context.lead, "metaData"):
                 if context.lead.metaData is None:
                     context.lead.metaData = {}
@@ -175,9 +265,8 @@ async def connect_to_live_agent(
             # For Plivo: suppress the serializer's auto hang-up before ending
             # the conversation. When end_conversation pushes EndFrame through
             # the pipeline the Plivo serializer would normally call _hang_up_call(),
-            # which drops the caller from the conference. Setting _hangup_attempted=True
-            # tells the serializer that a hang-up has already been handled so it
-            # skips the API call.
+            # which drops the caller. Setting _hangup_attempted=True tells the
+            # serializer that a hang-up has already been handled so it skips.
             if context.provider == CallProvider.PLIVO:
                 try:
                     plivo_serializer = context.bot.transport.output()._params.serializer
@@ -200,11 +289,9 @@ async def connect_to_live_agent(
                     and hasattr(context.bot, "ws")
                     and context.bot.ws
                 ):
-
                     logger.info(
                         f"Explicitly closing websocket for Plivo transfer on call {context.call_sid}"
                     )
-
                     await close_websocket_safely(
                         context.bot.ws, 1000, "Transfer complete"
                     )
@@ -212,22 +299,32 @@ async def connect_to_live_agent(
             return {
                 "status": "success",
                 "conference_id": conference_result.get("conference_id"),
-                "agent_call_id": agent_call_id,
                 "message": "Successfully transferred to human agent",
             }
-        else:
-            failure_reason = conference_result.get("reason", "unknown_error")
-            logger.warning(f"Transfer failed: {failure_reason}. AI continues.")
 
-            return {
-                "status": "failed",
-                "reason": failure_reason,
-                "message": f"Transfer failed: {failure_reason}. Continuing with AI assistant.",
-            }
+        # "unavailable" — agent didn't answer or hung up immediately
+        logger.warning(
+            f"[Transfer] Agent unavailable for call {context.call_sid}. AI continues."
+        )
+        # Unmute STT so the conversation can continue normally
+        await unmute_stt(context, None)
+        logger.info(f"STT unmuted for call {context.call_sid} after agent unavailable")
+        return {
+            "status": "failed",
+            "reason": "unavailable",
+            "message": "Transfer failed: agent did not answer. Continuing with AI assistant.",
+        }
 
     except Exception as e:
         logger.error(f"Transfer exception: {str(e)}", exc_info=True)
-
+        # Unmute STT so the conversation can continue normally
+        try:
+            await unmute_stt(context, None)
+            logger.info(
+                f"STT unmuted for call {context.call_sid} after transfer exception"
+            )
+        except Exception as unmute_err:
+            logger.warning(f"Failed to unmute STT after exception: {unmute_err}")
         return {
             "status": "failed",
             "reason": "exception",

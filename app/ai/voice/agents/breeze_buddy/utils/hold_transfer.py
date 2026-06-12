@@ -26,7 +26,7 @@ async def publish_hold_transfer_result(channel: str, result: Dict[str, Any]) -> 
     redis_service = await get_redis_service()
     redis_client = await redis_service.get_client()
     await redis_client.publish(channel, json.dumps(result))  # type: ignore[union-attr]
-    logger.info(f"[hold_transfer] Published result to channel '{channel}'")
+    logger.info(f"[pubsub] Published result to channel '{channel}'")
 
 
 async def subscribe_and_wait(
@@ -41,8 +41,7 @@ async def subscribe_and_wait(
     pubsub = redis_client.pubsub()  # type: ignore[union-attr]
     await pubsub.subscribe(channel)
     logger.info(
-        f"[hold_transfer] Subscribed to '{channel}', "
-        f"waiting up to {timeout_seconds}s"
+        f"[pubsub] Subscribed to '{channel}', " f"waiting up to {timeout_seconds}s"
     )
 
     try:
@@ -52,17 +51,15 @@ async def subscribe_and_wait(
         )
         if result:
             logger.info(
-                f"[hold_transfer] Received result on '{channel}': "
+                f"[pubsub] Received result on '{channel}': "
                 f"status={result.get('status')}"
             )
         return result
     except asyncio.TimeoutError:
-        logger.warning(
-            f"[hold_transfer] Timed out after {timeout_seconds}s on '{channel}'"
-        )
+        logger.warning(f"[pubsub] Timed out after {timeout_seconds}s on '{channel}'")
         return None
     except Exception as e:
-        logger.error(f"[hold_transfer] Error waiting on '{channel}': {e}")
+        logger.error(f"[pubsub] Error waiting on '{channel}': {e}")
         return None
     finally:
         await pubsub.unsubscribe(channel)

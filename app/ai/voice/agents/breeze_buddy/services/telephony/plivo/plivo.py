@@ -3,7 +3,6 @@ from urllib.parse import urlencode
 
 import plivo
 from fastapi import WebSocket
-from starlette.responses import HTMLResponse
 
 from app.ai.voice.agents.breeze_buddy.agent import telephony_bot
 from app.ai.voice.agents.breeze_buddy.services.telephony.base_provider import (
@@ -11,6 +10,9 @@ from app.ai.voice.agents.breeze_buddy.services.telephony.base_provider import (
 )
 from app.ai.voice.agents.breeze_buddy.services.telephony.plivo.conference import (
     PlivoConferenceService,
+)
+from app.ai.voice.agents.breeze_buddy.utils.hold_transfer import (
+    publish_hold_transfer_result,
 )
 from app.core.config.static import (
     APP_BASE_URL,
@@ -107,36 +109,87 @@ class PlivoProvider(VoiceCallProvider):
             return None
 
 
-async def plivo_dial_xml(
-    transfer_data: dict, call_sid: str, params: dict
-) -> HTMLResponse:
-    """Build <Dial><Number> XML that bridges customer → agent."""
-    transfer_number = transfer_data.get("transfer_number")
-    if not transfer_number:
-        logger.error(f"[TRANSFER DIAL-UP] No transfer_number for call {call_sid}")
-        return HTMLResponse(
-            content='<?xml version="1.0" encoding="UTF-8"?>'
-            "<Response><Speak>Sorry, the transfer could not be completed.</Speak>"
-            "<Hangup/></Response>",
-            media_type="application/xml",
+async def handle_mpc_transfer_webhook(params: dict) -> None:
+    """Handle Plivo MPC participant-state-changes webhook.
+
+    Fires when an MPC participant's state changes (joins / exits).
+    Used to detect whether the agent answered the transfer call.
+
+    Flow:
+      - Agent answers → ParticipantJoin (role=agent)
+          → move customer into MPC, publish "answered" to Redis
+      - Agent no-answer → ParticipantExit (role=agent)
+          → publish "unavailable" to Redis
+    """
+    call_sid = str(params.get("call_sid") or "")
+    event = str(params.get("EventName", ""))
+    mpc_name = str(params.get("MPCName", ""))
+    participant_role = str(params.get("ParticipantRole", "")).lower()
+
+    logger.info(
+        f"[MPC-TRANSFER] event={event} role={participant_role} "
+        f"mpc={mpc_name} call_sid={call_sid}"
+    )
+
+    if not call_sid:
+        logger.error("[MPC-TRANSFER] Missing call_sid in callback")
+        return
+
+    outcome_channel = f"transfer_outcome:{call_sid}"
+
+    if participant_role == "agent" and event == "ParticipantJoin":
+        logger.info(
+            f"[MPC-TRANSFER] Agent answered for call {call_sid}. "
+            f"Moving customer into MPC '{mpc_name}'."
         )
 
-    agent_phone = transfer_number
-    if not agent_phone.startswith("+"):
-        agent_phone = f"+{agent_phone}"
+        client = plivo.RestClient(PLIVO_AUTH_ID, PLIVO_AUTH_TOKEN)
+        conference_service = PlivoConferenceService(client)
+        result = await conference_service.move_customer_to_mpc(
+            call_sid=call_sid,
+            mpc_name=mpc_name,
+        )
 
-    outbound_number = params.get("outbound_number", "")
-    action_url = (
-        f"{APP_BASE_URL}/agent/voice/breeze-buddy"
-        f"/plivo/callback/transfer/conclude"
-        f"?customer_call_sid={call_sid}"
-    )
-    xml = (
-        f'<?xml version="1.0" encoding="UTF-8"?>'
-        f"<Response>"
-        f'<Dial action="{action_url}" method="POST"'
-        f' callerId="{outbound_number}" timeout="30">'
-        f"<Number>{agent_phone}</Number>"
-        f"</Dial></Response>"
-    )
-    return HTMLResponse(content=xml, media_type="application/xml")
+        if result["success"]:
+            await publish_hold_transfer_result(
+                outcome_channel,
+                {"status": "answered"},
+            )
+            logger.info(
+                f"[MPC-TRANSFER] Customer moved to MPC, "
+                f"published 'answered' for {call_sid}"
+            )
+        else:
+            logger.error(
+                f"[MPC-TRANSFER] Failed to move customer to MPC: "
+                f"{result.get('error')}"
+            )
+            await publish_hold_transfer_result(
+                outcome_channel,
+                {
+                    "status": "unavailable",
+                    "reason": "mpc_move_failed",
+                    "error": result.get("error"),
+                },
+            )
+
+    elif participant_role == "agent" and event == "ParticipantExit":
+        # Agent never joined → timed out / busy → publish "unavailable".
+        # If ParticipantJoinTime is present, the agent had already joined
+        # and the transfer succeeded — this exit is a normal hang-up after
+        # a completed transfer and must not publish "unavailable".
+        join_time = str(params.get("ParticipantJoinTime", ""))
+        if join_time:
+            logger.info(
+                f"[MPC-TRANSFER] Agent exited after joining for call {call_sid}. "
+                f"Transfer was successful — not publishing 'unavailable'."
+            )
+        else:
+            logger.info(
+                f"[MPC-TRANSFER] Agent exited without joining for call {call_sid}. "
+                f"Publishing 'unavailable'."
+            )
+            await publish_hold_transfer_result(
+                outcome_channel,
+                {"status": "unavailable"},
+            )
