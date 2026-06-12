@@ -196,11 +196,16 @@ async def replace_template(
     expected_payload_schema, expected_callback_response_schema, configurations)
     - if not provided, they will be set to NULL.
 
+    reseller_id is optional: if omitted, the persisted value is kept; if
+    provided (non-empty), the template is moved to that reseller (requires
+    access to the destination reseller, 409 on name collision there).
+
     Path Parameters:
     - template_id: Template UUID
 
     Request Body:
         {
+            "reseller_id": "reseller_id",
             "name": "updated-template-name",
             "merchant_id": "merchant_id",
             "outbound_number_id": "uuid",
@@ -217,6 +222,8 @@ async def replace_template(
     Raises:
         - 404: Template not found
         - 400: Validation error (missing required fields)
+        - 403: No access to the current or destination reseller
+        - 409: Another template with the same reseller/merchant/name exists
     """
     return await replace_template_handler(template_id, template_data, current_user)
 

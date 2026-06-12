@@ -398,6 +398,45 @@ async def replace_template_handler(
             operation="access template",
         )
 
+        # Resolve the target reseller. ``None`` (field omitted) preserves the
+        # persisted value — older PUT clients never sent reseller_id. When the
+        # template moves to a different reseller, the user must also have
+        # rights on the destination.
+        reseller_id = (
+            template_data.reseller_id
+            if template_data.reseller_id is not None
+            else existing_template.reseller_id
+        )
+        if reseller_id != existing_template.reseller_id:
+            validate_template_access(
+                current_user,
+                reseller_id,
+                template_data.merchant_id,
+                operation="move template to reseller",
+            )
+
+        # If the (reseller, merchant, name) identity changes, it must not
+        # collide with another template — the DB unique indexes would
+        # otherwise reject the UPDATE and surface as an opaque 500.
+        identity_changed = (
+            reseller_id != existing_template.reseller_id
+            or template_data.merchant_id != existing_template.merchant_id
+            or template_data.name != existing_template.name
+        )
+        if identity_changed:
+            conflicting = await get_template_by_merchant(
+                reseller_id,
+                template_data.merchant_id,
+                template_data.name,
+                should_prioritize_merchant_specific=False,
+            )
+            if conflicting and str(conflicting.id) != str(template_id):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"Template already exists for reseller {reseller_id} "
+                    f"and template name: {template_data.name}",
+                )
+
         # Validate flow structure (direct mode has a different shape — see
         # the create handler for the matching branch).
         flow = template_data.flow
@@ -485,6 +524,7 @@ async def replace_template_handler(
 
         updated_template = await replace_template(
             template_id=template_id,
+            reseller_id=reseller_id,
             name=template_data.name,
             flow=flow,
             expected_payload_schema=template_data.expected_payload_schema,

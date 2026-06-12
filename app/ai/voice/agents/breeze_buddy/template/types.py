@@ -3,7 +3,7 @@ Pydantic models for the dynamic workflow engine.
 """
 
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Annotated, Any, Dict, List, Literal, Optional, Union
 
 from pydantic import (
     BaseModel,
@@ -11,6 +11,7 @@ from pydantic import (
     Field,
     SecretStr,
     SerializationInfo,
+    StringConstraints,
     field_serializer,
     model_validator,
 )
@@ -2040,9 +2041,15 @@ class RequestFlowNode(BaseModel):
     functions: List[RequestFlowFunction] = []
 
 
+# A template with reseller_id "" is unreachable by every reseller-scoped
+# lookup (RBAC filters, get-by-name resolution, config fallback), so reject
+# empty / whitespace-only values at the schema boundary.
+ResellerId = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+
+
 class CreateTemplateRequest(BaseModel):
     # New field names
-    reseller_id: str
+    reseller_id: ResellerId
     name: str
     merchant_id: Optional[str] = None
     outbound_number_id: Optional[str] = None
@@ -2064,7 +2071,7 @@ class ReplaceTemplateRequest(BaseModel):
     IMPORTANT — GET-to-PUT contract:
     This model uses extra="ignore" so that a GET /templates/{id} response can be
     sent directly to PUT /templates/{id} after editing. Read-only fields returned
-    by GET (id, merchant_id, created_at, updated_at) are automatically stripped.
+    by GET (id, created_at, updated_at) are automatically stripped.
     When adding new read-only fields to TemplateModel, do NOT add them here —
     they will be safely ignored. When adding new editable fields, add them to
     BOTH TemplateModel and this model with the SAME field name.
@@ -2072,6 +2079,12 @@ class ReplaceTemplateRequest(BaseModel):
     Non-nullable fields (name, flow, is_active) must be provided - throws 400 if not.
     Nullable fields (merchant_id, outbound_number_id, expected_payload_schema,
     expected_callback_response_schema, configurations) - if not provided, set to NULL.
+
+    ``reseller_id`` is optional (``None`` default) for backward compatibility:
+    pre-existing PUT clients never sent it (it used to be silently ignored), so
+    omitting it preserves the persisted value. When provided it must be
+    non-empty and the template is moved to that reseller — handler re-validates
+    RBAC against the destination and checks for name collisions there.
 
     ``supported_channels`` is intentionally optional (``None`` default) rather
     than defaulting to ``['voice']``: pre-chat-feature PUT clients have no
@@ -2081,9 +2094,10 @@ class ReplaceTemplateRequest(BaseModel):
     """
 
     # extra="ignore" allows clients to pass the full GET response body to PUT;
-    # read-only fields (id, merchant_id, created_at, updated_at) are auto-stripped.
+    # read-only fields (id, created_at, updated_at) are auto-stripped.
     model_config = ConfigDict(extra="ignore")
 
+    reseller_id: Optional[ResellerId] = None
     name: str
     merchant_id: Optional[str] = None
     outbound_number_id: Optional[str] = None
