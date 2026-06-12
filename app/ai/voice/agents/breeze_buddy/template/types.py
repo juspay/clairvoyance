@@ -1033,6 +1033,56 @@ class McpConfig(BaseModel):
     )
 
 
+class HitlConfig(BaseModel):
+    """Human-In-The-Loop (HITL) configuration for a template.
+
+    When enabled, certain tool calls require user confirmation before execution.
+    This provides a security/compliance layer for critical operations like
+    cart creation, checkout, etc.
+
+    The HITL system works as follows:
+    1. LLM decides to call a tool (e.g., create_cart)
+    2. System checks if that tool is in tools_requiring_approval
+    3. If yes: emit hitl_confirmation_required SSE event, pause turn
+    4. User sees confirmation modal in widget
+    5. User approves/rejects
+    6. If approved: tool executes, turn continues
+       If rejected/timed out: tool not executed, error returned
+
+    Example template configuration::
+
+        {
+            "configurations": {
+                "hitl": {
+                    "enabled": true,
+                    "default_timeout_seconds": 30,
+                    "tools_requiring_approval": ["create_cart", "update_cart", "add_line_items"]
+                }
+            }
+        }
+    """
+
+    enabled: bool = Field(
+        default=False,
+        description="Whether HITL is enabled for this template",
+    )
+    default_timeout_seconds: Optional[int] = Field(
+        default=30,
+        ge=5,
+        le=300,
+        description="Default timeout for HITL approval in seconds. "
+        "None means no auto-expiry - pending confirmation stays until resolved.",
+    )
+    tools_requiring_approval: List[str] = Field(
+        default_factory=list,
+        description=(
+            "List of tool names that require HITL approval before execution. "
+            "Tools NOT in this list pass through without approval. "
+            "Example: ['create_cart', 'update_cart', 'add_line_items', 'remove_line_item']"
+        ),
+    )
+
+
 class UiCatalogConfig(BaseModel):
     """Per-template selection of which generative-UI primitives the LLM
     may emit and the widget will render.
@@ -1303,6 +1353,17 @@ class ConfigurationModel(BaseModel):
             "Generic engine — the template decides which args matter."
         ),
     )
+
+    # --- Human-In-The-Loop (HITL) ---
+    hitl: Optional[HitlConfig] = Field(
+        None,
+        description=(
+            "Optional. HITL configuration for critical tool calls. "
+            "When enabled, listed tools require user confirmation before execution. "
+            "See HitlConfig for details."
+        ),
+    )
+
     client_context: Optional["ClientContextConfig"] = Field(
         None,
         description=(
