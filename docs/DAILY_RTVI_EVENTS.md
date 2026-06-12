@@ -63,7 +63,7 @@ Real-time events emitted by the Breeze Buddy backend to Daily-connected clients 
 | `onCamUpdated` | Active camera changes | After `client.updateCam()` | Confirm camera switch |
 | `onDeviceError` | Device access fails | Permission denied, device in use, hardware error | Show "mic access denied" or "device unavailable" message |
 | **Server Messages** | | | |
-| `onServerMessage` | Backend sends custom RTVI event via `_emit_rtvi_event()` | On conversation-start, conversation-end, pipeline-error, bot-ready | Handle Breeze Buddy-specific lifecycle events |
+| `onServerMessage` | Backend sends custom RTVI event via `_emit_rtvi_event()` | On conversation-start, conversation-end, pipeline-error, bot-ready, function-approval-request, function-approval-resolved | Handle Breeze Buddy-specific lifecycle events + HITL approval cards |
 
 ## Event Timeline
 
@@ -568,9 +568,51 @@ onServerMessage: (message: { type: string; timestamp?: number; payload?: any }) 
     case 'pipeline-error':
       console.error('Pipeline error:', message.payload?.processor, message.payload?.error);
       break;
+    case 'function-approval-request':
+      // HITL: the LLM called an approval-gated function (template
+      // `approval` config). Show an approve/deny card; answer with the
+      // `function-approval-decision` client message below. Re-emitted
+      // for still-pending requests when a client (re)connects.
+      // payload: { approval_id, function_name, arguments, prompt, timeout_secs }
+      break;
+    case 'function-approval-resolved':
+      // HITL: a pending approval resolved — dismiss its card.
+      // payload: { approval_id, status }
+      // status: "approved" | "denied" | "timeout" | "cancelled" | "superseded"
+      break;
   }
 }
 ```
+
+### HITL function approvals (client → server)
+
+Answer a `function-approval-request` with:
+
+```typescript
+client.sendClientMessage('function-approval-decision', {
+  approval_id: '...',   // from the request payload
+  approved: true,       // or false
+  reason: 'optional',   // shown to the LLM on denial
+});
+```
+
+Semantics:
+- Decisions are idempotent per `approval_id` — duplicates and decisions
+  arriving after the wait timed out are ignored (the bot logs a stale-id
+  warning).
+- Whether the bot keeps talking while waiting is the function's existing
+  `cancel_on_interruption`: `true` = the bot blocks silently (and ANY user
+  utterance cancels the request → `status: "cancelled"`); `false` = async
+  call, the bot keeps conversing and the decision may arrive minutes later.
+- On timeout/deny the LLM receives `{"status": "denied"|"timeout", reason}`
+  as the tool result. Pending requests are denied automatically on client
+  disconnect, idle timeout, and conversation end.
+- A duplicate request for the same function supersedes the older pending
+  one (`status: "superseded"`).
+- Voice HITL requires RTVI (`ENABLE_BREEZE_BUDDY_DAILY_EVENTS=true`);
+  without it, gated calls on Daily are denied
+  (`approval_channel_unavailable`). Telephony has no approval surface —
+  the template's `approval.on_no_channel` decides.
 
 ---
 

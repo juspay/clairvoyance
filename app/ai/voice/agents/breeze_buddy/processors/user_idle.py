@@ -45,6 +45,10 @@ class UserIdleCallbackHandler:
         # Set when end_conversation is in flight, cleared if it fails so
         # subsequent idle events can retry.
         self._call_ended = False
+        # Optional predicate that pauses idle handling entirely while True
+        # (e.g. an approval card is pending and the user is silently
+        # reading it). Assigned post-construction by the agent.
+        self.suppress_when: Optional[Callable[[], bool]] = None
         logger.info(f"User idle detection enabled with max_retries: {max_retries}")
 
     def reset_retry_count(self) -> None:
@@ -56,6 +60,10 @@ class UserIdleCallbackHandler:
     async def handle_user_idle(self, aggregator: Any) -> None:
         """Prompt the user; end the call after ``max_retries`` prompts."""
         if self._call_ended:
+            return
+
+        if self.suppress_when is not None and self.suppress_when():
+            logger.debug("User idle event suppressed (pending approval or similar)")
             return
 
         self.retry_count += 1

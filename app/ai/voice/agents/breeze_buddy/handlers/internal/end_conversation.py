@@ -295,6 +295,13 @@ async def end_conversation(context: TemplateContext, args, transition_to=None):
             exc_info=True,
         )
     finally:
+        # Deny any pending HITL approvals before tearing down — pipecat does
+        # NOT cancel parallel function-call tasks on EndFrame, so a blocked
+        # gated handler would otherwise outlive the pipeline until timeout.
+        approval_manager = getattr(context.bot, "approval_manager", None)
+        if approval_manager:
+            approval_manager.deny_all("conversation_ended")
+
         # Send EndFrame to gracefully terminate the pipeline
         logger.info(
             f"Sending EndFrame to terminate pipeline for call {context.call_sid}"
