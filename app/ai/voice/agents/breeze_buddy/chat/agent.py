@@ -6,6 +6,7 @@ around :func:`llm_driver.stream` — see ``docs/CHAT_MODE.md`` §4 + §9 for the
 full architecture.
 """
 
+import asyncio
 import json
 import uuid
 from dataclasses import dataclass
@@ -43,6 +44,7 @@ from app.ai.voice.agents.breeze_buddy.mcp import (
     close_mcp_pool,
     get_mcp_global_functions_cached,
 )
+from app.ai.voice.agents.breeze_buddy.template.approval import build_approval_map
 from app.ai.voice.agents.breeze_buddy.template.builder import FlowConfigBuilder
 from app.ai.voice.agents.breeze_buddy.template.context import with_context
 from app.ai.voice.agents.breeze_buddy.template.session_state import (
@@ -62,7 +64,8 @@ from app.database.accessor.breeze_buddy.chat_session import (
     update_chat_session_after_turn,
     upsert_agent_session_state,
 )
-from app.schemas.breeze_buddy.chat import ChatMessageRole
+from app.database.accessor.breeze_buddy.tool_approvals import insert_tool_approval
+from app.schemas.breeze_buddy.chat import ChatMessageRole, ToolApproval
 
 # Each tool-call → handler → re-invoke counts as one cycle. The guard stops a
 # pathological template (handler always returns a transition that loops back)
@@ -78,7 +81,7 @@ _MAX_TOOL_CYCLES = 20
 
 @dataclass
 class _PreparedTools:
-    """Per-turn tool surface built once by ``_prepare_tools``."""
+    """Per-turn tool surface shared by ``run_turn`` and ``run_approval_turn``."""
 
     flow_config: Dict[str, Any]
     global_funcs: List[FlowsFunctionSchema]
@@ -164,6 +167,15 @@ class ChatAgent:
             )
         else:
             self._ui_allowlist = resolve_allowlist()
+        # HITL: chat gates approval pre-dispatch (Pattern B — the turn ends
+        # at the gated call; the decision arrives on the dedicated approval
+        # endpoint). This flag makes the voice in-handler gate
+        # (template/approval.py) a pass-through for ChatAgent, since the
+        # global-function adapters receive bot_instance=self and would
+        # otherwise double-gate.
+        self.handles_approval_externally = True
+        # function name -> ApprovalConfig for every gated global function.
+        self._approval_map = build_approval_map(self.template.flow or {})
 
     async def run_turn(
         self,
@@ -232,8 +244,8 @@ class ChatAgent:
 
     async def _prepare_tools(self) -> _PreparedTools:
         """Build the per-turn tool surface (flow config, wrapped handlers,
-        global + MCP functions, retention policy). Extracted from
-        ``_run_turn_inner`` so the seeding and the cycle loop stay readable."""
+        global + MCP functions, retention policy). Shared by ``run_turn``
+        and ``run_approval_turn``."""
         flow_builder = FlowConfigBuilder(disabled_names=CHAT_DISABLED_NAMES, quiet=True)
         # Wrap before build_flow_config: _build_function_schema captures the
         # handler reference into a closure, so post-build wrapping is a no-op.
@@ -314,10 +326,11 @@ class ChatAgent:
         node: Dict[str, Any],
         prep: _PreparedTools,
     ) -> AsyncIterator[SSEEvent]:
-        """The LLM ↔ tool loop for one turn, extracted from
-        ``_run_turn_inner``. ``context`` must already be seeded; this loop
-        drives LLM cycles and dispatches tool calls until the model
-        produces a user-facing reply (or the cycle cap trips)."""
+        """The LLM ↔ tool loop for one turn (shared by ``run_turn`` and the
+        continuation of ``run_approval_turn``). ``context`` must already be
+        seeded; this loop drives LLM cycles, dispatches ungated tool calls,
+        and ends the turn early (``turn_end {awaiting_approval}``) when the
+        LLM calls an approval-gated function."""
         global_funcs = prep.global_funcs
         node_name = cast(str, node["name"])
 
@@ -422,14 +435,16 @@ class ChatAgent:
                 # matches what the LLM previously saw in-context.
                 insert_at = 1 if assistant_blocks[0].get("type") == "text" else 0
                 assistant_blocks.insert(insert_at, internal_text_block(ui_summary))
+            gate_assistant_idx: Optional[int] = None
             if assistant_blocks:
-                await insert_chat_message(
+                gate_row = await insert_chat_message(
                     session_id=self.session_id,
                     role=ChatMessageRole.ASSISTANT,
                     content=visible_text or None,
                     content_blocks=assistant_blocks,
                     ui_blocks=turn_ui_ops or None,
                 )
+                gate_assistant_idx = gate_row.idx if gate_row else None
 
             # Mirror LLMAssistantContextAggregator: append assistant message
             # carrying tool_calls, then a tool-result per call. Universal
@@ -465,9 +480,19 @@ class ChatAgent:
                 else []
             )
 
+            # HITL partition: approval-gated calls do NOT execute now — the
+            # turn ends after the ungated siblings finish, and each gated
+            # call waits for its decision on the approval endpoint.
+            gated_calls = [
+                c for c in tool_calls if c.function_name in self._approval_map
+            ]
+            ungated_calls = [
+                c for c in tool_calls if c.function_name not in self._approval_map
+            ]
+
             next_node: Optional[Dict[str, Any]] = None
             tool_result_pairs: List[Tuple[str, Any]] = []
-            for call in tool_calls:
+            for call in ungated_calls:
                 injected_args = inject_tool_args(
                     tool_name=call.function_name,
                     args=dict(call.arguments),
@@ -536,6 +561,69 @@ class ChatAgent:
                 node_name = cast(str, node.get("name") or node_name)
                 self._apply_node_transition(context, node, global_funcs)
                 yield SSEEvent(event="node_transition", data={"to": node_name})
+
+            if gated_calls:
+                # Order is load-bearing: the ungated results + agent state
+                # are already persisted above (their side effects ran), and
+                # any ungated transition has been applied to ``node_name``.
+                # Now record each gated call as PENDING and end the turn —
+                # the decision arrives on POST .../session/{id}/approval.
+                pending_ids: List[str] = []
+                for call in gated_calls:
+                    approval_cfg = self._approval_map[call.function_name]
+                    # Inject NOW so the persisted row holds exactly the
+                    # arguments that will run on approval (idempotency hash
+                    # bakes in this turn's id — resume replays it verbatim).
+                    injected_args = inject_tool_args(
+                        tool_name=call.function_name,
+                        args=dict(call.arguments),
+                        state_data=self.agent_state,
+                        chat_session_id=self.session_id,
+                        injections=arg_injection_rules,
+                        turn_id=self._turn_id,
+                    )
+                    row = await insert_tool_approval(
+                        session_id=self.session_id,
+                        tool_call_id=call.tool_call_id,
+                        function_name=call.function_name,
+                        arguments=injected_args,
+                        prompt=approval_cfg.prompt,
+                        expiry_secs=approval_cfg.chat_expiry_secs,
+                    )
+                    pending_ids.append(call.tool_call_id)
+                    yield SSEEvent(
+                        event="function_approval_requested",
+                        data={
+                            "tool_call_id": call.tool_call_id,
+                            "name": call.function_name,
+                            "args": injected_args,
+                            "prompt": approval_cfg.prompt,
+                            "expires_at": (row.expires_at.isoformat() if row else None),
+                        },
+                    )
+
+                await update_chat_session_after_turn(
+                    session_id=self.session_id, current_node=node_name or None
+                )
+                # Drain any held marker carry (mirrors the normal turn end).
+                for out in self._ui_extractor.flush():
+                    if isinstance(out, TextOut):
+                        yield SSEEvent(
+                            event="assistant_token", data={"delta": out.value}
+                        )
+                # ``assistant_idx`` carries the gate-time assistant row so
+                # turn metrics persist (the turn DID consume an LLM call)
+                # and the client has a stable anchor for the partial bubble.
+                yield SSEEvent(
+                    event="turn_end",
+                    data={
+                        "session_status": "ACTIVE",
+                        "assistant_idx": gate_assistant_idx,
+                        "awaiting_approval": True,
+                        "pending_tool_call_ids": pending_ids,
+                    },
+                )
+                return
         else:
             # Loop ran to completion without ``break`` — every cycle produced
             # a tool call. Bail out rather than burning more LLM calls.
@@ -622,6 +710,268 @@ class ChatAgent:
         yield SSEEvent(
             event="turn_end",
             data={"session_status": "ACTIVE", "assistant_idx": final_assistant_idx},
+        )
+
+    async def run_approval_turn(
+        self,
+        *,
+        approval: ToolApproval,
+        approved: bool,
+        wire_status: str,
+        decision_reason: Optional[str],
+        synthetic_result: Optional[Dict[str, Any]],
+        history: List[Dict[str, Any]],
+        current_node: Optional[str],
+        pending_sibling_ids: List[str],
+    ) -> AsyncIterator[SSEEvent]:
+        """Resume a turn that ended awaiting approval (HITL Pattern B).
+
+        The caller (approve_chat_tool_handler) has ALREADY atomically
+        claimed the approval row and, for deny/expired outcomes, persisted
+        the synthetic tool_result row under the session lock BEFORE loading
+        ``history`` — so the denial result replays via history and the
+        decided-but-unpersisted crash window only exists on the approve
+        path (closed below with a shielded error-row write).
+
+        - ``approved=True``: execute the stored (post-injection) arguments
+          verbatim, persist the result, then continue the LLM loop.
+        - ``approved=False`` (denied / expired): no execution; continue the
+          LLM loop so the model can acknowledge.
+        - ``pending_sibling_ids`` non-empty: other gated calls from the same
+          batch are still undecided — end the turn awaiting them WITHOUT
+          invoking the LLM (the replayed context would have dangling
+          tool_use blocks).
+        """
+        self.aiohttp_session = create_aiohttp_session()
+        self.mcp_pool = {}
+        # Fresh turn id: any NEW tool calls in the continued loop get fresh
+        # idempotency hashes. The approved call itself replays the stored
+        # args (original turn's hash) — intentional, it IS that operation.
+        self._turn_id = uuid.uuid4().hex
+        try:
+            async for event in self._run_approval_turn_inner(
+                approval=approval,
+                approved=approved,
+                wire_status=wire_status,
+                decision_reason=decision_reason,
+                synthetic_result=synthetic_result,
+                history=history,
+                current_node=current_node,
+                pending_sibling_ids=pending_sibling_ids,
+            ):
+                yield event
+        finally:
+            if self.aiohttp_session is not None:
+                await self.aiohttp_session.close()
+                self.aiohttp_session = None
+            await close_mcp_pool(self.mcp_pool)
+            self.mcp_pool = None
+
+    async def _run_approval_turn_inner(
+        self,
+        *,
+        approval: ToolApproval,
+        approved: bool,
+        wire_status: str,
+        decision_reason: Optional[str],
+        synthetic_result: Optional[Dict[str, Any]],
+        history: List[Dict[str, Any]],
+        current_node: Optional[str],
+        pending_sibling_ids: List[str],
+    ) -> AsyncIterator[SSEEvent]:
+        prep = await self._prepare_tools()
+        node = self._resolve_node(prep.flow_config, current_node)
+        node_name = cast(str, node["name"])
+        context = self._seed_resume_context(node, history, prep.global_funcs)
+
+        yield SSEEvent(
+            event="function_approval_resolved",
+            data={
+                "tool_call_id": approval.tool_call_id,
+                "status": wire_status,
+                "reason": decision_reason,
+            },
+        )
+
+        transition_node: Optional[Dict[str, Any]] = None
+        if approved:
+            call = FunctionCallFromLLM(
+                function_name=approval.function_name,
+                tool_call_id=approval.tool_call_id,
+                arguments=dict(approval.arguments),
+                context=None,
+            )
+            persist_task: Optional["asyncio.Task[None]"] = None
+            try:
+                # Stored args are dispatched verbatim — they were injected
+                # at gate time and are exactly what the user approved.
+                result_payload, transition_node = await self._dispatch_tool_call(
+                    call,
+                    node,
+                    prep.global_funcs,
+                    injected_args=dict(approval.arguments),
+                )
+                reducer_rules = (
+                    self.template.configurations.state_reducers
+                    if self.template.configurations
+                    else []
+                )
+                self.agent_state = apply_state_reducers(
+                    state_data=self.agent_state,
+                    tool_name=approval.function_name,
+                    tool_result=result_payload,
+                    reducers=reducer_rules,
+                )
+                # Run the real result write as a task so a cancellation
+                # landing during (or after) it can tell whether the row
+                # already exists — writing a synthetic row on top would
+                # answer the same tool_use twice, which providers reject
+                # on every later replay (permanent session brick).
+                persist_task = asyncio.create_task(
+                    self._persist_tool_result_row(approval.tool_call_id, result_payload)
+                )
+                await asyncio.shield(persist_task)
+                await upsert_agent_session_state(
+                    chat_session_id=self.session_id,
+                    data=self.agent_state,
+                )
+            except asyncio.CancelledError:
+                # Stop button / disconnect mid-execution. The row is already
+                # DECIDED — without a persisted result the session history
+                # would carry a dangling tool_use forever. Write the
+                # synthetic row ONLY if the real write never landed (it may
+                # have completed before, or kept running under the shield
+                # after, the cancellation).
+                real_write_landed = False
+                if persist_task is not None:
+                    try:
+                        await asyncio.shield(persist_task)
+                        real_write_landed = True
+                    except asyncio.CancelledError:
+                        # Second cancel mid-wait — the shielded task still
+                        # runs to completion in the background; treat as
+                        # landed to avoid the duplicate-answer brick (the
+                        # repair backstop covers the lost-write case).
+                        real_write_landed = True
+                    except Exception:
+                        real_write_landed = False
+                if not real_write_landed:
+                    await asyncio.shield(
+                        self._persist_tool_result_row(
+                            approval.tool_call_id,
+                            {
+                                "status": "error",
+                                "error": "execution was interrupted before completing",
+                            },
+                        )
+                    )
+                raise
+            context.add_message(
+                cast(
+                    LLMContextMessage,
+                    {
+                        "role": "tool",
+                        "tool_call_id": approval.tool_call_id,
+                        "content": json.dumps(result_payload, default=str),
+                    },
+                )
+            )
+        else:
+            # Denied / expired: the synthetic result row was persisted by
+            # the handler before history load, so it is already in
+            # ``context`` via the replayed history.
+            result_payload = synthetic_result or {
+                "status": "denied",
+                "reason": decision_reason or "the user did not approve this action",
+            }
+
+        yield SSEEvent(
+            event="function_call_completed",
+            data={
+                "name": approval.function_name,
+                "tool_call_id": approval.tool_call_id,
+                "result_summary": _summarize_result(result_payload),
+            },
+        )
+
+        if transition_node is not None:
+            node = transition_node
+            node_name = cast(str, node.get("name") or node_name)
+            self._apply_node_transition(context, node, prep.global_funcs)
+            yield SSEEvent(event="node_transition", data={"to": node_name})
+
+        # Persist node BEFORE a possible siblings early-return — the next
+        # sibling's approval turn resolves session.current_node, which
+        # would otherwise be stale after a transition here.
+        await update_chat_session_after_turn(
+            session_id=self.session_id, current_node=node_name or None
+        )
+
+        if pending_sibling_ids:
+            # Other gated calls from the same batch still await decisions;
+            # invoking the LLM now would replay dangling tool_use blocks.
+            yield SSEEvent(
+                event="turn_end",
+                data={
+                    "session_status": "ACTIVE",
+                    "assistant_idx": None,
+                    "awaiting_approval": True,
+                    "pending_tool_call_ids": pending_sibling_ids,
+                },
+            )
+            return
+
+        async for event in self._cycle_loop(context, node, prep):
+            yield event
+
+    async def _persist_tool_result_row(
+        self, tool_call_id: str, result_payload: Any
+    ) -> None:
+        """Persist one tool result as a USER row of tool_result blocks —
+        the resume-path sibling of the coalesced batch write in
+        ``_cycle_loop``."""
+        await insert_chat_message(
+            session_id=self.session_id,
+            role=ChatMessageRole.USER,
+            content=None,
+            content_blocks=tool_results_to_user_blocks(
+                [(tool_call_id, result_payload)]
+            ),
+        )
+
+    def _seed_resume_context(
+        self,
+        node: Dict[str, Any],
+        history: List[Dict[str, Any]],
+        global_funcs: List[FlowsFunctionSchema],
+    ) -> LLMContext:
+        """Build the LLMContext for an approval-resume turn:
+        ``[role, task, system_block?, …history…]`` — NO new user message.
+
+        Unlike ``_seed_context``, the client-context ``system_block`` goes
+        BEFORE history: the replayed history tail is an assistant
+        tool_calls message (+ tool results), and wedging a system message
+        between an assistant tool_calls and its tool responses is rejected
+        by OpenAI and breaks the Anthropic adapter's role merge. The
+        ``user_block`` variant is dropped entirely — it rides user turns
+        and a resume turn has none.
+        """
+        role_messages, task_messages = self._render_node_messages(node)
+        _user_block, system_block = render_client_context(
+            self.agent_state,
+            self._client_context_config,
+            self._context_placement,
+        )
+        messages: List[Dict[str, Any]] = [
+            *role_messages,
+            *task_messages,
+        ]
+        if system_block:
+            messages.append({"role": "system", "content": system_block})
+        messages.extend(history)
+        return LLMContext(
+            messages=cast(List[LLMContextMessage], messages),
+            tools=_tools_schema(node, global_funcs),
         )
 
     def _resolve_node(
