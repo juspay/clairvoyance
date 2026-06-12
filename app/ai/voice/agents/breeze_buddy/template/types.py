@@ -1693,6 +1693,67 @@ class GlobalFunctionType(str, Enum):
     CUSTOM = "custom"  # Future: custom Python function handlers
 
 
+class ApprovalOnNoChannel(str, Enum):
+    """Fallback behavior for approval-gated functions on channels with no
+    approval surface (telephony). Daily/web voice without a working approval
+    channel always denies and never consults this setting."""
+
+    EXECUTE = "execute"
+    DENY = "deny"
+
+
+class ApprovalConfig(BaseModel):
+    """Human-in-the-loop approval for a global function.
+
+    Presence of this config on a function marks it as gated: the LLM may call
+    the function, but execution waits for an explicit end-user decision.
+
+    Channel behavior:
+    - Chat: the turn ends at the gated call (`turn_end` carries
+      ``awaiting_approval``); the decision arrives on the dedicated
+      ``POST .../session/{id}/approval`` endpoint which resumes the turn.
+    - Voice (Daily): the in-process handler blocks on an RTVI
+      ``function-approval-decision`` client message. Whether the bot keeps
+      conversing while waiting is governed by the function's existing
+      ``cancel_on_interruption`` flag (True = bot waits silently and any user
+      utterance cancels the request; False = async call, the bot keeps
+      talking and the decision may arrive minutes later).
+    - Telephony: no approval surface exists; ``on_no_channel`` applies.
+    """
+
+    prompt: Optional[str] = Field(
+        None,
+        description="Human-facing text shown on the approval card. Note: the "
+        "post-injection arguments that will actually run are shown to the "
+        "end user alongside this prompt.",
+    )
+    voice_announce: Optional[str] = Field(
+        None,
+        description="Optional phrase spoken (queue_tts_filler) when the voice "
+        "gate starts waiting, e.g. 'I need your approval for this refund.' "
+        "None = no spoken announcement (the visual card is the only cue).",
+    )
+    timeout_secs: float = Field(
+        120,
+        gt=0,
+        description="VOICE-only: how long the in-process gate waits for a "
+        "decision before resolving as timeout. Must stay below the pipeline "
+        "idle timeout (300s) and the template's user-idle end-call budget.",
+    )
+    chat_expiry_secs: float = Field(
+        3600,
+        gt=0,
+        description="CHAT-only: TTL for the pending approval card "
+        "(expires_at). Decoupled from the voice wait — chat blocks nothing "
+        "server-side, so this can be generous.",
+    )
+    on_no_channel: ApprovalOnNoChannel = Field(
+        ApprovalOnNoChannel.EXECUTE,
+        description="TELEPHONY-only fallback when no approval surface exists: "
+        "'execute' (default; logs a loud warning) or 'deny'.",
+    )
+
+
 class BaseGlobalFunction(BaseModel):
     """Base model for all global function types.
 
@@ -1729,6 +1790,15 @@ class BaseGlobalFunction(BaseModel):
         default=None,
         description="Per-function timeout override in seconds. Falls back to "
         "the LLM service's function_call_timeout_secs when unset.",
+    )
+    approval: Optional[ApprovalConfig] = Field(
+        default=None,
+        description="Human-in-the-loop gate. When set, the function is "
+        "approval-gated: execution waits for an explicit end-user decision "
+        "(chat: dedicated approval endpoint resumes the turn; voice: RTVI "
+        "decision message). Interacts with cancel_on_interruption — True "
+        "means the bot blocks while waiting (and any user utterance cancels "
+        "the request), False means the bot keeps conversing (async call).",
     )
     response_transforms: List["ResponseTransform"] = Field(
         default_factory=list,
