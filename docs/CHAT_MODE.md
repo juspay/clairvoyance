@@ -201,6 +201,7 @@ All endpoints under `/api/breeze_buddy/chat/`. JWT required; same RBAC middlewar
 | `POST` | `/session` | Create new chat session for a template. Returns session ID + initial assistant greeting. |
 | `GET` | `/session/{id}` | Resume — returns full message history and current status. |
 | `POST` | `/session/{id}/message` | Send user message. Returns **SSE stream** for the assistant's turn. |
+| `POST` | `/session/{id}/approval` | Decide a pending HITL tool approval (§6.7). Returns **SSE stream** for the resumed turn. |
 | `POST` | `/session/{id}/end` | Explicit end (user closes the chat). Fires outcome webhook. |
 | `GET` | `/session/{id}/transcript` | Plain JSON transcript export (read-only). |
 
@@ -275,8 +276,10 @@ Acquires per-session lock (Redis). Returns **SSE stream** with these event types
 | `assistant_message` | `{ idx, content }` | Full assistant turn (always emitted at end of turn, after streaming). |
 | `function_call_started` | `{ name, args, tool_call_id }` | "Thinking…" indicator equivalent. |
 | `function_call_completed` | `{ name, tool_call_id, result_summary }` | |
+| `function_approval_requested` | `{ tool_call_id, name, args, prompt, expires_at }` | HITL (§6.7): the LLM called an approval-gated function. `args` are the post-injection arguments that will actually run. The turn ends right after (see `turn_end`). |
+| `function_approval_resolved` | `{ tool_call_id, status, reason }` | HITL (§6.7): a pending approval resolved. `status` ∈ `approved \| denied \| timeout \| superseded`. Emitted on the `/approval` resume stream, and at stream start for lazily expired/superseded rows. |
 | `node_transition` | `{ to }` | Synthesized node moved (flow mode only). The `from` field from D8's draft was dropped — clients should track `current_node` themselves between turns. |
-| `turn_end` | `{ session_status }` | Closes the SSE stream. Always last. |
+| `turn_end` | `{ session_status, assistant_idx, awaiting_approval?, pending_tool_call_ids? }` | Closes the SSE stream. Always last. `awaiting_approval: true` (additive, HITL §6.7) means the turn paused at one or more gated calls — `session_status` stays `ACTIVE` and the decision arrives via `/approval`. |
 | `error` | `{ code, message }` | Stream closes after. |
 
 If lock contended → HTTP 409 (don't open SSE).
@@ -291,6 +294,59 @@ isn't fired by v1. There is no in-memory registry to evict from (§4).
 ### 6.6 `GET /session/{id}/transcript`
 
 Plain JSON. Useful for export/audit. Same payload as `GET /session/{id}` minus runtime status.
+
+### 6.7 HITL tool approvals — `POST /session/{id}/approval` → SSE
+
+A template author marks a global function (HTTP/builtin/custom) with an
+`approval` config (`template/types.py:ApprovalConfig`). When the LLM calls
+it in chat, the gated call does **not** execute: the turn persists a
+PENDING row in `tool_approvals` (migration 033), emits
+`function_approval_requested`, and ends with `turn_end
+{awaiting_approval: true}` (Pattern B — approval-as-data, no in-memory
+wait). The decision arrives here:
+
+Request: `{ "tool_call_id": "...", "approved": true|false, "reason"?: "..." }`
+
+The handler atomically claims the row (`UPDATE … WHERE status='PENDING'`),
+then streams the resumed turn — identical event shapes to `/message`, but
+with **no** `user_committed` (there is no new user message):
+`function_approval_resolved` → `function_call_completed` →
+`assistant_token`* → `turn_end`.
+
+Semantics worth knowing:
+
+- **Approve** executes the stored post-injection arguments verbatim (the
+  idempotency hash baked at gate time replays — it IS that operation),
+  persists the result, then continues the LLM loop.
+- **Deny** persists a synthetic `{"status":"denied"}` tool result under the
+  lock *before* streaming; the LLM acknowledges in the resumed turn.
+- **Expiry is lazy** (`expires_at` = `chat_expiry_secs`, default 1h). A
+  late decision claims the row as `EXPIRED` (wire status `timeout`) and
+  the resume still runs so the LLM can say it timed out. No sweeper.
+- **Supersede**: any new `/message` claims every pending row as
+  `SUPERSEDED` with an LLM-visible `not_decided` result (deliberately not
+  "denied" — the user moved on, they didn't refuse).
+- **Sibling batches**: with several gated calls in one batch, each decision
+  is its own `/approval` POST; only the last one (no pending siblings left)
+  re-invokes the LLM. Replay stays provider-valid throughout — every
+  persisted `tool_use` is answered before any LLM call
+  (`block_codec.repair_dangling_tool_uses` is the defensive backstop).
+- **409s carry a machine-readable body**: `detail.code` ∈
+  `already_decided` (with the winning `status`) | `lock_contended` |
+  `voice_live` (widget surface only). Clients must branch on the code —
+  not all 409s mean "voice is live".
+
+All three auth surfaces expose the route: `/chat/session/{id}/approval`
+(RBAC), `/chat/demo/session/{id}/approval` (demo bearer + the same
+per-session turn cap as `/message`), `/widget/session/{id}/approval`
+(widget bearer + CORS preflight). `GET /widget/session/{id}` additionally
+returns `pending_approvals` (unexpired) so a reloaded embed can repaint
+cards.
+
+Voice (Daily) uses a different pattern for the same template config —
+in-process gating via RTVI messages; see `docs/DAILY_RTVI_EVENTS.md`.
+Telephony has no approval surface: `approval.on_no_channel` decides
+(`execute` default with a loud warning, or `deny`).
 
 ## 7. Agent Runtime
 

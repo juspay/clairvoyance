@@ -36,6 +36,7 @@ from app.ai.voice.agents.breeze_buddy.services.daily.daily import (
 )
 from app.ai.voice.agents.breeze_buddy.template.cache import get_template_by_id_cached
 from app.api.routers.breeze_buddy.chat.handlers import (
+    approve_chat_tool_handler,
     cancel_chat_turn_handler,
     create_chat_session_handler,
     end_chat_session_handler,
@@ -68,6 +69,9 @@ from app.database.accessor.breeze_buddy.lead_call_tracker import (
     handle_lead_abort,
     reset_widget_voice_lead,
 )
+from app.database.accessor.breeze_buddy.tool_approvals import (
+    list_pending_tool_approvals,
+)
 from app.database.accessor.breeze_buddy.widget_config import (
     get_widget_config_by_id,
 )
@@ -79,6 +83,7 @@ from app.schemas import (
     UserRole,
 )
 from app.schemas.breeze_buddy.chat import (
+    ApproveToolRequest,
     ChatMessage,
     ChatSessionStatus,
     CreateChatSessionRequest,
@@ -285,6 +290,68 @@ async def send_widget_message_handler(
         )
 
     return await send_chat_message_handler(session_id, req, access_check=None)
+
+
+# ---------------------------------------------------------------------------
+# POST /widget/session/{id}/approval
+# ---------------------------------------------------------------------------
+
+
+async def approve_widget_tool_handler(
+    session_id: str,
+    req: ApproveToolRequest,
+    request: Request,
+    ctx: WidgetSessionContext,
+):
+    """Decide a pending HITL tool approval on the widget surface.
+
+    Same gate order as ``send_widget_message_handler`` (config-active 401
+    → IP limit → ownership → 410 ENDED → 409 channel!=CHAT), then
+    delegates to the shared chat approval handler. The channel 409
+    carries ``detail.code="voice_live"`` so the SDK can distinguish it
+    from ``already_decided`` / ``lock_contended``.
+    """
+    cfg = await get_widget_config_by_id(ctx.widget_config_id)
+    if cfg is None or not cfg.active:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Widget configuration not found or inactive",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    await enforce_widget_ip_limit(
+        request=request,
+        bucket="message",
+        limit=cfg.max_messages_per_ip_hour,
+        widget_config_id=cfg.id,
+    )
+
+    session = await get_chat_session_by_id(session_id)
+    if session is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Widget session '{session_id}' not found",
+        )
+    assert_widget_session_ownership(session, ctx)
+    if session.status == ChatSessionStatus.ENDED:
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail=f"Widget session '{session_id}' has ended",
+        )
+    if session.current_channel != WidgetChannel.CHAT:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "voice_live",
+                "message": (
+                    f"Widget session is on channel "
+                    f"{session.current_channel.value}; end the voice "
+                    "attachment before deciding chat approvals."
+                ),
+            },
+        )
+
+    return await approve_chat_tool_handler(session_id, req, access_check=None)
 
 
 # ---------------------------------------------------------------------------
@@ -820,6 +887,10 @@ async def get_widget_session_state_handler(
         if isinstance(facts, dict):
             client_context = facts
 
+    # Unexpired pending HITL approvals so the embed can repaint approval
+    # cards after a reload (lazy expiry — the accessor filters expires_at).
+    pending_approvals = await list_pending_tool_approvals(session_id)
+
     return WidgetSessionStateResponse(
         session_id=session_id,
         status=session.status,
@@ -831,4 +902,5 @@ async def get_widget_session_state_handler(
         template_vars=template_vars,
         metadata=session.metadata or {},
         client_context=client_context,
+        pending_approvals=pending_approvals,
     )

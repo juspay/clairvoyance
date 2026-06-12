@@ -29,6 +29,7 @@ from app.api.security.breeze_buddy.widget_token import (
     require_widget_session,
 )
 from app.schemas.breeze_buddy.chat import (
+    ApproveToolRequest,
     CreateWidgetSessionRequest,
     CreateWidgetSessionResponse,
     EndChatSessionResponse,
@@ -41,6 +42,7 @@ from app.schemas.breeze_buddy.chat import (
 )
 
 from .handlers import (
+    approve_widget_tool_handler,
     cancel_widget_message_handler,
     create_widget_session_handler,
     end_widget_session_handler,
@@ -76,6 +78,11 @@ async def widget_message_preflight(session_id: str) -> Response:
 
 @router.options("/session/{session_id}/cancel")
 async def widget_cancel_preflight(session_id: str) -> Response:
+    return options_cors_response()
+
+
+@router.options("/session/{session_id}/approval")
+async def widget_approval_preflight(session_id: str) -> Response:
     return options_cors_response()
 
 
@@ -152,6 +159,25 @@ async def cancel_widget_message(
     """
     await cancel_widget_message_handler(session_id, ctx)
     return Response(status_code=status.HTTP_202_ACCEPTED)
+
+
+@router.post(
+    "/session/{session_id}/approval",
+    summary="Decide a pending HITL tool approval (streams the resumed turn)",
+)
+async def approve_widget_tool(
+    session_id: str,
+    req: ApproveToolRequest,
+    request: Request,
+    ctx: WidgetSessionContext = Depends(require_widget_session),
+):
+    """Apply the end user's approve/deny to a pending gated function call.
+
+    Streams the resumed turn as SSE (same shape as ``/message``). 409s
+    carry a machine-readable ``detail.code``: ``already_decided`` |
+    ``lock_contended`` | ``voice_live``.
+    """
+    return await approve_widget_tool_handler(session_id, req, request, ctx)
 
 
 @router.post(
