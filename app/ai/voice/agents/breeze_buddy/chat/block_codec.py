@@ -39,7 +39,7 @@ User row blocks (tool-result turn — emitted between tool cycles)::
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, List, cast
+from typing import Any, Dict, List, Optional, Set, cast
 
 from pipecat.frames.frames import FunctionCallFromLLM
 from pipecat.processors.aggregators.llm_context import LLMContextMessage
@@ -186,6 +186,123 @@ def blocks_to_llm_context_messages(
     return out
 
 
+_LOST_RESULT_PAYLOAD = json.dumps(
+    {
+        "status": "error",
+        "reason": (
+            "the execution result for this call was lost; " "treat this call as failed"
+        ),
+    }
+)
+
+
+def repair_dangling_tool_uses(
+    messages: List[LLMContextMessage],
+    exclude_ids: Optional[Set[str]] = None,
+) -> List[LLMContextMessage]:
+    """Make a replayed history provider-safe in BOTH directions.
+
+    1. Dangling tool_use: an assistant message carries ``tool_calls`` with
+       no answering ``{role:"tool"}`` message anywhere later — inject a
+       synthetic error result right after that batch's contiguous tool-run.
+       Covers crash/cancel windows where an approval was DECIDED but its
+       result write was lost (those rows are NOT re-claimable by
+       resolve_dangling_approvals, which only touches PENDING rows).
+    2. Orphan tool_result: a ``{role:"tool"}`` message whose tool_call_id
+       has no preceding assistant ``tool_calls`` in the (windowed) list —
+       dropped. Happens when CHAT_HISTORY_REPLAY_LIMIT cuts a batch in
+       half at the window boundary.
+
+    ``exclude_ids`` are tool_call ids the CALLER is about to answer itself
+    and must stay unanswered here: the approval handler passes the claimed
+    id plus the still-PENDING sibling ids. The ``/message`` path passes
+    nothing (every pending row was resolved + persisted before the history
+    load). Never exclude all decided ids — a decided-but-lost row must be
+    repaired or the session bricks.
+    """
+    exclude: Set[str] = exclude_ids or set()
+    # Ids answered ANYWHERE in the window — a non-contiguous real answer is
+    # already-broken history we won't make worse by adding a duplicate.
+    answered_global: Set[str] = {
+        cast(str, m.get("tool_call_id"))
+        for m in messages
+        if isinstance(m, dict) and m.get("role") == "tool" and m.get("tool_call_id")
+    }
+
+    repaired: List[LLMContextMessage] = []
+    declared_so_far: Set[str] = set()
+    # First answer wins — a second tool_result for the same id (e.g. a
+    # historical cancel-race double write) would make providers reject the
+    # whole conversation on every replay, so later duplicates are dropped.
+    answered_kept: Set[str] = set()
+
+    def _keep_tool(tmsg: Dict[str, Any]) -> None:
+        tcid = tmsg.get("tool_call_id")
+        if tcid not in declared_so_far:
+            logger.warning(
+                f"[block_codec] dropping orphan tool_result "
+                f"{tcid!r} (no preceding tool_use in replay window)"
+            )
+            return
+        if tcid in answered_kept:
+            logger.warning(
+                f"[block_codec] dropping duplicate tool_result for {tcid!r} "
+                "(first answer wins)"
+            )
+            return
+        answered_kept.add(cast(str, tcid))
+        repaired.append(cast(LLMContextMessage, tmsg))
+
+    n = len(messages)
+    i = 0
+    while i < n:
+        msg = cast(Dict[str, Any], messages[i])
+        role = msg.get("role")
+
+        if role == "tool":
+            _keep_tool(msg)
+            i += 1
+            continue
+
+        repaired.append(cast(LLMContextMessage, msg))
+        tool_calls = msg.get("tool_calls") if role == "assistant" else None
+        if tool_calls:
+            batch_ids = [tc.get("id") for tc in tool_calls if tc.get("id")]
+            declared_so_far.update(batch_ids)
+            # Consume the contiguous run of answering tool messages.
+            j = i + 1
+            while (
+                j < n
+                and isinstance(messages[j], dict)
+                and cast(Dict[str, Any], messages[j]).get("role") == "tool"
+            ):
+                _keep_tool(cast(Dict[str, Any], messages[j]))
+                j += 1
+            for tcid in batch_ids:
+                if tcid in exclude or tcid in answered_global:
+                    continue
+                logger.warning(
+                    f"[block_codec] injecting synthetic result for dangling "
+                    f"tool_use {tcid!r}"
+                )
+                repaired.append(
+                    cast(
+                        LLMContextMessage,
+                        {
+                            "role": "tool",
+                            "tool_call_id": tcid,
+                            "content": _LOST_RESULT_PAYLOAD,
+                        },
+                    )
+                )
+            i = j
+            continue
+
+        i += 1
+
+    return repaired
+
+
 def _assistant_row_to_openai(blocks: List[Dict[str, Any]]) -> LLMContextMessage:
     """Anthropic assistant blocks → one OpenAI-shape assistant message.
 
@@ -280,4 +397,5 @@ __all__ = [
     "internal_text_block",
     "filter_visible_blocks",
     "blocks_to_llm_context_messages",
+    "repair_dangling_tool_uses",
 ]
