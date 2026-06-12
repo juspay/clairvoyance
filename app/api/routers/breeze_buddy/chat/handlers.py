@@ -9,7 +9,7 @@ stay thin: validate auth, then delegate.
 import asyncio
 import time
 from datetime import datetime
-from typing import Any, AsyncIterator, Callable, Dict, Optional
+from typing import Any, AsyncIterator, Callable, Dict, Optional, cast
 
 from fastapi import HTTPException, status
 from fastapi.responses import StreamingResponse
@@ -18,6 +18,7 @@ from app.ai.voice.agents.breeze_buddy.chat.agent import ChatAgent
 from app.ai.voice.agents.breeze_buddy.chat.block_codec import (
     blocks_to_llm_context_messages,
     filter_visible_blocks,
+    repair_dangling_tool_uses,
 )
 from app.ai.voice.agents.breeze_buddy.chat.client_context import (
     ClientContextTooLarge,
@@ -491,6 +492,11 @@ async def send_chat_message_handler(
                 if row.role in (ChatMessageRole.USER, ChatMessageRole.ASSISTANT)
             ]
         )
+        # Defensive both-direction repair: an unmatched tool_use (crash or
+        # cancel between the assistant-row persist and the tool-result
+        # persist) gets a synthetic error result; orphan tool_results from
+        # window truncation are dropped. No-op on well-formed history.
+        history = cast(list, repair_dangling_tool_uses(history))
 
         # Load per-session agent state (cart_id, customer_id, etc. for
         # commerce templates). Generic — the runtime doesn't read the
