@@ -62,9 +62,11 @@ from app.schemas.breeze_buddy.chat import (
     EndChatSessionResponse,
     GetChatSessionResponse,
     GreetingMessage,
+    HitlResponseInfo,
     ListChatSessionsResponse,
     SendChatMessageRequest,
 )
+from app.services.redis.hitl import resolve_hitl
 from app.services.redis.locks import LockAcquireError, RedisLock
 
 from . import cancel_bus
@@ -398,6 +400,197 @@ async def get_chat_session_handler(session: ChatSession) -> GetChatSessionRespon
     )
 
 
+async def _handle_hitl_response(
+    session_id: str,
+    hitl_info: "HitlResponseInfo",
+    content: Optional[str] = None,
+    run_turn_after: bool = False,
+) -> StreamingResponse:
+    """Handle a HITL approval/rejection response.
+
+    When the user approves or rejects a pending HITL confirmation,
+    this handler resolves the confirmation in Redis. If run_turn_after is True,
+    it also runs a turn which will execute the approved tool.
+
+    This runs with the per-session Redis lock to ensure atomicity.
+    """
+    lock = RedisLock(_lock_key(session_id), ttl_seconds=_SESSION_LOCK_TTL_SECONDS)
+    try:
+        await lock.acquire()
+    except LockAcquireError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Another turn is in flight for this session",
+        )
+
+    try:
+        # Resolve the HITL in Redis
+        await resolve_hitl(
+            session_id=session_id,
+            confirmation_id=hitl_info.confirmation_id,
+            approved=hitl_info.approved,
+        )
+
+        logger.info(
+            f"[HITL] Resolved confirmation {hitl_info.confirmation_id} "
+            f"(approved={hitl_info.approved}) in session {session_id}"
+        )
+
+        # If run_turn_after is True, run a turn which will execute the pending tool
+        if run_turn_after:
+            from app.ai.voice.agents.breeze_buddy.chat.agent import ChatAgent
+            from app.database.accessor.breeze_buddy import (
+                chat_session as chat_session_accessor,
+            )
+
+            # Get session from database
+            session_row = await chat_session_accessor.get_chat_session_by_id(session_id)
+            if not session_row:
+                raise HTTPException(status_code=404, detail="Session not found")
+            # pyrefly: session_row is guaranteed non-None after the check above
+            assert session_row is not None
+
+            if session_row.status == ChatSessionStatus.ENDED:
+                raise HTTPException(
+                    status_code=410,
+                    detail=f"Chat session '{session_id}' has ended",
+                )
+
+            # Get template using the cached function
+            template = await get_template_by_id_cached(session_row.template_id)
+            if not template:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Template '{session_row.template_id}' for chat session '{session_id}' no longer exists",
+                )
+            # pyrefly: template is guaranteed non-None after the check above
+            assert template is not None
+
+            # Get LLM using the same service as regular chat turns
+            llm = await get_llm_service(
+                _resolve_llm_configuration(template), pooled=True
+            )
+
+            # Get agent state
+            state_row = await chat_session_accessor.get_agent_session_state(session_id)
+            agent_state: Dict[str, Any] = state_row.data if state_row else {}
+
+            # Build template vars (same as regular chat turns)
+            persisted_template_vars = (
+                session_row.metadata.get("template_vars", {})
+                if isinstance(session_row.metadata, dict)
+                else {}
+            )
+            template_vars = await _build_render_template_vars(
+                template, persisted_template_vars
+            )
+
+            # Fetch message history (same as regular chat turns)
+            history_limit = await CHAT_HISTORY_REPLAY_LIMIT()
+            history_rows = await chat_session_accessor.list_chat_messages_for_session(
+                session_id, limit=history_limit
+            )
+            # Build history and convert to OpenAI format using blocks_to_llm_context_messages.
+            # This is CRITICAL: _run_turn_inner assumes history is in OpenAI format
+            # (with tool_calls, not content_blocks) when it adds HITL tool results.
+            # Include ALL ASSISTANT messages to preserve tool_calls.
+            # For USER messages, include those with text content OR tool_result
+            # blocks to maintain valid OpenAI message sequences.
+            history: list = blocks_to_llm_context_messages(
+                [
+                    {
+                        "role": row.role.value,
+                        "content": row.content,
+                        "content_blocks": row.content_blocks,
+                    }
+                    for row in history_rows
+                    if row.role == ChatMessageRole.ASSISTANT
+                    or (
+                        row.role == ChatMessageRole.USER
+                        and (
+                            row.content is not None
+                            or (
+                                row.content_blocks
+                                and any(
+                                    b.get("type") == "tool_result"
+                                    for b in row.content_blocks
+                                )
+                            )
+                        )
+                    )
+                ]
+            )
+
+            # Run the turn
+            async def turn_stream():
+                try:
+                    agent = ChatAgent(
+                        session_id=session_id,
+                        template=template,  # type: ignore[arg-type]  # template checked above
+                        llm=llm,
+                        template_vars=template_vars,
+                        agent_state=agent_state,
+                    )
+                    # Use empty string if content is None (no new user message after HITL approval)
+                    effective_content = content if content is not None else ""
+                    async for event in agent.run_turn(
+                        user_content=effective_content,
+                        history=history,
+                        current_node=session_row.current_node,  # type: ignore[union-attr]  # session_row checked above
+                    ):
+                        yield format_sse(event)
+                except Exception as e:
+                    logger.error(
+                        f"[HITL] Error running turn after hitl resolution: {e}"
+                    )
+                    yield format_sse(
+                        SSEEvent(
+                            event="error",
+                            data={"message": f"Failed to run turn: {e}"},
+                        )
+                    )
+                    yield format_sse(
+                        SSEEvent(event="turn_end", data={"session_status": "ERROR"})
+                    )
+
+            return StreamingResponse(
+                turn_stream(),
+                media_type="text/event-stream",
+            )
+
+        # No turn to run - just emit resolution event
+        async def hitl_response_stream():
+            """Generator that yields HITL resolution events."""
+            try:
+                yield format_sse(
+                    SSEEvent(
+                        event="hitl_resolved",
+                        data={
+                            "confirmation_id": hitl_info.confirmation_id,
+                            "approved": hitl_info.approved,
+                        },
+                    )
+                )
+                yield format_sse(
+                    SSEEvent(event="turn_end", data={"session_status": "OK"})
+                )
+            except Exception as e:
+                logger.error(f"[HITL] Failed to emit hitl resolution events: {e}")
+                yield format_sse(
+                    SSEEvent(
+                        event="error",
+                        data={"message": f"Failed to process HITL response: {e}"},
+                    )
+                )
+
+        return StreamingResponse(
+            hitl_response_stream(),
+            media_type="text/event-stream",
+        )
+    finally:
+        await lock.release()
+
+
 async def send_chat_message_handler(
     session_id: str,
     req: SendChatMessageRequest,
@@ -427,6 +620,20 @@ async def send_chat_message_handler(
     already bound to a specific ``session_id`` and there's nothing
     further to authorise.
     """
+
+    # === HITL RESPONSE HANDLING ===
+    # If this message contains a HITL response (approve/reject),
+    # resolve it. If content is also provided, run a turn which will
+    # execute the approved tool. Otherwise, the next normal message
+    # will execute the approved tool.
+    if req.hitl:
+        return await _handle_hitl_response(
+            session_id,
+            req.hitl,
+            content=req.content,
+            run_turn_after=bool(req.content),
+        )
+
     lock = RedisLock(_lock_key(session_id), ttl_seconds=_SESSION_LOCK_TTL_SECONDS)
     try:
         await lock.acquire()
@@ -480,6 +687,12 @@ async def send_chat_message_handler(
         # migration 030), falling back to the denormalised prose for
         # any legacy rows. Tool_use / tool_result blocks survive so the
         # LLM sees its own prior identifiers (cart_id, etc.) verbatim.
+        # IMPORTANT: We include ALL ASSISTANT messages to preserve tool_calls,
+        # even if their content is None. For USER messages, include those
+        # with text content OR tool_result blocks (from HITL execution).
+        # Excluding tool_result messages breaks the OpenAI API sequence
+        # because the assistant message with tool_calls needs a matching
+        # tool message with the same tool_call_id.
         history: list = blocks_to_llm_context_messages(
             [
                 {
@@ -488,7 +701,20 @@ async def send_chat_message_handler(
                     "content_blocks": row.content_blocks,
                 }
                 for row in history_rows
-                if row.role in (ChatMessageRole.USER, ChatMessageRole.ASSISTANT)
+                if row.role == ChatMessageRole.ASSISTANT
+                or (
+                    row.role == ChatMessageRole.USER
+                    and (
+                        row.content is not None
+                        or (
+                            row.content_blocks
+                            and any(
+                                b.get("type") == "tool_result"
+                                for b in row.content_blocks
+                            )
+                        )
+                    )
+                )
             ]
         )
 

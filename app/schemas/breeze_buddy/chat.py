@@ -227,6 +227,23 @@ class ClientContextPatch(BaseModel):
     )
 
 
+class HitlResponseInfo(BaseModel):
+    """HITL response embedded in a message request.
+
+    When a user approves or rejects a pending HITL confirmation,
+    the response is sent as part of the next message request.
+    """
+
+    confirmation_id: str = Field(
+        ...,
+        description="ID of the pending confirmation being resolved",
+    )
+    approved: bool = Field(
+        ...,
+        description="Whether the user approved the action",
+    )
+
+
 class SendChatMessageRequest(BaseModel):
     """Body of ``POST /session/{id}/message``."""
 
@@ -237,6 +254,14 @@ class SendChatMessageRequest(BaseModel):
             "Optional context patch applied to this session (and persisted) "
             "BEFORE the model runs this turn — lets a state/facts update ride "
             "atomically with the message instead of a separate /context call."
+        ),
+    )
+    hitl: Optional[HitlResponseInfo] = Field(
+        None,
+        description=(
+            "Optional HITL response. When present, this message is treated as "
+            "a response to a pending HITL confirmation (approve/reject). "
+            "The message content is ignored in this case."
         ),
     )
 

@@ -48,7 +48,7 @@ from app.ai.voice.agents.breeze_buddy.template.session_state import (
     apply_state_reducers,
     inject_tool_args,
 )
-from app.ai.voice.agents.breeze_buddy.template.types import TemplateModel
+from app.ai.voice.agents.breeze_buddy.template.types import HitlConfig, TemplateModel
 from app.ai.voice.agents.breeze_buddy.template.ui_catalog import resolve_allowlist
 from app.ai.voice.agents.breeze_buddy.template.utils import render_messages_with_vars
 from app.ai.voice.agents.breeze_buddy.utils.language_utils.prompt_injections import (
@@ -62,6 +62,12 @@ from app.database.accessor.breeze_buddy.chat_session import (
     upsert_agent_session_state,
 )
 from app.schemas.breeze_buddy.chat import ChatMessageRole
+from app.services.redis.hitl import (
+    clear_pending_hitl,
+    get_pending_hitl,
+    get_resolved_hitl,
+    store_pending_hitl,
+)
 
 # Each tool-call → handler → re-invoke counts as one cycle. The guard stops a
 # pathological template (handler always returns a transition that loops back)
@@ -154,6 +160,242 @@ class ChatAgent:
         else:
             self._ui_allowlist = resolve_allowlist()
 
+    # -------------------------------------------------------------------------
+    # HITL (Human-In-The-Loop) helpers
+    # -------------------------------------------------------------------------
+
+    def _get_hitl_config(self) -> Optional[HitlConfig]:
+        """Get HITL configuration from template."""
+        if not self.template.configurations:
+            return None
+        return self.template.configurations.hitl
+
+    def _tool_requires_hitl(self, tool_name: str) -> bool:
+        """Check if a tool requires HITL approval.
+
+        Returns True if:
+        1. HITL is enabled in template config
+        2. The tool name is in the tools_requiring_approval list
+        """
+        hitl_config = self._get_hitl_config()
+        if not hitl_config or not hitl_config.enabled:
+            return False
+
+        # Case-insensitive comparison
+        tool_name_lower = tool_name.lower()
+        for approved_tool in hitl_config.tools_requiring_approval:
+            if approved_tool.lower() == tool_name_lower:
+                return True
+        return False
+
+    def _get_hitl_timeout(self) -> int:
+        """Get HITL timeout in seconds. Returns 0 for no timeout."""
+        hitl_config = self._get_hitl_config()
+        if hitl_config and hitl_config.default_timeout_seconds is not None:
+            return hitl_config.default_timeout_seconds
+        return 0  # No timeout
+
+    async def _execute_pending_hitl_tool(
+        self,
+    ) -> AsyncIterator[SSEEvent]:
+        """Execute any pending HITL tool that was approved.
+
+        This is called at the start of a turn when the user has approved a
+        pending HITL confirmation. It checks Redis for resolved HITL,
+        executes the approved tool, and yields SSE events.
+
+        Yields:
+            SSEEvent for function_call_started and function_call_completed
+        """
+        from app.services.redis.hitl import get_session_pending_hitl, resolve_hitl
+
+        # Check if there's a pending HITL for this session
+        logger.info(
+            f"[HITL] _execute_pending_hitl_tool ENTRY for session {self.session_id}"
+        )
+        pending_id = await get_session_pending_hitl(self.session_id)
+        if not pending_id:
+            logger.info(
+                f"[HITL] No pending HITL found for session {self.session_id}, skipping HITL tool execution"
+            )
+            return
+
+        # Check if it's been resolved
+        resolved = await get_resolved_hitl(self.session_id, pending_id)
+        if not resolved:
+            return
+
+        # Get the pending info (may be None if already deleted after resolution)
+        pending = await get_pending_hitl(self.session_id, pending_id)
+
+        # Fall back to pending info from resolved data if pending key was deleted
+        tool_name = pending.tool_name if pending else (resolved.tool_name or "")
+        tool_args = pending.arguments if pending else resolved.original_arguments
+
+        if not tool_name:
+            logger.warning(
+                f"[HITL] Resolved confirmation {pending_id} but tool_name not found"
+            )
+            await clear_pending_hitl(self.session_id, pending_id)
+            return
+
+        if not resolved.approved:
+            # User rejected the action — still need a tool_result message
+            # so the OpenAI API is satisfied (assistant with tool_calls
+            # must be followed by a tool message with matching tool_call_id)
+            logger.info(
+                f"[HITL] User rejected {tool_name} " f"(confirmation_id={pending_id})"
+            )
+
+            # Add rejection tool_result to history so LLM context is valid
+            if resolved.tool_call_id:
+                rejection_result = {
+                    "rejected": True,
+                    "reason": "User declined the action",
+                }
+                if not hasattr(self, "hitl_tool_results"):
+                    self.hitl_tool_results = []
+                self.hitl_tool_results.append(
+                    {
+                        "tool_name": tool_name,
+                        "result": rejection_result,
+                        "pending_id": pending_id,
+                        "tool_call_id": resolved.tool_call_id,
+                    }
+                )
+                # Persist rejection to DB so subsequent turns load it
+                await insert_chat_message(
+                    session_id=self.session_id,
+                    role=ChatMessageRole.USER,
+                    content=None,
+                    content_blocks=tool_results_to_user_blocks(
+                        [(resolved.tool_call_id, rejection_result)]
+                    ),
+                )
+                logger.info(
+                    f"[HITL] Persisted rejection tool result for {tool_name} "
+                    f"with tool_call_id={resolved.tool_call_id}"
+                )
+
+            await clear_pending_hitl(self.session_id, pending_id)
+            return
+
+        # User approved! Execute the tool
+        logger.info(
+            f"[HITL] User approved {tool_name} "
+            f"(confirmation_id={pending_id}), executing..."
+        )
+
+        # Mark as resolved (already done by handler, but ensure consistency)
+        await resolve_hitl(
+            self.session_id,
+            pending_id,
+            approved=True,
+        )
+
+        # Get handler from handler_map which includes both global and per-node handlers
+        # handler_map is stored on self in _run_turn_inner before this method is called
+        handler_fn = None
+
+        # First check handler_map (includes global and per-node handlers)
+        if hasattr(self, "handler_map") and tool_name in self.handler_map:
+            handler_fn = self.handler_map[tool_name]
+            logger.info(f"[HITL] Found handler for {tool_name} in handler_map")
+
+        # If not found, check global_funcs (includes MCP functions)
+        if not handler_fn and hasattr(self, "global_funcs"):
+            for fn in self.global_funcs:
+                if fn.name == tool_name:
+                    handler_fn = fn.handler
+                    logger.info(f"[HITL] Found handler for {tool_name} in global_funcs")
+                    break
+
+        if not handler_fn:
+            logger.error(
+                f"[HITL] No handler found for tool {tool_name} - "
+                f"handler_map has {list(getattr(self, 'handler_map', {}).keys()) if hasattr(self, 'handler_map') else 'N/A'}"
+            )
+            return
+
+        # Emit function_call_started
+        yield SSEEvent(
+            event="function_call_started",
+            data={"name": tool_name},
+        )
+
+        try:
+            # Execute the tool (handler expects (args, None) - context is injected by with_context wrapper)
+            # tool_args could be None if all fallback sources are None; use empty dict in that case
+            effective_args = tool_args if tool_args is not None else {}
+            result_payload = await handler_fn(effective_args, None)  # type: ignore
+
+            # Apply state reducers
+            reducer_rules = (
+                self.template.configurations.state_reducers
+                if self.template.configurations
+                else []
+            )
+            self.agent_state = apply_state_reducers(
+                state_data=self.agent_state,
+                tool_name=tool_name,
+                tool_result=result_payload,
+                reducers=reducer_rules,
+            )
+
+            # Store tool result so _run_turn_inner can add it to history for LLM context
+            if not hasattr(self, "hitl_tool_results"):
+                self.hitl_tool_results = []
+            self.hitl_tool_results.append(
+                {
+                    "tool_name": tool_name,
+                    "result": result_payload,
+                    "pending_id": pending_id,
+                    "tool_call_id": resolved.tool_call_id,
+                }
+            )
+
+            # Persist tool result to DB so subsequent turns load it from history
+            # (mirrors regular flow in run_turn lines 754-760)
+            if resolved.tool_call_id:
+                await insert_chat_message(
+                    session_id=self.session_id,
+                    role=ChatMessageRole.USER,
+                    content=None,
+                    content_blocks=tool_results_to_user_blocks(
+                        [(resolved.tool_call_id, result_payload)]
+                    ),
+                )
+                logger.info(
+                    f"[HITL] Persisted tool result for {tool_name} to DB "
+                    f"with tool_call_id={resolved.tool_call_id}"
+                )
+
+            # Emit function_call_completed
+            yield SSEEvent(
+                event="function_call_completed",
+                data={
+                    "name": tool_name,
+                    "result_summary": _summarize_result(result_payload),
+                },
+            )
+
+            logger.info(
+                f"[HITL] Executed {tool_name} successfully "
+                f"(confirmation_id={pending_id})"
+            )
+
+        except Exception as exc:
+            logger.error(f"[HITL] Failed to execute {tool_name}: {exc}")
+            yield SSEEvent(
+                event="function_call_completed",
+                data={
+                    "name": tool_name,
+                    "error": str(exc),
+                },
+            )
+        finally:
+            await clear_pending_hitl(self.session_id, pending_id)
+
     async def run_turn(
         self,
         *,
@@ -197,6 +439,8 @@ class ChatAgent:
         history: List[Dict[str, Any]],
         current_node: Optional[str],
     ) -> AsyncIterator[SSEEvent]:
+        # Build flow config first so _execute_pending_hitl_tool can use it
+        # to find handlers for both global and per-node functions
         flow_builder = FlowConfigBuilder(disabled_names=CHAT_DISABLED_NAMES, quiet=True)
         # Wrap before build_flow_config: _build_function_schema captures the
         # handler reference into a closure, so post-build wrapping is a no-op.
@@ -206,17 +450,13 @@ class ChatAgent:
             self.template, ui_allowlist=self._ui_allowlist
         )
         self.flow_config = flow_config
+        # Store handler_map for _execute_pending_hitl_tool to find per-node handlers
+        # Cast to dict[str, Any] because handlers are wrapped with with_context which
+        # changes their signature at runtime, but pyrefly sees the original signature
+        self.handler_map = cast(dict[str, Any], flow_builder.handler_map)
 
-        # Global functions live alongside per-node ones for the LLM. In direct
-        # mode this is the channel for *any* tools (the synthesized node has
-        # no per-node functions); in flow mode it's the always-available
-        # cross-node tool set. ``build_global_functions`` already runs
-        # ``filter_disabled_identifiers`` against CHAT_DISABLED_NAMES, so
-        # voice-only entries (warm_transfer, end_conversation, etc.) never
-        # reach the LLM in chat. ``bot_instance=self`` mirrors voice so global
-        # function adapters that need the bot for post-action context resolve
-        # against the ChatAgent (which carries the same flow_config / lead /
-        # call_sid / vad_analyzer attribute surface those adapters read).
+        # Build global functions (including MCP functions) BEFORE _execute_pending_hitl_tool
+        # so that HITL tool execution can find handlers for MCP functions
         global_funcs: List[FlowsFunctionSchema] = flow_builder.build_global_functions(
             self.template.flow, bot_instance=self
         )
@@ -242,6 +482,60 @@ class ChatAgent:
             logger.info(
                 f"[BUDDY_MCP] chat: added {len(unique)} MCP tools as global functions"
             )
+
+        # Store global_funcs for _execute_pending_hitl_tool to find MCP function handlers
+        self.global_funcs = global_funcs
+
+        # === EXECUTE PENDING HITL TOOLS ===
+        # Check if there are any resolved HITL confirmations from a previous turn
+        # If found and approved, execute the tool BEFORE the new LLM call
+        # This yields SSE events (function_call_started, function_call_completed)
+        async for event in self._execute_pending_hitl_tool():
+            yield event
+
+        # Add HITL tool results to history so the LLM can see them.
+        # NOTE: history is already in OpenAI format (from blocks_to_llm_context_messages),
+        # so we must add messages in OpenAI format, NOT with content_blocks.
+        if hasattr(self, "hitl_tool_results") and self.hitl_tool_results:
+            for hitl_result in self.hitl_tool_results:
+                tool_name = hitl_result["tool_name"]
+                result = hitl_result["result"]
+                tool_call_id = hitl_result.get("tool_call_id")
+                if tool_call_id:
+                    # Encode result as JSON string for OpenAI tool message
+                    if isinstance(result, str):
+                        result_text = result
+                    else:
+                        try:
+                            result_text = json.dumps(result, default=str)
+                        except (TypeError, ValueError):
+                            result_text = str(result)
+                    # Add in OpenAI format: {role: "tool", tool_call_id: ..., content: ...}
+                    history.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": tool_call_id,
+                            "content": result_text,
+                        }
+                    )
+                    logger.info(
+                        f"[HITL] Added OpenAI tool message for {tool_name} "
+                        f"with tool_call_id={tool_call_id} to history"
+                    )
+                else:
+                    # Fallback: add as plain text user message if no tool_call_id
+                    result_summary = _summarize_result(result)
+                    history.append(
+                        {
+                            "role": "user",
+                            "content": f"Tool '{tool_name}' result: {result_summary}",
+                        }
+                    )
+                    logger.info(
+                        f"[HITL] Added plain text tool result for {tool_name} to history"
+                    )
+            # Clear the stored results so they don't get added again on next turn
+            self.hitl_tool_results = []
 
         # Aggregate per-tool context-retention policy across every MCP server
         # the template declares. Used by llm_driver to compact stale
@@ -439,6 +733,44 @@ class ChatAgent:
                     injections=arg_injection_rules,
                     turn_id=self._turn_id,
                 )
+
+                # === HITL CHECK ===
+                # Check if this tool requires HITL approval before execution
+                if self._tool_requires_hitl(call.function_name):
+                    confirmation_id = uuid.uuid4().hex
+                    timeout_seconds = self._get_hitl_timeout()
+
+                    # Store pending confirmation in Redis
+                    await store_pending_hitl(
+                        session_id=self.session_id,
+                        confirmation_id=confirmation_id,
+                        tool_name=call.function_name,
+                        arguments=injected_args,
+                        timeout_seconds=timeout_seconds,
+                        tool_call_id=call.tool_call_id,
+                    )
+
+                    # Emit HITL confirmation required event
+                    yield SSEEvent(
+                        event="hitl_confirmation_required",
+                        data={
+                            "confirmation_id": confirmation_id,
+                            "tool_name": call.function_name,
+                            "description": f"Confirm: {call.function_name.replace('_', ' ')}",
+                            "arguments": injected_args,
+                            "timeout_seconds": timeout_seconds,
+                        },
+                    )
+
+                    # Emit turn_end and exit the generator
+                    # The user will see a confirmation modal and send an approval
+                    # On the next turn, the approved tool will be executed
+                    yield SSEEvent(
+                        event="turn_end",
+                        data={"session_status": "HITL_PENDING"},
+                    )
+                    return
+
                 result_payload, transition_node = await self._dispatch_tool_call(
                     call, node, global_funcs, injected_args=injected_args
                 )
