@@ -8,6 +8,7 @@ full architecture.
 
 import json
 import uuid
+from dataclasses import dataclass
 from typing import Any, AsyncIterator, Dict, List, Optional, Set, Tuple, cast
 
 from pipecat.adapters.schemas.tools_schema import ToolsSchema
@@ -73,6 +74,16 @@ from app.schemas.breeze_buddy.chat import ChatMessageRole
 # stops re-searching what it already found, which keeps real turns well under
 # this ceiling; 20 is headroom, not a target.
 _MAX_TOOL_CYCLES = 20
+
+
+@dataclass
+class _PreparedTools:
+    """Per-turn tool surface built once by ``_prepare_tools``."""
+
+    flow_config: Dict[str, Any]
+    global_funcs: List[FlowsFunctionSchema]
+    tool_retention: Optional[Dict[str, str]]
+    tool_projection: Optional[Dict[str, List[str]]]
 
 
 class ChatAgent:
@@ -197,6 +208,32 @@ class ChatAgent:
         history: List[Dict[str, Any]],
         current_node: Optional[str],
     ) -> AsyncIterator[SSEEvent]:
+        prep = await self._prepare_tools()
+        node = self._resolve_node(prep.flow_config, current_node)
+
+        # Persist user message before the LLM call so a crash mid-stream
+        # still leaves the user's input in history. We also write the
+        # canonical Anthropic-shape [text] block so the loader has a
+        # single source of truth on the next turn.
+        user_msg = await insert_chat_message(
+            session_id=self.session_id,
+            role=ChatMessageRole.USER,
+            content=user_content,
+            content_blocks=plain_text_blocks(user_content),
+        )
+        yield SSEEvent(
+            event="user_committed",
+            data={"idx": user_msg.idx if user_msg else None, "content": user_content},
+        )
+
+        context = self._seed_context(node, history, user_content, prep.global_funcs)
+        async for event in self._cycle_loop(context, node, prep):
+            yield event
+
+    async def _prepare_tools(self) -> _PreparedTools:
+        """Build the per-turn tool surface (flow config, wrapped handlers,
+        global + MCP functions, retention policy). Extracted from
+        ``_run_turn_inner`` so the seeding and the cycle loop stay readable."""
         flow_builder = FlowConfigBuilder(disabled_names=CHAT_DISABLED_NAMES, quiet=True)
         # Wrap before build_flow_config: _build_function_schema captures the
         # handler reference into a closure, so post-build wrapping is a no-op.
@@ -264,25 +301,25 @@ class ChatAgent:
                 if server.tool_context_projection:
                     tool_projection.update(server.tool_context_projection)
 
-        node = self._resolve_node(flow_config, current_node)
+        return _PreparedTools(
+            flow_config=flow_config,
+            global_funcs=global_funcs,
+            tool_retention=tool_retention or None,
+            tool_projection=tool_projection or None,
+        )
+
+    async def _cycle_loop(
+        self,
+        context: LLMContext,
+        node: Dict[str, Any],
+        prep: _PreparedTools,
+    ) -> AsyncIterator[SSEEvent]:
+        """The LLM ↔ tool loop for one turn, extracted from
+        ``_run_turn_inner``. ``context`` must already be seeded; this loop
+        drives LLM cycles and dispatches tool calls until the model
+        produces a user-facing reply (or the cycle cap trips)."""
+        global_funcs = prep.global_funcs
         node_name = cast(str, node["name"])
-
-        # Persist user message before the LLM call so a crash mid-stream
-        # still leaves the user's input in history. We also write the
-        # canonical Anthropic-shape [text] block so the loader has a
-        # single source of truth on the next turn.
-        user_msg = await insert_chat_message(
-            session_id=self.session_id,
-            role=ChatMessageRole.USER,
-            content=user_content,
-            content_blocks=plain_text_blocks(user_content),
-        )
-        yield SSEEvent(
-            event="user_committed",
-            data={"idx": user_msg.idx if user_msg else None, "content": user_content},
-        )
-
-        context = self._seed_context(node, history, user_content, global_funcs)
 
         assistant_text_chunks: List[str] = []
         # ui_ops accumulator (Sprint 1.7) — captures each SpecStream op the
@@ -300,8 +337,8 @@ class ChatAgent:
                 self._llm,
                 context,
                 log_label=f"chat#{self.session_id[:8]}",
-                tool_context_retention=tool_retention or None,
-                tool_context_projection=tool_projection or None,
+                tool_context_retention=prep.tool_retention,
+                tool_context_projection=prep.tool_projection,
             ):
                 if kind == "text":
                     text = cast(str, payload)
