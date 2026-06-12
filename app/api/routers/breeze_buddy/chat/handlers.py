@@ -574,113 +574,17 @@ async def send_chat_message_handler(
             t0=time.monotonic(),
         )
 
-        async def stream() -> AsyncIterator[str]:
-            # Register ourselves so /cancel can find and cancel this task
-            # cross-pod. The registration MUST happen inside the generator
-            # body (not in the outer handler) — the task that actually
-            # drives ``yield`` is the StreamingResponse iterator task, and
-            # that's the only one whose cancel() reliably propagates into
-            # ``agent.run_turn()``.
-            current_task = asyncio.current_task()
-            registered = False
-            if current_task is not None:
-                cancel_bus.register(session_id, current_task)
-                registered = True
-            try:
-                try:
-                    async for event in agent.run_turn(
-                        user_content=req.content,
-                        history=history,
-                        current_node=resume_node,
-                    ):
-                        turn_metrics.observe(event)
-                        yield format_sse(event)
-                except asyncio.CancelledError:
-                    # User clicked Stop. Emit a clean turn_end so the client
-                    # sees a structured end (the SDK's turn engine maps this
-                    # to ``turn-end: CANCELED`` and flips status back to
-                    # ready). Don't re-raise — letting CancelledError
-                    # propagate would tear down the StreamingResponse mid-
-                    # write, which Starlette logs as an error.
-                    #
-                    # Python 3.11+ asyncio gotcha: simply catching
-                    # CancelledError leaves the task's cancel-counter > 0,
-                    # so the NEXT await in this generator (the finally's
-                    # ``lock.release()``) is re-raised as CancelledError
-                    # before the Redis DEL goes out. Result: the lock stays
-                    # held until its 180s TTL and the next /message gets
-                    # 409. Calling ``uncancel()`` decrements the counter
-                    # so cleanup can complete. Symptom this fixes:
-                    # "cancelled by user" log fires, but follow-up sends
-                    # still see HTTP 409.
-                    if current_task is not None:
-                        try:
-                            current_task.uncancel()
-                        except AttributeError:
-                            # Python <3.11 — no uncancel; rely on the
-                            # ``shield`` in the finally below.
-                            pass
-                    logger.info(
-                        f"send_message stream for session {session_id} cancelled by user"
-                    )
-                    turn_metrics.status = "CANCELED"
-                    yield format_sse(
-                        SSEEvent(event="turn_end", data={"session_status": "CANCELED"})
-                    )
-                except Exception as exc:
-                    # Full exception (incl. SDK / DB internals) goes to logs; the
-                    # SSE payload is intentionally generic — provider stack traces,
-                    # internal URLs, and SQL strings should not reach the client.
-                    logger.error(
-                        f"send_message stream for session {session_id} crashed: {exc}",
-                        exc_info=True,
-                    )
-                    yield format_sse(
-                        SSEEvent(
-                            event="error",
-                            data={
-                                "code": "internal",
-                                "message": "Internal server error",
-                            },
-                        )
-                    )
-                    turn_metrics.status = "FAILED"
-                    yield format_sse(
-                        SSEEvent(event="turn_end", data={"session_status": "FAILED"})
-                    )
-            finally:
-                turn_metrics.emit()
-                if registered and current_task is not None:
-                    cancel_bus.unregister(session_id, current_task)
-                # Shield the release: on a natural client disconnect path
-                # (Starlette cancels the generator without our explicit
-                # except-CancelledError running), the bare ``await
-                # lock.release()`` would be re-cancelled before the Redis
-                # DEL goes out. ``shield`` lets the DEL complete; the
-                # surrounding cancellation still propagates afterwards.
-                try:
-                    await asyncio.shield(lock.release())
-                except asyncio.CancelledError:
-                    # Cancellation arrived after the shielded release
-                    # already kicked off. Don't swallow it — re-raise so
-                    # the generator exits cleanly.
-                    raise
-                except Exception as release_exc:
-                    logger.warning(
-                        f"send_message stream for session {session_id}: "
-                        f"lock release failed in finally: {release_exc}"
-                    )
-                # Best-effort: mirror this turn's metrics into
-                # chat_turn_metrics (migration 032) so the conversational-log
-                # UI can show latency per turn without querying logs. Last in
-                # the finally — after lock release — so a DB blip never delays
-                # releasing the lock. No-op when the turn produced no assistant
-                # row (assistant_idx None); the [CHAT_METRICS] log already
-                # captured it either way.
-                await _persist_turn_metrics(turn_metrics)
-
         response = StreamingResponse(
-            stream(),
+            _turn_sse_stream(
+                session_id=session_id,
+                lock=lock,
+                turn_metrics=turn_metrics,
+                events=agent.run_turn(
+                    user_content=req.content,
+                    history=history,
+                    current_node=resume_node,
+                ),
+            ),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache, no-transform",
@@ -693,6 +597,118 @@ async def send_chat_message_handler(
     finally:
         if not lock_handed_off:
             await lock.release()
+
+
+async def _turn_sse_stream(
+    *,
+    session_id: str,
+    lock: RedisLock,
+    turn_metrics: TurnMetrics,
+    events: AsyncIterator[SSEEvent],
+) -> AsyncIterator[str]:
+    """SSE generator scaffolding for a chat turn stream.
+
+    Owns the cancel-bus registration, CancelledError → ``turn_end
+    {CANCELED}`` mapping, generic error masking, the shielded lock
+    release, and the best-effort turn-metrics write.
+    """
+    # Register ourselves so /cancel can find and cancel this task
+    # cross-pod. The registration MUST happen inside the generator
+    # body (not in the outer handler) — the task that actually
+    # drives ``yield`` is the StreamingResponse iterator task, and
+    # that's the only one whose cancel() reliably propagates into
+    # the agent's turn generator.
+    current_task = asyncio.current_task()
+    registered = False
+    if current_task is not None:
+        cancel_bus.register(session_id, current_task)
+        registered = True
+    try:
+        try:
+            async for event in events:
+                turn_metrics.observe(event)
+                yield format_sse(event)
+        except asyncio.CancelledError:
+            # User clicked Stop. Emit a clean turn_end so the client
+            # sees a structured end (the SDK's turn engine maps this
+            # to ``turn-end: CANCELED`` and flips status back to
+            # ready). Don't re-raise — letting CancelledError
+            # propagate would tear down the StreamingResponse mid-
+            # write, which Starlette logs as an error.
+            #
+            # Python 3.11+ asyncio gotcha: simply catching
+            # CancelledError leaves the task's cancel-counter > 0,
+            # so the NEXT await in this generator (the finally's
+            # ``lock.release()``) is re-raised as CancelledError
+            # before the Redis DEL goes out. Result: the lock stays
+            # held until its 180s TTL and the next /message gets
+            # 409. Calling ``uncancel()`` decrements the counter
+            # so cleanup can complete. Symptom this fixes:
+            # "cancelled by user" log fires, but follow-up sends
+            # still see HTTP 409.
+            if current_task is not None:
+                try:
+                    current_task.uncancel()
+                except AttributeError:
+                    # Python <3.11 — no uncancel; rely on the
+                    # ``shield`` in the finally below.
+                    pass
+            logger.info(f"chat turn stream for session {session_id} cancelled by user")
+            turn_metrics.status = "CANCELED"
+            yield format_sse(
+                SSEEvent(event="turn_end", data={"session_status": "CANCELED"})
+            )
+        except Exception as exc:
+            # Full exception (incl. SDK / DB internals) goes to logs; the
+            # SSE payload is intentionally generic — provider stack traces,
+            # internal URLs, and SQL strings should not reach the client.
+            logger.error(
+                f"chat turn stream for session {session_id} crashed: {exc}",
+                exc_info=True,
+            )
+            yield format_sse(
+                SSEEvent(
+                    event="error",
+                    data={
+                        "code": "internal",
+                        "message": "Internal server error",
+                    },
+                )
+            )
+            turn_metrics.status = "FAILED"
+            yield format_sse(
+                SSEEvent(event="turn_end", data={"session_status": "FAILED"})
+            )
+    finally:
+        turn_metrics.emit()
+        if registered and current_task is not None:
+            cancel_bus.unregister(session_id, current_task)
+        # Shield the release: on a natural client disconnect path
+        # (Starlette cancels the generator without our explicit
+        # except-CancelledError running), the bare ``await
+        # lock.release()`` would be re-cancelled before the Redis
+        # DEL goes out. ``shield`` lets the DEL complete; the
+        # surrounding cancellation still propagates afterwards.
+        try:
+            await asyncio.shield(lock.release())
+        except asyncio.CancelledError:
+            # Cancellation arrived after the shielded release
+            # already kicked off. Don't swallow it — re-raise so
+            # the generator exits cleanly.
+            raise
+        except Exception as release_exc:
+            logger.warning(
+                f"chat turn stream for session {session_id}: "
+                f"lock release failed in finally: {release_exc}"
+            )
+        # Best-effort: mirror this turn's metrics into
+        # chat_turn_metrics (migration 032) so the conversational-log
+        # UI can show latency per turn without querying logs. Last in
+        # the finally — after lock release — so a DB blip never delays
+        # releasing the lock. No-op when the turn produced no assistant
+        # row (assistant_idx None); the [CHAT_METRICS] log already
+        # captured it either way.
+        await _persist_turn_metrics(turn_metrics)
 
 
 async def cancel_chat_turn_handler(session_id: str) -> None:
