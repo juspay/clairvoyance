@@ -26,7 +26,7 @@ from app.ai.voice.agents.breeze_buddy.services.telephony.exotel.exotel import (
     exotel_dial_text,
 )
 from app.ai.voice.agents.breeze_buddy.services.telephony.plivo.plivo import (
-    plivo_dial_xml,
+    handle_mpc_transfer_webhook,
 )
 from app.ai.voice.agents.breeze_buddy.utils.hold_transfer import (
     publish_hold_transfer_result,
@@ -89,6 +89,8 @@ async def handle_call_transfer(
 
     if action == "dial-up":
         return await _handle_transfer_dial_up(request, provider_lower)
+    elif action == "mpc-transfer":
+        return await _handle_mpc_transfer_status(request)
     elif action in ("conclude", "conference-end"):
         return HTMLResponse(
             content='<?xml version="1.0" encoding="UTF-8"?><Response><Hangup/></Response>',
@@ -100,6 +102,16 @@ async def handle_call_transfer(
             status_code=404,
             content=f"Unknown transfer action: {provider}/{action}",
         )
+
+
+async def _handle_mpc_transfer_status(request: Request) -> Response:
+    """Handle Plivo MPC participant-state-changes webhook.
+
+    Delegates to the Plivo service layer for all business logic.
+    """
+    params = {**dict(request.query_params), **dict(await request.form())}
+    await handle_mpc_transfer_webhook(params)
+    return Response(status_code=200)
 
 
 async def _handle_transfer_dial_up(request: Request, provider: str) -> Response:
@@ -133,7 +145,15 @@ async def _handle_transfer_dial_up(request: Request, provider: str) -> Response:
         return Response(status_code=404, content="Transfer not requested")
 
     if provider == "plivo":
-        return await plivo_dial_xml(transfer_data, call_sid, params)
+        # Legacy Plivo transfer — no longer used with MPC dial-first flow
+        logger.warning(
+            f"[TRANSFER DIAL-UP] Legacy dial-up called for {call_sid} — "
+            "MPC transfer should use mpc-transfer callback instead"
+        )
+        return HTMLResponse(
+            content='<?xml version="1.0" encoding="UTF-8"?><Response><Hangup/></Response>',
+            media_type="application/xml",
+        )
 
     # Exotel — return agent phone number as plain text
     return await exotel_dial_text(transfer_data)

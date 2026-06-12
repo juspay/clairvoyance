@@ -10,7 +10,8 @@ Endpoints:
 - POST   /{provider}/callback/status                         - Receive call status updates
 - POST   /twilio/callback/twiml-fallback - Fallback TwiML when Smart Router is down
 - *      /{provider}/callback/transfer/{action}              - Transfer callbacks (GET/POST)
-    - dial-up           : Fetch dial-target info (Exotel GET, Plivo POST)
+    - dial-up           : Fetch dial-target info (Exotel GET, Plivo POST — legacy)
+    - mpc-transfer      : MPC participant state changes (Plivo POST)
     - conference-end    : Conference ended — resource cleanup (Twilio/Plivo POST)
 """
 
