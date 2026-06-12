@@ -46,6 +46,53 @@ class WidgetChannel(str, Enum):
     ENDED = "ENDED"
 
 
+class ToolApprovalStatus(str, Enum):
+    """Lifecycle of a HITL tool-approval row (migration 033).
+
+    PENDING rows are claimed atomically (UPDATE ... WHERE status='PENDING')
+    by exactly one of: an explicit decision (APPROVED/DENIED), lazy expiry
+    (EXPIRED — the user decided after expires_at, or the handler swept it),
+    or a new user message (SUPERSEDED — the user moved on without deciding).
+    """
+
+    PENDING = "PENDING"
+    APPROVED = "APPROVED"
+    DENIED = "DENIED"
+    EXPIRED = "EXPIRED"
+    SUPERSEDED = "SUPERSEDED"
+
+
+class ToolApproval(BaseModel):
+    """One row of `tool_approvals` — a gated function call awaiting (or past)
+    its human decision. ``arguments`` are the post-injection args that will
+    actually run on approval."""
+
+    id: str
+    session_id: str
+    channel: str = "CHAT"
+    tool_call_id: str
+    function_name: str
+    arguments: Dict[str, Any] = Field(default_factory=dict)
+    prompt: Optional[str] = None
+    status: ToolApprovalStatus
+    reason: Optional[str] = None
+    requested_at: datetime
+    decided_at: Optional[datetime] = None
+    expires_at: datetime
+
+
+class ApproveToolRequest(BaseModel):
+    """Body of ``POST .../session/{id}/approval`` (all three auth surfaces)."""
+
+    tool_call_id: str = Field(..., min_length=1, max_length=128)
+    approved: bool
+    reason: Optional[str] = Field(
+        None,
+        max_length=500,
+        description="Optional free-text reason shown to the LLM on denial.",
+    )
+
+
 class ChatSession(BaseModel):
     """One row of `chat_session`.
 
@@ -539,6 +586,14 @@ class WidgetSessionStateResponse(BaseModel):
             "Empty when none was pushed."
         ),
     )
+    pending_approvals: List[ToolApproval] = Field(
+        default_factory=list,
+        description=(
+            "Unexpired PENDING HITL tool approvals for this session, oldest "
+            "first, so the embed can repaint approval cards after a reload. "
+            "Empty when nothing is awaiting a decision."
+        ),
+    )
 
 
 __all__ = [
@@ -546,6 +601,9 @@ __all__ = [
     "ChatMessageRole",
     "ChatEndedReason",
     "WidgetChannel",
+    "ToolApprovalStatus",
+    "ToolApproval",
+    "ApproveToolRequest",
     "ChatSession",
     "ChatMessage",
     "AgentSessionState",
