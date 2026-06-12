@@ -22,6 +22,11 @@ from pipecat.runner.utils import (
 )
 from pipecat_flows import FlowManager
 
+from app.ai.voice.agents.breeze_buddy.agent.approval import (
+    RTVI_APPROVAL_DECISION,
+    RTVI_APPROVAL_REQUEST,
+    ApprovalManager,
+)
 from app.ai.voice.agents.breeze_buddy.agent.flow import (
     build_flow_config,
     load_template_config,
@@ -183,6 +188,12 @@ class Agent:
         # the agent skips greeting playback and starts the FlowManager
         # at start_node with prior_history pre-loaded into LLM context.
         self._widget_resume_seed: Optional[Dict[str, Any]] = None
+
+        # HITL approval channel — daily mode only, set alongside
+        # _rtvi_processor. None on telephony bots (no approval surface) and
+        # when RTVI is unavailable; the gate in template/approval.py treats
+        # those cases differently (telephony on_no_channel vs daily deny).
+        self.approval_manager: Optional[ApprovalManager] = None
 
     @property
     def is_daily_mode(self) -> bool:
@@ -737,6 +748,8 @@ class Agent:
         @self.transport.event_handler("on_client_disconnected")
         async def on_client_disconnected(transport, client):
             logger.info(f"Client disconnected: {client}")
+            if self.approval_manager:
+                self.approval_manager.deny_all("client_disconnected")
             if self._rtvi_processor:
                 await self._emit_rtvi_event(
                     "conversation-end", {"reason": "client_disconnected"}
@@ -753,13 +766,18 @@ class Agent:
         @self.task.event_handler("on_idle_timeout")
         async def on_idle_timeout(task):
             logger.info("Idle timeout detected.")
+            if self.approval_manager:
+                self.approval_manager.deny_all("idle_timeout")
             if self._rtvi_processor:
                 await self._emit_rtvi_event(
                     "conversation-end", {"reason": "idle_timeout"}
                 )
             await self._handle_unexpected_disconnect("idle_timeout")
 
-        # Register RTVI-specific event handlers for daily mode
+        # Register RTVI-specific event handlers for daily mode. Client
+        # messages are accepted whenever RTVI exists — widget voice runs as
+        # daily AGENT mode (is_stream_mode=False), so registering only in
+        # stream mode would make approval decisions undeliverable there.
         if self._rtvi_processor:
 
             @self._rtvi_processor.event_handler("on_client_ready")
@@ -767,13 +785,17 @@ class Agent:
                 await rtvi.push_frame(
                     RTVIServerMessageFrame(data={"type": "bot-ready"})
                 )
-
-        # Stream mode: accept tts-speak via RTVI client-message (PipecatClient SDK)
-        if self.is_stream_mode and self._rtvi_processor:
+                # Re-emit pending approval requests so a reconnecting client
+                # (page refresh within the Daily token TTL) repaints cards
+                # instead of losing them until timeout.
+                if self.approval_manager:
+                    for payload in self.approval_manager.pending_requests():
+                        await self._emit_rtvi_event(RTVI_APPROVAL_REQUEST, payload)
 
             @self._rtvi_processor.event_handler("on_client_message")
             async def on_client_message(rtvi, message):
-                if message.type == "tts-speak":
+                # tts-speak remains stream-mode-only (PipecatClient SDK).
+                if message.type == "tts-speak" and self.is_stream_mode:
                     data = message.data or {}
                     text = data.get("text", "")
                     if not isinstance(text, str) or not text:
@@ -787,6 +809,29 @@ class Agent:
                     if self.task:
                         logger.debug(f"[STREAM] TTS speak: {text[:80]}")
                         await self.task.queue_frame(TTSSpeakFrame(text=text))
+                elif message.type == RTVI_APPROVAL_DECISION:
+                    if not self.approval_manager:
+                        logger.warning(
+                            "[approval] Decision received but no approval "
+                            "manager on this bot"
+                        )
+                        return
+                    data = message.data or {}
+                    approval_id = data.get("approval_id")
+                    approved = data.get("approved")
+                    reason = data.get("reason")
+                    if not isinstance(approval_id, str) or not isinstance(
+                        approved, bool
+                    ):
+                        logger.warning(
+                            f"[approval] Malformed decision message: {data!r}"
+                        )
+                        return
+                    self.approval_manager.resolve(
+                        approval_id,
+                        approved,
+                        reason if isinstance(reason, str) else None,
+                    )
 
         # Register user turn started event to reset idle retry counter
         if self._context_aggregator and self._user_idle_callback_handler:
@@ -1064,6 +1109,19 @@ class Agent:
 
             if self.is_daily_mode and hasattr(self.task, "rtvi") and self.task.rtvi:
                 self._rtvi_processor = self.task.rtvi
+                # HITL approval channel rides the RTVI processor. Note: widget
+                # voice attachments run as daily AGENT mode (not stream), and
+                # RTVI requires ENABLE_BREEZE_BUDDY_DAILY_EVENTS=true — without
+                # it approval_manager stays None and gated calls are denied.
+                self.approval_manager = ApprovalManager(emit=self._emit_rtvi_event)
+                if self._user_idle_callback_handler:
+                    # While an approval card is showing, the user is silently
+                    # reading — idle prompts/end-call must not fire (idle
+                    # re-inference can also spawn duplicate gated calls).
+                    approval_manager = self.approval_manager
+                    self._user_idle_callback_handler.suppress_when = (
+                        approval_manager.has_pending
+                    )
 
             # Flow manager is agent-mode only (stream mode has no LLM to drive
             # node transitions or function calls).
