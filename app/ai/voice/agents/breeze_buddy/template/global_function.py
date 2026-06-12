@@ -17,6 +17,7 @@ from typing import Any, Callable, Dict, List, Optional, Protocol, runtime_checka
 
 from pipecat_flows import FlowsFunctionSchema
 
+from app.ai.voice.agents.breeze_buddy.template.approval import gate_global_function
 from app.ai.voice.agents.breeze_buddy.template.context import TemplateContext
 from app.ai.voice.agents.breeze_buddy.template.func_action_handlers import (
     execute_func_post_actions,
@@ -35,6 +36,12 @@ from app.ai.voice.agents.breeze_buddy.utils.parser import (
 from app.core.config.static import GLOBAL_FUNCTION_DESCRIPTION_SUFFIX
 from app.core.logger import logger
 
+# Execution budget assumed for a handler whose template sets no explicit
+# timeout_secs, used when sizing the watchdog for approval-gated functions.
+# Must be >= the LLM services' function_call_timeout_secs default (10s).
+_APPROVAL_EXEC_FALLBACK_SECS = 60.0
+_APPROVAL_BUDGET_MARGIN_SECS = 15.0
+
 
 def _flows_async_kwargs(func: BaseGlobalFunction) -> Dict[str, Any]:
     """Per-function pipecat-flows 1.0 kwargs, opt-in via template config.
@@ -46,13 +53,72 @@ def _flows_async_kwargs(func: BaseGlobalFunction) -> Dict[str, Any]:
     therefore controlled by the per-subclass model defaults — `GlobalHttp
     Function` defaults to async (False) for slow APIs and `GlobalBuiltin
     Function` defaults to sync (True) for control-flow critical handlers.
+
+    Approval-gated functions get an ADDITIVE watchdog budget (approval wait
+    + execution + margin), never max(): pipecat's watchdog does NOT cancel
+    the handler — it fires result_callback(None), the aggregator marks the
+    call COMPLETED, and any later real result is dropped while the side
+    effect still executes. An undersized budget therefore means a silent
+    bot, a dropped result, and a possible LLM retry / duplicate execution.
     """
     extra: Dict[str, Any] = {}
     if func.cancel_on_interruption is not None:
         extra["cancel_on_interruption"] = func.cancel_on_interruption
     if func.timeout_secs is not None:
         extra["timeout_secs"] = func.timeout_secs
+    if func.approval is not None:
+        exec_budget = (
+            func.timeout_secs
+            if func.timeout_secs is not None
+            else _APPROVAL_EXEC_FALLBACK_SECS
+        )
+        extra["timeout_secs"] = (
+            func.approval.timeout_secs + exec_budget + _APPROVAL_BUDGET_MARGIN_SECS
+        )
     return extra
+
+
+def _make_global_wrapper(
+    func: BaseGlobalFunction,
+    wrapped_handler: Callable,
+    bot_instance: Any,
+) -> Callable:
+    """Build the outer handler shared by all global function adapters.
+
+    Execution side effects (filler phrase, background music, fire-and-forget
+    func_post_actions) live INSIDE the ``execute`` closure handed to the
+    approval gate, so a denied/timed-out gated call plays no filler and
+    fires no post-actions. On the approve path the behavior is identical to
+    the pre-refactor wrappers: filler/music start, handler runs, music stops
+    (even on error), post-actions fire on the result.
+    """
+
+    async def wrapper_handler(llm_args, flow_manager):
+        async def execute() -> Any:
+            await _run_filler_and_music(bot_instance, func)
+            try:
+                result = await wrapped_handler(
+                    llm_args,
+                    function_config=func,
+                )
+            finally:
+                # Always stop music even if handler errors
+                await _stop_music(bot_instance, func)
+
+            if func.func_post_actions and bot_instance:
+                asyncio.create_task(
+                    execute_func_post_actions(
+                        bot_instance,
+                        result,
+                        func.func_post_actions,
+                        func.name,
+                    )
+                )
+            return result
+
+        return await gate_global_function(bot_instance, func, llm_args, execute)
+
+    return wrapper_handler
 
 
 async def _run_filler_and_music(
@@ -254,49 +320,10 @@ class HttpGlobalFunctionAdapter:
             f"http_request={func.http_request.method.value} {func.http_request.url}"
         )
 
-        # Create outer wrapper that passes function_config via kwargs
-        # This follows the same pattern as normal functions passing transition_to, hooks, etc.
-        def create_wrapper(
-            captured_func: GlobalHttpFunction, captured_bot_instance: Any
-        ):
-            async def wrapper_handler(llm_args, flow_manager):
-                """
-                Outer wrapper for global HTTP function.
-
-                1. Runs filler phrase TTS + enables background music (if configured)
-                2. Calls the wrapped handler (with_context wrapper) passing function_config
-                3. Disables background music after handler returns
-                4. Fires post-actions (fire-and-forget)
-                """
-                # Pre-call: filler phrase + background music
-                await _run_filler_and_music(captured_bot_instance, captured_func)
-
-                try:
-                    result = await wrapped_handler(
-                        llm_args,
-                        function_config=captured_func,
-                    )
-                finally:
-                    # Post-call: always stop music even if handler errors
-                    await _stop_music(captured_bot_instance, captured_func)
-
-                if captured_func.func_post_actions and captured_bot_instance:
-                    asyncio.create_task(
-                        execute_func_post_actions(
-                            captured_bot_instance,
-                            result,
-                            captured_func.func_post_actions,
-                            captured_func.name,
-                        )
-                    )
-                return result
-
-            return wrapper_handler
-
         return FlowsFunctionSchema(
             name=func.name,
             description=enhanced_description,
-            handler=create_wrapper(func, bot_instance),
+            handler=_make_global_wrapper(func, wrapped_handler, bot_instance),
             properties=func.properties,
             required=func.required,
             **_flows_async_kwargs(func),
@@ -367,47 +394,10 @@ class BuiltinGlobalFunctionAdapter:
             f"Building builtin global function: {func.name}, handler={func.handler}"
         )
 
-        def create_wrapper(
-            captured_func: GlobalBuiltinFunction, captured_bot_instance: Any
-        ):
-            async def wrapper_handler(llm_args, flow_manager):
-                """
-                Outer wrapper for built-in global function.
-
-                1. Runs filler phrase TTS + enables background music (if configured)
-                2. Passes function_config to the dispatcher via kwargs
-                3. Disables background music after handler returns
-                4. Fires post-actions (fire-and-forget)
-                """
-                # Pre-call: filler phrase + background music
-                await _run_filler_and_music(captured_bot_instance, captured_func)
-
-                try:
-                    result = await wrapped_handler(
-                        llm_args,
-                        function_config=captured_func,
-                    )
-                finally:
-                    # Post-call: always stop music even if handler errors
-                    await _stop_music(captured_bot_instance, captured_func)
-
-                if captured_func.func_post_actions and captured_bot_instance:
-                    asyncio.create_task(
-                        execute_func_post_actions(
-                            captured_bot_instance,
-                            result,
-                            captured_func.func_post_actions,
-                            captured_func.name,
-                        )
-                    )
-                return result
-
-            return wrapper_handler
-
         return FlowsFunctionSchema(
             name=func.name,
             description=enhanced_description,
-            handler=create_wrapper(func, bot_instance),
+            handler=_make_global_wrapper(func, wrapped_handler, bot_instance),
             properties=func.properties,
             required=func.required,
             **_flows_async_kwargs(func),
@@ -495,45 +485,10 @@ class CustomPythonGlobalFunctionAdapter:
             f"timeout={func.timeout_seconds}s"
         )
 
-        def create_wrapper(
-            captured_func: GlobalCustomFunction, captured_bot_instance: Any
-        ):
-            async def wrapper_handler(llm_args, flow_manager):
-                """
-                Outer wrapper for custom Python global function.
-
-                Passes function_config (with compiled_handler) to the handler.
-                The with_context wrapper extracts function_config and passes
-                it to custom_python_code_handler.
-                """
-                # Pre-call: filler phrase + background music
-                await _run_filler_and_music(captured_bot_instance, captured_func)
-
-                try:
-                    result = await wrapped_handler(
-                        llm_args,
-                        function_config=captured_func,
-                    )
-                finally:
-                    # Post-call: always stop music even if handler errors
-                    await _stop_music(captured_bot_instance, captured_func)
-                if captured_func.func_post_actions and captured_bot_instance:
-                    asyncio.create_task(
-                        execute_func_post_actions(
-                            captured_bot_instance,
-                            result,
-                            captured_func.func_post_actions,
-                            captured_func.name,
-                        )
-                    )
-                return result
-
-            return wrapper_handler
-
         return FlowsFunctionSchema(
             name=func.name,
             description=enhanced_description,
-            handler=create_wrapper(func, bot_instance),
+            handler=_make_global_wrapper(func, wrapped_handler, bot_instance),
             properties=func.properties,
             required=func.required,
             **_flows_async_kwargs(func),
