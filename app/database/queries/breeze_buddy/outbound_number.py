@@ -204,6 +204,54 @@ def get_outbound_number_based_on_status_and_provider_query(
     return text, values
 
 
+def get_available_outbound_numbers_by_provider_and_reseller_query(
+    provider: CallProvider, reseller_id: str
+) -> Tuple[str, List[Any]]:
+    """
+    Return AVAILABLE numbers for a provider scoped to a reseller.
+
+    Ordering: reseller-specific numbers before generic (reseller_id IS NULL),
+    then least-loaded (lowest channels), then oldest first for stability.
+    """
+    text = f"""
+        SELECT *
+        FROM "{OUTBOUND_NUMBER_TABLE}"
+        WHERE "status" = 'AVAILABLE'
+          AND "provider" = $1
+          AND ("reseller_id" = $2 OR "reseller_id" IS NULL)
+        ORDER BY
+          CASE WHEN "reseller_id" = $2 THEN 0 ELSE 1 END,
+          "channels" ASC NULLS FIRST,
+          "created_at" DESC;
+    """
+    values = [provider.value, reseller_id]
+    return text, values
+
+
+def claim_outbound_number_if_available_query(
+    outbound_number_id: str,
+) -> Tuple[str, List[Any]]:
+    """
+    Atomically claim an outbound number by setting status to IN_USE only when
+    the current status is AVAILABLE.
+
+    The ``WHERE status = 'AVAILABLE'`` guard makes the claim atomic: if two
+    concurrent workers both fetch the same candidate and race here, only one
+    UPDATE will match (the other sees status = 'IN_USE' and returns no rows).
+    Used for Twilio numbers where capacity is modelled as a binary AVAILABLE /
+    IN_USE status rather than a channels counter.
+    """
+    text = f"""
+        UPDATE "{OUTBOUND_NUMBER_TABLE}"
+        SET "status" = 'IN_USE', "updated_at" = NOW()
+        WHERE "id" = $1
+          AND "status" = 'AVAILABLE'
+        RETURNING *;
+    """
+    values = [outbound_number_id]
+    return text, values
+
+
 def get_outbound_number_by_number_query(number: str) -> Tuple[str, List[Any]]:
     """
     Generate query to get outbound number by phone number.

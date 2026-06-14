@@ -22,6 +22,9 @@ from app.ai.voice.agents.breeze_buddy.managers.calls import (
 from app.ai.voice.agents.breeze_buddy.services.agent_router.client import (
     safe_release_pod,
 )
+from app.ai.voice.agents.breeze_buddy.services.daily.transfer_bridge import (
+    terminate_bridge,
+)
 from app.ai.voice.agents.breeze_buddy.services.telephony.exotel.exotel import (
     exotel_dial_text,
 )
@@ -282,6 +285,17 @@ async def handle_callback_status(request: Request, provider: str) -> Response:
             await safe_release_pod(
                 call_sid=str(call_sid), reason=f"status_{call_status}"
             )
+
+            # If this is a bridge call (agent leg of a Daily warm transfer),
+            # terminate the bridge pipeline immediately and skip retry logic —
+            # bridge calls are not subject to unanswered-call retries.
+            terminated = await terminate_bridge(str(call_sid))
+            if terminated:
+                logger.info(
+                    f"[BridgeRun] Bridge pipeline terminated via status callback "
+                    f"({call_status}) for call {call_sid}"
+                )
+                return Response(status_code=200)
 
         # Handle failed calls for retry logic
         if call_status.lower() in (

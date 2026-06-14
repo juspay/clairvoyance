@@ -138,6 +138,7 @@ class Agent:
         self.stream_sid: Optional[str] = None
         self.vad_analyzer: Optional[SileroVADAnalyzer] = None
         self.transport: Any = None
+        self.room_url: Optional[str] = None  # Daily room URL (Daily mode only)
         self.lead: Optional[LeadCallTracker] = None
         self.root_span: Any = None
         self.flow_manager: Optional[FlowManager] = None
@@ -385,6 +386,7 @@ class Agent:
 
         transport_params = get_transport_params(self.template, self.configurations)
         self.transport = await create_transport(runner_args, transport_params)
+        self.room_url = getattr(runner_args, "room_url", None)
 
     async def _setup_telephony_transport(self) -> bool:
         """Initialize transport for telephony mode. Returns False if setup fails."""

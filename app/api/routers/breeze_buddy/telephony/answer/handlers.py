@@ -55,6 +55,7 @@ from app.ai.voice.agents.breeze_buddy.services.telephony.plivo.recording import 
     start_call_recording,
 )
 from app.ai.voice.agents.breeze_buddy.template.types import TTSConfig
+from app.ai.voice.agents.breeze_buddy.utils.bridge_flag import get_bridge_flag
 from app.core.config.dynamic import (
     BB_NOISE_CANCELLATION_ENABLED,
     BB_NOISE_CANCELLATION_LEVEL,
@@ -593,6 +594,24 @@ async def handle_provider_answer(request: Request, provider: str) -> Response:
     if not call_id:
         logger.error(f"[{tag}] Missing call ID")
         return _error_response(provider, "Missing call identifier", 400)
+
+    # Daily warm-transfer bridge: when the AI bot dials a human agent, it
+    # writes a bridge flag keyed by the agent leg's call_sid. Detect that
+    # here and route the WS to the bridge endpoint instead of the AI bot.
+    # Skips pod allocation, IVR, inbound policy — none apply to the bridge.
+    # Only route to the bridge endpoint for providers whose serializer is
+    # implemented (V1: Plivo only). Other providers fall through to the
+    # normal AI-bot path and the bridge will have already failed at the
+    # outbound-number selection stage in the warm-transfer handler.
+    _BRIDGE_SUPPORTED_PROVIDERS = {"plivo"}
+    bridge_flag = await get_bridge_flag(call_id)
+    if bridge_flag and provider in _BRIDGE_SUPPORTED_PROVIDERS:
+        ws_base = APP_BASE_URL.replace("https://", "wss://").replace("http://", "ws://")
+        bridge_ws_url = f"{ws_base}/agent/voice/breeze-buddy/{provider}/bridge/v2"
+        logger.info(
+            f"[{tag}] Bridge flag found for {call_id}; routing WS to {bridge_ws_url}"
+        )
+        return await _build_xml_response(bridge_ws_url)
 
     # Plivo-specific: start recording
     if provider == "plivo":
