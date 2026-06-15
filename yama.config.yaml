@@ -1,0 +1,203 @@
+# =============================================================================
+# Yama PR Review configuration
+# =============================================================================
+# Consumed by the @juspay/yama GitHub Action (.github/workflows). Auto-discovered
+# from the repo root (search order: yama.config.yaml → config/yama.config.yaml →
+# .yama/config.yaml) and also passed explicitly via the workflow `config-path`.
+#
+# WHERE THE REVIEW RULES COME FROM
+#   Yama automatically loads, from this repo root, if present:
+#     • CLAUDE.md       — your authoritative engineering rules
+#     • CONTRIBUTING.md — contribution + commit conventions
+#   and injects them into the reviewer as <project-rules>. Keep repo-specific
+#   rules THERE; this file tunes WHAT the reviewer focuses on and WHAT blocks a
+#   merge.
+#
+# PROVIDER / MODEL ARE INTENTIONALLY NOT SET HERE
+#   They are controlled by the workflow inputs (ai-provider / ai-model), exposed
+#   as AI_PROVIDER / AI_MODEL env. Yama merges this file OVER those env values, so
+#   setting ai.provider / ai.model here would silently override the workflow.
+# =============================================================================
+
+version: 2
+configType: "yama"
+
+display:
+  showBanner: false
+  streamingMode: false
+  verboseToolCalls: false
+  showAIThinking: false
+
+ai:
+  # provider/model OMITTED on purpose — controlled by the workflow.
+  temperature: 0.2 # deterministic, review-grade output
+  timeout: "15m"
+  retryAttempts: 3
+
+  # The explore worker reads project rules (CLAUDE.md / CONTRIBUTING.md) and
+  # codebase context. Keep enabled so the reviewer sees your repo's rules.
+  explore:
+    enabled: true
+    timeout: "5m"
+    cacheResults: true
+
+# GitHub MCP only. Jira/Bitbucket off so no extra credentials are needed. Yama's
+# built-in denylist already blocks repo-mutating GitHub tools; this is a
+# read + review-comment workflow.
+mcpServers:
+  github:
+    enabled: true
+    # transport defaults to "http" (hosted GitHub MCP at api.githubcopilot.com).
+  jira:
+    enabled: false
+
+review:
+  enabled: true
+
+  workflowInstructions: |
+    You are reviewing a pull request for Clairvoyance — a Python 3.11 / FastAPI
+    multi-agent voice + telephony backend (Pipecat-AI) with raw asyncpg
+    PostgreSQL access, Redis-backed dynamic config, and external integrations
+    (Twilio/Plivo/Exotel telephony, Daily.co, AWS KMS/S3, GCP, Slack, Langfuse).
+    It ships as a Docker service. Treat the <project-rules> block (this repo's
+    CLAUDE.md / AGENTS.md) as the AUTHORITATIVE ruleset and cite the specific
+    rule when you flag a violation.
+
+    Do NOT duplicate the mechanical checks CI already enforces in
+    pr-build-check.yml — Black formatting (--check), isort import order
+    (--check, profile=black), autoflake unused imports/variables, pyrefly type
+    checking (note: it EXCLUDES **/automatic/**, so type-level mistakes under
+    app/ai/voice/agents/automatic/ are NOT machine-checked — scrutinize those by
+    hand), and the "exactly 1 commit" rule. Don't restate those; assume they pass.
+
+    Focus on what static analysis cannot catch. Prioritise:
+    - SQL safety: this repo uses NO ORM. Every query must be built with asyncpg
+      positional placeholders ($1, $2, …) via the queries -> accessor -> decoder
+      layers. Flag ANY string-interpolated / f-string / %-formatted SQL, or
+      user/lead/template input concatenated into a query, as injection.
+    - Auth & authorization: JWT validation, password hashing (bcrypt), and RBAC
+      live in app/core/security/. Flag endpoints (app/api/routers/**, incl. the
+      breeze_buddy/ REST + WebSocket routers) that skip auth, trust client-supplied
+      IDs (reseller_id/merchant_id/lead_id) without an ownership/tenant check, or
+      leak data across tenants.
+    - Input validation: API request/response bodies must use Pydantic models
+      (app/schemas/). Flag handlers that read raw request data, trust webhook
+      payloads (telephony callbacks, DevCycle), or skip validation. Breeze Buddy
+      templates use {placeholder} substitution from lead payloads and drive
+      LLM/HTTP "global functions" — flag unvalidated placeholders, SSRF in
+      template-/config-driven outbound URLs, and aiohttp http_client calls (proxy
+      support) to attacker-influenced hosts.
+    - Secrets & PII: secrets/credentials are KMS-encrypted in the DB — flag any
+      plaintext secret, API key, or token in source, logs, or error messages.
+      Call transcripts, lead/customer data, and phone numbers are PII — flag
+      logging of PII or returning it in unauthenticated responses.
+    - Async & resilience: all DB/HTTP/I/O is async. Flag blocking calls in async
+      paths, un-awaited coroutines, missing timeouts on outbound HTTP, swallowed
+      exceptions, and broken error handling (the codebase expects track_error /
+      end_call_with_errors / send_webhook_with_retry and fail-open degradation).
+    - DB migrations: NEVER modify an existing migration SQL file. Schema changes
+      must be NEW sequential files (e.g. 026_*.sql). Flag edits to existing
+      database/migrations/*.sql.
+
+    Be specific and constructive: every comment references the exact file+line,
+    explains the concrete risk, and suggests a fix where useful. Only block per
+    <blocking-criteria>; otherwise leave inline comments and approve.
+
+  focusAreas:
+    - name: "Security & Secrets"
+      priority: "CRITICAL"
+      description: |
+        - Hardcoded secrets / API keys / tokens / credentials in source (secrets
+          are KMS-encrypted in the DB — none belong in code, logs, or errors)
+        - SQL injection: string-interpolated / f-string / %-formatted SQL or
+          user/lead/template input concatenated into asyncpg queries instead of
+          $1, $2 positional parameters
+        - Command/template injection, unsafe eval, path traversal
+        - SSRF via template-/config-driven outbound URLs and the aiohttp
+          http_client (proxy-aware) reaching attacker-influenced hosts
+        - PII exposure: call transcripts, lead/customer data, phone numbers
+          logged or returned without authorization
+    - name: "Auth & Authorization"
+      priority: "CRITICAL"
+      description: |
+        - Endpoints (REST + WebSocket routers, esp. breeze_buddy/) missing JWT
+          validation or RBAC checks from app/core/security/
+        - Trusting client-supplied reseller_id / merchant_id / lead_id without an
+          ownership/tenant check (cross-tenant data access)
+        - Webhook/telephony callbacks (Twilio/Plivo/Exotel, DevCycle) accepted
+          without signature/source verification
+    - name: "API & Data Correctness"
+      priority: "MAJOR"
+      description: |
+        - Missing Pydantic validation on request/response bodies (app/schemas/)
+        - Logic bugs, races across pods, broken Redis distributed-lock usage
+        - Breaking changes to public API endpoints without a migration path
+        - Edits to existing database/migrations/*.sql instead of new sequential
+          files; queries/accessor/decoder layering violations
+    - name: "Error Handling & Resilience"
+      priority: "MAJOR"
+      description: |
+        - Blocking calls or un-awaited coroutines in async paths
+        - Missing timeouts on outbound HTTP / external-provider calls
+        - Swallowed exceptions; missing track_error / end_call_with_errors /
+          send_webhook_with_retry / fail-open degradation where expected
+    - name: "Tests for New Behaviour"
+      priority: "MINOR"
+      description: |
+        - New endpoints, query builders, handlers, or template logic have
+          pytest/pytest-asyncio coverage under tests/
+        - Untyped automatic/ code (excluded from pyrefly) reviewed extra carefully
+
+  blockingCriteria:
+    - condition: "Any hardcoded secret, API key, token, password or credential committed in source (non-test, non-example); secrets must come from env/KMS"
+      action: "BLOCK"
+      reason: "Security: secrets must never be committed"
+    - condition: "Any CRITICAL severity security vulnerability: SQL injection (non-parameterized asyncpg query), auth/authorization bypass or cross-tenant data access, SSRF, command/template injection, or PII exposure"
+      action: "BLOCK"
+      reason: "Critical security risk"
+    - condition: "An existing database/migrations/*.sql file is modified or deleted instead of adding a new sequential migration"
+      action: "BLOCK"
+      reason: "Migrations are append-only — editing an applied migration corrupts schema state across environments"
+
+  # Generated / vendored / binary files are skipped.
+  excludePatterns:
+    - "uv.lock"
+    - "*.lock"
+    - "__pycache__/**"
+    - "*.pyc"
+    - "*.pyo"
+    - ".venv/**"
+    - "venv/**"
+    - "*.egg-info/**"
+    - "*.svg"
+    - "dist/**"
+    - "build/**"
+    - "coverage/**"
+    - ".coverage"
+
+  contextLines: 3
+  maxFilesPerReview: 100
+  fileAnalysisTimeout: "2m"
+
+# Review-only: never rewrite PR descriptions (also forced by the workflow input
+# skip-description-enhance: "true").
+descriptionEnhancement:
+  enabled: false
+
+# Stateless reviewer: no memory-bank dir, no knowledge-base file, no commits back
+# to the repo (needs no write access beyond posting the review).
+memoryBank:
+  enabled: false
+knowledgeBase:
+  enabled: false
+memory:
+  enabled: false
+  autoCommit: false
+
+# Cost / runtime guardrails.
+performance:
+  maxReviewDuration: "15m"
+  tokenBudget:
+    maxTokensPerReview: 800000
+    warningThreshold: 600000
+
