@@ -101,6 +101,7 @@ async def create_template(
     now,
     configurations: Optional[dict] = None,
     secrets: Optional[dict] = None,
+    data_sources: Optional[List[dict]] = None,
     outbound_number_id: Optional[str] = None,
     is_active: bool = True,
     supported_channels: Optional[List[str]] = None,
@@ -130,6 +131,10 @@ async def create_template(
         # Convert secrets to JSON string
         secrets_json = json.dumps(secrets) if secrets is not None else None
 
+        data_sources_json = (
+            json.dumps(data_sources) if data_sources is not None else None
+        )
+
         query, values = create_template_query(
             template_id,
             reseller_id,
@@ -140,6 +145,7 @@ async def create_template(
             expected_callback_response_schema_json,
             configurations_json,
             secrets_json,
+            data_sources_json,
             outbound_number_id,  # Moved: now matches SQL column order
             is_active,
             supported_channels or ["voice"],
@@ -369,6 +375,7 @@ async def replace_template(
     expected_callback_response_schema: Optional[dict],
     configurations: Optional[dict],
     secrets: Optional[dict],
+    data_sources: Optional[List[dict]],
     outbound_number_id: Optional[str],
     is_active: bool,
     merchant_id: Optional[str],
@@ -388,6 +395,7 @@ async def replace_template(
         expected_callback_response_schema: Expected callback response schema (optional, set to NULL if not provided)
         configurations: Template configurations (optional, set to NULL if not provided)
         secrets: Secrets and variables for HTTP functions (optional, set to NULL if not provided)
+        data_sources: Data source refs attached to this template (optional)
         outbound_number_id: Outbound number ID (optional, set to NULL if not provided)
         is_active: Whether template is active (required)
         merchant_id: Merchant identifier (optional, set to NULL if not provided)
@@ -420,6 +428,10 @@ async def replace_template(
         # Convert secrets to JSON string
         secrets_json = json.dumps(secrets) if secrets is not None else None
 
+        data_sources_json = (
+            json.dumps(data_sources) if data_sources is not None else None
+        )
+
         query, values = replace_template_query(
             template_id,
             reseller_id,
@@ -429,6 +441,7 @@ async def replace_template(
             expected_callback_response_schema_json,
             configurations_json,
             secrets_json,
+            data_sources_json,
             outbound_number_id,
             is_active,
             merchant_id,

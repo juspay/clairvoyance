@@ -44,6 +44,7 @@ async def load_template_config(
         merchant_id=lead.merchant_id if lead else None,
         call_payload=lead.payload,
         template_id=lead.template_id,
+        lead_id=lead.id if lead else None,
     )
 
     # Apply overrides and re-render if playground mode
@@ -143,6 +144,12 @@ def build_flow_config(
         "expected_callback_response_schema", None
     )
 
+    # Propagate data-source system messages set by the loader so that
+    # prepare_initial_node can prepend them to the initial node's context.
+    ds_messages = template.flow.get("_data_source_messages")
+    if ds_messages:
+        flow_config["_data_source_messages"] = ds_messages
+
     logger.info(
         f"Built flow config with {len(flow_config['nodes'])} nodes, "
         f"initial: {flow_config['initial_node']}, "
@@ -191,6 +198,17 @@ def prepare_initial_node(
         # Prepend the greeting message to task messages
         task_messages = [greeting_context_message] + task_messages
         logger.info(f"Injected greeting into LLM context: {greeting_text[:50]}...")
+
+    # Prepend data-source "message" injections (inject_as="message")
+    # These are system messages containing fetched sheet content that the
+    # LLM needs as read-only context before starting the conversation.
+    ds_messages = flow_config.get("_data_source_messages")
+    if ds_messages:
+        task_messages = ds_messages + task_messages
+        logger.info(
+            "Prepended %d data-source system message(s) to initial node",
+            len(ds_messages),
+        )
 
     return NodeConfig(
         name=node_config["name"],
