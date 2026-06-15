@@ -110,36 +110,47 @@ async def list_data_sources(
 
 async def update_data_source(
     data_source_id: str,
-    name: Optional[str] = None,
-    spreadsheet_url: Optional[str] = None,
-    sheet_name: Optional[str] = None,
-    columns: Optional[List[str]] = None,
-    format: Optional[str] = None,
-    is_active: Optional[bool] = None,
+    **fields,
 ) -> Optional[DataSourceResponse]:
-    """Update an existing data source. Only provided fields are updated."""
+    """Update an existing data source. Only provided fields (via exclude_unset) are updated.
+
+    Fields present but None are explicitly set to NULL in the database.
+    Fields not in ``fields`` are left unchanged.
+    """
     try:
+        update_fields = set(fields.keys())
+        if not update_fields:
+            logger.warning("update_data_source called with no fields to update")
+            return None
+
         new_spreadsheet_id = None
-        if spreadsheet_url:
-            new_spreadsheet_id = extract_spreadsheet_id(spreadsheet_url)
-            if not new_spreadsheet_id:
-                logger.error(
-                    f"Cannot extract spreadsheet_id from URL: {spreadsheet_url}"
-                )
-                return None
+        if "spreadsheet_url" in fields:
+            update_fields.add("spreadsheet_id")
+            url = fields["spreadsheet_url"]
+            if url is not None:
+                new_spreadsheet_id = extract_spreadsheet_id(url)
+                if not new_spreadsheet_id:
+                    logger.error(f"Cannot extract spreadsheet_id from URL: {url}")
+                    return None
+
+        update_fields = frozenset(update_fields)
 
         now = datetime.now(timezone.utc)
-        columns_json = json.dumps(columns) if columns is not None else None
+        columns_json = None
+        if "columns" in fields:
+            cols = fields["columns"]
+            columns_json = json.dumps(cols) if cols else None
 
         query, values = update_data_source_query(
             data_source_id=data_source_id,
-            name=name,
-            spreadsheet_url=spreadsheet_url,
+            update_fields=update_fields,
+            name=fields.get("name"),
+            spreadsheet_url=fields.get("spreadsheet_url"),
             spreadsheet_id=new_spreadsheet_id,
-            sheet_name=sheet_name,
+            sheet_name=fields.get("sheet_name"),
             columns_json=columns_json,
-            format=format,
-            is_active=is_active,
+            format=fields.get("format"),
+            is_active=fields.get("is_active"),
             now=now,
         )
         result = await run_parameterized_query(query, values)

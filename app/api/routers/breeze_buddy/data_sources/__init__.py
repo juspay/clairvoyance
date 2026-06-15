@@ -19,6 +19,7 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, Query, status
 
 from app.api.security.breeze_buddy.rbac_token import get_current_user_with_rbac
+from app.core.security.authorization import require_admin
 from app.schemas import UserInfo
 from app.schemas.breeze_buddy.data_source import (
     ColumnsResponse,
@@ -52,7 +53,8 @@ async def get_sheet_tabs(
     spreadsheet_url: str = Query(..., description="Full Google Sheets URL"),
     current_user: UserInfo = Depends(get_current_user_with_rbac),
 ):
-    """List all tab names in a Google Spreadsheet."""
+    """List all tab names in a Google Spreadsheet (admin-only)."""
+    require_admin(current_user)
     return await list_tabs_handler(spreadsheet_url)
 
 
@@ -64,7 +66,8 @@ async def get_sheet_columns(
     ),
     current_user: UserInfo = Depends(get_current_user_with_rbac),
 ):
-    """List column headers for a sheet tab."""
+    """List column headers for a sheet tab (admin-only)."""
+    require_admin(current_user)
     return await list_columns_handler(spreadsheet_url, sheet_name)
 
 
@@ -78,7 +81,8 @@ async def preview_sheet(
     max_rows: int = Query(10, ge=1, le=100, description="Max rows to return"),
     current_user: UserInfo = Depends(get_current_user_with_rbac),
 ):
-    """Preview up to N rows from a sheet."""
+    """Preview up to N rows from a sheet (admin-only)."""
+    require_admin(current_user)
     return await preview_handler(spreadsheet_url, sheet_name, columns, max_rows)
 
 

@@ -5,7 +5,7 @@ Returns (sql_string, values_list) tuples consumed by run_parameterized_query().
 """
 
 from datetime import datetime
-from typing import Any, List, Optional, Tuple
+from typing import Any, FrozenSet, List, Optional, Tuple
 
 DATA_SOURCE_TABLE = "data_source"
 
@@ -97,6 +97,7 @@ def list_data_sources_query(
 
 def update_data_source_query(
     data_source_id: str,
+    update_fields: FrozenSet[str],
     name: Optional[str],
     spreadsheet_url: Optional[str],
     spreadsheet_id: Optional[str],
@@ -109,26 +110,21 @@ def update_data_source_query(
     sets: List[str] = []
     values: List[Any] = []
 
-    def _add(col: str, val: Any, cast: str = "") -> None:
-        sets.append(f"{col} = ${len(values) + 1}{cast}")
-        values.append(val)
+    def _add_if(col: str, val: Any, cast: str = "") -> None:
+        if col in update_fields:
+            sets.append(f"{col} = ${len(values) + 1}{cast}")
+            values.append(val)
 
-    if name is not None:
-        _add("name", name)
-    if spreadsheet_url is not None:
-        _add("spreadsheet_url", spreadsheet_url)
-    if spreadsheet_id is not None:
-        _add("spreadsheet_id", spreadsheet_id)
-    if sheet_name is not None:
-        _add("sheet_name", sheet_name)
-    if columns_json is not None:
-        _add("columns", columns_json, "::jsonb")
-    if format is not None:
-        _add("format", format)
-    if is_active is not None:
-        _add("is_active", is_active)
+    _add_if("name", name)
+    _add_if("spreadsheet_url", spreadsheet_url)
+    _add_if("spreadsheet_id", spreadsheet_id)
+    _add_if("sheet_name", sheet_name)
+    _add_if("columns", columns_json, "::jsonb")
+    _add_if("format", format)
+    _add_if("is_active", is_active)
 
-    _add("updated_at", now)
+    sets.append(f"updated_at = ${len(values) + 1}")
+    values.append(now)
     values.append(data_source_id)
 
     query = f"""

@@ -176,12 +176,7 @@ async def update_data_source_handler(
 
     updated = await update_data_source(
         data_source_id=data_source_id,
-        name=req.name,
-        spreadsheet_url=req.spreadsheet_url,
-        sheet_name=req.sheet_name,
-        columns=req.columns,
-        format=req.format,
-        is_active=req.is_active,
+        **req.model_dump(exclude_unset=True),
     )
 
     if not updated:
@@ -232,6 +227,7 @@ async def list_tabs_handler(spreadsheet_url: str) -> TabsResponse:
             detail="Invalid Google Sheets URL",
         )
 
+    logger.info("Enumerating tabs for spreadsheet_id=%s", spreadsheet_id)
     tabs = await list_tabs(spreadsheet_id)
     return TabsResponse(spreadsheet_id=spreadsheet_id, tabs=tabs)
 
@@ -247,6 +243,11 @@ async def list_columns_handler(
             detail="Invalid Google Sheets URL",
         )
 
+    logger.info(
+        "Listing columns for spreadsheet_id=%s tab=%s",
+        spreadsheet_id,
+        sheet_name or "(default)",
+    )
     columns = await get_column_headers(spreadsheet_id, sheet_name)
     return ColumnsResponse(
         spreadsheet_id=spreadsheet_id,
@@ -269,6 +270,13 @@ async def preview_handler(
             detail="Invalid Google Sheets URL",
         )
 
+    logger.info(
+        "Previewing spreadsheet_id=%s tab=%s cols=%s rows=%d",
+        spreadsheet_id,
+        sheet_name or "(default)",
+        len(columns) if columns else "all",
+        max_rows,
+    )
     rows = await fetch_sheet_data(
         spreadsheet_id, sheet_name, columns, max_rows=max_rows
     )

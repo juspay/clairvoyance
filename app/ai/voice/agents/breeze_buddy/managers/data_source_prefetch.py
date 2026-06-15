@@ -2,11 +2,13 @@
 Data Source Prefetch Manager
 
 Pre-warms Redis with Google Sheets content for all DataSourceRefs attached to a
-template at dispatch time.  This runs concurrently with greeting TTS synthesis so
-that sheet content is already cached before the call connects.
+template at dispatch time. Runs concurrently with greeting TTS synthesis.
 
-Cache key : ``datasource:{lead_id}:{ref.name}``
-TTL        : 300 s  (covers typical call duration + re-try window)
+Cache key is scoped to the data_source_id (not lead_id) so that concurrent
+calls referencing the same sheet share a single cached copy.
+
+Cache key : ``datasource:content:{data_source_id}``
+TTL        : 60 s (short: keeps data fresh, covers burst window)
 """
 
 import asyncio
@@ -19,7 +21,7 @@ from app.services.data_sources import data_source_in_template_scope
 from app.services.google.sheets import fetch_formatted
 from app.services.redis import get_redis_service
 
-_CACHE_TTL = 300  # seconds
+_CACHE_TTL = 60  # seconds — shared across leads; short to keep data fresh
 _FETCH_TIMEOUT = 5.0  # generous timeout for background prefetch
 
 
@@ -27,7 +29,7 @@ async def _prefetch_one(
     lead_id: str, template: TemplateModel, ref: DataSourceRef
 ) -> None:
     """Fetch and cache content for a single DataSourceRef."""
-    cache_key = f"datasource:{lead_id}:{ref.name}"
+    cache_key = f"datasource:content:{ref.data_source_id}"
     try:
         ds = await get_data_source_by_id(ref.data_source_id)
         if not ds:
@@ -62,21 +64,23 @@ async def _prefetch_one(
         redis = await get_redis_service()
         await redis.setex(cache_key, content, ttl_seconds=_CACHE_TTL)
         logger.info(
-            "Prefetched data source '%s' for lead=%s (%d chars, TTL=%ds)",
+            "Prefetched data source '%s' (ds=%s, %d chars, TTL=%ds)",
             ref.name,
-            lead_id,
+            ref.data_source_id,
             len(content),
             _CACHE_TTL,
         )
     except asyncio.TimeoutError:
         logger.warning(
-            "Prefetch timeout for data source '%s', lead=%s", ref.name, lead_id
+            "Prefetch timeout for data source '%s' (ds=%s)",
+            ref.name,
+            ref.data_source_id,
         )
     except Exception as exc:
         logger.error(
-            "Prefetch error for data source '%s', lead=%s: %s",
+            "Prefetch error for data source '%s' (ds=%s): %s",
             ref.name,
-            lead_id,
+            ref.data_source_id,
             exc,
             exc_info=True,
         )

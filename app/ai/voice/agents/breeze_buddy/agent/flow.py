@@ -27,24 +27,23 @@ from app.schemas.breeze_buddy.core import ExecutionMode, LeadCallTracker
 
 async def load_template_config(
     lead: LeadCallTracker,
-) -> tuple[TemplateModel, Optional[ConfigurationModel], Dict[str, str]]:
+) -> tuple[TemplateModel, Optional[ConfigurationModel], Dict[str, str], List[Dict]]:
     """Load template configuration from database.
 
     Args:
         lead: The lead instance
 
     Returns:
-        Tuple of (template, configurations, template_vars)
+        Tuple of (template, configurations, template_vars, data_source_messages)
     """
     flow_loader = FlowConfigLoader()
 
-    template, template_vars = await flow_loader.load_template(
+    template, template_vars, ds_messages = await flow_loader.load_template(
         reseller_id=lead.reseller_id,
         template=lead.template,
         merchant_id=lead.merchant_id if lead else None,
         call_payload=lead.payload,
         template_id=lead.template_id,
-        lead_id=lead.id if lead else None,
     )
 
     # Apply overrides and re-render if playground mode
@@ -59,7 +58,7 @@ async def load_template_config(
     if getattr(lead, "execution_mode", None) != ExecutionMode.DAILY_STREAM:
         validate_template_compat(template)
 
-    return template, template.configurations, template_vars
+    return template, template.configurations, template_vars, ds_messages
 
 
 def setup_flow_manager(
@@ -128,12 +127,14 @@ def setup_flow_manager(
 def build_flow_config(
     flow_builder: FlowConfigBuilder,
     template: TemplateModel,
+    ds_messages: Optional[List[Dict]] = None,
 ) -> tuple[Dict[str, Any], List, Any]:
     """Build flow configuration from template.
 
     Args:
         flow_builder: Flow config builder
         template: Template model
+        ds_messages: Data source "message"-mode system messages (from loader)
 
     Returns:
         Tuple of (flow_config, end_conversation_callbacks, expected_callback_response_schema)
@@ -144,9 +145,8 @@ def build_flow_config(
         "expected_callback_response_schema", None
     )
 
-    # Propagate data-source system messages set by the loader so that
-    # prepare_initial_node can prepend them to the initial node's context.
-    ds_messages = template.flow.get("_data_source_messages")
+    # Propagate data-source "message" injections so that prepare_initial_node
+    # can prepend them to the initial node's context.
     if ds_messages:
         flow_config["_data_source_messages"] = ds_messages
 
