@@ -4,12 +4,15 @@ Flow Configuration Loader
 This module provides functionality to load templates from the database.
 """
 
-from typing import Dict, Optional, Tuple
+import asyncio
+from typing import Dict, List, Optional, Tuple
 
 from app.ai.voice.agents.breeze_buddy.template.transformation_function import (
     TEMPLATE_FUNCTION_REGISTRY,
 )
 from app.ai.voice.agents.breeze_buddy.template.types import (
+    DataSourceMode,
+    DataSourceRef,
     FlowMode,
     TemplateModel,
 )
@@ -21,6 +24,24 @@ from app.database.accessor.breeze_buddy.credentials import (
 from app.database.accessor.breeze_buddy.template import (
     get_template_by_id_with_fallback,
 )
+from app.services.data_sources import (
+    DATA_SOURCE_UNAVAILABLE,
+    get_connector,
+    within_cache_limit,
+)
+from app.services.redis import get_redis_service
+
+
+def eager_data_sources(
+    data_sources: Optional[List[DataSourceRef]],
+) -> List[DataSourceRef]:
+    """Sources injected statically up front.
+
+    ``on_demand`` sources are deliberately excluded: they are loaded one keyed
+    slice at a time mid-call via the ``load_data_source`` global function, never
+    dumped wholesale into the prompt.
+    """
+    return [ref for ref in (data_sources or []) if ref.mode != DataSourceMode.ON_DEMAND]
 
 
 class FlowConfigLoader:
@@ -205,6 +226,29 @@ class FlowConfigLoader:
                         f"Injected extra payload field '{field_name}' into template_vars"
                     )
 
+        # 5. data sources — inject EAGER sources as {datasource_<name>} variables.
+        # on_demand sources are skipped here; the agent loads them one keyed
+        # slice at a time mid-call via the load_data_source global function.
+        eager_sources = eager_data_sources(template_obj.data_sources)
+        if eager_sources:
+            contents = await asyncio.gather(
+                *[self._fetch_one_data_source(ref) for ref in eager_sources],
+                return_exceptions=True,
+            )
+            for ref, result in zip(eager_sources, contents):
+                # Skip exceptions, None, and the failure sentinel — never inject
+                # "[Data unavailable]" into the prompt as if it were content.
+                if (
+                    not isinstance(result, Exception)
+                    and result is not None
+                    and result != DATA_SOURCE_UNAVAILABLE
+                ):
+                    var_key = f"datasource_{ref.name}"
+                    if var_key not in template_vars:
+                        template_vars[var_key] = result
+                        logger.info(
+                            f"Injected data source '{ref.name}' as variable '{var_key}'"
+                        )
         # Direct mode has a flat structure (system_prompt + flat function list)
         # rather than a nodes array, so render the top-level message fields and
         # skip the per-node loop entirely.
@@ -275,3 +319,47 @@ class FlowConfigLoader:
 
         logger.info(f"Rendered task messages for template {template_obj.name}")
         return template_obj, template_vars
+
+    async def _fetch_one_data_source(self, ref: "DataSourceRef") -> str:
+        if not ref.is_active:
+            return DATA_SOURCE_UNAVAILABLE
+
+        # Route through the connector registry (same path as on-demand) so the
+        # cache key and fetch logic have a single source of truth, and so any
+        # connector type works — not just google_sheet.
+        connector = get_connector(ref.type)
+        if connector is None:
+            logger.warning(
+                f"Data source '{ref.name}': no connector for type '{ref.type}'"
+            )
+            return DATA_SOURCE_UNAVAILABLE
+
+        config = ref.connector_config()
+        # Eager sources address a fixed slice: the configured sheet (in config).
+        cache_key = connector.cache_key(config, None)
+
+        try:
+            redis = await get_redis_service()
+            cached = await redis.get(cache_key)
+            if cached:
+                return cached
+        except Exception:
+            pass
+
+        try:
+            content = await asyncio.wait_for(connector.fetch(config, None), timeout=5.0)
+        except asyncio.TimeoutError:
+            logger.warning(f"Data source '{ref.name}' fetch timed out")
+            return DATA_SOURCE_UNAVAILABLE
+        except Exception as exc:
+            logger.error(f"Data source '{ref.name}' fetch failed: {exc}", exc_info=True)
+            return DATA_SOURCE_UNAVAILABLE
+
+        if content != DATA_SOURCE_UNAVAILABLE and within_cache_limit(content):
+            try:
+                redis = await get_redis_service()
+                await redis.setex(cache_key, content, ttl_seconds=60)
+            except Exception:
+                pass
+
+        return content
