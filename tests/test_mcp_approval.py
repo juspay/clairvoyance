@@ -17,6 +17,7 @@ from typing import Any, Dict, List, Optional
 from app.ai.voice.agents.breeze_buddy.mcp import (
     _gate_mcp_handler,
     _mcp_approval_timeout_secs,
+    _state_wrap_mcp_handler,
     get_mcp_global_functions,
     get_mcp_global_functions_cached,
 )
@@ -25,6 +26,8 @@ from app.ai.voice.agents.breeze_buddy.template.types import (
     ApprovalConfig,
     McpConfig,
     McpServerConfig,
+    StateReducer,
+    ToolArgInjection,
 )
 
 
@@ -292,3 +295,82 @@ async def test_voice_loader_gated_handler_denies_without_network():
     result = await handler({"line_items": [1]}, None)
     assert result == {"status": "denied", "reason": "nope"}
     assert bot.approval_manager.requests[0]["function_name"] == "create_checkout"
+
+
+# ---------------------------------------------------------------------------
+# voice SessionStatePolicy for MCP tools — _state_wrap_mcp_handler
+# (inject_tool_args / apply_state_reducers, the MCP counterpart of
+# _make_global_wrapper's state hook; the pure engines are covered in
+# tests/test_session_state.py)
+# ---------------------------------------------------------------------------
+
+import json as _json  # noqa: E402
+
+
+def _state_bot(
+    agent_state: Dict[str, Any], *, external: bool = False
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        handles_state_externally=external,
+        configurations=SimpleNamespace(
+            tool_arg_injection=[
+                ToolArgInjection(
+                    tool_name="create_checkout",
+                    set_paths={"cart_id": "state.data.cart_id"},
+                )
+            ],
+            state_reducers=[
+                StateReducer(
+                    tool_name="create_checkout", set_paths={"cart_id": "cart.id"}
+                )
+            ],
+        ),
+        agent_state=dict(agent_state),
+        _widget_resume_seed=None,
+        lead=None,
+        call_sid="cs1",
+    )
+
+
+def _mcp_envelope(payload: dict) -> dict:
+    return {"status": "success", "data": _json.dumps(payload)}
+
+
+def _recording_mcp_handler(record: Dict[str, Any], result: Any):
+    async def handler(args, flow_manager):
+        record["args"] = args
+        return result
+
+    return handler
+
+
+async def test_state_wrap_injects_and_reduces_on_voice():
+    record: Dict[str, Any] = {}
+    bot = _state_bot({"cart_id": "C1"})
+    wrapped = _state_wrap_mcp_handler(
+        _recording_mcp_handler(record, _mcp_envelope({"cart": {"id": "C2"}})),
+        bot,
+        "create_checkout",
+    )
+    result = await wrapped({}, None)
+    assert record["args"].get("cart_id") == "C1"  # injected from state
+    assert bot.agent_state["cart_id"] == "C2"  # reduced from the result
+    assert result == _mcp_envelope({"cart": {"id": "C2"}})
+
+
+async def test_state_wrap_skips_when_handled_externally():
+    record: Dict[str, Any] = {}
+    bot = _state_bot({"cart_id": "C1"}, external=True)
+    wrapped = _state_wrap_mcp_handler(
+        _recording_mcp_handler(record, _mcp_envelope({"cart": {"id": "C2"}})),
+        bot,
+        "create_checkout",
+    )
+    await wrapped({}, None)
+    assert "cart_id" not in record["args"]  # not injected by the wrapper
+    assert bot.agent_state == {"cart_id": "C1"}  # not reduced by the wrapper
+
+
+async def test_state_wrap_noop_without_bot():
+    handler = _recording_mcp_handler({}, _mcp_envelope({}))
+    assert _state_wrap_mcp_handler(handler, None, "create_checkout") is handler

@@ -189,6 +189,13 @@ class Agent:
         # at start_node with prior_history pre-loaded into LLM context.
         self._widget_resume_seed: Optional[Dict[str, Any]] = None
 
+        # Reducer-built session state (cart_id/checkout_id/client facts),
+        # the voice counterpart of ChatAgent.agent_state. Seeded from a
+        # widget-resume (below), accumulated via state_reducers during the
+        # call by the global-function wrapper, and drained back to the
+        # chat_session on end_conversation. Empty {} for fresh/telephony calls.
+        self.agent_state: Dict[str, Any] = {}
+
         # HITL approval channel — daily mode only, set alongside
         # _rtvi_processor. None on telephony bots (no approval surface) and
         # when RTVI is unavailable; the gate in template/approval.py treats
@@ -332,11 +339,20 @@ class Agent:
                 "start_node": meta.get("start_node"),
                 "prior_history": list(meta.get("prior_history") or []),
                 "seed_message_count": int(meta.get("seed_message_count", 0) or 0),
+                # Reducer-built chat state (cart_id/checkout_id/...) carried
+                # across the CHAT->VOICE flip; merged into template_vars below.
+                "agent_state": dict(meta.get("agent_state") or {}),
             }
+            # Seed the live agent_state from the chat session so voice tool
+            # calls inject/update it (tool_arg_injection + state_reducers via
+            # the global-function wrapper) and the final state drains back on
+            # end_conversation.
+            self.agent_state = dict(self._widget_resume_seed["agent_state"])
             logger.info(
                 f"Widget voice resume: chat_session={widget_session_id} "
                 f"start_node={self._widget_resume_seed['start_node']!r} "
-                f"prior_msgs={len(self._widget_resume_seed['prior_history'])}"
+                f"prior_msgs={len(self._widget_resume_seed['prior_history'])} "
+                f"agent_state_keys={sorted(self.agent_state)}"
             )
 
         logger.info(
@@ -360,6 +376,22 @@ class Agent:
         except ValueError as e:
             logger.error(f"Failed to load template config for Daily mode: {e}")
             raise
+
+        # Widget resume: thread the chat session's accumulated agent_state
+        # (cart_id/checkout_id/client-pushed facts) into template_vars so
+        # {placeholder} resolution in the resumed voice flow uses the
+        # chat-built identifiers instead of losing them on the flip.
+        # only_if_missing — never clobber an explicitly-rendered call var.
+        if self._widget_resume_seed:
+            resumed_state = self._widget_resume_seed.get("agent_state") or {}
+            merged_keys = [k for k in resumed_state if k not in self.template_vars]
+            for k in merged_keys:
+                self.template_vars[k] = resumed_state[k]
+            if merged_keys:
+                logger.info(
+                    f"Widget voice resume: merged {len(merged_keys)} agent_state "
+                    f"var(s) into template_vars: {sorted(merged_keys)}"
+                )
 
         # Synthesize and cache the initial greeting in Redis so it can be
         # played out on client-connect. Idempotent: if the dispatch worker

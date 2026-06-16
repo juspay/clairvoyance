@@ -329,6 +329,74 @@ def _is_tool_success(tool_result: Any) -> bool:
     return True
 
 
+# ---------------------------------------------------------------------------
+# Voice SessionStatePolicy — bot-aware application of the engines above.
+#
+# Chat runs inject_tool_args / apply_state_reducers itself inside
+# ChatAgent._cycle_loop. Voice has no such loop, so these helpers are applied
+# at the voice tool seams — global functions (template/global_function.py's
+# _make_global_wrapper) and MCP tools (mcp/__init__.py's loader). bot_instance
+# is duck-typed via getattr so this stays import-light (no agent import).
+# ---------------------------------------------------------------------------
+
+
+def _voice_state_session_id(bot_instance: Any) -> str:
+    """Best-effort session id for inject_tool_args' eval context (voice path).
+
+    Prefers the widget chat_session id (widget-resume), falls back to the
+    lead id / call_sid. Used only for the ``{session_id}`` eval var + the
+    idempotency-hash discriminator — never a correctness key on voice.
+    """
+    seed = getattr(bot_instance, "_widget_resume_seed", None)
+    if isinstance(seed, dict) and seed.get("widget_session_id"):
+        return str(seed["widget_session_id"])
+    lead = getattr(bot_instance, "lead", None)
+    if lead is not None and getattr(lead, "id", None):
+        return str(lead.id)
+    return str(getattr(bot_instance, "call_sid", "") or "")
+
+
+def _inject_voice_state(
+    bot_instance: Any, tool_name: str, llm_args: Dict[str, Any]
+) -> Dict[str, Any]:
+    """Voice SessionStatePolicy (read): fill state-driven tool args.
+
+    Mirrors what ``ChatAgent._cycle_loop`` does for chat — so a template's
+    ``tool_arg_injection`` rules (e.g. thread ``cart_id`` from session state
+    into ``update_cart``) work on voice too. Applied to both voice global
+    functions and voice MCP tools. No-op when no injection rules are declared.
+    """
+    configs = getattr(bot_instance, "configurations", None)
+    injections = getattr(configs, "tool_arg_injection", None) if configs else None
+    if not injections:
+        return llm_args
+    state = getattr(bot_instance, "agent_state", None) or {}
+    return inject_tool_args(
+        tool_name=tool_name,
+        args=llm_args,
+        state_data=state,
+        chat_session_id=_voice_state_session_id(bot_instance),
+        injections=injections,
+    )
+
+
+def _reduce_voice_state(bot_instance: Any, tool_name: str, result: Any) -> None:
+    """Voice SessionStatePolicy (write): lift identifiers off a tool result
+    into ``bot_instance.agent_state`` via the template's ``state_reducers``.
+    No-op when no reducers are declared or the bot carries no agent_state.
+    """
+    configs = getattr(bot_instance, "configurations", None)
+    reducers = getattr(configs, "state_reducers", None) if configs else None
+    if not reducers:
+        return
+    state = getattr(bot_instance, "agent_state", None)
+    if state is None:
+        return
+    bot_instance.agent_state = apply_state_reducers(
+        state_data=state, tool_name=tool_name, tool_result=result, reducers=reducers
+    )
+
+
 __all__ = [
     "apply_state_reducers",
     "inject_tool_args",

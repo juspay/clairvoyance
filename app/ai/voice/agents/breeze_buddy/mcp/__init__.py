@@ -28,6 +28,10 @@ from app.ai.voice.agents.breeze_buddy.mcp.cache import get_or_discover_server_to
 # others; the latent handlers<->template cycle the note below describes is
 # pre-existing and unchanged by this import.)
 from app.ai.voice.agents.breeze_buddy.template.approval import gate_call
+from app.ai.voice.agents.breeze_buddy.template.session_state import (
+    _inject_voice_state,
+    _reduce_voice_state,
+)
 
 # Template types FIRST — fully loads the `template` package (whose
 # __init__ eagerly pulls in http_handler / http_requester / hooks /
@@ -96,6 +100,33 @@ def _gate_mcp_handler(
         return await gate_call(bot_instance, registered_name, approval, args, execute)
 
     return gated_handler
+
+
+def _state_wrap_mcp_handler(handler: Any, bot_instance: Any, tool_name: str) -> Any:
+    """Apply the voice SessionStatePolicy to an MCP tool handler.
+
+    The MCP counterpart of ``_make_global_wrapper``'s state hook: inject
+    state-driven args before the call and lift identifiers off the result
+    after it, so a template's ``tool_arg_injection`` / ``state_reducers`` reach
+    MCP tools on voice (chat already runs them in its ``_cycle_loop``). No-op
+    without a bot, and skipped when the bot sets ``handles_state_externally``
+    (chat). ``tool_name`` is the REGISTERED name the LLM calls — the name that
+    injection/reducer rules target. Applied OUTSIDE the approval gate, so a
+    denied call's bare ``{status, reason}`` simply finds no matching reducer
+    paths (no-op), while an approved call reduces its real result.
+    """
+    if bot_instance is None:
+        return handler
+
+    async def state_handler(args: Dict[str, Any], flow_manager: Any) -> Any:
+        if getattr(bot_instance, "handles_state_externally", False):
+            return await handler(args, flow_manager)
+        injected = _inject_voice_state(bot_instance, tool_name, args)
+        result = await handler(injected, flow_manager)
+        _reduce_voice_state(bot_instance, tool_name, result)
+        return result
+
+    return state_handler
 
 
 def _deep_merge_defaults(
@@ -641,6 +672,7 @@ async def _load_server_tools(
                 tool_name,
                 tool_approval,
             )
+            handler = _state_wrap_mcp_handler(handler, bot_instance, tool_name)
             schema_kwargs: Dict[str, Any] = {}
             if tool_approval is not None:
                 schema_kwargs["timeout_secs"] = _mcp_approval_timeout_secs(
@@ -698,6 +730,7 @@ async def _load_server_tools(
             tool_name,
             tool_approval,
         )
+        handler = _state_wrap_mcp_handler(handler, bot_instance, tool_name)
         schema_kwargs: Dict[str, Any] = {}
         if tool_approval is not None:
             schema_kwargs["timeout_secs"] = _mcp_approval_timeout_secs(tool_approval)

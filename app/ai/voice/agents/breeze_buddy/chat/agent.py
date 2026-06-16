@@ -174,6 +174,11 @@ class ChatAgent:
         # global-function adapters receive bot_instance=self and would
         # otherwise double-gate.
         self.handles_approval_externally = True
+        # Chat runs inject_tool_args / apply_state_reducers itself inside
+        # _cycle_loop; this flag tells the shared global-function wrapper NOT
+        # to re-apply them (voice has no such loop, so it lets the wrapper do
+        # it). Prevents double-application of the SessionStatePolicy.
+        self.handles_state_externally = True
         # function name -> ApprovalConfig for every gated global function.
         self._approval_map = build_approval_map(self.template.flow or {})
 

@@ -600,6 +600,16 @@ async def voice_connect_handler(
             "widget_config_id": cfg.id,
             "source": "widget",
         }
+        # Carry the chat session's accumulated agent_state (reducer-built
+        # identifiers like cart_id / checkout_id, plus client-pushed facts)
+        # into the voice seed so they survive the CHAT->VOICE flip. Without
+        # this, a voice continuation of a chat that already built a cart
+        # loses the cart_id and would silently act on a fresh cart.
+        agent_state_row = await get_agent_session_state(session_id)
+        agent_state_data: Dict[str, Any] = (
+            dict(agent_state_row.data) if agent_state_row else {}
+        )
+
         # ``meta_data`` carries the voice-runtime seed (read by the
         # agent's _setup_*_transport). The widget_session_id back-link
         # is what the end_conversation drain uses to find the
@@ -611,6 +621,7 @@ async def voice_connect_handler(
             "start_node": session.current_node,
             "prior_history": prior_history,
             "seed_message_count": seed_message_count,
+            "agent_state": agent_state_data,
         }
         template_name = getattr(template, "name", None) or "widget"
 
