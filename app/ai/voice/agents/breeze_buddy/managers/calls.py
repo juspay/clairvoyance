@@ -428,6 +428,7 @@ async def _retry_call(
             request_id=lead.request_id,
             meta_data={},
             call_direction=lead.call_direction,  # Inherit call direction from parent lead
+            execution_mode=lead.execution_mode,
         )
 
         # Only ZADD onto the schedule if the DB insert actually landed. If
@@ -520,7 +521,8 @@ async def reconcile_stuck_processing_leads():
             if (
                 config
                 and locked_lead.call_direction == CallDirection.OUTBOUND
-                and locked_lead.execution_mode == ExecutionMode.TELEPHONY
+                and locked_lead.execution_mode
+                in (ExecutionMode.TELEPHONY, ExecutionMode.TELEPHONY_ALERT)
             ):
                 await _retry_call(locked_lead, config)
 
@@ -619,7 +621,8 @@ async def handle_call_completion(
         config
         and outcome in ["BUSY", "NO_ANSWER"]
         and lead.call_direction == CallDirection.OUTBOUND
-        and lead.execution_mode == ExecutionMode.TELEPHONY
+        and lead.execution_mode
+        in (ExecutionMode.TELEPHONY, ExecutionMode.TELEPHONY_ALERT)
     ):
         await _retry_call(lead, config, outcome)
 
@@ -708,7 +711,8 @@ async def handle_unanswered_calls(call_id: str):
     if (
         config
         and lead.call_direction == CallDirection.OUTBOUND
-        and lead.execution_mode == ExecutionMode.TELEPHONY
+        and lead.execution_mode
+        in (ExecutionMode.TELEPHONY, ExecutionMode.TELEPHONY_ALERT)
     ):
         await _retry_call(lead, config, "NO_ANSWER")
 

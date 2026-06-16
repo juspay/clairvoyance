@@ -238,6 +238,10 @@ class BreezeBuddyRBACTokenManager:
                 "read:own_data",
                 "analytics:own",
             ]
+        elif role_str == "alert_system":
+            return [
+                "alerts:fire",
+            ]
         else:
             return []
 

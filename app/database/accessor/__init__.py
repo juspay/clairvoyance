@@ -3,6 +3,10 @@ Main database accessor module.
 This module exports all database accessor functions.
 """
 
+from .breeze_buddy.alert_groups import (
+    get_alert_group_by_name,
+    upsert_alert_group,
+)
 from .breeze_buddy.blacklisted_numbers import (
     add_blacklisted_number,
     check_blacklisted_number,
@@ -73,6 +77,8 @@ from .breeze_buddy.template import (
 )
 
 __all__ = [
+    "get_alert_group_by_name",
+    "upsert_alert_group",
     "is_number_blacklisted",
     "add_blacklisted_number",
     "remove_blacklisted_number",

@@ -121,8 +121,8 @@ async def test_schedule_lead_does_not_raise_on_redis_error(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_is_dispatchable_telephony_modes_only():
-    """Only TELEPHONY and TELEPHONY_TEST should pass the gate.
+def test_is_dispatchable_outbound_pstn_modes_only():
+    """Only standalone outbound PSTN modes should pass the gate.
 
     DAILY / DAILY_TEST / DAILY_STREAM are web-mode (customer joins a Daily
     room) — they must NOT enter the dispatcher's PSTN-dial path. HOLD_TRANSFER
@@ -133,6 +133,7 @@ def test_is_dispatchable_telephony_modes_only():
 
     assert queue.is_dispatchable(ExecutionMode.TELEPHONY) is True
     assert queue.is_dispatchable(ExecutionMode.TELEPHONY_TEST) is True
+    assert queue.is_dispatchable(ExecutionMode.TELEPHONY_ALERT) is True
     assert queue.is_dispatchable(ExecutionMode.DAILY) is False
     assert queue.is_dispatchable(ExecutionMode.DAILY_TEST) is False
     assert queue.is_dispatchable(ExecutionMode.DAILY_STREAM) is False

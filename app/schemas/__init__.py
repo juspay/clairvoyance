@@ -9,6 +9,7 @@ organized hierarchically:
   - core.py: Core domain models (leads, numbers, configs)
 """
 
+from app.schemas.breeze_buddy.alerts import AlertFireRequest, AlertGroup
 from app.schemas.breeze_buddy.analytics import (
     AnalyticsFilters,
     AnalyticsOptions,
@@ -91,6 +92,9 @@ from app.schemas.feature_flags import (
 )
 
 __all__ = [
+    # Alerts
+    "AlertFireRequest",
+    "AlertGroup",
     # Auth
     "AuthTokenData",
     "LaunchTokenRequest",

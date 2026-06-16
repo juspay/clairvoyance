@@ -22,12 +22,18 @@ from app.services.redis import get_redis_service
 # Execution modes the event-driven dispatcher places outbound calls for.
 # Mirrors the WHERE clause in ``get_unscheduled_backlog_leads_query`` so the
 # ingest path, retry path, and dispatch-now path all match the reconciler.
-# DAILY/DAILY_TEST/DAILY_STREAM are web-only — they're either customer-
-# initiated (inbound) or handled by a separate room-creation + notification
-# flow, NOT by the worker's ``provider.make_call`` PSTN dial. HOLD_TRANSFER
-# is a transient mid-call leg, not a standalone outbound to schedule.
+# TELEPHONY_ALERT is an outbound PSTN notification and uses the same worker
+# path as regular telephony. DAILY/DAILY_TEST/DAILY_STREAM are web-only —
+# they're either customer-initiated (inbound) or handled by a separate
+# room-creation + notification flow, NOT by the worker's ``provider.make_call``
+# PSTN dial. HOLD_TRANSFER is a transient mid-call leg, not a standalone
+# outbound to schedule.
 DISPATCHABLE_EXECUTION_MODES = frozenset(
-    {ExecutionMode.TELEPHONY, ExecutionMode.TELEPHONY_TEST}
+    {
+        ExecutionMode.TELEPHONY,
+        ExecutionMode.TELEPHONY_TEST,
+        ExecutionMode.TELEPHONY_ALERT,
+    }
 )
 
 

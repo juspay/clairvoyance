@@ -28,7 +28,7 @@ def get_unscheduled_backlog_leads_query(
         FROM "{LEAD_CALL_TRACKER_TABLE}"
         WHERE "status" = 'BACKLOG'
           AND "is_locked" = FALSE
-          AND "execution_mode" IN ('TELEPHONY', 'TELEPHONY_TEST')
+          AND "execution_mode" IN ('TELEPHONY', 'TELEPHONY_TEST', 'TELEPHONY_ALERT')
           AND "next_attempt_at" <= NOW() + ($1 || ' seconds')::interval
         ORDER BY "next_attempt_at" ASC
         LIMIT $2;

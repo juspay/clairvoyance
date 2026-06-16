@@ -113,7 +113,9 @@ def build_analytics_where_clause(
     # HOLD_TRANSFER is included so hold & consult outbound legs appear in
     # the dashboard alongside regular TELEPHONY calls.
     if filter_execution_mode:
-        conditions.append("lct.execution_mode IN ('TELEPHONY', 'HOLD_TRANSFER')")
+        conditions.append(
+            "lct.execution_mode IN ('TELEPHONY', 'TELEPHONY_ALERT', 'HOLD_TRANSFER')"
+        )
 
     # Date range filters - convert IST to UTC before passing to DB
     if "date_from" in filters and filters["date_from"]:
