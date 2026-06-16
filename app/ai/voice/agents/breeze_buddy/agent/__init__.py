@@ -37,12 +37,6 @@ from app.ai.voice.agents.breeze_buddy.agent.inbound import (
     create_lead_from_template_id,
     handle_inbound_call,
 )
-from app.ai.voice.agents.breeze_buddy.agent.ivr import (
-    BLOCK_MESSAGE_PLAY_SECONDS,
-    _send_audio,
-    get_template_id_from_call,
-    prepare_block_audio,
-)
 from app.ai.voice.agents.breeze_buddy.agent.pipeline import (
     build_pipeline,
     create_pipeline_task,
@@ -62,6 +56,13 @@ from app.ai.voice.agents.breeze_buddy.chat.voice_bridge import WidgetVoiceBridge
 from app.ai.voice.agents.breeze_buddy.handlers.internal.end_conversation import (
     end_conversation,
 )
+from app.ai.voice.agents.breeze_buddy.ivr.selection import (
+    BLOCK_MESSAGE_PLAY_SECONDS,
+    _send_audio,
+    get_template_id_from_call,
+    prepare_block_audio,
+)
+from app.ai.voice.agents.breeze_buddy.ivr.walker import IvrWalker
 from app.ai.voice.agents.breeze_buddy.managers.utils import (
     prepare_and_store_initial_greeting,
 )
@@ -85,6 +86,7 @@ from app.ai.voice.agents.breeze_buddy.template.context import with_context
 from app.ai.voice.agents.breeze_buddy.template.types import (
     LEGACY_VOICE_TO_PROVIDER,
     ConfigurationModel,
+    FlowMode,
     InterruptionConfig,
     TemplateModel,
     TTSConfig,
@@ -1073,6 +1075,22 @@ class Agent:
                         logger.warning(
                             f"Invalid TTS provider '{payload_provider}' in payload, keeping existing config"
                         )
+
+            # ── IVR mode: pure DTMF state machine (no STT/LLM/pipeline) ─────────
+            # Telephony-only. Runs the menu tree directly over the websocket and
+            # returns before any pipeline is built — self.task/self.context stay
+            # None, which the reused end_conversation finaliser already handles.
+            if (
+                not self.is_daily_mode
+                and self.template
+                and self.template.flow.get("mode") == FlowMode.IVR.value
+            ):
+                logger.info(
+                    f"[IVR] flow.mode=ivr -> running DTMF walker for "
+                    f"call {self.call_sid}"
+                )
+                await IvrWalker(self).run()
+                return
 
             # Build services and pipeline. Stream mode skips LLM creation and
             # runs build_pipeline with mode="stream" (no LLM processor, no

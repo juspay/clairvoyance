@@ -2079,10 +2079,16 @@ class FlowMode(str, Enum):
                      internally implemented as a synthetic single node so
                      the rest of the pipeline (filler audio, hooks, OTEL,
                      evaluators, greeting, idle handling) is unchanged.
+    IVR:             Pure DTMF state machine — no STT, no LLM, no Pipecat
+                     pipeline. Each node plays a TTS prompt and maps pressed
+                     digits to actions (transition to another node, or end the
+                     call). Driven entirely by keypad input over the telephony
+                     websocket. See ``IvrModeFlow``.
     """
 
     FLOW = "flow"
     DIRECT = "direct"
+    IVR = "ivr"
 
 
 class DirectModeFlow(BaseModel):
@@ -2143,6 +2149,175 @@ class DirectModeFlow(BaseModel):
         description="Same semantics as flow mode — list of callback names "
         "to invoke when the conversation ends.",
     )
+
+
+class IvrAction(str, Enum):
+    """What a pressed digit does in IVR mode. Deliberately just two actions.
+
+    TRANSITION:  Go to another IVR node (a sub-menu).
+    END:         Hang up. If the option has a ``message`` it is spoken first,
+                 otherwise the call ends silently.
+    """
+
+    TRANSITION = "transition"
+    END = "end"
+
+
+class IvrOption(BaseModel):
+    """One digit -> action mapping within an IVR node.
+
+    ``outcome``/``metadata`` are applied to the lead IMMEDIATELY when the
+    option fires (in-memory, plus a non-blocking background DB write) so that a
+    caller who hangs up inside a sub-menu still has their last intent
+    persisted. ``outcome`` is valid on BOTH ``transition`` and ``end`` — on a
+    transition it records an intermediate outcome (e.g. ``CANCEL_STARTED``).
+
+    No hook is required to persist ``outcome`` — that happens automatically.
+    ``hooks`` are optional and only for EXTERNAL side-effects (e.g. notifying a
+    merchant API); they are fire-and-forget, same as flow/direct mode.
+    """
+
+    digit: str = Field(
+        ...,
+        description="The keypad digit that selects this option: "
+        "'0'-'9', '*', or '#'.",
+    )
+    action: IvrAction
+    label: Optional[str] = Field(None, description="Human-readable note (not spoken).")
+    target_node: Optional[str] = Field(
+        None, description="Target node name. Required when action == 'transition'."
+    )
+    message: Optional[str] = Field(
+        None,
+        description="action == 'end' only: spoken before hangup. Omit for a "
+        "silent hangup. Supports {placeholder} variables.",
+    )
+    outcome: Optional[str] = Field(
+        None,
+        description="Outcome written to the lead immediately when this option "
+        "fires (valid on both 'transition' and 'end').",
+    )
+    metadata: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Merged into lead.metaData immediately when this option "
+        "fires (e.g. {'cancellation_reason': 'too_expensive'}).",
+    )
+    hooks: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="Optional fire-and-forget hooks for external side-effects "
+        "(HookConfig dicts, same shape as flow mode). NOT needed to persist "
+        "'outcome'.",
+    )
+
+    @model_validator(mode="after")
+    def _check_transition_target(self) -> "IvrOption":
+        """A transition option must name the node it transitions to.
+
+        Without this, a missing ``target_node`` makes the walker's
+        ``if kind == "transition" and target:`` check silently fall through
+        and end the call instead of transitioning. Fail fast at load time.
+        """
+        if self.action == IvrAction.TRANSITION and not self.target_node:
+            raise ValueError(
+                f"IVR option digit '{self.digit}': target_node is required "
+                "when action == 'transition'"
+            )
+        return self
+
+
+class IvrNode(BaseModel):
+    """A single IVR menu node: a prompt plus digit->action options."""
+
+    name: str
+    prompt: Optional[str] = Field(
+        None,
+        description="TTS text spoken on entry (the menu). Supports "
+        "{placeholder} variables resolved from lead payload. May be omitted "
+        "ONLY for the initial_node, which then relies on "
+        "configurations.initial_greeting (already spoken at call start, and "
+        "re-spoken on no-input / return-to-main). Every non-initial node must "
+        "set a prompt.",
+    )
+    options: List[IvrOption]
+    invalid_prompt: Optional[str] = Field(
+        None,
+        description="Spoken when an unmapped digit is pressed. Defaults to "
+        "replaying the prompt.",
+    )
+    timeout_secs: float = Field(
+        7.0,
+        description="Seconds to wait for a keypad digit AFTER the prompt "
+        "finishes speaking (the prompt's own playback time is added "
+        "automatically). Barge-in during the prompt is always allowed.",
+    )
+    max_retries: int = Field(
+        3, description="How many times to replay the prompt before giving up."
+    )
+    on_timeout_message: Optional[str] = Field(
+        None,
+        description="Closing line spoken when retries are exhausted (else a "
+        "default goodbye).",
+    )
+    on_timeout_outcome: Optional[str] = Field(
+        None,
+        description="Outcome recorded when the node times out / gives up. If "
+        "omitted, the call defaults to BUSY (retry-eligible) — a no-input timeout "
+        "is then re-dialled like a hangup. Set an explicit value (e.g. "
+        "'NO_RESPONSE', 'CANCELLED') to record a terminal, non-retry outcome.",
+    )
+
+
+class IvrModeFlow(BaseModel):
+    """Schema for ``flow`` JSON when ``mode == "ivr"``.
+
+    A pure DTMF menu tree. Only ``tts_configuration`` from the template is
+    consumed (to synthesize prompts); ``stt_configuration`` and
+    ``llm_configurations`` are ignored. Example::
+
+        {
+            "mode": "ivr",
+            "initial_node": "main",
+            "nodes": {
+                "main": {
+                    "name": "main",
+                    "prompt": "Press 1 to confirm, 2 to cancel.",
+                    "options": [
+                        {"digit": "1", "action": "end", "outcome": "CONFIRMED",
+                         "message": "Thank you, your order is confirmed."},
+                        {"digit": "2", "action": "transition",
+                         "target_node": "cancel_reasons", "outcome": "CANCEL_STARTED"}
+                    ]
+                },
+                "cancel_reasons": { ... }
+            }
+        }
+    """
+
+    mode: FlowMode = Field(FlowMode.IVR, description="Must be 'ivr' for this schema.")
+    initial_node: str = Field(..., description="Name of the node to start at.")
+    nodes: Dict[str, IvrNode] = Field(..., description="Map of node name -> IvrNode.")
+
+    @model_validator(mode="after")
+    def _check_node_references(self) -> "IvrModeFlow":
+        """Fail fast on dangling node references at template-load time.
+
+        Catches a typo'd ``initial_node`` or a transition ``target_node`` that
+        points at a non-existent node before the call runs (otherwise the
+        walker only discovers it mid-call as IVR_NODE_MISSING).
+        """
+        if self.initial_node not in self.nodes:
+            raise ValueError(f"initial_node '{self.initial_node}' not found in nodes")
+        for node_name, node in self.nodes.items():
+            for opt in node.options:
+                if (
+                    opt.action == IvrAction.TRANSITION
+                    and opt.target_node not in self.nodes
+                ):
+                    raise ValueError(
+                        f"node '{node_name}' option '{opt.digit}' transitions "
+                        f"to unknown node '{opt.target_node}'"
+                    )
+        return self
 
 
 def _default_supported_channels() -> List[Literal["voice", "chat"]]:
