@@ -81,6 +81,34 @@ class FlowConfigLoader:
                 system_prompt = system_prompt.replace(f"{{{key}}}", str(value))
             flow["system_prompt"] = system_prompt
 
+    def _render_ivr_flow(self, flow: Dict, variables: Dict[str, str]) -> None:
+        """Render {placeholder} variables in an ivr-mode flow JSON in place.
+
+        IVR nodes have no task/role messages. Each node has a spoken ``prompt``
+        plus optional ``invalid_prompt`` / ``on_timeout_message``, and each
+        option may carry a spoken ``message``. Render all of them with the same
+        simple substitution direct mode uses.
+        """
+
+        def _sub(text):
+            if isinstance(text, str) and text:
+                for key, value in variables.items():
+                    text = text.replace(f"{{{key}}}", str(value))
+            return text
+
+        nodes = flow.get("nodes", {})
+        if not isinstance(nodes, dict):
+            return
+        for node in nodes.values():
+            if not isinstance(node, dict):
+                continue
+            for field in ("prompt", "invalid_prompt", "on_timeout_message"):
+                if field in node:
+                    node[field] = _sub(node[field])
+            for option in node.get("options", []) or []:
+                if isinstance(option, dict) and "message" in option:
+                    option["message"] = _sub(option["message"])
+
     def render_task_messages(
         self, task_messages: list, variables: Dict[str, str]
     ) -> list:
@@ -211,6 +239,13 @@ class FlowConfigLoader:
         if template_obj.flow.get("mode") == FlowMode.DIRECT.value:
             self._render_direct_mode_flow(template_obj.flow, template_vars)
             logger.info(f"Rendered direct-mode flow for template {template_obj.name}")
+            return template_obj, template_vars
+
+        # IVR mode is a DTMF menu tree (no task/role messages); render the
+        # spoken prompt/message fields and skip the per-node task-message loop.
+        if template_obj.flow.get("mode") == FlowMode.IVR.value:
+            self._render_ivr_flow(template_obj.flow, template_vars)
+            logger.info(f"Rendered ivr-mode flow for template {template_obj.name}")
             return template_obj, template_vars
 
         # Get nodes from flow structure

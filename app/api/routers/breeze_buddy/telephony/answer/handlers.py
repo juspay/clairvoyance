@@ -37,7 +37,7 @@ from urllib.parse import quote
 from fastapi import Request, Response
 from starlette.responses import HTMLResponse
 
-from app.ai.voice.agents.breeze_buddy.agent.ivr import (
+from app.ai.voice.agents.breeze_buddy.ivr.selection import (
     IVR_CONFIG_CACHE_PREFIX,
     IVR_CONFIG_CACHE_TTL,
     prepare_goodbye_audio,

@@ -338,6 +338,70 @@ class TemplateContext:
             f"'{active_entry.get('node_name')}'"
         )
 
+    def record_ivr_input(
+        self,
+        digit: str,
+        label: Optional[str] = None,
+        action: Optional[str] = None,
+        target_node: Optional[str] = None,
+        outcome: Optional[str] = None,
+        invalid: bool = False,
+    ) -> None:
+        """Record a single IVR keypress under the currently active node.
+
+        Appends to the ``dtmf_inputs`` list of the most recent node_traversal
+        entry (the one with ``exited_at`` still None), mirroring
+        ``record_global_function_call``'s active-node lookup. IVR-mode only;
+        flow/direct mode never call this, so their node_traversal is unchanged.
+
+        Args:
+            digit: The keypad digit pressed ('0'-'9', '*', '#').
+            label: Human-readable option label (valid presses only).
+            action: The option's action ('transition'/'end'), valid presses only.
+            target_node: Transition target, when the option transitions.
+            outcome: Outcome the option set, when present.
+            invalid: True when the digit did not match any option on the node.
+        """
+        if not self.lead or not self.lead.metaData:
+            logger.warning("Cannot record IVR input: lead or metaData is None")
+            return
+
+        if "node_traversal" not in self.lead.metaData:
+            logger.warning("Cannot record IVR input: node_traversal not initialized")
+            return
+
+        # Find the last open node entry (the currently active node).
+        active_entry = None
+        for entry in reversed(self.lead.metaData["node_traversal"]):
+            if entry.get("exited_at") is None:
+                active_entry = entry
+                break
+
+        if active_entry is None:
+            logger.warning(
+                f"Cannot record IVR input '{digit}': no active node entry found"
+            )
+            return
+
+        record: Dict[str, Any] = {"digit": digit, "at": self._get_ist_timestamp()}
+        if invalid:
+            record["invalid"] = True
+        if label:
+            record["label"] = label
+        if action:
+            record["action"] = action
+        if target_node:
+            record["target"] = target_node
+        if outcome:
+            record["outcome"] = outcome
+
+        active_entry.setdefault("dtmf_inputs", []).append(record)
+        logger.info(
+            f"Recorded IVR input '{digit}'"
+            f"{' (invalid)' if invalid else ''} under node "
+            f"'{active_entry.get('node_name')}'"
+        )
+
 
 def with_context(bot_instance):
     """

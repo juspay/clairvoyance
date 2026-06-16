@@ -304,12 +304,22 @@ async def end_conversation(context: TemplateContext, args, transition_to=None):
         if approval_manager:
             approval_manager.deny_all("conversation_ended")
 
-        # Send EndFrame to gracefully terminate the pipeline
-        logger.info(
-            f"Sending EndFrame to terminate pipeline for call {context.call_sid}"
-        )
-        await context.task.queue_frame(EndFrame())
-        logger.info(f"EndFrame queued for call {context.call_sid}")
+        # Send EndFrame to gracefully terminate the pipeline.
+        # IVR mode (flow.mode == "ivr") runs without a Pipecat pipeline, so
+        # context.task is None — there is nothing to terminate. The IVR walker
+        # ends the call by closing the websocket itself. Guard the EndFrame so
+        # this finalization path is reusable from the pipeline-less walker.
+        if context.task:
+            logger.info(
+                f"Sending EndFrame to terminate pipeline for call {context.call_sid}"
+            )
+            await context.task.queue_frame(EndFrame())
+            logger.info(f"EndFrame queued for call {context.call_sid}")
+        else:
+            logger.info(
+                f"No pipeline task for call {context.call_sid} (IVR mode); "
+                "skipping EndFrame"
+            )
 
         # Clear log context AFTER all logs to prevent leakage between calls
         clear_log_context()
