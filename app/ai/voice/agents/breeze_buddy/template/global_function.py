@@ -22,6 +22,10 @@ from app.ai.voice.agents.breeze_buddy.template.context import TemplateContext
 from app.ai.voice.agents.breeze_buddy.template.func_action_handlers import (
     execute_func_post_actions,
 )
+from app.ai.voice.agents.breeze_buddy.template.session_state import (
+    _inject_voice_state,
+    _reduce_voice_state,
+)
 from app.ai.voice.agents.breeze_buddy.template.types import (
     BaseGlobalFunction,
     GlobalBuiltinFunction,
@@ -94,16 +98,31 @@ def _make_global_wrapper(
     """
 
     async def wrapper_handler(llm_args, flow_manager):
+        # SessionStatePolicy (voice): inject state-driven args before the
+        # handler runs and lift identifiers off the result after it — the
+        # same reducers / tool_arg_injection chat applies. Chat sets
+        # handles_state_externally and does this in its own _cycle_loop, so
+        # skip here to avoid double-application.
+        manages_state = not getattr(bot_instance, "handles_state_externally", False)
+        effective_args = (
+            _inject_voice_state(bot_instance, func.name, llm_args)
+            if manages_state
+            else llm_args
+        )
+
         async def execute() -> Any:
             await _run_filler_and_music(bot_instance, func)
             try:
                 result = await wrapped_handler(
-                    llm_args,
+                    effective_args,
                     function_config=func,
                 )
             finally:
                 # Always stop music even if handler errors
                 await _stop_music(bot_instance, func)
+
+            if manages_state:
+                _reduce_voice_state(bot_instance, func.name, result)
 
             if func.func_post_actions and bot_instance:
                 asyncio.create_task(
@@ -116,7 +135,7 @@ def _make_global_wrapper(
                 )
             return result
 
-        return await gate_global_function(bot_instance, func, llm_args, execute)
+        return await gate_global_function(bot_instance, func, effective_args, execute)
 
     return wrapper_handler
 

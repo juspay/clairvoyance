@@ -19,6 +19,7 @@ from app.core.logger import logger
 from app.core.logger.context import clear_log_context
 from app.database.accessor.breeze_buddy.chat_session import (
     drain_voice_into_chat_session,
+    upsert_agent_session_state,
 )
 
 callback_map = {
@@ -149,6 +150,15 @@ async def end_conversation(context: TemplateContext, args, transition_to=None):
                     new_messages=new_messages,
                     final_node=final_node,
                 )
+                # Persist voice-accumulated agent_state back to the chat
+                # session so a later chat turn sees cart_id/etc. that voice
+                # updated (mirror of the seed carried in on /voice/connect).
+                voice_state = getattr(context.bot, "agent_state", None)
+                if voice_state:
+                    await upsert_agent_session_state(
+                        chat_session_id=str(widget_session_id),
+                        data=voice_state,
+                    )
             except Exception as drain_err:
                 logger.error(
                     f"widget drain: failed for chat_session "
