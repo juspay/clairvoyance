@@ -141,6 +141,12 @@ def _synthetic_widget_user(widget_config_id: str) -> UserInfo:
 # ---------------------------------------------------------------------------
 
 
+def _is_redirect_action(action: object) -> bool:
+    """True when a quick-reply action is an ``open_url`` redirect (vs. the
+    default send-to-agent behavior). Such pills carry no ``value``."""
+    return getattr(action, "type", None) == "open_url"
+
+
 def _extract_widget_config(
     template: object,
 ) -> tuple[List[QuickReplyWire], bool]:
@@ -155,7 +161,19 @@ def _extract_widget_config(
         return [], True
     quick_replies: List[QuickReplyWire] = [
         QuickReplyWire(
-            label=qr.label, value=qr.value if qr.value is not None else qr.label
+            label=qr.label,
+            # Redirect pills (open_url action) never message the agent, so they
+            # always emit value=None — even if the config set one. The
+            # label->value fallback applies only to plain message pills.
+            value=(
+                None
+                if _is_redirect_action(qr.action)
+                else (qr.value if qr.value is not None else qr.label)
+            ),
+            action=qr.action,
+            # Icon is purely presentational — pass it through verbatim for
+            # every pill (no value/action coupling).
+            icon=qr.icon,
         )
         for qr in (getattr(configurations, "quick_replies", None) or [])
     ]

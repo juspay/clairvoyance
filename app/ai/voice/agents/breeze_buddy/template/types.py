@@ -16,6 +16,7 @@ from pydantic import (
     model_validator,
 )
 
+from app.ai.voice.agents.breeze_buddy.template.ui_catalog import ActionUnion, Icon
 from app.ai.voice.llm.types import LLMConfiguration
 from app.core.deprecation import log_deprecated_fields
 from app.core.logger import logger
@@ -658,6 +659,11 @@ class QuickReplyOption(BaseModel):
     omitted it falls back to ``label``, which lets the display text differ
     from the agent instruction (e.g. label="Track my order" while the
     backend receives a more explicit instruction).
+
+    Set ``action`` to override the click behavior. With an ``open_url``
+    action the chicklet **redirects** (opens the URL, honoring ``target``)
+    instead of messaging the agent; ``value`` is then optional and the
+    label fallback is not applied.
     """
 
     label: str = Field(..., min_length=1, description="Button text shown to the user.")
@@ -665,7 +671,24 @@ class QuickReplyOption(BaseModel):
         None,
         description=(
             "Payload sent to the backend. Defaults to label when absent "
-            "the fallback is applied server-side before the value reaches the client."
+            "the fallback is applied server-side before the value reaches the client. "
+            "Ignored when ``action`` is an ``open_url`` redirect."
+        ),
+    )
+    action: Optional[ActionUnion] = Field(
+        None,
+        description=(
+            "Optional click action. When omitted the chicklet sends ``value`` "
+            "to the agent (default). An ``open_url`` action makes it redirect "
+            "instead of messaging the agent."
+        ),
+    )
+    icon: Optional[Icon] = Field(
+        None,
+        description=(
+            "Optional icon shown alongside the label. Independent of "
+            "``value``/``action`` — applies to both message and redirect "
+            "chicklets."
         ),
     )
 

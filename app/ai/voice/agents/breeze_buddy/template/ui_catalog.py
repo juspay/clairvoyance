@@ -86,15 +86,38 @@ class ToAssistantAction(BaseModel):
 
 
 class OpenUrlAction(BaseModel):
-    """Open ``url`` in a new tab. Server-provided URLs only."""
+    """Open ``url``. Server-provided URLs only.
+
+    ``target`` controls where it opens: ``new_tab`` (default — preserves the
+    historical behavior) or ``same_tab`` to navigate the current page (e.g.
+    a checkout redirect)."""
 
     model_config = ConfigDict(extra="forbid")
 
     type: Literal["open_url"] = "open_url"
     url: HttpUrl
+    target: Literal["new_tab", "same_tab"] = Field(
+        "new_tab",
+        description=(
+            "Where to open the URL. ``new_tab`` (default) opens a new tab; "
+            "``same_tab`` navigates the current page."
+        ),
+    )
 
 
 ActionUnion = Union[ToAssistantAction, OpenUrlAction]
+
+
+class Icon(BaseModel):
+    """A small icon shown alongside a quick-reply chicklet. Server-provided
+    URLs only (http/https), same posture as ``Image.src``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    url: HttpUrl
+    alt: Optional[str] = Field(
+        None, description="Accessible label for the icon. Optional."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -208,8 +231,13 @@ class Buttons(_CatalogBase):
 class QuickReplyItem(BaseModel):
     """One pill in a ``QuickReplies`` row.
 
-    ``value`` is what gets sent to the agent; ``label`` is what the user
-    sees. When ``value`` is absent the widget echoes ``label`` verbatim.
+    Default behavior (no ``action``): clicking sends ``value`` back to the
+    agent (``label`` when ``value`` is absent) — a ``to_assistant`` round-trip.
+
+    Set ``action`` to override the click behavior. With an ``open_url``
+    action the pill **redirects** (opens the URL, honoring ``target``)
+    instead of messaging the agent — useful for "View your order",
+    "Checkout", help links, etc. ``value`` is then optional.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -219,7 +247,16 @@ class QuickReplyItem(BaseModel):
         None,
         description=(
             "Payload sent to the agent. Falls back to ``label`` when absent — "
-            "lets the display text differ from the agent instruction."
+            "lets the display text differ from the agent instruction. Ignored "
+            "when ``action`` is an ``open_url`` redirect."
+        ),
+    )
+    action: Optional[ActionUnion] = Field(
+        None,
+        description=(
+            "Optional click action. When omitted the pill sends ``value`` to "
+            "the agent (default). An ``open_url`` action makes the pill "
+            "redirect instead of messaging the agent."
         ),
     )
 

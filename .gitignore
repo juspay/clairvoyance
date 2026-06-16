@@ -55,3 +55,6 @@ logs
 .claude/memory/
 CLAUDE.local.md
 .claude/settings.json
+
+# Local scratch / test fixtures
+temp/
