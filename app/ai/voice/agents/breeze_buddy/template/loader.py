@@ -4,12 +4,16 @@ Flow Configuration Loader
 This module provides functionality to load templates from the database.
 """
 
+import asyncio
+import hashlib
+import json
 from typing import Dict, Optional, Tuple
 
 from app.ai.voice.agents.breeze_buddy.template.transformation_function import (
     TEMPLATE_FUNCTION_REGISTRY,
 )
 from app.ai.voice.agents.breeze_buddy.template.types import (
+    DataSourceRef,
     FlowMode,
     TemplateModel,
 )
@@ -21,6 +25,9 @@ from app.database.accessor.breeze_buddy.credentials import (
 from app.database.accessor.breeze_buddy.template import (
     get_template_by_id_with_fallback,
 )
+from app.services.data_sources import DATA_SOURCE_UNAVAILABLE
+from app.services.google.sheets import extract_spreadsheet_id, fetch_formatted
+from app.services.redis import get_redis_service
 
 
 class FlowConfigLoader:
@@ -205,6 +212,23 @@ class FlowConfigLoader:
                         f"Injected extra payload field '{field_name}' into template_vars"
                     )
 
+        # 5. data sources — inject as {datasource_<name>} variables
+        if template_obj.data_sources:
+            contents = await asyncio.gather(
+                *[
+                    self._fetch_one_data_source(ref)
+                    for ref in template_obj.data_sources
+                ],
+                return_exceptions=True,
+            )
+            for ref, result in zip(template_obj.data_sources, contents):
+                if not isinstance(result, Exception) and result is not None:
+                    var_key = f"datasource_{ref.name}"
+                    if var_key not in template_vars:
+                        template_vars[var_key] = result
+                        logger.info(
+                            f"Injected data source '{ref.name}' as variable '{var_key}'"
+                        )
         # Direct mode has a flat structure (system_prompt + flat function list)
         # rather than a nodes array, so render the top-level message fields and
         # skip the per-node loop entirely.
@@ -275,3 +299,59 @@ class FlowConfigLoader:
 
         logger.info(f"Rendered task messages for template {template_obj.name}")
         return template_obj, template_vars
+
+    async def _fetch_one_data_source(self, ref: "DataSourceRef") -> str:
+        if not ref.is_active:
+            return DATA_SOURCE_UNAVAILABLE
+
+        spreadsheet_id = extract_spreadsheet_id(ref.spreadsheet_url)
+        if not spreadsheet_id:
+            logger.warning(
+                "Data source '%s' has malformed spreadsheet_url: %s",
+                ref.name,
+                ref.spreadsheet_url,
+            )
+            return DATA_SOURCE_UNAVAILABLE
+
+        sheet = ref.sheet_name or "_first_"
+        cols = json.dumps(sorted(ref.columns or []))
+        cols_digest = hashlib.md5(cols.encode()).hexdigest()[:8]
+        cache_key = (
+            f"datasource:{spreadsheet_id}:{sheet}:{cols_digest}:{ref.format.value}"
+        )
+
+        try:
+            redis = await get_redis_service()
+            cached = await redis.get(cache_key)
+            if cached:
+                return cached
+        except Exception:
+            pass
+
+        try:
+            content = await asyncio.wait_for(
+                fetch_formatted(
+                    spreadsheet_id=spreadsheet_id,
+                    sheet_name=ref.sheet_name,
+                    columns=ref.columns,
+                    format=ref.format.value,
+                ),
+                timeout=5.0,
+            )
+        except asyncio.TimeoutError:
+            logger.warning("Data source '%s' fetch timed out", ref.name)
+            return DATA_SOURCE_UNAVAILABLE
+        except Exception as exc:
+            logger.error(
+                "Data source '%s' fetch failed: %s", ref.name, exc, exc_info=True
+            )
+            return DATA_SOURCE_UNAVAILABLE
+
+        if content != DATA_SOURCE_UNAVAILABLE:
+            try:
+                redis = await get_redis_service()
+                await redis.setex(cache_key, content, ttl_seconds=60)
+            except Exception:
+                pass
+
+        return content
