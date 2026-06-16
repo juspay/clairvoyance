@@ -89,7 +89,14 @@ _EXAMPLES: Dict[str, Dict[str, Any]] = {
         "items": [
             {"label": "Yes, confirm"},
             {"label": "No, cancel", "value": "cancel_order_intent"},
-            {"label": "Show more options"},
+            {
+                "label": "View your order",
+                "action": {
+                    "type": "open_url",
+                    "url": "https://shop.example/orders/123",
+                    "target": "new_tab",
+                },
+            },
         ],
     },
     "Handoff": {

@@ -11,6 +11,8 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
+from app.ai.voice.agents.breeze_buddy.template.ui_catalog import ActionUnion, Icon
+
 
 class ChatSessionStatus(str, Enum):
     """Lifecycle status of a chat session."""
@@ -447,8 +449,25 @@ class QuickReplyWire(BaseModel):
     value: Optional[str] = Field(
         None,
         description=(
-            "Payload sent to the backend. Always populated — falls back to "
-            "label server-side when not explicitly set in the template."
+            "Payload sent to the backend. Populated for message pills — falls "
+            "back to label server-side when not explicitly set in the template. "
+            "May be null when ``action`` is an ``open_url`` redirect."
+        ),
+    )
+    action: Optional[ActionUnion] = Field(
+        None,
+        description=(
+            "Optional click action. When null the pill sends ``value`` to the "
+            "agent (default). An ``open_url`` action makes the pill redirect "
+            "(opening the URL, honoring its ``target``) instead of messaging."
+        ),
+    )
+    icon: Optional[Icon] = Field(
+        None,
+        description=(
+            "Optional icon (``url`` + ``alt``) shown alongside the label. "
+            "Passed through verbatim from the template config — present on "
+            "both message and redirect pills."
         ),
     )
 
