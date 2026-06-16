@@ -1138,6 +1138,9 @@ class Agent:
                         mcp_global_functions = await get_mcp_global_functions(
                             mcp_config=mcp_config,
                             template_vars=self.template_vars,
+                            # Thread the bot so a gated MCP tool can reach the
+                            # ApprovalManager and block in-process (Pattern C).
+                            bot_instance=self,
                         )
                     except Exception as e:
                         logger.error(

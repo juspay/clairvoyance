@@ -61,23 +61,28 @@ def denial_result(status: str, reason: str) -> Dict[str, str]:
     return {"status": status, "reason": reason}
 
 
-async def gate_global_function(
+async def gate_call(
     bot_instance: Any,
-    func: BaseGlobalFunction,
+    name: str,
+    approval: Optional[ApprovalConfig],
     llm_args: Dict[str, Any],
     execute: Callable[[], Awaitable[Any]],
 ) -> Any:
-    """Run ``execute()`` only after the function's approval gate clears.
+    """Run ``execute()`` only after the approval gate for ``name`` clears.
+
+    Channel-generic core shared by global functions (via
+    :func:`gate_global_function`) and MCP tools (via the wrapper in
+    ``mcp/__init__.py``). ``name`` is the LLM-visible call name; ``approval``
+    is its ApprovalConfig (None => ungated => execute immediately).
 
     ``execute`` carries the full call side effects (filler audio, handler,
-    post-actions) — a denied call therefore plays no filler and fires no
-    side effects.
+    post-actions / the real MCP round-trip) — a denied call therefore plays
+    no filler and fires no side effects.
 
     CancelledError from the approval wait (user barge-in on a sync gated
-    function, or pipeline teardown) propagates — pipecat's aggregator
-    records the call as CANCELLED and never re-invokes the handler.
+    call, or pipeline teardown) propagates — pipecat's aggregator records
+    the call as CANCELLED and never re-invokes the handler.
     """
-    approval = getattr(func, "approval", None)
     if approval is None:
         return await execute()
 
@@ -91,9 +96,9 @@ async def gate_global_function(
     if manager is None:
         if getattr(bot_instance, "is_daily_mode", False):
             # Channel expected but unavailable (e.g. RTVI disabled by env
-            # flag). Never auto-execute a gated function here.
+            # flag). Never auto-execute a gated call here.
             logger.error(
-                f"[approval] '{func.name}' is approval-gated but this daily "
+                f"[approval] '{name}' is approval-gated but this daily "
                 "bot has no approval channel (RTVI unavailable — check "
                 "ENABLE_BREEZE_BUDDY_DAILY_EVENTS). Denying."
             )
@@ -102,13 +107,13 @@ async def gate_global_function(
         # Telephony: no approval surface can exist.
         if approval.on_no_channel == ApprovalOnNoChannel.DENY:
             logger.warning(
-                f"[approval] '{func.name}' denied on a channel with no "
+                f"[approval] '{name}' denied on a channel with no "
                 "approval surface (on_no_channel=deny)."
             )
             return denial_result(LLM_STATUS_DENIED, "no_approval_channel")
 
         logger.warning(
-            f"[approval] EXECUTING approval-gated function '{func.name}' "
+            f"[approval] EXECUTING approval-gated call '{name}' "
             "WITHOUT human approval — no approval surface on this channel "
             "(telephony) and on_no_channel=execute. "
             f"args_keys={sorted(llm_args.keys()) if llm_args else []}"
@@ -124,7 +129,7 @@ async def gate_global_function(
         except Exception as e:
             logger.warning(f"[approval] Failed to queue voice_announce: {e}")
 
-    outcome: ApprovalOutcome = await manager.request(func.name, llm_args, approval)
+    outcome: ApprovalOutcome = await manager.request(name, llm_args, approval)
     if outcome.approved:
         return await execute()
 
@@ -140,6 +145,22 @@ async def gate_global_function(
     return denial_result(
         llm_status,
         outcome.reason or "the user did not approve this action",
+    )
+
+
+async def gate_global_function(
+    bot_instance: Any,
+    func: BaseGlobalFunction,
+    llm_args: Dict[str, Any],
+    execute: Callable[[], Awaitable[Any]],
+) -> Any:
+    """Approval gate for a global function — thin shim over :func:`gate_call`.
+
+    Reads the function's name + approval and delegates; keeps the existing
+    call sites (``_make_global_wrapper``) unchanged.
+    """
+    return await gate_call(
+        bot_instance, func.name, getattr(func, "approval", None), llm_args, execute
     )
 
 

@@ -1011,6 +1011,23 @@ class McpServerConfig(BaseModel):
             "voice and chat."
         ),
     )
+    tool_approvals: Dict[str, "ApprovalConfig"] = Field(
+        default_factory=dict,
+        description=(
+            "Per-tool human-in-the-loop approval gates. Keys are the RAW "
+            "upstream MCP tool names (e.g. 'create_checkout'); values are "
+            "ApprovalConfig. When an entry exists, a call to that tool pauses "
+            "for an explicit end-user decision before it executes: chat ends "
+            "the turn with a function_approval_requested event and resumes on "
+            "the approval endpoint; Daily voice blocks in-process on the RTVI "
+            "approval channel (Pattern C). Same keying rule as the other "
+            "per-tool maps — author against the raw upstream name; a tool "
+            "whose name collides across servers is gated under its registered "
+            "``<server.name>_<name>`` form. Telephony has no approval surface "
+            "(see ApprovalConfig.on_no_channel, default 'execute'); set it to "
+            "'deny' for high-stakes write tools (refunds, checkout)."
+        ),
+    )
     tool_schemas: Optional[List[Dict[str, Any]]] = Field(
         default=None,
         description=(
@@ -1703,10 +1720,13 @@ class ApprovalOnNoChannel(str, Enum):
 
 
 class ApprovalConfig(BaseModel):
-    """Human-in-the-loop approval for a global function.
+    """Human-in-the-loop approval for a global function or an MCP tool.
 
-    Presence of this config on a function marks it as gated: the LLM may call
-    the function, but execution waits for an explicit end-user decision.
+    Presence of this config marks the call as gated: the LLM may call the
+    function/tool, but execution waits for an explicit end-user decision. On a
+    global function it is set inline via ``BaseGlobalFunction.approval``; on an
+    MCP tool it is set via ``McpServerConfig.tool_approvals[<raw tool name>]``.
+    The gate semantics below are identical for both.
 
     Channel behavior:
     - Chat: the turn ends at the gated call (`turn_end` carries

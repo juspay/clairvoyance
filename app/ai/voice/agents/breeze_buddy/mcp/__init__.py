@@ -6,7 +6,7 @@ import json
 import re
 import uuid
 from datetime import timedelta
-from typing import Any, Dict, List, Optional, cast
+from typing import Any, Dict, List, Optional, Tuple, cast
 
 import httpx
 from mcp.client.session_group import StreamableHttpParameters
@@ -22,6 +22,13 @@ from app.ai.voice.agents.breeze_buddy.handlers.transport.utils.response_transfor
 )
 from app.ai.voice.agents.breeze_buddy.mcp.cache import get_or_discover_server_tools
 
+# gate_call wraps gated MCP tool handlers with the HITL approval gate (voice).
+# Cycle-safe: template.approval only depends on template.context +
+# template.types, never on mcp. (isort orders this template import among the
+# others; the latent handlers<->template cycle the note below describes is
+# pre-existing and unchanged by this import.)
+from app.ai.voice.agents.breeze_buddy.template.approval import gate_call
+
 # Template types FIRST — fully loads the `template` package (whose
 # __init__ eagerly pulls in http_handler / http_requester / hooks /
 # field_resolver) before we touch handlers/transport/utils/. Importing
@@ -29,6 +36,7 @@ from app.ai.voice.agents.breeze_buddy.mcp.cache import get_or_discover_server_to
 # handlers.transport.utils.__init__ → field_resolver → template.types
 # while template/__init__.py is mid-load, causing a cycle.
 from app.ai.voice.agents.breeze_buddy.template.types import (
+    ApprovalConfig,
     HttpAuthType,
     McpConfig,
     McpServerConfig,
@@ -37,6 +45,57 @@ from app.ai.voice.agents.breeze_buddy.template.types import (
     ToolUiTrigger,
 )
 from app.core.logger import logger
+
+# --- HITL approval for MCP tools -------------------------------------------
+# Watchdog budget for a gated MCP tool: approval wait + the handler's dispatch
+# ceiling + margin. The MCP handler does up to two 30s waits (_tool_wrapper +
+# the result future), so the exec ceiling is ~60s. Mirrors the ADDITIVE budget
+# in template/global_function.py — pipecat's watchdog fires
+# result_callback(None) rather than cancelling the handler, so an undersized
+# timeout would silently drop the real result while the side effect still runs.
+_MCP_APPROVAL_EXEC_BUDGET_SECS = 60.0
+_MCP_APPROVAL_BUDGET_MARGIN_SECS = 15.0
+
+
+def _mcp_approval_timeout_secs(approval: ApprovalConfig) -> float:
+    """Additive pipecat watchdog budget for a gated MCP FlowsFunctionSchema."""
+    return (
+        approval.timeout_secs
+        + _MCP_APPROVAL_EXEC_BUDGET_SECS
+        + _MCP_APPROVAL_BUDGET_MARGIN_SECS
+    )
+
+
+def _gate_mcp_handler(
+    handler: Any,
+    bot_instance: Any,
+    registered_name: str,
+    approval: Optional[ApprovalConfig],
+) -> Any:
+    """Wrap an MCP tool handler with the HITL approval gate (voice path).
+
+    No-op when there is no approval config or no bot to reach the
+    ApprovalManager — returns the handler unchanged. On chat the bot sets
+    ``handles_approval_externally`` so ``gate_call`` short-circuits to execute
+    (chat gates pre-dispatch via its approval map); this wrap is therefore only
+    load-bearing on Daily voice.
+
+    A denied/timed-out call never runs the real MCP round-trip (no upstream
+    side effect): ``gate_call`` returns the bare ``{status, reason}`` denial —
+    the same shape a denied voice GLOBAL function returns, so the LLM reads it
+    uniformly. Only on approve does the real MCP ``{status, data}`` envelope
+    flow through.
+    """
+    if approval is None or bot_instance is None:
+        return handler
+
+    async def gated_handler(args: Dict[str, Any], flow_manager: Any) -> Any:
+        async def execute() -> Any:
+            return await handler(args, flow_manager)
+
+        return await gate_call(bot_instance, registered_name, approval, args, execute)
+
+    return gated_handler
 
 
 def _deep_merge_defaults(
@@ -518,6 +577,7 @@ async def _load_server_tools(
     server: McpServerConfig,
     template_vars: Dict[str, str],
     existing_names: set,
+    bot_instance: Any = None,
 ) -> List[FlowsFunctionSchema]:
     """Connect to a single MCP server and return its tools as FlowsFunctionSchema.
 
@@ -566,24 +626,40 @@ async def _load_server_tools(
                 server.tool_response_transforms.get(schema["name"]) or None
             )
             tool_ui_hint = server.tool_ui_instructions.get(schema["name"])
+            # HITL: per-tool approval is authored against the RAW upstream
+            # name (like transforms/ui), but gated under the REGISTERED name.
+            tool_approval = server.tool_approvals.get(schema["name"])
+            handler = _gate_mcp_handler(
+                _create_direct_http_tool_handler(
+                    server_params,
+                    schema["name"],
+                    response_transforms=tool_transforms,
+                    ui_hint=tool_ui_hint,
+                    default_args=server.default_args,
+                ),
+                bot_instance,
+                tool_name,
+                tool_approval,
+            )
+            schema_kwargs: Dict[str, Any] = {}
+            if tool_approval is not None:
+                schema_kwargs["timeout_secs"] = _mcp_approval_timeout_secs(
+                    tool_approval
+                )
             functions.append(
                 FlowsFunctionSchema(
                     name=tool_name,
                     description=schema.get("description", ""),
                     properties=schema.get("properties", {}),
                     required=schema.get("required", []),
-                    handler=_create_direct_http_tool_handler(
-                        server_params,
-                        schema["name"],
-                        response_transforms=tool_transforms,
-                        ui_hint=tool_ui_hint,
-                        default_args=server.default_args,
-                    ),
+                    handler=handler,
+                    **schema_kwargs,
                 )
             )
             existing_names.add(tool_name)
             logger.info(
                 f"[BUDDY_MCP] Registered (declared) tool: {tool_name} (from {label})"
+                + (" [approval-gated]" if tool_approval is not None else "")
             )
         logger.info(f"[BUDDY_MCP] Loaded {len(functions)} declared tools from {label}")
         return functions
@@ -609,6 +685,22 @@ async def _load_server_tools(
         # author against the upstream name; the local prefix is internal).
         tool_transforms = server.tool_response_transforms.get(func_schema.name) or None
         tool_ui_hint = server.tool_ui_instructions.get(func_schema.name)
+        tool_approval = server.tool_approvals.get(func_schema.name)
+        handler = _gate_mcp_handler(
+            _create_mcp_tool_handler(
+                server_params,
+                func_schema.name,
+                response_transforms=tool_transforms,
+                ui_hint=tool_ui_hint,
+                default_args=server.default_args,
+            ),
+            bot_instance,
+            tool_name,
+            tool_approval,
+        )
+        schema_kwargs: Dict[str, Any] = {}
+        if tool_approval is not None:
+            schema_kwargs["timeout_secs"] = _mcp_approval_timeout_secs(tool_approval)
 
         discovered_functions.append(
             FlowsFunctionSchema(
@@ -616,19 +708,17 @@ async def _load_server_tools(
                 description=func_schema.description,
                 properties=func_schema.properties,
                 required=func_schema.required,
-                handler=_create_mcp_tool_handler(
-                    server_params,
-                    func_schema.name,
-                    response_transforms=tool_transforms,
-                    ui_hint=tool_ui_hint,
-                    default_args=server.default_args,
-                ),
+                handler=handler,
+                **schema_kwargs,
             )
         )
         # Track the chosen name so a subsequent tool from the same server
         # with a duplicate name also gets prefixed.
         existing_names.add(tool_name)
-        logger.info(f"[BUDDY_MCP] Registered tool: {tool_name} (from {label})")
+        logger.info(
+            f"[BUDDY_MCP] Registered tool: {tool_name} (from {label})"
+            + (" [approval-gated]" if tool_approval is not None else "")
+        )
 
     logger.info(f"[BUDDY_MCP] Loaded {len(discovered_functions)} tools from {label}")
     return discovered_functions
@@ -637,11 +727,18 @@ async def _load_server_tools(
 async def get_mcp_global_functions(
     mcp_config: McpConfig,
     template_vars: Dict[str, str] | None = None,
+    bot_instance: Any = None,
 ) -> List[FlowsFunctionSchema]:
     """Fetch tools from all enabled MCP servers and return as FlowManager global functions.
 
     Each tool handler creates a fresh MCPClient per invocation, so no shared
     client cleanup is needed at the call level.
+
+    ``bot_instance`` (the voice agent) is threaded into the tool handlers so an
+    MCP tool with a ``tool_approvals`` entry can reach the bot's
+    ApprovalManager and gate in-process before its real round-trip (Pattern C).
+    Chat uses :func:`get_mcp_global_functions_cached`, which gates pre-dispatch
+    instead and needs no bot reference here.
     """
     template_vars = template_vars or {}
     all_functions: List[FlowsFunctionSchema] = []
@@ -653,7 +750,9 @@ async def get_mcp_global_functions(
         try:
             existing_names = {f.name for f in all_functions}
             task = asyncio.create_task(
-                _load_server_tools(server, template_vars, existing_names)
+                _load_server_tools(
+                    server, template_vars, existing_names, bot_instance=bot_instance
+                )
             )
             tools = await asyncio.shield(task)
             all_functions.extend(tools)
@@ -671,7 +770,7 @@ async def get_mcp_global_functions_cached(
     template_vars: Dict[str, Any],
     template_id: str,
     mcp_pool: Optional[MCPPool] = None,
-) -> List[FlowsFunctionSchema]:
+) -> Tuple[List[FlowsFunctionSchema], Dict[str, ApprovalConfig]]:
     """Cache-aware variant for chat mode.
 
     Reads tool metadata from Redis (per-template + URL hash, see
@@ -683,8 +782,16 @@ async def get_mcp_global_functions_cached(
     When ``mcp_pool`` is provided the resulting handlers share one
     MCPClient per server for the lifetime of the turn. The caller owns
     pool teardown via ``close_mcp_pool``.
+
+    Returns ``(functions, approval_map)`` where ``approval_map`` maps each
+    gated MCP tool's REGISTERED name (raw, or ``<server.name>_<name>`` on a
+    cross-server collision) to its ApprovalConfig. Chat does NOT wrap the
+    handlers (unlike voice): it gates pre-dispatch by merging this map into
+    ChatAgent._approval_map, so the existing name-keyed partition / pending
+    row / approval-endpoint / resume machinery gates MCP tools unchanged.
     """
     all_functions: List[FlowsFunctionSchema] = []
+    approval_map: Dict[str, ApprovalConfig] = {}
 
     for server in mcp_config.servers:
         if not server.enabled:
@@ -724,6 +831,9 @@ async def get_mcp_global_functions_cached(
                     server.tool_response_transforms.get(schema["name"]) or None
                 )
                 tool_ui_hint = server.tool_ui_instructions.get(schema["name"])
+                tool_approval = server.tool_approvals.get(schema["name"])
+                if tool_approval is not None:
+                    approval_map[tool_name] = tool_approval
                 all_functions.append(
                     FlowsFunctionSchema(
                         name=tool_name,
@@ -768,6 +878,9 @@ async def get_mcp_global_functions_cached(
                 tool_name = f"{server.name}_{tool_name}"
             tool_transforms = server.tool_response_transforms.get(meta["name"]) or None
             tool_ui_hint = server.tool_ui_instructions.get(meta["name"])
+            tool_approval = server.tool_approvals.get(meta["name"])
+            if tool_approval is not None:
+                approval_map[tool_name] = tool_approval
             all_functions.append(
                 FlowsFunctionSchema(
                     name=tool_name,
@@ -791,4 +904,4 @@ async def get_mcp_global_functions_cached(
             )
 
     logger.info(f"[BUDDY_MCP] chat: total tools loaded: {len(all_functions)}")
-    return all_functions
+    return all_functions, approval_map

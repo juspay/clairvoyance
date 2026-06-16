@@ -279,7 +279,7 @@ class ChatAgent:
             self.template.configurations.mcp if self.template.configurations else None
         )
         if mcp_config and mcp_config.servers:
-            mcp_funcs = await get_mcp_global_functions_cached(
+            mcp_funcs, mcp_approvals = await get_mcp_global_functions_cached(
                 mcp_config,
                 self.template_vars,
                 self.template.id,
@@ -291,6 +291,27 @@ class ChatAgent:
             logger.info(
                 f"[BUDDY_MCP] chat: added {len(unique)} MCP tools as global functions"
             )
+            # HITL: gate MCP tools by NAME, alongside flow global functions.
+            # This is the only place the final registered names exist (the
+            # __init__ build_approval_map runs before MCP load), so the merge
+            # lives here rather than in build_approval_map. Everything
+            # downstream (partition, pending-row persist, approval endpoint,
+            # resume re-dispatch) is name-keyed and type-agnostic — it gates
+            # MCP tools with no further change. Only tools that actually
+            # registered (survived the collision-dedup above) are gated; a
+            # gated tool dropped on a name clash is logged, never silently
+            # un-gated-by-surprise.
+            if mcp_approvals:
+                unique_names = {fn.name for fn in unique}
+                for name, cfg in mcp_approvals.items():
+                    if name in unique_names:
+                        self._approval_map[name] = cfg
+                    else:
+                        logger.warning(
+                            f"[BUDDY_MCP] chat: gated MCP tool '{name}' was "
+                            "dropped on a name collision with an existing "
+                            "function; it will NOT be approval-gated."
+                        )
 
         # Aggregate per-tool context-retention policy across every MCP server
         # the template declares. Used by llm_driver to compact stale
