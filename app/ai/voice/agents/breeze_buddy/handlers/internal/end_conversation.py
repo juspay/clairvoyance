@@ -7,6 +7,7 @@ from pipecat.frames.frames import EndFrame
 from app.ai.voice.agents.breeze_buddy.callbacks import (
     service_callback,
 )
+from app.ai.voice.agents.breeze_buddy.evaluations import enqueue_lead_for_evaluation
 from app.ai.voice.agents.breeze_buddy.observability.tracing_setup import (
     update_span_with_evaluation_data,
 )
@@ -260,6 +261,14 @@ async def end_conversation(context: TemplateContext, args, transition_to=None):
         # Update OpenTelemetry span with evaluation data AFTER DB write,
         # so context.lead.outcome reflects the final persisted value.
         update_span_with_evaluation_data(context)
+
+        # Enqueue the lead for internal LLM-as-judge evaluation.
+        # Best-effort + idempotent per lead_id; never breaks call teardown.
+        # The worker reads the full lead (transcript, payload, outcome,
+        # reseller/merchant, tags) from the DB — no Langfuse fetch.
+        evaluation_lead_id = str(context.lead.id) if context.lead else None
+        if evaluation_lead_id:
+            await enqueue_lead_for_evaluation(evaluation_lead_id)
 
         # Execute end_conversation_callbacks
         if context.end_conversation_callbacks:
