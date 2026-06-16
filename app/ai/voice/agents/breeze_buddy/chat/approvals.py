@@ -114,3 +114,44 @@ async def resolve_dangling_approvals(
         f"{new_status.value} for session {session_id}"
     )
     return claimed
+
+
+async def terminate_pending_approvals(session_id: str) -> List[ToolApproval]:
+    """Resolve ALL still-pending approvals when a session terminates.
+
+    The chat counterpart of voice's ``ApprovalManager.deny_all`` on a terminal
+    event (disconnect / idle / conversation-end). The idle-cleanup task ends a
+    session, but without this its gated ``tool_approval`` rows are left PENDING
+    until lazy expiry — a dangling ``tool_use`` a late reload or audit would
+    see unanswered, and a ``pending_approvals`` query would report as still
+    live on an ended session. Claims every pending row as EXPIRED (timeout
+    result) and writes the coalesced synthetic ``tool_result`` so the
+    dangling-tool_use invariant holds even on an ended session.
+
+    Differs from ``resolve_dangling_approvals(only_expired=False)`` only in the
+    terminal STATUS: that path SUPERSEDES (the user moved on, mid-session);
+    this one EXPIRES (the session itself ended — closer to voice's terminal
+    deny). The caller runs under the session Redis lock (see chat/cleanup.py),
+    and the claim is an atomic CAS, so a racing ``/approval`` simply loses.
+    """
+    claimed = await claim_pending_tool_approvals(
+        session_id=session_id,
+        new_status=ToolApprovalStatus.EXPIRED,
+        reason="the chat session ended before a decision arrived",
+        only_expired=False,  # claim ALL pending, not just rows past expires_at
+    )
+    if not claimed:
+        return []
+
+    pairs = [(row.tool_call_id, EXPIRED_RESULT) for row in claimed]
+    await insert_chat_message(
+        session_id=session_id,
+        role=ChatMessageRole.USER,
+        content=None,
+        content_blocks=tool_results_to_user_blocks(pairs),
+    )
+    logger.info(
+        f"[approval] Terminated {len(claimed)} pending approval(s) on session "
+        f"end for {session_id}"
+    )
+    return claimed

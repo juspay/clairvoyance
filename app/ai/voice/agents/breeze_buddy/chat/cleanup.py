@@ -9,6 +9,9 @@ duplicate runs from a botched lock acquire are safe.
 
 from datetime import timedelta
 
+from app.ai.voice.agents.breeze_buddy.chat.approvals import (
+    terminate_pending_approvals,
+)
 from app.core.config.dynamic import CHAT_SESSION_END_TIMEOUT_SECONDS
 from app.core.logger import logger
 from app.database.accessor.breeze_buddy.chat_session import (
@@ -84,6 +87,15 @@ async def end_idle_chat_sessions() -> None:
                 ended_reason=ChatEndedReason.IDLE_TIMEOUT,
             )
             ended += 1
+            # Terminal sweep: resolve any approvals left PENDING on the now-
+            # ENDED session (chat's analog of voice deny_all). Best-effort —
+            # a failure here must not undo the end. Runs under the same lock.
+            try:
+                await terminate_pending_approvals(session_id)
+            except Exception as exc:
+                logger.warning(
+                    f"chat cleanup: terminate approvals failed for {session_id}: {exc}"
+                )
         except Exception as exc:
             logger.warning(f"chat cleanup: end_chat_session failed for {row.id}: {exc}")
         finally:
