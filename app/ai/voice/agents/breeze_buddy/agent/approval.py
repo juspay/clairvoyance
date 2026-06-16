@@ -15,11 +15,13 @@ Lifecycle invariants (these are load-bearing — see plan review):
   grace; pipeline teardown) the map pop is synchronous and the emit is a
   cheap frame-queue put, so cleanup fits the grace window; the error is
   re-raised so pipecat records the call as CANCELLED.
-- Duplicate request for the same function name (async re-call, parallel
-  batch) supersedes the older pending request.
+- An IDENTICAL re-call (same function name AND same arguments) supersedes
+  the older pending request. Distinct parallel calls to the same function
+  (different arguments) each keep their own pending card.
 """
 
 import asyncio
+import json
 import uuid
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
@@ -54,6 +56,26 @@ _Resolution = Tuple[bool, str, Optional[str]]
 _MAX_WAIT_SECS = 270.0
 
 
+def _dedupe_key(function_name: str, arguments: Optional[Dict[str, Any]]) -> str:
+    """Supersede key = function name + a stable fingerprint of the arguments.
+
+    A true re-call (same function, same args) collides and supersedes the
+    stale pending request; two DISTINCT parallel calls to the same function
+    (different args — e.g. two ``add_to_cart``) get different keys and each
+    keep their own pending card instead of one clobbering the other.
+    """
+    try:
+        return (
+            f"{function_name}\x00"
+            f"{json.dumps(arguments or {}, sort_keys=True, default=str)}"
+        )
+    except Exception:
+        # LLM tool args are JSON-serializable in practice; if some exotic
+        # value isn't, fall back to function-name-only keying (the older,
+        # coarser supersede behavior) rather than crash the gate.
+        return function_name
+
+
 class ApprovalManager:
     """Tracks pending approval requests for one in-process voice bot."""
 
@@ -62,8 +84,11 @@ class ApprovalManager:
         self._pending: Dict[
             str, Tuple["asyncio.Future[_Resolution]", Dict[str, Any]]
         ] = {}
-        # function_name -> approval_id, for supersede-on-duplicate.
-        self._by_function: Dict[str, str] = {}
+        # dedupe-key -> approval_id, for supersede-on-duplicate. Key is
+        # function_name + args fingerprint (see _dedupe_key): a true re-call
+        # supersedes; distinct parallel calls to the same function each keep
+        # their own card.
+        self._by_request: Dict[str, str] = {}
 
     def has_pending(self) -> bool:
         return bool(self._pending)
@@ -79,22 +104,25 @@ class ApprovalManager:
         config: ApprovalConfig,
     ) -> ApprovalOutcome:
         """Emit an approval request and wait for the decision."""
-        # Supersede an older pending request for the same function — its
-        # awaiting request() coroutine wakes up and handles its own
-        # cleanup + resolved emit.
-        prior_id = self._by_function.get(function_name)
+        # Supersede an older pending request that is an IDENTICAL re-call
+        # (same function, same args) — its awaiting request() coroutine wakes
+        # up and handles its own cleanup + resolved emit. Distinct parallel
+        # calls to the same function (different args) get different dedupe
+        # keys, so neither supersedes the other.
+        dedupe_key = _dedupe_key(function_name, arguments)
+        prior_id = self._by_request.get(dedupe_key)
         if prior_id is not None:
             prior = self._pending.get(prior_id)
             if prior is not None and not prior[0].done():
                 logger.info(
                     f"[approval] Superseding pending approval {prior_id} "
-                    f"for '{function_name}' with a newer request"
+                    f"for '{function_name}' with an identical newer request"
                 )
                 prior[0].set_result(
                     (
                         False,
                         WIRE_STATUS_SUPERSEDED,
-                        "superseded by a newer request for the same function",
+                        "superseded by an identical newer request",
                     )
                 )
 
@@ -117,7 +145,7 @@ class ApprovalManager:
         }
         fut: "asyncio.Future[_Resolution]" = asyncio.get_running_loop().create_future()
         self._pending[approval_id] = (fut, payload)
-        self._by_function[function_name] = approval_id
+        self._by_request[dedupe_key] = approval_id
 
         outcome: Optional[ApprovalOutcome] = None
         try:
@@ -151,8 +179,8 @@ class ApprovalManager:
         finally:
             # Single cleanup + emission point for every exit path.
             self._pending.pop(approval_id, None)
-            if self._by_function.get(function_name) == approval_id:
-                self._by_function.pop(function_name, None)
+            if self._by_request.get(dedupe_key) == approval_id:
+                self._by_request.pop(dedupe_key, None)
             if outcome is not None:
                 logger.info(
                     f"[approval] Resolved '{function_name}' "
