@@ -73,13 +73,15 @@ async def test_manager_timeout_then_late_resolve_is_stale():
     assert not manager.has_pending()
 
 
-async def test_manager_supersede_on_duplicate_function():
+async def test_manager_supersede_on_identical_recall():
+    """An identical re-call (same function AND same args) supersedes the
+    stale pending request."""
     emit = _EmitRecorder()
     manager = ApprovalManager(emit=emit)
     cfg = ApprovalConfig(timeout_secs=5)
     first = asyncio.create_task(manager.request("fn", {"v": 1}, cfg))
     await asyncio.sleep(0.01)
-    second = asyncio.create_task(manager.request("fn", {"v": 2}, cfg))
+    second = asyncio.create_task(manager.request("fn", {"v": 1}, cfg))
     await asyncio.sleep(0.01)
 
     first_outcome = await first
@@ -91,6 +93,35 @@ async def test_manager_supersede_on_duplicate_function():
     manager.resolve(second_id, True)
     second_outcome = await second
     assert second_outcome.approved is True
+    assert not manager.has_pending()
+
+
+async def test_manager_no_supersede_on_distinct_parallel_args():
+    """Two distinct parallel calls to the same function (DIFFERENT args, e.g.
+    two add_to_cart) each keep their own pending card — neither supersedes the
+    other (the parallel-drop bug fix)."""
+    emit = _EmitRecorder()
+    manager = ApprovalManager(emit=emit)
+    cfg = ApprovalConfig(timeout_secs=5)
+    first = asyncio.create_task(manager.request("add_to_cart", {"item": "A"}, cfg))
+    await asyncio.sleep(0.01)
+    second = asyncio.create_task(manager.request("add_to_cart", {"item": "B"}, cfg))
+    await asyncio.sleep(0.01)
+
+    # Both pending — no supersede, and nothing resolved yet.
+    assert manager.has_pending()
+    req_events = [e for e in emit.events if e[0] == RTVI_APPROVAL_REQUEST]
+    assert len(req_events) == 2
+    assert [e for e in emit.events if e[0] == RTVI_APPROVAL_RESOLVED] == []
+
+    # Each resolves independently to its own decision.
+    ids = [e[1]["approval_id"] for e in req_events]
+    manager.resolve(ids[0], True)
+    manager.resolve(ids[1], False)
+    o1 = await first
+    o2 = await second
+    assert o1.approved is True
+    assert o2.approved is False
     assert not manager.has_pending()
 
 

@@ -228,9 +228,11 @@ def build_approval_map(flow: Any) -> Dict[str, ApprovalConfig]:
         if gated_name in node_function_names:
             logger.warning(
                 f"[approval] Gated global '{gated_name}' is shadowed by a "
-                "per-node function of the same name: chat will gate the "
-                "shadowing per-node function (name-keyed), voice will not "
-                "(wrapper gate only wraps globals)."
+                "per-node function of the same name. In nodes that define it, "
+                "the per-node function runs UNGATED on BOTH chat and voice "
+                "(per-node functions are not gateable in v1); the gate applies "
+                "only in nodes where the global is reachable. Rename one to "
+                "remove the ambiguity."
             )
 
     return approval_map

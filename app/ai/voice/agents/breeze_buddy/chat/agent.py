@@ -79,6 +79,43 @@ from app.schemas.breeze_buddy.chat import ChatMessageRole, ToolApproval
 _MAX_TOOL_CYCLES = 20
 
 
+def _partition_gated_calls(
+    tool_calls: List[Any],
+    approval_map: Dict[str, Any],
+    node: Dict[str, Any],
+) -> Tuple[List[Any], List[Any]]:
+    """Split a tool-call batch into (gated, ungated) for HITL.
+
+    A gated name shadowed by a per-node function in the CURRENT node is
+    treated as UNGATED: in that node the LLM calls the per-node function
+    (which the author did not gate), not the gated global of the same name.
+    Non-shadow nodes are unaffected — a gated global is still gated. This
+    keeps chat consistent with voice, whose wrapper gates only globals.
+    """
+    # ``node["functions"]`` holds FlowsFunctionSchema objects in flow mode
+    # (FlowConfigBuilder._build_node runs every per-node function through
+    # _build_function_schema) — NOT plain dicts. Match the idiom used by
+    # _dispatch_tool_call / _tools_schema below: filter on FlowsFunctionSchema
+    # and read ``.name``. The builder renames function_name→name before the
+    # schema exists, so there is no alias to fall back to here.
+    node_fn_names = {
+        fn.name
+        for fn in (node.get("functions") or [])
+        if isinstance(fn, FlowsFunctionSchema)
+    }
+    gated = [
+        c
+        for c in tool_calls
+        if c.function_name in approval_map and c.function_name not in node_fn_names
+    ]
+    ungated = [
+        c
+        for c in tool_calls
+        if c.function_name not in approval_map or c.function_name in node_fn_names
+    ]
+    return gated, ungated
+
+
 @dataclass
 class _PreparedTools:
     """Per-turn tool surface shared by ``run_turn`` and ``run_approval_turn``."""
@@ -508,13 +545,12 @@ class ChatAgent:
 
             # HITL partition: approval-gated calls do NOT execute now — the
             # turn ends after the ungated siblings finish, and each gated
-            # call waits for its decision on the approval endpoint.
-            gated_calls = [
-                c for c in tool_calls if c.function_name in self._approval_map
-            ]
-            ungated_calls = [
-                c for c in tool_calls if c.function_name not in self._approval_map
-            ]
+            # call waits for its decision on the approval endpoint. Node-aware
+            # (see _partition_gated_calls): a per-node function shadows a
+            # same-named gated global, so it stays UNGATED — matching voice.
+            gated_calls, ungated_calls = _partition_gated_calls(
+                tool_calls, self._approval_map, node
+            )
 
             next_node: Optional[Dict[str, Any]] = None
             tool_result_pairs: List[Tuple[str, Any]] = []
