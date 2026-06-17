@@ -26,9 +26,8 @@ from fastapi import HTTPException, Request, status
 
 from app.ai.voice.agents.breeze_buddy.chat.client_context import (
     CLIENT_CONTEXT_KEY,
-    CLIENT_CONTEXT_REV_KEY,
     ClientContextTooLarge,
-    apply_context_patch,
+    compute_context_patch,
 )
 from app.ai.voice.agents.breeze_buddy.services.daily.daily import (
     daily_completion_function,
@@ -63,7 +62,7 @@ from app.database.accessor.breeze_buddy.chat_session import (
     get_agent_session_state,
     get_chat_session_by_id,
     list_chat_messages_for_session,
-    upsert_agent_session_state,
+    merge_client_context,
 )
 from app.database.accessor.breeze_buddy.lead_call_tracker import (
     handle_lead_abort,
@@ -396,8 +395,15 @@ async def update_widget_context_handler(
     update; use the message's ``context`` field to apply atomically with a
     turn). Allowlist- + size-gated by the template's
     ``configurations.client_context`` policy; an unconfigured template
-    accepts nothing. Serialised against an in-flight turn via the same
-    per-session Redis lock (see CLIENT_CONTEXT_UPDATES.md §5.1).
+    accepts nothing.
+
+    LOCK-FREE: the patch is merged atomically in Postgres
+    (``merge_client_context`` — top-level state keys overlay, facts deep-
+    merge, revision is the monotonic guard). It deliberately does NOT take
+    the per-session turn lock, so a background context push can never 409 a
+    concurrent ``/message`` (and vice-versa) — see CLIENT_CONTEXT_UPDATES.md
+    §5.1. The turn writers persist via a key-scoped merge that excludes the
+    client-context keys, so the two never clobber each other.
     """
     cfg = await get_widget_config_by_id(ctx.widget_config_id)
     if cfg is None or not cfg.active:
@@ -414,80 +420,73 @@ async def update_widget_context_handler(
         widget_config_id=cfg.id,
     )
 
-    lock = _session_lock(session_id)
-    try:
-        await lock.acquire()
-    except LockAcquireError:
+    session = await get_chat_session_by_id(session_id)
+    if session is None:
         raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Another operation is in flight for this session. Wait and retry.",
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Widget session '{session_id}' not found",
         )
+    assert_widget_session_ownership(session, ctx)
+    if session.status == ChatSessionStatus.ENDED:
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail=f"Widget session '{session_id}' has ended",
+        )
+
+    template = await get_template_by_id_cached(session.template_id)
+    cc_config = (
+        template.configurations.client_context
+        if template is not None and template.configurations
+        else None
+    )
+
+    # Read is for the facts size estimate only — NOT a correctness
+    # dependency: the authoritative merge (incl. the monotonic revision
+    # guard) happens atomically in merge_client_context.
+    state_row = await get_agent_session_state(session_id)
+    state_data: Dict[str, Any] = state_row.data if state_row else {}
 
     try:
-        session = await get_chat_session_by_id(session_id)
-        if session is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Widget session '{session_id}' not found",
-            )
-        assert_widget_session_ownership(session, ctx)
-        if session.status == ChatSessionStatus.ENDED:
-            raise HTTPException(
-                status_code=status.HTTP_410_GONE,
-                detail=f"Widget session '{session_id}' has ended",
-            )
-
-        template = await get_template_by_id_cached(session.template_id)
-        cc_config = (
-            template.configurations.client_context
-            if template is not None and template.configurations
-            else None
-        )
-
-        state_row = await get_agent_session_state(session_id)
-        state_data: Dict[str, Any] = state_row.data if state_row else {}
-
-        # Monotonic last-writer-wins: drop a stale revision so an
-        # out-of-order push from a racing storefront tab can't clobber
-        # newer context.
-        if body.revision is not None:
-            last_rev = state_data.get(CLIENT_CONTEXT_REV_KEY)
-            if isinstance(last_rev, int) and body.revision <= last_rev:
-                return UpdateWidgetContextResponse(
-                    applied=False, revision=body.revision
-                )
-
-        try:
-            next_state, state_keys, facts_keys = apply_context_patch(
+        state_patch, facts_patch, replace_facts, state_keys, facts_keys = (
+            compute_context_patch(
                 state_data,
                 state=body.state,
                 facts=body.facts,
                 merge=body.merge,
                 config=cc_config,
             )
-        except ClientContextTooLarge as exc:
-            raise HTTPException(
-                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                detail=str(exc),
-            )
-
-        if body.revision is not None:
-            next_state[CLIENT_CONTEXT_REV_KEY] = body.revision
-
-        # Skip the write when nothing landed and there's no revision to
-        # record (e.g. template hasn't enabled the feature) — keeps inert
-        # pushes from churning the row.
-        if state_keys or facts_keys or body.revision is not None:
-            await upsert_agent_session_state(session_id, next_state)
-
-        return UpdateWidgetContextResponse(
-            applied=True,
-            state_keys=state_keys,
-            facts_keys=facts_keys,
-            revision=body.revision,
         )
-    finally:
-        await lock.release()
+    except ClientContextTooLarge as exc:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=str(exc),
+        ) from exc
+
+    # Inert push (feature disabled / nothing allowlisted, no revision) — skip
+    # the write so it doesn't churn the row. Gate on PATCH PRESENCE, not the
+    # accepted-key echoes: a merge='replace' clear yields empty accepted-key
+    # lists but a non-empty ``state_patch`` (keys nulled) and/or a non-None
+    # ``facts_patch`` ({} to wipe facts), and those clears MUST be applied.
+    if not (state_patch or facts_patch is not None or body.revision is not None):
+        return UpdateWidgetContextResponse(
+            applied=True, state_keys=[], facts_keys=[], revision=body.revision
+        )
+
+    row = await merge_client_context(
+        session_id,
+        state_patch=state_patch,
+        facts_patch=facts_patch,
+        revision=body.revision,
+        replace_facts=replace_facts,
+    )
+    # None => the DB's monotonic guard skipped a stale/out-of-order revision.
+    applied = row is not None
+    return UpdateWidgetContextResponse(
+        applied=applied,
+        state_keys=state_keys if applied else [],
+        facts_keys=facts_keys if applied else [],
+        revision=body.revision,
+    )
 
 
 # ---------------------------------------------------------------------------

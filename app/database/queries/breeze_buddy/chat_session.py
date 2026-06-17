@@ -453,6 +453,91 @@ def upsert_agent_session_state_query(
     return query, [chat_session_id, data_json]
 
 
+def upsert_agent_session_state_merge_query(
+    chat_session_id: str,
+    patch_json: str,
+) -> Tuple[str, List[Any]]:
+    """INSERT-or-MERGE: shallow top-level merge of ``patch`` into ``data``.
+
+    Unlike :func:`upsert_agent_session_state_query` (full replace), this
+    overlays only the patch's top-level keys via JSONB ``||`` and leaves
+    every other key untouched. The turn / drain writers persist their
+    reducer-built state through this (minus the client-context keys) so a
+    turn's write never clobbers a concurrent ``/context`` push, which owns
+    ``_client_context`` / ``_client_context_rev``.
+    """
+    query = f"""
+        INSERT INTO {AGENT_SESSION_STATE_TABLE} (chat_session_id, data, updated_at)
+        VALUES ($1, $2::jsonb, now())
+        ON CONFLICT (chat_session_id) DO UPDATE
+            SET data = {AGENT_SESSION_STATE_TABLE}.data || EXCLUDED.data,
+                updated_at = now()
+        RETURNING {_AGENT_STATE_COLUMNS}
+    """
+    return query, [chat_session_id, patch_json]
+
+
+def merge_client_context_query(
+    chat_session_id: str,
+    top_patch_json: str,
+    facts_patch_json: str,
+    revision: Optional[int],
+    replace_facts: bool,
+    touch_facts: bool,
+) -> Tuple[str, List[Any]]:
+    """Atomically merge a client-context patch — lock-free, clobber-free.
+
+    Top-level ``state`` keys (and ``_client_context_rev``) overlay via
+    ``||``. When ``touch_facts`` the nested ``_client_context`` facts
+    namespace is DEEP-merged (``existing || facts_patch``) so two concurrent
+    pushes accumulate instead of overwriting (``replace_facts`` overwrites
+    instead). When NOT ``touch_facts`` (the push carried no ``facts``) the
+    namespace is left entirely untouched — so a state-only ``merge='replace'``
+    push can't wipe existing facts.
+
+    ``revision`` is the monotonic guard: when non-null the row is updated
+    only if the incoming revision exceeds the stored one — a stale / out-of-
+    order push is skipped and RETURNS NO ROW (caller treats that as
+    ``applied=false``). When ``touch_facts``, ``top_patch_json`` must include
+    ``_client_context`` (= facts) so the first-INSERT row is complete; on the
+    UPDATE branch ``jsonb_set`` recomputes the namespace.
+    """
+    query = f"""
+        INSERT INTO {AGENT_SESSION_STATE_TABLE} (chat_session_id, data, updated_at)
+        VALUES ($1, $2::jsonb, now())
+        ON CONFLICT (chat_session_id) DO UPDATE
+            SET data = CASE WHEN $6
+                    THEN jsonb_set(
+                        {AGENT_SESSION_STATE_TABLE}.data || EXCLUDED.data,
+                        '{{_client_context}}',
+                        CASE WHEN $5
+                            THEN $3::jsonb
+                            ELSE COALESCE(
+                                {AGENT_SESSION_STATE_TABLE}.data->'_client_context',
+                                '{{}}'::jsonb
+                            ) || $3::jsonb
+                        END
+                    )
+                    ELSE {AGENT_SESSION_STATE_TABLE}.data || EXCLUDED.data
+                END,
+                updated_at = now()
+            WHERE $4::bigint IS NULL
+               OR COALESCE(
+                    ({AGENT_SESSION_STATE_TABLE}.data->>'_client_context_rev')::bigint,
+                    -1
+                  ) < $4::bigint
+        RETURNING {_AGENT_STATE_COLUMNS}
+    """
+    return query, [
+        chat_session_id,
+        top_patch_json,
+        facts_patch_json,
+        revision,
+        replace_facts,
+        touch_facts,
+    ]
+
+
 # -- chat_turn_metrics (migration 032) --------------------------------------
 
 

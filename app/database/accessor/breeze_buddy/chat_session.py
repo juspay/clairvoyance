@@ -31,9 +31,11 @@ from app.database.queries.breeze_buddy.chat_session import (
     list_chat_sessions_query,
     list_chat_turn_metrics_for_session_query,
     list_idle_chat_sessions_query,
+    merge_client_context_query,
     record_chat_turn_metrics_query,
     set_chat_session_voice_lead_query,
     update_chat_session_after_turn_query,
+    upsert_agent_session_state_merge_query,
     upsert_agent_session_state_query,
 )
 from app.schemas.breeze_buddy.chat import (
@@ -454,6 +456,74 @@ async def upsert_agent_session_state(
         return decode_agent_session_state(row) if row else None
     except Exception as e:
         logger.error(f"Error upserting agent_session_state for {chat_session_id}: {e}")
+        raise
+
+
+async def upsert_agent_session_state_merge(
+    chat_session_id: str,
+    patch: Dict[str, Any],
+) -> Optional[AgentSessionState]:
+    """Shallow top-level MERGE of ``patch`` into the session's data.
+
+    For turn / drain writers: persists only the keys the caller owns
+    (reducer-built state, sans the client-context keys) so it never clobbers
+    a concurrent ``/context`` push. See ``strip_client_context_keys``.
+    """
+    query, values = upsert_agent_session_state_merge_query(
+        chat_session_id=chat_session_id,
+        patch_json=json.dumps(patch),
+    )
+    try:
+        result = await run_parameterized_query(query, values)
+        row = result[0] if result else None
+        return decode_agent_session_state(row) if row else None
+    except Exception as e:
+        logger.error(f"Error merging agent_session_state for {chat_session_id}: {e}")
+        raise
+
+
+async def merge_client_context(
+    chat_session_id: str,
+    *,
+    state_patch: Dict[str, Any],
+    facts_patch: Optional[Dict[str, Any]],
+    revision: Optional[int],
+    replace_facts: bool,
+) -> Optional[AgentSessionState]:
+    """Atomically merge a client-context patch (lock-free, clobber-free).
+
+    Top-level state keys overlay; the ``_client_context`` facts namespace is
+    deep-merged (or replaced when ``replace_facts``); ``revision`` is the
+    monotonic guard. ``facts_patch is None`` => the namespace is left
+    untouched (e.g. a state-only ``merge='replace'`` push must not wipe
+    facts). Returns the updated row, or ``None`` when a stale revision was
+    skipped (caller treats that as ``applied=false``).
+    """
+    touch_facts = facts_patch is not None
+    top_patch: Dict[str, Any] = dict(state_patch)
+    if touch_facts:
+        # Included so the first-INSERT row is complete; the UPDATE branch
+        # recomputes _client_context via jsonb_set (see the query docstring).
+        # Literals (not an import) keep the DB layer free of the agent module;
+        # source of truth is chat/client_context.py.
+        top_patch["_client_context"] = facts_patch
+    if revision is not None:
+        top_patch["_client_context_rev"] = revision
+
+    query, values = merge_client_context_query(
+        chat_session_id=chat_session_id,
+        top_patch_json=json.dumps(top_patch),
+        facts_patch_json=json.dumps(facts_patch or {}),
+        revision=revision,
+        replace_facts=replace_facts,
+        touch_facts=touch_facts,
+    )
+    try:
+        result = await run_parameterized_query(query, values)
+        row = result[0] if result else None
+        return decode_agent_session_state(row) if row else None
+    except Exception as e:
+        logger.error(f"Error merging client context for {chat_session_id}: {e}")
         raise
 
 
