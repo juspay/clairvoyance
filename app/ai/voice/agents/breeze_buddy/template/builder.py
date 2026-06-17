@@ -620,8 +620,8 @@ class FlowConfigBuilder:
             Pipecat FlowsFunctionSchema object with unified handler
         """
         logger.debug(
-            f"Building function schema for: {func.name}, "
-            f"transition_to={func.transition_to}, hooks={func.hooks}"
+            f"BUILDER: Building function schema for: {func.name}, "
+            f"transition_to={func.transition_to}, hooks={func.hooks}, hitl={func.hitl_config}"
         )
 
         # Get the wrapped unified handler from handler_map
@@ -634,19 +634,29 @@ class FlowConfigBuilder:
         hooks = [hook.model_dump() for hook in func.hooks] if func.hooks else []
         logger.debug(f"Using hooks for {func.name}: {hooks}")
 
-        # Create a wrapper handler matching FlowsFunctionSchema expected signature.
+        # Serialize HITL config if present
+        hitl_config = func.hitl_config.model_dump() if func.hitl_config else None
+        logger.info(f"BUILDER: hitl_config for {func.name} = {hitl_config}")
+
         # In flows 1.0, ConsolidatedFunctionResult is (FlowResult | None, NodeConfig | None);
         # the legacy str-node-name variant of next_node was removed.
+        # Create a wrapper handler matching FlowsFunctionSchema expected signature
+        # Signature: (llm_args: Dict[str, Any], flow_manager: FlowManager) -> Awaitable[FlowResult | tuple]
         async def wrapper_handler(
             llm_args: Dict[str, Any], _flow_manager: FlowManager
         ) -> FlowResult | tuple[FlowResult | None, NodeConfig | None]:
             # Call the wrapped unified transition handler
             # The with_context wrapper expects llm_args as first positional arg
+            logger.info(
+                f"DEBUG: Calling transition handler with hitl_config={hitl_config}"
+            )
+
             result = await cast(Callable[..., Any], wrapped_unified_handler)(
                 llm_args,
                 transition_to=func.transition_to,
                 hooks=hooks,
                 function_name=func.name,
+                hitl_config=hitl_config,
             )
             return result
 
@@ -658,6 +668,9 @@ class FlowConfigBuilder:
             handler=wrapper_handler,
             properties=func.properties,
             required=func.required,
+            timeout_secs=(
+                30.0 if func.hitl_config and func.hitl_config.enabled else None
+            ),
         )
 
     def _build_action(self, action: FlowAction) -> Dict[str, Any]:

@@ -45,6 +45,7 @@ from pipecat.frames.frames import (
 )
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
+from app.ai.voice.agents.breeze_buddy.features.hitl.manager import get_hitl_manager
 from app.ai.voice.agents.breeze_buddy.template.types import (
     KeywordFilterConfig,
     KeywordMatchType,
@@ -187,6 +188,23 @@ class TranscriptionGateProcessor(FrameProcessor):
 
         # ---- Transcription suppression logic -------------------------
         elif isinstance(frame, (TranscriptionFrame, InterimTranscriptionFrame)):
+            # HITL gate:
+            # - drop interim frames while HITL is active (avoid turn-start interruptions)
+            # - consume final transcription via HITL matcher
+            hitl_manager = get_hitl_manager()
+
+            if isinstance(frame, InterimTranscriptionFrame):
+                if hitl_manager.is_confirmation_active():
+                    logger.debug(
+                        "TranscriptionGate: dropping interim transcription (HITL active)"
+                    )
+                    return
+
+            if isinstance(frame, TranscriptionFrame):
+                consumed = await hitl_manager.consume_transcription_if_hitl(frame.text)
+                if consumed:
+                    logger.debug("TranscriptionGate: consumed transcription (HITL)")
+                    return
             # Mode 1: hard mute — drop unconditionally (both final and interim).
             # InterimTranscriptionFrame must also be dropped: TranscriptionUserTurnStartStrategy
             # with use_interim=True fires on interim frames, which triggers an interruption even

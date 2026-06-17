@@ -380,6 +380,7 @@ def with_context(bot_instance):
             hooks = kwargs.pop("hooks", None)
             function_name = kwargs.pop("function_name", None)
             function_config = kwargs.pop("function_config", None)
+            hitl_config = kwargs.pop("hitl_config", None)
 
             is_transition_handler = hooks is not None or function_name is not None
             is_global_function_handler = function_config is not None
@@ -415,6 +416,7 @@ def with_context(bot_instance):
                     transition_to=transition_to,
                     hooks=hooks,
                     function_name=function_name,
+                    hitl_config=hitl_config,
                 )
             else:
                 # Action handlers don't need hooks/function_name
