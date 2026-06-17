@@ -60,6 +60,145 @@ class ClientContextTooLarge(Exception):
         self.max_bytes = max_bytes
 
 
+def strip_client_context_keys(data: Dict[str, Any]) -> Dict[str, Any]:
+    """Return a copy of ``data`` without the client-context-owned keys
+    (the ``_client_context`` facts namespace + ``_client_context_rev``).
+
+    The chat / voice turn writers persist their reducer-built state through
+    this so a turn's write merges only its OWN keys and never clobbers a
+    concurrent ``/context`` push (which exclusively owns these two keys).
+    See ``merge_client_context_query`` for the other half of the contract.
+    """
+    return {k: v for k, v in data.items() if k not in _RESERVED_STATE_KEYS}
+
+
+def diff_state_patch(
+    baseline: Dict[str, Any], current: Dict[str, Any]
+) -> Dict[str, Any]:
+    """Return the client-context-free keys of ``current`` that CHANGED vs
+    ``baseline`` (added or updated).
+
+    The turn writers diff the live state against the snapshot loaded at turn
+    start and persist only this delta — never the whole loaded row. A blanket
+    merge of every loaded key would re-assert a stale value for an allowlisted
+    top-level state key (e.g. ``cart_id``) and clobber a concurrent lock-free
+    ``/context`` push of that key, since ``/context`` and the reducers can both
+    write the same allowlisted key. Client-context keys are always excluded
+    (they're owned solely by ``/context``).
+    """
+    return {
+        k: v
+        for k, v in strip_client_context_keys(current).items()
+        if k not in baseline or baseline[k] != v
+    }
+
+
+def compute_context_patch(
+    state_data: Dict[str, Any],
+    *,
+    state: Optional[Dict[str, Any]],
+    facts: Optional[Dict[str, Any]],
+    merge: str,
+    config: Optional[ClientContextConfig],
+) -> Tuple[Dict[str, Any], Optional[Dict[str, Any]], bool, List[str], List[str]]:
+    """Filter a client-context patch to its accepted keys WITHOUT merging.
+
+    Returns ``(state_patch, facts_patch, replace_facts, accepted_state_keys,
+    accepted_facts_keys)``. The actual merge happens atomically in Postgres
+    (:func:`...queries.merge_client_context_query`) — NOT here — so two
+    concurrent pushes can't read-modify-write over each other and lose keys.
+
+    - ``state_patch``: allowlisted top-level ``state`` keys → value. In
+      ``merge='replace'`` mode, allowlisted keys absent from this push are
+      included as ``None`` so the SQL merge clears them.
+    - ``facts_patch``: ``None`` when this push carries NO ``facts`` (the
+      ``_client_context`` namespace is then left untouched — important so a
+      state-only ``merge='replace'`` push doesn't wipe existing facts). When
+      ``facts`` IS supplied it's the allowlisted dict (possibly empty),
+      deep-merged into the namespace by the SQL (``replace_facts`` overwrites
+      instead).
+
+    Raises :class:`ClientContextTooLarge` when the facts namespace would
+    exceed ``config.max_bytes`` — estimated against the currently persisted
+    facts (a soft guard; the authoritative merge is the DB's).
+    """
+    if config is None:
+        return {}, None, False, [], []
+
+    replace = merge == "replace"
+
+    state_patch: Dict[str, Any] = {}
+    accepted_state: List[str] = []
+    if isinstance(state, dict) and config.state_allowlist:
+        allowed = {
+            k: v
+            for k, v in state.items()
+            if k in config.state_allowlist and k not in _RESERVED_STATE_KEYS
+        }
+        accepted_state = list(allowed.keys())
+        state_patch.update(allowed)
+        if replace:
+            # Clear allowlisted state keys this push didn't set (null-out;
+            # the SQL ``||`` merge can overwrite but not delete a key).
+            for k in config.state_allowlist:
+                if k not in allowed and k not in _RESERVED_STATE_KEYS:
+                    state_patch[k] = None
+
+    # None => no facts in this push => don't touch the namespace at all.
+    facts_patch: Optional[Dict[str, Any]] = None
+    accepted_facts: List[str] = []
+    if isinstance(facts, dict) and config.facts_allowlist:
+        allowed_facts = {k: v for k, v in facts.items() if k in config.facts_allowlist}
+        accepted_facts = list(allowed_facts.keys())
+        facts_patch = allowed_facts
+        existing = state_data.get(CLIENT_CONTEXT_KEY)
+        projected = (
+            dict(allowed_facts)
+            if replace
+            else {**(existing if isinstance(existing, dict) else {}), **allowed_facts}
+        )
+        # Gate on the projected facts (not on ``max_bytes`` truthiness) so
+        # ``max_bytes=0`` is honoured as a real cap — it rejects any non-empty
+        # facts rather than silently disabling the guard. An empty projection
+        # never trips it (clearing facts is always allowed).
+        if (
+            projected
+            and len(json.dumps(projected, default=str).encode("utf-8"))
+            > config.max_bytes
+        ):
+            raise ClientContextTooLarge(config.max_bytes)
+
+    return state_patch, facts_patch, replace, accepted_state, accepted_facts
+
+
+def merge_context_into(
+    data: Dict[str, Any],
+    state_patch: Dict[str, Any],
+    facts_patch: Optional[Dict[str, Any]],
+    replace_facts: bool,
+) -> Dict[str, Any]:
+    """Pure in-memory mirror of the SQL context merge.
+
+    Used to update a turn's in-flight ``agent_state`` so the SAME request's
+    LLM turn sees the just-applied in-message context. The persisted copy
+    goes through the atomic SQL merge; this keeps the two definitions in one
+    place. ``facts_patch is None`` => leave the facts namespace untouched
+    (see :func:`compute_context_patch`). Returns a NEW dict.
+    """
+    next_state = {**data, **state_patch}
+    next_state = {k: v for k, v in next_state.items() if v is not None}
+    if facts_patch is not None:
+        existing = data.get(CLIENT_CONTEXT_KEY)
+        base = (
+            {}
+            if replace_facts
+            else dict(existing) if isinstance(existing, dict) else {}
+        )
+        base.update(facts_patch)
+        next_state[CLIENT_CONTEXT_KEY] = base
+    return next_state
+
+
 def apply_context_patch(
     state_data: Dict[str, Any],
     *,
@@ -70,56 +209,23 @@ def apply_context_patch(
 ) -> Tuple[Dict[str, Any], List[str], List[str]]:
     """Merge a client context patch into ``agent_session_state.data``.
 
-    Returns ``(next_state, accepted_state_keys, accepted_facts_keys)`` —
-    a NEW dict (input is not mutated). Keys outside the template's
-    allowlists are silently dropped (the accepted-key lists tell the
-    caller what landed). When ``config`` is ``None`` the feature is not
-    enabled for this template and the state is returned unchanged.
-
-    ``merge='replace'`` clears the prior allowlisted state keys / the
-    facts namespace before applying; ``'shallow'`` (default) overlays.
+    Returns ``(next_state, accepted_state_keys, accepted_facts_keys)`` — a
+    NEW dict (input not mutated). Thin wrapper over
+    :func:`compute_context_patch` + :func:`merge_context_into` so the
+    filtering / size-guard / merge semantics live in one place (and mirror
+    the atomic SQL persist). Persistence should use the SQL merge, not this
+    full-dict result, to stay clobber-free under concurrency.
 
     Raises :class:`ClientContextTooLarge` when the merged facts namespace
     exceeds ``config.max_bytes``.
     """
     if config is None:
         return dict(state_data), [], []
-
-    next_state = dict(state_data)
-
-    # --- state identifiers → top level of data ---
-    accepted_state: List[str] = []
-    if isinstance(state, dict) and config.state_allowlist:
-        allowed = {
-            k: v
-            for k, v in state.items()
-            if k in config.state_allowlist and k not in _RESERVED_STATE_KEYS
-        }
-        if merge == "replace":
-            for k in config.state_allowlist:
-                next_state.pop(k, None)
-        next_state.update(allowed)
-        accepted_state = list(allowed.keys())
-
-    # --- facts → reserved namespace ---
-    accepted_facts: List[str] = []
-    if isinstance(facts, dict) and config.facts_allowlist:
-        allowed_facts = {k: v for k, v in facts.items() if k in config.facts_allowlist}
-        existing = next_state.get(CLIENT_CONTEXT_KEY)
-        merged_facts: Dict[str, Any] = (
-            dict(existing) if isinstance(existing, dict) and merge != "replace" else {}
-        )
-        merged_facts.update(allowed_facts)
-        if (
-            config.max_bytes
-            and len(json.dumps(merged_facts, default=str).encode("utf-8"))
-            > config.max_bytes
-        ):
-            raise ClientContextTooLarge(config.max_bytes)
-        next_state[CLIENT_CONTEXT_KEY] = merged_facts
-        accepted_facts = list(allowed_facts.keys())
-
-    return next_state, accepted_state, accepted_facts
+    state_patch, facts_patch, replace_facts, sk, fk = compute_context_patch(
+        state_data, state=state, facts=facts, merge=merge, config=config
+    )
+    next_state = merge_context_into(state_data, state_patch, facts_patch, replace_facts)
+    return next_state, sk, fk
 
 
 def render_client_context(
@@ -172,5 +278,9 @@ __all__ = [
     "CLIENT_CONTEXT_REV_KEY",
     "ClientContextTooLarge",
     "apply_context_patch",
+    "compute_context_patch",
+    "diff_state_patch",
+    "merge_context_into",
     "render_client_context",
+    "strip_client_context_keys",
 ]

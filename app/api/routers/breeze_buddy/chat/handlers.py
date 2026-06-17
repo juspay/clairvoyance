@@ -28,7 +28,8 @@ from app.ai.voice.agents.breeze_buddy.chat.block_codec import (
 )
 from app.ai.voice.agents.breeze_buddy.chat.client_context import (
     ClientContextTooLarge,
-    apply_context_patch,
+    compute_context_patch,
+    merge_context_into,
 )
 from app.ai.voice.agents.breeze_buddy.chat.metrics import TurnMetrics
 from app.ai.voice.agents.breeze_buddy.chat.sse import SSEEvent, format_sse
@@ -55,8 +56,8 @@ from app.database.accessor.breeze_buddy.chat_session import (
     list_chat_messages_for_session,
     list_chat_sessions,
     list_chat_turn_metrics_for_session,
+    merge_client_context,
     record_chat_turn_metrics,
-    upsert_agent_session_state,
 )
 from app.database.accessor.breeze_buddy.credentials import (
     get_credentials_as_template_vars,
@@ -558,7 +559,7 @@ async def send_chat_message_handler(
                 else None
             )
             try:
-                agent_state, _, _ = apply_context_patch(
+                state_patch, facts_patch, replace_facts, _, _ = compute_context_patch(
                     agent_state,
                     state=req.context.state,
                     facts=req.context.facts,
@@ -569,8 +570,25 @@ async def send_chat_message_handler(
                 raise HTTPException(
                     status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
                     detail=str(exc),
+                ) from exc
+            # Update the in-memory state so THIS turn sees the context...
+            agent_state = merge_context_into(
+                agent_state, state_patch, facts_patch, replace_facts
+            )
+            # ...and persist via the atomic merge (message-bound, no revision)
+            # so a concurrent standalone /context push isn't clobbered. The
+            # turn's own write (agent.py) excludes the client-context keys.
+            # ``facts_patch`` is None only when the push carried no facts; an
+            # empty {} (a merge='replace' facts clear) IS a real write, so gate
+            # on ``is not None`` — truthiness would silently drop the clear.
+            if state_patch or facts_patch is not None:
+                await merge_client_context(
+                    session_id,
+                    state_patch=state_patch,
+                    facts_patch=facts_patch,
+                    revision=None,
+                    replace_facts=replace_facts,
                 )
-            await upsert_agent_session_state(session_id, agent_state)
             context_placement = req.context.placement
 
         persisted_template_vars = (

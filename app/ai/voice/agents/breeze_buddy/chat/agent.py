@@ -7,6 +7,7 @@ full architecture.
 """
 
 import asyncio
+import copy
 import json
 import uuid
 from dataclasses import dataclass
@@ -24,7 +25,10 @@ from app.ai.voice.agents.breeze_buddy.chat.block_codec import (
     plain_text_blocks,
     tool_results_to_user_blocks,
 )
-from app.ai.voice.agents.breeze_buddy.chat.client_context import render_client_context
+from app.ai.voice.agents.breeze_buddy.chat.client_context import (
+    diff_state_patch,
+    render_client_context,
+)
 from app.ai.voice.agents.breeze_buddy.chat.disabled import CHAT_DISABLED_NAMES
 from app.ai.voice.agents.breeze_buddy.chat.sse import SSEEvent
 from app.ai.voice.agents.breeze_buddy.chat.tool_result_normalizer import normalize
@@ -62,7 +66,7 @@ from app.core.transport.http_client import create_aiohttp_session
 from app.database.accessor.breeze_buddy.chat_session import (
     insert_chat_message,
     update_chat_session_after_turn,
-    upsert_agent_session_state,
+    upsert_agent_session_state_merge,
 )
 from app.database.accessor.breeze_buddy.tool_approvals import insert_tool_approval
 from app.schemas.breeze_buddy.chat import ChatMessageRole, ToolApproval
@@ -150,6 +154,14 @@ class ChatAgent:
         # upserted to Postgres before the next turn. Empty dict on first
         # turn or when the row doesn't exist yet.
         self.agent_state: Dict[str, Any] = dict(agent_state or {})
+        # Snapshot of the state as loaded at turn start. The turn writer
+        # persists only the keys its reducers CHANGED vs this baseline (see
+        # ``diff_state_patch``), not the whole loaded row — so it can't
+        # re-assert a stale allowlisted key (e.g. ``cart_id``) and clobber a
+        # concurrent lock-free ``/context`` push of that same key. Deep-copied
+        # so an in-place mutation of a nested state value can never make the
+        # baseline compare equal to a genuinely-changed current value.
+        self._loaded_state_baseline: Dict[str, Any] = copy.deepcopy(self.agent_state)
         # Client-pushed context (storefront → /widget/session/{id}/context).
         # Policy comes off the template; ``context_placement`` is an optional
         # per-turn render override carried by a piggyback ``context.placement``.
@@ -613,10 +625,19 @@ class ChatAgent:
                     content=None,
                     content_blocks=tool_results_to_user_blocks(tool_result_pairs),
                 )
-            await upsert_agent_session_state(
-                chat_session_id=self.session_id,
-                data=self.agent_state,
+            # Persist ONLY the keys this turn's reducers changed vs the state
+            # loaded at turn start (never the whole row, never the client-
+            # context keys) so a concurrent lock-free /context push of an
+            # untouched allowlisted key isn't clobbered. Skip the write
+            # entirely when nothing changed.
+            reducer_patch = diff_state_patch(
+                self._loaded_state_baseline, self.agent_state
             )
+            if reducer_patch:
+                await upsert_agent_session_state_merge(
+                    chat_session_id=self.session_id,
+                    patch=reducer_patch,
+                )
 
             if next_node is not None:
                 node = next_node
@@ -893,10 +914,17 @@ class ChatAgent:
                     self._persist_tool_result_row(approval.tool_call_id, result_payload)
                 )
                 await asyncio.shield(persist_task)
-                await upsert_agent_session_state(
-                    chat_session_id=self.session_id,
-                    data=self.agent_state,
+                # Persist only the keys the reducers changed this turn (see
+                # _cycle_loop note); never the whole row, never the client-
+                # context keys a /context push owns.
+                reducer_patch = diff_state_patch(
+                    self._loaded_state_baseline, self.agent_state
                 )
+                if reducer_patch:
+                    await upsert_agent_session_state_merge(
+                        chat_session_id=self.session_id,
+                        patch=reducer_patch,
+                    )
             except asyncio.CancelledError:
                 # Stop button / disconnect mid-execution. The row is already
                 # DECIDED — without a persisted result the session history

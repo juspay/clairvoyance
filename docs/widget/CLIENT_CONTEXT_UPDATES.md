@@ -1,6 +1,6 @@
 # Breeze Buddy Assist — Client → Backend Context Updates (design + plan)
 
-**Status:** Design / proposal (no code yet)
+**Status:** Implemented (Phase 1 shipped) — lock-free atomic JSONB merge (`merge_client_context`); the `/context` endpoint takes no per-session lock and cannot `409` a concurrent `/message`.
 **Scope (v1, agreed):** push **state/identifiers** + **prompt facts** from the storefront into a live widget session. Facts placement is **configurable** — render as data-context (`user_tail`, default) or, for trusted merchant-curated keys, as dynamic prompt/instructions (`system`) — see §4.3. **Next-turn-only** (no proactive/unprompted replies). Client data treated as **untrusted hints**.
 **Out of v1 (documented for later):** a typed *events* endpoint, and *proactive nudges* (server-initiated turns).
 
@@ -52,7 +52,7 @@ This cleanly splits our two kinds:
 
 ### 4.1 State patch → `agent_session_state.data`
 
-A pushed `state` object **shallow-merges** into `agent_session_state.data` under the same lock the turn uses. From there the **existing** `inject_tool_args` engine fills the values into outgoing tool args via the merchant's template rules — no new injection code.
+A pushed `state` object **shallow-merges** into `agent_session_state.data` via an **atomic, lock-free JSONB merge** (top-level keys overlay; the `_client_context` facts namespace deep-merges). It deliberately does **not** take the chat-turn lock — a background context push must never 409 a concurrent `/message`. The turn writers persist their reducer keys through a key-scoped merge that excludes the `_client_context` / `_client_context_rev` keys, so a turn and a `/context` push touch disjoint keys and never clobber each other. From there the **existing** `inject_tool_args` engine fills the values into outgoing tool args via the merchant's template rules — no new injection code.
 
 Example — shopper made a cart on the page:
 ```jsonc
@@ -116,7 +116,7 @@ So placement is a free choice mechanically. The two real consequences:
 
 ### 5.1 New endpoint — `POST /agent/voice/breeze-buddy/widget/session/{id}/context`
 
-Auth: `Depends(require_widget_session)` (the session-scoped `widget_token`) + `assert_widget_session_ownership` — identical to `/cancel`, `/voice/*`, `/end`. Per-IP rate limit via `enforce_widget_ip_limit` (new bucket `context`). Takes the per-session `RedisLock` so it can't race an in-flight turn.
+Auth: `Depends(require_widget_session)` (the session-scoped `widget_token`) + `assert_widget_session_ownership` — identical to `/cancel`, `/voice/*`, `/end`. Per-IP rate limit via `enforce_widget_ip_limit` (new bucket `context`). **Lock-free**: persists via the atomic JSONB merge (`merge_client_context`) and does **not** take the per-session turn lock — so it can neither 409 a concurrent `/message` nor be 409'd by one. The monotonic `revision` guard (in the SQL) drops stale/out-of-order pushes; concurrent pushes accumulate facts via the DB deep-merge.
 
 Request:
 ```jsonc
@@ -128,9 +128,9 @@ Request:
   "revision": 7                                             // optional monotonic; stale writes dropped
 }
 ```
-Response `200`: `{ "applied": true, "revision": 7, "state_keys": ["cart_id"], "facts_keys": ["offers","cart_summary"] }` (echo of accepted keys after allowlist/size filtering, so the client can see what was dropped). Errors: `404` unknown/!owned session, `410` ended, `409` lock contended (retry), `413`/`422` payload over cap or non-allowlisted-only.
+Response `200`: `{ "applied": true, "revision": 7, "state_keys": ["cart_id"], "facts_keys": ["offers","cart_summary"] }` (echo of accepted keys after allowlist/size filtering, so the client can see what was dropped). `applied: false` means the monotonic `revision` guard skipped a stale push (not an error). A push that lands no allowlisted keys is inert and returns `200` with empty `state_keys`/`facts_keys` (not an error). Errors: `404` unknown/!owned session, `410` ended, `413` facts payload over `max_bytes`. (No `409` — the endpoint is lock-free.)
 
-Behavior: **no LLM call.** Validate → allowlist-filter → size-check → merge into `agent_session_state.data` (state) and `…._client_context` (facts) → `upsert_agent_session_state` → return. Applies to the **next** `/message`.
+Behavior: **no LLM call.** Validate → allowlist-filter → size-check → **atomic JSONB merge** into `agent_session_state.data` (state) + the `_client_context` facts namespace via `merge_client_context` (lock-free, monotonic-revision-guarded; concurrent pushes accumulate instead of clobbering) → return. Applies to the **next** `/message`.
 
 ### 5.2 Piggyback on a turn — extend `SendChatMessageRequest`
 
@@ -215,10 +215,29 @@ Events are **deferred** because the two raw channels already cover both of your 
 | **Proactive nudges** (assistant speaks on a push) | No server-initiated channel today; turns are client-request/response SSE. Big lift (push transport, debounce, "don't be annoying" policy). | positioning wants unprompted assistance; pairs naturally with the events layer + a `nudge:true` flag |
 | **Cross-session memory** (profile, history) | This row dies with the session (SCALE_ROADMAP:220) | belongs in customer-level tables, separate effort |
 
+### 10.1 Known limitations / post-review follow-ups
+
+Surfaced by the PR #841 review (CodeRabbit, validated 2026-06-17). Deliberately
+deferred from #841 — the other 9 findings were fixed and shipped in that PR.
+
+- [ ] **F7 / F10 — `max_bytes` is a *soft* cap under concurrent facts pushes.**
+  The size check in `compute_context_patch` runs against a pre-merge snapshot,
+  and the `/context` endpoint is now lock-free, so two concurrent facts pushes
+  can each pass the check and then both deep-merge in Postgres — leaving the
+  `_client_context` namespace slightly over `max_bytes`. The consequence is a
+  soft-cap overshoot (still valid, renderable JSON), **not** data loss or a
+  crash, so it was accepted for the 409 fix. **Revisit when** a storefront
+  drives high concurrent `/context` traffic on one session.
+  **Fix options:** a post-merge size check inside `merge_client_context`
+  (re-read the merged `_client_context`, reject/trim when over cap and surface
+  a 413) or a conservative pre-merge headroom factor. A static DB `CHECK`
+  constraint is **not** viable — `max_bytes` is per-template config, not a
+  fixed column value.
+
 ## 11. Phased plan
 
 **Phase 1 — raw context channel (this design).**
-1. **Backend:** add `client_context` template config (`template/types.py`); `POST /context` route + handler (`widget/__init__.py`, `widget/handlers.py`) reusing lock + ownership + rate-limit; allowlist/size/merge helper; persist via `upsert_agent_session_state`; add `_client_context` namespace; render the untrusted block in `_seed_context` (`chat/agent.py:601`); extend `SendChatMessageRequest` with optional `context` and apply it before turn build; echo `client_context` in `WidgetSessionStateResponse` + voice seed. Tests: merge/allowlist/size/idempotency, render placement, resume + voice parity.
+1. **Backend:** add `client_context` template config (`template/types.py`); `POST /context` route + handler (`widget/__init__.py`, `widget/handlers.py`) — **lock-free** (atomic JSONB merge, no per-session lock) + ownership + rate-limit; allowlist/size/merge helper; persist via `merge_client_context` (atomic JSONB merge with a monotonic revision guard — **not** the full-row `upsert_agent_session_state`); add `_client_context` namespace; render the untrusted block in `_seed_context` (`chat/agent.py:601`); extend `SendChatMessageRequest` with optional `context` and apply it before turn build; echo `client_context` in `WidgetSessionStateResponse` + voice seed. Tests: merge/allowlist/size/idempotency, render placement, resume + voice parity.
 2. **SDK:** `updateContext` + `send(..., {context})` on `chat/widget.ts` + store; types; unit tests.
 3. **Widget:** `updateContext` method + `window.BreezeAssist.updateContext` + `:context` CustomEvent + postMessage + pre-session buffering.
 4. **Docs:** new `src/docs/buddy-assist/context-updates.svx` (storefront recipe: "create a cart, push the id, push offers"), plus a `configurations.client_context` reference in `widget-config.svx`; update `CHAT_MODE.md` §14 and `SCALE_ROADMAP.md` (move this from "future use" to "shipped").

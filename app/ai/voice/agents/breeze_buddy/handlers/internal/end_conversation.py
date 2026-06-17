@@ -19,8 +19,15 @@ from app.core.logger import logger
 from app.core.logger.context import clear_log_context
 from app.database.accessor.breeze_buddy.chat_session import (
     drain_voice_into_chat_session,
-    upsert_agent_session_state,
+    upsert_agent_session_state_merge,
 )
+
+# Client-context-owned keys to exclude from the drain's merge so it never
+# clobbers a /context push (source of truth: chat/client_context.py). Inlined
+# rather than imported — end_conversation sits inside client_context's
+# transitive import chain (template.types -> builder -> handlers.internal), so
+# importing it back here would be a circular import.
+_CLIENT_CONTEXT_KEYS = ("_client_context", "_client_context_rev")
 
 callback_map = {
     "service_callback": service_callback,
@@ -155,10 +162,26 @@ async def end_conversation(context: TemplateContext, args, transition_to=None):
                 # updated (mirror of the seed carried in on /voice/connect).
                 voice_state = getattr(context.bot, "agent_state", None)
                 if voice_state:
-                    await upsert_agent_session_state(
-                        chat_session_id=str(widget_session_id),
-                        data=voice_state,
-                    )
+                    # Merge back ONLY the keys voice actually CHANGED vs the
+                    # seed copied in at /voice/connect — never the whole seeded
+                    # state, never the client-context keys. A blanket merge of
+                    # the seed would re-assert a stale allowlisted key (e.g.
+                    # cart_id) and clobber a /context push made against the chat
+                    # session while voice was live (the /context endpoint has no
+                    # channel guard, so it runs concurrently with the call).
+                    seed_state = context.lead.metaData.get("agent_state")
+                    if not isinstance(seed_state, dict):
+                        seed_state = {}
+                    changed = {
+                        k: v
+                        for k, v in voice_state.items()
+                        if k not in _CLIENT_CONTEXT_KEYS and seed_state.get(k) != v
+                    }
+                    if changed:
+                        await upsert_agent_session_state_merge(
+                            chat_session_id=str(widget_session_id),
+                            patch=changed,
+                        )
             except Exception as drain_err:
                 logger.error(
                     f"widget drain: failed for chat_session "
