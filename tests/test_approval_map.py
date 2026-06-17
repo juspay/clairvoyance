@@ -113,3 +113,36 @@ def test_non_dict_flow_is_safe():
     assert build_approval_map(None) == {}
     assert build_approval_map([]) == {}
     assert build_approval_map({}) == {}
+
+
+def test_global_function_types_match_enum():
+    # The gated-type set must stay derived from GlobalFunctionType so chat
+    # (build_approval_map) and voice/builder gate the same set. A hardcoded
+    # literal would silently skip any newly added type on the chat side.
+    from app.ai.voice.agents.breeze_buddy.template.approval import (
+        _GLOBAL_FUNCTION_TYPES,
+    )
+    from app.ai.voice.agents.breeze_buddy.template.types import GlobalFunctionType
+
+    assert _GLOBAL_FUNCTION_TYPES == {t.value for t in GlobalFunctionType}
+
+
+def test_every_global_function_type_is_gateable():
+    # Every enum-listed type, when carrying an approval config in flow mode,
+    # is mapped — guards against a future type being added to the enum but not
+    # gated by chat.
+    from app.ai.voice.agents.breeze_buddy.template.types import GlobalFunctionType
+
+    flow = {
+        "global_functions": [
+            {
+                "type": t.value,
+                "name": f"fn_{t.value}",
+                "description": "d",
+                "approval": {},
+            }
+            for t in GlobalFunctionType
+        ]
+    }
+    amap = build_approval_map(flow)
+    assert set(amap) == {f"fn_{t.value}" for t in GlobalFunctionType}

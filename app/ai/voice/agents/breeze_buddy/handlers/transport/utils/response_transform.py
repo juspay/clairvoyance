@@ -290,9 +290,14 @@ def omit_fields(value: Any, args: Dict[str, Any]) -> Any:
 
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 _WHITESPACE_RE = re.compile(r"\s+")
-# A stripped tag becomes a space, so ``word</b>.`` collapses to ``word .`` —
-# drop the space a removed tag leaves immediately before closing punctuation.
-_SPACE_BEFORE_PUNCT_RE = re.compile(r"\s+([.,;:!?)\]])")
+# A stripped tag becomes a space, so ``word</b>.`` would collapse to ``word .``.
+# Drop the run of tags (and the whitespace between/after them) that sits
+# immediately before closing punctuation, keeping only the punctuation — this
+# also handles nested closes like ``<em>x</em></strong>.`` -> ``x.``. Anchored
+# to the tag site on purpose: a global "space before punctuation" pass also
+# corrupts tag-free text — decimals ("3 . 14" -> "3. 14"), spaced parens
+# ("( a )" -> "( a)"), initials ("Mr . Smith").
+_TAG_BEFORE_PUNCT_RE = re.compile(r"(?:<[^>]+>\s*)+([.,;:!?)\]])")
 
 
 @register_transform("strip_html")
@@ -316,9 +321,11 @@ def strip_html(value: Any, args: Dict[str, Any]) -> Any:
     """
     if not isinstance(value, str):
         return value
-    plain = _HTML_TAG_RE.sub(" ", value)
+    # Drop tags sitting directly before closing punctuation first (no injected
+    # space), then turn the remaining tags into spaces and collapse runs.
+    plain = _TAG_BEFORE_PUNCT_RE.sub(r"\1", value)
+    plain = _HTML_TAG_RE.sub(" ", plain)
     plain = _WHITESPACE_RE.sub(" ", plain).strip()
-    plain = _SPACE_BEFORE_PUNCT_RE.sub(r"\1", plain)
     max_chars = args.get("max_chars")
     if isinstance(max_chars, int) and max_chars > 0 and len(plain) > max_chars:
         clipped = plain[:max_chars]

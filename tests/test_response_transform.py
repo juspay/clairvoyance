@@ -373,6 +373,30 @@ def test_strip_html_non_string_passes_through():
     assert strip_html(42, {}) == 42
 
 
+def test_strip_html_drops_tag_directly_before_punctuation():
+    # A tag sitting immediately before closing punctuation must NOT leave a
+    # space where it was (this is what the tag-site anchoring buys us).
+    assert strip_html("<p>The bottle is <b>insulated</b>.</p>", {}) == (
+        "The bottle is insulated."
+    )
+    assert strip_html("<p>done</p>.", {}) == "done."
+    assert strip_html("Buy now<b>!</b>", {}) == "Buy now!"
+    # Nested closes immediately before punctuation collapse cleanly too.
+    assert strip_html("<p>It is <strong><em>great</em></strong>.</p>", {}) == (
+        "It is great."
+    )
+
+
+def test_strip_html_preserves_spaces_around_punctuation_in_tag_free_text():
+    # The old global "space before punctuation" pass corrupted tag-free text;
+    # anchoring to tag sites leaves these untouched.
+    assert strip_html("3 . 14", {}) == "3 . 14"
+    assert strip_html("( a )", {}) == "( a )"
+    assert strip_html("Mr . Smith", {}) == "Mr . Smith"
+    assert strip_html("Wait ! Really ?", {}) == "Wait ! Really ?"
+    assert strip_html("emoticon :) test", {}) == "emoticon :) test"
+
+
 def test_strip_html_via_walker_on_nested_path():
     data = {
         "products": [

@@ -96,6 +96,45 @@ async def test_manager_supersede_on_identical_recall():
     assert not manager.has_pending()
 
 
+async def test_manager_supersede_emits_resolved_before_new_request():
+    """On supersede the wire order is request(old) -> resolved(old) ->
+    request(new): the old card is dismissed before its replacement appears,
+    and the superseded id resolves exactly once."""
+    emit = _EmitRecorder()
+    manager = ApprovalManager(emit=emit)
+    cfg = ApprovalConfig(timeout_secs=5)
+    first = asyncio.create_task(manager.request("fn", {"v": 1}, cfg))
+    await asyncio.sleep(0.01)
+    second = asyncio.create_task(manager.request("fn", {"v": 1}, cfg))
+    await asyncio.sleep(0.01)
+
+    first_outcome = await first
+    assert first_outcome.status == "superseded"
+
+    # request(old), resolved(old, superseded), request(new) — in that order.
+    assert [e[0] for e in emit.events] == [
+        RTVI_APPROVAL_REQUEST,
+        RTVI_APPROVAL_RESOLVED,
+        RTVI_APPROVAL_REQUEST,
+    ]
+    first_id = emit.events[0][1]["approval_id"]
+    assert emit.events[1][1] == {"approval_id": first_id, "status": "superseded"}
+
+    second_id = emit.events[2][1]["approval_id"]
+    assert second_id != first_id
+    manager.resolve(second_id, True)
+    assert (await second).approved is True
+
+    # The superseded id never resolves twice (eager emit + finally-skip).
+    resolved_first = [
+        e
+        for e in emit.events
+        if e[0] == RTVI_APPROVAL_RESOLVED and e[1]["approval_id"] == first_id
+    ]
+    assert len(resolved_first) == 1
+    assert not manager.has_pending()
+
+
 async def test_manager_no_supersede_on_distinct_parallel_args():
     """Two distinct parallel calls to the same function (DIFFERENT args, e.g.
     two add_to_cart) each keep their own pending card — neither supersedes the

@@ -8,9 +8,18 @@ Lifecycle invariants (these are load-bearing — see plan review):
 - ``asyncio.wait_for`` CANCELS the inner future on timeout, so a late
   ``resolve()`` must done-guard (no InvalidStateError) and report stale.
 - Every exit path (approve / deny / timeout / CancelledError / deny_all /
-  supersede) pops the map entry exactly once and emits exactly one
-  ``function-approval-resolved`` event, both owned by ``request()``'s
-  try/finally so there is a single emission point.
+  supersede) pops the map entry exactly once and emits AT MOST ONE
+  ``function-approval-resolved`` event — never two. (At-most-one, not
+  exactly-one: RTVI emits are best-effort everywhere in this manager, so a
+  failed emit is logged and swallowed, leaving zero events for that id; the
+  client also learns of resolution from the next request / a deny_all.) The
+  pop and (for all paths except supersede) the emit are owned by
+  ``request()``'s try/finally. The one exception: a superseded request's
+  resolved event is emitted eagerly by the *superseding* ``request()`` —
+  before its own ``function-approval-request``, so the client sees
+  resolved-then-request — and the superseded coroutine's finally skips its
+  emit (so the two never both emit; if the eager emit fails it is swallowed
+  like any other).
 - On CancelledError (user barge-in cancels sync gated handlers with ~1s
   grace; pipeline teardown) the map pop is synchronous and the emit is a
   cheap frame-queue put, so cleanup fits the grace window; the error is
@@ -125,6 +134,22 @@ class ApprovalManager:
                         "superseded by an identical newer request",
                     )
                 )
+                # Emit the superseded resolution NOW, before this newer
+                # request's function-approval-request below, so the client
+                # sees resolved-then-request order (the old card is dismissed
+                # before its replacement appears). The superseded coroutine's
+                # finally detects its SUPERSEDED status and skips its own emit,
+                # so the resolved event still fires exactly once per id.
+                try:
+                    await self._emit(
+                        RTVI_APPROVAL_RESOLVED,
+                        {"approval_id": prior_id, "status": WIRE_STATUS_SUPERSEDED},
+                    )
+                except Exception as e:
+                    logger.warning(
+                        f"[approval] Failed to emit supersede resolution for "
+                        f"{prior_id}: {e}"
+                    )
 
         wait_secs = config.timeout_secs
         if wait_secs > _MAX_WAIT_SECS:
@@ -187,16 +212,22 @@ class ApprovalManager:
                     f"(approval_id={approval_id}) -> {outcome.status}"
                     + (f" ({outcome.reason})" if outcome.reason else "")
                 )
-                try:
-                    await self._emit(
-                        RTVI_APPROVAL_RESOLVED,
-                        {"approval_id": approval_id, "status": outcome.status},
-                    )
-                except Exception as e:
-                    logger.warning(
-                        f"[approval] Failed to emit resolution for "
-                        f"{approval_id}: {e}"
-                    )
+                # A superseded request's resolved event was already emitted
+                # eagerly by the superseding request() (resolved-before-request
+                # ordering); skip it here to preserve exactly-one emission per
+                # approval_id. Supersede is the only path that yields this
+                # status, so the guard never suppresses a real resolution.
+                if outcome.status != WIRE_STATUS_SUPERSEDED:
+                    try:
+                        await self._emit(
+                            RTVI_APPROVAL_RESOLVED,
+                            {"approval_id": approval_id, "status": outcome.status},
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            f"[approval] Failed to emit resolution for "
+                            f"{approval_id}: {e}"
+                        )
 
     def resolve(
         self, approval_id: str, approved: bool, reason: Optional[str] = None
