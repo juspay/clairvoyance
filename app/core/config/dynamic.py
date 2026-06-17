@@ -33,6 +33,11 @@ BB_SPEECH_PROVIDER_DEFAULTS: dict[str, dict] = {
         "speed": 0.9,
         "pitch": 0.0,
     },
+    "gemini": {
+        "voice_id": "Aoede",  # warmer than default "Kore" for en-IN customer-facing
+        "model": "gemini-2.5-flash-tts",  # GA; preview model also settable via GEMINI_TTS_MODEL
+        "language": "en-IN",
+    },
 }
 
 
@@ -302,6 +307,20 @@ async def GEMINI_TTS_MODEL() -> str:
     Default: gemini-3.1-flash-tts-preview
     """
     return await get_config("GEMINI_TTS_MODEL", "gemini-3.1-flash-tts-preview", str)
+
+
+async def BB_GEMINI_TTS_LOW_LATENCY() -> bool:
+    """Whether to use the low-latency Gemini TTS variant.
+
+    When True (default), build_gemini_tts returns LowLatencyGeminiTTSService
+    which overrides pipecat's hardcoded ~500 ms first-frame audio buffer to
+    ~100 ms — saves ~400 ms of mouth-to-ear latency per turn.
+
+    Set to False to fall back to the stock GeminiTTSService (e.g. for
+    rollback or if the smaller buffer causes audio glitches on a specific
+    transport).
+    """
+    return await get_config("BB_GEMINI_TTS_LOW_LATENCY", True, bool)
 
 
 async def BB_VOICE_PROVIDER_DEFAULTS(provider: str) -> dict:
