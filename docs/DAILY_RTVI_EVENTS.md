@@ -63,7 +63,8 @@ Real-time events emitted by the Breeze Buddy backend to Daily-connected clients 
 | `onCamUpdated` | Active camera changes | After `client.updateCam()` | Confirm camera switch |
 | `onDeviceError` | Device access fails | Permission denied, device in use, hardware error | Show "mic access denied" or "device unavailable" message |
 | **Server Messages** | | | |
-| `onServerMessage` | Backend sends custom RTVI event via `_emit_rtvi_event()` | On conversation-start, conversation-end, pipeline-error, bot-ready, function-approval-request, function-approval-resolved | Handle Breeze Buddy-specific lifecycle events + HITL approval cards |
+| `onServerMessage` | Backend sends custom RTVI event via `_emit_rtvi_event()` | On conversation-start, conversation-end, pipeline-error, bot-ready, function-approval-request, function-approval-resolved, ui-op | Handle Breeze Buddy-specific lifecycle events + HITL approval cards + generative voice UI |
+| `ui-action` *(client → server)* | Carousel/product click injected as a live user turn | `client.sendClientMessage('ui-action', { msg, display? })` | Drive the voice LLM from a UI click (widget voice-as-chat) |
 
 ## Event Timeline
 
@@ -580,6 +581,13 @@ onServerMessage: (message: { type: string; timestamp?: number; payload?: any }) 
       // payload: { approval_id, status }
       // status: "approved" | "denied" | "timeout" | "cancelled" | "superseded"
       break;
+    case 'ui-op':
+      // Generative voice UI: the LLM emitted a <ui_stream> op (carousel,
+      // tile, card, …). Apply it to the session UI tree and render with the
+      // SAME primitives chat uses. payload: { op } — chat-identical UiOp:
+      // { op: "add"|"replace"|"remove", id, type? (add), parent? (add
+      // non-root), props? }. Opt-in per template via `configurations.ui_catalog`.
+      break;
   }
 }
 ```
@@ -613,6 +621,47 @@ Semantics:
   without it, gated calls on Daily are denied
   (`approval_channel_unavailable`). Telephony has no approval surface —
   the template's `approval.on_no_channel` decides.
+
+### Generative voice UI (widget voice-as-chat)
+
+Lets a Daily voice agent render the same generative UI as chat (carousels,
+tiles, cards) and accept clicks as live user turns. See
+`docs/widget/VOICE_AS_CHAT.md`.
+
+**`ui-op` (server → client).** The LLM emits `<ui_stream>` JSONL blocks in its
+text; the `VoiceUiStreamProcessor` (between LLM and TTS) heals/validates each op
+exactly as chat does, forwards only the marker-stripped prose to TTS (so the bot
+never speaks the JSON), and emits one `onServerMessage` `ui-op` per validated op:
+
+```typescript
+// payload: { op: { op: "add"|"replace"|"remove", id, type?, parent?, props? } }
+// Identical UiOp wire shape to chat's `ui_op` SSE event — reuse the same
+// renderer (BbUiPane / UiRenderer). Disabled/unknown primitives are dropped
+// server-side (never emitted), per the template's resolved ui_catalog allowlist.
+```
+
+**`ui-action` (client → server).** A carousel/product click is injected as a
+live user turn (the same mid-call injection user-idle uses):
+
+```typescript
+client.sendClientMessage('ui-action', {
+  msg: 'Tell me about Dawn',   // injected into the LLM context (run_llm=true)
+  display: 'Dawn',             // optional; the widget renders this bubble
+});
+```
+
+Semantics:
+- The backend injects `msg` into context only and emits **no** transcript echo —
+  the widget renders the `display` bubble optimistically (matches chat's
+  carousel-click). `msg` is trimmed and capped at `UI_ACTION_MAX_CHARS` (2000);
+  blank/non-string messages are ignored.
+- Barge-in is native: a click while the bot is speaking interrupts it (works
+  only with interruption enabled — the default; `disabled_discard` drops it).
+- Daily-only and opt-in: `ui-op`/`ui-action` require RTVI
+  (`ENABLE_BREEZE_BUDDY_DAILY_EVENTS=true`) **and** a template that sets
+  `configurations.ui_catalog` and includes `{{ui_primitives_section}}` in its
+  voice prompt. Telephony (no RTVI) and realtime speech-to-speech (no separate
+  TTS stage) never emit `ui-op`.
 
 ---
 

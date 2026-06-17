@@ -38,6 +38,13 @@ BB_SPEECH_PROVIDER_DEFAULTS: dict[str, dict] = {
         "model": "tts-rt-v1",
         "language": "en",
     },
+    # Google Cloud TTS — Chirp 3 HD voices. The voice name encodes the model
+    # and locale (e.g. en-IN-Chirp3-HD-Despina), so there is no separate model
+    # field; language should match the voice's locale prefix.
+    "google": {
+        "voice_id": "en-IN-Chirp3-HD-Despina",
+        "language": "en-IN",
+    },
 }
 
 
@@ -339,6 +346,17 @@ async def BB_AGGREGATE_SENTENCES(provider: str) -> bool:
     """Returns aggregate_sentences setting for a provider from Redis."""
     key = f"BB_{provider.upper()}_AGGREGATE_SENTENCES"
     return await get_config(key, True, bool)
+
+
+async def BB_STRIP_EMOJIS_FROM_TTS() -> bool:
+    """Whether to strip emoji from text sent to the TTS provider (default True).
+
+    Applies to every voice flow (telephony, Daily, widget stream); no emoji is
+    ever voiced. The widget stream-mode transcript is produced independently of
+    TTS (bridge RTVI event + chat_message) and keeps its emoji; the telephony /
+    Daily stored transcript reflects the spoken (emoji-free) text. Kill-switch.
+    """
+    return await get_config("BB_STRIP_EMOJIS_FROM_TTS", True, bool)
 
 
 async def SHOPS_FOR_TEMPLATE_FLOW() -> list[str]:

@@ -13,12 +13,15 @@ in the same step, UNDER the session Redis lock and BEFORE the history is
 loaded — so every history load sees a fully-answered batch.
 """
 
-from typing import Any, Dict, List
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
 
 from app.ai.voice.agents.breeze_buddy.chat.block_codec import (
     tool_results_to_user_blocks,
 )
 from app.ai.voice.agents.breeze_buddy.template.approval import (
+    LLM_STATUS_DENIED,
     LLM_STATUS_NOT_DECIDED,
     LLM_STATUS_TIMEOUT,
     WIRE_STATUS_APPROVED,
@@ -30,6 +33,9 @@ from app.core.logger import logger
 from app.database.accessor.breeze_buddy.chat_session import insert_chat_message
 from app.database.accessor.breeze_buddy.tool_approvals import (
     claim_pending_tool_approvals,
+    decide_tool_approval,
+    get_tool_approval,
+    list_pending_tool_approvals,
 )
 from app.schemas.breeze_buddy.chat import (
     ChatMessageRole,
@@ -61,6 +67,130 @@ WIRE_STATUS_BY_DB_STATUS: Dict[ToolApprovalStatus, str] = {
     ToolApprovalStatus.EXPIRED: WIRE_STATUS_TIMEOUT,
     ToolApprovalStatus.SUPERSEDED: WIRE_STATUS_SUPERSEDED,
 }
+
+
+@dataclass
+class ApprovalClaim:
+    """Outcome of atomically claiming a HITL decision for one tool call.
+
+    Shared by the HTTP ``/approval`` route (maps terminal outcomes to 404/409)
+    and the voice bridge (maps them to RTVI events). ``outcome``:
+    - ``proceed`` — the row was PENDING and is now claimed; the caller drives
+      the resume turn (see ``run_chat_approval_continuation``).
+    - ``not_found`` — no approval with that id for the session.
+    - ``already_decided`` — the row was already resolved (``winning_status`` is
+      its wire status so the client can settle the card).
+    """
+
+    outcome: str
+    claimed: Optional[ToolApproval] = None
+    effective_approved: bool = False
+    wire_status: Optional[str] = None
+    decision_reason: Optional[str] = None
+    synthetic_result: Optional[Dict[str, Any]] = None
+    pending_sibling_ids: List[str] = field(default_factory=list)
+    expired_siblings: List[ToolApproval] = field(default_factory=list)
+    winning_status: Optional[str] = None
+
+
+async def claim_tool_approval(
+    session_id: str,
+    tool_call_id: str,
+    approved: bool,
+    reason: Optional[str],
+) -> ApprovalClaim:
+    """Atomically claim a pending HITL decision (the load-bearing DB step).
+
+    MUST run under the session Redis lock. Mirrors the order the approval
+    handler documents: claim the target row (a decision after ``expires_at``
+    claims it EXPIRED → wire ``timeout``); for deny/expired persist the
+    synthetic tool_result NOW so the history load sees a fully-answered batch;
+    lazily expire other pending rows past their TTL; collect the still-pending
+    sibling ids the resume turn must keep unanswered.
+
+    Returns an :class:`ApprovalClaim`; the caller maps a non-``proceed``
+    outcome to its transport (HTTP status vs RTVI event) and, on ``proceed``,
+    drives :func:`run_chat_approval_continuation`.
+    """
+    row = await get_tool_approval(session_id, tool_call_id)
+    if row is None:
+        return ApprovalClaim(outcome="not_found")
+    if row.status != ToolApprovalStatus.PENDING:
+        return ApprovalClaim(
+            outcome="already_decided",
+            winning_status=WIRE_STATUS_BY_DB_STATUS.get(row.status),
+        )
+
+    is_expired = row.expires_at <= datetime.now(timezone.utc)
+    if is_expired:
+        new_status = ToolApprovalStatus.EXPIRED
+        decision_reason: Optional[str] = "decision arrived after expiry"
+    elif approved:
+        new_status = ToolApprovalStatus.APPROVED
+        decision_reason = reason
+    else:
+        new_status = ToolApprovalStatus.DENIED
+        decision_reason = reason
+
+    claimed = await decide_tool_approval(
+        session_id, tool_call_id, new_status, decision_reason
+    )
+    if claimed is None:
+        # Lost the claim race to a concurrent decision.
+        relook = await get_tool_approval(session_id, tool_call_id)
+        return ApprovalClaim(
+            outcome="already_decided",
+            winning_status=(
+                WIRE_STATUS_BY_DB_STATUS.get(relook.status) if relook else None
+            ),
+        )
+
+    effective_approved = approved and not is_expired
+    wire_status = WIRE_STATUS_BY_DB_STATUS[new_status]
+    logger.info(
+        f"[approval] session={session_id} tool_call_id={tool_call_id} "
+        f"function={claimed.function_name} decision={new_status.value}"
+        + (f" reason={decision_reason!r}" if decision_reason else "")
+    )
+
+    synthetic_result: Optional[Dict[str, Any]] = None
+    if not effective_approved:
+        synthetic_result = (
+            dict(EXPIRED_RESULT)
+            if is_expired
+            else {
+                "status": LLM_STATUS_DENIED,
+                "reason": reason or "the user did not approve this action",
+            }
+        )
+        await insert_chat_message(
+            session_id=session_id,
+            role=ChatMessageRole.USER,
+            content=None,
+            content_blocks=tool_results_to_user_blocks(
+                [(tool_call_id, synthetic_result)]
+            ),
+        )
+
+    # Lazily expire the OTHER pending rows past their TTL (persists their
+    # synthetic timeout results); the caller surfaces them at stream start.
+    expired_siblings = await resolve_dangling_approvals(session_id, only_expired=True)
+    # include_expired: a sibling whose expires_at falls between the sweep and
+    # this read is still PENDING + decidable — keep it in the exclude set.
+    pending_siblings = await list_pending_tool_approvals(
+        session_id, include_expired=True
+    )
+
+    return ApprovalClaim(
+        outcome="proceed",
+        claimed=claimed,
+        effective_approved=effective_approved,
+        wire_status=wire_status,
+        decision_reason=decision_reason,
+        synthetic_result=synthetic_result,
+        pending_sibling_ids=[sib.tool_call_id for sib in pending_siblings],
+        expired_siblings=expired_siblings,
+    )
 
 
 async def resolve_dangling_approvals(

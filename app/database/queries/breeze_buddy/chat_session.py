@@ -306,36 +306,6 @@ def flip_chat_session_channel_query(
     return query, params
 
 
-def drain_voice_into_chat_session_query(
-    session_id: str,
-    *,
-    final_node: Optional[str],
-    expected_voice_lead_id: str,
-) -> Tuple[str, List[Any]]:
-    """Final UPDATE at the end of a voice attachment.
-
-    Flips channel back to CHAT, optionally advances current_node to
-    whatever node the voice flow ended on. Does NOT clear
-    voice_lead_id — the lead stays bound so the next
-    /voice/connect on this session can reuse it.
-
-    Conditioned on (current_channel='VOICE' AND voice_lead_id matches)
-    so a stale callback for an old lead can't flip a freshly-reused
-    session back to CHAT.
-    """
-    query = f"""
-        UPDATE {CHAT_SESSION_TABLE}
-        SET current_channel = 'CHAT',
-            current_node    = COALESCE($1, current_node),
-            last_activity_at = now()
-        WHERE id = $2
-          AND current_channel = 'VOICE'
-          AND voice_lead_id = $3::uuid
-        RETURNING {_SESSION_COLUMNS}
-    """
-    return query, [final_node, session_id, expected_voice_lead_id]
-
-
 # -- chat_message -------------------------------------------------------------
 
 

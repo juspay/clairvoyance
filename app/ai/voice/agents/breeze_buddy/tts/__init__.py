@@ -8,28 +8,36 @@ from app.ai.voice.agents.breeze_buddy.template.types import (
     TTSConfig,
     TTSProvider,
 )
+from app.ai.voice.agents.breeze_buddy.tts.emoji_filter import (
+    EmojiTextFilter,
+    strip_emojis,
+)
 from app.ai.voice.agents.breeze_buddy.utils.common import convert_to_mulaw
 from app.ai.voice.tts import (
     CartesiaConfig,
     ElevenLabsConfig,
     GeminiConfig,
+    GoogleConfig,
     SarvamTTSConfig,
     SonioxTTSConfig,
     build_cartesia_tts,
     build_elevenlabs_tts,
     build_gemini_tts,
+    build_google_tts,
     build_sarvam_tts,
     build_soniox_tts,
 )
 from app.ai.voice.tts.cartesia import _generate_cartesia_audio
 from app.ai.voice.tts.elevenlabs import _generate_elevenlabs_audio
 from app.ai.voice.tts.gemini import _generate_gemini_audio
+from app.ai.voice.tts.google import _generate_google_audio
 from app.ai.voice.tts.sarvam import _generate_sarvam_audio
 from app.ai.voice.tts.soniox import _generate_soniox_audio
 from app.core.config.dynamic import (
     BB_AGGREGATE_SENTENCES,
     BB_ENABLE_ELEVENLABS_INDIAN_RESIDENCY,
     BB_SARVAM_TTS_ENABLE_PREPROCESSING,
+    BB_STRIP_EMOJIS_FROM_TTS,
     BB_TTS_SERVICE,
     BB_VOICE_PROVIDER_DEFAULTS,
 )
@@ -123,6 +131,13 @@ async def get_tts_service(voice_config: TTSConfig):
         f"model={voice_config.model}, speed={voice_config.speed}, language={voice_config.language}"
     )
 
+    # Emoji stripping applies to EVERY provider/flow. pipecat runs these filters
+    # only on the string sent to the TTS provider (incl. TTSSpeakFrame used by
+    # the widget stream mode + fillers); the transcript frame keeps its emoji.
+    text_filters: list = []
+    if await BB_STRIP_EMOJIS_FROM_TTS():
+        text_filters.append(EmojiTextFilter())
+
     if provider == "elevenlabs":
         use_indian_residency = await BB_ENABLE_ELEVENLABS_INDIAN_RESIDENCY()
         if use_indian_residency and not ELEVENLABS_INDIAN_RESIDENCY_API_KEY:
@@ -152,6 +167,7 @@ async def get_tts_service(voice_config: TTSConfig):
                 speed=voice_config.speed or 1.0,
                 language=_parse_language(voice_config.language, Language.EN_IN),
                 aggregate_sentences=aggregate,
+                text_filters=text_filters,
             )
         )
 
@@ -175,6 +191,7 @@ async def get_tts_service(voice_config: TTSConfig):
                 language=_parse_language(voice_config.language),
                 generation_config=generation_config,
                 aggregate_sentences=aggregate,
+                text_filters=text_filters,
             )
         )
 
@@ -193,6 +210,7 @@ async def get_tts_service(voice_config: TTSConfig):
                 pitch=voice_config.pitch or 0.0,
                 pace=voice_config.speed or 0.9,
                 enable_preprocessing=enable_preprocessing,
+                text_filters=text_filters,
             )
         )
 
@@ -207,6 +225,23 @@ async def get_tts_service(voice_config: TTSConfig):
                 language=_parse_language(voice_config.language, Language.EN_IN),
                 style_prompt=getattr(voice_config, "style_prompt", None),
                 credentials=GOOGLE_CREDENTIALS_JSON,
+                text_filters=text_filters,
+            )
+        )
+
+    elif provider == "google":
+        if not GOOGLE_CREDENTIALS_JSON:
+            raise ValueError("GOOGLE_CREDENTIALS_JSON is required for Google TTS")
+
+        # Chirp 3 HD: the voice name (e.g. en-IN-Chirp3-HD-Despina) encodes both
+        # the model and locale, so there is no model field. Language should match
+        # the voice's locale prefix; default to EN_IN.
+        return build_google_tts(
+            GoogleConfig(
+                voice_id=voice_config.voice_id or "en-IN-Chirp3-HD-Despina",
+                language=_parse_language(voice_config.language, Language.EN_IN),
+                credentials=GOOGLE_CREDENTIALS_JSON,
+                text_filters=text_filters,
             )
         )
 
@@ -223,6 +258,7 @@ async def get_tts_service(voice_config: TTSConfig):
                 model=voice_config.model or "tts-rt-v1",
                 language=_parse_language(voice_config.language, Language.EN),
                 aggregate_sentences=aggregate,
+                text_filters=text_filters,
             )
         )
 
@@ -251,6 +287,12 @@ async def generate_audio(
     overrides = configurations.tts_configuration_overrides if configurations else None
     resolved = await resolve_voice_config(voice_config, overrides)
     provider = resolved.provider.value
+
+    # Batch synth calls the provider API directly, bypassing the pipecat TTS
+    # service (and its EmojiTextFilter), so strip emoji here too. The caller
+    # stores the display text separately — the greeting bubble keeps its emoji.
+    if await BB_STRIP_EMOJIS_FROM_TTS():
+        text = strip_emojis(text)
 
     if provider == "sarvam":
         audio_data = await _generate_sarvam_audio(
@@ -287,6 +329,14 @@ async def generate_audio(
             style_prompt=getattr(resolved, "style_prompt", None),
         )
         # _generate_gemini_audio already downsamples to 16 kHz PCM
+        input_format = "raw"
+    elif provider == "google":
+        audio_data = await _generate_google_audio(
+            text=text,
+            voice_id=resolved.voice_id,
+            language=resolved.language,
+        )
+        # _generate_google_audio already downsamples to 16 kHz PCM
         input_format = "raw"
     elif provider == "soniox":
         audio_data = await _generate_soniox_audio(

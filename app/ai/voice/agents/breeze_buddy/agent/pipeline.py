@@ -37,6 +37,7 @@ from pipecat.turns.user_start import (
 )
 from pipecat.turns.user_stop import (
     BaseUserTurnStopStrategy,
+    SpeechTimeoutUserTurnStopStrategy,
     TurnAnalyzerUserTurnStopStrategy,
 )
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
@@ -49,9 +50,6 @@ from app.ai.voice.agents.breeze_buddy.processors import (
     UserIdleCallbackHandler,
 )
 from app.ai.voice.agents.breeze_buddy.stt import get_stt_service
-from app.ai.voice.agents.breeze_buddy.template.interruption import (
-    AccumulatingSpeechTimeoutStrategy,
-)
 from app.ai.voice.agents.breeze_buddy.template.types import (
     ConfigurationModel,
     InterruptionConfig,
@@ -213,9 +211,11 @@ async def build_pipeline(
     Uses the universal LLMContextAggregatorPair with UserTurnStrategies:
     - Start: VADUserTurnStartStrategy (primary, ~100ms) + TranscriptionUserTurnStartStrategy
       (fallback for soft speech VAD misses, uses interim transcriptions)
-    - Stop: AccumulatingSpeechTimeoutStrategy (user_speech_timeout=0.0) — triggers
+    - Stop: SpeechTimeoutUserTurnStopStrategy (user_speech_timeout=0.0) — triggers
       immediately when Soniox sends a finalized transcript (after its own
-      max_endpoint_delay_ms semantic endpoint detection).
+      max_endpoint_delay_ms semantic endpoint detection). TIMEOUT mode passes a
+      non-zero user_speech_timeout so the turn ends only after that much silence
+      following the last transcript (the timer rearms on each new transcript).
     - VAD runs inside the aggregator (not the transport)
 
     Stream mode (mode="stream") reuses the same aggregator + turn strategies
@@ -425,8 +425,11 @@ async def build_pipeline(
         # TIMEOUT and STT_NATIVE are the same strategy — only the timeout differs.
         # STT_NATIVE uses 0.0 (fires immediately on finalized transcript, e.g. Soniox <end> token).
         # TIMEOUT uses user_speech_timeout (waits after last transcript, resets on each new one).
+        # pipecat 1.1.0's SpeechTimeoutUserTurnStopStrategy handles the no-VAD
+        # multi-turn case natively (per-turn reset + independent wait flags), so
+        # no subclass/sentinel is needed.
         stop_strategies = [
-            AccumulatingSpeechTimeoutStrategy(user_speech_timeout=user_speech_timeout)
+            SpeechTimeoutUserTurnStopStrategy(user_speech_timeout=user_speech_timeout)
         ]
         logger.info(
             f"Turn detection: {turn_detection_mode.value} (user_speech_timeout={user_speech_timeout}s)"
@@ -505,6 +508,10 @@ async def build_pipeline(
     if is_stream:
         pipeline_parts.extend([tts, transport.output()])
     else:
+        # Generative voice UI (a VoiceUiStreamProcessor tapping LLM text between
+        # the LLM and TTS to emit `ui-op` RTVI events) is DEFERRED — the
+        # processor module is kept but not plugged in. See
+        # docs/widget/VOICE_GENERATIVE_UI_TODO.md for the re-wiring steps.
         pipeline_parts.extend(
             [llm, tts, transport.output(), context_aggregator.assistant()]
         )
@@ -552,6 +559,7 @@ async def create_pipeline_task(
             function_call_report_level={
                 "*": RTVIFunctionCallReportLevel.FULL,
             },
+            ignored_sources=[],
         )
         if emit_daily_events
         else None
