@@ -27,6 +27,7 @@ def decode_outbound_number(result: List[asyncpg.Record]) -> Optional[OutboundNum
         maximum_channels=row["maximum_channels"],
         reseller_id=row["reseller_id"],
         merchant_id=row["merchant_id"],
+        pool_id=row.get("pool_id"),
         created_at=row["created_at"],
         updated_at=row["updated_at"],
     )
@@ -51,6 +52,7 @@ def decode_outbound_number_list(result: List[asyncpg.Record]) -> List[OutboundNu
             maximum_channels=row["maximum_channels"],
             reseller_id=row["reseller_id"],
             merchant_id=row["merchant_id"],
+            pool_id=row.get("pool_id"),
             created_at=row["created_at"],
             updated_at=row["updated_at"],
         )

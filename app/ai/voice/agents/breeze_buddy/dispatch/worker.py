@@ -49,6 +49,7 @@ from app.ai.voice.agents.breeze_buddy.managers.calls import (
     _get_available_number,
     _get_lead_config,
     _is_within_calling_hours,
+    _mark_pool_acquired,
     _release_number,
     _run_pre_checks_for_lead,
 )
@@ -405,12 +406,22 @@ class Worker:
                 )
                 return
 
+            # Determine if this number was resolved via pool round-robin.
+            # If template.outbound_number_id points to a pool (not the number
+            # itself), the IDs will differ — that means the pool flow was used.
+            via_pool = (
+                template is not None
+                and template.outbound_number_id is not None
+                and number.pool_id is not None
+                and template.outbound_number_id != number.id
+            )
+
             # DB-side bookkeeping: ``outbound_number.status`` (Twilio) or
             # ``channels`` (Exotel/Plivo) is the operator-visible view used by
             # admin UI, analytics, and the channel-token reconciler. The Redis
             # token is the actual capacity gate; the DB write is eventually
             # consistent state.
-            acquired_db = await _acquire_number(number)
+            acquired_db = await _acquire_number(number, via_pool=via_pool)
             if not acquired_db:
                 logger.warning(
                     f"Worker {self._uuid}: DB capacity denied for number "
@@ -419,6 +430,21 @@ class Worker:
                 await release_channel_token(number.id, token)
                 lock_released = await self._defer_and_release(locked.id, 5)
                 return
+
+            # Persist the via_pool flag in Redis so the call-end webhook can
+            # retrieve it and correctly decrement pool-level channels on release.
+            if via_pool:
+                flag_stored = await _mark_pool_acquired(locked.id)
+                if not flag_stored:
+                    logger.error(
+                        f"Worker {self._uuid}: failed to persist pool_acquired "
+                        f"flag for lead {locked.id} — rolling back number "
+                        "acquisition to prevent channel leak"
+                    )
+                    await release_channel_token(number.id, token)
+                    await _release_number(number.id, number.provider, via_pool=True)
+                    lock_released = await self._defer_and_release(locked.id, 5)
+                    return
 
             call_provider = get_voice_provider(
                 number.provider, session, config.telephony_config
@@ -431,7 +457,7 @@ class Worker:
                     f"for lead {locked.id}"
                 )
                 await release_channel_token(number.id, token)
-                await _release_number(number.id, number.provider)
+                await _release_number(number.id, number.provider, via_pool=via_pool)
                 lock_released = await self._fail_and_release(locked.id, "INVALID_PHONE")
                 return
 
@@ -461,7 +487,7 @@ class Worker:
                         f"deferring {rl_defer}s."
                     )
                     await release_channel_token(number.id, token)
-                    await _release_number(number.id, number.provider)
+                    await _release_number(number.id, number.provider, via_pool=via_pool)
                     lock_released = await self._defer_and_release(locked.id, rl_defer)
                     return
 
@@ -478,7 +504,7 @@ class Worker:
                     f"lead {locked.id}: {e}"
                 )
                 await release_channel_token(number.id, token)
-                await _release_number(number.id, number.provider)
+                await _release_number(number.id, number.provider, via_pool=via_pool)
                 # Backoff retry. Use defer_seconds derived from attempt_count.
                 backoff = min(60, 5 * (locked.attempt_count + 1))
                 lock_released = await self._defer_and_release(locked.id, backoff)
@@ -490,7 +516,7 @@ class Worker:
                     f"for lead {locked.id}: {call}"
                 )
                 await release_channel_token(number.id, token)
-                await _release_number(number.id, number.provider)
+                await _release_number(number.id, number.provider, via_pool=via_pool)
                 lock_released = await self._defer_and_release(locked.id, 10)
                 return
 
@@ -511,7 +537,7 @@ class Worker:
                     "the call may be orphaned."
                 )
                 await release_channel_token(number.id, token)
-                await _release_number(number.id, number.provider)
+                await _release_number(number.id, number.provider, via_pool=via_pool)
                 lock_released = await self._release(locked.id)
                 return
 

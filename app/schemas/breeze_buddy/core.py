@@ -191,6 +191,7 @@ class OutboundNumber(BaseModel):
     maximum_channels: Optional[int] = None
     reseller_id: Optional[str] = None
     merchant_id: Optional[str] = None
+    pool_id: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
@@ -364,3 +365,43 @@ class CreateBlacklistNumberRequest(BaseModel):
     phone_number: str = Field(min_length=4, max_length=20)
     reseller_id: Optional[str] = None
     reason: Optional[str] = Field(default=None, max_length=500)
+
+
+class OutboundNumberPoolStatus(str, Enum):
+    """Status of an outbound number pool"""
+
+    ACTIVE = "ACTIVE"
+    DISABLED = "DISABLED"
+
+
+class OutboundNumberPool(BaseModel):
+    """Outbound number pool model — groups numbers for round-robin rotation with shared channel limits"""
+
+    id: str
+    name: str
+    provider: CallProvider
+    reseller_id: str
+    merchant_id: Optional[str] = None
+    max_channels: int
+    current_channels: int = 0
+    rotation_index: int = 0
+    status: OutboundNumberPoolStatus = OutboundNumberPoolStatus.ACTIVE
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+
+class CreateOutboundNumberPoolRequest(BaseModel):
+    """Request to create a new outbound number pool"""
+
+    name: str
+    provider: CallProvider
+    reseller_id: str
+    merchant_id: Optional[str] = None
+    max_channels: int
+
+
+class UpdateOutboundNumberPoolRequest(BaseModel):
+    """Request to update an outbound number pool"""
+
+    name: Optional[str] = None
+    max_channels: Optional[int] = None
