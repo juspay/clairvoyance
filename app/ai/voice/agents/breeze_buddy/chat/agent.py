@@ -972,6 +972,13 @@ class ChatAgent:
         if pending_sibling_ids:
             # Other gated calls from the same batch still await decisions;
             # invoking the LLM now would replay dangling tool_use blocks.
+            # ``assistant_idx`` is intentionally None: this branch returns
+            # BEFORE _cycle_loop, so no LLM inference ran this turn and there
+            # is no metrics row to key (_persist_turn_metrics early-returns on
+            # None). The SDK settles each card off function_approval_resolved /
+            # function_call_completed (both carry tool_call_id), so it needs no
+            # assistant anchor here; emitting a prior turn's gate-row idx would
+            # mis-attribute metrics to a row this turn never wrote.
             yield SSEEvent(
                 event="turn_end",
                 data={

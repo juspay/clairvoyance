@@ -27,6 +27,7 @@ from app.ai.voice.agents.breeze_buddy.template.types import (
     ApprovalConfig,
     ApprovalOnNoChannel,
     BaseGlobalFunction,
+    GlobalFunctionType,
 )
 from app.core.logger import logger
 
@@ -44,7 +45,10 @@ WIRE_STATUS_TIMEOUT = "timeout"
 WIRE_STATUS_CANCELLED = "cancelled"
 WIRE_STATUS_SUPERSEDED = "superseded"
 
-_GLOBAL_FUNCTION_TYPES = {"http", "builtin", "custom"}
+# Derived from the enum (mirrors builder.py:_GLOBAL_FUNCTION_TYPES) so a new
+# GlobalFunctionType is gated by chat and voice in lockstep — a hardcoded set
+# here would silently skip a 4th type that the builder/voice path still gates.
+_GLOBAL_FUNCTION_TYPES = {t.value for t in GlobalFunctionType}
 
 
 @dataclass
