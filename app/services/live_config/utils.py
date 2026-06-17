@@ -1,12 +1,12 @@
 """
-Utility functions for DevCycle feature flag processing.
+Utility functions for feature flag processing.
 
 Contains helper functions for data type conversion, key normalization,
-and DevCycle value processing.
+and value processing.
 """
 
 import os
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
 
 def normalize_key(key: str) -> str:
@@ -47,24 +47,3 @@ def get_env_value(key: str, return_type: type) -> Optional[Any]:
 
     converted = convert_type(env_value, return_type)
     return converted if converted is not None else env_value
-
-
-def process_devcycle_value(value: Any, var_type: str) -> Any:
-    """Process DevCycle value based on its type"""
-    if var_type == "Boolean" and isinstance(value, str):
-        return value.lower() == "true"
-    elif var_type == "String" and isinstance(value, bool):
-        return str(value).lower()
-    return value
-
-
-def build_variable_mapping(variables: list) -> Dict[str, Dict[str, str]]:
-    """Build mapping of variable IDs to their metadata"""
-    mapping = {}
-    for variable in variables:
-        if isinstance(variable, dict) and "_id" in variable and "key" in variable:
-            mapping[variable["_id"]] = {
-                "key": variable["key"],
-                "type": variable.get("type", "String"),
-            }
-    return mapping

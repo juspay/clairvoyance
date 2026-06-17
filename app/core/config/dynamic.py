@@ -118,7 +118,7 @@ async def ENABLE_CHAT_MODE_PROMPT() -> bool:
 # ============================================================================
 # Chat (text-mode) idle session timeout. Read by the cleanup task in
 # app/ai/voice/agents/breeze_buddy/chat/cleanup.py on every sweep so a
-# DevCycle change propagates without a pod restart. The sweep cadence
+# Redis change propagates without a pod restart. The sweep cadence
 # itself lives in static config (CHAT_SESSION_END_TIMEOUT_LOOP_INTERVAL_SECONDS
 # in app/core/config/static.py) because the BackgroundTaskScheduler binds it
 # once at startup.
@@ -163,7 +163,7 @@ async def CHAT_HISTORY_REPLAY_LIMIT() -> int:
 #
 # All four are operational dials we may want to turn during incident
 # response or after observing real demo traffic, *without* a deploy.
-# Reads are async because they hit Redis/DevCycle — cheap, but call
+# Reads are async because they hit Redis — cheap, but call
 # sites must ``await``. Each value is captured at the moment it's needed:
 #
 # - ``DEMO_MESSAGE_CAP_PER_SESSION`` is read at session-create and
@@ -234,16 +234,6 @@ async def SARVAM_STT_PROMPT() -> str:
     return await get_config("SARVAM_STT_PROMPT", "", str)
 
 
-async def SARVAM_STT_VAD_SIGNALS() -> bool:
-    """Returns SARVAM_STT_VAD_SIGNALS from Redis"""
-    return await get_config("SARVAM_STT_VAD_SIGNALS", True, bool)
-
-
-async def SARVAM_STT_HIGH_VAD_SENSITIVITY() -> bool:
-    """Returns SARVAM_STT_HIGH_VAD_SENSITIVITY from Redis"""
-    return await get_config("SARVAM_STT_HIGH_VAD_SENSITIVITY", False, bool)
-
-
 async def SARVAM_TTS_MODEL() -> str:
     """Returns SARVAM_TTS_MODEL from Redis"""
     return await get_config("SARVAM_TTS_MODEL", "bulbul:v2", str)
@@ -254,6 +244,16 @@ async def SARVAM_TTS_VOICE_ID() -> str:
     return await get_config("SARVAM_TTS_VOICE_ID", "manisha", str)
 
 
+async def SARVAM_STT_VAD_SIGNALS() -> bool:
+    """Returns SARVAM_STT_VAD_SIGNALS from Redis"""
+    return await get_config("SARVAM_STT_VAD_SIGNALS", True, bool)
+
+
+async def SARVAM_STT_HIGH_VAD_SENSITIVITY() -> bool:
+    """Returns SARVAM_STT_HIGH_VAD_SENSITIVITY from Redis"""
+    return await get_config("SARVAM_STT_HIGH_VAD_SENSITIVITY", False, bool)
+
+
 async def SARVAM_TTS_PITCH() -> float:
     """Returns SARVAM_TTS_PITCH from Redis"""
     return await get_config("SARVAM_TTS_PITCH", 0.0, float)
@@ -262,6 +262,11 @@ async def SARVAM_TTS_PITCH() -> float:
 async def SARVAM_TTS_PACE() -> float:
     """Returns SARVAM_TTS_PACE from Redis"""
     return await get_config("SARVAM_TTS_PACE", 1.0, float)
+
+
+async def ENABLE_TRACING() -> bool:
+    """Returns ENABLE_TRACING from Redis"""
+    return await get_config("ENABLE_TRACING", False, bool)
 
 
 # --- Breeze Buddy Sarvam STT Configuration ---

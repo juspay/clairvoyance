@@ -1,8 +1,8 @@
 """
 Feature Flags Management Router
 
-Provides CRUD operations for Redis-based feature flags
-without external DevCycle dependency.
+Provides CRUD operations for Redis-based feature flags.
+Frontend calls these endpoints directly to read/write flags.
 """
 
 from fastapi import APIRouter, Depends
