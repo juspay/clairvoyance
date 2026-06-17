@@ -72,7 +72,7 @@ from app.core.config.static import (
     BB_WORKER_HEARTBEAT_TTL_S,
 )
 from app.core.logger import logger
-from app.core.transport.http_client import create_aiohttp_session
+from app.core.transport.http_client import get_shared_aiohttp_session
 from app.database.accessor import (
     acquire_lock_on_lead_by_id,
     defer_lead_next_attempt_and_release_lock,
@@ -174,18 +174,20 @@ class Worker:
     # -- main loop ----------------------------------------------------------
 
     async def _loop(self) -> None:
-        async with create_aiohttp_session() as session:
-            while not self._stopping.is_set():
-                try:
-                    await self._iteration(session)
-                except Exception as e:  # noqa: BLE001
-                    logger.error(
-                        f"Worker {self._uuid}: unexpected error in loop: {e}",
-                        exc_info=True,
-                    )
-                    # Yield briefly so we don't hot-spin if something is
-                    # systemically broken.
-                    await asyncio.sleep(1.0)
+        while not self._stopping.is_set():
+            try:
+                # Re-fetch each iteration so a lifespan that swaps the
+                # shared session out (today: only on shutdown) can't
+                # leave us pinned to a closed reference.
+                await self._iteration(get_shared_aiohttp_session())
+            except Exception as e:  # noqa: BLE001
+                logger.error(
+                    f"Worker {self._uuid}: unexpected error in loop: {e}",
+                    exc_info=True,
+                )
+                # Yield briefly so we don't hot-spin if something is
+                # systemically broken.
+                await asyncio.sleep(1.0)
 
     async def _iteration(self, session: Optional[aiohttp.ClientSession]) -> None:
         """One pop-and-dispatch cycle. Errors are logged and contained."""

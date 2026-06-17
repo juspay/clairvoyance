@@ -327,10 +327,25 @@ POSTGRES_HOST = os.getenv("POSTGRES_HOST", "")
 POSTGRES_PORT = os.getenv("POSTGRES_PORT", "")
 POSTGRES_DB = os.getenv("POSTGRES_DB", "")
 
-# Connection pool settings
-POSTGRES_POOL_SIZE = int(os.getenv("POSTGRES_POOL_SIZE", "5"))
-POSTGRES_MAX_OVERFLOW = int(os.getenv("POSTGRES_MAX_OVERFLOW", "10"))
+# Connection pool settings. Sizes are **per pod** — multiply by replica
+# count when sizing the managed Postgres ``max_connections``. Defaults
+# absorb a BB_WORKER_COUNT=20 burst (multiple short acquires per
+# dispatch cycle) plus the FastAPI request path and reconcilers.
+POSTGRES_POOL_SIZE = int(os.getenv("POSTGRES_POOL_SIZE", "10"))
+POSTGRES_MAX_OVERFLOW = int(os.getenv("POSTGRES_MAX_OVERFLOW", "30"))
 POSTGRES_POOL_RECYCLE = int(os.getenv("POSTGRES_POOL_RECYCLE", "3600"))  # 1 hour
+
+# aiohttp connection-pool sizing. Bound the TCPConnector limits so per-
+# request sessions (factory default) and the long-lived shared session
+# don't each get aiohttp's unbounded default. Per pod.
+AIOHTTP_DEFAULT_POOL_LIMIT = int(os.getenv("AIOHTTP_DEFAULT_POOL_LIMIT", "50"))
+AIOHTTP_DEFAULT_POOL_LIMIT_PER_HOST = int(
+    os.getenv("AIOHTTP_DEFAULT_POOL_LIMIT_PER_HOST", "10")
+)
+AIOHTTP_SHARED_POOL_LIMIT = int(os.getenv("AIOHTTP_SHARED_POOL_LIMIT", "200"))
+AIOHTTP_SHARED_POOL_LIMIT_PER_HOST = int(
+    os.getenv("AIOHTTP_SHARED_POOL_LIMIT_PER_HOST", "32")
+)
 
 # KMS Configuration
 SKIP_KMS_DECRYPT = os.getenv("SKIP_KMS_DECRYPT", "false").lower() == "true"
