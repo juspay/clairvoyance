@@ -343,13 +343,12 @@ def _is_tool_success(tool_result: Any) -> bool:
 def _voice_state_session_id(bot_instance: Any) -> str:
     """Best-effort session id for inject_tool_args' eval context (voice path).
 
-    Prefers the widget chat_session id (widget-resume), falls back to the
-    lead id / call_sid. Used only for the ``{session_id}`` eval var + the
-    idempotency-hash discriminator — never a correctness key on voice.
+    Used by the AGENT-mode global-function / MCP tool wrappers (telephony +
+    non-widget daily) for the ``{session_id}`` eval var + the idempotency-hash
+    discriminator — never a correctness key on voice. Falls back lead id →
+    call_sid. (Widget voice now runs stream mode through the chat brain, which
+    owns its own session id, so there's no widget-resume seed to prefer here.)
     """
-    seed = getattr(bot_instance, "_widget_resume_seed", None)
-    if isinstance(seed, dict) and seed.get("widget_session_id"):
-        return str(seed["widget_session_id"])
     lead = getattr(bot_instance, "lead", None)
     if lead is not None and getattr(lead, "id", None):
         return str(lead.id)

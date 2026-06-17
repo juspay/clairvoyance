@@ -9,9 +9,13 @@ from app.ai.voice.agents.breeze_buddy.processors.transcription_gate import (
 from app.ai.voice.agents.breeze_buddy.processors.user_idle import (
     UserIdleCallbackHandler,
 )
+from app.ai.voice.agents.breeze_buddy.processors.voice_ui_stream import (
+    VoiceUiStreamProcessor,
+)
 
 __all__ = [
     "TranscriptCollectorProcessor",
     "TranscriptionGateProcessor",
     "UserIdleCallbackHandler",
+    "VoiceUiStreamProcessor",
 ]

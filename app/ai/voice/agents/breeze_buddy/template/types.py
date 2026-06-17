@@ -278,6 +278,7 @@ class TTSProvider(str, Enum):
     CARTESIA = "cartesia"
     SARVAM = "sarvam"
     GEMINI = "gemini"
+    GOOGLE = "google"
     SONIOX = "soniox"
 
 
@@ -333,11 +334,18 @@ class TTSConfig(BaseModel):
             "model": "tts-rt-v1",
             "language": "en"
         }
+
+    Example (Google Cloud TTS — Chirp 3 HD):
+        {
+            "provider": "google",
+            "voice_id": "en-IN-Chirp3-HD-Despina",
+            "language": "en-IN"
+        }
     """
 
     provider: TTSProvider = Field(
         ...,
-        description="TTS provider (elevenlabs, cartesia, sarvam, gemini, soniox)",
+        description="TTS provider (elevenlabs, cartesia, sarvam, gemini, google, soniox)",
     )
     voice_id: Optional[str] = Field(None, description="Provider-specific voice ID")
     model: Optional[str] = Field(

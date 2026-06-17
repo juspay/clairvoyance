@@ -21,7 +21,6 @@ from app.database.queries import run_parameterized_query
 from app.database.queries.breeze_buddy.chat_session import (
     count_chat_sessions_query,
     create_chat_session_query,
-    drain_voice_into_chat_session_query,
     end_chat_session_query,
     flip_chat_session_channel_query,
     get_agent_session_state_query,
@@ -342,76 +341,6 @@ async def flip_chat_session_to_chat(
         return decode_chat_session(row) if row else None
     except Exception as e:
         logger.error(f"Error flipping chat_session {session_id} to CHAT: {e}")
-        raise
-
-
-async def drain_voice_into_chat_session(
-    *,
-    chat_session_id: str,
-    lead_id: str,
-    new_messages: List[Dict[str, Any]],
-    final_node: Optional[str],
-) -> bool:
-    """End-of-voice drain: append new turns, advance current_node,
-    flip channel back to CHAT.
-
-    voice_lead_id is intentionally PRESERVED — the lead is bound to
-    the conversation for its full lifetime; the next /voice/connect
-    reuses it via attempt_count.
-
-    Idempotent against duplicate fires (e.g., end_conversation invoked
-    twice). The (session_id, idx) PK + atomic idx subquery in
-    insert_chat_message_query make duplicate INSERTs impossible at
-    the DB level; we wrap each insert just in case so a single
-    duplicate doesn't stop the rest.
-
-    Returns True when the channel flip succeeded (this drain owned
-    the close-out). False when the row had already moved on
-    (another caller ended the voice first).
-    """
-    # 1. Append any new turns.
-    for msg in new_messages:
-        role = msg.get("role")
-        content = msg.get("content")
-        if role not in ("user", "assistant") or not content:
-            continue
-        try:
-            await insert_chat_message(
-                session_id=chat_session_id,
-                role=ChatMessageRole(role),
-                content=content,
-            )
-        except Exception as e:
-            logger.warning(
-                f"drain: skip insert (session={chat_session_id}, role={role!r}): {e}"
-            )
-
-    # 2. Flip channel + advance current_node atomically. voice_lead_id
-    # stays bound for reuse on the next /voice/connect.
-    query, values = drain_voice_into_chat_session_query(
-        chat_session_id,
-        final_node=final_node,
-        expected_voice_lead_id=lead_id,
-    )
-    try:
-        result = await run_parameterized_query(query, values)
-        if result:
-            logger.info(
-                f"drain: voice lead {lead_id} drained into chat_session "
-                f"{chat_session_id}, final_node={final_node!r} "
-                "(voice_lead_id preserved for reuse)"
-            )
-            return True
-        logger.info(
-            f"drain: chat_session {chat_session_id} no longer matches "
-            f"lead {lead_id}; flip skipped"
-        )
-        return False
-    except Exception as e:
-        logger.error(
-            f"drain: failed to flip chat_session {chat_session_id} after "
-            f"lead {lead_id}: {e}"
-        )
         raise
 
 

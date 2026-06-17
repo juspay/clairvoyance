@@ -12,8 +12,8 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
-from dataclasses import dataclass
-from typing import Optional
+from dataclasses import dataclass, field
+from typing import Optional, Sequence
 
 from pipecat.services.soniox.tts import (
     SonioxTTSService,
@@ -53,6 +53,7 @@ class SonioxTTSConfig:
     sample_rate: int = 16000
     audio_format: str = "pcm_s16le"
     aggregate_sentences: bool = True
+    text_filters: Sequence = field(default_factory=list)
 
 
 def build_soniox_tts(config: SonioxTTSConfig) -> SonioxTTSService:
@@ -83,6 +84,7 @@ def build_soniox_tts(config: SonioxTTSConfig) -> SonioxTTSService:
             if config.aggregate_sentences
             else TextAggregationMode.TOKEN
         ),
+        text_filters=list(config.text_filters) if config.text_filters else None,
     )
 
 

@@ -26,7 +26,6 @@ from pipecat.turns.user_start import (
 )
 from pipecat.turns.user_stop import SpeechTimeoutUserTurnStopStrategy
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
-from pipecat.utils.asyncio.task_manager import BaseTaskManager
 
 from app.ai.voice.agents.breeze_buddy.template.context import TemplateContext
 from app.ai.voice.agents.breeze_buddy.template.types import (
@@ -34,56 +33,6 @@ from app.ai.voice.agents.breeze_buddy.template.types import (
     InterruptionMode,
 )
 from app.core.logger import logger
-
-# Duration for the sentinel timer (24 hours). This timer exists solely to keep
-# _timeout_task non-None so Pipecat's fallback check (line 201 in
-# speech_timeout_user_turn_stop_strategy.py) doesn't fire immediately.
-_SENTINEL_DURATION_SECS = 86400
-
-
-class AccumulatingSpeechTimeoutStrategy(SpeechTimeoutUserTurnStopStrategy):
-    """Stop strategy that reliably supports multi-turn input collection.
-
-    Pipecat's SpeechTimeoutUserTurnStopStrategy has a bug in the no-VAD
-    fallback path: after a turn completes (timer fires → finally block sets
-    _timeout_task = None), the NEXT turn's first finalized transcript hits:
-
-        if self._timeout_task is None:
-            await self.trigger_user_turn_stopped()      # line 201
-
-    This triggers immediately, ignoring user_speech_timeout. The Phase 1
-    sentinel hack only protected the first turn after update_strategies().
-
-    Fix: override setup() and reset() to always re-seed a long-duration
-    sentinel timer when user_speech_timeout > 0, guaranteeing _timeout_task
-    is never None at the start of any turn. The sentinel is harmlessly
-    cancelled and replaced by the real timer on the first transcript.
-
-    When user_speech_timeout == 0, behaves identically to the base class
-    (immediate trigger on finalized transcript is the desired behavior).
-    """
-
-    async def setup(self, task_manager: BaseTaskManager):
-        await super().setup(task_manager)
-        self._seed_sentinel()
-
-    async def reset(self):
-        await super().reset()
-        self._seed_sentinel()
-
-    def _seed_sentinel(self):
-        """Seed a long-duration sentinel timer to keep _timeout_task non-None.
-
-        Only seeds when user_speech_timeout > 0 (collection mode) and no
-        timer is already running. The sentinel sleeps for 24 hours and is
-        cancelled by the fallback code in _handle_transcription() on the
-        first real transcript, which replaces it with the actual timer.
-        """
-        if self._user_speech_timeout > 0 and self._timeout_task is None:
-            self._timeout_task = self.task_manager.create_task(
-                self._timeout_handler(_SENTINEL_DURATION_SECS),
-                f"{self}::sentinel_timeout",
-            )
 
 
 async def reset_interruption_to_default(
@@ -273,13 +222,14 @@ async def _apply_interruption_config(
     else:
         start_strategies.append(TranscriptionUserTurnStartStrategy(use_interim=True))
 
-    # Use AccumulatingSpeechTimeoutStrategy which re-seeds the sentinel
-    # timer after every reset(), fixing the multi-turn _timeout_task=None bug.
-    # For user_speech_timeout=0, it behaves identically to the base class.
+    # pipecat 1.1.0's SpeechTimeoutUserTurnStopStrategy handles the no-VAD
+    # multi-turn case natively (per-turn reset + independent wait flags), so the
+    # turn ends after user_speech_timeout seconds of silence following the last
+    # transcript. user_speech_timeout=0 fires immediately on a finalized transcript.
     new_strategies = UserTurnStrategies(
         start=start_strategies,
         stop=[
-            AccumulatingSpeechTimeoutStrategy(user_speech_timeout=user_speech_timeout)
+            SpeechTimeoutUserTurnStopStrategy(user_speech_timeout=user_speech_timeout)
         ],
     )
 

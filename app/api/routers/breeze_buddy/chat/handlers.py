@@ -8,35 +8,30 @@ stay thin: validate auth, then delegate.
 
 import asyncio
 import time
-from datetime import datetime, timezone
-from typing import Any, AsyncIterator, Callable, Dict, List, Optional, cast
+from datetime import datetime
+from typing import Any, AsyncIterator, Callable, Dict, List, Optional
 
 from fastapi import HTTPException, status
 from fastapi.responses import StreamingResponse
 
-from app.ai.voice.agents.breeze_buddy.chat.agent import ChatAgent
 from app.ai.voice.agents.breeze_buddy.chat.approvals import (
-    EXPIRED_RESULT,
     WIRE_STATUS_BY_DB_STATUS,
-    resolve_dangling_approvals,
+    claim_tool_approval,
 )
 from app.ai.voice.agents.breeze_buddy.chat.block_codec import (
-    blocks_to_llm_context_messages,
     filter_visible_blocks,
-    repair_dangling_tool_uses,
-    tool_results_to_user_blocks,
 )
 from app.ai.voice.agents.breeze_buddy.chat.client_context import (
     ClientContextTooLarge,
     compute_context_patch,
-    merge_context_into,
 )
 from app.ai.voice.agents.breeze_buddy.chat.metrics import TurnMetrics
 from app.ai.voice.agents.breeze_buddy.chat.sse import SSEEvent, format_sse
-from app.ai.voice.agents.breeze_buddy.llm import get_llm_service
-from app.ai.voice.agents.breeze_buddy.template.approval import (
-    LLM_STATUS_DENIED,
-    WIRE_STATUS_SUPERSEDED,
+from app.ai.voice.agents.breeze_buddy.chat.turn_core import (
+    build_render_template_vars,
+    resolve_llm_configuration,
+    run_chat_approval_continuation,
+    run_chat_turn,
 )
 from app.ai.voice.agents.breeze_buddy.template.cache import get_template_by_id_cached
 from app.ai.voice.agents.breeze_buddy.template.transformation_function import (
@@ -44,7 +39,6 @@ from app.ai.voice.agents.breeze_buddy.template.transformation_function import (
 )
 from app.ai.voice.agents.breeze_buddy.template.types import TemplateModel
 from app.api.routers.breeze_buddy.analytics.rbac import apply_hierarchical_filters
-from app.core.config.dynamic import CHAT_HISTORY_REPLAY_LIMIT
 from app.core.logger import logger
 from app.database.accessor.breeze_buddy.chat_session import (
     count_chat_sessions,
@@ -58,14 +52,6 @@ from app.database.accessor.breeze_buddy.chat_session import (
     list_chat_turn_metrics_for_session,
     merge_client_context,
     record_chat_turn_metrics,
-)
-from app.database.accessor.breeze_buddy.credentials import (
-    get_credentials_as_template_vars,
-)
-from app.database.accessor.breeze_buddy.tool_approvals import (
-    decide_tool_approval,
-    get_tool_approval,
-    list_pending_tool_approvals,
 )
 from app.schemas import UserInfo
 from app.schemas.breeze_buddy.chat import (
@@ -237,29 +223,6 @@ def _apply_payload_transformations(
     return out
 
 
-async def _build_render_template_vars(
-    template: TemplateModel, persisted: Optional[Dict[str, Any]]
-) -> Dict[str, Any]:
-    """Build the per-turn render context. Same precedence as voice:
-    credentials < template.secrets < persisted payload values.
-    """
-    merged: Dict[str, Any] = {}
-    try:
-        creds = await get_credentials_as_template_vars(template.reseller_id)
-        if creds:
-            merged.update(creds)
-    except Exception as exc:
-        logger.warning(
-            f"chat: failed to load credentials for reseller "
-            f"{template.reseller_id}: {exc}"
-        )
-    if template.secrets:
-        merged.update(template.secrets)
-    if persisted:
-        merged.update(persisted)
-    return merged
-
-
 # ---------------------------------------------------------------------------
 # Shared validators
 # ---------------------------------------------------------------------------
@@ -282,21 +245,12 @@ def validate_template_for_chat(template: TemplateModel) -> None:
             ),
         )
 
-    llm_cfg = _resolve_llm_configuration(template)
+    llm_cfg = resolve_llm_configuration(template)
     if llm_cfg is not None and getattr(llm_cfg, "realtime", False):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Realtime / speech-to-speech LLMs are not supported in chat mode.",
         )
-
-
-def _resolve_llm_configuration(template: TemplateModel):
-    """Pick out ``configurations.llm_configurations`` (the canonical path)
-    safely. Mirrors voice's access pattern (see ``agent/pipeline.py``)."""
-    configurations = getattr(template, "configurations", None)
-    if configurations is None:
-        return None
-    return getattr(configurations, "llm_configurations", None)
 
 
 def _render_initial_greeting(
@@ -386,7 +340,7 @@ async def create_chat_session_handler(
     # replay on the very first /message call. Render against the same
     # merged context turns will see, so a greeting that references a
     # credential / secret placeholder doesn't render with raw braces.
-    greeting_render_vars = await _build_render_template_vars(
+    greeting_render_vars = await build_render_template_vars(
         template, transformed_template_vars
     )
     greeting_text = _render_initial_greeting(template, greeting_render_vars)
@@ -492,65 +446,14 @@ async def send_chat_message_handler(
                 ),
             )
 
-        # HITL: a new user message supersedes every pending approval (the
-        # user moved on without deciding). MUST run under the lock and
-        # BEFORE the history load — it persists the synthetic tool_result
-        # rows that keep the replayed history fully answered. The resolved
-        # events ride at the start of this turn's stream so live cards
-        # flip to superseded without client-side inference.
-        # NOTE: requires migration 033 (tool_approvals) — run
-        # `python scripts/migrate.py up` before deploying this version.
-        superseded = await resolve_dangling_approvals(session_id, only_expired=False)
-        pre_events: List[SSEEvent] = [
-            SSEEvent(
-                event="function_approval_resolved",
-                data={
-                    "tool_call_id": row.tool_call_id,
-                    "status": WIRE_STATUS_SUPERSEDED,
-                    "reason": row.reason,
-                },
-            )
-            for row in superseded
-        ]
-
-        history_limit = await CHAT_HISTORY_REPLAY_LIMIT()
-        history_rows = await list_chat_messages_for_session(
-            session_id, limit=history_limit
-        )
-        # Replay the canonical Anthropic-shape blocks if present (post-
-        # migration 030), falling back to the denormalised prose for
-        # any legacy rows. Tool_use / tool_result blocks survive so the
-        # LLM sees its own prior identifiers (cart_id, etc.) verbatim.
-        history: list = blocks_to_llm_context_messages(
-            [
-                {
-                    "role": row.role.value,
-                    "content": row.content,
-                    "content_blocks": row.content_blocks,
-                }
-                for row in history_rows
-                if row.role in (ChatMessageRole.USER, ChatMessageRole.ASSISTANT)
-            ]
-        )
-        # Defensive both-direction repair: every pending approval was just
-        # resolved + persisted above, so nothing is legitimately dangling —
-        # any unmatched tool_use here is a decided-but-lost row (crash or
-        # cancel between claim and persist) and gets a synthetic error
-        # result; orphan tool_results from window truncation are dropped.
-        history = cast(list, repair_dangling_tool_uses(history))
-
-        # Load per-session agent state (cart_id, customer_id, etc. for
-        # commerce templates). Generic — the runtime doesn't read the
-        # keys; the template's tool_arg_injection rules do.
-        state_row = await get_agent_session_state(session_id)
-        agent_state: Dict[str, Any] = state_row.data if state_row else {}
-
         # Piggyback context patch (CLIENT_CONTEXT_UPDATES.md §5.2): an
-        # optional state/facts update riding with this message. Applied +
-        # persisted under the same lock BEFORE the turn builds, so it's
-        # effective on THIS turn (vs. the standalone /context endpoint, which
-        # lands on the next turn). Allowlist-gated by the template policy; an
-        # unconfigured template silently no-ops.
+        # optional state/facts update riding with this message. Persisted
+        # under the lock BEFORE the turn builds, so ``run_chat_turn`` re-reads
+        # it on THIS turn (vs. the standalone /context endpoint, which lands
+        # next turn). Allowlist-gated by the template policy; an unconfigured
+        # template silently no-ops. The 413 must surface here, before the SSE
+        # stream opens, so this validation stays in the HTTP shell (voice
+        # never sends a piggyback context, so run_chat_turn omits it).
         context_placement: Optional[str] = None
         if req.context is not None:
             cc_config = (
@@ -558,6 +461,8 @@ async def send_chat_message_handler(
                 if template.configurations
                 else None
             )
+            state_row = await get_agent_session_state(session_id)
+            agent_state: Dict[str, Any] = state_row.data if state_row else {}
             try:
                 state_patch, facts_patch, replace_facts, _, _ = compute_context_patch(
                     agent_state,
@@ -571,16 +476,13 @@ async def send_chat_message_handler(
                     status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
                     detail=str(exc),
                 ) from exc
-            # Update the in-memory state so THIS turn sees the context...
-            agent_state = merge_context_into(
-                agent_state, state_patch, facts_patch, replace_facts
-            )
-            # ...and persist via the atomic merge (message-bound, no revision)
-            # so a concurrent standalone /context push isn't clobbered. The
-            # turn's own write (agent.py) excludes the client-context keys.
-            # ``facts_patch`` is None only when the push carried no facts; an
-            # empty {} (a merge='replace' facts clear) IS a real write, so gate
-            # on ``is not None`` — truthiness would silently drop the clear.
+            # Persist via the atomic merge (message-bound, no revision) so a
+            # concurrent standalone /context push isn't clobbered; the turn's
+            # own write (agent.py) excludes the client-context keys.
+            # ``run_chat_turn`` re-loads agent_state below, so it sees this
+            # patch on THIS turn. ``facts_patch`` is None only when the push
+            # carried no facts; an empty {} (a merge='replace' facts clear) IS
+            # a real write, so gate on ``is not None``.
             if state_patch or facts_patch is not None:
                 await merge_client_context(
                     session_id,
@@ -591,38 +493,6 @@ async def send_chat_message_handler(
                 )
             context_placement = req.context.placement
 
-        persisted_template_vars = (
-            fresh.metadata.get("template_vars", {})
-            if isinstance(fresh.metadata, dict)
-            else {}
-        )
-        # Voice's loader merges credentials + template.secrets + payload
-        # values on every call (template/loader.py:125-183). Chat now does
-        # the same per-turn so HTTP/global function ``{placeholder}``
-        # resolution and prompt rendering see credentials/secrets the
-        # same way they would on voice. Doing it per-turn (not at session-
-        # create) keeps rotated credentials and updated secrets effective
-        # without resuming the session.
-        template_vars = await _build_render_template_vars(
-            template, persisted_template_vars
-        )
-
-        # Chat-only opt-in to the shared LLM client (Azure HTTP/2 pool,
-        # Claude-on-Vertex client + token cache). Voice uses fresh per-call
-        # services — subprocess-per-call gets nothing from sharing.
-        llm = await get_llm_service(_resolve_llm_configuration(template), pooled=True)
-        agent = ChatAgent(
-            session_id=session_id,
-            template=template,
-            llm=llm,
-            template_vars=template_vars,
-            agent_state=agent_state,
-            context_placement=context_placement,
-        )
-        # Snapshot into a local so the closure below doesn't have to rely
-        # on Optional narrowing surviving the boundary.
-        resume_node = fresh.current_node
-
         # Phase-0 measurement (docs/widget/UI_FAST_RELIABLE_GENERIC_PLAN.md):
         # observe the turn's SSE stream and log one [CHAT_METRICS] line at the
         # end. Passive — never mutates the events the widget receives.
@@ -632,17 +502,21 @@ async def send_chat_message_handler(
             t0=time.monotonic(),
         )
 
+        # The brain — approval supersede, history replay + repair, agent_state
+        # load, template-var render, ChatAgent drive — lives in
+        # ``run_chat_turn``, the SAME generator the widget voice bridge drives.
+        # This handler is just the HTTP shell: lock + access-check + 410/413
+        # gating + SSE wrapping.
         response = StreamingResponse(
             _turn_sse_stream(
                 session_id=session_id,
                 lock=lock,
                 turn_metrics=turn_metrics,
-                events=agent.run_turn(
+                events=run_chat_turn(
+                    session_id=session_id,
                     user_content=req.content,
-                    history=history,
-                    current_node=resume_node,
+                    context_placement=context_placement,
                 ),
-                pre_events=pre_events,
             ),
             media_type="text/event-stream",
             headers={
@@ -850,8 +724,13 @@ async def approve_chat_tool_handler(
                 ),
             )
 
-        row = await get_tool_approval(session_id, req.tool_call_id)
-        if row is None:
+        # Atomically claim the decision (PENDING-only; expiry → timeout;
+        # synthetic deny/timeout result + sibling sweep persisted under the
+        # lock). The SAME claim the voice bridge uses — see claim_tool_approval.
+        claim = await claim_tool_approval(
+            session_id, req.tool_call_id, req.approved, req.reason
+        )
+        if claim.outcome == "not_found":
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=(
@@ -859,71 +738,15 @@ async def approve_chat_tool_handler(
                     f"'{req.tool_call_id}' for this session"
                 ),
             )
-        if row.status != ToolApprovalStatus.PENDING:
+        if claim.outcome == "already_decided":
             raise _approval_conflict(
                 "already_decided",
-                f"This approval was already resolved ({row.status.value}).",
-                WIRE_STATUS_BY_DB_STATUS.get(row.status),
+                "This approval was already resolved.",
+                claim.winning_status,
             )
 
-        is_expired = row.expires_at <= datetime.now(timezone.utc)
-        if is_expired:
-            new_status = ToolApprovalStatus.EXPIRED
-            decision_reason: Optional[str] = "decision arrived after expiry"
-        elif req.approved:
-            new_status = ToolApprovalStatus.APPROVED
-            decision_reason = req.reason
-        else:
-            new_status = ToolApprovalStatus.DENIED
-            decision_reason = req.reason
-
-        claimed = await decide_tool_approval(
-            session_id, req.tool_call_id, new_status, decision_reason
-        )
-        if claimed is None:
-            # Lost the claim race to a concurrent decision.
-            relook = await get_tool_approval(session_id, req.tool_call_id)
-            raise _approval_conflict(
-                "already_decided",
-                "This approval was already resolved by a concurrent request.",
-                WIRE_STATUS_BY_DB_STATUS.get(relook.status) if relook else None,
-            )
-
-        effective_approved = req.approved and not is_expired
-        wire_status = WIRE_STATUS_BY_DB_STATUS[new_status]
-
-        logger.info(
-            f"[approval] session={session_id} tool_call_id={req.tool_call_id} "
-            f"function={claimed.function_name} decision={new_status.value}"
-            + (f" reason={decision_reason!r}" if decision_reason else "")
-        )
-
-        synthetic_result: Optional[Dict[str, Any]] = None
-        if not effective_approved:
-            synthetic_result = (
-                dict(EXPIRED_RESULT)
-                if is_expired
-                else {
-                    "status": LLM_STATUS_DENIED,
-                    "reason": req.reason or "the user did not approve this action",
-                }
-            )
-            # Persist under the lock, before streaming — the history load
-            # below already sees a fully-answered batch for this call.
-            await insert_chat_message(
-                session_id=session_id,
-                role=ChatMessageRole.USER,
-                content=None,
-                content_blocks=tool_results_to_user_blocks(
-                    [(req.tool_call_id, synthetic_result)]
-                ),
-            )
-
-        # Lazily expire the OTHER pending rows past their TTL (persists
-        # their synthetic timeout results) and surface them at stream start.
-        expired_siblings = await resolve_dangling_approvals(
-            session_id, only_expired=True
-        )
+        # Expired siblings (swept during the claim) ride at stream start so the
+        # widget flips their cards to timeout without client-side inference.
         pre_events: List[SSEEvent] = [
             SSEEvent(
                 event="function_approval_resolved",
@@ -933,65 +756,8 @@ async def approve_chat_tool_handler(
                     "reason": sib.reason,
                 },
             )
-            for sib in expired_siblings
+            for sib in claim.expired_siblings
         ]
-
-        # include_expired: a sibling whose expires_at falls between the
-        # sweep above and this statement is still PENDING and decidable —
-        # it must stay in the exclude set (and keep the turn awaiting)
-        # rather than getting a fabricated "lost" answer; the next touch
-        # lazily expires it.
-        pending_siblings = await list_pending_tool_approvals(
-            session_id, include_expired=True
-        )
-        pending_sibling_ids = [sib.tool_call_id for sib in pending_siblings]
-
-        history_limit = await CHAT_HISTORY_REPLAY_LIMIT()
-        history_rows = await list_chat_messages_for_session(
-            session_id, limit=history_limit
-        )
-        history: list = blocks_to_llm_context_messages(
-            [
-                {
-                    "role": hist_row.role.value,
-                    "content": hist_row.content,
-                    "content_blocks": hist_row.content_blocks,
-                }
-                for hist_row in history_rows
-                if hist_row.role in (ChatMessageRole.USER, ChatMessageRole.ASSISTANT)
-            ]
-        )
-        # The claimed call (approve path answers it in-turn) and the
-        # still-pending siblings must STAY unanswered; anything else
-        # unmatched is decided-but-lost and gets a synthetic error.
-        history = cast(
-            list,
-            repair_dangling_tool_uses(
-                history, exclude_ids={req.tool_call_id, *pending_sibling_ids}
-            ),
-        )
-
-        state_row = await get_agent_session_state(session_id)
-        agent_state: Dict[str, Any] = state_row.data if state_row else {}
-
-        persisted_template_vars = (
-            fresh.metadata.get("template_vars", {})
-            if isinstance(fresh.metadata, dict)
-            else {}
-        )
-        template_vars = await _build_render_template_vars(
-            template, persisted_template_vars
-        )
-
-        llm = await get_llm_service(_resolve_llm_configuration(template), pooled=True)
-        agent = ChatAgent(
-            session_id=session_id,
-            template=template,
-            llm=llm,
-            template_vars=template_vars,
-            agent_state=agent_state,
-        )
-        resume_node = fresh.current_node
 
         turn_metrics = TurnMetrics(
             session_id=session_id,
@@ -1004,15 +770,14 @@ async def approve_chat_tool_handler(
                 session_id=session_id,
                 lock=lock,
                 turn_metrics=turn_metrics,
-                events=agent.run_approval_turn(
-                    approval=claimed,
-                    approved=effective_approved,
-                    wire_status=wire_status,
-                    decision_reason=decision_reason,
-                    synthetic_result=synthetic_result,
-                    history=history,
-                    current_node=resume_node,
-                    pending_sibling_ids=pending_sibling_ids,
+                events=run_chat_approval_continuation(
+                    session_id=session_id,
+                    claimed=claim.claimed,
+                    effective_approved=claim.effective_approved,
+                    wire_status=claim.wire_status,
+                    decision_reason=claim.decision_reason,
+                    synthetic_result=claim.synthetic_result,
+                    pending_sibling_ids=claim.pending_sibling_ids,
                 ),
                 pre_events=pre_events,
             ),

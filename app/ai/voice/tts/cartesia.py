@@ -1,7 +1,7 @@
 """Cartesia TTS helpers and builder."""
 
-from dataclasses import dataclass
-from typing import Optional
+from dataclasses import dataclass, field
+from typing import Optional, Sequence
 
 import httpx
 from pipecat.services.cartesia.tts import CartesiaTTSService, GenerationConfig
@@ -37,6 +37,7 @@ class CartesiaConfig:
     language: Language = Language.EN
     generation_config: Optional[GenerationConfig] = None
     aggregate_sentences: bool = True
+    text_filters: Sequence = field(default_factory=list)
 
 
 def build_cartesia_tts(config: CartesiaConfig) -> CartesiaTTSService:
@@ -62,6 +63,7 @@ def build_cartesia_tts(config: CartesiaConfig) -> CartesiaTTSService:
             if config.aggregate_sentences
             else TextAggregationMode.TOKEN
         ),
+        text_filters=list(config.text_filters) if config.text_filters else None,
     )
 
 

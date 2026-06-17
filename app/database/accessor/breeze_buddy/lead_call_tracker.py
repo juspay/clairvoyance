@@ -756,6 +756,7 @@ async def reset_widget_voice_lead(
     lead_id: str,
     payload: Dict[str, Any],
     meta_data_seed: Dict[str, Any],
+    execution_mode: ExecutionMode = ExecutionMode.DAILY_STREAM,
 ) -> Optional[LeadCallTracker]:
     """Reset a widget voice lead so the next /voice/connect can reuse it.
 
@@ -763,15 +764,17 @@ async def reset_widget_voice_lead(
     chat_session has ONE voice lead (set in chat_session.voice_lead_id)
     that persists for the conversation's lifetime. Each /voice/connect
     after the first reuses this lead — bumps attempt_count, refreshes
-    the seed (start_node, prior_history), clears per-call fields
-    (call_id, outcome, etc.) so they don't leak from the previous
-    attempt.
+    the widget seed, re-asserts ``execution_mode`` (so a pre-stream-pivot
+    lead is upgraded to DAILY_STREAM), clears per-call fields (call_id,
+    outcome, etc.) so they don't leak from the previous attempt.
     """
     logger.info(
         f"Resetting widget voice lead {lead_id} for next attempt "
-        f"(seed: {sorted(meta_data_seed.keys())})"
+        f"(seed: {sorted(meta_data_seed.keys())}, mode: {execution_mode.value})"
     )
-    query_text, values = reset_widget_voice_lead_query(lead_id, payload, meta_data_seed)
+    query_text, values = reset_widget_voice_lead_query(
+        lead_id, payload, meta_data_seed, execution_mode.value
+    )
     try:
         result = await run_parameterized_query(query_text, values)
         if result and get_row_count(result) > 0:

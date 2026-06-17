@@ -31,7 +31,6 @@ from app.ai.voice.agents.breeze_buddy.agent.flow import (
     build_flow_config,
     load_template_config,
     prepare_initial_node,
-    prepare_resume_node,
     setup_flow_manager,
 )
 from app.ai.voice.agents.breeze_buddy.agent.inbound import (
@@ -59,6 +58,7 @@ from app.ai.voice.agents.breeze_buddy.agent.utils import (
     send_initial_greeting,
     send_initial_greeting_daily,
 )
+from app.ai.voice.agents.breeze_buddy.chat.voice_bridge import WidgetVoiceBridge
 from app.ai.voice.agents.breeze_buddy.handlers.internal.end_conversation import (
     end_conversation,
 )
@@ -70,6 +70,9 @@ from app.ai.voice.agents.breeze_buddy.observability.tracing_setup import (
     create_root_span,
 )
 from app.ai.voice.agents.breeze_buddy.processors import TranscriptCollectorProcessor
+from app.ai.voice.agents.breeze_buddy.processors.voice_ui_stream import (
+    coerce_ui_action_text,
+)
 from app.ai.voice.agents.breeze_buddy.services.inbound_policy import (
     get_block_redirect,
 )
@@ -113,6 +116,9 @@ from app.schemas.breeze_buddy.core import ExecutionMode, LeadCallTracker
 
 DEFAULT_OUTCOME = "BUSY"
 TTS_SPEAK_MAX_CHARS = 2000
+# Cap on a carousel/product-click `ui-action` message injected as a user turn
+# (mirrors TTS_SPEAK_MAX_CHARS). See docs/widget/VOICE_AS_CHAT.md (A2).
+UI_ACTION_MAX_CHARS = 2000
 
 
 class Agent:
@@ -182,18 +188,19 @@ class Agent:
         # Error tracking
         self.errors: List[Dict[str, Any]] = []
 
-        # Widget-mode resume seed (CHAT_MODE.md §14). Populated from
-        # lead.metaData in _setup_*_transport when this voice call is a
-        # transient attachment to an in-progress chat_session. When set,
-        # the agent skips greeting playback and starts the FlowManager
-        # at start_node with prior_history pre-loaded into LLM context.
-        self._widget_resume_seed: Optional[Dict[str, Any]] = None
+        # Widget voice-as-chat bridge (stream mode + a bound chat_session).
+        # Constructed in _register_event_handlers once self.task exists; drives
+        # every finished user turn through the chat brain (run_chat_turn) and
+        # speaks the assistant prose via TTS. None for telephony / non-widget
+        # stream / agent-mode calls. See chat/voice_bridge.py + the
+        # widget-voice-as-chat re-architecture plan.
+        self._voice_bridge: Optional[WidgetVoiceBridge] = None
 
         # Reducer-built session state (cart_id/checkout_id/client facts),
-        # the voice counterpart of ChatAgent.agent_state. Seeded from a
-        # widget-resume (below), accumulated via state_reducers during the
-        # call by the global-function wrapper, and drained back to the
-        # chat_session on end_conversation. Empty {} for fresh/telephony calls.
+        # the voice counterpart of ChatAgent.agent_state. Accumulated via
+        # state_reducers during an AGENT-mode call by the global-function
+        # wrapper. Empty {} for stream-mode widget voice (the chat brain owns
+        # state there) and for telephony calls with no reducers.
         self.agent_state: Dict[str, Any] = {}
 
         # HITL approval channel — daily mode only, set alongside
@@ -326,35 +333,6 @@ class Agent:
         )
         update_log_context(call_sid=self.call_sid)
 
-        # Widget-mode resume seed: see CHAT_MODE.md §14. When this voice
-        # call is a transient attachment to an in-progress chat_session,
-        # the unified widget router stuffs the seed into lead.metaData.
-        # We capture it here so the greeting / initial-node code paths
-        # below can branch on it cleanly.
-        meta = self.lead.metaData or {}
-        widget_session_id = meta.get("widget_session_id")
-        if widget_session_id:
-            self._widget_resume_seed = {
-                "widget_session_id": str(widget_session_id),
-                "start_node": meta.get("start_node"),
-                "prior_history": list(meta.get("prior_history") or []),
-                "seed_message_count": int(meta.get("seed_message_count", 0) or 0),
-                # Reducer-built chat state (cart_id/checkout_id/...) carried
-                # across the CHAT->VOICE flip; merged into template_vars below.
-                "agent_state": dict(meta.get("agent_state") or {}),
-            }
-            # Seed the live agent_state from the chat session so voice tool
-            # calls inject/update it (tool_arg_injection + state_reducers via
-            # the global-function wrapper) and the final state drains back on
-            # end_conversation.
-            self.agent_state = dict(self._widget_resume_seed["agent_state"])
-            logger.info(
-                f"Widget voice resume: chat_session={widget_session_id} "
-                f"start_node={self._widget_resume_seed['start_node']!r} "
-                f"prior_msgs={len(self._widget_resume_seed['prior_history'])} "
-                f"agent_state_keys={sorted(self.agent_state)}"
-            )
-
         logger.info(
             f"Starting Daily bot for lead_id: {lead_id}, call_sid: {self.call_sid}"
         )
@@ -376,22 +354,6 @@ class Agent:
         except ValueError as e:
             logger.error(f"Failed to load template config for Daily mode: {e}")
             raise
-
-        # Widget resume: thread the chat session's accumulated agent_state
-        # (cart_id/checkout_id/client-pushed facts) into template_vars so
-        # {placeholder} resolution in the resumed voice flow uses the
-        # chat-built identifiers instead of losing them on the flip.
-        # only_if_missing — never clobber an explicitly-rendered call var.
-        if self._widget_resume_seed:
-            resumed_state = self._widget_resume_seed.get("agent_state") or {}
-            merged_keys = [k for k in resumed_state if k not in self.template_vars]
-            for k in merged_keys:
-                self.template_vars[k] = resumed_state[k]
-            if merged_keys:
-                logger.info(
-                    f"Widget voice resume: merged {len(merged_keys)} agent_state "
-                    f"var(s) into template_vars: {sorted(merged_keys)}"
-                )
 
         # Synthesize and cache the initial greeting in Redis so it can be
         # played out on client-connect. Idempotent: if the dispatch worker
@@ -842,12 +804,6 @@ class Agent:
                         logger.debug(f"[STREAM] TTS speak: {text[:80]}")
                         await self.task.queue_frame(TTSSpeakFrame(text=text))
                 elif message.type == RTVI_APPROVAL_DECISION:
-                    if not self.approval_manager:
-                        logger.warning(
-                            "[approval] Decision received but no approval "
-                            "manager on this bot"
-                        )
-                        return
                     data = message.data or {}
                     approval_id = data.get("approval_id")
                     approved = data.get("approved")
@@ -859,11 +815,45 @@ class Agent:
                             f"[approval] Malformed decision message: {data!r}"
                         )
                         return
-                    self.approval_manager.resolve(
-                        approval_id,
-                        approved,
-                        reason if isinstance(reason, str) else None,
-                    )
+                    reason_str = reason if isinstance(reason, str) else None
+                    if self._voice_bridge is not None:
+                        # Stream-mode widget voice: the chat brain gated the call
+                        # (Pattern B). Drive the resume turn through the bridge.
+                        await self._voice_bridge.handle_approval_decision(
+                            approval_id, approved, reason_str
+                        )
+                    elif self.approval_manager:
+                        # Agent-mode voice (Pattern C): resolve the in-handler gate.
+                        self.approval_manager.resolve(approval_id, approved, reason_str)
+                    else:
+                        logger.warning(
+                            "[approval] Decision received but no approval "
+                            "channel on this bot"
+                        )
+                elif message.type == "ui-action":
+                    # Widget voice-as-chat: a carousel/product click arrives as
+                    # a user turn. The backend emits no transcript echo (the
+                    # widget renders the bubble optimistically). See
+                    # docs/widget/VOICE_AS_CHAT.md (A2).
+                    text = coerce_ui_action_text(message.data, UI_ACTION_MAX_CHARS)
+                    if text is None:
+                        logger.warning(f"[ui-action] empty/malformed: {message.data!r}")
+                        return
+                    if self._voice_bridge is not None:
+                        # Stream mode: drive the click through the chat brain,
+                        # exactly like a spoken turn.
+                        logger.debug(f"[ui-action] bridge user turn: {text[:80]}")
+                        await self._voice_bridge.handle_user_turn(text)
+                    elif self.task:
+                        # Agent mode: inject into the live LLM context
+                        # (run_llm=True) — the same mid-call user-turn injection
+                        # user_idle.py uses; pipecat handles barge-in natively.
+                        logger.debug(f"[ui-action] inject user turn: {text[:80]}")
+                        await self.task.queue_frame(
+                            LLMMessagesAppendFrame(
+                                [{"role": "user", "content": text}], run_llm=True
+                            )
+                        )
 
         # Register user turn started event to reset idle retry counter
         if self._context_aggregator and self._user_idle_callback_handler:
@@ -881,12 +871,51 @@ class Agent:
                         logger.debug("Post-greeting timer cancelled - user spoke")
                 self._user_idle_callback_handler.reset_retry_count()
 
+        # Widget voice-as-chat bridge: stream mode + a bound chat_session.
+        # Drive every finished user turn through the chat brain (run_chat_turn)
+        # — the bridge speaks the assistant prose via TTS and emits RTVI
+        # transcript / ui-op / turn-end events. on_user_turn_started cancels an
+        # in-flight turn on barge-in (pipecat's broadcast_interruption already
+        # flushed queued TTS natively). No idle handler is wired in stream mode,
+        # so these registrations don't collide with the block above.
+        widget_session_id = (
+            (self.lead.metaData or {}).get("widget_session_id") if self.lead else None
+        )
+        if self.is_stream_mode and widget_session_id and self._context_aggregator:
+            self._voice_bridge = WidgetVoiceBridge(
+                session_id=str(widget_session_id),
+                task=self.task,
+                emit_rtvi=self._emit_rtvi_event,
+            )
+            bridge = self._voice_bridge
+            bridge_user_aggregator = self._context_aggregator.user()
+
+            @bridge_user_aggregator.event_handler("on_user_turn_stopped")
+            async def _bridge_user_turn_stopped(aggregator, strategy, message):
+                await bridge.handle_user_turn(getattr(message, "content", None))
+
+            @bridge_user_aggregator.event_handler("on_user_turn_started")
+            async def _bridge_user_turn_started(aggregator, strategy):
+                await bridge.cancel_inflight()
+
+            logger.info(
+                "[STREAM] Widget voice-as-chat bridge wired for chat_session "
+                f"{widget_session_id}"
+            )
+
     async def _handle_client_connected(self) -> None:
         """Handle client connection and initialize flow."""
         if self.is_stream_mode:
             if self.lead and self.lead.metaData is None:
                 self.lead.metaData = {}
             logger.info("[STREAM] Client connected — ready for STT/TTS")
+            # Widget voice-as-chat: on the FIRST attachment (no prior user
+            # turns) speak the persisted chat greeting via TTS. A reconnect
+            # mid-conversation does not re-greet. The bridge gates on the chat
+            # history and pushes audio only (no transcript echo — the widget
+            # already shows the greeting bubble from its session load).
+            if self._voice_bridge is not None:
+                await self._voice_bridge.maybe_speak_greeting()
             return
 
         if (
@@ -904,18 +933,9 @@ class Agent:
         # greeting_source/text here makes prepare_initial_node inject the
         # greeting into the LLM context as an assistant message and switch
         # respond_immediately=False — same downstream behavior as telephony.
-        # DAILY_STREAM also uses a Daily transport but is client-driven STT/
-        # TTS-only (no LLM, no template playback) — explicitly skip greeting
-        # injection there so we don't push audio into a passthrough pipeline.
-        # Widget-mode resume: skip the greeting too. Prior chat history is
-        # already in the seed; re-greeting would repeat what the user
-        # already saw and feels broken (CHAT_MODE.md §14).
-        if (
-            self.is_daily_mode
-            and not self.is_stream_mode
-            and not self._widget_resume_seed
-            and self.task
-        ):
+        # (Stream mode returned above — its greeting is spoken by the voice
+        # bridge, not injected into an LLM context.)
+        if self.is_daily_mode and not self.is_stream_mode and self.task:
             greeting_result = await send_initial_greeting_daily(
                 task=self.task,
                 lead=self.lead,
@@ -944,27 +964,13 @@ class Agent:
 
         lead_payload = self.lead.payload or {}
 
-        # Widget-mode resume: start at the chat's current_node with the
-        # chat's history pre-seeded. See prepare_resume_node for why
-        # the history goes inside task_messages (FlowManager always
-        # RESETs context on first node init — we have to put the seed
-        # inside the same frame to survive).
-        if self._widget_resume_seed:
-            initial_node_config = prepare_resume_node(
-                flow_config=self.flow_config,
-                lead_payload=lead_payload,
-                configurations=self.configurations,
-                start_node_name=self._widget_resume_seed.get("start_node"),
-                prior_history=self._widget_resume_seed.get("prior_history") or [],
-            )
-        else:
-            initial_node_config = prepare_initial_node(
-                flow_config=self.flow_config,
-                lead_payload=lead_payload,
-                configurations=self.configurations,
-                has_greeting_source=bool(self.greeting_source),
-                greeting_text=self.greeting_text,
-            )
+        initial_node_config = prepare_initial_node(
+            flow_config=self.flow_config,
+            lead_payload=lead_payload,
+            configurations=self.configurations,
+            has_greeting_source=bool(self.greeting_source),
+            greeting_text=self.greeting_text,
+        )
 
         # Initialize node traversal tracking
         if self.lead.metaData is None:
@@ -974,30 +980,12 @@ class Agent:
         # Record initial-node entry BEFORE flow_manager.initialize so that any
         # global function called during the first LLM turn (e.g. get_driver_info
         # on the initial node) finds an active node entry to record against.
-        # For widget resume we use the resume node name (which falls back to
-        # initial_node if start_node is missing — see prepare_resume_node).
-        if self._widget_resume_seed:
-            initial_node_name = (
-                self._widget_resume_seed.get("start_node")
-                or self.flow_config["initial_node"]
-            )
-            if initial_node_name not in self.flow_config["nodes"]:
-                initial_node_name = self.flow_config["initial_node"]
-        else:
-            initial_node_name = self.flow_config["initial_node"]
+        initial_node_name = self.flow_config["initial_node"]
         context = TemplateContext(self)
         context.record_node_entry(initial_node_name)
 
         await self.flow_manager.initialize(initial_node_config)
-        logger.info(
-            f"FlowManager initialized at node: {initial_node_name}"
-            + (
-                f" (widget resume from chat_session "
-                f"{self._widget_resume_seed['widget_session_id']})"
-                if self._widget_resume_seed
-                else ""
-            )
-        )
+        logger.info(f"FlowManager initialized at node: {initial_node_name}")
 
     async def _run_with_tracing(self, runner: PipelineRunner) -> None:
         """Run the pipeline with OpenTelemetry tracing."""
@@ -1136,24 +1124,31 @@ class Agent:
             update_log_context(conversation_id=self.conversation_id)
 
             self.task = await create_pipeline_task(
-                pipeline, self.conversation_id, is_daily_mode=self.is_daily_mode
+                pipeline,
+                self.conversation_id,
+                is_daily_mode=self.is_daily_mode,
             )
 
             if self.is_daily_mode and hasattr(self.task, "rtvi") and self.task.rtvi:
                 self._rtvi_processor = self.task.rtvi
-                # HITL approval channel rides the RTVI processor. Note: widget
-                # voice attachments run as daily AGENT mode (not stream), and
-                # RTVI requires ENABLE_BREEZE_BUDDY_DAILY_EVENTS=true — without
-                # it approval_manager stays None and gated calls are denied.
-                self.approval_manager = ApprovalManager(emit=self._emit_rtvi_event)
-                if self._user_idle_callback_handler:
-                    # While an approval card is showing, the user is silently
-                    # reading — idle prompts/end-call must not fire (idle
-                    # re-inference can also spawn duplicate gated calls).
-                    approval_manager = self.approval_manager
-                    self._user_idle_callback_handler.suppress_when = (
-                        approval_manager.has_pending
-                    )
+                # HITL approval channel (Pattern C — the in-handler gate that
+                # blocks a voice global-function on a live RTVI card). This is
+                # AGENT-mode only: stream-mode widget voice has no FlowManager /
+                # global-function wrapper to ever reach the gate, and it gates
+                # approvals through the chat brain instead (Pattern B). So only
+                # non-widget daily agent-mode calls get an ApprovalManager.
+                # RTVI requires ENABLE_BREEZE_BUDDY_DAILY_EVENTS=true; without it
+                # approval_manager stays None and gated calls are denied.
+                if not is_stream:
+                    self.approval_manager = ApprovalManager(emit=self._emit_rtvi_event)
+                    if self._user_idle_callback_handler:
+                        # While an approval card is showing, the user is silently
+                        # reading — idle prompts/end-call must not fire (idle
+                        # re-inference can also spawn duplicate gated calls).
+                        approval_manager = self.approval_manager
+                        self._user_idle_callback_handler.suppress_when = (
+                            approval_manager.has_pending
+                        )
 
             # Flow manager is agent-mode only (stream mode has no LLM to drive
             # node transitions or function calls).

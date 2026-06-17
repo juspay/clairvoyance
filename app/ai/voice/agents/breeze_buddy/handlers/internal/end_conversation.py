@@ -18,16 +18,8 @@ from app.ai.voice.agents.breeze_buddy.utils.hold_transfer import (
 from app.core.logger import logger
 from app.core.logger.context import clear_log_context
 from app.database.accessor.breeze_buddy.chat_session import (
-    drain_voice_into_chat_session,
-    upsert_agent_session_state_merge,
+    flip_chat_session_to_chat,
 )
-
-# Client-context-owned keys to exclude from the drain's merge so it never
-# clobbers a /context push (source of truth: chat/client_context.py). Inlined
-# rather than imported — end_conversation sits inside client_context's
-# transitive import chain (template.types -> builder -> handlers.internal), so
-# importing it back here would be a circular import.
-_CLIENT_CONTEXT_KEYS = ("_client_context", "_client_context_rev")
 
 callback_map = {
     "service_callback": service_callback,
@@ -125,67 +117,44 @@ async def end_conversation(context: TemplateContext, args, transition_to=None):
                 f"No context found for transcription collection in call {context.call_sid}"
             )
 
-        # ── Widget-mode drain ─────────────────────────────────────────────
-        # If this voice call was a transient attachment to a widget chat
-        # session (CHAT_MODE.md §14), drain the new turns back into the
-        # canonical chat_session so chat resumes with full conversation
-        # history. The drain is idempotent and best-effort — a failure
-        # here must NOT block the rest of end_conversation (DB lead
-        # update, callbacks, EndFrame), so it's wrapped in its own try.
+        # ── Widget voice attachment: flip channel back to CHAT ─────────────
+        # In the voice-as-chat architecture the chat brain (run_chat_turn)
+        # wrote every turn to the chat_session LIVE — there is no transcript to
+        # drain and no agent_state to merge back. All that remains is to flip
+        # current_channel VOICE → CHAT so /message and /voice/connect unblock.
+        # This is the authoritative flip (the pipeline has fully torn down, so
+        # no bridge turn is still writing); the /voice/end route's flip is the
+        # crash safety net. Both go through the conditional UPDATE, so whichever
+        # runs second is a no-op. Best-effort — a failure here must NOT block
+        # the rest of end_conversation (DB lead update, callbacks, EndFrame).
         widget_session_id = context.lead.metaData.get("widget_session_id")
         if widget_session_id:
             try:
-                seed_count = int(
-                    context.lead.metaData.get("seed_message_count", 0) or 0
-                )
-                # New voice turns = everything past the seed boundary in
-                # filtered_transcript (user/assistant only — the same
-                # shape chat_message stores).
-                new_messages = filtered_transcript[seed_count:]
-                final_node = None
-                if context.bot and getattr(context.bot, "flow_manager", None):
-                    final_node = context.bot.flow_manager.current_node
-                if not final_node:
-                    final_node = context.lead.metaData.get("start_node")
-                logger.info(
-                    f"widget drain: chat_session={widget_session_id} "
-                    f"new_turns={len(new_messages)} final_node={final_node!r}"
-                )
-                await drain_voice_into_chat_session(
-                    chat_session_id=str(widget_session_id),
-                    lead_id=str(context.lead.id),
-                    new_messages=new_messages,
-                    final_node=final_node,
-                )
-                # Persist voice-accumulated agent_state back to the chat
-                # session so a later chat turn sees cart_id/etc. that voice
-                # updated (mirror of the seed carried in on /voice/connect).
-                voice_state = getattr(context.bot, "agent_state", None)
-                if voice_state:
-                    # Merge back ONLY the keys voice actually CHANGED vs the
-                    # seed copied in at /voice/connect — never the whole seeded
-                    # state, never the client-context keys. A blanket merge of
-                    # the seed would re-assert a stale allowlisted key (e.g.
-                    # cart_id) and clobber a /context push made against the chat
-                    # session while voice was live (the /context endpoint has no
-                    # channel guard, so it runs concurrently with the call).
-                    seed_state = context.lead.metaData.get("agent_state")
-                    if not isinstance(seed_state, dict):
-                        seed_state = {}
-                    changed = {
-                        k: v
-                        for k, v in voice_state.items()
-                        if k not in _CLIENT_CONTEXT_KEYS and seed_state.get(k) != v
-                    }
-                    if changed:
-                        await upsert_agent_session_state_merge(
-                            chat_session_id=str(widget_session_id),
-                            patch=changed,
+                # Drain the voice bridge FIRST so its in-flight turn (and the
+                # per-session Redis lock it holds) is fully released before the
+                # flip — otherwise a flip to CHAT could let a new /message turn
+                # race the bridge's still-writing turn on the chat_message idx.
+                bridge = getattr(context.bot, "_voice_bridge", None)
+                if bridge is not None:
+                    try:
+                        await bridge.aclose()
+                    except Exception as drain_err:  # noqa: BLE001
+                        logger.warning(
+                            f"widget voice: bridge drain failed for "
+                            f"{widget_session_id}: {drain_err} (continuing)"
                         )
-            except Exception as drain_err:
+                await flip_chat_session_to_chat(
+                    session_id=str(widget_session_id),
+                    voice_lead_id=str(context.lead.id),
+                )
+                logger.info(
+                    f"widget voice: flipped chat_session {widget_session_id} "
+                    "back to CHAT on call end"
+                )
+            except Exception as flip_err:
                 logger.error(
-                    f"widget drain: failed for chat_session "
-                    f"{widget_session_id} / lead {context.lead.id}: {drain_err}",
+                    f"widget voice: flip-to-chat failed for chat_session "
+                    f"{widget_session_id} / lead {context.lead.id}: {flip_err}",
                     exc_info=True,
                 )
 

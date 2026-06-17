@@ -506,6 +506,15 @@ class CreateWidgetSessionResponse(BaseModel):
             "Ignored by the client when quick_replies is empty."
         ),
     )
+    voice_enabled: bool = Field(
+        False,
+        description=(
+            "Whether this merchant's template offers a voice mode — i.e. "
+            "'voice' is in the template's supported_channels (the same gate "
+            "/voice/connect enforces). The embed shows the voice-mode button "
+            "only when True; the server stays the enforcement point."
+        ),
+    )
 
 
 class UpdateWidgetContextRequest(ClientContextPatch):
@@ -593,6 +602,14 @@ class WidgetSessionStateResponse(BaseModel):
             "False = composer hidden for all turns; only quick replies or "
             "agent-driven input is possible. "
             "Ignored by the client when quick_replies is empty."
+        ),
+    )
+    voice_enabled: bool = Field(
+        False,
+        description=(
+            "Whether this merchant's template offers a voice mode — i.e. "
+            "'voice' is in the template's supported_channels. Lets the embed "
+            "restore the voice-mode button after a reload without re-deriving."
         ),
     )
     template_vars: Dict[str, Any] = Field(default_factory=dict)

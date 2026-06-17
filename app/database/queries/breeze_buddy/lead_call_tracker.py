@@ -717,6 +717,7 @@ def reset_widget_voice_lead_query(
     lead_id: str,
     payload: Dict[str, Any],
     meta_data_seed: Dict[str, Any],
+    execution_mode: str,
 ) -> Tuple[str, List[Any]]:
     """Reset a widget voice lead so the next /voice/connect can reuse it.
 
@@ -732,10 +733,12 @@ def reset_widget_voice_lead_query(
       - payload REPLACED with the latest template_vars (chat may have
         accumulated new state since the prior voice attachment)
       - meta_data is *merged* with the new seed so widget-mode markers
-        (is_widget, widget_config_id, widget_session_id) and the new
-        seed (start_node, prior_history, seed_message_count) overwrite
-        their prior values, but unrelated fields the bot wrote during
-        the prior attempt (e.g., evaluator scores) are preserved
+        (is_widget, widget_config_id, widget_session_id) overwrite their
+        prior values, but unrelated fields the bot wrote during the prior
+        attempt (e.g., evaluator scores) are preserved
+      - execution_mode RE-ASSERTED (e.g. DAILY_STREAM) so a lead created
+        before the stream pivot is upgraded on reuse instead of silently
+        running the old agent-mode pipeline
       - call_id, call_initiated_time, call_end_time, outcome, cost,
         recording_url are CLEARED so they don't leak from the prior
         attempt's call into this one
@@ -747,6 +750,7 @@ def reset_widget_voice_lead_query(
             "attempt_count"        = COALESCE("attempt_count", 0) + 1,
             "payload"              = $3::jsonb,
             "meta_data"            = COALESCE("meta_data", '{{}}')::jsonb || $4::jsonb,
+            "execution_mode"       = $5,
             "call_id"              = NULL,
             "call_initiated_time"  = NULL,
             "call_end_time"        = NULL,
@@ -762,5 +766,6 @@ def reset_widget_voice_lead_query(
         LeadCallStatus.BACKLOG.value,
         json.dumps(payload),
         json.dumps(meta_data_seed),
+        execution_mode,
     ]
     return text, values

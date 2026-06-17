@@ -180,6 +180,19 @@ def _extract_widget_config(
     return quick_replies, enable_text_input
 
 
+def _template_voice_enabled(template: object) -> bool:
+    """Whether the widget should offer a voice mode for this template.
+
+    True ⇔ ``'voice'`` is in ``template.supported_channels``. Mirrors the
+    /voice/connect gate exactly — including its default-to-voice-enabled
+    behavior when the list is unset/empty (legacy templates predate the
+    field) — so the button the embed shows and the connect the server accepts
+    never disagree. The server stays the enforcement point; this flag is UX.
+    """
+    supported = list(getattr(template, "supported_channels", []) or []) or ["voice"]
+    return "voice" in supported
+
+
 # ---------------------------------------------------------------------------
 # POST /widget/session
 # ---------------------------------------------------------------------------
@@ -250,6 +263,7 @@ async def create_widget_session_handler(
         ttl_seconds=DEFAULT_WIDGET_TOKEN_TTL_MINUTES * 60,
         quick_replies=quick_replies,
         enable_text_input=enable_text_input,
+        voice_enabled=_template_voice_enabled(template),
     )
 
 
@@ -557,10 +571,7 @@ async def voice_connect_handler(
             detail="Widget template misconfigured",
         )
 
-    supported: List[str] = list(getattr(template, "supported_channels", []) or []) or [
-        "voice"
-    ]
-    if "voice" not in supported:
+    if not _template_voice_enabled(template):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Template does not include 'voice' in supported_channels.",
@@ -597,48 +608,29 @@ async def voice_connect_handler(
                 ),
             )
 
-        # ── Build seed -----------------------------------------------------
-        history = await list_chat_messages_for_session(session_id)
-        prior_history: List[Dict[str, Any]] = [
-            {"role": m.role.value, "content": m.content} for m in history if m.content
-        ]
-        seed_message_count = len(prior_history)
+        # ── Build lead payload + widget back-link --------------------------
+        # The chat brain (run_chat_turn) owns history, agent_state, and the
+        # current node — the stream-mode bot resumes them straight from the
+        # chat_session at turn time (no seed to carry, no end-of-call drain).
+        # The voice lead carries only what the voice runtime itself needs: the
+        # rendered template_vars (for {placeholder} resolution in
+        # load_template_config) and the widget_session_id back-link the bridge
+        # drives turns against (and end_conversation flips the channel on).
         template_vars: Dict[str, Any] = (
             session.metadata.get("template_vars", {})
             if isinstance(session.metadata, dict)
             else {}
         )
-
-        # ``payload`` flows into voice's load_template_config — so the
-        # template_vars from chat must be here for the renderer.
         payload: Dict[str, Any] = {
             **template_vars,
             "is_widget": True,
             "widget_config_id": cfg.id,
             "source": "widget",
         }
-        # Carry the chat session's accumulated agent_state (reducer-built
-        # identifiers like cart_id / checkout_id, plus client-pushed facts)
-        # into the voice seed so they survive the CHAT->VOICE flip. Without
-        # this, a voice continuation of a chat that already built a cart
-        # loses the cart_id and would silently act on a fresh cart.
-        agent_state_row = await get_agent_session_state(session_id)
-        agent_state_data: Dict[str, Any] = (
-            dict(agent_state_row.data) if agent_state_row else {}
-        )
-
-        # ``meta_data`` carries the voice-runtime seed (read by the
-        # agent's _setup_*_transport). The widget_session_id back-link
-        # is what the end_conversation drain uses to find the
-        # chat_session to drain into.
         meta_data_seed: Dict[str, Any] = {
             "is_widget": True,
             "widget_config_id": cfg.id,
             "widget_session_id": session_id,
-            "start_node": session.current_node,
-            "prior_history": prior_history,
-            "seed_message_count": seed_message_count,
-            "agent_state": agent_state_data,
         }
         template_name = getattr(template, "name", None) or "widget"
 
@@ -647,10 +639,16 @@ async def voice_connect_handler(
         lead_id: Optional[str] = session.voice_lead_id
         if lead_id:
             # 2nd+ attachment: reuse the bound lead. The reset bumps
-            # attempt_count, refreshes the seed, and clears per-call
-            # fields (call_id, outcome, recording_url, etc.) so they
-            # don't leak from the previous attempt.
-            reset_lead = await reset_widget_voice_lead(lead_id, payload, meta_data_seed)
+            # attempt_count, refreshes the seed, re-asserts DAILY_STREAM
+            # (so a lead created before the stream pivot is upgraded), and
+            # clears per-call fields (call_id, outcome, recording_url, etc.)
+            # so they don't leak from the previous attempt.
+            reset_lead = await reset_widget_voice_lead(
+                lead_id,
+                payload,
+                meta_data_seed,
+                execution_mode=ExecutionMode.DAILY_STREAM,
+            )
             if reset_lead is None:
                 # Lead was archived / hard-deleted. Fall through to
                 # create a fresh one and rebind. Shouldn't normally
@@ -674,7 +672,10 @@ async def voice_connect_handler(
                 attempt_count=0,
                 meta_data=meta_data_seed,
                 request_id=f"widget-{new_lead_id}",
-                execution_mode=ExecutionMode.DAILY,
+                # Widget voice runs STREAM mode: STT/TTS-only pipeline with no
+                # LLM/FlowManager — every turn is driven through the chat brain
+                # by the WidgetVoiceBridge. See the voice-as-chat re-architecture.
+                execution_mode=ExecutionMode.DAILY_STREAM,
                 status=LeadCallStatus.BACKLOG,
                 call_direction=CallDirection.INBOUND,
             )
@@ -774,18 +775,22 @@ async def voice_end_handler(
 ) -> WidgetVoiceEndResponse:
     """Best-effort end of the voice attachment.
 
-    Two paths run the actual drain (transcripts back into chat_message,
-    flip channel back to CHAT):
-      1. The bot's ``end_conversation`` handler, when Daily disconnects.
-      2. This route, as a fallback (e.g., user closed tab; bot is
-         still up but the user is gone) — we signal the bot via the
-         existing daily_completion_function and return immediately.
-    Both paths are guarded by the same per-session Redis lock and the
-    conditional UPDATE in ``drain_voice_into_chat_session_query``.
+    The chat brain wrote every turn live (no end-of-call drain), so ending
+    voice is just: signal the bot to tear down, then flip the channel back to
+    CHAT. Two paths flip:
+      1. The bot's ``end_conversation`` handler, when Daily disconnects — the
+         authoritative flip, after the pipeline (and any in-flight bridge
+         turn) has fully torn down.
+      2. This route — signals the bot via ``daily_completion_function`` and
+         then flips explicitly as the crash safety net: a bot that dies
+         before ``end_conversation`` would otherwise leave the session stuck
+         on VOICE and 409 ``/message`` + ``/voice/connect`` forever.
+    Both flips go through the conditional UPDATE in ``flip_chat_session_to_chat``
+    (current_channel=VOICE AND voice_lead_id matches), so whichever runs
+    second is a harmless no-op.
 
-    Idempotent: if channel is already CHAT (drain already ran) we
-    return success without doing anything. ``voice_lead_id`` stays
-    bound on the chat_session so the next /voice/connect reuses
+    Idempotent: if channel is already CHAT we return success without doing
+    anything. ``voice_lead_id`` stays bound so the next /voice/connect reuses
     the same lead.
     """
     lock = _session_lock(session_id)
@@ -827,12 +832,8 @@ async def voice_end_handler(
             )
             return WidgetVoiceEndResponse(status="cleared_orphan_state", lead_id=None)
 
-        # Signal the bot to wind down. The bot's end_conversation
-        # handler will run the drain when its pipeline tears down.
-        # We don't block on it — return optimistically. If the bot
-        # crashed and never drains, the conditional UPDATE in
-        # ``flip_chat_session_to_chat`` (or a janitor sweep) is the
-        # safety net.
+        # Signal the bot to wind down (best-effort, non-blocking). Its
+        # end_conversation flips the channel when the pipeline tears down.
         lead = await get_lead_by_id(lead_id)
         call_id = lead.call_id if lead and lead.call_id else lead_id
         try:
@@ -844,6 +845,19 @@ async def voice_end_handler(
             logger.warning(
                 f"widget voice: daily_completion_function failed for "
                 f"call_id={call_id}: {exc} (continuing)"
+            )
+
+        # Flip the channel back to CHAT now as the crash safety net. The chat
+        # brain wrote every turn live, so there's nothing to wait for; the
+        # conditional UPDATE makes the bot's own end_conversation flip a no-op
+        # if it runs after. Without this, a bot that dies before
+        # end_conversation leaves the session stuck on VOICE forever.
+        try:
+            await flip_chat_session_to_chat(session_id, voice_lead_id=lead_id)
+        except Exception as flip_err:
+            logger.warning(
+                f"widget voice: flip-to-chat failed for {session_id} / "
+                f"{lead_id}: {flip_err} (bot end_conversation will retry)"
             )
 
         return WidgetVoiceEndResponse(status="end_requested", lead_id=lead_id)
@@ -927,6 +941,7 @@ async def get_widget_session_state_handler(
         messages=messages,
         quick_replies=quick_replies,
         enable_text_input=enable_text_input,
+        voice_enabled=_template_voice_enabled(template),
         template_vars=template_vars,
         metadata=session.metadata or {},
         client_context=client_context,
