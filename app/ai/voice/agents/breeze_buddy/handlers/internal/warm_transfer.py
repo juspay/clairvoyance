@@ -1,9 +1,17 @@
 """
 Transfer Handler
 
-Handles transfer to human agent using Plivo's MultiPartyCall (MPC).
+Routes a warm transfer to a human agent down one of two transports, selected by
+the template's ``configurations.enable_mpc_transfer`` flag (Plivo only):
 
-Flow (dial-first MPC):
+Legacy immediate transfer (default, ``enable_mpc_transfer=False``):
+  The customer's live leg is bridged to the agent immediately via the native
+  call-transfer API; the bot's WebSocket closes right away, the call does not
+  wait for the agent to answer, and nothing is returned to the LLM
+  (transfer_to_agent is terminal). No MultiPartyCall cost. Twilio/Exotel always
+  use this path (their existing provider behavior).
+
+Dial-first MPC (``enable_mpc_transfer=True``, Plivo):
   1. Agent is dialled into a new MPC via add_participant(role='agent').
      The customer's <Stream> is untouched and Buddy stays connected.
   2. We subscribe to a Redis pub/sub channel and wait for the MPC
@@ -11,7 +19,7 @@ Flow (dial-first MPC):
   3. Agent answers → webhook moves customer into MPC, publishes "answered".
      We end the AI conversation and close the WebSocket.
   4. Agent no-answer → webhook publishes "unavailable".
-     Buddy continues the conversation seamlessly.
+     Buddy continues the conversation seamlessly (resume).
 """
 
 import asyncio
@@ -30,6 +38,7 @@ from app.ai.voice.agents.breeze_buddy.utils.transport.websockets import (
     close_websocket_safely,
 )
 from app.ai.voice.agents.breeze_buddy.utils.warm_transfer import set_transfer_flag
+from app.core.config.static import APP_BASE_URL
 from app.core.logger import logger
 from app.database.accessor import get_outbound_number_by_id
 from app.schemas import CallProvider
@@ -41,10 +50,11 @@ async def connect_to_live_agent(
     transition_to: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
-    Initiate warm transfer to human agent via Plivo MPC.
+    Initiate a warm transfer to a human agent.
 
-    On success (agent answers): terminates AI conversation.
-    On failure (agent no-answer): returns gracefully, allowing AI to continue.
+    Runs shared pre-flight checks, then dispatches to either the dial-first MPC
+    transport (Plivo, when ``enable_mpc_transfer`` is set) or the legacy
+    immediate transfer (default / all other providers).
 
     Args:
         context: Handler context with bot state access
@@ -52,7 +62,7 @@ async def connect_to_live_agent(
         transition_to: Not used
 
     Returns:
-        Dict with status, reason, message, conference_id, agent_call_id
+        Dict with status, reason, message, conference_id
     """
     logger.info(f"Transfer called for {context.call_sid}")
 
@@ -126,17 +136,64 @@ async def connect_to_live_agent(
             "message": "Conference service not configured",
         }
 
-    try:
-        customer_phone_number = None
-        if context.lead and context.lead.payload:
-            customer_phone_number = context.lead.payload.get("customer_mobile_number")
-            if customer_phone_number:
-                logger.info(f"Using customer phone number: {customer_phone_number}")
-            else:
-                logger.warning(
-                    f"Customer phone number not found in payload for call {context.call_sid}"
-                )
+    conference_service = context.telephony_service.conference_service
 
+    customer_phone_number = None
+    if context.lead and context.lead.payload:
+        customer_phone_number = context.lead.payload.get("customer_mobile_number")
+        if customer_phone_number:
+            logger.info(
+                f"Customer phone number resolved from payload for call {context.call_sid}"
+            )
+        else:
+            logger.warning(
+                f"Customer phone number not found in payload for call {context.call_sid}"
+            )
+
+    # Transport selection. MPC dial-first is Plivo-only and opt-in; everything
+    # else uses the legacy immediate transfer.
+    use_mpc = (
+        bool(getattr(configurations, "enable_mpc_transfer", False))
+        and context.provider == CallProvider.PLIVO
+    )
+
+    if use_mpc:
+        return await _transfer_via_mpc(
+            context,
+            conference_service=conference_service,
+            agent_phone_number=agent_phone_number,
+            conference_name=conference_name,
+            outbound_number=outbound_number,
+            customer_phone_number=customer_phone_number,
+        )
+
+    return await _transfer_legacy(
+        context,
+        conference_service=conference_service,
+        agent_phone_number=agent_phone_number,
+        conference_name=conference_name,
+        outbound_number=outbound_number,
+        customer_phone_number=customer_phone_number,
+    )
+
+
+async def _transfer_via_mpc(
+    context: TemplateContext,
+    *,
+    conference_service: Any,
+    agent_phone_number: str,
+    conference_name: str,
+    outbound_number: str,
+    customer_phone_number: Optional[str],
+) -> Dict[str, Any]:
+    """Dial-first MPC transfer (Plivo).
+
+    On success (agent answers): terminates AI conversation and closes the WS.
+    On failure (agent no-answer / cancellation): unmutes STT and returns to the
+    LLM so the assistant resumes the conversation — the customer was never
+    dropped.
+    """
+    try:
         # Mute STT before initiating transfer to prevent audio capture
         # during the ringing period (up to 35 seconds).
         await mute_stt(context, None)
@@ -179,13 +236,11 @@ async def connect_to_live_agent(
         timeout_task = asyncio.create_task(_timeout_publish())
 
         # Trigger MPC transfer (agent is dialled into MPC, customer stays on Stream)
-        conference_result = (
-            await context.telephony_service.conference_service.handle_transfer(
-                conference_name=conference_name,
-                agent_phone_number=agent_phone_number,
-                customer_call_sid=context.call_sid,
-                outbound_number=outbound_number,
-            )
+        conference_result = await conference_service.handle_mpc_transfer(
+            conference_name=conference_name,
+            agent_phone_number=agent_phone_number,
+            customer_call_sid=context.call_sid,
+            outbound_number=outbound_number,
         )
 
         if not conference_result.get("success"):
@@ -200,11 +255,7 @@ async def connect_to_live_agent(
             logger.warning(
                 f"[Transfer] MPC setup failed: {failure_reason}. AI continues."
             )
-            # Unmute STT so the conversation can continue normally
             await unmute_stt(context, None)
-            logger.info(
-                f"STT unmuted for call {context.call_sid} after MPC setup failure"
-            )
             return {
                 "status": "failed",
                 "reason": failure_reason,
@@ -225,11 +276,7 @@ async def connect_to_live_agent(
                 await timeout_task
             except asyncio.CancelledError:
                 pass
-            # Unmute STT so the conversation can continue normally
             await unmute_stt(context, None)
-            logger.info(
-                f"STT unmuted for call {context.call_sid} after subscriber cancellation"
-            )
             return {
                 "status": "failed",
                 "reason": "cancelled",
@@ -306,9 +353,7 @@ async def connect_to_live_agent(
         logger.warning(
             f"[Transfer] Agent unavailable for call {context.call_sid}. AI continues."
         )
-        # Unmute STT so the conversation can continue normally
         await unmute_stt(context, None)
-        logger.info(f"STT unmuted for call {context.call_sid} after agent unavailable")
         return {
             "status": "failed",
             "reason": "unavailable",
@@ -317,14 +362,135 @@ async def connect_to_live_agent(
 
     except Exception as e:
         logger.error(f"Transfer exception: {str(e)}", exc_info=True)
-        # Unmute STT so the conversation can continue normally
         try:
             await unmute_stt(context, None)
-            logger.info(
-                f"STT unmuted for call {context.call_sid} after transfer exception"
-            )
         except Exception as unmute_err:
             logger.warning(f"Failed to unmute STT after exception: {unmute_err}")
+        return {
+            "status": "failed",
+            "reason": "exception",
+            "message": "Transfer failed due to error. Continuing with AI assistant.",
+            "error": str(e),
+        }
+
+
+async def _transfer_legacy(
+    context: TemplateContext,
+    *,
+    conference_service: Any,
+    agent_phone_number: str,
+    conference_name: str,
+    outbound_number: str,
+    customer_phone_number: Optional[str],
+) -> Dict[str, Any]:
+    """Legacy immediate transfer.
+
+    Bridges the customer's live leg to the agent immediately (no waiting for the
+    agent to answer), then ends the AI conversation and closes the WebSocket.
+    transfer_to_agent is terminal here — nothing is returned to the LLM on
+    success. On a setup failure the call continues with the AI (the call was
+    never committed to the transfer), matching pre-dial-first behavior.
+    """
+    try:
+        # Set transfer flag in Redis (includes customer phone for Plivo dial-back)
+        await set_transfer_flag(
+            call_sid=context.call_sid,
+            reseller_id=context.lead.reseller_id,
+            merchant_id=context.lead.merchant_id,
+            transfer_number=agent_phone_number,
+            customer_phone_number=customer_phone_number,
+        )
+        logger.info(f"Transfer flag set in Redis for call {context.call_sid}")
+
+        # Build status callback URL for conference events
+        provider_name = context.provider.lower() if context.provider else None
+        status_callback_url = (
+            f"{APP_BASE_URL}/agent/voice/breeze-buddy/{provider_name}"
+            f"/callback/transfer/conference-end"
+        )
+        logger.info(f"Using conference status callback URL: {status_callback_url}")
+
+        conference_result = await conference_service.handle_transfer(
+            conference_name=conference_name,
+            agent_phone_number=agent_phone_number,
+            customer_call_sid=context.call_sid,
+            outbound_number=outbound_number,
+            callback=None,
+            status_callback_url=status_callback_url,
+            customer_phone_number=customer_phone_number,
+        )
+
+        if conference_result.get("success"):
+            logger.info(
+                f"Transfer successful: conference={conference_result.get('conference_id')}, "
+                f"agent_call={conference_result.get('agent_call_id')}"
+            )
+
+            agent_call_id = conference_result.get("agent_call_id")
+
+            transfer_meta = {
+                "status": "success",
+                "conference_id": conference_result.get("conference_id"),
+                "agent_phone_number": agent_phone_number,
+                "agent_call_id": agent_call_id,
+            }
+            if context.lead and hasattr(context.lead, "metaData"):
+                if context.lead.metaData is None:
+                    context.lead.metaData = {}
+                context.lead.metaData["transfer"] = transfer_meta
+
+            # For Plivo: suppress the serializer's auto hang-up before ending
+            # the conversation. When end_conversation pushes EndFrame through
+            # the pipeline the Plivo serializer would normally call _hang_up_call(),
+            # which drops the caller from the conference. Setting
+            # _hangup_attempted=True tells the serializer that a hang-up has
+            # already been handled so it skips the API call.
+            if context.provider == CallProvider.PLIVO:
+                try:
+                    plivo_serializer = context.bot.transport.output()._params.serializer
+                    if plivo_serializer is not None:
+                        plivo_serializer._hangup_attempted = True
+                        logger.info(
+                            f"[transfer_to_agent] Suppressed Plivo auto-hangup for call {context.call_sid}"
+                        )
+                except Exception as suppress_err:
+                    logger.warning(
+                        f"[transfer_to_agent] Could not suppress Plivo hangup: {suppress_err}"
+                    )
+
+            # End the AI conversation
+            await end_conversation(context, None)
+
+            if context.provider == CallProvider.PLIVO:
+                if (
+                    hasattr(context, "bot")
+                    and hasattr(context.bot, "ws")
+                    and context.bot.ws
+                ):
+                    logger.info(
+                        f"Explicitly closing websocket for Plivo transfer on call {context.call_sid}"
+                    )
+                    await close_websocket_safely(
+                        context.bot.ws, 1000, "Transfer complete"
+                    )
+
+            return {
+                "status": "success",
+                "conference_id": conference_result.get("conference_id"),
+                "agent_call_id": agent_call_id,
+                "message": "Successfully transferred to human agent",
+            }
+
+        failure_reason = conference_result.get("reason", "unknown_error")
+        logger.warning(f"Transfer failed: {failure_reason}. AI continues.")
+        return {
+            "status": "failed",
+            "reason": failure_reason,
+            "message": f"Transfer failed: {failure_reason}. Continuing with AI assistant.",
+        }
+
+    except Exception as e:
+        logger.error(f"Transfer exception: {str(e)}", exc_info=True)
         return {
             "status": "failed",
             "reason": "exception",
