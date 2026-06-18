@@ -27,6 +27,7 @@ from app.ai.voice.agents.breeze_buddy.services.telephony.exotel.exotel import (
 )
 from app.ai.voice.agents.breeze_buddy.services.telephony.plivo.plivo import (
     handle_mpc_transfer_webhook,
+    plivo_dial_xml,
 )
 from app.ai.voice.agents.breeze_buddy.utils.hold_transfer import (
     publish_hold_transfer_result,
@@ -145,15 +146,10 @@ async def _handle_transfer_dial_up(request: Request, provider: str) -> Response:
         return Response(status_code=404, content="Transfer not requested")
 
     if provider == "plivo":
-        # Legacy Plivo transfer — no longer used with MPC dial-first flow
-        logger.warning(
-            f"[TRANSFER DIAL-UP] Legacy dial-up called for {call_sid} — "
-            "MPC transfer should use mpc-transfer callback instead"
-        )
-        return HTMLResponse(
-            content='<?xml version="1.0" encoding="UTF-8"?><Response><Hangup/></Response>',
-            media_type="application/xml",
-        )
+        # Legacy immediate transfer: return <Dial><Number> XML that bridges
+        # the customer's transferred leg to the agent. (The MPC dial-first
+        # path uses the mpc-transfer callback instead, not this one.)
+        return await plivo_dial_xml(transfer_data, call_sid, params)
 
     # Exotel — return agent phone number as plain text
     return await exotel_dial_text(transfer_data)

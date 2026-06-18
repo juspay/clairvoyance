@@ -3,6 +3,7 @@ from urllib.parse import urlencode
 
 import plivo
 from fastapi import WebSocket
+from starlette.responses import HTMLResponse
 
 from app.ai.voice.agents.breeze_buddy.agent import telephony_bot
 from app.ai.voice.agents.breeze_buddy.services.telephony.base_provider import (
@@ -107,6 +108,46 @@ class PlivoProvider(VoiceCallProvider):
         except Exception as e:
             logger.error(f"Error when making call via Plivo: {e}")
             return None
+
+
+async def plivo_dial_xml(
+    transfer_data: dict, call_sid: str, params: dict
+) -> HTMLResponse:
+    """Build <Dial><Number> XML that bridges customer → agent (legacy transfer).
+
+    Used by the immediate (non-MPC) transfer path: Plivo fetches this from the
+    dial-up callback after the customer's leg has been transferred, and the XML
+    dials the agent from the customer's leg.
+    """
+    transfer_number = transfer_data.get("transfer_number")
+    if not transfer_number:
+        logger.error(f"[TRANSFER DIAL-UP] No transfer_number for call {call_sid}")
+        return HTMLResponse(
+            content='<?xml version="1.0" encoding="UTF-8"?>'
+            "<Response><Speak>Sorry, the transfer could not be completed.</Speak>"
+            "<Hangup/></Response>",
+            media_type="application/xml",
+        )
+
+    agent_phone = transfer_number
+    if not agent_phone.startswith("+"):
+        agent_phone = f"+{agent_phone}"
+
+    outbound_number = params.get("outbound_number", "")
+    action_url = (
+        f"{APP_BASE_URL}/agent/voice/breeze-buddy"
+        f"/plivo/callback/transfer/conclude"
+        f"?customer_call_sid={call_sid}"
+    )
+    xml = (
+        f'<?xml version="1.0" encoding="UTF-8"?>'
+        f"<Response>"
+        f'<Dial action="{action_url}" method="POST"'
+        f' callerId="{outbound_number}" timeout="30">'
+        f"<Number>{agent_phone}</Number>"
+        f"</Dial></Response>"
+    )
+    return HTMLResponse(content=xml, media_type="application/xml")
 
 
 async def handle_mpc_transfer_webhook(params: dict) -> None:

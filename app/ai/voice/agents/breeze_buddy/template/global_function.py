@@ -46,6 +46,12 @@ from app.core.logger import logger
 _APPROVAL_EXEC_FALLBACK_SECS = 60.0
 _APPROVAL_BUDGET_MARGIN_SECS = 15.0
 
+# Forced function-call timeout for the warm-transfer builtin. The MPC dial-first
+# path blocks up to ~40s waiting for the agent (subscribe_and_wait ceiling in the
+# handler); without this, pipecat's 10s function_call_timeout_secs default would
+# kill the transfer mid-ring. Harmless for the legacy immediate path.
+_TRANSFER_FUNCTION_TIMEOUT_SECS = 45.0
+
 
 def _flows_async_kwargs(func: BaseGlobalFunction) -> Dict[str, Any]:
     """Per-function pipecat-flows 1.0 kwargs, opt-in via template config.
@@ -70,6 +76,14 @@ def _flows_async_kwargs(func: BaseGlobalFunction) -> Dict[str, Any]:
         extra["cancel_on_interruption"] = func.cancel_on_interruption
     if func.timeout_secs is not None:
         extra["timeout_secs"] = func.timeout_secs
+    elif (
+        isinstance(func, GlobalBuiltinFunction)
+        and func.handler == "connect_to_live_agent"
+    ):
+        # Warm transfer blocks well past the 10s function_call_timeout_secs
+        # default (esp. MPC dial-first). Force a safe ceiling unless the
+        # template set an explicit override above.
+        extra["timeout_secs"] = _TRANSFER_FUNCTION_TIMEOUT_SECS
     if func.approval is not None:
         exec_budget = (
             func.timeout_secs

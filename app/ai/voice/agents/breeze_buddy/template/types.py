@@ -1486,6 +1486,24 @@ class ConfigurationModel(BaseModel):
     transfer_number: Optional[str] = Field(
         None, description="Phone number to transfer the call to"
     )
+    enable_mpc_transfer: bool = Field(
+        False,
+        description=(
+            "Warm-transfer transport selector (Plivo only). "
+            "False (default, legacy): the customer's live leg is bridged to the "
+            "agent immediately via the native call-transfer API; the bot's "
+            "WebSocket closes right away, the call does not wait for the agent "
+            "to answer, and nothing is returned to the LLM (transfer_to_agent is "
+            "terminal). This matches templates authored before dial-first and "
+            "incurs no MultiPartyCall cost. "
+            "True: dial-first MultiPartyCall (MPC) — the agent is dialled first "
+            "while the customer stays on the bot; if the agent does not answer "
+            "the call resumes with the AI. Requires the template prompt to "
+            "handle a resumed conversation, and an LLM function-call timeout "
+            ">= ~40s (enforced automatically for the transfer builtin). "
+            "Twilio and Exotel ignore this flag and keep their existing behavior."
+        ),
+    )
     vad_config: Optional[VadConfig] = Field(
         None, description="Default VAD configuration for the template"
     )
