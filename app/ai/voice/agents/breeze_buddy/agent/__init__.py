@@ -64,6 +64,7 @@ from app.ai.voice.agents.breeze_buddy.mcp import get_mcp_global_functions
 from app.ai.voice.agents.breeze_buddy.observability.tracing_setup import (
     create_root_span,
 )
+from app.ai.voice.agents.breeze_buddy.observers import ObserverManager, build_observers
 from app.ai.voice.agents.breeze_buddy.processors import TranscriptCollectorProcessor
 from app.ai.voice.agents.breeze_buddy.services.inbound_policy import (
     get_block_redirect,
@@ -173,6 +174,9 @@ class Agent:
 
         # Stream mode transcript collector (replaces LLMContext for transcription)
         self._transcript_collector: Optional[TranscriptCollectorProcessor] = None
+
+        # Real-time observers (side-LLMs for voicemail/hallucination detection)
+        self._observer_manager: Optional[ObserverManager] = None
 
         # Error tracking
         self.errors: List[Dict[str, Any]] = []
@@ -788,21 +792,27 @@ class Agent:
                         logger.debug(f"[STREAM] TTS speak: {text[:80]}")
                         await self.task.queue_frame(TTSSpeakFrame(text=text))
 
-        # Register user turn started event to reset idle retry counter
-        if self._context_aggregator and self._user_idle_callback_handler:
-            user_aggregator = self._context_aggregator.user()
+        # Register pipeline event handlers
+        if self._context_aggregator:
+            user_agg = self._context_aggregator.user()
 
-            @user_aggregator.event_handler("on_user_turn_started")
+            @user_agg.event_handler("on_user_turn_started")
             async def on_user_turn_started(aggregator, strategy):
-                """Reset idle retry counter when user starts speaking."""
-                # Detect first user speech and cancel post-greeting timer
-                if not self._user_spoke:
-                    self._user_spoke = True
-                    if self._post_greeting_task:
-                        self._post_greeting_task.cancel()
-                        self._post_greeting_task = None
-                        logger.debug("Post-greeting timer cancelled - user spoke")
-                self._user_idle_callback_handler.reset_retry_count()
+                """Reset idle retry counter."""
+                if self._user_idle_callback_handler:
+                    if not self._user_spoke:
+                        self._user_spoke = True
+                        if self._post_greeting_task:
+                            self._post_greeting_task.cancel()
+                            self._post_greeting_task = None
+                            logger.debug("Post-greeting timer cancelled - user spoke")
+                    self._user_idle_callback_handler.reset_retry_count()
+
+            # Subscribe observer manager to pipeline events
+            if self._observer_manager:
+                self._observer_manager.subscribe_to_pipeline(
+                    self._context_aggregator, self.flow_manager
+                )
 
     async def _handle_client_connected(self) -> None:
         """Handle client connection and initialize flow."""
@@ -1098,6 +1108,35 @@ class Agent:
                     mcp_global_functions=mcp_global_functions,
                 )
 
+            # ── Real-time observers ──────────────────────────────────
+            observers_config = (
+                self.configurations.observers if self.configurations else None
+            )
+            logger.info(
+                f"Observer setup: "
+                f"observers_count={len(observers_config) if observers_config else 0}, "
+                f"is_stream={is_stream}"
+            )
+            if observers_config and not is_stream:
+                try:
+                    observer_instances = await build_observers(
+                        configs=observers_config,
+                        template=self.template,
+                        agent_context=self,
+                        handler_map=self.flow_builder.handler_map,
+                    )
+                    if observer_instances:
+                        self._observer_manager = ObserverManager(
+                            observer_instances, context
+                        )
+                        logger.info(
+                            f"Initialized {len(observer_instances)} "
+                            f"real-time observer(s)"
+                        )
+                except Exception as e:
+                    logger.error(f"Failed to initialize observers: {e}")
+                    self._observer_manager = None
+
             self._register_event_handlers()
 
             runner = PipelineRunner(handle_sigint=False, force_gc=True)
@@ -1113,6 +1152,9 @@ class Agent:
             except asyncio.CancelledError:
                 logger.info(f"{log_prefix}Pipeline task cancelled. Exiting gracefully.")
         finally:
+            if self._observer_manager:
+                await self._observer_manager.stop()
+                self._observer_manager = None
             clear_log_context()
 
     async def _handle_unexpected_disconnect(self, reason: str) -> None:

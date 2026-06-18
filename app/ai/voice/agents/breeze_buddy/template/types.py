@@ -1469,6 +1469,12 @@ class ConfigurationModel(BaseModel):
         description="Hold & consultative transfer configuration. "
         "When set, enables the hold_and_consult builtin handler.",
     )
+    observers: Optional[List["ObserverConfig"]] = Field(
+        None,
+        description="Real-time observers that watch the conversation in parallel. "
+        "Each observer is a side-LLM that checks the transcript after every turn "
+        "and can take action (e.g., end_conversation) on detection.",
+    )
 
     @model_validator(mode="after")
     def _backfill_legacy_from_stt_config(self):
@@ -1516,6 +1522,55 @@ class FlowAction(BaseModel):
     text: Optional[str] = None
     handler: Optional[str] = None
     args: Optional[Dict[str, Any]] = None
+
+
+class ObserverConfig(BaseModel):
+    """Real-time observer definition.
+
+    Observers are side-LLMs that watch the conversation transcript in parallel
+    with the main pipeline and can take action (e.g., end the call) when they
+    detect a problem such as voicemail, hallucination, or abuse.
+    """
+
+    name: str = Field(..., description="Unique observer identifier")
+    system_prompt: str = Field(
+        ...,
+        description="Detection instructions for the observer LLM. "
+        "The LLM receives the configured tools and should call "
+        "one based on its analysis.",
+    )
+    tools: List[Dict[str, Any]] = Field(
+        ...,
+        description="Tool definitions for this observer. "
+        "Each tool is a dict with name, description, properties, required. "
+        "The LLM will call one of these tools based on its analysis.",
+    )
+    trigger_on: List[str] = Field(
+        default=["on_user_turn_message_added"],
+        description="Pipecat events that trigger this observer. "
+        "User events: on_user_turn_started, on_user_turn_stopped, "
+        "on_user_turn_message_added, on_user_turn_idle. "
+        "Assistant events: on_assistant_turn_started, on_assistant_turn_stopped. "
+        "LLM events: on_function_calls_started. "
+        "Default: on_user_turn_message_added.",
+    )
+    start_after_turn: int = Field(
+        0,
+        ge=0,
+        description="Skip the first N turns before checking. "
+        "0 = check from the very first turn.",
+    )
+    llm: Optional[LLMConfiguration] = Field(
+        None,
+        description="Optional LLM override. Omit to inherit from "
+        "the template's llm_configurations with model defaulting "
+        "to gpt-4o-mini.",
+    )
+    action: FlowAction = Field(
+        ...,
+        description="Action to execute on detection. Uses the same "
+        "FlowAction type and handler_map as template pre/post actions.",
+    )
 
 
 class TaskMessage(BaseModel):
