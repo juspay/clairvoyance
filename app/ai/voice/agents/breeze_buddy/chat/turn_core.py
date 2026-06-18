@@ -209,6 +209,95 @@ async def run_chat_turn(
         yield event
 
 
+async def run_chat_initial_turn(
+    *,
+    session_id: str,
+    llm: Optional[Any] = None,
+) -> AsyncIterator[SSEEvent]:
+    """Drive the turn-1 greeting (no user message) for ``session_id`` and yield
+    its SSE events -- the no-user-message counterpart to :func:`run_chat_turn`.
+
+    Loads session + template + agent_state itself, then drives
+    ``ChatAgent.run_initial_turn`` (the agent speaks first off the system
+    prompt). Idempotent: if the session already has any chat_message (a static
+    greeting was seeded at create, or the initial turn already ran), yields a
+    terminal ``error`` + ``turn_end`` and does NOT re-run -- the widget
+    self-gates on transcripts; this is the server-side guard against a duplicate
+    greeting / duplicate assistant row.
+
+    Unlike :func:`run_chat_turn`: no user content, no dangling-approval
+    supersede (turn 1, nothing pending), and no history repair (turn 1 has no
+    tool_use blocks). On a missing / ended session or missing template, yields a
+    terminal ``error`` + ``turn_end`` like ``run_chat_turn``.
+    """
+    session = await get_chat_session_by_id(session_id)
+    if session is None:
+        yield SSEEvent(
+            event="error",
+            data={"code": "session_not_found", "message": "Session not found"},
+        )
+        yield SSEEvent(event="turn_end", data={"session_status": "FAILED"})
+        return
+    if session.status == ChatSessionStatus.ENDED:
+        yield SSEEvent(
+            event="error",
+            data={"code": "session_ended", "message": "Session has ended"},
+        )
+        yield SSEEvent(event="turn_end", data={"session_status": "FAILED"})
+        return
+
+    template = await get_template_by_id_cached(session.template_id)
+    if template is None:
+        logger.error(
+            f"run_chat_initial_turn: template {session.template_id!r} for session "
+            f"{session_id} no longer exists"
+        )
+        yield SSEEvent(
+            event="error",
+            data={"code": "template_missing", "message": "Template missing"},
+        )
+        yield SSEEvent(event="turn_end", data={"session_status": "FAILED"})
+        return
+
+    # Idempotency: /initial-turn is turn 1 on a FRESH session. Any existing
+    # chat_message means a static greeting was seeded at create or the greeting
+    # already ran -- re-running would duplicate it. (Widget self-gates on
+    # transcripts; this is the server-side guard.)
+    if await list_chat_messages_for_session(session_id, limit=1):
+        yield SSEEvent(
+            event="error",
+            data={
+                "code": "session_not_fresh",
+                "message": "Initial turn already ran or the conversation has started",
+            },
+        )
+        yield SSEEvent(event="turn_end", data={"session_status": "FAILED"})
+        return
+
+    state_row = await get_agent_session_state(session_id)
+    agent_state: Dict[str, Any] = state_row.data if state_row else {}
+
+    persisted_template_vars = (
+        session.metadata.get("template_vars", {})
+        if isinstance(session.metadata, dict)
+        else {}
+    )
+    template_vars = await build_render_template_vars(template, persisted_template_vars)
+
+    if llm is None:
+        llm = await get_llm_service(resolve_llm_configuration(template), pooled=True)
+
+    agent = ChatAgent(
+        session_id=session_id,
+        template=template,
+        llm=llm,
+        template_vars=template_vars,
+        agent_state=agent_state,
+    )
+    async for event in agent.run_initial_turn(current_node=session.current_node):
+        yield event
+
+
 async def run_chat_approval_continuation(
     *,
     session_id: str,
@@ -365,6 +454,7 @@ async def run_chat_approval_turn(
 
 __all__ = [
     "run_chat_turn",
+    "run_chat_initial_turn",
     "run_chat_approval_turn",
     "run_chat_approval_continuation",
     "build_render_template_vars",

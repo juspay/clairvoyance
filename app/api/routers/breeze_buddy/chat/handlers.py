@@ -31,6 +31,7 @@ from app.ai.voice.agents.breeze_buddy.chat.turn_core import (
     build_render_template_vars,
     resolve_llm_configuration,
     run_chat_approval_continuation,
+    run_chat_initial_turn,
     run_chat_turn,
 )
 from app.ai.voice.agents.breeze_buddy.template.cache import get_template_by_id_cached
@@ -174,7 +175,7 @@ def _sanitize_messages_for_widget(messages: list) -> list:
 #   chat has a single fixed payload per session, so the transformations
 #   (e.g., timestamp formatters) are computed once and the transformed
 #   dict is the thing we persist into ``chat_session.metadata``.
-# - ``_build_render_template_vars`` runs per-turn: it overlays credentials
+# - ``build_render_template_vars`` runs per-turn: it overlays credentials
 #   (which can rotate) and template secrets (which may have changed since
 #   session-create) on top of the persisted payload values, so each turn
 #   sees the freshest values without re-doing the transformation work.
@@ -332,14 +333,18 @@ async def create_chat_session_handler(
             detail="Failed to create chat_session row",
         )
 
-    # Reuse the voice template's initial_greeting field as the chat
-    # greeting (CHAT_MODE.md §8.4): one place to author "first thing the
-    # bot says", whether the template ships on voice, chat, or both.
-    # Skip the LLM round-trip on session create by persisting it as the
-    # first assistant message so it appears in the agent's history
-    # replay on the very first /message call. Render against the same
-    # merged context turns will see, so a greeting that references a
-    # credential / secret placeholder doesn't render with raw braces.
+    # The opening greeting (CHAT_MODE.md §8.4). If the template defines an
+    # `initial_greeting`, render + persist it verbatim (instant, no LLM call)
+    # so the panel opens with it and /message history replay includes it.
+    # Render against the same merged context turns see, so a greeting
+    # referencing a credential/secret placeholder doesn't show raw braces.
+    #
+    # If the template has no static greeting, ``greeting_text`` stays None and
+    # create returns ``greeting=None``. That null is the signal for the widget
+    # to call the streaming ``/initial-turn`` endpoint, which runs the initial
+    # turn (no user message) through the same SSE pipe as every later turn
+    # (so the LLM's prose bubble + chicklets stream in token-by-token on first
+    # open, instead of being generated synchronously at create time).
     greeting_render_vars = await build_render_template_vars(
         template, transformed_template_vars
     )
@@ -517,6 +522,112 @@ async def send_chat_message_handler(
                     user_content=req.content,
                     context_placement=context_placement,
                 ),
+            ),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache, no-transform",
+                "X-Accel-Buffering": "no",
+                "Connection": "keep-alive",
+            },
+        )
+        lock_handed_off = True
+        return response
+    finally:
+        if not lock_handed_off:
+            await lock.release()
+
+
+async def send_chat_initial_turn_handler(
+    session_id: str,
+    *,
+    access_check: Optional[Callable[[ChatSession], None]] = None,
+) -> StreamingResponse:
+    """Stream the initial turn (turn 1, no user message) as SSE -- the
+    no-user-message counterpart to :func:`send_chat_message_handler`. The
+    widget calls this right after create when a template has no static
+    ``initial_greeting``.
+
+    Thin HTTP shell (per-session lock with fail-fast 409, fresh session
+    read, access-check, 410 gate, turn metrics, ``_turn_sse_stream``)
+    around :func:`run_chat_initial_turn`. The brain -- history replay,
+    idempotency guard, agent_state load, template-var render, ChatAgent
+    drive -- lives there, the SAME way :func:`send_chat_message_handler`
+    wraps :func:`run_chat_turn`. ``access_check`` runs under the lock
+    against the freshly-read row, same as the message handler.
+    """
+    lock = RedisLock(_lock_key(session_id), ttl_seconds=_SESSION_LOCK_TTL_SECONDS)
+    try:
+        await lock.acquire()
+    except LockAcquireError:
+        # Fail-fast (CHAT_MODE.md D12): no server-side blocking acquire.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Another turn is already in flight for this session. "
+                "Wait for the previous stream to complete and retry."
+            ),
+        )
+
+    lock_handed_off = False
+    try:
+        fresh = await get_chat_session_by_id(session_id)
+        if fresh is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Chat session '{session_id}' not found",
+            )
+        if access_check is not None:
+            access_check(fresh)
+        if fresh.status == ChatSessionStatus.ENDED:
+            raise HTTPException(
+                status_code=status.HTTP_410_GONE,
+                detail=f"Chat session '{session_id}' has ended",
+            )
+
+        template = await get_template_by_id_cached(fresh.template_id)
+        if template is None:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=(
+                    f"Template '{fresh.template_id}' for chat session "
+                    f"'{session_id}' no longer exists"
+                ),
+            )
+
+        # Idempotency: /initial-turn is turn 1 on a FRESH session. If any
+        # message already exists (a static greeting was seeded at create, the
+        # initial turn already ran, or the conversation has started), fail-fast
+        # 409 BEFORE opening the stream -- re-running would emit a duplicate
+        # greeting + a second assistant row. The widget self-gates on
+        # transcripts; this is the server-side guard. Mirrors the fail-fast 409
+        # the message/approval handlers use for contention (a duplicate turn
+        # must be a clean 409, not a 200-streaming-FAILED). run_chat_initial_turn
+        # re-checks as defense-in-depth.
+        if await list_chat_messages_for_session(session_id, limit=1):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"Chat session '{session_id}' is not fresh -- the initial "
+                    "turn has already run or the conversation has started."
+                ),
+            )
+
+        # The brain -- history replay, agent_state load, template-var render,
+        # ChatAgent drive -- lives in run_chat_initial_turn (same split as
+        # send_chat_message_handler -> run_chat_turn).
+
+        turn_metrics = TurnMetrics(
+            session_id=session_id,
+            template_id=template.id,
+            t0=time.monotonic(),
+        )
+
+        response = StreamingResponse(
+            _turn_sse_stream(
+                session_id=session_id,
+                lock=lock,
+                turn_metrics=turn_metrics,
+                events=run_chat_initial_turn(session_id=session_id),
             ),
             media_type="text/event-stream",
             headers={

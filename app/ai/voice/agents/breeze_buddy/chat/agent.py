@@ -267,6 +267,43 @@ class ChatAgent:
             await close_mcp_pool(self.mcp_pool)
             self.mcp_pool = None
 
+    async def run_initial_turn(
+        self, *, current_node: Optional[str] = None
+    ) -> AsyncIterator[SSEEvent]:
+        """Stream the initial turn — the bot's first turn, with NO user message
+        (CHAT_MODE.md §8.4). It is a normal LLM turn, identical in machinery to
+        every later turn; the only difference is the bot speaks first. Seeds
+        context from ``[role, task]`` on a fresh session (empty history, no user
+        row, no ``user_committed``) — the approval-resume shape — then drives
+        :meth:`_cycle_loop`, which persists the assistant row + ``ui_blocks``
+        (so resume replays it) and emits the normal
+        ``assistant_token`` / ``ui_op`` / ``assistant_message`` / ``turn_end``
+        events.
+
+        YIELDS the turn's SSE events — the same shape as :meth:`run_turn`, so
+        the initial turn streams through the same ``_turn_sse_stream`` pipe as
+        every later turn (prose bubble + chicklets render identically). Any
+        QuickReplies / UI the LLM emits ride as ``ui_op`` events live and as
+        ``ui_blocks`` on the persisted row for resume replay.
+        """
+        self.aiohttp_session = create_aiohttp_session()
+        self.mcp_pool = {}
+        self._turn_id = uuid.uuid4().hex
+        try:
+            prep = await self._prepare_tools()
+            node = self._resolve_node(prep.flow_config, current_node)
+            # _seed_resume_context with empty history = [role, task, system?]
+            # and no user message — exactly the greeting layout.
+            context = self._seed_resume_context(node, [], prep.global_funcs)
+            async for event in self._cycle_loop(context, node, prep):
+                yield event
+        finally:
+            if self.aiohttp_session is not None:
+                await self.aiohttp_session.close()
+                self.aiohttp_session = None
+            await close_mcp_pool(self.mcp_pool)
+            self.mcp_pool = None
+
     async def _run_turn_inner(
         self,
         *,
@@ -1066,6 +1103,19 @@ class ChatAgent:
         if system_block:
             messages.append({"role": "system", "content": system_block})
         messages.extend(history)
+        # The greeting (initial) turn has empty history, so `messages` is
+        # system-role only ([system_prompt] +/- [storefront_context]). Pipecat's
+        # Anthropic adapter requires a user message; with none present it DEMOTES
+        # the last system message into the user role to satisfy the API -- and
+        # when no storefront context has landed yet, that last message is the
+        # SYSTEM PROMPT, so the bot's own instructions arrive as "user input"
+        # and the greeting goes off the rails. Voice dodges this (its greeting
+        # turn always has a following user/assistant structure); mirror that by
+        # keeping the prompt in `system` and adding a minimal user trigger
+        # (".", the same synthetic turn VertexAnthropicLLMService uses).
+        # Approval-resume passes non-empty history, so this never fires there.
+        if not history and not any(m.get("role") == "user" for m in messages):
+            messages.append({"role": "user", "content": "."})
         return LLMContext(
             messages=cast(List[LLMContextMessage], messages),
             tools=_tools_schema(node, global_funcs),

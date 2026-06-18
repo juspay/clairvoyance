@@ -40,6 +40,7 @@ from app.api.routers.breeze_buddy.chat.handlers import (
     create_chat_session_handler,
     end_chat_session_handler,
     load_chat_session_or_404,
+    send_chat_initial_turn_handler,
     send_chat_message_handler,
     validate_template_for_chat,
 )
@@ -84,6 +85,7 @@ from app.schemas import (
 from app.schemas.breeze_buddy.chat import (
     ApproveToolRequest,
     ChatMessage,
+    ChatSession,
     ChatSessionStatus,
     CreateChatSessionRequest,
     CreateWidgetSessionRequest,
@@ -321,6 +323,80 @@ async def send_widget_message_handler(
         )
 
     return await send_chat_message_handler(session_id, req, access_check=None)
+
+
+# ---------------------------------------------------------------------------
+# POST /widget/session/{id}/initial-turn
+# ---------------------------------------------------------------------------
+
+
+async def send_widget_initial_turn_handler(
+    session_id: str,
+    request: Request,
+    ctx: WidgetSessionContext,
+):
+    """Stream the turn-1 LLM greeting (no user message). 409 if voice is
+    currently active. Gate-for-gate parity with
+    ``send_widget_message_handler`` minus the request body (a greeting has
+    no user content)."""
+    cfg = await get_widget_config_by_id(ctx.widget_config_id)
+    if cfg is None or not cfg.active:
+        # Token's widget_config_id is stale — probably deleted via the
+        # admin CRUD. 401 so the client knows to abandon the token.
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Widget configuration not found or inactive",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    await enforce_widget_ip_limit(
+        request=request,
+        bucket="message",
+        limit=cfg.max_messages_per_ip_hour,
+        widget_config_id=cfg.id,
+    )
+
+    # Cheap pre-check before delegating — the chat handler will reload
+    # the session under its own lock, but we want a clean 409 for
+    # "voice is live" before the SSE stream opens.
+    session = await get_chat_session_by_id(session_id)
+    if session is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Widget session '{session_id}' not found",
+        )
+    assert_widget_session_ownership(session, ctx)
+    if session.status == ChatSessionStatus.ENDED:
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail=f"Widget session '{session_id}' has ended",
+        )
+    if session.current_channel != WidgetChannel.CHAT:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Widget session is on channel {session.current_channel.value}; "
+                "end the voice attachment first."
+            ),
+        )
+
+    # Re-validate the CHAT channel UNDER the per-session lock. The pre-check
+    # above ran lock-free, so a concurrent /voice/connect could flip the
+    # channel to VOICE between then and the chat handler's lock acquisition.
+    # The chat handler runs this against its freshly-read, locked session row.
+    def _assert_still_chat_channel(session: ChatSession) -> None:
+        if session.current_channel != WidgetChannel.CHAT:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"Widget session is on channel {session.current_channel.value}; "
+                    "end the voice attachment first."
+                ),
+            )
+
+    return await send_chat_initial_turn_handler(
+        session_id, access_check=_assert_still_chat_channel
+    )
 
 
 # ---------------------------------------------------------------------------

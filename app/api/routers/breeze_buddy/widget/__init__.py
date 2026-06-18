@@ -47,6 +47,7 @@ from .handlers import (
     create_widget_session_handler,
     end_widget_session_handler,
     get_widget_session_state_handler,
+    send_widget_initial_turn_handler,
     send_widget_message_handler,
     update_widget_context_handler,
     voice_connect_handler,
@@ -73,6 +74,11 @@ async def widget_get_preflight(session_id: str) -> Response:
 
 @router.options("/session/{session_id}/message")
 async def widget_message_preflight(session_id: str) -> Response:
+    return options_cors_response()
+
+
+@router.options("/session/{session_id}/initial-turn")
+async def widget_initial_turn_preflight(session_id: str) -> Response:
     return options_cors_response()
 
 
@@ -139,6 +145,18 @@ async def send_widget_message(
     ctx: WidgetSessionContext = Depends(require_widget_session),
 ):
     return await send_widget_message_handler(session_id, req, request, ctx)
+
+
+@router.post(
+    "/session/{session_id}/initial-turn",
+    summary="Stream the LLM greeting turn (SSE)",
+)
+async def send_widget_initial_turn(
+    session_id: str,
+    request: Request,
+    ctx: WidgetSessionContext = Depends(require_widget_session),
+):
+    return await send_widget_initial_turn_handler(session_id, request, ctx)
 
 
 @router.post(
