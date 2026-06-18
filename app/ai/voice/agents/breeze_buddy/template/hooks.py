@@ -23,6 +23,7 @@ from app.ai.voice.agents.breeze_buddy.handlers.transport.utils.field_resolver im
 )
 from app.ai.voice.agents.breeze_buddy.template.context import TemplateContext
 from app.ai.voice.agents.breeze_buddy.template.types import (
+    FieldConfig,
     FieldSource,
     HookConfig,
 )
@@ -244,6 +245,19 @@ class UpdateOutcomeInDatabaseHook(Hook):
                 )
                 outcome = "TRANSFERRED"
 
+            # Guard: if an observer already set the outcome, preserve it.
+            # The observer runs in parallel and may detect voicemail before
+            # the main LLM calls user_busy — don't let user_busy overwrite.
+            if meta_data.get("observer_triggered") and context.lead.outcome:
+                existing = context.lead.outcome
+                if existing != outcome:
+                    logger.info(
+                        f"Observer already set outcome '{existing}' for lead "
+                        f"{context.lead.id}. Preserving over '{outcome}' "
+                        f"(function: '{function_name}')"
+                    )
+                    outcome = existing
+
             # Set in-memory outcome AFTER transfer override but BEFORE the
             # async DB write.  This prevents a race condition in Direct Mode
             # where end_conversation_global checks context.lead.outcome and
@@ -425,3 +439,36 @@ class HookRegistry:
 # Register hooks
 HookRegistry.register("update_outcome_in_database", UpdateOutcomeInDatabaseHook())
 HookRegistry.register("send_http_request", ExternalHTTPHook())
+
+
+async def set_outcome(
+    context: TemplateContext, outcome: str, triggered_by: str = ""
+) -> None:
+    """Set call outcome via update_outcome_in_database hook.
+
+    Same path template function hooks use (confirm_order → CONFIRM, etc.).
+
+    Args:
+        context: TemplateContext for the current call
+        outcome: Outcome value (e.g., "VOICEMAIL", "HALLUCINATION")
+        triggered_by: Who triggered this (e.g., "voicemail_detector")
+    """
+    hook = HookRegistry.get("update_outcome_in_database")
+    if not hook:
+        logger.warning(
+            f"set_outcome: 'update_outcome_in_database' hook not found, "
+            f"outcome '{outcome}' not persisted"
+        )
+        return
+    hook_config = HookConfig(
+        name="update_outcome_in_database",
+        expected_fields={
+            "outcome": FieldConfig(source=FieldSource.STATIC, value=outcome)
+        },
+    )
+    await hook.safe_execute(
+        context,
+        {"outcome": outcome},
+        triggered_by or "set_outcome",
+        hook_config,
+    )
