@@ -22,7 +22,7 @@ from __future__ import annotations
 import uuid
 from typing import Any, Dict, List, Optional
 
-from fastapi import HTTPException, Request, status
+from fastapi import HTTPException, Request, UploadFile, status
 
 from app.ai.voice.agents.breeze_buddy.chat.client_context import (
     CLIENT_CONTEXT_KEY,
@@ -34,6 +34,7 @@ from app.ai.voice.agents.breeze_buddy.services.daily.daily import (
     start_daily_session,
 )
 from app.ai.voice.agents.breeze_buddy.template.cache import get_template_by_id_cached
+from app.ai.voice.stt import TranscriptionError, transcribe_audio
 from app.api.routers.breeze_buddy.chat.handlers import (
     approve_chat_tool_handler,
     cancel_chat_turn_handler,
@@ -53,6 +54,8 @@ from app.api.security.breeze_buddy.widget_token import (
     assert_widget_session_ownership,
     mint_widget_token,
 )
+from app.core.config.dynamic import WIDGET_STT_MAX_AUDIO_BYTES
+from app.core.config.static import BREEZE_BUDDY_STT_SERVICE
 from app.core.logger import logger
 from app.database.accessor import create_lead_call_tracker, get_lead_by_id
 from app.database.accessor.breeze_buddy.chat_session import (
@@ -94,6 +97,7 @@ from app.schemas.breeze_buddy.chat import (
     UpdateWidgetContextResponse,
     WidgetChannel,
     WidgetSessionStateResponse,
+    WidgetTranscribeResponse,
     WidgetVoiceConnectResponse,
     WidgetVoiceEndResponse,
 )
@@ -321,6 +325,108 @@ async def send_widget_message_handler(
         )
 
     return await send_chat_message_handler(session_id, req, access_check=None)
+
+
+# ---------------------------------------------------------------------------
+# POST /widget/session/{id}/transcribe  (push-to-talk STT)
+# ---------------------------------------------------------------------------
+
+
+async def transcribe_widget_audio_handler(
+    session_id: str,
+    audio: UploadFile,
+    request: Request,
+    ctx: WidgetSessionContext,
+) -> WidgetTranscribeResponse:
+    """Transcribe a push-to-talk clip and return the text for review.
+
+    Stateless: no Redis lock, no DB writes — transcription touches no
+    session state, so it can run alongside an in-flight turn. Same gate
+    order as ``send_widget_message_handler`` (config-active 401 → IP limit
+    → ownership → 410 ENDED), then one direct STT call.
+
+    Provider follows the template's ``stt_configuration.provider`` (default
+    ``BREEZE_BUDDY_STT_SERVICE``); Soniox transcribes via its async file API,
+    while Google (no one-shot path) falls back to Whisper inside
+    ``transcribe_audio``. The returned text is NOT sent as a turn — the embed
+    drops it into the composer for the user to edit and send via ``/message``.
+    """
+    cfg = await get_widget_config_by_id(ctx.widget_config_id)
+    if cfg is None or not cfg.active:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Widget configuration not found or inactive",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    # Separate "transcribe" bucket (same per-merchant hourly cap as messages)
+    # so STT spend is counted independently of chat turns.
+    await enforce_widget_ip_limit(
+        request=request,
+        bucket="transcribe",
+        limit=cfg.max_messages_per_ip_hour,
+        widget_config_id=cfg.id,
+    )
+
+    session = await get_chat_session_by_id(session_id)
+    if session is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Widget session '{session_id}' not found",
+        )
+    assert_widget_session_ownership(session, ctx)
+    if session.status == ChatSessionStatus.ENDED:
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail=f"Widget session '{session_id}' has ended",
+        )
+
+    max_bytes = await WIDGET_STT_MAX_AUDIO_BYTES()
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = await audio.read(64 * 1024)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > max_bytes:
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail=f"Audio exceeds the {max_bytes}-byte limit",
+            )
+        chunks.append(chunk)
+    data = b"".join(chunks)
+    if not data:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Empty audio upload",
+        )
+
+    template = await get_template_by_id_cached(session.template_id)
+    configurations = getattr(template, "configurations", None)
+    stt = getattr(configurations, "stt_configuration", None)
+    if stt is not None and stt.provider is not None:
+        provider = stt.provider.value
+    else:
+        provider = BREEZE_BUDDY_STT_SERVICE
+    language = stt.language if stt is not None else None
+
+    try:
+        result = await transcribe_audio(
+            data,
+            audio.content_type,
+            provider=provider,
+            language=language,
+            filename=audio.filename or "audio.webm",
+        )
+    except TranscriptionError as e:
+        logger.warning("widget transcribe failed (session={}): {}", session_id, e)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Transcription failed",
+        ) from e
+
+    return WidgetTranscribeResponse(text=result.text, provider=result.provider)
 
 
 # ---------------------------------------------------------------------------

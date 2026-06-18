@@ -13,8 +13,13 @@ from .google import build_google_stt
 from .openai import build_openai_stt
 from .sarvam import SarvamConfig, build_sarvam_stt, get_sarvam_language
 from .soniox import SonioxConfig, build_soniox_stt
+from .transcribe import Transcription, TranscriptionError, transcribe_audio
 
 __all__ = [
+    # One-shot (push-to-talk) transcription
+    "Transcription",
+    "TranscriptionError",
+    "transcribe_audio",
     # AssemblyAI
     "build_assemblyai_stt",
     # Deepgram

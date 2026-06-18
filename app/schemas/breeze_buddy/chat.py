@@ -632,6 +632,20 @@ class WidgetSessionStateResponse(BaseModel):
     )
 
 
+class WidgetTranscribeResponse(BaseModel):
+    """Body of ``POST /widget/session/{id}/transcribe``.
+
+    Push-to-talk: the clip is transcribed and the text is returned for the
+    embed to drop into the composer (the user reviews/edits, then sends via
+    ``POST /widget/session/{id}/message``). ``provider`` is the STT provider
+    that actually produced the text (may differ from the template's when a
+    streaming-only provider falls back to Whisper).
+    """
+
+    text: str
+    provider: str
+
+
 __all__ = [
     "ChatSessionStatus",
     "ChatMessageRole",
@@ -666,4 +680,5 @@ __all__ = [
     "WidgetVoiceConnectResponse",
     "WidgetVoiceEndResponse",
     "WidgetSessionStateResponse",
+    "WidgetTranscribeResponse",
 ]

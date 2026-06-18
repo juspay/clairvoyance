@@ -1013,6 +1013,7 @@ URL prefix `/agent/voice/breeze-buddy/widget`:
 |---|---|---|---|
 | `/session` | POST | `public_widget_key` + Origin + per-IP RL | mints widget_token, returns greeting |
 | `/session/{id}/message` | POST | widget_token | SSE stream; 409 if channel ≠ CHAT |
+| `/session/{id}/transcribe` | POST | widget_token | push-to-talk: multipart `audio` → `{text, provider}`; stateless, no turn. Provider from template `stt_configuration` (Soniox/Google fall back to Whisper) |
 | `/session/{id}/voice/connect` | POST | widget_token | spins up Daily room + bot, seeds from chat history |
 | `/session/{id}/voice/end` | POST | widget_token | best-effort signal; drain runs in `end_conversation` |
 | `/session/{id}/end` | POST | widget_token | ends whole conversation; signals voice if live |

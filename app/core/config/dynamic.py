@@ -177,6 +177,23 @@ async def CHAT_HISTORY_REPLAY_LIMIT() -> int:
     return await get_config("CHAT_HISTORY_REPLAY_LIMIT", 100, int)
 
 
+async def WIDGET_STT_MAX_AUDIO_BYTES() -> int:
+    """Max audio upload accepted by ``POST /widget/session/{id}/transcribe``
+    (push-to-talk). Clips are short; the default 10 MB sits well under
+    provider limits (OpenAI Whisper is 25 MB). Read per request so it can
+    be tightened during abuse without a deploy."""
+    return await get_config("WIDGET_STT_MAX_AUDIO_BYTES", 10 * 1024 * 1024, int)
+
+
+async def SONIOX_ASYNC_MODEL() -> str:
+    """Soniox async/file model for one-shot (push-to-talk) transcription.
+
+    Used by ``transcribe_audio`` when a template's STT provider is Soniox.
+    Resolves Redis → env → default, so the model can be bumped (e.g.
+    ``stt-async-v5`` → ``v6``) without a deploy."""
+    return await get_config("SONIOX_ASYNC_MODEL", "stt-async-v5", str)
+
+
 # ============================================================================
 # Public chat-demo tuning knobs (CHAT_MODE.md §13).
 #
