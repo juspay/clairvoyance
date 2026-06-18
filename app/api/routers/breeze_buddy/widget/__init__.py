@@ -21,7 +21,7 @@ Origin + per-IP rate limit. All other routes use the session-bound
 ``widget_token`` minted at create-time.
 """
 
-from fastapi import APIRouter, Depends, Request, Response, status
+from fastapi import APIRouter, Depends, File, Request, Response, UploadFile, status
 
 from app.api.routers.breeze_buddy.widget_common import options_cors_response
 from app.api.security.breeze_buddy.widget_token import (
@@ -37,6 +37,7 @@ from app.schemas.breeze_buddy.chat import (
     UpdateWidgetContextRequest,
     UpdateWidgetContextResponse,
     WidgetSessionStateResponse,
+    WidgetTranscribeResponse,
     WidgetVoiceConnectResponse,
     WidgetVoiceEndResponse,
 )
@@ -48,6 +49,7 @@ from .handlers import (
     end_widget_session_handler,
     get_widget_session_state_handler,
     send_widget_message_handler,
+    transcribe_widget_audio_handler,
     update_widget_context_handler,
     voice_connect_handler,
     voice_end_handler,
@@ -73,6 +75,11 @@ async def widget_get_preflight(session_id: str) -> Response:
 
 @router.options("/session/{session_id}/message")
 async def widget_message_preflight(session_id: str) -> Response:
+    return options_cors_response()
+
+
+@router.options("/session/{session_id}/transcribe")
+async def widget_transcribe_preflight(session_id: str) -> Response:
     return options_cors_response()
 
 
@@ -139,6 +146,27 @@ async def send_widget_message(
     ctx: WidgetSessionContext = Depends(require_widget_session),
 ):
     return await send_widget_message_handler(session_id, req, request, ctx)
+
+
+@router.post(
+    "/session/{session_id}/transcribe",
+    response_model=WidgetTranscribeResponse,
+    summary="Transcribe a push-to-talk audio clip to text (no turn)",
+)
+async def transcribe_widget_audio(
+    session_id: str,
+    request: Request,
+    audio: UploadFile = File(...),
+    ctx: WidgetSessionContext = Depends(require_widget_session),
+) -> WidgetTranscribeResponse:
+    """Push-to-talk: upload a short audio clip, get the transcript back.
+
+    Returns the text (it is NOT sent as a turn) so the embed can drop it
+    into the composer for the user to review/edit, then send via
+    ``/message``. The STT provider follows the template's
+    ``stt_configuration``; streaming-only providers fall back to Whisper.
+    """
+    return await transcribe_widget_audio_handler(session_id, audio, request, ctx)
 
 
 @router.post(
