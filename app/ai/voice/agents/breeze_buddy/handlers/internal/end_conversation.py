@@ -7,6 +7,8 @@ from pipecat.frames.frames import EndFrame
 from app.ai.voice.agents.breeze_buddy.callbacks import (
     service_callback,
 )
+from app.ai.voice.agents.breeze_buddy.memory.identity import resolve_customer_key
+from app.ai.voice.agents.breeze_buddy.memory.service import MemoryService
 from app.ai.voice.agents.breeze_buddy.observability.tracing_setup import (
     update_span_with_evaluation_data,
 )
@@ -14,6 +16,10 @@ from app.ai.voice.agents.breeze_buddy.template.context import TemplateContext
 from app.ai.voice.agents.breeze_buddy.utils.hold_transfer import (
     publish_hold_transfer_result,
     summarize_transcription,
+)
+from app.core.config.dynamic import (
+    BUDDY_MEMORY_BACKEND as resolve_memory_backend,
+    BUDDY_MEMORY_ENABLED as is_memory_enabled,
 )
 from app.core.logger import logger
 from app.core.logger.context import clear_log_context
@@ -291,6 +297,48 @@ async def end_conversation(context: TemplateContext, args, transition_to=None):
         # Update OpenTelemetry span with evaluation data AFTER DB write,
         # so context.lead.outcome reflects the final persisted value.
         update_span_with_evaluation_data(context)
+
+        # ── Memory extraction enqueue ─────────────────────────────────────
+        # Best-effort, must never block end_conversation.
+        # The drain worker re-reads the transcript from DB (already saved above).
+        # Gates: global kill-switch AND per-template opt-in (MemoryConfig.enabled).
+        mem_cfg = getattr(getattr(context.bot, "configurations", None), "memory", None)
+        if await is_memory_enabled() and mem_cfg and mem_cfg.enabled and context.lead:
+            try:
+                resolved = await resolve_customer_key(
+                    reseller_id=context.lead.reseller_id or "",
+                    merchant_id=context.lead.merchant_id or "",
+                    payload=payload,
+                )
+                if resolved:
+                    customer_key, key_type = resolved
+                    phone_raw = payload.get("customer_mobile_number") or payload.get(
+                        "phone"
+                    )
+                    explicit_cid = (
+                        payload.get("customer_id") if key_type == "phone" else None
+                    )
+                    # Backend: per-template override wins, else Redis/DevCycle dynamic default.
+                    backend_name = mem_cfg.backend or await resolve_memory_backend()
+                    await MemoryService().enqueue_extraction(
+                        kind="voice_lead",
+                        record_id=str(context.lead.id),
+                        customer_key=customer_key,
+                        key_type=key_type,
+                        reseller_id=context.lead.reseller_id or "",
+                        merchant_id=context.lead.merchant_id or "",
+                        source_channel="voice",
+                        phone=str(phone_raw) if phone_raw else None,
+                        explicit_customer_id=(
+                            str(explicit_cid) if explicit_cid else None
+                        ),
+                        backend=backend_name,
+                        extraction_prompt=mem_cfg.extraction_prompt,
+                    )
+            except Exception as mem_err:
+                logger.warning(
+                    f"[memory] enqueue failed for lead {context.lead.id}: {mem_err}"
+                )
 
         # Execute end_conversation_callbacks
         if context.end_conversation_callbacks:

@@ -5,7 +5,17 @@ This module contains database connection and models.
 
 import asyncpg
 
+try:
+    from pgvector.asyncpg import register_vector as _register_vector
+
+    _PGVECTOR_AVAILABLE = True
+except ImportError:
+    _PGVECTOR_AVAILABLE = False
+
+
 from app.core.config.static import (
+    BUDDY_MEMORY_BACKEND,
+    BUDDY_MEMORY_ENABLED,
     POSTGRES_DB,
     POSTGRES_HOST,
     POSTGRES_MAX_OVERFLOW,
@@ -15,6 +25,31 @@ from app.core.config.static import (
     POSTGRES_USER,
 )
 from app.core.logger import logger
+
+
+async def _init_connection(conn: asyncpg.Connection) -> None:
+    """Register the pgvector codec on each new connection.
+
+    Only runs when persistent memory is enabled *and* the pgvector backend is
+    selected — otherwise a memory-off deployment (or one using the supermemory
+    backend) would needlessly require the `vector` extension / migration 032.
+    Wrapped so a half-provisioned pgvector deployment degrades with a warning
+    instead of failing every connection (which would kill the whole pool).
+    """
+    if not (
+        _PGVECTOR_AVAILABLE
+        and BUDDY_MEMORY_ENABLED
+        and BUDDY_MEMORY_BACKEND == "pgvector"
+    ):
+        return
+    try:
+        await _register_vector(conn)  # type: ignore[arg-type]
+    except Exception as e:
+        # vector extension / migration 032 not applied — memory will degrade,
+        # but the connection (and the rest of the app) stays healthy.
+        logger.warning(f"pgvector codec registration skipped: {e}")
+
+
 from app.services.aws.kms import decrypt_kms
 
 pool = None
@@ -56,6 +91,7 @@ async def init_db_pool():
                 port=POSTGRES_PORT,
                 min_size=POSTGRES_POOL_SIZE,
                 max_size=POSTGRES_POOL_SIZE + POSTGRES_MAX_OVERFLOW,
+                init=_init_connection,
             )
             logger.info("Database pool initialized successfully.")
         except Exception as e:

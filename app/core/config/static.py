@@ -126,6 +126,25 @@ ENABLE_MUTE_UNTIL_FIRST_BOT_COMPLETE = (
     os.environ.get("ENABLE_MUTE_UNTIL_FIRST_BOT_COMPLETE", "false").lower() == "true"
 )
 
+# Persistent user memory (Breeze Buddy)
+BUDDY_MEMORY_ENABLED = os.environ.get("BUDDY_MEMORY_ENABLED", "false").lower() == "true"
+# Default memory backend: "pgvector" (our DIY Postgres store) | "supermemory".
+# A template's MemoryConfig.backend overrides this per-template.
+BUDDY_MEMORY_BACKEND = os.environ.get("BUDDY_MEMORY_BACKEND", "pgvector").lower()
+# pgvector backend only:
+AZURE_OPENAI_EMBEDDING_DEPLOYMENT = os.environ.get(
+    "AZURE_OPENAI_EMBEDDING_DEPLOYMENT", "text-embedding-3-small"
+)
+MEMORY_EXTRACTION_INTERVAL_SECONDS = int(
+    os.environ.get("MEMORY_EXTRACTION_INTERVAL_SECONDS", "60")
+)
+MEMORY_EXTRACTION_BATCH_SIZE = int(os.environ.get("MEMORY_EXTRACTION_BATCH_SIZE", "20"))
+# supermemory backend only:
+SUPERMEMORY_API_KEY = os.environ.get("SUPERMEMORY_API_KEY", "")
+SUPERMEMORY_BASE_URL = os.environ.get(
+    "SUPERMEMORY_BASE_URL", "https://api.supermemory.ai"
+)
+
 # Mem0 Configuration
 MEM0_API_KEY = os.getenv("MEM0_API_KEY", "")
 MEM0_ENABLED = os.getenv("MEM0_ENABLED", "false").lower() == "true"

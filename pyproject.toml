@@ -34,6 +34,8 @@ dependencies = [
     "nltk",
     "jmespath>=1.1.0",
     "h2>=4.3.0",
+    "pgvector",
+    "supermemory>=3.45.0",
 ]
 
 [project.optional-dependencies]
