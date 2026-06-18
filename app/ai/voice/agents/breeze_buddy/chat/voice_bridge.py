@@ -344,6 +344,20 @@ class WidgetVoiceBridge:
                 for chunk in agg.push(delta):
                     await self._speak(chunk, gen)
             elif ev.event == "ui_op":
+                # TODO(voice-as-chat): flush the sentence aggregator before
+                # emitting the ui-op, mirroring function_call_started /
+                # function_approval_requested / turn_end below. A <ui_stream>
+                # block is a hard turn boundary (the widget finalizes the open
+                # transcript bubble on ui-op), but unlike those branches this one
+                # does NOT agg.flush() first. If the prose before the marker ends
+                # mid-sentence — no terminal punctuation/newline, e.g. a trailing
+                # colon ("...best options:") — that tail stays buffered and gets
+                # prepended to the post-carousel prose, leaking into the next
+                # bubble. Low severity (the <ui_stream> marker is usually
+                # newline-led, so the buffer is empty at the boundary), deferred.
+                # Fix: `for chunk in agg.flush(): await self._speak(chunk, gen)`
+                # immediately before the emit below. See docs/widget/
+                # VOICE_GENERATIVE_UI_TODO.md.
                 op = ev.data.get("op") if isinstance(ev.data, dict) else None
                 if op is not None:
                     await self._emit_rtvi(_RTVI_UI_OP, {"op": op})
