@@ -9,7 +9,9 @@ from app.ai.voice.agents.breeze_buddy.chat.ui_healer import (
 
 # Load template package before chat/* modules — same circular-import trap.
 from app.ai.voice.agents.breeze_buddy.template.ui_catalog import (  # noqa: F401
+    QUICK_REPLIES_MAX_ITEMS,
     UI_CATALOG,
+    validate_props,
 )
 
 
@@ -186,3 +188,229 @@ def test_healer_alias_does_not_override_canonical_when_both_present():
     assert out["props"]["text"] == "explicit"
     # `label` was stripped (unknown prop), not renamed.
     assert "label" not in out["props"]
+
+
+# ---------------------------------------------------------------------------
+# QuickReplies item-cap clamp (chiclets resilience)
+# ---------------------------------------------------------------------------
+
+
+def _qr_items(n: int):
+    return [{"label": f"Category {i}"} for i in range(n)]
+
+
+def test_quickreplies_cap_is_twelve():
+    """Lock the chiclet cap: 12 items validate, 13 do not."""
+    assert QUICK_REPLIES_MAX_ITEMS == 12
+    validate_props("QuickReplies", {"items": _qr_items(12)})  # no raise
+    raised = False
+    try:
+        validate_props("QuickReplies", {"items": _qr_items(13)})
+    except Exception:
+        raised = True
+    assert raised, "13 items should exceed the QuickReplies cap"
+
+
+def test_healer_clamps_quickreplies_over_cap():
+    """>cap QuickReplies → truncate to the cap (and the clamped op then passes
+    catalog validation) instead of dropping the whole row."""
+    import json
+
+    line = json.dumps(
+        {
+            "op": "add",
+            "id": "qr",
+            "type": "QuickReplies",
+            "parent": "root",
+            "props": {"items": _qr_items(14)},
+        }
+    )
+    r = heal_op_line(line, _ctx(known_ids={"root"}))
+    assert r.drop is False
+    assert any(n == "clamped_quickreplies_items:-2" for n in r.notes)
+    out = json.loads(r.line)  # type: ignore[arg-type]
+    assert len(out["props"]["items"]) == QUICK_REPLIES_MAX_ITEMS
+    # the healed op now survives catalog validation
+    validate_props("QuickReplies", out["props"])
+
+
+def test_healer_leaves_quickreplies_at_cap():
+    import json
+
+    line = json.dumps(
+        {
+            "op": "add",
+            "id": "qr",
+            "type": "QuickReplies",
+            "parent": "root",
+            "props": {"items": _qr_items(QUICK_REPLIES_MAX_ITEMS)},
+        }
+    )
+    r = heal_op_line(line, _ctx(known_ids={"root"}))
+    assert r.drop is False
+    assert not any(n.startswith("clamped_quickreplies_items") for n in r.notes)
+
+
+# ---------------------------------------------------------------------------
+# Scheme-less URL coercion (checkout Handoff resilience)
+# ---------------------------------------------------------------------------
+
+
+def test_healer_coerces_scheme_less_handoff_url():
+    """Bare-domain checkout Handoff url → https:// (and then validates)."""
+    import json
+
+    line = json.dumps(
+        {
+            "op": "add",
+            "id": "root",
+            "type": "Handoff",
+            "props": {
+                "reason": "checkout",
+                "label": "Review and checkout",
+                "url": "shop.myshopify.com/cart",
+                "lifecycle": "popup",
+            },
+        }
+    )
+    r = heal_op_line(line, _ctx(known_ids=set()))
+    assert r.drop is False
+    assert any(n == "coerced_scheme_less_url:1" for n in r.notes)
+    out = json.loads(r.line)  # type: ignore[arg-type]
+    assert out["props"]["url"] == "https://shop.myshopify.com/cart"
+    validate_props("Handoff", out["props"])
+
+
+def test_healer_leaves_absolute_url_untouched():
+    import json
+
+    line = json.dumps(
+        {
+            "op": "add",
+            "id": "root",
+            "type": "Handoff",
+            "props": {
+                "reason": "checkout",
+                "label": "Go",
+                "url": "https://shop.com/cart",
+                "lifecycle": "popup",
+            },
+        }
+    )
+    r = heal_op_line(line, _ctx(known_ids=set()))
+    assert not any(n.startswith("coerced_scheme_less_url") for n in r.notes)
+    out = json.loads(r.line)  # type: ignore[arg-type]
+    assert out["props"]["url"] == "https://shop.com/cart"
+
+
+def test_healer_leaves_hostless_relative_url():
+    """A leading-slash path has no host to attach a scheme to — leave it for
+    the validator (the healer must not invent a host)."""
+    import json
+
+    line = json.dumps(
+        {
+            "op": "add",
+            "id": "root",
+            "type": "Handoff",
+            "props": {
+                "reason": "checkout",
+                "label": "Go",
+                "url": "/cart",
+                "lifecycle": "popup",
+            },
+        }
+    )
+    r = heal_op_line(line, _ctx(known_ids=set()))
+    assert not any(n.startswith("coerced_scheme_less_url") for n in r.notes)
+    out = json.loads(r.line)  # type: ignore[arg-type]
+    assert out["props"]["url"] == "/cart"
+
+
+def test_healer_leaves_mailto_untouched():
+    import json
+
+    line = json.dumps(
+        {
+            "op": "add",
+            "id": "root",
+            "type": "Handoff",
+            "props": {
+                "reason": "support",
+                "label": "Email",
+                "url": "mailto:a@b.com",
+                "lifecycle": "popup",
+            },
+        }
+    )
+    r = heal_op_line(line, _ctx(known_ids=set()))
+    assert not any(n.startswith("coerced_scheme_less_url") for n in r.notes)
+    out = json.loads(r.line)  # type: ignore[arg-type]
+    assert out["props"]["url"] == "mailto:a@b.com"
+
+
+def test_healer_coerces_protocol_relative_image_src():
+    import json
+
+    line = json.dumps(
+        {
+            "op": "add",
+            "id": "img",
+            "type": "Image",
+            "parent": "root",
+            "props": {"src": "//cdn.shop.com/a.jpg", "alt": "a"},
+        }
+    )
+    r = heal_op_line(line, _ctx(known_ids={"root"}))
+    assert any(n == "coerced_scheme_less_url:1" for n in r.notes)
+    out = json.loads(r.line)  # type: ignore[arg-type]
+    assert out["props"]["src"] == "https://cdn.shop.com/a.jpg"
+
+
+def test_healer_coerces_nested_quickreply_action_url():
+    """Scheme-less url nested inside a QuickReplies item's open_url action."""
+    import json
+
+    line = json.dumps(
+        {
+            "op": "add",
+            "id": "qr",
+            "type": "QuickReplies",
+            "parent": "root",
+            "props": {
+                "items": [
+                    {
+                        "label": "Track order",
+                        "action": {"type": "open_url", "url": "shop.com/orders"},
+                    },
+                    {"label": "Home"},
+                ]
+            },
+        }
+    )
+    r = heal_op_line(line, _ctx(known_ids={"root"}))
+    assert any(n == "coerced_scheme_less_url:1" for n in r.notes)
+    out = json.loads(r.line)  # type: ignore[arg-type]
+    assert out["props"]["items"][0]["action"]["url"] == "https://shop.com/orders"
+    validate_props("QuickReplies", out["props"])
+
+
+def test_healer_leaves_sideeffect_relative_url_untouched():
+    """``SideEffect.url`` is a same-origin-relative str (not HttpUrl) — a
+    root-level dotted path like ``cart.js`` must NOT be rewritten into a host."""
+    import json
+
+    line = json.dumps(
+        {
+            "op": "add",
+            "id": "se",
+            "type": "SideEffect",
+            "parent": "root",
+            "props": {"kind": "fetch", "url": "cart.js", "method": "GET"},
+        }
+    )
+    r = heal_op_line(line, _ctx(known_ids={"root"}))
+    assert r.drop is False
+    assert not any(n.startswith("coerced_scheme_less_url") for n in r.notes)
+    out = json.loads(r.line)  # type: ignore[arg-type]
+    assert out["props"]["url"] == "cart.js"
