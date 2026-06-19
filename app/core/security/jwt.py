@@ -1,4 +1,3 @@
-import json
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
@@ -7,9 +6,7 @@ from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.core.config.static import (
-    AUTOMATIC_CONNECT_BLOCKED_ORIGINS,
     BREEZE_BUDDY_SESSION_SECRET_KEY,
-    ENABLE_LIGHTHOUSE_AUTH,
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES,
     JWT_ALGORITHM,
     JWT_SECRET_KEY,
@@ -252,75 +249,6 @@ async def get_current_user(
 
 
 # Breeze Authentication Functions
-
-
-async def validate_automatic_request(raw_request: Request) -> Optional[Dict[str, Any]]:
-    """
-    FastAPI dependency to get user context from breezeToken in request body
-
-    Args:
-        raw_request: FastAPI Request object to read raw body
-
-    Returns:
-        Dictionary containing user context from verified breezeToken if ENABLE_LIGHTHOUSE_AUTH is True,
-        None if ENABLE_LIGHTHOUSE_AUTH is False
-
-    Raises:
-        HTTPException: If ENABLE_LIGHTHOUSE_AUTH is True and token is missing, invalid, or expired
-    """
-
-    origin = raw_request.headers.get("origin")
-    referer = raw_request.headers.get("referer")
-    if origin:
-        if any(blocked in origin for blocked in AUTOMATIC_CONNECT_BLOCKED_ORIGINS):
-            raise HTTPException(
-                status_code=403,
-                detail=f"Access from origin '{origin}' is forbidden.",
-            )
-    elif referer:
-        if any(blocked in referer for blocked in AUTOMATIC_CONNECT_BLOCKED_ORIGINS):
-            raise HTTPException(
-                status_code=403,
-                detail=f"Access from referer '{referer}' is forbidden.",
-            )
-
-    # If authentication is disabled, return None
-    if not ENABLE_LIGHTHOUSE_AUTH:
-        return None
-
-    try:
-        body = await raw_request.body()
-        data = json.loads(body)
-        breeze_token = data.get("breezeToken")
-        mode = data.get("mode")
-        if mode == "TEST":  # Skip auth for test mode
-            logger.info("Test mode detected, skipping auth validation")
-            return None
-        if not breeze_token:
-            logger.error("Missing breezeToken in request body")
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="breezeToken is required in request body",
-            )
-
-        user_context = jwt_manager.verify_breeze_token(breeze_token)
-        logger.info(
-            f"Body-based breeze token verified for user: {user_context['email']}"
-        )
-        return user_context
-
-    except json.JSONDecodeError:
-        logger.error("Invalid JSON in request body")
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid JSON in request body",
-        )
-    except Exception as e:
-        logger.error(f"Unexpected error reading request body: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Error processing request body",
-        )
 
 
 async def get_breeze_buddy_session(request: Request):

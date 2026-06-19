@@ -5,13 +5,7 @@ Please use the new organized schema structure:
 - app.schemas.breeze_buddy.auth - Authentication & authorization models
 - app.schemas.breeze_buddy.analytics - Analytics request/response models
 - app.schemas.breeze_buddy.core - Core domain models (leads, numbers, configs)
-- app.schemas.automatic_voice.connection - Automatic Voice connection schemas
 """
-
-from app.schemas.automatic_voice.connection import (
-    AutomaticVoiceTTSServiceConfig,
-    AutomaticVoiceUserConnectRequest,
-)
 
 # Re-export all schemas from the new organized structure for backward compatibility
 # This allows existing code to continue using `from app.schemas import XYZ`
@@ -65,8 +59,6 @@ __all__ = [
     "AnalyticsResponse",
     "AnalyticsType",
     "AuthTokenData",
-    "AutomaticVoiceTTSServiceConfig",
-    "AutomaticVoiceUserConnectRequest",
     "BlacklistedNumber",
     "CallBasedAnalyticsResult",
     "CallDetailResult",
