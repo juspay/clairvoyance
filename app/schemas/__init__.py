@@ -7,13 +7,8 @@ organized hierarchically:
   - auth.py: Authentication & authorization models
   - analytics.py: Analytics request/response models
   - core.py: Core domain models (leads, numbers, configs)
-- automatic_voice/: Automatic Voice agent schemas
 """
 
-from app.schemas.automatic_voice.connection import (
-    AutomaticVoiceTTSServiceConfig,
-    AutomaticVoiceUserConnectRequest,
-)
 from app.schemas.breeze_buddy.analytics import (
     AnalyticsFilters,
     AnalyticsOptions,
@@ -145,9 +140,6 @@ __all__ = [
     "UpdateCredentialRequest",
     # Connection
     "BreezeBuddyDailyConnectRequest",
-    # Automatic Voice
-    "AutomaticVoiceTTSServiceConfig",
-    "AutomaticVoiceUserConnectRequest",
     # User Management
     "DeleteUserResponse",
     # Feature Flags

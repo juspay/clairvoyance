@@ -1,6 +1,8 @@
 # Clairvoyance
 
-Multi-agent conversational AI platform for real-time voice interactions. Two main agents: **Automatic** (analytics voice agent for web/mobile) and **Breeze Buddy** (template-driven telephony voice agent for outbound/inbound calls). Built on FastAPI + Pipecat-AI + asyncpg.
+Conversational AI platform for real-time voice and chat interactions, built around **Breeze Buddy** — a template-driven agent for outbound/inbound telephony, web chat, and widget voice. Built on FastAPI + Pipecat-AI + asyncpg.
+
+> **Note:** The former **Automatic** analytics voice agent (web/mobile via Daily.co) has been **removed**. Its functionality is migrated to an Automatic template-driven Breeze Buddy workflow (analytics tools exposed via global HTTP functions / MCP on a template). Open follow-ups tracked in `docs/AUTOMATIC_PARITY.md` (chart rendering, push-to-talk).
 
 ## Commands
 
@@ -18,7 +20,7 @@ uv run isort . --profile black      # Import sorting
 uv run autoflake --in-place --remove-all-unused-imports --remove-unused-variables --exclude "app/__init__.py,.venv/*,venv/*" -r app/
 
 # Type check
-uv run pyrefly check                # Type checking (excludes **/automatic/**)
+uv run pyrefly check                # Type checking
 
 # Dependencies
 uv add <package>                    # Add production dependency
@@ -30,14 +32,10 @@ uv lock --upgrade && uv sync        # Upgrade all
 
 ```
 app/
-├── main.py                         # FastAPI entry with lifespan (pool init, shutdown)
+├── main.py                         # FastAPI entry with lifespan (startup, shutdown)
 ├── ai/voice/
 │   ├── agents/
-│   │   ├── automatic/              # Analytics voice agent (web/mobile via Daily.co)
-│   │   │   ├── tools/              # Dynamic tools: Juspay, Breeze, Charts, System, Internet
-│   │   │   ├── features/           # HITL, charts, text sanitization
-│   │   │   └── rtvi/               # RTVI protocol integration
-│   │   └── breeze_buddy/           # Telephony voice agent (Twilio/Plivo/Exotel)
+│   │   └── breeze_buddy/           # Telephony + chat + widget agent (Twilio/Plivo/Exotel, Daily)
 │   │       ├── agent/              # Core: pipeline.py, flow.py, transport.py, vad.py
 │   │       ├── template/           # Template types, rendering, node transitions
 │   │       ├── handlers/           # internal/ (builtin, warm_transfer, end_conversation)
@@ -51,7 +49,6 @@ app/
 │   ├── stt/                        # STT providers: Google, Deepgram, Soniox, AssemblyAI, OpenAI
 │   └── tts/                        # TTS providers: ElevenLabs, Cartesia, Google, Sarvam
 ├── api/routers/
-│   ├── automatic.py                # Automatic agent endpoints
 │   ├── breeze_buddy/               # 22 files: leads, templates, analytics, websocket, auth
 │   ├── devcycle.py                 # Feature flag webhooks
 │   └── systems.py                  # Health checks, metrics
@@ -67,9 +64,8 @@ app/
 │   ├── queries/                    # Raw parameterized SQL builders (return tuple[str, list])
 │   ├── accessor/                   # Business logic layer (calls queries + decoders)
 │   └── decoder/                    # DB rows -> Pydantic models
-├── schemas/                        # Pydantic models (breeze_buddy/, automatic_voice/)
+├── schemas/                        # Pydantic models (breeze_buddy/)
 ├── services/                       # External: redis/, aws/ (KMS, S3), gcp/, slack/, langfuse/
-├── helpers/automatic/              # daily_room_pool.py, process_pool.py, session_manager.py
 └── utils/                          # Common validation, parsing utilities
 ```
 
@@ -154,10 +150,7 @@ Breeze Buddy is the template-driven telephony agent. These patterns MUST be foll
 
 - IMPORTANT: Never modify migration SQL files directly. Create new sequential migrations (e.g., `026_your_change.sql`)
 - IMPORTANT: The pre-commit hook auto-formats code. If CI fails on formatting, run `uv run black . && uv run isort . --profile black` locally
-- IMPORTANT: `pyrefly check` excludes `**/automatic/**` (see pyproject.toml). Only Breeze Buddy code is type-checked
 - Secrets and credentials are KMS-encrypted in the database. Use `SKIP_KMS_DECRYPT=true` locally if no AWS access
-- `.env.example` has 198 variables -- copy to `.env` and fill required ones for your work area
-- Process pools (Daily rooms + voice agents) are pre-warmed at startup to avoid 5-6s latency. Don't bypass this
+- `.env.example` -- copy to `.env` and fill required ones for your work area (some entries are legacy Automatic vars, now unused)
 - Redis distributed locking prevents duplicate background task execution across pods
 - CORS is configured in main.py via `CORS_ALLOWED_ORIGINS` env var
-- Voice agent subprocesses are spawned via `process_pool.py` -- each call runs in its own process

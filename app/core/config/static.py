@@ -18,11 +18,6 @@ UVICORN_LOG_LEVEL = os.environ.get("UVICORN_LOG_LEVEL", "info")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 
 # Pipecat Agent Configuration
-AUTOMATIC_CONNECT_BLOCKED_ORIGINS = [
-    item.strip()
-    for item in os.environ.get("AUTOMATIC_CONNECT_BLOCKED_ORIGINS", "").split(",")
-    if item.strip()
-]
 DAILY_API_KEY = os.environ.get("DAILY_API_KEY", "")
 DAILY_API_URL = os.environ.get("DAILY_API_URL", "https://api.daily.co/v1")
 # Breeze Buddy Daily API Configuration - falls back to DAILY_API_KEY and DAILY_API_URL if not set
@@ -34,7 +29,6 @@ BREEZE_BUDDY_DAILY_API_URL = (
 )
 AZURE_OPENAI_API_KEY = os.environ.get("AZURE_OPENAI_API_KEY", "")
 AZURE_OPENAI_ENDPOINT = os.environ.get("AZURE_OPENAI_ENDPOINT", "")
-AZURE_OPENAI_MODEL = os.environ.get("AZURE_OPENAI_MODEL", "gpt-4o-automatic")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o")
 GOOGLE_CREDENTIALS_JSON = os.environ.get("GOOGLE_CREDENTIALS_JSON", "")
@@ -102,11 +96,6 @@ TOOL_CALL_SOUND_FILE = os.environ.get(
 PING_INTERVAL = int(os.environ.get("WS_PING_INTERVAL", 5))  # seconds
 PING_TIMEOUT = int(os.environ.get("WS_PING_TIMEOUT", 10))  # seconds
 
-# Juspay API configuration
-GENIUS_API_URL = "https://portal.juspay.in/api/q/query?api-type=genius-query"
-EULER_DASHBOARD_API_URL = os.environ.get(
-    "EULER_DASHBOARD_API_URL", "https://portal.juspay.in"
-)
 
 # VAD & framing for client-side audio chunking
 SAMPLE_RATE = 16000
@@ -126,13 +115,6 @@ ENABLE_MUTE_UNTIL_FIRST_BOT_COMPLETE = (
     os.environ.get("ENABLE_MUTE_UNTIL_FIRST_BOT_COMPLETE", "false").lower() == "true"
 )
 
-# Mem0 Configuration
-MEM0_API_KEY = os.getenv("MEM0_API_KEY", "")
-MEM0_ENABLED = os.getenv("MEM0_ENABLED", "false").lower() == "true"
-MEM0_MAX_FAILURES = int(os.getenv("MEM0_MAX_FAILURES", "3"))
-MEM0_RETRY_INTERVAL = int(os.getenv("MEM0_RETRY_INTERVAL", "300"))
-MEM0_SESSION_TIMEOUT = int(os.getenv("MEM0_SESSION_TIMEOUT", "3600"))
-MEM0_MIN_MESSAGE_LENGTH = int(os.getenv("MEM0_MIN_MESSAGE_LENGTH", "10"))
 
 # Tracing
 ENABLE_TRACING = os.environ.get("ENABLE_TRACING", "false").lower() == "true"
@@ -145,18 +127,7 @@ SANITIZE_TEXT_FOR_TTS = (
     os.environ.get("SANITIZE_TEXT_FOR_TTS", "false").lower() == "true"
 )
 
-# Audio recording
-ENABLE_AUTOMATIC_DAILY_RECORDING = (
-    os.environ.get("ENABLE_AUTOMATIC_DAILY_RECORDING", "false").lower() == "true"
-)
 
-# Search
-ENABLE_SEARCH_GROUNDING = (
-    os.environ.get("ENABLE_SEARCH_GROUNDING", "true").lower() == "true"
-)
-GEMINI_SEARCH_RESULT_API_MODEL = os.environ.get(
-    "GEMINI_SEARCH_RESULT_API_MODEL", "gemini-2.5-flash-lite-preview-06-17"
-)
 GEMINI_TRANSLATION_MODEL = os.environ.get(
     "GEMINI_TRANSLATION_MODEL", "gemini-2.5-flash"
 )
@@ -207,58 +178,9 @@ SONIOX_MAX_ENDPOINT_DELAY_MS = int(
     os.environ.get("SONIOX_MAX_ENDPOINT_DELAY_MS", "500")
 )  # Max delay (ms) for Soniox native endpoint detection (500-3000, default 500)
 
-# Automatic MCP Tool Server
-ENABLE_BREEZE_MCP_FOR_BRET = (
-    os.environ.get("ENABLE_BREEZE_MCP_FOR_BRET", "false").lower() == "true"
-)
-
-BREEZE_MCP_ENDPOINT_PATH = os.environ.get("BREEZE_MCP_ENDPOINT_PATH", "/ai/mcp/v2")
-
-MCP_CLIENT_TIMEOUT = int(os.environ.get("MCP_CLIENT_TIMEOUT", 30))  # seconds
-shops_for_mcp = os.environ.get("SHOPS_FOR_BREEZE_MCP", "")
-SHOPS_FOR_BREEZE_MCP = [
-    shop.strip() for shop in shops_for_mcp.split(",") if shop.strip()
-]
-
-# Shops for performance directives
-shops_for_performance_directives_str = os.environ.get(
-    "SHOPS_FOR_PERFORMANCE_DIRECTIVES", ""
-)
-SHOPS_FOR_PERFORMANCE_DIRECTIVES = [
-    shop.strip()
-    for shop in shops_for_performance_directives_str.split(",")
-    if shop.strip()
-]
 
 LIGHTHOUSE_APP_URL = os.environ.get("LIGHTHOUSE_APP_URL", "http://localhost:5173")
-ENABLE_ALL_METRICS_FROM_CKH = (
-    os.environ.get("ENABLE_ALL_METRICS_FROM_CKH", "true").lower() == "true"
-)
 
-# Get authorized users from environment, split and normalize
-AUTOMATIC_WRITE_ACTIONS_AUTHORIZED_USERS = [
-    email.strip().lower()
-    for email in os.environ.get("AUTOMATIC_WRITE_ACTIONS_AUTHORIZED_USERS", "").split(
-        ","
-    )
-    if email.strip()
-]
-
-ENABLE_WRITE_ACTIONS_FOR_MERCHANTS = (
-    os.environ.get("ENABLE_WRITE_ACTIONS_FOR_MERCHANTS", "false").lower() == "true"
-)
-
-# Get write actions from environment, split and normalize
-AUTOMATIC_ACTIONS_REQUIRE_AUTH = [
-    action.strip().lower()
-    for action in os.environ.get("AUTOMATIC_ACTIONS_REQUIRE_AUTH", "").split(",")
-    if action.strip()
-]
-
-# Context Summarization Configuration
-ENABLE_SUMMARIZATION = os.environ.get("ENABLE_SUMMARIZATION", "true").lower() == "true"
-MAX_TURNS_BEFORE_SUMMARY = int(os.environ.get("MAX_TURNS_BEFORE_SUMMARY", 10))
-KEEP_RECENT_TURNS = int(os.environ.get("KEEP_RECENT_TURNS", 2))
 
 AZURE_BREEZE_BUDDY_OPENAI_MODEL = os.environ.get(
     "AZURE_BREEZE_BUDDY_OPENAI_MODEL", "gpt-4o-automatic"
@@ -361,38 +283,6 @@ BREEZE_BUDDY_STT_SERVICE = os.getenv(
     "BREEZE_BUDDY_STT_SERVICE", "soniox"
 ).lower()  # "soniox", "sarvam", "openai", "deepgram", or "google"
 
-# Session inactivity timeout
-AUTOMATIC_SESSION_INACTIVITY_TIMEOUT = float(
-    os.environ.get("AUTOMATIC_SESSION_INACTIVITY_TIMEOUT", 900.0)
-)
-MAX_DAILY_SESSION_LIMIT = int(os.environ.get("MAX_DAILY_SESSION_LIMIT", 1800))
-
-# Pool Configuration
-VOICE_AGENT_POOL_SIZE = int(os.environ.get("VOICE_AGENT_POOL_SIZE", 1))
-VOICE_AGENT_MAX_POOL_SIZE = int(os.environ.get("VOICE_AGENT_MAX_POOL_SIZE", 3))
-DAILY_ROOM_POOL_SIZE = int(os.environ.get("DAILY_ROOM_POOL_SIZE", 1))
-DAILY_ROOM_MAX_POOL_SIZE = int(os.environ.get("DAILY_ROOM_MAX_POOL_SIZE", 5))
-
-# Human-in-the-Loop (HITL) Configuration
-HITL_ENABLE = os.environ.get("HITL_ENABLE", "true").lower() == "true"
-FUNCTION_CONFIRMATION_TIMEOUT = int(
-    os.environ.get("FUNCTION_CONFIRMATION_TIMEOUT", "30")
-)
-
-# HITL Actions Configuration
-_hitl_actions_str = os.environ.get("HITL_ACTIONS", "delete")
-HITL_ACTIONS = [
-    action.strip().lower() for action in _hitl_actions_str.split(",") if action.strip()
-]
-
-# Chart Generation Configuration
-ENABLE_CHARTS = os.environ.get("ENABLE_CHARTS", "false").lower() == "true"
-MAX_CHARTS_PER_TURN = int(os.environ.get("MAX_CHARTS_PER_TURN", "1"))
-
-# PTT VAD Filter Configuration
-DISABLE_VAD_FOR_PTT = os.environ.get("DISABLE_VAD_FOR_PTT", "true").lower() == "true"
-
-BREEZE_DEFAULT_SALES_TAB = os.environ.get("BREEZE_DEFAULT_SALES_TAB", "SALES")
 
 # Breeze Portal URLs
 AWS_BREEZE_PORTAL_URL = os.environ.get(
@@ -401,7 +291,6 @@ AWS_BREEZE_PORTAL_URL = os.environ.get(
 GCP_BREEZE_PORTAL_URL = os.environ.get(
     "GCP_BREEZE_PORTAL_URL", "https://portal.breezesdk.store"
 )
-AUTOMATIC_OPENAI_STT_PROMPT = os.environ.get("AUTOMATIC_OPENAI_STT_PROMPT", "")
 
 # -----------------------------------------------------------------------------
 # Event-Driven Dispatch (Breeze Buddy backlog dispatcher)
@@ -427,8 +316,6 @@ def _flag(env_var: str, default_main_server: bool, default_agent_pool: bool) -> 
 
 
 ENABLE_DISPATCHER = _flag("ENABLE_DISPATCHER", True, False)
-ENABLE_VOICE_AGENT_POOL = _flag("ENABLE_VOICE_AGENT_POOL", False, True)
-ENABLE_DAILY_ROOM_POOL = _flag("ENABLE_DAILY_ROOM_POOL", False, True)
 
 # Promoter
 BB_PROMOTER_TICK_MS = int(os.environ.get("BB_PROMOTER_TICK_MS", 200))

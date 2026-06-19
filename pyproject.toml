@@ -67,7 +67,7 @@ line_length = 88
 combine_as_imports = true
 
 [tool.pyrefly]
-project-excludes = ["**/automatic/**"]
+project-excludes = []
 
 [dependency-groups]
 dev = [
