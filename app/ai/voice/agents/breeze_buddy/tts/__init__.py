@@ -61,6 +61,7 @@ _VOICE_CONFIG_FIELDS = (
     "emotion",
     "pitch",
     "style_prompt",
+    "enable_ssml_parsing",
 )
 
 
@@ -128,7 +129,8 @@ async def get_tts_service(voice_config: TTSConfig):
 
     logger.info(
         f"Building TTS service: provider={provider}, voice_id={voice_config.voice_id}, "
-        f"model={voice_config.model}, speed={voice_config.speed}, language={voice_config.language}"
+        f"model={voice_config.model}, speed={voice_config.speed}, language={voice_config.language}, "
+        f"enable_ssml_parsing={voice_config.enable_ssml_parsing}"
     )
 
     # Emoji stripping applies to EVERY provider/flow. pipecat runs these filters
@@ -167,6 +169,7 @@ async def get_tts_service(voice_config: TTSConfig):
                 speed=voice_config.speed or 1.0,
                 language=_parse_language(voice_config.language, Language.EN_IN),
                 aggregate_sentences=aggregate,
+                enable_ssml_parsing=bool(voice_config.enable_ssml_parsing),
                 text_filters=text_filters,
             )
         )

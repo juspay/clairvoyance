@@ -371,6 +371,14 @@ class TTSConfig(BaseModel):
             "(e.g. 'Speak in a warm, enthusiastic tone'). Ignored by other providers."
         ),
     )
+    enable_ssml_parsing: Optional[bool] = Field(
+        None,
+        description=(
+            "ElevenLabs only. When true, the websocket parses SSML tags such as "
+            '<break time="0.5s" /> so they create real pauses instead of being read '
+            "aloud. Leave unset/false for plain text. Ignored by other providers."
+        ),
+    )
 
 
 class TTSSelectionConfig(BaseModel):
