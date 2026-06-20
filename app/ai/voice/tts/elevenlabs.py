@@ -33,6 +33,7 @@ class ElevenLabsConfig:
     language: Language = Language.EN_IN
     text_filters: Optional[Sequence] = None
     aggregate_sentences: bool = True
+    enable_ssml_parsing: bool = False
 
 
 def build_elevenlabs_tts(config: ElevenLabsConfig):
@@ -45,6 +46,7 @@ def build_elevenlabs_tts(config: ElevenLabsConfig):
         voice_id=config.voice_id,
         model=config.model,
         url=config.url,
+        enable_ssml_parsing=config.enable_ssml_parsing,
         settings=ElevenLabsTTSService.Settings(
             speed=config.speed,
             language=config.language,
