@@ -3,6 +3,7 @@ from .utils import (
     digits_to_speech,
     expand_shorthand,
     extract_10_digit_mobile,
+    format_array,
     indian_number_to_speech,
     string_to_lowercase,
     string_to_uppercase,
@@ -26,6 +27,7 @@ register_template_function("date_to_speech", date_to_speech)
 register_template_function("extract_10_digit_mobile", extract_10_digit_mobile)
 register_template_function("expand_shorthand", expand_shorthand)
 register_template_function("trim_words", trim_words)
+register_template_function("format_array", format_array)
 
 __all__ = [
     "TEMPLATE_FUNCTION_REGISTRY",

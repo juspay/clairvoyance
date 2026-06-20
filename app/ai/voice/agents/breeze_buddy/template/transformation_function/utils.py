@@ -90,10 +90,48 @@ DIGIT_WORDS = {
     "9": "nine",
 }
 
+# Phonetic spellings for letters so TTS (e.g. ElevenLabs) reads each letter
+# clearly instead of rushing single characters — important for alphanumeric PNRs.
+LETTER_WORDS = {
+    "A": "ए",
+    "B": "bee",
+    "C": "see",
+    "D": "dee",
+    "E": "ई",
+    "F": "एफ",
+    "G": "jee",
+    "H": "एच",
+    "I": "eye",
+    "J": "जे",
+    "K": "के",
+    "L": "एल",
+    "M": "एम",
+    "N": "एन",
+    "O": "oh",
+    "P": "pee",
+    "Q": "kyoo",
+    "R": "aar",
+    "S": "एस",
+    "T": "tee",
+    "U": "यू",
+    "V": "वी",
+    "W": "double यू",
+    "X": "eks",
+    "Y": "why",
+    "Z": "zed",
+}
+
 
 def digits_to_speech(value) -> str:
     text = str(value)
-    words = [DIGIT_WORDS.get(ch, ch) for ch in text]
+    words = []
+    for ch in text:
+        if ch in DIGIT_WORDS:
+            words.append(DIGIT_WORDS[ch])
+        elif ch.upper() in LETTER_WORDS:
+            words.append(LETTER_WORDS[ch.upper()])
+        else:
+            words.append(ch)
     return " ".join(words)
 
 
@@ -210,3 +248,53 @@ def expand_shorthand(value: str) -> str:
         result = re.sub(pattern, replacement, result)
 
     return result
+
+
+def _humanize_key(key: str) -> str:
+    """Turn a snake_case payload key into a readable label (fallback only)."""
+    return " ".join(word.capitalize() for word in str(key).split("_"))
+
+
+def format_array(
+    items_value, item_label="Customer", fields=None, transforms=None
+) -> str:
+    """Render an array payload as numbered, speech-friendly lines.
+
+    e.g. "Customer 1: Name Rhea, PNR ...". Config comes from the schema ``params``:
+      - ``item_label``: line prefix (default "Customer").
+      - ``fields``: a ``{key: label}`` map, rendered in order. If omitted, every key
+        is shown with a humanized label.
+      - ``transforms``: optional ``{key: transform_name}`` map, e.g.
+        {"PNR": "digits_to_speech"} — any transform function defined in this module.
+
+    Adding a payload field is a one-line schema edit — no code change.
+    """
+    if not isinstance(items_value, list):
+        return str(items_value)
+    transforms = transforms if isinstance(transforms, dict) else {}
+
+    lines = []
+    for index, item in enumerate(items_value, start=1):
+        if not isinstance(item, dict):
+            continue
+        labels = (
+            fields if isinstance(fields, dict) else {k: _humanize_key(k) for k in item}
+        )
+        parts = []
+        for key, label in labels.items():
+            value = item.get(key)
+            # Skip missing/empty fields so we don't emit dangling labels
+            # like "Boarding Point " with an extra comma.
+            if value in (None, ""):
+                continue
+            # transform name (a string from the schema) -> the function in this module
+            transform = globals().get(transforms.get(key) or "")
+            if callable(transform):
+                try:
+                    value = transform(value)
+                except Exception:
+                    pass
+            parts.append(f"{label} {value}")
+        lines.append(f"{item_label} {index}: " + ", ".join(parts))
+
+    return "\n".join(lines)
