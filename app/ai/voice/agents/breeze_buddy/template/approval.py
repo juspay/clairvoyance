@@ -20,7 +20,7 @@ Denials materialize as an LLM-visible tool result so the model can react.
 """
 
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, Dict, Optional
+from typing import Any, Awaitable, Callable, Dict, Optional, Set
 
 from app.ai.voice.agents.breeze_buddy.template.context import TemplateContext
 from app.ai.voice.agents.breeze_buddy.template.types import (
@@ -240,3 +240,30 @@ def build_approval_map(flow: Any) -> Dict[str, ApprovalConfig]:
             )
 
     return approval_map
+
+
+def build_client_tool_names(flow: Any) -> Set[str]:
+    """Names of CLIENT-FULFILLED global functions (``client_fulfilled: true``).
+
+    These are gated like approval functions — the chat turn pauses at the call —
+    but resolved by the FRONTEND with DATA via the tool-result endpoint, not by a
+    human decision. Scans the same surfaces as :func:`build_approval_map`
+    (flow-mode ``global_functions`` + direct-mode ``functions``).
+    """
+    names: Set[str] = set()
+    if not isinstance(flow, dict):
+        return names
+
+    def _scan(entry: Any) -> None:
+        if not isinstance(entry, dict) or not entry.get("client_fulfilled"):
+            return
+        name = entry.get("name") or entry.get("function_name")
+        if name:
+            names.add(name)
+
+    for entry in flow.get("global_functions") or []:
+        _scan(entry)
+    for entry in flow.get("functions") or []:
+        if isinstance(entry, dict) and entry.get("type") in _GLOBAL_FUNCTION_TYPES:
+            _scan(entry)
+    return names

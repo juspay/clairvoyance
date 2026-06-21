@@ -42,6 +42,7 @@ from app.api.routers.breeze_buddy.chat.handlers import (
     end_chat_session_handler,
     load_chat_session_or_404,
     send_chat_message_handler,
+    submit_tool_result_handler,
     validate_template_for_chat,
 )
 from app.api.routers.breeze_buddy.widget_common import (
@@ -93,6 +94,7 @@ from app.schemas.breeze_buddy.chat import (
     CreateWidgetSessionResponse,
     QuickReplyWire,
     SendChatMessageRequest,
+    SubmitToolResultRequest,
     UpdateWidgetContextRequest,
     UpdateWidgetContextResponse,
     WidgetChannel,
@@ -434,19 +436,15 @@ async def transcribe_widget_audio_handler(
 # ---------------------------------------------------------------------------
 
 
-async def approve_widget_tool_handler(
-    session_id: str,
-    req: ApproveToolRequest,
-    request: Request,
-    ctx: WidgetSessionContext,
-):
-    """Decide a pending HITL tool approval on the widget surface.
+async def _assert_widget_chat_turn(
+    session_id: str, request: Request, ctx: WidgetSessionContext
+) -> None:
+    """Shared widget-surface gate for chat-turn actions (approve / tool-result).
 
-    Same gate order as ``send_widget_message_handler`` (config-active 401
-    → IP limit → ownership → 410 ENDED → 409 channel!=CHAT), then
-    delegates to the shared chat approval handler. The channel 409
-    carries ``detail.code="voice_live"`` so the SDK can distinguish it
-    from ``already_decided`` / ``lock_contended``.
+    Runs the same order as ``send_widget_message_handler`` — config-active 401 →
+    per-IP limit → ownership → 410 ENDED → 409 channel!=CHAT (the ``voice_live``
+    code lets the SDK distinguish it from ``already_decided`` /
+    ``lock_contended``). Raises on any failure; returns once the turn is allowed.
     """
     cfg = await get_widget_config_by_id(ctx.widget_config_id)
     if cfg is None or not cfg.active:
@@ -483,12 +481,40 @@ async def approve_widget_tool_handler(
                 "message": (
                     f"Widget session is on channel "
                     f"{session.current_channel.value}; end the voice "
-                    "attachment before deciding chat approvals."
+                    "attachment before resuming the chat turn."
                 ),
             },
         )
 
+
+async def approve_widget_tool_handler(
+    session_id: str,
+    req: ApproveToolRequest,
+    request: Request,
+    ctx: WidgetSessionContext,
+):
+    """Decide a pending HITL tool approval on the widget surface, then delegate
+    to the shared chat approval handler (which streams the resumed turn)."""
+    await _assert_widget_chat_turn(session_id, request, ctx)
     return await approve_chat_tool_handler(session_id, req, access_check=None)
+
+
+# ---------------------------------------------------------------------------
+# POST /widget/session/{id}/tool-result
+# ---------------------------------------------------------------------------
+
+
+async def submit_widget_tool_result_handler(
+    session_id: str,
+    req: SubmitToolResultRequest,
+    request: Request,
+    ctx: WidgetSessionContext,
+):
+    """Fulfill a pending CLIENT-FULFILLED tool call on the widget surface
+    (e.g. ``get_current_screen`` → current on-screen text), then delegate to the
+    shared chat tool-result handler (which streams the resumed turn)."""
+    await _assert_widget_chat_turn(session_id, request, ctx)
+    return await submit_tool_result_handler(session_id, req, access_check=None)
 
 
 # ---------------------------------------------------------------------------

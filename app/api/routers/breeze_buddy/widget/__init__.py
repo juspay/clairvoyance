@@ -34,6 +34,7 @@ from app.schemas.breeze_buddy.chat import (
     CreateWidgetSessionResponse,
     EndChatSessionResponse,
     SendChatMessageRequest,
+    SubmitToolResultRequest,
     UpdateWidgetContextRequest,
     UpdateWidgetContextResponse,
     WidgetSessionStateResponse,
@@ -49,6 +50,7 @@ from .handlers import (
     end_widget_session_handler,
     get_widget_session_state_handler,
     send_widget_message_handler,
+    submit_widget_tool_result_handler,
     transcribe_widget_audio_handler,
     update_widget_context_handler,
     voice_connect_handler,
@@ -90,6 +92,11 @@ async def widget_cancel_preflight(session_id: str) -> Response:
 
 @router.options("/session/{session_id}/approval")
 async def widget_approval_preflight(session_id: str) -> Response:
+    return options_cors_response()
+
+
+@router.options("/session/{session_id}/tool-result")
+async def widget_tool_result_preflight(session_id: str) -> Response:
     return options_cors_response()
 
 
@@ -206,6 +213,26 @@ async def approve_widget_tool(
     ``lock_contended`` | ``voice_live``.
     """
     return await approve_widget_tool_handler(session_id, req, request, ctx)
+
+
+@router.post(
+    "/session/{session_id}/tool-result",
+    summary="Fulfill a client tool call with captured data (streams the resumed turn)",
+)
+async def submit_widget_tool_result(
+    session_id: str,
+    req: SubmitToolResultRequest,
+    request: Request,
+    ctx: WidgetSessionContext = Depends(require_widget_session),
+):
+    """Resolve a pending CLIENT-FULFILLED tool call (e.g. ``get_current_screen``)
+    with data the widget captured (current on-screen text).
+
+    Streams the resumed turn as SSE (same shape as ``/message``). 409s
+    carry a machine-readable ``detail.code``: ``already_decided`` |
+    ``lock_contended`` | ``voice_live``.
+    """
+    return await submit_widget_tool_result_handler(session_id, req, request, ctx)
 
 
 @router.post(

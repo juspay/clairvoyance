@@ -95,6 +95,24 @@ class ApproveToolRequest(BaseModel):
     )
 
 
+class SubmitToolResultRequest(BaseModel):
+    """Body of ``POST .../session/{id}/tool-result``.
+
+    Resolves a pending CLIENT-FULFILLED tool call (``client_fulfilled: true``,
+    e.g. ``get_current_screen``) with data the frontend captured.
+    ``result`` becomes the LLM-visible tool result and the paused turn resumes
+    (same SSE shape as ``/message``). Oversized results are bounded server-side
+    so a large capture can't bloat replayed history.
+    """
+
+    tool_call_id: str = Field(..., min_length=1, max_length=128)
+    result: Dict[str, Any] = Field(
+        ...,
+        description="Tool result payload captured by the client (e.g. the "
+        "current on-screen text as {url, title, text}).",
+    )
+
+
 class ChatSession(BaseModel):
     """One row of `chat_session`.
 

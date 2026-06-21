@@ -68,6 +68,11 @@ WIRE_STATUS_BY_DB_STATUS: Dict[ToolApprovalStatus, str] = {
     ToolApprovalStatus.SUPERSEDED: WIRE_STATUS_SUPERSEDED,
 }
 
+# Wire status for a CLIENT-FULFILLED tool call resolved with data (not an
+# approve/deny decision). Informational on ``function_approval_resolved``;
+# the resumed stream is what the widget actually consumes.
+WIRE_STATUS_FULFILLED = "fulfilled"
+
 
 @dataclass
 class ApprovalClaim:
@@ -185,6 +190,100 @@ async def claim_tool_approval(
         outcome="proceed",
         claimed=claimed,
         effective_approved=effective_approved,
+        wire_status=wire_status,
+        decision_reason=decision_reason,
+        synthetic_result=synthetic_result,
+        pending_sibling_ids=[sib.tool_call_id for sib in pending_siblings],
+        expired_siblings=expired_siblings,
+    )
+
+
+async def claim_client_tool_result(
+    session_id: str,
+    tool_call_id: str,
+    result: Dict[str, Any],
+) -> ApprovalClaim:
+    """Atomically claim a pending CLIENT-FULFILLED tool call and inject the
+    frontend-supplied ``result`` as its tool_result.
+
+    The client analogue of :func:`claim_tool_approval` (same load-bearing order:
+    claim under the session Redis lock, persist the synthetic tool_result row
+    BEFORE the history load so replay is fully answered, then sweep + collect
+    siblings) — but the resolution carries DATA, not an approve/deny decision.
+
+    The row is marked ``APPROVED`` (the call WAS fulfilled — there is no human
+    refusal here, and the status CHECK forbids a new value), yet the returned
+    claim sets ``effective_approved=False`` so the shared continuation
+    (:func:`run_chat_approval_continuation`) injects ``synthetic_result`` from
+    the replayed history instead of executing the function server-side —
+    ``get_current_screen`` has no server-side execution; its result IS the
+    client data.
+
+    A call past ``expires_at`` is claimed ``EXPIRED`` with a timeout result,
+    exactly like a late approval, so the LLM can acknowledge the miss.
+    """
+    row = await get_tool_approval(session_id, tool_call_id)
+    if row is None:
+        return ApprovalClaim(outcome="not_found")
+    if row.status != ToolApprovalStatus.PENDING:
+        return ApprovalClaim(
+            outcome="already_decided",
+            winning_status=WIRE_STATUS_BY_DB_STATUS.get(row.status),
+        )
+
+    is_expired = row.expires_at <= datetime.now(timezone.utc)
+    new_status = (
+        ToolApprovalStatus.EXPIRED if is_expired else ToolApprovalStatus.APPROVED
+    )
+    decision_reason: Optional[str] = (
+        "result arrived after expiry" if is_expired else None
+    )
+
+    claimed = await decide_tool_approval(
+        session_id, tool_call_id, new_status, decision_reason
+    )
+    if claimed is None:
+        # Lost the claim race to a concurrent resolution.
+        relook = await get_tool_approval(session_id, tool_call_id)
+        return ApprovalClaim(
+            outcome="already_decided",
+            winning_status=(
+                WIRE_STATUS_BY_DB_STATUS.get(relook.status) if relook else None
+            ),
+        )
+
+    # Never executes server-side, so effective_approved is always False: an
+    # expired call gets the timeout result, otherwise the client's captured data.
+    synthetic_result: Dict[str, Any] = dict(EXPIRED_RESULT) if is_expired else result
+    wire_status = (
+        WIRE_STATUS_BY_DB_STATUS[ToolApprovalStatus.EXPIRED]
+        if is_expired
+        else WIRE_STATUS_FULFILLED
+    )
+    await insert_chat_message(
+        session_id=session_id,
+        role=ChatMessageRole.USER,
+        content=None,
+        content_blocks=tool_results_to_user_blocks([(tool_call_id, synthetic_result)]),
+    )
+
+    logger.info(
+        f"[client_tool] session={session_id} tool_call_id={tool_call_id} "
+        f"function={claimed.function_name} status={new_status.value}"
+    )
+
+    # Same sibling housekeeping as the approval claim: lazily expire other
+    # pending rows past TTL, and collect those still pending so the resume keeps
+    # them unanswered (their replayed tool_use would otherwise dangle).
+    expired_siblings = await resolve_dangling_approvals(session_id, only_expired=True)
+    pending_siblings = await list_pending_tool_approvals(
+        session_id, include_expired=True
+    )
+
+    return ApprovalClaim(
+        outcome="proceed",
+        claimed=claimed,
+        effective_approved=False,
         wire_status=wire_status,
         decision_reason=decision_reason,
         synthetic_result=synthetic_result,

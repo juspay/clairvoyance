@@ -2096,6 +2096,17 @@ class BaseGlobalFunction(BaseModel):
         "means the bot blocks while waiting (and any user utterance cancels "
         "the request), False means the bot keeps conversing (async call).",
     )
+    client_fulfilled: bool = Field(
+        default=False,
+        description="CHAT-only. When true, this function is NOT executed "
+        "server-side — it is fulfilled by the FRONTEND with data. The turn "
+        "pauses at the call, the client app captures the requested data (e.g. "
+        "the current on-screen text via get_current_screen) and POSTs it to "
+        "`.../session/{id}/tool-result`, which resumes the turn with that data "
+        "as the tool result. No approval card and no human decision. Independent "
+        "of `approval` (don't set both). Ignored on voice/telephony, where there "
+        "is no client fulfillment channel.",
+    )
     response_transforms: List["ResponseTransform"] = Field(
         default_factory=list,
         description=(

@@ -7,6 +7,7 @@ stay thin: validate auth, then delegate.
 """
 
 import asyncio
+import json
 import time
 from datetime import datetime
 from typing import Any, AsyncIterator, Callable, Dict, List, Optional
@@ -16,6 +17,7 @@ from fastapi.responses import StreamingResponse
 
 from app.ai.voice.agents.breeze_buddy.chat.approvals import (
     WIRE_STATUS_BY_DB_STATUS,
+    claim_client_tool_result,
     claim_tool_approval,
 )
 from app.ai.voice.agents.breeze_buddy.chat.block_codec import (
@@ -68,6 +70,7 @@ from app.schemas.breeze_buddy.chat import (
     GreetingMessage,
     ListChatSessionsResponse,
     SendChatMessageRequest,
+    SubmitToolResultRequest,
     ToolApprovalStatus,
 )
 from app.services.redis.locks import LockAcquireError, RedisLock
@@ -742,6 +745,151 @@ async def approve_chat_tool_handler(
             raise _approval_conflict(
                 "already_decided",
                 "This approval was already resolved.",
+                claim.winning_status,
+            )
+
+        # Expired siblings (swept during the claim) ride at stream start so the
+        # widget flips their cards to timeout without client-side inference.
+        pre_events: List[SSEEvent] = [
+            SSEEvent(
+                event="function_approval_resolved",
+                data={
+                    "tool_call_id": sib.tool_call_id,
+                    "status": WIRE_STATUS_BY_DB_STATUS[ToolApprovalStatus.EXPIRED],
+                    "reason": sib.reason,
+                },
+            )
+            for sib in claim.expired_siblings
+        ]
+
+        turn_metrics = TurnMetrics(
+            session_id=session_id,
+            template_id=template.id,
+            t0=time.monotonic(),
+        )
+
+        response = StreamingResponse(
+            _turn_sse_stream(
+                session_id=session_id,
+                lock=lock,
+                turn_metrics=turn_metrics,
+                events=run_chat_approval_continuation(
+                    session_id=session_id,
+                    claimed=claim.claimed,
+                    effective_approved=claim.effective_approved,
+                    wire_status=claim.wire_status,
+                    decision_reason=claim.decision_reason,
+                    synthetic_result=claim.synthetic_result,
+                    pending_sibling_ids=claim.pending_sibling_ids,
+                ),
+                pre_events=pre_events,
+            ),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache, no-transform",
+                "X-Accel-Buffering": "no",
+                "Connection": "keep-alive",
+            },
+        )
+        lock_handed_off = True
+        return response
+    finally:
+        if not lock_handed_off:
+            await lock.release()
+
+
+_MAX_CLIENT_TOOL_RESULT_BYTES = 16384
+
+
+def _bounded_client_tool_result(
+    result: Dict[str, Any], max_bytes: int = _MAX_CLIENT_TOOL_RESULT_BYTES
+) -> Dict[str, Any]:
+    """Bound a client tool result so an oversized capture can't bloat replayed
+    history. Clips the known-large ``text`` field by bytes (UTF-8 safe); the
+    small structured fields (url, title, …) are left intact."""
+    if len(json.dumps(result, default=str).encode("utf-8")) <= max_bytes:
+        return result
+    bounded = dict(result)
+    text = bounded.get("text")
+    if isinstance(text, str):
+        # Reserve headroom for the other fields + JSON overhead.
+        budget = max(0, max_bytes - 1024)
+        bounded["text"] = text.encode("utf-8")[:budget].decode("utf-8", "ignore")
+        bounded["truncated"] = True
+    return bounded
+
+
+async def submit_tool_result_handler(
+    session_id: str,
+    req: SubmitToolResultRequest,
+    *,
+    access_check: Optional[Callable[[ChatSession], None]] = None,
+) -> StreamingResponse:
+    """Resolve a pending CLIENT-FULFILLED tool call with frontend-captured data
+    and stream the resumed turn (same SSE shape as ``/message``).
+
+    The client analogue of :func:`approve_chat_tool_handler`: identical lock +
+    session + claim + stream scaffolding, but the resolution carries DATA (the
+    captured ``result``) instead of an approve/deny decision.
+    :func:`claim_client_tool_result` injects it as the tool result and the
+    shared :func:`run_chat_approval_continuation` resumes with
+    ``effective_approved=False`` (no server-side execution).
+    """
+    lock = RedisLock(_lock_key(session_id), ttl_seconds=_SESSION_LOCK_TTL_SECONDS)
+    try:
+        await lock.acquire()
+    except LockAcquireError:
+        raise _approval_conflict(
+            "lock_contended",
+            "Another turn is already in flight for this session. "
+            "Wait for the in-flight stream to complete and retry.",
+        )
+
+    lock_handed_off = False
+    try:
+        fresh = await get_chat_session_by_id(session_id)
+        if fresh is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Chat session '{session_id}' not found",
+            )
+        if access_check is not None:
+            access_check(fresh)
+        if fresh.status == ChatSessionStatus.ENDED:
+            raise HTTPException(
+                status_code=status.HTTP_410_GONE,
+                detail=f"Chat session '{session_id}' has ended",
+            )
+
+        template = await get_template_by_id_cached(fresh.template_id)
+        if template is None:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=(
+                    f"Template '{fresh.template_id}' for chat session "
+                    f"'{session_id}' no longer exists"
+                ),
+            )
+
+        # Claim the pending row + inject the (size-bounded) captured result as
+        # the synthetic tool_result, under the lock and BEFORE history load.
+        claim = await claim_client_tool_result(
+            session_id,
+            req.tool_call_id,
+            _bounded_client_tool_result(req.result),
+        )
+        if claim.outcome == "not_found":
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=(
+                    f"No pending client tool call with tool_call_id "
+                    f"'{req.tool_call_id}' for this session"
+                ),
+            )
+        if claim.outcome == "already_decided":
+            raise _approval_conflict(
+                "already_decided",
+                "This tool call was already resolved.",
                 claim.winning_status,
             )
 

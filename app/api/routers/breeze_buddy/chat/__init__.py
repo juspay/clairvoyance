@@ -46,6 +46,7 @@ from app.schemas.breeze_buddy.chat import (
     GetChatSessionResponse,
     ListChatSessionsResponse,
     SendChatMessageRequest,
+    SubmitToolResultRequest,
 )
 
 from .demo import router as demo_router
@@ -59,6 +60,7 @@ from .handlers import (
     list_chat_sessions_handler,
     load_chat_session_or_404,
     send_chat_message_handler,
+    submit_tool_result_handler,
     validate_template_for_chat,
 )
 from .rbac import validate_chat_create_access, validate_chat_session_access
@@ -235,6 +237,39 @@ async def approve_tool(
         validate_chat_session_access(current_user, session, operation="approve_tool")
 
     return await approve_chat_tool_handler(session_id, req, access_check=_check)
+
+
+@router.post("/session/{session_id}/tool-result")
+async def submit_tool_result(
+    session_id: str,
+    req: SubmitToolResultRequest,
+    current_user: UserInfo = Depends(get_current_user_with_rbac),
+):
+    """
+    Resolve a pending CLIENT-FULFILLED tool call (``client_fulfilled: true``,
+    e.g. ``get_current_screen``) with data the frontend captured, and stream the
+    resumed turn (same SSE shape as ``/message``).
+
+    The turn that requested the call ended with ``turn_end
+    {awaiting_client_tool: true}`` + a ``client_tool_requested`` event; this
+    endpoint atomically claims the pending row, injects ``req.result`` as the
+    tool result, and continues the LLM loop. Sibling of ``/approval`` — same
+    auth, lock, and conflict semantics; the resolution carries data, not a
+    decision.
+
+    Returns:
+        ``StreamingResponse`` (``text/event-stream``). 404 if the session or
+        tool_call_id is unknown, 410 if the session ENDED, 409 with a
+        machine-readable ``detail.code`` (``already_decided`` |
+        ``lock_contended``) on conflicts.
+    """
+
+    def _check(session) -> None:
+        validate_chat_session_access(
+            current_user, session, operation="submit_tool_result"
+        )
+
+    return await submit_tool_result_handler(session_id, req, access_check=_check)
 
 
 @router.post(
