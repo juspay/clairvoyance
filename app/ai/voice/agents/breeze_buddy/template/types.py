@@ -280,6 +280,7 @@ class TTSProvider(str, Enum):
     GEMINI = "gemini"
     GOOGLE = "google"
     SONIOX = "soniox"
+    DRAGONTTS = "dragontts"
 
 
 # Maps legacy tts_voice_name values to current provider strings for backward compat.
