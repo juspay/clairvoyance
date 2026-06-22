@@ -39,10 +39,17 @@ async def send_message(
     Returns:
         True if message sent successfully, False otherwise
     """
+    if ws.client_state.name == "DISCONNECTED":
+        logger.debug("Cannot send message: WebSocket is disconnected")
+        return False
+
     try:
         await ws.send_text(json.dumps(message))
         logger.debug("Successfully sent websocket message")
         return True
+    except RuntimeError as e:
+        logger.debug(f"Connection closed before send: {e}")
+        return False
     except Exception as e:
         logger.error(f"Failed to send websocket message: {e}")
         return False

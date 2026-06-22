@@ -685,6 +685,10 @@ async def _send_audio(
         audio_bytes: Audio bytes to send
         provider: Telephony provider ("twilio", "exotel", or "plivo")
     """
+    if ws.client_state.name == "DISCONNECTED":
+        logger.warning("[IVR] Cannot send audio - WebSocket already disconnected")
+        return
+
     payload = base64.b64encode(audio_bytes).decode("utf-8")
 
     # Build provider-specific media message format
@@ -745,45 +749,58 @@ async def _wait_for_valid_dtmf(
         provider.lower() if hasattr(provider, "lower") else str(provider).lower()
     )
 
-    async for message in ws.iter_text():
-        try:
-            data = json.loads(message)
-            event = data.get("event")
-
-            if event == "dtmf":
-                digit = data.get("dtmf", {}).get("digit")
-                if digit:
-                    logger.info(f"[IVR] Received DTMF: {digit}")
-                    try:
-                        index = int(digit) - 1
-                        if 0 <= index < len(ivr_options):
-                            # Valid digit - interrupt audio playback
-                            logger.info(
-                                f"[IVR] Valid digit {digit} - interrupting audio"
-                            )
-                            # Send clearAudio to stop provider's audio playback
-                            if provider_str == "plivo":
-                                clear_message = {
-                                    "event": "clearAudio",
-                                    "streamId": stream_sid,
-                                }
-                                await send_message(ws=ws, message=clear_message)
-                                logger.info("[IVR] Sent clearAudio command to Plivo")
-
-                            return ivr_options[index]["id"]
-                        else:
-                            # Invalid digit - do NOT interrupt audio
-                            logger.warning(
-                                f"[IVR] Invalid digit {digit}, only {len(ivr_options)} options available"
-                            )
-                    except ValueError:
-                        logger.warning(f"[IVR] Non-numeric digit: {digit}")
-
-            elif event == "stop":
-                logger.info("[IVR] Call stopped")
+    try:
+        async for message in ws.iter_text():
+            if ws.client_state.name == "DISCONNECTED":
+                logger.info("[IVR] WebSocket disconnected during DTMF wait")
                 return None
 
-        except json.JSONDecodeError:
-            continue
+            try:
+                data = json.loads(message)
+                event = data.get("event")
+
+                if event == "dtmf":
+                    digit = data.get("dtmf", {}).get("digit")
+                    if digit:
+                        logger.info(f"[IVR] Received DTMF: {digit}")
+                        try:
+                            index = int(digit) - 1
+                            if 0 <= index < len(ivr_options):
+                                # Valid digit - interrupt audio playback
+                                logger.info(
+                                    f"[IVR] Valid digit {digit} - interrupting audio"
+                                )
+                                # Send clearAudio to stop provider's audio playback
+                                if provider_str == "plivo":
+                                    clear_message = {
+                                        "event": "clearAudio",
+                                        "streamId": stream_sid,
+                                    }
+                                    await send_message(ws=ws, message=clear_message)
+                                    logger.info(
+                                        "[IVR] Sent clearAudio command to Plivo"
+                                    )
+
+                                return ivr_options[index]["id"]
+                            else:
+                                # Invalid digit - do NOT interrupt audio
+                                logger.warning(
+                                    f"[IVR] Invalid digit {digit}, only {len(ivr_options)} options available"
+                                )
+                        except ValueError:
+                            logger.warning(f"[IVR] Non-numeric digit: {digit}")
+
+                elif event == "stop":
+                    logger.info("[IVR] Call stopped")
+                    return None
+
+            except json.JSONDecodeError:
+                continue
+
+    except RuntimeError as e:
+        if "disconnect message has been received" in str(e):
+            logger.info("[IVR] Client hung up while waiting for DTMF")
+            return None
+        raise
 
     return None
