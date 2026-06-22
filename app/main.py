@@ -25,6 +25,9 @@ from app.ai.voice.agents.breeze_buddy.managers.calls import (
 from app.ai.voice.agents.breeze_buddy.services.agent_router.client import (
     close_smart_router_client,
 )
+from app.ai.voice.agents.breeze_buddy.utils.pipecat_log_filter import (
+    install_pipecat_log_filter,
+)
 
 # Database imports
 from app.ai.voice.llm._pools import close_all_pools as close_llm_http_pools
@@ -76,6 +79,10 @@ _background_scheduler = None
 async def lifespan(_app: FastAPI):
     """FastAPI lifespan manager that handles startup and shutdown tasks."""
     logger.info(f"Application startup... (POD_ROLE={POD_ROLE})")
+
+    # Suppress known-harmless Pipecat WS close error on client-initiated disconnect.
+    # Must be called before any pipeline runs.
+    install_pipecat_log_filter()
 
     # Initialize database and create tables if needed
     try:
