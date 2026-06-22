@@ -45,6 +45,13 @@ BB_SPEECH_PROVIDER_DEFAULTS: dict[str, dict] = {
         "voice_id": "en-IN-Chirp3-HD-Despina",
         "language": "en-IN",
     },
+    # DragonTTS caching proxy — model carries the nested provider as
+    # "<provider>:<model>" (e.g. "cartesia:sonic-3.5").
+    "dragontts": {
+        "voice_id": "bec003e2-3cb3-429c-8468-206a393c67ad",
+        "model": "cartesia:sonic-3.5",
+        "language": "en",
+    },
 }
 
 

@@ -15,12 +15,14 @@ from app.ai.voice.agents.breeze_buddy.tts.emoji_filter import (
 from app.ai.voice.agents.breeze_buddy.utils.common import convert_to_mulaw
 from app.ai.voice.tts import (
     CartesiaConfig,
+    DragonTTSConfig,
     ElevenLabsConfig,
     GeminiConfig,
     GoogleConfig,
     SarvamTTSConfig,
     SonioxTTSConfig,
     build_cartesia_tts,
+    build_dragontts_tts,
     build_elevenlabs_tts,
     build_gemini_tts,
     build_google_tts,
@@ -28,6 +30,7 @@ from app.ai.voice.tts import (
     build_soniox_tts,
 )
 from app.ai.voice.tts.cartesia import _generate_cartesia_audio
+from app.ai.voice.tts.dragontts import _collect_params, _generate_dragontts_audio
 from app.ai.voice.tts.elevenlabs import _generate_elevenlabs_audio
 from app.ai.voice.tts.gemini import _generate_gemini_audio
 from app.ai.voice.tts.google import _generate_google_audio
@@ -43,6 +46,7 @@ from app.core.config.dynamic import (
 )
 from app.core.config.static import (
     CARTESIA_API_KEY,
+    DRAGONTTS_URL,
     ELEVENLABS_API_KEY,
     ELEVENLABS_INDIAN_RESIDENCY_API_KEY,
     ELEVENLABS_INDIAN_RESIDENCY_WEBSOCKET_URL,
@@ -126,6 +130,40 @@ def _parse_language(code: str | None, fallback: Language = Language.EN) -> Langu
 async def get_tts_service(voice_config: TTSConfig):
     """Build a TTS service from a resolved TTSConfig."""
     provider = voice_config.provider.value
+
+    if provider == "dragontts":
+        # Route the live stream through DragonTTS so every aggregated sentence
+        # is served from its cache (scripted phrases become permanent hits) and
+        # synthesized+stored on miss. ``model`` carries the nested provider as
+        # "<provider>:<model>"; DragonTTS applies the params relevant to it.
+        model_id = voice_config.model
+        if not model_id:
+            raise ValueError("dragontts requires model '<provider>:<model>'")
+        nested = model_id.split(":", 1)
+        if len(nested) != 2 or not nested[0] or not nested[1]:
+            raise ValueError(
+                f"dragontts model must be '<provider>:<model>' with non-empty "
+                f"parts, got {model_id!r}"
+            )
+        nested_provider, nested_model = nested
+        aggregate = await BB_AGGREGATE_SENTENCES(nested_provider)
+
+        logger.info(
+            f"Building DragonTTS streaming service: nested_provider={nested_provider}, "
+            f"model={nested_model}, voice_id={voice_config.voice_id}, "
+            f"language={voice_config.language}"
+        )
+
+        return build_dragontts_tts(
+            DragonTTSConfig(
+                url=DRAGONTTS_URL,
+                model_id=model_id,  # full "<provider>:<model>", validated above
+                voice_id=voice_config.voice_id or "",
+                language=voice_config.language or "",
+                params=_collect_params(voice_config),
+                aggregate_sentences=aggregate,
+            )
+        )
 
     logger.info(
         f"Building TTS service: provider={provider}, voice_id={voice_config.voice_id}, "
@@ -349,6 +387,9 @@ async def generate_audio(
             language=resolved.language,
         )
         input_format = "raw"
+    elif provider == "dragontts":
+        # DragonTTS caching proxy — returns μ-law directly (no local conversion).
+        return await _generate_dragontts_audio(text=text, resolved=resolved)
     else:
         raise ValueError(f"Unsupported TTS provider: {provider}")
 

@@ -280,6 +280,7 @@ class TTSProvider(str, Enum):
     GEMINI = "gemini"
     GOOGLE = "google"
     SONIOX = "soniox"
+    DRAGONTTS = "dragontts"
 
 
 # Maps legacy tts_voice_name values to current provider strings for backward compat.
@@ -345,7 +346,7 @@ class TTSConfig(BaseModel):
 
     provider: TTSProvider = Field(
         ...,
-        description="TTS provider (elevenlabs, cartesia, sarvam, gemini, google, soniox)",
+        description="TTS provider (elevenlabs, cartesia, sarvam, gemini, google, soniox, dragontts)",
     )
     voice_id: Optional[str] = Field(None, description="Provider-specific voice ID")
     model: Optional[str] = Field(

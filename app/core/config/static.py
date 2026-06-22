@@ -8,6 +8,12 @@ ENVIRONMENT = os.environ.get("ENVIRONMENT", "production")
 PROD_LOG_LEVEL = os.environ.get("PROD_LOG_LEVEL", "INFO")
 APP_BASE_URL = os.environ.get("APP_BASE_URL", "")
 
+# DragonTTS caching proxy. Breeze Buddy one-shot TTS (provider="dragontts") is
+# routed here. Override via env for non-local deployments.
+DRAGONTTS_URL = os.environ.get(
+    "DRAGONTTS_URL", "http://dragontts.beta.svc.cluster.local"
+)
+
 # Uvicorn
 PORT = int(os.environ.get("PORT", 8000))
 HOST = os.environ.get("HOST", "0.0.0.0")
