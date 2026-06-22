@@ -7,6 +7,7 @@ reuse the same provider-specific setup logic.
 from __future__ import annotations
 
 from .cartesia import CartesiaConfig, build_cartesia_tts
+from .dragontts import DragonTTSConfig, build_dragontts_tts
 from .elevenlabs import ElevenLabsConfig, build_elevenlabs_tts
 from .gemini import GeminiConfig, build_gemini_tts
 from .google import GoogleConfig, build_google_tts
@@ -17,6 +18,9 @@ __all__ = [
     # Cartesia
     "CartesiaConfig",
     "build_cartesia_tts",
+    # DragonTTS (caching proxy)
+    "DragonTTSConfig",
+    "build_dragontts_tts",
     # ElevenLabs
     "ElevenLabsConfig",
     "build_elevenlabs_tts",
