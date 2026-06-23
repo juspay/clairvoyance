@@ -36,6 +36,7 @@ _FILLER_SOUNDTRACK_FILE_MAP: dict[str, tuple[str, str]] = {
     "typing": ("typing_music_realistic_8k.mp3", "typing_music_realistic_24k.mp3"),
     "dial-tone": ("dial-tone_8k.wav", "dial-tone_24k.wav"),
     "on-hold-ringtone": ("on-hold-ringtone_8k.mp3", "on-hold-ringtone_24k.mp3"),
+    "voicemail-beep": ("voicemail_beep_8k.mp3", "voicemail_beep_24k.mp3"),
 }
 
 
