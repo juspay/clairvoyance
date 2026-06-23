@@ -427,6 +427,7 @@ class FillerSoundtrack(str, Enum):
     TYPING = "typing"  # typing_music_realistic_{8k,24k}.mp3
     DIAL_TONE = "dial-tone"  # dial-tone_{8k,24k}.wav
     ON_HOLD_RINGTONE = "on-hold-ringtone"  # on-hold-ringtone_{8k,24k}.mp3
+    VOICEMAIL_BEEP = "voicemail-beep"  # voicemail_beep_{8k,24k}.mp3
 
 
 class KeywordMatchType(str, Enum):
