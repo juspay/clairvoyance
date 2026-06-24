@@ -18,9 +18,11 @@ from app.schemas import (
 
 from .handlers import (
     download_call_details,
+    get_attempts_to_connect_analytics,
     get_call_based_analytics,
     get_call_details_analytics,
     get_call_details_grouped_analytics,
+    get_calls_by_hour_analytics,
     get_chat_based_analytics,
     get_conversion_analytics,
     get_distinct_merchant_ids,
@@ -52,6 +54,8 @@ _ANALYTICS_HANDLERS: Dict[AnalyticsType, Callable[..., Awaitable]] = {
     AnalyticsType.OUTCOME_COUNTS: get_outcome_counts,
     AnalyticsType.DISTINCT_RESELLERS: get_distinct_resellers,
     AnalyticsType.DISTINCT_MERCHANT_IDS: get_distinct_merchant_ids,
+    AnalyticsType.ATTEMPTS_TO_CONNECT: get_attempts_to_connect_analytics,
+    AnalyticsType.CALLS_BY_HOUR: get_calls_by_hour_analytics,
 }
 
 

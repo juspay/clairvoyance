@@ -19,7 +19,9 @@ from app.database.queries.breeze_buddy.analytics import (
     get_analytics_outbound_numbers_query,
     get_analytics_summary_query,
     get_analytics_trends_query,
+    get_attempts_to_connect_query,
     get_call_details_records_query,
+    get_calls_by_hour_query,
     get_distinct_merchant_ids_query,
     get_distinct_outcomes_query,
     get_distinct_resellers_query,
@@ -308,6 +310,7 @@ async def get_lead_based_analytics_from_db(
                     "outbound_leads": 0,
                     "inbound_leads": 0,
                     "picked_calls": 0,
+                    "connected_leads": 0,
                     "outcome_counts": {},
                 }
             row = result[0]
@@ -316,6 +319,7 @@ async def get_lead_based_analytics_from_db(
                 "outbound_leads": row["outbound_leads"] or 0,
                 "inbound_leads": row["inbound_leads"] or 0,
                 "picked_calls": row["picked_calls"] or 0,
+                "connected_leads": row["connected_leads"] or 0,
                 "outcome_counts": row["outcome_counts"] or {},
             }
             logger.info(
@@ -352,6 +356,46 @@ async def get_outbound_numbers_analytics_from_db(
 
     except Exception as e:
         logger.error(f"Error getting outbound numbers analytics: {e}", exc_info=True)
+        raise
+
+
+async def get_attempts_to_connect_from_db(filters: Dict[str, Any]) -> Dict[str, int]:
+    """
+    Distribution of the pickup attempt number (1 / 2 / 3 / 4+) for leads that
+    connected. Returns a dict bucket -> count, zero-filled for all four buckets.
+    """
+    logger.info(f"[Analytics DB] Getting attempts-to-connect with filters: {filters}")
+    try:
+        query_text, values = get_attempts_to_connect_query(filters)
+        result = await run_parameterized_query(query_text, values)
+        buckets: Dict[str, int] = {"1": 0, "2": 0, "3": 0, "4+": 0}
+        for row in result or []:
+            bucket = row["bucket"]
+            if bucket in buckets:
+                buckets[bucket] = row["count"] or 0
+        return buckets
+    except Exception as e:
+        logger.error(f"Error getting attempts-to-connect: {e}", exc_info=True)
+        raise
+
+
+async def get_calls_by_hour_from_db(filters: Dict[str, Any]) -> Dict[str, int]:
+    """
+    Distribution of calls by hour-of-day. Returns a dict hour ("0".."23") -> count,
+    zero-filled for all 24 hours.
+    """
+    logger.info(f"[Analytics DB] Getting calls-by-hour with filters: {filters}")
+    try:
+        query_text, values = get_calls_by_hour_query(filters)
+        result = await run_parameterized_query(query_text, values)
+        hours: Dict[str, int] = {str(h): 0 for h in range(24)}
+        for row in result or []:
+            hour = row["hour"]
+            if hour is not None and 0 <= hour <= 23:
+                hours[str(hour)] = row["count"] or 0
+        return hours
+    except Exception as e:
+        logger.error(f"Error getting calls-by-hour: {e}", exc_info=True)
         raise
 
 

@@ -13,10 +13,12 @@ from starlette.responses import StreamingResponse
 
 from app.database.accessor.breeze_buddy.analytics import (
     get_analytics_count_from_db,
+    get_attempts_to_connect_from_db,
     get_call_detail_records,
     get_call_details_from_db,
     get_call_details_grouped_count_from_db,
     get_call_details_grouped_from_db,
+    get_calls_by_hour_from_db,
     get_distinct_merchant_ids_from_db,
     get_distinct_outcomes_from_db,
     get_distinct_resellers_from_db,
@@ -447,6 +449,7 @@ async def get_lead_based_analytics(
                 "inbound_leads": lead_data.get("inbound_leads", 0),
                 "total_leads": lead_data.get("total_leads", 0),
                 "picked_calls": lead_data.get("picked_calls", 0),
+                "connected_leads": lead_data.get("connected_leads", 0),
                 "outcome_counts": parse_outcome_breakdown(
                     lead_data.get("outcome_counts")
                 ),
@@ -888,6 +891,34 @@ async def get_distinct_outcomes(
         "results": {
             "outcomes": outcomes,
         },
+    }
+
+
+async def get_attempts_to_connect_analytics(
+    filters: Dict[str, Any],
+    options: Dict[str, Any],
+    current_user: UserInfo,
+) -> Dict[str, Any]:
+    """Distribution of the attempt number on which leads were first connected."""
+    buckets = await get_attempts_to_connect_from_db(filters)
+    return {
+        "type": "attempts-to-connect",
+        "filters_applied": filters,
+        "results": buckets,
+    }
+
+
+async def get_calls_by_hour_analytics(
+    filters: Dict[str, Any],
+    options: Dict[str, Any],
+    current_user: UserInfo,
+) -> Dict[str, Any]:
+    """Distribution of calls by hour-of-day (0-23)."""
+    hours = await get_calls_by_hour_from_db(filters)
+    return {
+        "type": "calls-by-hour",
+        "filters_applied": filters,
+        "results": hours,
     }
 
 
