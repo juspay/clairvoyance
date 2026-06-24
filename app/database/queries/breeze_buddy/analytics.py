@@ -183,6 +183,10 @@ def build_analytics_where_clause(
         values.append(filters["outcome"])
         conditions.append(f"lct.outcome = ANY(${len(values) + value_offset})")
 
+    if "call_direction" in filters and filters["call_direction"]:
+        values.append(filters["call_direction"])
+        conditions.append(f"lct.call_direction = ${len(values) + value_offset}")
+
     if "request_id" in filters and filters["request_id"]:
         values.append(filters["request_id"])
         conditions.append(f"lct.request_id = ${len(values) + value_offset}")
@@ -664,7 +668,10 @@ def get_analytics_lead_based_query(
                     lct.request_id,
                     lct.status,
                     lct.outcome,
-                    lct.call_direction
+                    lct.call_direction,
+                    lct.attempt_count,
+                    lct.call_initiated_time,
+                    lct.id
                 FROM "{LEAD_CALL_TRACKER_TABLE}" lct
                 {join_clause}
                 {where_clause}
@@ -674,6 +681,7 @@ def get_analytics_lead_based_query(
                     request_id,
                     COUNT(*) FILTER (WHERE status = 'FINISHED') as finished_calls,
                     COUNT(*) FILTER (WHERE outcome = 'NO_ANSWER') as no_answer_calls,
+                    MAX(CASE WHEN outcome IS NOT NULL AND outcome NOT IN ('NO_ANSWER', 'BUSY') THEN 1 ELSE 0 END) as is_connected,
                     MAX(CASE WHEN call_direction = 'OUTBOUND' THEN 1 ELSE 0 END) as has_outbound,
                     MAX(CASE WHEN call_direction = 'INBOUND' THEN 1 ELSE 0 END) as has_inbound
                 FROM filtered_data
@@ -684,15 +692,28 @@ def get_analytics_lead_based_query(
                     COUNT(*) as total_leads,
                     COUNT(*) FILTER (WHERE has_outbound = 1) as outbound_leads,
                     COUNT(*) FILTER (WHERE has_inbound = 1) as inbound_leads,
-                    COUNT(*) FILTER (WHERE finished_calls > no_answer_calls) as picked_calls
+                    COUNT(*) FILTER (WHERE finished_calls > no_answer_calls) as picked_calls,
+                    COUNT(*) FILTER (WHERE is_connected = 1) as connected_leads
                 FROM base_leads
+            ),
+            final_outcomes AS (
+                -- One row per customer: the outcome on their highest-attempt
+                -- (latest) call that produced a real outcome. Counting customers
+                -- by this single final outcome makes the donut slices sum to the
+                -- number of unique customers reached, instead of double-counting
+                -- customers who hit several outcomes across attempts.
+                SELECT DISTINCT ON (request_id)
+                    request_id,
+                    outcome
+                FROM filtered_data
+                WHERE outcome IS NOT NULL
+                ORDER BY request_id, attempt_count DESC NULLS LAST, call_initiated_time DESC NULLS LAST, id DESC
             ),
             outcome_counts AS (
                 SELECT
                     outcome,
-                    COUNT(DISTINCT request_id) as lead_count
-                FROM filtered_data
-                WHERE outcome IS NOT NULL
+                    COUNT(*) as lead_count
+                FROM final_outcomes
                 GROUP BY outcome
             ),
             outcome_agg AS (
@@ -708,11 +729,95 @@ def get_analytics_lead_based_query(
                 lead_aggregates.outbound_leads,
                 lead_aggregates.inbound_leads,
                 lead_aggregates.picked_calls,
+                lead_aggregates.connected_leads,
                 outcome_agg.outcome_counts
             FROM lead_aggregates
             CROSS JOIN outcome_agg;
         """
 
+    return text, values
+
+
+def get_attempts_to_connect_query(filters: Dict[str, Any]) -> Tuple[str, List[Any]]:
+    """
+    Distribution of the attempt number on which each lead was first connected
+    (picked up). Buckets are '1', '2', '3', '4+'. Only leads that connected are
+    counted; leads never reached are excluded.
+
+    Attempt ordinal is derived with ROW_NUMBER over attempt_count (then time) so it
+    is robust regardless of how attempt_count is based. A "connected" attempt is any
+    row whose outcome is set and not NO_ANSWER / BUSY.
+    """
+    conditions, values = build_analytics_where_clause(filters)
+    where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
+
+    extra_condition = "lct.request_id IS NOT NULL"
+    if where_clause:
+        where_clause = f"{where_clause} AND {extra_condition}"
+    else:
+        where_clause = f" WHERE {extra_condition}"
+
+    join_clause = (
+        f'LEFT JOIN "{OUTBOUND_NUMBER_TABLE}" ou ON lct.outbound_number_id = ou.id'
+        if "provider" in filters and filters["provider"]
+        else ""
+    )
+
+    text = f"""
+        WITH attempts AS (
+            SELECT
+                lct.request_id,
+                lct.outcome,
+                ROW_NUMBER() OVER (
+                    PARTITION BY lct.request_id
+                    ORDER BY lct.attempt_count, lct.call_initiated_time NULLS LAST, lct.id
+                ) AS attempt_no
+            FROM "{LEAD_CALL_TRACKER_TABLE}" lct
+            {join_clause}
+            {where_clause}
+        ),
+        picked AS (
+            SELECT request_id, MIN(attempt_no) AS pick_attempt
+            FROM attempts
+            WHERE outcome IS NOT NULL AND outcome NOT IN ('NO_ANSWER', 'BUSY')
+            GROUP BY request_id
+        )
+        SELECT
+            CASE WHEN pick_attempt >= 4 THEN '4+' ELSE pick_attempt::text END AS bucket,
+            COUNT(*) as count
+        FROM picked
+        GROUP BY 1;
+    """
+    return text, values
+
+
+def get_calls_by_hour_query(filters: Dict[str, Any]) -> Tuple[str, List[Any]]:
+    """
+    Distribution of calls by hour-of-day (0-23), derived from call_initiated_time.
+    Honors all standard filters including call_direction; test calls are excluded by
+    build_analytics_where_clause. Hour is extracted in the DB session timezone, matching
+    the day-bucketing used by the trends query (IST conversion is a shared fast-follow).
+    """
+    conditions, values = build_analytics_where_clause(filters)
+    conditions.append("lct.call_initiated_time IS NOT NULL")
+    where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
+
+    join_clause = (
+        f'LEFT JOIN "{OUTBOUND_NUMBER_TABLE}" ou ON lct.outbound_number_id = ou.id'
+        if "provider" in filters and filters["provider"]
+        else ""
+    )
+
+    text = f"""
+        SELECT
+            EXTRACT(HOUR FROM lct.call_initiated_time)::int AS hour,
+            COUNT(*) as count
+        FROM "{LEAD_CALL_TRACKER_TABLE}" lct
+        {join_clause}
+        {where_clause}
+        GROUP BY 1
+        ORDER BY 1;
+    """
     return text, values
 
 

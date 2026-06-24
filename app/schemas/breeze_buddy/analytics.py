@@ -24,6 +24,8 @@ class AnalyticsType(str, Enum):
     CALL_DETAILS_GROUPED = "call-details-grouped"
     DISTINCT_RESELLERS = "distinct-resellers"
     DISTINCT_MERCHANT_IDS = "distinct-merchant-ids"
+    ATTEMPTS_TO_CONNECT = "attempts-to-connect"
+    CALLS_BY_HOUR = "calls-by-hour"
 
 
 class TimeGranularity(str, Enum):
@@ -59,6 +61,9 @@ class AnalyticsFilters(BaseModel):
         None, description="Filter by call status (completed, failed, etc.)"
     )
     outcome: Optional[List[str]] = Field(None, description="Filter by call outcome")
+    call_direction: Optional[str] = Field(
+        None, description="Filter by call direction (INBOUND or OUTBOUND)"
+    )
     request_id: Optional[str] = Field(None, description="Filter by request ID")
     date_from: Optional[date] = Field(
         None, description="Filter from date (ISO format: YYYY-MM-DD)"
