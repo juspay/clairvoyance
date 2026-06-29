@@ -30,6 +30,7 @@ from app.api.routers.breeze_buddy.template_generator import (
 from app.api.routers.breeze_buddy.templates import router as templates_router
 from app.api.routers.breeze_buddy.users import router as users_router
 from app.api.routers.breeze_buddy.websocket import router as websocket_router
+from app.api.routers.breeze_buddy.whatsapp import router as whatsapp_router
 
 # Widget public mode (CHAT_MODE.md §14): per-merchant widget_config
 # CRUD (RBAC) + the unified /widget/session conversation router
@@ -104,3 +105,6 @@ router.include_router(chat_router, prefix="", tags=["chat"])
 # - widget: unified /widget/session/* conversation router (chat ↔ voice)
 router.include_router(widget_config_router, prefix="", tags=["widget-config"])
 router.include_router(widget_router, prefix="", tags=["widget-session"])
+
+# WhatsApp Embedded Signup (merchant onboarding for abandoned-recovery messaging)
+router.include_router(whatsapp_router, prefix="", tags=["whatsapp"])

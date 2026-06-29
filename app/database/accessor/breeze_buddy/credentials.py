@@ -18,8 +18,10 @@ from app.database.queries.breeze_buddy.credentials import (
     get_all_credentials_query,
     get_credential_by_id_query,
     get_credentials_by_merchant_query,
+    get_merchant_credential_by_name_query,
     insert_credential_query,
     update_credential_query,
+    upsert_merchant_credential_by_name_query,
 )
 from app.schemas import Credential, CredentialType
 from app.services.encryption import encrypt_credential
@@ -95,9 +97,13 @@ async def create_credential(
     credential_type: CredentialType,
     value: Dict[str, Any],
     description: Optional[str] = None,
+    merchant_id: Optional[str] = None,
 ) -> Optional[Credential]:
     """Create a new credential with optional KMS encryption."""
-    logger.info(f"Creating credential '{name}' for merchant: {reseller_id or 'GLOBAL'}")
+    logger.info(
+        f"Creating credential '{name}' for reseller: {reseller_id or 'GLOBAL'}, "
+        f"merchant: {merchant_id or 'NONE'}"
+    )
 
     try:
         # Validate value structure matches credential_type
@@ -108,6 +114,7 @@ async def create_credential(
         query_text, values = insert_credential_query(
             id=str(uuid4()),
             reseller_id=reseller_id,
+            merchant_id=merchant_id,
             name=name,
             credential_type=credential_type.value,
             value=stored_value,
@@ -145,13 +152,70 @@ async def get_credential_by_id(
         return None
 
 
+async def get_merchant_credential_by_name(
+    reseller_id: Optional[str],
+    merchant_id: str,
+    name: str,
+    mask: bool = True,
+) -> Optional[Credential]:
+    """Get an active named credential scoped to one merchant."""
+
+    try:
+        query_text, values = get_merchant_credential_by_name_query(
+            reseller_id=reseller_id,
+            merchant_id=merchant_id,
+            name=name,
+        )
+        result = await run_parameterized_query(query_text, values)
+        return decode_single_credential(result, mask=mask)
+    except Exception as e:
+        logger.error(
+            f"Error getting credential '{name}' for merchant {merchant_id}: {e}"
+        )
+        return None
+
+
+async def upsert_merchant_credential_by_name(
+    reseller_id: Optional[str],
+    merchant_id: str,
+    name: str,
+    credential_type: CredentialType,
+    value: Dict[str, Any],
+    description: Optional[str] = None,
+    mask: bool = True,
+) -> Optional[Credential]:
+    """Create or update a named merchant-scoped credential."""
+
+    try:
+        _validate_credential_value(credential_type, value)
+        stored_value, is_encrypted = encrypt_credential(value)
+        query_text, values = upsert_merchant_credential_by_name_query(
+            id=str(uuid4()),
+            reseller_id=reseller_id,
+            merchant_id=merchant_id,
+            name=name,
+            credential_type=credential_type.value,
+            value=stored_value,
+            is_encrypted=is_encrypted,
+            description=description,
+        )
+        result = await run_parameterized_query(query_text, values)
+        return decode_single_credential(result, mask=mask)
+    except Exception as e:
+        logger.error(
+            f"Error upserting credential '{name}' for merchant {merchant_id}: {e}",
+            exc_info=True,
+        )
+        return None
+
+
 async def get_credentials_by_merchant(
     reseller_id: Optional[str],
     mask: bool = True,
 ) -> List[Credential]:
     """
-    Get credentials for a merchant (includes global credentials).
-    Results ordered: global first, then merchant-specific.
+    Get global and reseller-scoped credentials for template/API configuration.
+    Merchant-scoped system credentials are fetched through explicit helpers.
     """
     try:
         query_text, values = get_credentials_by_merchant_query(reseller_id)
@@ -178,7 +242,7 @@ async def get_credentials_as_template_vars(
 ) -> Dict[str, Any]:
     """
     Get credentials as a flat dict for template_vars resolution.
-    Merges global + merchant-specific credentials (merchant overrides global).
+    Merges global + reseller-specific credentials.
     """
     try:
         query_text, values = get_credentials_by_merchant_query(reseller_id)

@@ -51,6 +51,7 @@ class Credential(BaseModel):
 
     id: str
     reseller_id: Optional[str] = None
+    merchant_id: Optional[str] = None
     name: str
     credential_type: CredentialType
     value: Optional[Dict[str, Any]] = Field(

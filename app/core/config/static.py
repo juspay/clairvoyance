@@ -285,6 +285,25 @@ ENABLE_LIGHTHOUSE_AUTH = os.getenv("ENABLE_LIGHTHOUSE_AUTH", "false").lower() ==
 # Obtain from: https://console.cloud.google.com/apis/credentials
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
 
+# Meta WhatsApp Embedded Signup
+META_APP_ID = os.getenv("META_APP_ID", "")
+META_APP_SECRET = os.getenv("META_APP_SECRET", "")
+META_WHATSAPP_EMBEDDED_SIGNUP_CONFIG_ID = os.getenv(
+    "META_WHATSAPP_EMBEDDED_SIGNUP_CONFIG_ID", ""
+)
+META_GRAPH_API_VERSION = os.getenv("META_GRAPH_API_VERSION", "v25.0")
+META_GRAPH_BASE_URL = os.getenv("META_GRAPH_BASE_URL", "https://graph.facebook.com")
+META_REQUEST_TIMEOUT_SECONDS = int(os.getenv("META_REQUEST_TIMEOUT_SECONDS", "10"))
+WHATSAPP_PAYMENT_LINK_TEMPLATE_NAME = os.getenv(
+    "WHATSAPP_PAYMENT_LINK_TEMPLATE_NAME", "buddy_payment_link_requested_v1"
+)
+WHATSAPP_PAYMENT_LINK_TEMPLATE_LANGUAGE = os.getenv(
+    "WHATSAPP_PAYMENT_LINK_TEMPLATE_LANGUAGE", "en_US"
+)
+WHATSAPP_PAYMENT_LINK_TEMPLATE_CATEGORY = os.getenv(
+    "WHATSAPP_PAYMENT_LINK_TEMPLATE_CATEGORY", "UTILITY"
+)
+
 BREEZE_BUDDY_STT_SERVICE = os.getenv(
     "BREEZE_BUDDY_STT_SERVICE", "soniox"
 ).lower()  # "soniox", "sarvam", "openai", "deepgram", or "google"

@@ -48,6 +48,7 @@ def decode_credential(
     return Credential(
         id=str(row["id"]),
         reseller_id=row["reseller_id"],
+        merchant_id=row["merchant_id"],
         name=row["name"],
         credential_type=CredentialType(row["credential_type"]),
         value=_mask_credential_value(real_value) if mask else real_value,

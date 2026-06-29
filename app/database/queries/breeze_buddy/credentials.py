@@ -11,6 +11,7 @@ CREDENTIALS_TABLE = "credentials"
 def insert_credential_query(
     id: str,
     reseller_id: Optional[str],
+    merchant_id: Optional[str],
     name: str,
     credential_type: str,
     value: str,
@@ -20,14 +21,15 @@ def insert_credential_query(
     """Generate query to insert a credential record."""
     text = f"""
         INSERT INTO "{CREDENTIALS_TABLE}"
-        ("id", "reseller_id", "name", "credential_type", "value",
+        ("id", "reseller_id", "merchant_id", "name", "credential_type", "value",
          "is_encrypted", "description", "is_active", "created_at", "updated_at")
-        VALUES ($1, $2, $3, $4, $5, $6, $7, TRUE, $8, $9)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, TRUE, $9, $10)
         RETURNING *;
     """
     values = [
         id,
         reseller_id,
+        merchant_id,
         name,
         credential_type,
         value,
@@ -45,18 +47,91 @@ def get_credential_by_id_query(credential_id: str) -> Tuple[str, List[Any]]:
     return text, [credential_id]
 
 
+def get_merchant_credential_by_name_query(
+    reseller_id: Optional[str],
+    merchant_id: str,
+    name: str,
+) -> Tuple[str, List[Any]]:
+    """Generate query to get a named merchant-scoped credential."""
+
+    text = f"""
+        SELECT * FROM "{CREDENTIALS_TABLE}"
+        WHERE "reseller_id" IS NOT DISTINCT FROM $1
+          AND "merchant_id" = $2
+          AND "name" = $3
+          AND "is_active" = TRUE
+        ORDER BY "updated_at" DESC
+        LIMIT 1;
+    """
+    return text, [reseller_id, merchant_id, name]
+
+
+def upsert_merchant_credential_by_name_query(
+    id: str,
+    reseller_id: Optional[str],
+    merchant_id: str,
+    name: str,
+    credential_type: str,
+    value: str,
+    is_encrypted: bool,
+    description: Optional[str],
+) -> Tuple[str, List[Any]]:
+    """Generate query to upsert a named merchant-scoped credential."""
+
+    now = datetime.now()
+    text = f"""
+        WITH updated AS (
+            UPDATE "{CREDENTIALS_TABLE}"
+            SET "credential_type" = $4,
+                "value" = $5,
+                "is_encrypted" = $6,
+                "description" = $7,
+                "is_active" = TRUE,
+                "updated_at" = $8
+            WHERE "reseller_id" IS NOT DISTINCT FROM $1
+              AND "merchant_id" = $2
+              AND "name" = $3
+            RETURNING *
+        ),
+        inserted AS (
+            INSERT INTO "{CREDENTIALS_TABLE}"
+            ("id", "reseller_id", "merchant_id", "name", "credential_type",
+             "value", "is_encrypted", "description", "is_active",
+             "created_at", "updated_at")
+            SELECT $9, $1, $2, $3, $4, $5, $6, $7, TRUE, $8, $8
+            WHERE NOT EXISTS (SELECT 1 FROM updated)
+            RETURNING *
+        )
+        SELECT * FROM updated
+        UNION ALL
+        SELECT * FROM inserted;
+    """
+    return text, [
+        reseller_id,
+        merchant_id,
+        name,
+        credential_type,
+        value,
+        is_encrypted,
+        description,
+        now,
+        id,
+    ]
+
+
 def get_credentials_by_merchant_query(
     reseller_id: Optional[str],
 ) -> Tuple[str, List[Any]]:
     """
     Generate query to get credentials for a merchant.
     If reseller is provided, returns reseller-specific + global credentials.
-    If reseller is None, returns only global credentials.
+    Merchant-scoped system credentials are intentionally excluded.
     """
     if reseller_id:
         text = f"""
             SELECT * FROM "{CREDENTIALS_TABLE}"
             WHERE ("reseller_id" = $1 OR "reseller_id" IS NULL)
+            AND "merchant_id" IS NULL
             AND "is_active" = TRUE
             ORDER BY "reseller_id" NULLS FIRST, "name" ASC;
         """
@@ -64,7 +139,9 @@ def get_credentials_by_merchant_query(
     else:
         text = f"""
             SELECT * FROM "{CREDENTIALS_TABLE}"
-            WHERE "reseller_id" IS NULL AND "is_active" = TRUE
+            WHERE "reseller_id" IS NULL
+            AND "merchant_id" IS NULL
+            AND "is_active" = TRUE
             ORDER BY "name" ASC;
         """
         return text, []
@@ -72,7 +149,12 @@ def get_credentials_by_merchant_query(
 
 def get_all_credentials_query() -> Tuple[str, List[Any]]:
     """Generate query to get all credentials."""
-    text = f'SELECT * FROM "{CREDENTIALS_TABLE}" where "is_active" = TRUE ORDER BY "reseller_id" NULLS FIRST, "name" ASC;'
+    text = f"""
+        SELECT * FROM "{CREDENTIALS_TABLE}"
+        WHERE "is_active" = TRUE
+        AND "merchant_id" IS NULL
+        ORDER BY "reseller_id" NULLS FIRST, "name" ASC;
+    """
     return text, []
 
 
