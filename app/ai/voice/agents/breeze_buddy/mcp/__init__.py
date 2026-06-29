@@ -208,6 +208,45 @@ def _maybe_inject_ui_instructions(
         return result
 
 
+def _extract_jsonrpc_payload(resp: httpx.Response) -> Dict[str, Any]:
+    """Parse a JSON-RPC response that may arrive as plain JSON or SSE.
+
+    Lighthouse's `/ai/mcp` endpoint streams `tools/call` results as
+    Server-Sent Events (`event: message\ndata: {<json-rpc>}\n\n`) even
+    for non-streaming POSTs, so `resp.json()` fails on the raw `data:`
+    framing. This mirrors the old automatic agent's bespoke httpx SSE
+    reader: walk each `data:` line, keep the LAST line that decodes to a
+    JSON-RPC envelope (robust to intermediate progress events).
+    """
+    content_type = resp.headers.get("content-type", "")
+    if "text/event-stream" not in content_type:
+        try:
+            return resp.json()
+        except Exception:
+            pass
+
+    payload: Optional[Dict[str, Any]] = None
+    for raw_line in resp.text.splitlines():
+        line = raw_line.rstrip("\r")
+        if not line.startswith("data:"):
+            continue
+        chunk = line[len("data:") :].strip()
+        if not chunk:
+            continue
+        try:
+            candidate = json.loads(chunk)
+        except (ValueError, TypeError):
+            continue
+        if isinstance(candidate, dict) and (
+            "result" in candidate or "error" in candidate
+        ):
+            payload = candidate
+
+    if payload is None:
+        raise ValueError("no JSON-RPC payload found in MCP response")
+    return payload
+
+
 def _create_direct_http_tool_handler(
     server_params: StreamableHttpParameters,
     tool_name: str,
@@ -246,7 +285,7 @@ def _create_direct_http_tool_handler(
             k: v for k, v in raw_headers.items() if v is not None
         }
         headers.setdefault("Content-Type", "application/json")
-        headers.setdefault("Accept", "application/json")
+        headers.setdefault("Accept", "application/json, text/event-stream")
 
         timeout_s = (
             server_params.timeout.total_seconds() if server_params.timeout else 30.0
@@ -283,7 +322,7 @@ def _create_direct_http_tool_handler(
             )
 
         try:
-            payload = resp.json()
+            payload = _extract_jsonrpc_payload(resp)
         except Exception as e:
             logger.warning(
                 f"[BUDDY_MCP] direct {tool_name!r} non-JSON 2xx response: {e}"
