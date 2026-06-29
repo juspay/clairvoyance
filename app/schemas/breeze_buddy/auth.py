@@ -116,6 +116,25 @@ class S2STokenResponse(BaseModel):
     note: str
 
 
+class LaunchCodeRequest(BaseModel):
+    """Nautilus → Clairvoyance (S2S) request to mint a one-time Loom launch code."""
+
+    merchant_id: str
+    target: str = "dashboard"
+
+
+class LaunchCodeResponse(BaseModel):
+    """Response carrying the one-time launch code."""
+
+    code: str
+
+
+class ExchangeRequest(BaseModel):
+    """Loom → Clairvoyance request to exchange a launch code for a session token."""
+
+    code: str
+
+
 class UserInfo(BaseModel):
     """User information extracted from JWT token"""
 
