@@ -201,12 +201,15 @@ class LLMConfiguration(BaseModel):
         None, description="Provider region / location (e.g. asia-south1)"
     )
     endpoint: Optional[str] = Field(
-        None, description="Provider endpoint URL (e.g. Azure OpenAI endpoint)"
+        None,
+        description="Provider endpoint URL. For Azure, the Azure OpenAI "
+        "endpoint; for OpenAI, the base_url of an OpenAI-compatible gateway "
+        "(e.g. Juspay Grid). Falls back to the provider default when unset.",
     )
     api_key_name: Optional[str] = Field(
         None,
         description="Dynamic config key name to resolve the API key at runtime "
-        "(required when custom endpoint is provided for Azure)",
+        "(required when a custom endpoint is provided for Azure or OpenAI)",
     )
     temperature: Optional[float] = Field(
         None, ge=0.0, le=2.0, description="Sampling temperature"

@@ -121,7 +121,21 @@ async def _resolve_azure(
 
 
 async def _resolve_openai(llm_config: LLMConfiguration | None) -> OpenAILLMService:
-    """Build direct OpenAI LLM."""
+    """Build direct OpenAI LLM.
+
+    When ``endpoint`` is set, the request is routed to an OpenAI-compatible
+    gateway (e.g. Juspay Grid) instead of api.openai.com. A custom endpoint
+    requires an explicit ``api_key_name`` so we never leak the default OpenAI
+    key to a third-party gateway.
+    """
+    # base_url: template override (custom gateway) or stock OpenAI default.
+    base_url = llm_config.endpoint if llm_config and llm_config.endpoint else None
+
+    if llm_config and llm_config.endpoint and not llm_config.api_key_name:
+        raise ValueError(
+            "api_key_name is required when a custom endpoint is provided for OpenAI"
+        )
+
     if llm_config and llm_config.api_key_name:
         api_key = await get_config(llm_config.api_key_name, "", str)
         if not api_key:
@@ -150,6 +164,7 @@ async def _resolve_openai(llm_config: LLMConfiguration | None) -> OpenAILLMServi
     return build_openai_llm(
         OpenAIConfig(
             api_key=api_key,
+            base_url=base_url,
             model=model,
             temperature=temperature,
             max_tokens=max_tokens,
