@@ -52,6 +52,9 @@ from app.ai.voice.agents.breeze_buddy.managers.calls import (
     _release_number,
     _run_pre_checks_for_lead,
 )
+from app.ai.voice.agents.breeze_buddy.managers.data_source_prefetch import (
+    prefetch_data_sources,
+)
 from app.ai.voice.agents.breeze_buddy.managers.utils import (
     prepare_and_store_initial_greeting,
 )
@@ -85,6 +88,11 @@ from app.database.accessor import (
 )
 from app.schemas import ExecutionMode, LeadCallStatus
 from app.services.redis import get_redis_service
+
+# Strong refs to fire-and-forget prefetch tasks. asyncio.create_task only keeps
+# a weak reference, so without this the task can be GC'd mid-flight and the
+# Redis cache is never warmed. Discard on completion to avoid unbounded growth.
+_prefetch_tasks: set = set()
 
 # ---------------------------------------------------------------------------
 # Single dispatch worker
@@ -339,6 +347,10 @@ class Worker:
 
             if template:
                 template = apply_playground_overrides(locked, template)
+                if template.data_sources:
+                    _t = asyncio.create_task(prefetch_data_sources(template=template))
+                    _prefetch_tasks.add(_t)
+                    _t.add_done_callback(_prefetch_tasks.discard)
                 await prepare_and_store_initial_greeting(
                     lead_id=locked.id,
                     payload=locked.payload or {},

@@ -2381,6 +2381,74 @@ def _default_supported_channels() -> List[Literal["voice", "chat"]]:
     return ["voice"]
 
 
+class DataSourceFormat(str, Enum):
+    MARKDOWN_TABLE = "markdown_table"
+    CSV = "csv"
+    JSON = "json"
+
+
+class DataSourceMode(str, Enum):
+    # Phase-1 behavior: fetched once and injected statically as {datasource_<name>}.
+    EAGER = "eager"
+    # Loaded on demand mid-call via the load_data_source global function, one
+    # keyed slice (tab) at a time — never injected wholesale into the prompt.
+    ON_DEMAND = "on_demand"
+
+
+class DataSourceRef(BaseModel):
+    """Inline config for a data source attached to a template.
+
+    ``eager`` sources (default, Phase-1 behavior) are fetched at call time and
+    injected as ``template_vars[datasource_<name>]`` for ``{datasource_<name>}``
+    placeholder use. ``on_demand`` sources are NOT injected wholesale; the agent
+    pulls one keyed slice at a time via the ``load_data_source`` global function.
+
+    ``type`` selects the connector (``google_sheet`` today; ``http`` / ``db``
+    later). The connector reads its settings from :meth:`connector_config`.
+    """
+
+    name: str = Field(
+        description="Variable name. Eager sources resolve as {datasource_<name>}; "
+        "on_demand sources are referenced by name in load_data_source(source=...)"
+    )
+    type: str = Field(
+        default="google_sheet",
+        description="Connector type: 'google_sheet' (more later)",
+    )
+    mode: DataSourceMode = Field(
+        default=DataSourceMode.EAGER,
+        description="'eager' = inject statically up front; 'on_demand' = agent "
+        "loads one keyed slice at a time via load_data_source",
+    )
+    spreadsheet_url: str = Field(
+        description="Full Google Sheets URL (shared with platform SA)"
+    )
+    sheet_name: Optional[str] = Field(
+        default=None, description="Tab name. NULL = first tab"
+    )
+    columns: Optional[List[str]] = Field(
+        default=None, description="Columns to include. NULL = all columns"
+    )
+    format: DataSourceFormat = Field(
+        default=DataSourceFormat.MARKDOWN_TABLE,
+        description="Output format: 'markdown_table' | 'csv' | 'json'",
+    )
+    is_active: bool = Field(default=True, description="Skip if false at call time")
+
+    def connector_config(self) -> Dict[str, Any]:
+        """Connector-specific settings dict consumed by the matching connector.
+
+        Keeps connectors decoupled from this (currently sheet-shaped) model: the
+        connector reads only this dict, never the ref's attributes directly.
+        """
+        return {
+            "spreadsheet_url": self.spreadsheet_url,
+            "sheet_name": self.sheet_name,
+            "columns": self.columns,
+            "format": self.format.value,
+        }
+
+
 class TemplateModel(BaseModel):
     # Read-only fields (set by server, not editable via API).
     # These are intentionally excluded from ReplaceTemplateRequest so that
@@ -2400,6 +2468,10 @@ class TemplateModel(BaseModel):
     secrets: Optional[Dict[str, Any]] = None
     outbound_number_id: Optional[str] = None
     is_active: bool = True
+    data_sources: Optional[List[DataSourceRef]] = Field(
+        default=None,
+        description="Inline data source configs attached to this template",
+    )
     # Channels this template is allowed to be served on. Defaults to
     # voice-only so existing templates are unaffected. Add "chat" to
     # opt the template into the chat (text) mode flow build path
@@ -2448,6 +2520,7 @@ class CreateTemplateRequest(BaseModel):
     expected_callback_response_schema: Optional[Dict[str, Any]] = None
     configurations: Optional[ConfigurationModel] = None
     secrets: Optional[Dict[str, Any]] = None
+    data_sources: Optional[List[DataSourceRef]] = None
     supported_channels: List[Literal["voice", "chat"]] = Field(
         default_factory=_default_supported_channels,
         min_length=1,
@@ -2496,6 +2569,7 @@ class ReplaceTemplateRequest(BaseModel):
     expected_callback_response_schema: Optional[Dict[str, Any]] = None
     configurations: Optional[ConfigurationModel] = None
     secrets: Optional[Dict[str, Any]] = None
+    data_sources: Optional[List[DataSourceRef]] = None
     supported_channels: Optional[List[Literal["voice", "chat"]]] = Field(
         default=None,
         min_length=1,

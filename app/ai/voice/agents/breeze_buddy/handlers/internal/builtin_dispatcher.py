@@ -28,6 +28,9 @@ from app.ai.voice.agents.breeze_buddy.handlers.internal.get_current_time import 
 from app.ai.voice.agents.breeze_buddy.handlers.internal.hold_and_consult import (
     hold_and_consult,
 )
+from app.ai.voice.agents.breeze_buddy.handlers.internal.load_data_source import (
+    load_data_source,
+)
 from app.ai.voice.agents.breeze_buddy.handlers.internal.stt import (
     mute_stt,
     unmute_stt,
@@ -50,6 +53,7 @@ BUILTIN_HANDLERS: Dict[str, Callable] = {
     "end_conversation": end_conversation_global,
     "get_current_time": get_current_time,
     "hold_and_consult": hold_and_consult,
+    "load_data_source": load_data_source,
     "update_outcome": update_outcome,
 }
 
