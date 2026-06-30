@@ -31,8 +31,42 @@ from app.schemas import (
     LeadCallTracker,
     PreCheckConfig,
     PreCheckDefaultAction,
+    PreCheckMatchType,
     PreCheckType,
 )
+
+
+def _value_present(actual: Any, needle: Any) -> bool:
+    """True if ``needle`` is present inside ``actual`` (case-insensitive).
+
+    Supports both lists (membership / per-item substring) and plain strings
+    (substring). Shopify ``tags`` may arrive as a list or a comma-separated
+    string, so this handles both.
+    """
+    if actual is None:
+        return False
+    needle_s = str(needle).lower()
+    if isinstance(actual, (list, tuple, set)):
+        return any(needle_s in str(item).lower() for item in actual)
+    return needle_s in str(actual).lower()
+
+
+def _value_matches(actual: Any, expected: Any, match_type: PreCheckMatchType) -> bool:
+    """Apply the pre-check's match_type, returning whether the call should PROCEED."""
+    if match_type == PreCheckMatchType.NOT_EQUALS:
+        return actual != expected
+    if match_type == PreCheckMatchType.CONTAINS:
+        return _value_present(actual, expected)
+    if match_type == PreCheckMatchType.NOT_CONTAINS:
+        return not _value_present(actual, expected)
+    if match_type in (PreCheckMatchType.GT, PreCheckMatchType.LT):
+        try:
+            a, e = float(actual), float(expected)
+        except (TypeError, ValueError):
+            return False
+        return a > e if match_type == PreCheckMatchType.GT else a < e
+    # EQUALS (default)
+    return actual == expected
 
 
 @dataclass
@@ -354,12 +388,16 @@ async def run_pre_checks(
 
             actual_value = response_data[check_field]
             expected_value = response_config.response_field_value
+            match_type = response_config.match_type
 
-            # Proceed only if actual value matches expected value
-            should_proceed = actual_value == expected_value
+            # Apply the configured operator (defaults to equals) to decide whether
+            # the call should proceed. Supports equals/not_equals, list-aware
+            # contains/not_contains (e.g. tags), and numeric gt/lt.
+            should_proceed = _value_matches(actual_value, expected_value, match_type)
             logger.info(
                 f"Pre-check '{pre_check.name}': {check_field}={actual_value}, "
-                f"expected={expected_value}, should_proceed={should_proceed}"
+                f"match_type={match_type.value}, expected={expected_value}, "
+                f"should_proceed={should_proceed}"
             )
 
             result = SinglePreCheckResult(
