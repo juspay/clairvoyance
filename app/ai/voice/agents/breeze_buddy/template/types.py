@@ -22,6 +22,21 @@ from app.core.deprecation import log_deprecated_fields
 from app.core.logger import logger
 
 
+class WorkflowType(str, Enum):
+    """Use-case workflow a template belongs to.
+
+    Values mirror Nautilus's WorkflowType so Shopify-provisioned templates can
+    be classified directly. ``non-shopify`` is the catch-all for every
+    non-Shopify reseller.
+    """
+
+    ORDER_CONFIRMATION = "order-confirmation"
+    ABANDONMENT_RECOVERY = "abandonment-recovery"
+    ASSIST = "assist"
+    TEST = "test"
+    NON_SHOPIFY = "non-shopify"
+
+
 class ActionType(str, Enum):
     TTS_SAY = "tts_say"
     END_CONVERSATION = "end_conversation"
@@ -2390,6 +2405,7 @@ class TemplateModel(BaseModel):
     merchant_id: Optional[str] = None
     created_at: Optional[Any] = None
     updated_at: Optional[Any] = None
+    workflow: WorkflowType = WorkflowType.NON_SHOPIFY
 
     # Editable fields (these match ReplaceTemplateRequest field names 1:1).
     name: str
@@ -2451,6 +2467,13 @@ class CreateTemplateRequest(BaseModel):
     supported_channels: List[Literal["voice", "chat"]] = Field(
         default_factory=_default_supported_channels,
         min_length=1,
+    )
+    workflow: Optional[WorkflowType] = Field(
+        default=None,
+        description=(
+            "Use-case workflow this template belongs to. Trusted as-is when "
+            "provided; defaults to non-shopify when omitted."
+        ),
     )
 
 

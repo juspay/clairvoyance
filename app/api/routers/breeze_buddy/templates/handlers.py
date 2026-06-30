@@ -14,6 +14,7 @@ from app.ai.voice.agents.breeze_buddy.template.types import (
     CreateTemplateRequest,
     FlowMode,
     ReplaceTemplateRequest,
+    WorkflowType,
 )
 from app.ai.voice.agents.breeze_buddy.utils.secrets import (
     mask_template_secrets,
@@ -23,6 +24,7 @@ from app.ai.voice.agents.breeze_buddy.utils.secrets import (
 from app.core.logger import logger
 from app.database.accessor import get_outbound_number_by_id, get_template_by_merchant
 from app.database.accessor.breeze_buddy.template import (
+    batch_update_template_configurations,
     check_template_usage,
     create_template,
     delete_template_if_not_referenced,
@@ -32,6 +34,7 @@ from app.database.accessor.breeze_buddy.template import (
 )
 from app.schemas import UserInfo
 from app.schemas.breeze_buddy.template import (
+    BatchConfigResponse,
     DeleteTemplateResponse,
     TemplateListResponse,
 )
@@ -140,6 +143,7 @@ async def create_template_handler(
             outbound_number_id=template_data.outbound_number_id,
             is_active=template_data.is_active,
             supported_channels=list(template_data.supported_channels),
+            workflow=template_data.workflow,
             now=now,
         )
 
@@ -665,3 +669,141 @@ async def delete_template_handler(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error deleting template: {str(e)}",
         )
+
+
+def _split_csv(value: Optional[str]) -> List[str]:
+    """Split a comma-separated header value into a clean list.
+
+    Trims each item and drops empties, so "a, b," -> ["a", "b"].
+    """
+    if not value:
+        return []
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def _resolve_workflow_scope(x_workflow: Optional[str]) -> Optional[List[str]]:
+    """Translate the X-Workflow header into concrete workflow values.
+
+    Accepts a single value or a comma-separated list; each must be a valid
+    WorkflowType. Any invalid value raises 422.
+    """
+    workflows = _split_csv(x_workflow)
+    if not workflows:
+        return None
+    resolved: List[str] = []
+    for workflow in workflows:
+        try:
+            resolved.append(WorkflowType(workflow).value)
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Invalid workflow: {workflow}",
+            )
+    return resolved
+
+
+async def batch_patch_configurations_handler(
+    patches: Dict[str, Any],
+    dry_run: bool,
+    create: bool,
+    all_templates: bool,
+    x_reseller_id: Optional[str],
+    x_merchant_id: Optional[str],
+    x_template_name: Optional[str],
+    x_workflow: Optional[str],
+    current_user: UserInfo,
+) -> BatchConfigResponse:
+    """Batch-update template configurations across a scope.
+
+    Scope is the AND of the provided X-* headers (reseller, merchant, template
+    name, workflow). At least one scope header is required unless ``all=true``
+    is passed. RBAC always constrains the scope to the caller's accessible
+    resellers/merchants. Defaults to a dry run.
+    """
+    logger.info(
+        f"User {current_user.username} (role: {current_user.role}) batch-patching "
+        f"configurations (dry_run={dry_run}, create={create}, all={all_templates}): "
+        f"reseller={x_reseller_id}, merchant={x_merchant_id}, "
+        f"template={x_template_name}, workflow={x_workflow}"
+    )
+
+    if not patches:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="A non-empty patches body is required",
+        )
+
+    patch_keys = list(patches.keys())
+    for i, key_a in enumerate(patch_keys):
+        for key_b in patch_keys[i + 1 :]:
+            if (
+                key_a == key_b
+                or key_b.startswith(f"{key_a}.")
+                or key_a.startswith(f"{key_b}.")
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=(
+                        f"Conflicting patch keys '{key_a}' and '{key_b}': one path "
+                        "nests inside the other. Send only the most specific path."
+                    ),
+                )
+
+    workflows = _resolve_workflow_scope(x_workflow)
+
+    scope_provided = any([x_reseller_id, x_merchant_id, x_template_name, workflows])
+    if not scope_provided and not all_templates:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Specify at least one scope (X-Reseller-Id, X-Merchant-Id, "
+                "X-Template-Name, X-Workflow) or pass ?all=true"
+            ),
+        )
+
+    filters: Dict[str, Any] = {}
+    reseller_ids = _split_csv(x_reseller_id)
+    if len(reseller_ids) > 1:
+        filters["reseller_ids"] = reseller_ids
+    elif reseller_ids:
+        filters["reseller_id"] = reseller_ids[0]
+    merchant_ids = _split_csv(x_merchant_id)
+    if len(merchant_ids) > 1:
+        filters["merchant_ids"] = merchant_ids
+    elif merchant_ids:
+        filters["merchant_id"] = merchant_ids[0]
+
+    filters = apply_hierarchical_template_filters(filters, current_user)
+
+    if x_template_name:
+        filters["template_name"] = x_template_name
+    if workflows:
+        filters["workflows"] = workflows
+
+    try:
+        response = await batch_update_template_configurations(
+            filters=filters,
+            patches=patches,
+            create=create,
+            dry_run=dry_run,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error batch-patching configurations: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error batch-patching configurations: {str(e)}",
+        )
+
+    if not dry_run:
+        for item in response.results:
+            if any(stat in ("patched", "created") for stat in item.keys.values()):
+                try:
+                    await invalidate_template(item.id)
+                except Exception as cache_exc:
+                    logger.warning(
+                        f"Template cache invalidation failed for {item.id}: {cache_exc}"
+                    )
+
+    return response

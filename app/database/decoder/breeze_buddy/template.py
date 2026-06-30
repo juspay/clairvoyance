@@ -11,6 +11,7 @@ from app.ai.voice.agents.breeze_buddy.template.types import (
     LEGACY_VOICE_TO_PROVIDER,
     ConfigurationModel,
     TemplateModel,
+    WorkflowType,
 )
 from app.core.logger import logger
 
@@ -185,6 +186,13 @@ def decode_template(result: asyncpg.Record) -> Optional[TemplateModel]:
             secrets_data = json.loads(secrets_data)
         # If it's already a dict (from JSONB), use it directly
 
+    try:
+        workflow_value = WorkflowType(
+            result.get("workflow") or WorkflowType.NON_SHOPIFY
+        )
+    except ValueError:
+        workflow_value = WorkflowType.NON_SHOPIFY
+
     # supported_channels is a Postgres text[] (NOT NULL DEFAULT {'voice'}).
     # Some legacy SELECTs may not include the column — fall back to ['voice']
     # so the model always has at least one channel.
@@ -205,6 +213,7 @@ def decode_template(result: asyncpg.Record) -> Optional[TemplateModel]:
             if result.get("outbound_number_id")
             else None
         ),
+        workflow=workflow_value,
         is_active=result["is_active"],
         supported_channels=list(supported_channels),
         created_at=result["created_at"],

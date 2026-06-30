@@ -17,7 +17,8 @@
     "secrets":                           { "description": "Flat dict of credential key-value pairs injected as template vars, overriding reseller-level credentials for the same keys. Values substitute into {secret_key} placeholders in HTTP URLs, headers, and bodies.", "example": { "api_token": "Bearer sk-prod-abc123", "webhook_secret": "wh_live_xyz789" } },
     "outbound_number_id":                { "description": "UUID of the outbound phone number record to use for calls from this template. Must belong to the reseller. Null to use the reseller-default number.", "example": "eb0df4e9-a438-4ce4-a828-addf9db5ce3a" },
     "is_active":                         { "description": "When false, the template is soft-disabled: dispatch will not enqueue new leads for it. Set to false (not delete) when retiring a template.", "example": true },
-    "supported_channels":                { "description": "Channels this template may be served on. Default ['voice']. Add 'chat' to enable the Buddy Assist web-chat mode. Must have at least one entry.", "example": ["voice"] }
+    "supported_channels":                { "description": "Channels this template may be served on. Default ['voice']. Add 'chat' to enable the Buddy Assist web-chat mode. Must have at least one entry.", "example": ["voice"] },
+    "workflow":                          { "description": "Use-case workflow this template belongs to, used to batch-scope config updates by workflow. Set explicitly at creation (defaults to 'non-shopify' when omitted); pre-existing rows were classified once by name via the migration backfill. One of: order-confirmation, abandonment-recovery, assist, test, non-shopify.", "example": "order-confirmation" }
   },
 
   "ConfigurationModel": {
