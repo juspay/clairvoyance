@@ -58,13 +58,16 @@ def get_credentials_by_merchant_query(
             SELECT * FROM "{CREDENTIALS_TABLE}"
             WHERE ("reseller_id" = $1 OR "reseller_id" IS NULL)
             AND "is_active" = TRUE
+            AND "name" NOT LIKE 'whatsapp\\_business\\_api:%' ESCAPE '\\'
             ORDER BY "reseller_id" NULLS FIRST, "name" ASC;
         """
         return text, [reseller_id]
     else:
         text = f"""
             SELECT * FROM "{CREDENTIALS_TABLE}"
-            WHERE "reseller_id" IS NULL AND "is_active" = TRUE
+            WHERE "reseller_id" IS NULL
+            AND "is_active" = TRUE
+            AND "name" NOT LIKE 'whatsapp\\_business\\_api:%' ESCAPE '\\'
             ORDER BY "name" ASC;
         """
         return text, []
@@ -72,7 +75,12 @@ def get_credentials_by_merchant_query(
 
 def get_all_credentials_query() -> Tuple[str, List[Any]]:
     """Generate query to get all credentials."""
-    text = f'SELECT * FROM "{CREDENTIALS_TABLE}" where "is_active" = TRUE ORDER BY "reseller_id" NULLS FIRST, "name" ASC;'
+    text = f"""
+        SELECT * FROM "{CREDENTIALS_TABLE}"
+        WHERE "is_active" = TRUE
+          AND "name" NOT LIKE 'whatsapp\\_business\\_api:%' ESCAPE '\\'
+        ORDER BY "reseller_id" NULLS FIRST, "name" ASC;
+    """
     return text, []
 
 
