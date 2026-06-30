@@ -70,6 +70,20 @@ class PreCheckDefaultAction(str, Enum):
     SKIP = "skip"  # Fail-closed: block the call
 
 
+class PreCheckMatchType(str, Enum):
+    """How to compare the response field value against response_field_value.
+
+    The result is always "should the call PROCEED?".
+    """
+
+    EQUALS = "equals"  # proceed when field == value (default, back-compatible)
+    NOT_EQUALS = "not_equals"  # proceed when field != value
+    CONTAINS = "contains"  # proceed when value is present in the field (list or string)
+    NOT_CONTAINS = "not_contains"  # proceed when value is ABSENT from the field
+    GT = "gt"  # proceed when field > value (numeric)
+    LT = "lt"  # proceed when field < value (numeric)
+
+
 class PreCheckHttpRequest(BaseModel):
     """HTTP request configuration for pre-check API calls.
     Matches HttpRequestConfig structure for compatibility with HttpRequestExecutor."""
@@ -93,11 +107,24 @@ class PreCheckResponseConfig(BaseModel):
 
         # Proceed only if status="active"
         {"response_field": "status", "response_field_value": "active"}
+
+        # Proceed only if the order is NOT tagged "no-call"
+        # (tags returned as a list; "contains"/"not_contains" are list-aware)
+        {"response_field": "tags", "match_type": "not_contains",
+         "response_field_value": "no-call"}
     """
 
     response_field: str = Field(description="JSON field name in response to check")
     response_field_value: Any = Field(
-        description="Expected value. Proceed only when field equals this value."
+        description="Comparison value. For 'equals'/'not_equals' the field is "
+        "compared directly; for 'contains'/'not_contains' this is the needle "
+        "looked up inside the field (list membership or substring); for "
+        "'gt'/'lt' both sides are compared numerically."
+    )
+    match_type: PreCheckMatchType = Field(
+        default=PreCheckMatchType.EQUALS,
+        description="How to compare the field against response_field_value. "
+        "Defaults to 'equals' (backward-compatible).",
     )
 
 
