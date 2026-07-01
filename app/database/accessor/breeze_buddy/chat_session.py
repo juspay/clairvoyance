@@ -34,6 +34,7 @@ from app.database.queries.breeze_buddy.chat_session import (
     record_chat_turn_metrics_query,
     set_chat_session_voice_lead_query,
     update_chat_session_after_turn_query,
+    update_chat_session_outcome_query,
     upsert_agent_session_state_merge_query,
     upsert_agent_session_state_query,
 )
@@ -131,6 +132,29 @@ async def end_chat_session(
         return None
     except Exception as e:
         logger.error(f"Error ending chat session {session_id}: {e}")
+        raise
+
+
+async def update_chat_session_outcome(
+    session_id: str,
+    outcome: str,
+) -> Optional[str]:
+    """Set the singular outcome on a chat_session WITHOUT ending it.
+
+    Used by the chat-aware ``update_outcome_in_database`` hook so an assist /
+    chat session records an outcome as soon as the LLM sets one. Returns the
+    written outcome, or None if no row matched. Raises on DB error.
+    """
+    query, values = update_chat_session_outcome_query(session_id, outcome)
+    try:
+        result = await run_parameterized_query(query, values)
+        if not result:
+            return None
+        return result[0]["outcome"]
+    except Exception as e:
+        logger.error(
+            f"Error setting outcome '{outcome}' on chat session {session_id}: {e}"
+        )
         raise
 
 
