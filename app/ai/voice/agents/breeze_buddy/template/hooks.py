@@ -28,6 +28,9 @@ from app.ai.voice.agents.breeze_buddy.template.types import (
     HookConfig,
 )
 from app.core.logger import logger
+from app.database.accessor.breeze_buddy.chat_session import (
+    update_chat_session_outcome,
+)
 from app.database.accessor.breeze_buddy.lead_call_tracker import (
     update_lead_call_completion_details,
 )
@@ -198,11 +201,29 @@ class UpdateOutcomeInDatabaseHook(Hook):
 
         # Get lead from context
         if not context.lead or not context.lead.id:
-            # Expected in chat mode (no lead by design). Outcome persistence
-            # to chat_session is a separate concern; see docs/CHAT_MODE.md §15.
-            logger.info(
-                f"Skipping outcome DB update for '{function_name}': no lead in context."
-            )
+            # Chat / assist mode (no lead by design): persist the singular
+            # outcome to chat_session.outcome instead of dropping it. The
+            # session id rides on the bot (ChatAgent.session_id); when even
+            # that is absent (e.g. a bare test harness) there is nothing to
+            # write to. Mirroring to a bound voice lead is a follow-up.
+            session_id = getattr(context.bot, "session_id", None)
+            if not session_id:
+                logger.info(
+                    f"No lead and no chat session for '{function_name}': "
+                    f"skipping outcome persistence."
+                )
+                return
+            try:
+                await update_chat_session_outcome(str(session_id), str(outcome))
+                logger.info(
+                    f"Persisted chat outcome '{outcome}' to session {session_id} "
+                    f"(function: '{function_name}')"
+                )
+            except Exception as e:
+                logger.opt(exception=True).error(
+                    f"Failed to persist chat outcome '{outcome}' to session "
+                    f"{session_id} (function: '{function_name}'): {e}"
+                )
             return
 
         try:

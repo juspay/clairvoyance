@@ -107,6 +107,33 @@ def end_chat_session_query(
     return query, [outcome, ended_reason, session_id]
 
 
+def update_chat_session_outcome_query(
+    session_id: str,
+    outcome: str,
+) -> Tuple[str, List[Any]]:
+    """Set the singular ``outcome`` on a chat_session WITHOUT ending it.
+
+    Used by the chat-aware ``update_outcome_in_database`` hook (and the
+    ``update_outcome`` builtin that fires it) so a chat / assist session
+    records an outcome as soon as the LLM sets one — instead of dropping
+    it, which is what happened before when the hook bailed on
+    ``context.lead`` being None. Returns the written outcome.
+
+    No-op (returns no row) if the session is already ``ENDED`` — mirrors the
+    ``end_chat_session_query`` guard so a late fire-and-forget write (the hook
+    is scheduled via ``asyncio.create_task``) can't overwrite a terminal
+    session's state.
+    """
+    query = f"""
+        UPDATE {CHAT_SESSION_TABLE}
+        SET outcome = $2,
+            last_activity_at = now()
+        WHERE id = $1 AND status <> 'ENDED'
+        RETURNING outcome
+    """
+    return query, [session_id, outcome]
+
+
 def list_idle_chat_sessions_query(
     cutoff: datetime,
     statuses: List[str],
