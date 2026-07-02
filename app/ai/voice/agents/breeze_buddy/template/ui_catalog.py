@@ -654,6 +654,79 @@ class SideEffect(_CatalogBase):
 
 
 # ---------------------------------------------------------------------------
+# Metric primitives (group: metrics)
+#
+# Single-number / stat widgets for analytics dashboards — the "big number"
+# tiles, not full charts. Rendered by the widget like every other primitive.
+# Numeric display strings are passed pre-formatted (e.g. "2,999", "₹1,299")
+# so locale formatting stays the upstream tool's job.
+# ---------------------------------------------------------------------------
+
+
+class KPI(_CatalogBase):
+    """A headline metric: a big value with a label and optional change.
+    Use for the key number in an analytics answer (e.g. total calls, success
+    rate). ``value`` is a pre-formatted display string."""
+
+    label: str = Field(
+        ..., min_length=1, description="What the number measures (e.g. 'Total calls')."
+    )
+    value: str = Field(
+        ...,
+        min_length=1,
+        description="The metric, pre-formatted (e.g. '2,999', '87%').",
+    )
+    delta: Optional[str] = Field(
+        None, description="Optional change vs a baseline, pre-formatted (e.g. '+12%')."
+    )
+    trend: Optional[Literal["up", "down", "flat"]] = Field(
+        None, description="Direction of the change; colours the delta + arrow."
+    )
+
+
+class MetricCard(_CatalogBase):
+    """A metric inside a bordered card: title + big value + optional caption.
+    Use for a labelled stat tile in a grid of metrics."""
+
+    title: str = Field(
+        ..., min_length=1, description="Card title (e.g. 'No-answer rate')."
+    )
+    value: str = Field(..., min_length=1, description="The metric, pre-formatted.")
+    caption: Optional[str] = Field(
+        None, description="Optional supporting text under the value."
+    )
+    tone: Optional[Literal["neutral", "positive", "warning", "info"]] = Field(
+        "neutral", description="Accent colour for the card."
+    )
+
+
+class Sparkline(_CatalogBase):
+    """A tiny inline trend line (no axes/labels) for a sequence of numbers.
+    Use beside a KPI to show its recent movement compactly."""
+
+    values: List[float] = Field(
+        ..., min_length=2, description="Ordered numeric points to plot."
+    )
+    color: Optional[str] = Field(None, description="Optional stroke colour (CSS).")
+
+
+class ProgressBar(_CatalogBase):
+    """A horizontal bar showing progress toward a goal (value out of max).
+    Use for rates / completion (e.g. '87% confirmed')."""
+
+    value: float = Field(
+        ..., ge=0, description="Current value (clamped to [0, max] at render)."
+    )
+    max: float = Field(100, gt=0, description="Maximum value (default 100).")
+    label: Optional[str] = Field(
+        None, description="Optional label shown above the bar."
+    )
+    tone: Optional[Literal["neutral", "positive", "warning", "info"]] = Field(
+        "neutral", description="Accent colour for the filled portion."
+    )
+
+
+# ---------------------------------------------------------------------------
 # Chart primitives (group: graphs)
 #
 # Rendered by local Svelte chart primitives (BarChart.svelte, LineChart.svelte,
@@ -750,6 +823,11 @@ UI_CATALOG: Dict[str, Type[_CatalogBase]] = {
     "Handoff": Handoff,
     # Composite
     "Tile": Tile,
+    # Metrics (analytics stats)
+    "KPI": KPI,
+    "MetricCard": MetricCard,
+    "Sparkline": Sparkline,
+    "ProgressBar": ProgressBar,
     # Charts (graphs)
     "BarChart": BarChart,
     "LineChart": LineChart,
@@ -804,7 +882,10 @@ PRIMITIVE_GROUPS: Dict[str, List[str]] = {
     # Reserved for future expansion — schemas + widget components land
     # behind these group flags so existing templates aren't affected.
     "metrics": [
-        # KPI, MetricCard, Sparkline, ProgressBar — shipping in a follow-up PR
+        "KPI",
+        "MetricCard",
+        "Sparkline",
+        "ProgressBar",
     ],
     "forms": [
         # "TextInput", "Select", "Checkbox", "RadioGroup"
@@ -842,6 +923,11 @@ PRIMITIVE_RENDER_ORDER: List[str] = [
     "Handoff",
     # Data
     "Table",
+    # Metrics (analytics stats)
+    "KPI",
+    "MetricCard",
+    "Sparkline",
+    "ProgressBar",
     # Charts
     "BarChart",
     "LineChart",
