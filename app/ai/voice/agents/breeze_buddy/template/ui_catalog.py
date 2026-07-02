@@ -654,6 +654,76 @@ class SideEffect(_CatalogBase):
 
 
 # ---------------------------------------------------------------------------
+# Chart primitives (group: graphs)
+#
+# Rendered by local Svelte chart primitives (BarChart.svelte, LineChart.svelte,
+# …) in the Buddy Assist widget — the widget-side render support for these
+# schemas, same pattern as the core primitives. All charts share the same tiny
+# {label, value} data shape so the LLM can swap chart types freely.
+# ---------------------------------------------------------------------------
+
+
+class ChartDatum(BaseModel):
+    """One point in a chart: a category label and its numeric value."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    label: str = Field(
+        ..., min_length=1, description="Category label shown on the axis or legend."
+    )
+    value: float = Field(..., description="Numeric value for this point.")
+    color: Optional[str] = Field(
+        None, description="Optional CSS colour; falls back to the palette by order."
+    )
+
+
+class BarChart(_CatalogBase):
+    """Vertical bar chart for comparing discrete categories (e.g. calls per
+    hour, outcomes by type, top merchants). Use when comparing counts across
+    a small set of labelled categories."""
+
+    data: List[ChartDatum] = Field(
+        ..., min_length=1, description="Bars to plot, one per category."
+    )
+    title: Optional[str] = Field(None, description="Heading shown above the chart.")
+
+
+class LineChart(_CatalogBase):
+    """Line chart for a trend across an ordered sequence (e.g. attempts per day,
+    connect rate over a week). Use to show change over an ordered axis."""
+
+    data: List[ChartDatum] = Field(
+        ..., min_length=1, description="Points in order, plotted left to right."
+    )
+    title: Optional[str] = Field(None, description="Heading shown above the chart.")
+
+
+class AreaChart(_CatalogBase):
+    """Filled area chart for volume over time (e.g. daily call or chat volume).
+    Like a line chart but emphasises magnitude with a filled region."""
+
+    data: List[ChartDatum] = Field(
+        ..., min_length=1, description="Points in order, plotted left to right."
+    )
+    title: Optional[str] = Field(None, description="Heading shown above the chart.")
+
+
+class PieChart(_CatalogBase):
+    """Pie or donut chart for share-of-total (e.g. outcome breakdown, channel
+    split). Use when parts sum to a meaningful whole. Set ``donut`` for a ring
+    with a centre total."""
+
+    data: List[ChartDatum] = Field(
+        ..., min_length=1, description="Slices; each value is a share of the total."
+    )
+    title: Optional[str] = Field(None, description="Heading shown above the chart.")
+    donut: Optional[bool] = Field(
+        None,
+        description="Render as a donut ring with a centre total instead of a full pie.",
+    )
+
+
+# ---------------------------------------------------------------------------
 # Catalog manifest + group registry
 # ---------------------------------------------------------------------------
 
@@ -680,6 +750,11 @@ UI_CATALOG: Dict[str, Type[_CatalogBase]] = {
     "Handoff": Handoff,
     # Composite
     "Tile": Tile,
+    # Charts (graphs)
+    "BarChart": BarChart,
+    "LineChart": LineChart,
+    "AreaChart": AreaChart,
+    "PieChart": PieChart,
     # Effects (invisible)
     "SideEffect": SideEffect,
 }
@@ -720,13 +795,16 @@ PRIMITIVE_GROUPS: Dict[str, List[str]] = {
     "effects": [
         "SideEffect",
     ],
+    "graphs": [
+        "BarChart",
+        "LineChart",
+        "AreaChart",
+        "PieChart",
+    ],
     # Reserved for future expansion — schemas + widget components land
     # behind these group flags so existing templates aren't affected.
-    "graphs": [
-        # "LineChart", "BarChart", "PieChart", "AreaChart"
-    ],
     "metrics": [
-        # "KPI", "Sparkline", "MetricCard", "ProgressBar"
+        # KPI, MetricCard, Sparkline, ProgressBar — shipping in a follow-up PR
     ],
     "forms": [
         # "TextInput", "Select", "Checkbox", "RadioGroup"
@@ -764,6 +842,11 @@ PRIMITIVE_RENDER_ORDER: List[str] = [
     "Handoff",
     # Data
     "Table",
+    # Charts
+    "BarChart",
+    "LineChart",
+    "AreaChart",
+    "PieChart",
     # Notifications
     "Message",
     # Effects (invisible — last so it doesn't crowd the visual catalog)
