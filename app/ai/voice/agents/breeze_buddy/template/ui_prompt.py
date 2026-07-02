@@ -117,6 +117,43 @@ _EXAMPLES: Dict[str, Dict[str, Any]] = {
         "columns": ["Item", "Qty", "Total"],
         "rows": [["Item A", "1", "100"]],
     },
+    "BarChart": {
+        "+": "bar1:BarChart@root",
+        "title": "Orders by status",
+        "data": [
+            {"label": "Confirmed", "value": 42},
+            {"label": "Cancelled", "value": 8},
+            {"label": "No answer", "value": 15},
+        ],
+    },
+    "LineChart": {
+        "+": "line1:LineChart@root",
+        "title": "Calls per day",
+        "data": [
+            {"label": "Mon", "value": 120},
+            {"label": "Tue", "value": 98},
+            {"label": "Wed", "value": 141},
+        ],
+    },
+    "AreaChart": {
+        "+": "area1:AreaChart@root",
+        "title": "Chat volume",
+        "data": [
+            {"label": "Wk1", "value": 300},
+            {"label": "Wk2", "value": 420},
+            {"label": "Wk3", "value": 380},
+        ],
+    },
+    "PieChart": {
+        "+": "pie1:PieChart@root",
+        "title": "Outcome split",
+        "donut": True,
+        "data": [
+            {"label": "Confirmed", "value": 42},
+            {"label": "Cancelled", "value": 8},
+            {"label": "Address updated", "value": 12},
+        ],
+    },
 }
 
 

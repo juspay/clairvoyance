@@ -4,6 +4,7 @@ Covers:
   * ``resolve_allowlist`` — default ("core" only), groups + primitives mix,
     disabled overrides, unknown group/primitive tolerance.
   * ``group_for`` — primitive → group reverse lookup.
+  * ``graphs`` group enablement + chart primitive ``validate_props`` shape.
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ from app.ai.voice.agents.breeze_buddy.template.ui_catalog import (
     SideEffectKind,
     group_for,
     resolve_allowlist,
+    validate_props,
 )
 
 # ---------------------------------------------------------------------------
@@ -178,3 +180,37 @@ def test_sideeffect_default_kind_is_fetch_so_url_required():
     for the same reason ``SideEffect(kind=fetch)`` does."""
     with pytest.raises(ValidationError, match="kind='fetch' requires"):
         SideEffect()
+
+
+# ---------------------------------------------------------------------------
+# graphs group
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_graphs_group_includes_all_chart_types():
+    """Enabling the ``graphs`` group surfaces exactly the four chart types."""
+    result = resolve_allowlist(enabled_groups=["graphs"])
+    assert result == {"BarChart", "LineChart", "AreaChart", "PieChart"}
+
+
+def test_chart_primitives_map_back_to_graphs_group():
+    """Each chart primitive reverse-maps to the ``graphs`` group."""
+    for chart in ("BarChart", "LineChart", "AreaChart", "PieChart"):
+        assert group_for(chart) == "graphs"
+
+
+def test_validate_props_accepts_minimal_bar_chart():
+    """A minimal single-datum BarChart payload passes validation."""
+    chart = validate_props("BarChart", {"data": [{"label": "Mon", "value": 5}]})
+    # validate_props is typed to return the _CatalogBase base, so read the
+    # concrete fields via model_dump() rather than dynamic attribute access.
+    datum = chart.model_dump()["data"][0]
+    assert datum["label"] == "Mon"
+    assert datum["value"] == 5
+
+
+def test_validate_props_rejects_empty_chart_datum_label():
+    """``ChartDatum.label`` enforces ``min_length=1`` — empty labels are rejected
+    (parity with Button/Tag/Table labels)."""
+    with pytest.raises(ValidationError):
+        validate_props("BarChart", {"data": [{"label": "", "value": 5}]})
