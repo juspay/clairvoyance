@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 # Load the template package before any chat/* module reaches it — same
 # circular-import precaution as the sibling ui_stream / ui_healer tests.
 from app.ai.voice.agents.breeze_buddy.template.ui_catalog import (  # noqa: F401
@@ -109,6 +111,25 @@ def test_tile_example_validates_against_catalog():
     assert payload["type"] == "Tile"
     # Server-side validator must accept the expanded example props.
     validate_props("Tile", payload["props"])
+
+
+@pytest.mark.parametrize("name", ["KPI", "MetricCard", "Sparkline", "ProgressBar"])
+def test_metric_example_validates_against_catalog(name):
+    """Each metric primitive's hard-coded compact example must round-trip
+    through expand_compact_op -> validate_props, so a malformed example can't
+    ship and mis-train the LLM prompt (mirrors the Tile contract test)."""
+    from app.ai.voice.agents.breeze_buddy.chat.ui_stream import expand_compact_op
+
+    section = render_primitives_section({name})
+    block = section.split(f"**{name}**", 1)[1]
+    example_line = next(
+        line for line in block.splitlines() if line.strip().startswith("Example:")
+    )
+    payload = expand_compact_op(
+        json.loads(example_line.split("Example:", 1)[1].strip())
+    )
+    assert payload["type"] == name
+    validate_props(name, payload["props"])
 
 
 # ---------------------------------------------------------------------------

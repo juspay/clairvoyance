@@ -5,6 +5,7 @@ Covers:
     disabled overrides, unknown group/primitive tolerance.
   * ``group_for`` — primitive → group reverse lookup.
   * ``graphs`` group enablement + chart primitive ``validate_props`` shape.
+  * ``metrics`` group enablement + metric primitive ``validate_props`` shape.
 """
 
 from __future__ import annotations
@@ -210,7 +211,39 @@ def test_validate_props_accepts_minimal_bar_chart():
 
 
 def test_validate_props_rejects_empty_chart_datum_label():
-    """``ChartDatum.label`` enforces ``min_length=1`` — empty labels are rejected
+    """``ChartPoint.label`` enforces ``min_length=1`` — empty labels are rejected
     (parity with Button/Tag/Table labels)."""
     with pytest.raises(ValidationError):
         validate_props("BarChart", {"data": [{"label": "", "value": 5}]})
+
+
+# ---------------------------------------------------------------------------
+# metrics group
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_metrics_group_includes_all_metric_types():
+    """Enabling the ``metrics`` group surfaces exactly the four metric types."""
+    result = resolve_allowlist(enabled_groups=["metrics"])
+    assert result == {"KPI", "MetricCard", "Sparkline", "ProgressBar"}
+
+
+def test_metric_primitives_map_back_to_metrics_group():
+    """Each metric primitive reverse-maps to the ``metrics`` group."""
+    for prim in ("KPI", "MetricCard", "Sparkline", "ProgressBar"):
+        assert group_for(prim) == "metrics"
+
+
+def test_validate_props_accepts_minimal_kpi():
+    """A KPI with just label + value validates and round-trips its fields."""
+    kpi = validate_props("KPI", {"label": "Total calls", "value": "2,999"})
+    dumped = kpi.model_dump()
+    assert dumped["label"] == "Total calls"
+    assert dumped["value"] == "2,999"
+
+
+def test_validate_props_rejects_empty_kpi_label():
+    """``KPI.label`` enforces ``min_length=1`` — empty labels are rejected
+    so the widget never renders a blank metric label."""
+    with pytest.raises(ValidationError):
+        validate_props("KPI", {"label": "", "value": "42"})

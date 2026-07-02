@@ -117,6 +117,28 @@ _EXAMPLES: Dict[str, Dict[str, Any]] = {
         "columns": ["Item", "Qty", "Total"],
         "rows": [["Item A", "1", "100"]],
     },
+    "KPI": {
+        "+": "kpi1:KPI@root",
+        "label": "Total calls",
+        "value": "2,999",
+        "delta": "+12%",
+        "trend": "up",
+    },
+    "MetricCard": {
+        "+": "mc1:MetricCard@root",
+        "title": "No-answer rate",
+        "value": "52%",
+        "caption": "1,551 of 2,999 this week",
+        "tone": "warning",
+    },
+    "Sparkline": {"+": "spark1:Sparkline@root", "values": [120, 98, 141, 110, 165]},
+    "ProgressBar": {
+        "+": "prog1:ProgressBar@root",
+        "label": "Confirmed",
+        "value": 87,
+        "max": 100,
+        "tone": "positive",
+    },
     "BarChart": {
         "+": "bar1:BarChart@root",
         "title": "Orders by status",
