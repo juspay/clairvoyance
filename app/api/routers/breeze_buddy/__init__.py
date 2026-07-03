@@ -16,6 +16,9 @@ from app.api.routers.breeze_buddy.credentials import router as credentials_route
 # Daily transport (web/mobile clients via Daily.co)
 from app.api.routers.breeze_buddy.daily import router as daily_router
 from app.api.routers.breeze_buddy.demo import router as demo_router
+
+# Generic e-commerce integration ingress (WooCommerce/Magento/custom -> lead)
+from app.api.routers.breeze_buddy.integrations import router as integrations_router
 from app.api.routers.breeze_buddy.leads import router as leads_router
 from app.api.routers.breeze_buddy.merchants import router as merchants_router
 from app.api.routers.breeze_buddy.numbers import router as numbers_router
@@ -84,6 +87,9 @@ router.include_router(users_router, prefix="", tags=["users"])
 
 # Leads (call requests/trackers)
 router.include_router(leads_router, prefix="", tags=["leads"])
+
+# Generic e-commerce integration ingress (per-store signature auth; URL-param driven)
+router.include_router(integrations_router, prefix="", tags=["integrations"])
 
 # Telephony (webhook handlers for call providers)
 router.include_router(telephony_router, prefix="", tags=["telephony"])
