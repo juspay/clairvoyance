@@ -84,6 +84,22 @@ from app.schemas.breeze_buddy.users import (
     UserCreate,
     UserUpdate,
 )
+from app.schemas.breeze_buddy.whatsapp import (
+    WHATSAPP_SYNC_TOKEN_ENCRYPTION_SCHEME,
+    EncryptedWhatsAppAccessToken,
+    SyncMerchantWhatsAppConnection,
+    WhatsAppConnectionDisconnectRequest,
+    WhatsAppConnectionDisconnectResponse,
+    WhatsAppConnectionSyncResponse,
+    WhatsAppCredentialSecret,
+)
+from app.schemas.breeze_buddy.connectors import (
+    Connector,
+    ConnectorMetric,
+    ConnectorMetricIncrement,
+    ConnectorStatus,
+    UpsertConnectorConnection,
+)
 from app.schemas.feature_flags import (
     FeatureFlagDeleteResponse,
     FeatureFlagResponse,
@@ -154,6 +170,20 @@ __all__ = [
     "Credential",
     "CredentialType",
     "UpdateCredentialRequest",
+    # Connectors
+    "Connector",
+    "ConnectorMetric",
+    "ConnectorMetricIncrement",
+    "ConnectorStatus",
+    "UpsertConnectorConnection",
+    # WhatsApp
+    "EncryptedWhatsAppAccessToken",
+    "SyncMerchantWhatsAppConnection",
+    "WhatsAppConnectionDisconnectRequest",
+    "WhatsAppConnectionDisconnectResponse",
+    "WhatsAppConnectionSyncResponse",
+    "WhatsAppCredentialSecret",
+    "WHATSAPP_SYNC_TOKEN_ENCRYPTION_SCHEME",
     # Connection
     "BreezeBuddyDailyConnectRequest",
     # User Management

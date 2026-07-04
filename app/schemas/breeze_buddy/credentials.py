@@ -51,12 +51,14 @@ class Credential(BaseModel):
 
     id: str
     reseller_id: Optional[str] = None
+    merchant_id: Optional[str] = None
     name: str
     credential_type: CredentialType
     value: Optional[Dict[str, Any]] = Field(
         default=None, description="Masked credential value in API responses"
     )
     is_encrypted: bool = False
+    template_exposable: bool = True
     description: Optional[str] = None
     is_active: bool = True
     created_at: Optional[datetime] = None

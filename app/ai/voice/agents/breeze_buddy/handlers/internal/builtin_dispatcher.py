@@ -34,6 +34,9 @@ from app.ai.voice.agents.breeze_buddy.handlers.internal.hold_and_consult import 
 from app.ai.voice.agents.breeze_buddy.handlers.internal.query_knowledge_base import (
     query_knowledge_base,
 )
+from app.ai.voice.agents.breeze_buddy.handlers.internal.send_whatsapp_message import (
+    send_whatsapp_message,
+)
 from app.ai.voice.agents.breeze_buddy.handlers.internal.stt import (
     mute_stt,
     unmute_stt,
@@ -58,14 +61,15 @@ BUILTIN_HANDLERS: Dict[str, Callable] = {
     "get_current_time": get_current_time,
     "hold_and_consult": hold_and_consult,
     "query_knowledge_base": query_knowledge_base,
+    "send_whatsapp_message": send_whatsapp_message,
     "update_outcome": update_outcome,
 }
 
-# Handlers that receive their own function-entry config. The transfer
-# targets/limits live on the connect_to_agent function entry (not on
-# ConfigurationModel), so this handler needs function_config forwarded to it.
-# Every other builtin keeps the plain (context, args) contract.
-_CONFIG_AWARE_HANDLERS = {"connect_to_agent"}
+# Handlers that receive their own function-entry config. Transfer targets/limits
+# and WhatsApp value-count constraints live on the function entry, so these
+# handlers need function_config forwarded to them. Every other builtin keeps the
+# plain (context, args) contract.
+_CONFIG_AWARE_HANDLERS = {"connect_to_agent", "send_whatsapp_message"}
 
 
 async def _speak_and_wait(context: TemplateContext, message: str) -> None:
