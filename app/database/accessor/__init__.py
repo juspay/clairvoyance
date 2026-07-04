@@ -67,6 +67,24 @@ from .breeze_buddy.template import (
     get_template_by_id,
     get_template_in_scope,
 )
+from .breeze_buddy.connectors import (
+    disconnect_connector,
+    get_active_connector,
+    get_active_connector_credential,
+    get_connector,
+    get_connector_metrics,
+    increment_connector_metric,
+    mark_connector_error,
+    sync_connector_connection,
+)
+from .breeze_buddy.whatsapp import (
+    disconnect_merchant_whatsapp_connector,
+    get_active_merchant_whatsapp_connector,
+    get_merchant_whatsapp_connector,
+    get_whatsapp_credential_secret,
+    increment_merchant_whatsapp_message_counts,
+    sync_merchant_whatsapp_connection,
+)
 
 __all__ = [
     "is_number_blacklisted",
@@ -121,4 +139,18 @@ __all__ = [
     "get_credentials_as_template_vars",
     "update_credential",
     "delete_credential",
+    "get_connector",
+    "get_active_connector",
+    "get_active_connector_credential",
+    "sync_connector_connection",
+    "disconnect_connector",
+    "mark_connector_error",
+    "increment_connector_metric",
+    "get_connector_metrics",
+    "get_merchant_whatsapp_connector",
+    "get_active_merchant_whatsapp_connector",
+    "disconnect_merchant_whatsapp_connector",
+    "sync_merchant_whatsapp_connection",
+    "get_whatsapp_credential_secret",
+    "increment_merchant_whatsapp_message_counts",
 ]

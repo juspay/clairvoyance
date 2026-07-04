@@ -16,23 +16,28 @@ def insert_credential_query(
     value: str,
     is_encrypted: bool,
     description: Optional[str],
+    merchant_id: Optional[str] = None,
+    template_exposable: bool = True,
 ) -> Tuple[str, List[Any]]:
     """Generate query to insert a credential record."""
     text = f"""
         INSERT INTO "{CREDENTIALS_TABLE}"
-        ("id", "reseller_id", "name", "credential_type", "value",
-         "is_encrypted", "description", "is_active", "created_at", "updated_at")
-        VALUES ($1, $2, $3, $4, $5, $6, $7, TRUE, $8, $9)
+        ("id", "reseller_id", "merchant_id", "name", "credential_type", "value",
+         "is_encrypted", "description", "is_active", "template_exposable",
+         "created_at", "updated_at")
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, TRUE, $9, $10, $11)
         RETURNING *;
     """
     values = [
         id,
         reseller_id,
+        merchant_id,
         name,
         credential_type,
         value,
         is_encrypted,
         description,
+        template_exposable,
         datetime.now(),
         datetime.now(),
     ]
@@ -41,7 +46,11 @@ def insert_credential_query(
 
 def get_credential_by_id_query(credential_id: str) -> Tuple[str, List[Any]]:
     """Generate query to get a credential by ID."""
-    text = f'SELECT * FROM "{CREDENTIALS_TABLE}" WHERE "id" = $1;'
+    text = f"""
+        SELECT * FROM "{CREDENTIALS_TABLE}"
+        WHERE "id" = $1
+          AND "template_exposable" = TRUE;
+    """
     return text, [credential_id]
 
 
@@ -58,13 +67,16 @@ def get_credentials_by_merchant_query(
             SELECT * FROM "{CREDENTIALS_TABLE}"
             WHERE ("reseller_id" = $1 OR "reseller_id" IS NULL)
             AND "is_active" = TRUE
+            AND "template_exposable" = TRUE
             ORDER BY "reseller_id" NULLS FIRST, "name" ASC;
         """
         return text, [reseller_id]
     else:
         text = f"""
             SELECT * FROM "{CREDENTIALS_TABLE}"
-            WHERE "reseller_id" IS NULL AND "is_active" = TRUE
+            WHERE "reseller_id" IS NULL
+            AND "is_active" = TRUE
+            AND "template_exposable" = TRUE
             ORDER BY "name" ASC;
         """
         return text, []
@@ -72,8 +84,25 @@ def get_credentials_by_merchant_query(
 
 def get_all_credentials_query() -> Tuple[str, List[Any]]:
     """Generate query to get all credentials."""
-    text = f'SELECT * FROM "{CREDENTIALS_TABLE}" where "is_active" = TRUE ORDER BY "reseller_id" NULLS FIRST, "name" ASC;'
+    text = f"""
+        SELECT * FROM "{CREDENTIALS_TABLE}"
+        WHERE "is_active" = TRUE
+          AND "template_exposable" = TRUE
+        ORDER BY "reseller_id" NULLS FIRST, "name" ASC;
+    """
     return text, []
+
+
+def deactivate_credential_query(credential_id: str) -> Tuple[str, List[Any]]:
+    """Generate query to deactivate a credential by ID."""
+    text = f"""
+        UPDATE "{CREDENTIALS_TABLE}"
+        SET "is_active" = FALSE,
+            "updated_at" = $2
+        WHERE "id" = $1
+        RETURNING *;
+    """
+    return text, [credential_id, datetime.now()]
 
 
 def update_credential_query(
@@ -139,5 +168,10 @@ def update_credential_query(
 
 def delete_credential_query(credential_id: str) -> Tuple[str, List[Any]]:
     """Generate query to delete a credential by ID."""
-    text = f'DELETE FROM "{CREDENTIALS_TABLE}" WHERE "id" = $1 RETURNING *;'
+    text = f"""
+        DELETE FROM "{CREDENTIALS_TABLE}"
+        WHERE "id" = $1
+          AND "template_exposable" = TRUE
+        RETURNING *;
+    """
     return text, [credential_id]

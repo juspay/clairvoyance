@@ -58,6 +58,18 @@ from app.schemas.breeze_buddy.users import (
     UserResponse,
     UserUpdate as UserAccountUpdate,
 )
+from app.schemas.breeze_buddy.whatsapp import (
+    WHATSAPP_SYNC_TOKEN_ENCRYPTION_SCHEME,
+    SyncMerchantWhatsAppConnection,
+    WhatsAppCredentialSecret,
+)
+from app.schemas.breeze_buddy.connectors import (
+    Connector,
+    ConnectorMetric,
+    ConnectorMetricIncrement,
+    ConnectorStatus,
+    UpsertConnectorConnection,
+)
 
 __all__ = [
     # Auth
@@ -112,4 +124,14 @@ __all__ = [
     "UserListResponse",
     "UserResponse",
     "DeleteUserResponse",
+    # Connectors
+    "Connector",
+    "ConnectorMetric",
+    "ConnectorMetricIncrement",
+    "ConnectorStatus",
+    "UpsertConnectorConnection",
+    # WhatsApp
+    "SyncMerchantWhatsAppConnection",
+    "WhatsAppCredentialSecret",
+    "WHATSAPP_SYNC_TOKEN_ENCRYPTION_SCHEME",
 ]
