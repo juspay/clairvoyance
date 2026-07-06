@@ -182,7 +182,7 @@ async def find_templates_using_kb(kb_id: str) -> List[Dict[str, Any]]:
                 "id": str(row["id"]),
                 "name": row["name"],
                 "reseller_id": row["reseller_id"],
-                "merchant_id": row["merchant_identifier"],
+                "merchant_id": row["merchant_id"],
             }
             for row in result
         ]

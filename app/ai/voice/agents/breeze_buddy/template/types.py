@@ -1353,6 +1353,104 @@ class ClientContextConfig(BaseModel):
     )
 
 
+class KnowledgeBaseMode(str, Enum):
+    """How attached knowledge bases reach the LLM at runtime."""
+
+    AUTO = "auto"  # size-tiered: full_injection if small, else auto_retrieve
+    FULL_INJECTION = "full_injection"  # whole KB in the initial context
+    AUTO_RETRIEVE = "auto_retrieve"  # hybrid retrieval every user turn
+    TOOL = "tool"  # explicit query_knowledge_base function call
+
+
+class KnowledgeBaseConfig(BaseModel):
+    """Template-level knowledge base (RAG) configuration.
+
+    Attaches merchant knowledge bases (see /knowledge-bases API) to this
+    template and selects the retrieval mode. All attached KBs must share one
+    embedding provider (query vectors are not comparable across providers).
+    """
+
+    enabled: bool = Field(True, description="Master switch for KB retrieval.")
+    knowledge_base_ids: List[str] = Field(
+        ...,
+        min_length=1,
+        description="IDs of knowledge_base rows attached to this template.",
+    )
+    mode: KnowledgeBaseMode = Field(
+        KnowledgeBaseMode.AUTO,
+        description=(
+            "auto (default) resolves to full_injection when the KB total "
+            "token count is at or below full_injection_token_threshold, "
+            "else auto_retrieve. Realtime (speech-to-speech) templates "
+            "support only full_injection and tool."
+        ),
+    )
+    top_k: int = Field(
+        5, ge=1, le=20, description="Chunks retrieved per query (auto_retrieve/tool)."
+    )
+    score_threshold: float = Field(
+        0.0,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Minimum vector cosine similarity for retrieved chunks. "
+            "Keyword-leg exact matches are always kept."
+        ),
+    )
+    max_context_tokens: int = Field(
+        2000,
+        ge=100,
+        le=8000,
+        description="Per-turn token budget for injected chunks (auto_retrieve).",
+    )
+    full_injection_token_threshold: int = Field(
+        20_000,
+        ge=1_000,
+        le=60_000,
+        description="AUTO resolves to full_injection when the KB total token "
+        "count is at or below this.",
+    )
+    retrieval_timeout_secs: float = Field(
+        0.4,
+        ge=0.1,
+        le=2.0,
+        description="Fail-open budget around retrieval on the voice hot path; "
+        "on timeout the turn proceeds without KB context.",
+    )
+    include_recent_turns: int = Field(
+        1,
+        ge=0,
+        le=6,
+        description="Prior user turns appended to the retrieval query for "
+        "conversational context ('how much is it?').",
+    )
+    injection_header: str = Field(
+        "## Related knowledge",
+        description="Header line above injected chunks (auto_retrieve).",
+    )
+    injection_instruction: Optional[str] = Field(
+        None,
+        description="Overrides the default refusal-by-default instruction "
+        "that accompanies injected KB content.",
+    )
+    # --- tool mode ---
+    tool_name: str = Field(
+        "query_knowledge_base",
+        description="LLM-visible function name when mode='tool'.",
+    )
+    tool_description: Optional[str] = Field(
+        None,
+        description="LLM-visible function description when mode='tool'. "
+        "Name the KB contents here so the model knows when to call it.",
+    )
+
+    @model_validator(mode="after")
+    def _validate_tool_name(self):
+        if not self.tool_name.strip():
+            raise ValueError("tool_name cannot be empty")
+        return self
+
+
 class ConfigurationModel(BaseModel):
     # --- Agent session state (generic) ---
     state_reducers: List[StateReducer] = Field(
@@ -1536,6 +1634,12 @@ class ConfigurationModel(BaseModel):
         None,
         description="MCP tool server configuration for dynamic tool discovery",
     )
+    knowledge_base: Optional[KnowledgeBaseConfig] = Field(
+        None,
+        description="Knowledge base (RAG) retrieval configuration. Attaches "
+        "merchant knowledge bases and selects how retrieved content reaches "
+        "the LLM (auto / full_injection / auto_retrieve / tool).",
+    )
     interruption: Optional[InterruptionConfig] = Field(
         None,
         description="Interruption handling configuration (mode, min_words threshold)",
@@ -1600,6 +1704,32 @@ class ConfigurationModel(BaseModel):
                 "mira_voice_id": "cartesia_voice_configurations.voice_id",
             },
         )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_kb_realtime_compat(self):
+        """Reject auto/auto_retrieve KB modes on realtime (speech-to-speech)
+        LLMs at parse time, so template authors get a 422 at save instead of
+        every call failing at setup (validate_template_compat re-checks the
+        same invariant at call load as a backstop). The realtime pipeline has
+        no pre-LLM text hop, so per-turn retrieval injection cannot work —
+        and mode 'auto' may resolve to auto_retrieve whenever the KB grows.
+        """
+        kb = self.knowledge_base
+        llm = self.llm_configurations
+        if (
+            kb is not None
+            and kb.enabled
+            and llm is not None
+            and llm.realtime is not None
+            and kb.mode in (KnowledgeBaseMode.AUTO, KnowledgeBaseMode.AUTO_RETRIEVE)
+        ):
+            raise ValueError(
+                "knowledge_base mode 'auto'/'auto_retrieve' cannot be combined "
+                "with a realtime LLM (llm_configurations.realtime) — the "
+                "realtime pipeline has no pre-LLM text hop for per-turn "
+                "injection. Use mode='full_injection' or 'tool'."
+            )
         return self
 
 

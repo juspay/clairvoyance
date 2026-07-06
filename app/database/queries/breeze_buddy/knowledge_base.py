@@ -190,11 +190,22 @@ def find_templates_using_kb_query(kb_id: str) -> Tuple[str, List[Any]]:
 
     Attachment lives at ``configurations.knowledge_base.knowledge_base_ids``
     (JSONB array of KB id strings) -- used for delete-safety checks.
+
+    Only counts ENABLED attachments: the runtime ignores configs with
+    ``enabled: false`` entirely (``resolve_kb_runtime`` returns None), and
+    the loom dialog "detaches" by flipping that switch while preserving the
+    section's other settings — a disabled reference must not block KB
+    deletion. ``enabled`` missing defaults to true, matching the Pydantic
+    model default.
     """
     text = """
-        SELECT "id", "name", "reseller_id", "merchant_identifier"
+        SELECT "id", "name", "reseller_id", "merchant_id"
         FROM "template"
-        WHERE "configurations" -> 'knowledge_base' -> 'knowledge_base_ids' ? $1;
+        WHERE "configurations" -> 'knowledge_base' -> 'knowledge_base_ids' ? $1
+          AND COALESCE(
+              ("configurations" -> 'knowledge_base' ->> 'enabled')::boolean,
+              true
+          );
     """
     return text, [kb_id]
 

@@ -71,19 +71,28 @@ from app.ai.voice.agents.breeze_buddy.observability.tracing_setup import (
     create_root_span,
 )
 from app.ai.voice.agents.breeze_buddy.observers import ObserverManager, build_observers
-from app.ai.voice.agents.breeze_buddy.processors import TranscriptCollectorProcessor
+from app.ai.voice.agents.breeze_buddy.processors import (
+    KnowledgeRetrievalProcessor,
+    TranscriptCollectorProcessor,
+)
 from app.ai.voice.agents.breeze_buddy.processors.voice_ui_stream import (
     coerce_ui_action_text,
 )
 from app.ai.voice.agents.breeze_buddy.services.inbound_policy import (
     get_block_redirect,
 )
+from app.ai.voice.agents.breeze_buddy.services.knowledge_base import (
+    fetch_full_kb_text_cached,
+    resolve_kb_runtime,
+)
 from app.ai.voice.agents.breeze_buddy.services.telephony.base_provider import (
     VoiceCallProvider,
 )
-from app.ai.voice.agents.breeze_buddy.template import TemplateContext
 from app.ai.voice.agents.breeze_buddy.template.builder import FlowConfigBuilder
-from app.ai.voice.agents.breeze_buddy.template.context import with_context
+from app.ai.voice.agents.breeze_buddy.template.context import (
+    TemplateContext,
+    with_context,
+)
 from app.ai.voice.agents.breeze_buddy.template.types import (
     LEGACY_VOICE_TO_PROVIDER,
     ConfigurationModel,
@@ -181,6 +190,11 @@ class Agent:
 
         # Transcription gate processor (always present in pipeline)
         self.speech_gate: Any = None
+
+        # Knowledge base runtime (resolved in run(); all fail-open)
+        self.kb_runtime: Any = None  # Optional[ResolvedKbRuntime]
+        self._kb_processor: Any = None  # Optional[KnowledgeRetrievalProcessor]
+        self._kb_text_task: Optional[asyncio.Task] = None
 
         # RTVI processor for daily mode real-time events
         self._rtvi_processor: Any = None
@@ -976,12 +990,25 @@ class Agent:
 
         lead_payload = self.lead.payload or {}
 
+        # Full-injection KB text: the fetch started at boot (run()); give it a
+        # short grace window then fail open — the call proceeds without KB
+        # context rather than delaying the greeting (mirrors greeting prep).
+        kb_text: Optional[str] = None
+        if self._kb_text_task is not None:
+            try:
+                kb_text = await asyncio.wait_for(
+                    asyncio.shield(self._kb_text_task), timeout=2.0
+                )
+            except Exception as e:
+                logger.warning(f"KB full-injection text unavailable at connect: {e}")
+
         initial_node_config = prepare_initial_node(
             flow_config=self.flow_config,
             lead_payload=lead_payload,
             configurations=self.configurations,
             has_greeting_source=bool(self.greeting_source),
             greeting_text=self.greeting_text,
+            kb_text=kb_text,
         )
 
         # Initialize node traversal tracking
@@ -1113,6 +1140,28 @@ class Agent:
             if not is_stream:
                 assert llm is not None, "LLM is required in agent mode"
 
+            # Knowledge base runtime resolution (fail-open). Stream mode goes
+            # through the chat brain, which has its own KB hooks; realtime
+            # LLMs have no pre-LLM text hop (auto/auto_retrieve is rejected
+            # for them at template save by ConfigurationModel's validator and
+            # re-checked at call load by validate_template_compat).
+            is_realtime_llm = stt is None and tts is None and llm is not None
+            if not is_stream:
+                self.kb_runtime = await resolve_kb_runtime(self.configurations)
+            if self.kb_runtime:
+                if self.kb_runtime.mode == "auto_retrieve" and not is_realtime_llm:
+                    self._kb_processor = KnowledgeRetrievalProcessor(
+                        self.kb_runtime.config
+                    )
+                    logger.info("KB auto_retrieve enabled for this call")
+                elif self.kb_runtime.mode == "full_injection":
+                    # Fetch concurrently with pipeline build / greeting prep;
+                    # awaited (with a short shield) in _handle_client_connected.
+                    self._kb_text_task = asyncio.create_task(
+                        fetch_full_kb_text_cached(self.kb_runtime.config)
+                    )
+                    logger.info("KB full_injection enabled for this call")
+
             (
                 pipeline,
                 context,
@@ -1131,6 +1180,7 @@ class Agent:
                     None if is_stream else self._handle_user_idle_timeout
                 ),
                 mode="stream" if is_stream else "agent",
+                kb_processor=self._kb_processor,
             )
             self._context_aggregator = context_aggregator
 

@@ -48,6 +48,13 @@ from app.ai.voice.agents.breeze_buddy.mcp import (
     close_mcp_pool,
     get_mcp_global_functions_cached,
 )
+from app.ai.voice.agents.breeze_buddy.services.knowledge_base import (
+    build_kb_system_message,
+    build_retrieval_query,
+    fetch_full_kb_text_cached,
+    fetch_kb_context_message,
+    resolve_kb_runtime,
+)
 from app.ai.voice.agents.breeze_buddy.template.approval import build_approval_map
 from app.ai.voice.agents.breeze_buddy.template.builder import FlowConfigBuilder
 from app.ai.voice.agents.breeze_buddy.template.context import with_context
@@ -128,6 +135,19 @@ class _PreparedTools:
     global_funcs: List[FlowsFunctionSchema]
     tool_retention: Optional[Dict[str, str]]
     tool_projection: Optional[Dict[str, List[str]]]
+
+
+@dataclass
+class _KbMessage:
+    """This turn's ephemeral knowledge base message + where it seeds.
+
+    ``prefix`` = right after task messages (full injection, stable across
+    turns → prompt-cache friendly). ``tail`` = just before the user turn
+    (per-turn retrieved chunks). Never persisted to chat_message.
+    """
+
+    message: Dict[str, Any]
+    placement: str  # "prefix" | "tail"
 
 
 class ChatAgent:
@@ -292,9 +312,63 @@ class ChatAgent:
             data={"idx": user_msg.idx if user_msg else None, "content": user_content},
         )
 
-        context = self._seed_context(node, history, user_content, prep.global_funcs)
+        # Knowledge base context for this turn. In-memory only — like the
+        # client-context blocks it is EPHEMERAL (never persisted to
+        # chat_message), so nothing leaks into replayed history. Chat can
+        # afford a looser retrieval budget than voice.
+        kb_message = await self._prepare_kb_message(user_content, history)
+
+        context = self._seed_context(
+            node, history, user_content, prep.global_funcs, kb_message=kb_message
+        )
         async for event in self._cycle_loop(context, node, prep):
             yield event
+
+    async def _prepare_kb_message(
+        self,
+        user_content: str,
+        history: List[Dict[str, Any]],
+    ) -> Optional[_KbMessage]:
+        """Resolve the template's KB mode and fetch this turn's KB message.
+
+        Returns None when no KB is attached or on any failure (fail-open).
+        Tool mode needs nothing here — the builder synthesizes the
+        query_knowledge_base function instead.
+        """
+        try:
+            runtime = await resolve_kb_runtime(
+                self.template.configurations if self.template else None
+            )
+            if runtime is None or runtime.mode == "tool":
+                return None
+            if runtime.mode == "full_injection":
+                text = await fetch_full_kb_text_cached(runtime.config)
+                if not text:
+                    return None
+                return _KbMessage(
+                    message=build_kb_system_message(text, runtime.config),
+                    placement="prefix",
+                )
+            # auto_retrieve
+            recent_user_turns = [
+                m["content"]
+                for m in history
+                if isinstance(m, dict)
+                and m.get("role") == "user"
+                and isinstance(m.get("content"), str)
+            ]
+            query = build_retrieval_query(
+                user_content, recent_user_turns, runtime.config
+            )
+            message = await fetch_kb_context_message(runtime.config, query, timeout=1.0)
+            if message is None:
+                return None
+            return _KbMessage(message=message, placement="tail")
+        except Exception as e:
+            logger.warning(
+                f"ChatAgent {self.session_id}: KB prep failed (continuing): {e}"
+            )
+            return None
 
     async def _prepare_tools(self) -> _PreparedTools:
         """Build the per-turn tool surface (flow config, wrapped handlers,
@@ -865,7 +939,13 @@ class ChatAgent:
         prep = await self._prepare_tools()
         node = self._resolve_node(prep.flow_config, current_node)
         node_name = cast(str, node["name"])
-        context = self._seed_resume_context(node, history, prep.global_funcs)
+        # Resume turns get full-injection KB only: there is no new user
+        # utterance to retrieve on, and the history tail is tool_use/tool_result
+        # where extra messages break provider adapters.
+        kb_message = await self._prepare_kb_message_for_resume()
+        context = self._seed_resume_context(
+            node, history, prep.global_funcs, kb_message=kb_message
+        )
 
         yield SSEEvent(
             event="function_approval_resolved",
@@ -1036,11 +1116,38 @@ class ChatAgent:
             ),
         )
 
+    async def _prepare_kb_message_for_resume(self) -> Optional["_KbMessage"]:
+        """Full-injection KB message for approval-resume turns (or None).
+
+        Resume turns (HITL approval) carry no new user utterance, so there
+        is nothing to retrieve on — only full_injection mode applies here.
+        Called from ``_seed_resume_context``; fail-open like all KB paths.
+        """
+        try:
+            runtime = await resolve_kb_runtime(
+                self.template.configurations if self.template else None
+            )
+            if runtime is None or runtime.mode != "full_injection":
+                return None
+            text = await fetch_full_kb_text_cached(runtime.config)
+            if not text:
+                return None
+            return _KbMessage(
+                message=build_kb_system_message(text, runtime.config),
+                placement="prefix",
+            )
+        except Exception as e:
+            logger.warning(
+                f"ChatAgent {self.session_id}: KB resume prep failed (continuing): {e}"
+            )
+            return None
+
     def _seed_resume_context(
         self,
         node: Dict[str, Any],
         history: List[Dict[str, Any]],
         global_funcs: List[FlowsFunctionSchema],
+        kb_message: Optional["_KbMessage"] = None,
     ) -> LLMContext:
         """Build the LLMContext for an approval-resume turn:
         ``[role, task, system_block?, …history…]`` — NO new user message.
@@ -1063,6 +1170,8 @@ class ChatAgent:
             *role_messages,
             *task_messages,
         ]
+        if kb_message is not None and kb_message.placement == "prefix":
+            messages.append(kb_message.message)
         if system_block:
             messages.append({"role": "system", "content": system_block})
         messages.extend(history)
@@ -1111,8 +1220,10 @@ class ChatAgent:
         history: List[Dict[str, Any]],
         user_content: str,
         global_funcs: List[FlowsFunctionSchema],
+        kb_message: Optional["_KbMessage"] = None,
     ) -> LLMContext:
-        """Build initial LLMContext: [role, task, …history…, new user].
+        """Build initial LLMContext: [role, task, kb_full?, …history…,
+        system_block?, kb_chunks?, new user].
 
         Client-pushed facts (offers, cart summary, …) are rendered here:
         ``user_block`` rides the user turn as untrusted data (cache-safe,
@@ -1120,6 +1231,12 @@ class ChatAgent:
         a system message right before the user turn. Both are EPHEMERAL —
         never persisted to chat_message, re-derived from agent_state every
         turn so they always reflect current truth (latest-wins).
+
+        KB placement follows the same logic: full-injection text sits right
+        after task messages (stable across turns → prompt-cache friendly);
+        per-turn retrieved chunks sit just before the user turn (fresh each
+        turn, invalidates only the suffix). Both are ephemeral like the
+        client-context blocks.
         """
         role_messages, task_messages = self._render_node_messages(node)
         user_block, system_block = render_client_context(
@@ -1131,10 +1248,14 @@ class ChatAgent:
         messages: List[Dict[str, Any]] = [
             *role_messages,
             *task_messages,
-            *history,
         ]
+        if kb_message is not None and kb_message.placement == "prefix":
+            messages.append(kb_message.message)
+        messages.extend(history)
         if system_block:
             messages.append({"role": "system", "content": system_block})
+        if kb_message is not None and kb_message.placement == "tail":
+            messages.append(kb_message.message)
         messages.append({"role": "user", "content": user_text})
         return LLMContext(
             messages=cast(List[LLMContextMessage], messages),
