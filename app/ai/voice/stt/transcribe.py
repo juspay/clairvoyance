@@ -85,11 +85,15 @@ def _sarvam_lang(language: LanguageHint) -> str:
 
 
 async def _openai(
-    audio: bytes, content_type: Optional[str], filename: str, lang: Optional[str]
+    audio: bytes,
+    content_type: Optional[str],
+    filename: str,
+    lang: Optional[str],
+    model: Optional[str] = None,
 ) -> Transcription:
     headers = {"Authorization": f"Bearer {OPENAI_STT_API_KEY}"}
     files = {"file": (filename, audio, content_type or "audio/webm")}
-    data = {"model": OPENAI_STT_MODEL or "whisper-1"}
+    data = {"model": model or OPENAI_STT_MODEL or "whisper-1"}
     if lang:
         data["language"] = lang
     async with create_http_client(timeout=_HTTP_TIMEOUT_SECONDS) as client:
@@ -100,9 +104,16 @@ async def _openai(
 
 
 async def _deepgram(
-    audio: bytes, content_type: Optional[str], lang: Optional[str]
+    audio: bytes,
+    content_type: Optional[str],
+    lang: Optional[str],
+    model: Optional[str] = None,
 ) -> Transcription:
-    params = {"model": "nova-3", "smart_format": "true", "language": lang or "multi"}
+    params = {
+        "model": model or "nova-3",
+        "smart_format": "true",
+        "language": lang or "multi",
+    }
     headers = {
         "Authorization": f"Token {DEEPGRAM_API_KEY}",
         "Content-Type": content_type or "audio/webm",
@@ -118,11 +129,15 @@ async def _deepgram(
 
 
 async def _sarvam(
-    audio: bytes, content_type: Optional[str], filename: str, lang_code: str
+    audio: bytes,
+    content_type: Optional[str],
+    filename: str,
+    lang_code: str,
+    model: Optional[str] = None,
 ) -> Transcription:
     headers = {"api-subscription-key": SARVAM_API_KEY or ""}
     files = {"file": (filename, audio, content_type or "audio/wav")}
-    data = {"model": "saarika:v2", "language_code": lang_code}
+    data = {"model": model or "saarika:v2", "language_code": lang_code}
     async with create_http_client(timeout=_HTTP_TIMEOUT_SECONDS) as client:
         resp = await client.post(_SARVAM_URL, headers=headers, files=files, data=data)
     resp.raise_for_status()
@@ -149,6 +164,7 @@ async def _soniox(
     content_type: Optional[str],
     filename: str,
     language: LanguageHint,
+    model: Optional[str] = None,
 ) -> Transcription:
     """One-shot transcription via Soniox's async file API.
 
@@ -175,10 +191,11 @@ async def _soniox(
             up.raise_for_status()
             file_id = up.json()["id"]
 
-            # 2. Create the async transcription job. The model resolves
-            #    Redis → env → default, so it can be bumped without a deploy.
+            # 2. Create the async transcription job. A caller-supplied model
+            #    overrides; otherwise it resolves Redis → env → default, so it
+            #    can be bumped without a deploy.
             body: Dict[str, Any] = {
-                "model": await SONIOX_ASYNC_MODEL(),
+                "model": model or await SONIOX_ASYNC_MODEL(),
                 "file_id": file_id,
             }
             hints = _soniox_lang_hints(language)
@@ -237,31 +254,42 @@ async def transcribe_audio(
     content_type: Optional[str],
     *,
     provider: Optional[str],
+    model: Optional[str] = None,
     language: LanguageHint = None,
     filename: str = "audio.webm",
 ) -> Transcription:
-    """Transcribe ``audio`` to text using the template-selected ``provider``.
+    """Transcribe ``audio`` to text using the selected ``provider``.
 
     ``provider`` is an ``STTProvider`` value (``"soniox"`` | ``"deepgram"`` |
     ``"sarvam"`` | ``"openai"`` | ``"google"``). Soniox uses its async file API;
     Google (no direct one-shot path) and any provider whose key is unset
     transcribe via OpenAI Whisper. Raises :class:`TranscriptionError` only when
     no provider can run.
+
+    ``model`` optionally overrides the provider's default model. It is provider-
+    specific, so it is only forwarded to the direct provider call — never to the
+    OpenAI Whisper fallback below, unless the selected provider was OpenAI itself
+    (a Deepgram/Sarvam/Soniox model name would be meaningless to Whisper).
     """
     if not audio:
         raise TranscriptionError("empty audio")
 
     p = (provider or "").lower()
     lang = _short_lang(language)
+    # Only pass ``model`` to the Whisper fallback when OpenAI was the intended
+    # provider; other providers' model names don't apply to Whisper.
+    fallback_model = model if p == "openai" else None
 
     try:
         if p == "soniox" and SONIOX_API_KEY:
             # Pass the raw language (str | list) — Soniox takes a hints array.
-            return await _soniox(audio, content_type, filename, language)
+            return await _soniox(audio, content_type, filename, language, model)
         if p == "deepgram" and DEEPGRAM_API_KEY:
-            return await _deepgram(audio, content_type, lang)
+            return await _deepgram(audio, content_type, lang, model)
         if p == "sarvam" and SARVAM_API_KEY:
-            return await _sarvam(audio, content_type, filename, _sarvam_lang(language))
+            return await _sarvam(
+                audio, content_type, filename, _sarvam_lang(language), model
+            )
         if not OPENAI_STT_API_KEY:
             raise TranscriptionError(
                 f"no usable STT provider for '{provider}' (OPENAI_STT_API_KEY unset)"
@@ -272,7 +300,7 @@ async def transcribe_audio(
                 "using OpenAI Whisper",
                 provider,
             )
-        return await _openai(audio, content_type, filename, lang)
+        return await _openai(audio, content_type, filename, lang, fallback_model)
     except TranscriptionError:
         raise
     except Exception as e:
@@ -285,7 +313,9 @@ async def transcribe_audio(
                 e,
             )
             try:
-                return await _openai(audio, content_type, filename, lang)
+                return await _openai(
+                    audio, content_type, filename, lang, fallback_model
+                )
             except Exception as e2:
                 raise TranscriptionError(f"transcription failed: {e2}") from e2
         raise TranscriptionError(f"transcription failed: {e}") from e
