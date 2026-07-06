@@ -105,6 +105,20 @@ class CreateKnowledgeBaseRequest(BaseModel):
     settings: Optional[Dict[str, Any]] = None
 
 
+class KbDocumentDownloadResponse(BaseModel):
+    """Response of GET /knowledge-bases/{kb_id}/documents/{id}/download.
+
+    For uploaded files ``url`` is a short-lived signed GCS link (the browser
+    downloads the original bytes directly, nothing streams through the app);
+    for google_sheet documents it is the sheet's normal Google URL and
+    ``expires_in_seconds`` is null.
+    """
+
+    url: str
+    filename: str
+    expires_in_seconds: Optional[int] = None
+
+
 class UpdateKnowledgeBaseRequest(BaseModel):
     name: Optional[str] = Field(None, min_length=1, max_length=255)
     description: Optional[str] = None
@@ -126,6 +140,27 @@ class DeleteKnowledgeBaseResponse(BaseModel):
     status: str
     kb_id: str
     message: str
+
+
+class AddSheetDocumentRequest(BaseModel):
+    """Connect a Google Sheet as a knowledge base document."""
+
+    sheet_url: str = Field(
+        ..., min_length=10, description="Full Google Sheets URL (or bare ID)."
+    )
+    ranges: Optional[List[str]] = Field(
+        None,
+        description="Sheet tabs / A1 ranges to sync. Omit to sync all tabs.",
+    )
+    name: Optional[str] = Field(
+        None, description="Display name; defaults to the spreadsheet title."
+    )
+
+
+class SheetsServiceAccountResponse(BaseModel):
+    """The service-account email merchants share their sheet with."""
+
+    email: str
 
 
 class QueryKnowledgeBaseRequest(BaseModel):

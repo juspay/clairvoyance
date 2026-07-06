@@ -654,3 +654,30 @@ async def KB_MERCHANT_MAX_CHUNKS() -> int:
     per reseller on a 15GB instance); the per-KB cap above only binds once
     this one has been raised for a reseller."""
     return await get_config("KB_MERCHANT_MAX_CHUNKS", 20000, int)
+
+
+async def KB_SHEETS_POLL_ENABLED() -> bool:
+    """Master switch for the scheduled Google Sheets freshness poller."""
+    return await get_config("KB_SHEETS_POLL_ENABLED", "true", bool)
+
+
+async def KB_SHEETS_POLL_INTERVAL_SECONDS() -> int:
+    """Scheduler interval for the sheets poller (read at startup).
+
+    Hardened against malformed env overrides like KB_INGESTION_INTERVAL_SECONDS
+    (a bad value would disable ALL background tasks at startup).
+    """
+    value = await get_config("KB_SHEETS_POLL_INTERVAL_SECONDS", 900, int)
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        logger.warning(
+            f"Invalid KB_SHEETS_POLL_INTERVAL_SECONDS value {value!r}; using 900"
+        )
+        return 900
+
+
+async def KB_SHEETS_MIN_SYNC_INTERVAL_SECONDS() -> int:
+    """Debounce floor: a sheet is never re-synced more often than this,
+    even if Drive reports changes (Sheets bumps modifiedTime aggressively)."""
+    return await get_config("KB_SHEETS_MIN_SYNC_INTERVAL_SECONDS", 300, int)

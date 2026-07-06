@@ -551,3 +551,22 @@ def hybrid_search_chunks_query(
         top_k,
     ]
     return text, values
+
+
+def get_sheet_documents_due_for_poll_query(
+    min_sync_age_seconds: int,
+) -> Tuple[str, List[Any]]:
+    """Generate query for READY google_sheet documents due a freshness probe.
+
+    The age floor debounces the poller (Sheets bumps modifiedTime on every
+    keystroke-ish save; we never re-sync a sheet more often than this).
+    """
+    text = f"""
+        SELECT * FROM "{KB_DOCUMENT_TABLE}"
+        WHERE "source_type" = 'google_sheet'
+          AND "status" = 'READY'
+          AND ("synced_at" IS NULL
+               OR "synced_at" < now() - make_interval(secs => $1))
+        ORDER BY "synced_at" NULLS FIRST;
+    """
+    return text, [min_sync_age_seconds]

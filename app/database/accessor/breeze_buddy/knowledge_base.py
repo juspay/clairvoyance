@@ -30,6 +30,7 @@ from app.database.queries.breeze_buddy.knowledge_base import (
     get_kb_token_total_query,
     get_knowledge_base_by_id_query,
     get_merchant_chunk_total_query,
+    get_sheet_documents_due_for_poll_query,
     hybrid_search_chunks_query,
     insert_kb_document_query,
     insert_knowledge_base_query,
@@ -500,4 +501,19 @@ async def hybrid_search_chunks(
         return []
     except Exception as e:
         logger.error(f"Error in hybrid search over KBs {kb_ids}: {e}")
+        raise
+
+
+async def get_sheet_documents_due_for_poll(
+    min_sync_age_seconds: int,
+) -> List[KbDocument]:
+    """READY google_sheet documents older than the debounce floor."""
+    try:
+        query_text, values = get_sheet_documents_due_for_poll_query(
+            min_sync_age_seconds
+        )
+        result = await run_parameterized_query(query_text, values)
+        return decode_kb_document_list(result)
+    except Exception as e:
+        logger.error(f"Error listing sheet documents due for poll: {e}")
         raise

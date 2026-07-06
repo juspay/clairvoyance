@@ -43,6 +43,13 @@ GOOGLE_CREDENTIALS_JSON = os.environ.get("GOOGLE_CREDENTIALS_JSON", "")
 GCS_CREDENTIALS_JSON = os.environ.get("GCS_CREDENTIALS_JSON", "")
 GCS_BUCKET = os.environ.get("GCS_BUCKET", "atoms-sdk")
 
+# Google Sheets sync (knowledge base connector). Service-account JSON; the
+# merchant shares their sheet with this SA's email (Viewer). Falls back to
+# GCS_CREDENTIALS_JSON when unset (same SA reused with Sheets/Drive scopes).
+GOOGLE_SHEETS_SA_CREDENTIALS_JSON = os.environ.get(
+    "GOOGLE_SHEETS_SA_CREDENTIALS_JSON", ""
+)
+
 ENABLE_AIC_FILTER = os.environ.get("ENABLE_AIC_FILTER", "false").lower() == "true"
 AIC_LICENSE_KEY = os.environ.get("AIC_LICENSE_KEY", "")
 # Breeze Buddy AIC License Key

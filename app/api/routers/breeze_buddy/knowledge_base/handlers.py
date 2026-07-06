@@ -27,16 +27,19 @@ from app.database.accessor.breeze_buddy.knowledge_base import (
 )
 from app.schemas import UserInfo
 from app.schemas.breeze_buddy.knowledge_base import (
+    AddSheetDocumentRequest,
     CreateKnowledgeBaseRequest,
     DeleteKnowledgeBaseResponse,
     EmbeddingConfig,
     KbDocument,
+    KbDocumentDownloadResponse,
     KbDocumentListResponse,
     KbDocumentSourceType,
     KnowledgeBase,
     KnowledgeBaseListResponse,
     QueryKnowledgeBaseRequest,
     QueryKnowledgeBaseResponse,
+    SheetsServiceAccountResponse,
     UpdateKnowledgeBaseRequest,
 )
 from app.services.gcp.storage.storage import GCSStorage
@@ -327,6 +330,104 @@ async def upload_document_handler(
     return document
 
 
+async def add_sheet_document_handler(
+    kb_id: str, request: "AddSheetDocumentRequest", current_user: UserInfo
+) -> KbDocument:
+    """Connect a Google Sheet: validate SA access -> PENDING doc -> kick."""
+    from app.services.knowledge_base.connectors.google_sheets import (
+        fetch_spreadsheet_meta,
+        parse_spreadsheet_id,
+    )
+
+    kb = await _get_kb_or_404(kb_id)
+    require_admin_or_reseller_owner(current_user, kb.reseller_id, "connect sheets")
+
+    max_docs = await KB_MAX_DOCUMENTS_PER_KB()
+    documents = await list_kb_documents(kb_id)
+    if len(documents) >= max_docs:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Knowledge base already has {len(documents)} documents "
+            f"(cap: {max_docs})",
+        )
+
+    try:
+        spreadsheet_id = parse_spreadsheet_id(request.sheet_url)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+    duplicate = next(
+        (
+            d
+            for d in documents
+            if d.source_type == KbDocumentSourceType.GOOGLE_SHEET
+            and d.source_ref.get("spreadsheet_id") == spreadsheet_id
+        ),
+        None,
+    )
+    if duplicate is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"This spreadsheet is already connected as '{duplicate.name}'",
+        )
+
+    try:
+        meta = await fetch_spreadsheet_meta(spreadsheet_id)
+    except ValueError as e:
+        # Access/parse errors carry the share-with-SA guidance.
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception as e:
+        logger.error(f"Sheet validation failed for {spreadsheet_id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Could not reach Google Sheets; try again",
+        )
+
+    document = await create_kb_document(
+        kb_id=kb_id,
+        source_type=KbDocumentSourceType.GOOGLE_SHEET.value,
+        name=request.name or meta["title"],
+        source_ref={
+            "spreadsheet_id": spreadsheet_id,
+            "ranges": request.ranges or [],
+        },
+        mime_type="application/vnd.google-apps.spreadsheet",
+    )
+    if document is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to register the sheet",
+        )
+
+    kick_ingestion()
+    return document
+
+
+def get_sheets_service_account_handler() -> "SheetsServiceAccountResponse":
+    """The SA email to share sheets with (shown in the connect-sheet UI)."""
+    from app.services.knowledge_base.connectors.google_sheets import (
+        get_service_account_email,
+    )
+
+    try:
+        email = get_service_account_email()
+    except Exception as e:
+        logger.error(f"Sheets service-account lookup failed: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                "Google Sheets sync is not configured: set "
+                "GOOGLE_SHEETS_SA_CREDENTIALS_JSON (or GCS_CREDENTIALS_JSON)"
+            ),
+        ) from e
+    if not email:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Google Sheets service account has no client_email",
+        )
+    return SheetsServiceAccountResponse(email=email)
+
+
 async def list_documents_handler(
     kb_id: str, current_user: UserInfo
 ) -> KbDocumentListResponse:
@@ -404,6 +505,73 @@ async def resync_document_handler(
 
     kick_ingestion()
     return requeued
+
+
+_DOWNLOAD_URL_TTL_MINUTES = 10
+
+
+async def download_document_handler(
+    kb_id: str, document_id: str, current_user: UserInfo
+) -> KbDocumentDownloadResponse:
+    """Hand back the original source of a document.
+
+    Files: short-lived signed GCS URL (Content-Disposition forces the
+    original filename), so users can always retrieve exactly what they
+    uploaded. Sheets: the document IS the Google Sheet, so return its
+    canonical URL. Read-level access — same as list/query, not admin-gated.
+    Called from the loom docs-table download action (GET .../download).
+    """
+    kb = await _get_kb_or_404(kb_id)
+    validate_kb_access(
+        current_user, kb.reseller_id, kb.merchant_id, "download documents"
+    )
+
+    _require_uuid(document_id, "Document")
+    document = await get_kb_document_by_id(document_id)
+    if document is None or document.kb_id != kb_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Document {document_id} not found in knowledge base {kb_id}",
+        )
+
+    source_ref = document.source_ref or {}
+
+    if document.source_type == KbDocumentSourceType.GOOGLE_SHEET:
+        spreadsheet_id = source_ref.get("spreadsheet_id")
+        if not spreadsheet_id:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="This document has no downloadable source",
+            )
+        return KbDocumentDownloadResponse(
+            url=f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}/edit",
+            filename=document.name,
+            expires_in_seconds=None,
+        )
+
+    gcs_path = source_ref.get("gcs_path")
+    if not gcs_path:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="This document has no stored file to download",
+        )
+
+    url = GCSStorage().generate_signed_url(
+        gcs_path,
+        expires_minutes=_DOWNLOAD_URL_TTL_MINUTES,
+        download_filename=document.name,
+    )
+    if url is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="File storage is unavailable; try again shortly",
+        )
+
+    return KbDocumentDownloadResponse(
+        url=url,
+        filename=document.name,
+        expires_in_seconds=_DOWNLOAD_URL_TTL_MINUTES * 60,
+    )
 
 
 async def query_kb_handler(
