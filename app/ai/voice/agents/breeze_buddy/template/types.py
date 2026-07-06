@@ -2381,6 +2381,40 @@ def _default_supported_channels() -> List[Literal["voice", "chat"]]:
     return ["voice"]
 
 
+class DataSourceFormat(str, Enum):
+    MARKDOWN_TABLE = "markdown_table"
+    CSV = "csv"
+    JSON = "json"
+
+
+class DataSourceRef(BaseModel):
+    """Inline config for a data source attached to a template.
+
+    Content is fetched at call time and injected as ``template_vars[datasource_<name>]``.
+    The merchant references it in prompts with ``{datasource_<name>}`` placeholder syntax
+    (e.g. name='products' → use ``{datasource_products}`` in prompts).
+    The ``datasource_`` prefix prevents collision with payload credentials.
+    """
+
+    name: str = Field(
+        description="Variable name. Referenced in prompts as {datasource_<name>} (e.g. name='products' → {datasource_products})"
+    )
+    spreadsheet_url: str = Field(
+        description="Full Google Sheets URL (shared with platform SA)"
+    )
+    sheet_name: Optional[str] = Field(
+        default=None, description="Tab name. NULL = first tab"
+    )
+    columns: Optional[List[str]] = Field(
+        default=None, description="Columns to include. NULL = all columns"
+    )
+    format: DataSourceFormat = Field(
+        default=DataSourceFormat.MARKDOWN_TABLE,
+        description="Output format: 'markdown_table' | 'csv' | 'json'",
+    )
+    is_active: bool = Field(default=True, description="Skip if false at call time")
+
+
 class TemplateModel(BaseModel):
     # Read-only fields (set by server, not editable via API).
     # These are intentionally excluded from ReplaceTemplateRequest so that
@@ -2400,6 +2434,10 @@ class TemplateModel(BaseModel):
     secrets: Optional[Dict[str, Any]] = None
     outbound_number_id: Optional[str] = None
     is_active: bool = True
+    data_sources: Optional[List[DataSourceRef]] = Field(
+        default=None,
+        description="Inline data source configs attached to this template",
+    )
     # Channels this template is allowed to be served on. Defaults to
     # voice-only so existing templates are unaffected. Add "chat" to
     # opt the template into the chat (text) mode flow build path
@@ -2448,6 +2486,7 @@ class CreateTemplateRequest(BaseModel):
     expected_callback_response_schema: Optional[Dict[str, Any]] = None
     configurations: Optional[ConfigurationModel] = None
     secrets: Optional[Dict[str, Any]] = None
+    data_sources: Optional[List[DataSourceRef]] = None
     supported_channels: List[Literal["voice", "chat"]] = Field(
         default_factory=_default_supported_channels,
         min_length=1,
@@ -2496,6 +2535,7 @@ class ReplaceTemplateRequest(BaseModel):
     expected_callback_response_schema: Optional[Dict[str, Any]] = None
     configurations: Optional[ConfigurationModel] = None
     secrets: Optional[Dict[str, Any]] = None
+    data_sources: Optional[List[DataSourceRef]] = None
     supported_channels: Optional[List[Literal["voice", "chat"]]] = Field(
         default=None,
         min_length=1,

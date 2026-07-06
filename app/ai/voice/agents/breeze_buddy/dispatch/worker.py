@@ -52,6 +52,9 @@ from app.ai.voice.agents.breeze_buddy.managers.calls import (
     _release_number,
     _run_pre_checks_for_lead,
 )
+from app.ai.voice.agents.breeze_buddy.managers.data_source_prefetch import (
+    prefetch_data_sources,
+)
 from app.ai.voice.agents.breeze_buddy.managers.utils import (
     prepare_and_store_initial_greeting,
 )
@@ -339,6 +342,8 @@ class Worker:
 
             if template:
                 template = apply_playground_overrides(locked, template)
+                if template.data_sources:
+                    asyncio.create_task(prefetch_data_sources(template=template))
                 await prepare_and_store_initial_greeting(
                     lead_id=locked.id,
                     payload=locked.payload or {},

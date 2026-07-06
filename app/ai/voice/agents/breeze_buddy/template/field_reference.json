@@ -17,7 +17,8 @@
     "secrets":                           { "description": "Flat dict of credential key-value pairs injected as template vars, overriding reseller-level credentials for the same keys. Values substitute into {secret_key} placeholders in HTTP URLs, headers, and bodies.", "example": { "api_token": "Bearer sk-prod-abc123", "webhook_secret": "wh_live_xyz789" } },
     "outbound_number_id":                { "description": "UUID of the outbound phone number record to use for calls from this template. Must belong to the reseller. Null to use the reseller-default number.", "example": "eb0df4e9-a438-4ce4-a828-addf9db5ce3a" },
     "is_active":                         { "description": "When false, the template is soft-disabled: dispatch will not enqueue new leads for it. Set to false (not delete) when retiring a template.", "example": true },
-    "supported_channels":                { "description": "Channels this template may be served on. Default ['voice']. Add 'chat' to enable the Buddy Assist web-chat mode. Must have at least one entry.", "example": ["voice"] }
+    "supported_channels":                { "description": "Channels this template may be served on. Default ['voice']. Add 'chat' to enable the Buddy Assist web-chat mode. Must have at least one entry.", "example": ["voice"] },
+    "data_sources":                      { "description": "Google Sheets data sources attached to this template. Each ref has name, spreadsheet_url, sheet_name, columns filter, output format (markdown_table/csv/json), and is_active flag. Fetched at call dispatch and injected as {datasource_<name>} template vars into LLM context. For example, a ref named 'customer_list' is referenced as {datasource_customer_list} in prompts.", "example": [{ "name": "customer_list", "spreadsheet_url": "https://docs.google.com/spreadsheets/d/abc123", "sheet_name": "Sheet1", "columns": ["Name", "Status"], "format": "markdown_table", "is_active": true }] }
   },
 
   "ConfigurationModel": {

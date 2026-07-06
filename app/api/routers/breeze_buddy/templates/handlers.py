@@ -140,6 +140,11 @@ async def create_template_handler(
             outbound_number_id=template_data.outbound_number_id,
             is_active=template_data.is_active,
             supported_channels=list(template_data.supported_channels),
+            data_sources=(
+                [ds.model_dump() for ds in template_data.data_sources]
+                if template_data.data_sources
+                else None
+            ),
             now=now,
         )
 
@@ -535,6 +540,15 @@ async def replace_template_handler(
             is_active=template_data.is_active,
             merchant_id=template_data.merchant_id,
             supported_channels=supported_channels,
+            data_sources=(
+                ([ds.model_dump() for ds in template_data.data_sources] or None)
+                if template_data.data_sources is not None
+                else (
+                    [ds.model_dump() for ds in existing_template.data_sources]
+                    if existing_template.data_sources
+                    else None
+                )
+            ),
             now=now,
         )
 

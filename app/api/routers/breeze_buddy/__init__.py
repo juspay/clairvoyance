@@ -15,6 +15,7 @@ from app.api.routers.breeze_buddy.credentials import router as credentials_route
 
 # Daily transport (web/mobile clients via Daily.co)
 from app.api.routers.breeze_buddy.daily import router as daily_router
+from app.api.routers.breeze_buddy.data_sources import router as data_sources_router
 from app.api.routers.breeze_buddy.demo import router as demo_router
 from app.api.routers.breeze_buddy.leads import router as leads_router
 from app.api.routers.breeze_buddy.merchants import router as merchants_router
@@ -44,6 +45,7 @@ router = APIRouter()
 # ============================================================================
 
 # Public demo (unauthenticated)
+router.include_router(data_sources_router, prefix="", tags=["data-sources"])
 router.include_router(demo_router, prefix="", tags=["demo"])
 
 # Authentication (JWT & S2S tokens)
