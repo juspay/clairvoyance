@@ -16,6 +16,9 @@ from app.api.routers.breeze_buddy.credentials import router as credentials_route
 # Daily transport (web/mobile clients via Daily.co)
 from app.api.routers.breeze_buddy.daily import router as daily_router
 from app.api.routers.breeze_buddy.demo import router as demo_router
+
+# Knowledge base (RAG) management: KBs, documents, retrieval testing
+from app.api.routers.breeze_buddy.knowledge_base import router as knowledge_base_router
 from app.api.routers.breeze_buddy.leads import router as leads_router
 from app.api.routers.breeze_buddy.merchants import router as merchants_router
 from app.api.routers.breeze_buddy.numbers import router as numbers_router
@@ -66,6 +69,9 @@ router.include_router(numbers_router, prefix="", tags=["numbers"])
 
 # Templates (conversational flow definitions)
 router.include_router(templates_router, prefix="", tags=["templates"])
+
+# Knowledge bases (merchant documents/sheets for agent RAG)
+router.include_router(knowledge_base_router, prefix="", tags=["knowledge-base"])
 
 # AI-assisted template generation / refinement (streaming SSE)
 router.include_router(template_generator_router, prefix="", tags=["template-generator"])

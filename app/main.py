@@ -35,6 +35,7 @@ from app.api.routers.breeze_buddy.chat import cancel_bus as chat_cancel_bus
 from app.core.background_tasks import BackgroundTaskScheduler
 from app.core.config.dynamic import (
     ENABLE_BACKGROUND_TASKS,
+    KB_INGESTION_INTERVAL_SECONDS,
 )
 from app.core.config.static import (
     BACKGROUND_TASKS_LOOP_INTERVAL_SECONDS,
@@ -58,6 +59,9 @@ from app.core.config.static import (
 from app.core.logger import logger
 from app.core.middleware.widget_cors_bypass import CustomWidgetCorsBypassMiddleware
 from app.database import close_db_pool, init_db_pool
+from app.services.knowledge_base import (
+    process_pending_documents as process_pending_kb_documents,
+)
 from app.services.langfuse.tasks.task import initialize_langfuse_tasks
 from app.services.redis import (
     close_redis_connections,
@@ -134,6 +138,16 @@ async def lifespan(_app: FastAPI):
                 name="chat_session_idle_cleanup",
                 func=end_idle_chat_sessions,
                 interval_seconds=CHAT_SESSION_END_TIMEOUT_LOOP_INTERVAL_SECONDS,
+            )
+
+            # Knowledge base ingestion sweeper. Uploads kick processing
+            # immediately in-process; this sweep catches kicks lost to pod
+            # restarts and requeues stale PROCESSING claims. The claim query
+            # uses FOR UPDATE SKIP LOCKED, so kick + sweep never double-work.
+            _background_scheduler.register_task(
+                name="kb_ingestion",
+                func=process_pending_kb_documents,
+                interval_seconds=await KB_INGESTION_INTERVAL_SECONDS(),
             )
 
             # Event-driven dispatch reconcilers (Plane 5). Only registered on
