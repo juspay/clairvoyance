@@ -29,6 +29,18 @@ class MerchantCreate(BaseModel):
         description="Reseller user ID who owns this merchant. "
         "Admin-only field; auto-set for resellers.",
     )
+    issue_token: bool = Field(
+        False,
+        description="If true, mint a per-merchant S2S token, store it on the "
+        "merchant row, and return it (once) in the response. Used e.g. as the "
+        "webhook HMAC secret. Requires a reseller_id.",
+    )
+    token_lifetime_days: int = Field(
+        default=3650,
+        ge=1,
+        le=365000,
+        description="Lifetime of the issued token in days (only when issue_token).",
+    )
 
 
 class MerchantUpdate(BaseModel):
@@ -43,7 +55,11 @@ class MerchantUpdate(BaseModel):
 
 
 class MerchantResponse(BaseModel):
-    """Merchant entity response."""
+    """Merchant entity response.
+
+    ``token`` / ``token_expires_at`` are populated only on create when
+    ``issue_token`` was requested; they are null on list/get/update.
+    """
 
     merchant_id: str
     name: Optional[str] = None
@@ -52,6 +68,14 @@ class MerchantResponse(BaseModel):
     reseller_id: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
+    token: Optional[str] = Field(
+        None,
+        description="Per-merchant S2S token, returned once when issue_token=true. "
+        "Store it now — it is not retrievable later.",
+    )
+    token_expires_at: Optional[str] = Field(
+        None, description="ISO timestamp when the issued token expires"
+    )
 
 
 class MerchantListResponse(BaseModel):

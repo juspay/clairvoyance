@@ -298,3 +298,24 @@ def delete_merchant_query(merchant_id: str) -> Tuple[str, List[Any]]:
             (SELECT COUNT(*) FROM delete_operation) as deleted_count
     """
     return query, [merchant_id]
+
+
+def set_merchant_s2s_token_query(merchant_id: str, token: str) -> Tuple[str, List[Any]]:
+    """Generate query to store an S2S token (webhook HMAC secret) on a merchant."""
+    query = f"""
+        UPDATE {MERCHANTS_TABLE}
+        SET s2s_token = $1, updated_at = $2
+        WHERE merchant_id = $3
+        RETURNING merchant_id
+    """
+    return query, [token, datetime.now(timezone.utc), merchant_id]
+
+
+def get_merchant_s2s_token_query(merchant_id: str) -> Tuple[str, List[Any]]:
+    """Generate query to read a merchant's stored S2S token."""
+    query = f"""
+        SELECT s2s_token
+        FROM {MERCHANTS_TABLE}
+        WHERE merchant_id = $1
+    """
+    return query, [merchant_id]
