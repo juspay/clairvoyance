@@ -71,6 +71,58 @@ class GCSStorage:
             logger.error(f"Failed to upload file object to GCS: {e}", exc_info=True)
             return False
 
+    def download_as_bytes(self, source_path: str) -> Optional[bytes]:
+        """
+        Download an object from the GCS bucket as bytes.
+
+        Args:
+            source_path (str): The object path in the GCS bucket
+
+        Returns:
+            Optional[bytes]: File contents, or None on failure
+        """
+        try:
+            if not self.bucket:
+                logger.error("GCS bucket not initialized")
+                return None
+
+            blob = self.bucket.blob(source_path)
+            return blob.download_as_bytes()
+
+        except Exception as e:
+            logger.error(
+                f"Failed to download gs://{GCS_BUCKET}/{source_path}: {e}",
+                exc_info=True,
+            )
+            return None
+
+    def delete_file(self, source_path: str) -> bool:
+        """
+        Delete an object from the GCS bucket.
+
+        Args:
+            source_path (str): The object path in the GCS bucket
+
+        Returns:
+            bool: True if deleted (or already absent), False on failure
+        """
+        try:
+            if not self.bucket:
+                logger.error("GCS bucket not initialized")
+                return False
+
+            blob = self.bucket.blob(source_path)
+            if blob.exists():
+                blob.delete()
+            return True
+
+        except Exception as e:
+            logger.error(
+                f"Failed to delete gs://{GCS_BUCKET}/{source_path}: {e}",
+                exc_info=True,
+            )
+            return False
+
 
 def upload_file_to_gcs(
     file_obj: BinaryIO,

@@ -600,3 +600,62 @@ async def AZURE_OPENAI_REALTIME_ENDPOINT() -> str:
     ``llm_configurations.realtime.endpoint``.
     """
     return await get_config("AZURE_OPENAI_REALTIME_ENDPOINT", "", str)
+
+
+# --- Knowledge Base (RAG) ---
+async def KB_INGEST_BATCH_SIZE() -> int:
+    """Max documents the ingestion worker claims per tick/kick."""
+    return await get_config("KB_INGEST_BATCH_SIZE", 5, int)
+
+
+async def KB_INGESTION_INTERVAL_SECONDS() -> int:
+    """Scheduler sweep interval for the KB ingestion task (read at startup).
+
+    Hardened against malformed env overrides (get_env_value returns the RAW
+    string when int() conversion fails): a bad value here would raise inside
+    the startup try-block and silently disable ALL background tasks.
+    """
+    value = await get_config("KB_INGESTION_INTERVAL_SECONDS", 60, int)
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        logger.warning(
+            f"Invalid KB_INGESTION_INTERVAL_SECONDS value {value!r}; using 60"
+        )
+        return 60
+
+
+async def KB_STALE_PROCESSING_MINUTES() -> int:
+    """Documents stuck in PROCESSING longer than this are requeued
+    (crashed/redeployed worker pod)."""
+    return await get_config("KB_STALE_PROCESSING_MINUTES", 15, int)
+
+
+async def KB_MAX_FILE_MB() -> int:
+    """Per-file upload size cap (also bounds parser memory/time)."""
+    return await get_config("KB_MAX_FILE_MB", 20, int)
+
+
+async def KB_MAX_DOCUMENTS_PER_KB() -> int:
+    """Per-knowledge-base document count cap."""
+    return await get_config("KB_MAX_DOCUMENTS_PER_KB", 100, int)
+
+
+async def KB_MAX_CHUNKS_PER_KB() -> int:
+    """Per-knowledge-base chunk cap (~40MB of text at 450-token chunks)."""
+    return await get_config("KB_MAX_CHUNKS_PER_KB", 25000, int)
+
+
+async def KB_MERCHANT_MAX_CHUNKS() -> int:
+    """Per-reseller total chunk cap across all knowledge bases
+    (noisy-neighbor protection for ingestion; raise per merchant on request).
+
+    Default is sized to launch infra (~30MB of text / ~140MB of DB footprint
+    per reseller on a 15GB instance); the per-KB cap above only binds once
+    this one has been raised for a reseller."""
+    return await get_config("KB_MERCHANT_MAX_CHUNKS", 20000, int)
+
+
+async def KB_EMBED_CACHE_TTL_SECONDS() -> int:
+    """TTL for the Redis query-embedding cache on the retrieval hot path."""
+    return await get_config("KB_EMBED_CACHE_TTL_SECONDS", 3600, int)
