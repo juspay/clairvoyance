@@ -356,6 +356,7 @@ class Agent:
                 self.template,
                 self.configurations,
                 self.template_vars,
+                self.ds_messages,
             ) = await load_template_config(self.lead)
         except ValueError as e:
             logger.error(f"Failed to load template config for Daily mode: {e}")
@@ -553,6 +554,7 @@ class Agent:
                 self.template,
                 self.configurations,
                 self.template_vars,
+                self.ds_messages,
             ) = await load_template_config(self.lead)
         except ValueError as e:
             error_msg = f"Template loading failed: {str(e)}"
@@ -972,7 +974,9 @@ class Agent:
             self.flow_config,
             self.end_conversation_callbacks,
             self.expected_callback_response_schema,
-        ) = build_flow_config(self.flow_builder, self.template)
+        ) = build_flow_config(
+            self.flow_builder, self.template, ds_messages=self.ds_messages
+        )
 
         lead_payload = self.lead.payload or {}
 
@@ -1044,7 +1048,6 @@ class Agent:
             else:
                 if not await self._setup_telephony_transport():
                     if self.completion_function and self.call_sid:
-
                         lead = await get_lead_by_call_id(self.call_sid)
                         # If lead is None (not found), or it doesn't have an outcome,
                         # or the outcome is not a BLOCKED_ outcome, then it's an early hangup.

@@ -4,12 +4,14 @@ Flow Configuration Loader
 This module provides functionality to load templates from the database.
 """
 
-from typing import Dict, Optional, Tuple
+import asyncio
+from typing import Dict, List, Optional, Tuple
 
 from app.ai.voice.agents.breeze_buddy.template.transformation_function import (
     TEMPLATE_FUNCTION_REGISTRY,
 )
 from app.ai.voice.agents.breeze_buddy.template.types import (
+    DataSourceRef,
     FlowMode,
     TemplateModel,
 )
@@ -18,9 +20,16 @@ from app.core.logger import logger
 from app.database.accessor.breeze_buddy.credentials import (
     get_credentials_as_template_vars,
 )
+from app.database.accessor.breeze_buddy.data_source import get_data_source_by_id
 from app.database.accessor.breeze_buddy.template import (
     get_template_by_id_with_fallback,
 )
+from app.services.data_sources import (
+    DATA_SOURCE_UNAVAILABLE,
+    data_source_in_template_scope,
+)
+from app.services.google.sheets import fetch_formatted
+from app.services.redis import get_redis_service
 
 
 class FlowConfigLoader:
@@ -115,6 +124,80 @@ class FlowConfigLoader:
         """Method-style alias preserved for the voice loader call sites."""
         return render_messages_with_vars(task_messages, variables)
 
+    async def _fetch_data_source_content(
+        self,
+        ref: DataSourceRef,
+        template_obj: TemplateModel,
+    ) -> str:
+        """
+        Fetch formatted sheet content for a DataSourceRef.
+
+        Priority:
+        1. Redis cache (key ``datasource:content:{data_source_id}``, shared across leads)
+        2. Live Google Sheets fetch with 800 ms timeout
+        3. Fallback: DATA_SOURCE_UNAVAILABLE
+        """
+        # 1. Redis cache check (shared key across all leads using this data source)
+        cache_key = f"datasource:content:{ref.data_source_id}"
+        try:
+            redis = await get_redis_service()
+            cached = await redis.get(cache_key)
+            if cached:
+                logger.info(
+                    "Data source cache hit: ds=%s name=%s", ref.data_source_id, ref.name
+                )
+                return cached
+        except Exception as exc:
+            logger.warning(
+                "Redis cache check failed for datasource '%s': %s", ref.name, exc
+            )
+
+        # 2. Live fetch
+        try:
+            ds = await get_data_source_by_id(ref.data_source_id)
+            if not ds:
+                logger.warning(
+                    "Data source %s not found in DB (ref name=%s)",
+                    ref.data_source_id,
+                    ref.name,
+                )
+                return DATA_SOURCE_UNAVAILABLE
+            if not data_source_in_template_scope(
+                ds, template_obj.reseller_id, template_obj.merchant_id
+            ):
+                logger.warning(
+                    "Data source %s is inactive or outside template scope "
+                    "(template=%s, ref name=%s)",
+                    ref.data_source_id,
+                    template_obj.id,
+                    ref.name,
+                )
+                return DATA_SOURCE_UNAVAILABLE
+
+            content = await asyncio.wait_for(
+                fetch_formatted(
+                    spreadsheet_id=ds.spreadsheet_id,
+                    sheet_name=ds.sheet_name,
+                    columns=ds.columns,
+                    format=ds.format,
+                ),
+                timeout=0.8,
+            )
+            logger.info(
+                "Fetched data source '%s' live (%d chars)", ref.name, len(content)
+            )
+            return content
+        except asyncio.TimeoutError:
+            logger.warning(
+                "Timeout fetching data source '%s' (>800 ms); using fallback", ref.name
+            )
+            return DATA_SOURCE_UNAVAILABLE
+        except Exception as exc:
+            logger.error(
+                "Error fetching data source '%s': %s", ref.name, exc, exc_info=True
+            )
+            return DATA_SOURCE_UNAVAILABLE
+
     async def load_template(
         self,
         reseller_id: str,
@@ -122,7 +205,7 @@ class FlowConfigLoader:
         merchant_id: Optional[str] = None,
         call_payload: Optional[Dict[str, str]] = None,
         template_id: Optional[str] = None,
-    ) -> Tuple[TemplateModel, Dict[str, str]]:
+    ) -> Tuple[TemplateModel, Dict[str, str], List[Dict]]:
         """
         Load template and render task messages with variables.
 
@@ -134,10 +217,7 @@ class FlowConfigLoader:
             template_id: Optional template UUID (preferred over name-based lookup)
 
         Returns:
-            TemplateModel with rendered task messages, and dictionary of template variables
-
-        Raises:
-            ValueError: If template not found
+            Tuple of (template, template_vars, data_source_messages)
         """
 
         # Load template from database
@@ -233,13 +313,39 @@ class FlowConfigLoader:
                         f"Injected extra payload field '{field_name}' into template_vars"
                     )
 
+        # 5. Inject data_source content.
+        # "var" sources → template_vars[ref.name] = content (rendered as {name} placeholder)
+        # "message" sources → added to _ds_messages list (returned separately, consumed
+        #   later in prepare_initial_node / build_flow_config).
+        _ds_messages: List[Dict] = []
+        if template_obj.data_sources:
+            contents = await asyncio.gather(
+                *[
+                    self._fetch_data_source_content(ref, template_obj)
+                    for ref in template_obj.data_sources
+                ],
+                return_exceptions=True,
+            )
+            for ref, result in zip(template_obj.data_sources, contents):
+                content = (
+                    DATA_SOURCE_UNAVAILABLE if isinstance(result, Exception) else result
+                )
+                if ref.inject_as == "message":
+                    _ds_messages.append({"role": "system", "content": content})
+                    logger.info("Data source '%s' queued as system message", ref.name)
+                else:
+                    template_vars[ref.name] = content
+                    logger.info(
+                        "Data source '%s' injected into template_vars", ref.name
+                    )
+
         # Direct mode has a flat structure (system_prompt + flat function list)
         # rather than a nodes array, so render the top-level message fields and
         # skip the per-node loop entirely.
         if template_obj.flow.get("mode") == FlowMode.DIRECT.value:
             self._render_direct_mode_flow(template_obj.flow, template_vars)
             logger.info(f"Rendered direct-mode flow for template {template_obj.name}")
-            return template_obj, template_vars
+            return template_obj, template_vars, _ds_messages
 
         # IVR mode is a DTMF menu tree (no task/role messages); render the
         # spoken prompt/message fields and skip the per-node task-message loop.
@@ -309,4 +415,4 @@ class FlowConfigLoader:
             node["role_messages"] = rendered_role_dicts
 
         logger.info(f"Rendered task messages for template {template_obj.name}")
-        return template_obj, template_vars
+        return template_obj, template_vars, _ds_messages

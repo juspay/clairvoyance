@@ -185,6 +185,12 @@ def decode_template(result: asyncpg.Record) -> Optional[TemplateModel]:
             secrets_data = json.loads(secrets_data)
         # If it's already a dict (from JSONB), use it directly
 
+    # Parse attached data source refs from JSONB (can be str, list, or None)
+    data_sources_data = result.get("data_sources")
+    if data_sources_data:
+        if isinstance(data_sources_data, str):
+            data_sources_data = json.loads(data_sources_data)
+
     # supported_channels is a Postgres text[] (NOT NULL DEFAULT {'voice'}).
     # Some legacy SELECTs may not include the column — fall back to ['voice']
     # so the model always has at least one channel.
@@ -200,6 +206,7 @@ def decode_template(result: asyncpg.Record) -> Optional[TemplateModel]:
         expected_callback_response_schema=expected_callback_response_schema_data,
         configurations=configurations,
         secrets=secrets_data,
+        data_sources=data_sources_data,
         outbound_number_id=(
             str(result["outbound_number_id"])
             if result.get("outbound_number_id")

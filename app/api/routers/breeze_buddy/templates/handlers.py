@@ -22,6 +22,7 @@ from app.ai.voice.agents.breeze_buddy.utils.secrets import (
 )
 from app.core.logger import logger
 from app.database.accessor import get_outbound_number_by_id, get_template_by_merchant
+from app.database.accessor.breeze_buddy.data_source import get_data_source_by_id
 from app.database.accessor.breeze_buddy.template import (
     check_template_usage,
     create_template,
@@ -35,8 +36,32 @@ from app.schemas.breeze_buddy.template import (
     DeleteTemplateResponse,
     TemplateListResponse,
 )
+from app.services.data_sources import data_source_in_template_scope
 
 from .rbac import apply_hierarchical_template_filters, validate_template_access
+
+
+async def _validate_data_source_refs(
+    data_sources: Optional[List],
+    reseller_id: str,
+    merchant_id: Optional[str],
+) -> None:
+    """Validate attached data sources exist and belong to the template scope."""
+    if not data_sources:
+        return
+
+    for ref in data_sources:
+        data_source = await get_data_source_by_id(ref.data_source_id)
+        if not data_source:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Data source not found: {ref.data_source_id}",
+            )
+        if not data_source_in_template_scope(data_source, reseller_id, merchant_id):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Data source is outside template scope: {ref.data_source_id}",
+            )
 
 
 async def create_template_handler(
@@ -108,6 +133,12 @@ async def create_template_handler(
                     detail=f"Outbound number with ID {template_data.outbound_number_id} does not exist",
                 )
 
+        await _validate_data_source_refs(
+            template_data.data_sources,
+            template_data.reseller_id,
+            template_data.merchant_id,
+        )
+
         # Create the template
         now = datetime.now(timezone.utc)
 
@@ -137,6 +168,14 @@ async def create_template_handler(
             expected_callback_response_schema=template_data.expected_callback_response_schema,
             configurations=configurations,
             secrets=template_data.secrets,
+            data_sources=(
+                [
+                    data_source.model_dump(mode="json")
+                    for data_source in template_data.data_sources
+                ]
+                if template_data.data_sources is not None
+                else None
+            ),
             outbound_number_id=template_data.outbound_number_id,
             is_active=template_data.is_active,
             supported_channels=list(template_data.supported_channels),
@@ -465,6 +504,12 @@ async def replace_template_handler(
                     detail=f"Outbound number with ID {template_data.outbound_number_id} does not exist",
                 )
 
+        await _validate_data_source_refs(
+            template_data.data_sources,
+            reseller_id,
+            template_data.merchant_id,
+        )
+
         # Update the template
         now = datetime.now(timezone.utc)
 
@@ -531,6 +576,14 @@ async def replace_template_handler(
             expected_callback_response_schema=template_data.expected_callback_response_schema,
             configurations=configurations,
             secrets=merged_secrets,
+            data_sources=(
+                [
+                    data_source.model_dump(mode="json")
+                    for data_source in template_data.data_sources
+                ]
+                if template_data.data_sources is not None
+                else None
+            ),
             outbound_number_id=template_data.outbound_number_id,
             is_active=template_data.is_active,
             merchant_id=template_data.merchant_id,

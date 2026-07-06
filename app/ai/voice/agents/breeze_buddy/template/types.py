@@ -2,6 +2,7 @@
 Pydantic models for the dynamic workflow engine.
 """
 
+import re
 from enum import Enum
 from typing import Annotated, Any, Dict, List, Literal, Optional, Union
 
@@ -13,6 +14,7 @@ from pydantic import (
     SerializationInfo,
     StringConstraints,
     field_serializer,
+    field_validator,
     model_validator,
 )
 
@@ -2381,6 +2383,54 @@ def _default_supported_channels() -> List[Literal["voice", "chat"]]:
     return ["voice"]
 
 
+# ─── Data Source Reference (stored inside template.data_sources) ────────────
+
+
+ResellerId = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+
+
+class DataSourceRef(BaseModel):
+    """
+    Reference to a data_source entity attached to a template.
+
+    data_source_id: FK to the data_source table
+    name: the {variable_name} placeholder (must be unique per template)
+    inject_as: how to land in LLM context
+    """
+
+    data_source_id: str = Field(description="UUID of the data_source entity")
+    name: str = Field(
+        description="Variable name used as {name} placeholder in template prompts"
+    )
+    inject_as: Literal["var", "message"] = Field(
+        default="var",
+        description=(
+            '"var" — sheet content injected into template_vars as {name}. '
+            '"message" — prepended as a system message to the initial node.'
+        ),
+    )
+
+    @field_validator("name")
+    @classmethod
+    def _validate_name_identifier(cls, v: str) -> str:
+        if not re.match(r"^[a-zA-Z_][a-zA-Z0-9_]*$", v):
+            raise ValueError(
+                "name must be a valid Python identifier (letters, digits, underscore; "
+                "cannot start with a digit)"
+            )
+        return v
+
+
+def _validate_unique_data_source_names(
+    data_sources: Optional[List[DataSourceRef]],
+) -> None:
+    if not data_sources:
+        return
+    names = [data_source.name for data_source in data_sources]
+    if len(names) != len(set(names)):
+        raise ValueError("data_source names must be unique per template")
+
+
 class TemplateModel(BaseModel):
     # Read-only fields (set by server, not editable via API).
     # These are intentionally excluded from ReplaceTemplateRequest so that
@@ -2398,6 +2448,10 @@ class TemplateModel(BaseModel):
     expected_callback_response_schema: Optional[Dict[str, Any]] = None
     configurations: Optional[ConfigurationModel] = None
     secrets: Optional[Dict[str, Any]] = None
+    data_sources: Optional[List["DataSourceRef"]] = Field(
+        None,
+        description="List of data source references attached to this template",
+    )
     outbound_number_id: Optional[str] = None
     is_active: bool = True
     # Channels this template is allowed to be served on. Defaults to
@@ -2430,12 +2484,6 @@ class RequestFlowNode(BaseModel):
     functions: List[RequestFlowFunction] = []
 
 
-# A template with reseller_id "" is unreachable by every reseller-scoped
-# lookup (RBAC filters, get-by-name resolution, config fallback), so reject
-# empty / whitespace-only values at the schema boundary.
-ResellerId = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
-
-
 class CreateTemplateRequest(BaseModel):
     # New field names
     reseller_id: ResellerId
@@ -2448,10 +2496,16 @@ class CreateTemplateRequest(BaseModel):
     expected_callback_response_schema: Optional[Dict[str, Any]] = None
     configurations: Optional[ConfigurationModel] = None
     secrets: Optional[Dict[str, Any]] = None
+    data_sources: Optional[List["DataSourceRef"]] = None
     supported_channels: List[Literal["voice", "chat"]] = Field(
         default_factory=_default_supported_channels,
         min_length=1,
     )
+
+    @model_validator(mode="after")
+    def validate_data_source_names(self) -> "CreateTemplateRequest":
+        _validate_unique_data_source_names(self.data_sources)
+        return self
 
 
 class ReplaceTemplateRequest(BaseModel):
@@ -2467,7 +2521,8 @@ class ReplaceTemplateRequest(BaseModel):
 
     Non-nullable fields (name, flow, is_active) must be provided - throws 400 if not.
     Nullable fields (merchant_id, outbound_number_id, expected_payload_schema,
-    expected_callback_response_schema, configurations) - if not provided, set to NULL.
+    expected_callback_response_schema, configurations, data_sources) - if not
+    provided, set to NULL.
 
     ``reseller_id`` is optional (``None`` default) for backward compatibility:
     pre-existing PUT clients never sent it (it used to be silently ignored), so
@@ -2496,7 +2551,13 @@ class ReplaceTemplateRequest(BaseModel):
     expected_callback_response_schema: Optional[Dict[str, Any]] = None
     configurations: Optional[ConfigurationModel] = None
     secrets: Optional[Dict[str, Any]] = None
+    data_sources: Optional[List["DataSourceRef"]] = None
     supported_channels: Optional[List[Literal["voice", "chat"]]] = Field(
         default=None,
         min_length=1,
     )
+
+    @model_validator(mode="after")
+    def validate_data_source_names(self) -> "ReplaceTemplateRequest":
+        _validate_unique_data_source_names(self.data_sources)
+        return self

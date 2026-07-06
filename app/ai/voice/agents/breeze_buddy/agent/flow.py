@@ -27,18 +27,18 @@ from app.schemas.breeze_buddy.core import ExecutionMode, LeadCallTracker
 
 async def load_template_config(
     lead: LeadCallTracker,
-) -> tuple[TemplateModel, Optional[ConfigurationModel], Dict[str, str]]:
+) -> tuple[TemplateModel, Optional[ConfigurationModel], Dict[str, str], List[Dict]]:
     """Load template configuration from database.
 
     Args:
         lead: The lead instance
 
     Returns:
-        Tuple of (template, configurations, template_vars)
+        Tuple of (template, configurations, template_vars, data_source_messages)
     """
     flow_loader = FlowConfigLoader()
 
-    template, template_vars = await flow_loader.load_template(
+    template, template_vars, ds_messages = await flow_loader.load_template(
         reseller_id=lead.reseller_id,
         template=lead.template,
         merchant_id=lead.merchant_id if lead else None,
@@ -58,7 +58,7 @@ async def load_template_config(
     if getattr(lead, "execution_mode", None) != ExecutionMode.DAILY_STREAM:
         validate_template_compat(template)
 
-    return template, template.configurations, template_vars
+    return template, template.configurations, template_vars, ds_messages
 
 
 def setup_flow_manager(
@@ -127,12 +127,14 @@ def setup_flow_manager(
 def build_flow_config(
     flow_builder: FlowConfigBuilder,
     template: TemplateModel,
+    ds_messages: Optional[List[Dict]] = None,
 ) -> tuple[Dict[str, Any], List, Any]:
     """Build flow configuration from template.
 
     Args:
         flow_builder: Flow config builder
         template: Template model
+        ds_messages: Data source "message"-mode system messages (from loader)
 
     Returns:
         Tuple of (flow_config, end_conversation_callbacks, expected_callback_response_schema)
@@ -145,6 +147,11 @@ def build_flow_config(
     expected_callback_response_schema = flow_config.get(
         "expected_callback_response_schema", None
     )
+
+    # Propagate data-source "message" injections so that prepare_initial_node
+    # can prepend them to the initial node's context.
+    if ds_messages:
+        flow_config["_data_source_messages"] = ds_messages
 
     logger.info(
         f"Built flow config with {len(flow_config['nodes'])} nodes, "
@@ -194,6 +201,17 @@ def prepare_initial_node(
         # Prepend the greeting message to task messages
         task_messages = [greeting_context_message] + task_messages
         logger.info(f"Injected greeting into LLM context: {greeting_text[:50]}...")
+
+    # Prepend data-source "message" injections (inject_as="message")
+    # These are system messages containing fetched sheet content that the
+    # LLM needs as read-only context before starting the conversation.
+    ds_messages = flow_config.get("_data_source_messages")
+    if ds_messages:
+        task_messages = ds_messages + task_messages
+        logger.info(
+            "Prepended %d data-source system message(s) to initial node",
+            len(ds_messages),
+        )
 
     return NodeConfig(
         name=node_config["name"],

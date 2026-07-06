@@ -15,6 +15,7 @@ from app.api.routers.breeze_buddy.credentials import router as credentials_route
 
 # Daily transport (web/mobile clients via Daily.co)
 from app.api.routers.breeze_buddy.daily import router as daily_router
+from app.api.routers.breeze_buddy.data_sources import router as data_sources_router
 from app.api.routers.breeze_buddy.demo import router as demo_router
 from app.api.routers.breeze_buddy.leads import router as leads_router
 from app.api.routers.breeze_buddy.merchants import router as merchants_router
@@ -63,6 +64,10 @@ router.include_router(credentials_router, prefix="", tags=["credentials"])
 
 # Outbound Numbers (phone numbers for making calls)
 router.include_router(numbers_router, prefix="", tags=["numbers"])
+
+# Data Sources (Google Sheets attached to templates). Register before
+# /templates/{template_id}-style routes to avoid dynamic path collisions.
+router.include_router(data_sources_router, prefix="", tags=["data-sources"])
 
 # Templates (conversational flow definitions)
 router.include_router(templates_router, prefix="", tags=["templates"])
