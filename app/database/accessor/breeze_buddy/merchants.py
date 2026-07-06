@@ -17,8 +17,10 @@ from app.database.queries.breeze_buddy.merchants import (
     delete_merchant_query,
     get_all_merchants_query,
     get_merchant_by_merchant_identifier_query,
+    get_merchant_s2s_token_query,
     get_merchants_by_ids_query,
     get_merchants_by_reseller_query,
+    set_merchant_s2s_token_query,
     update_merchant_query,
 )
 from app.schemas.breeze_buddy.merchants import MerchantResponse
@@ -337,4 +339,42 @@ async def delete_merchant(merchant_id: str) -> bool:
         return False
     except Exception as e:
         logger.error(f"Error deleting merchant entity {merchant_id}: {e}")
+        raise
+
+
+async def set_merchant_s2s_token(merchant_id: str, token: str) -> bool:
+    """Store an S2S token (webhook HMAC secret) on a merchant row.
+
+    Stored as-is in the nullable ``s2s_token`` column. Returns True if the
+    merchant existed and was updated, False otherwise.
+    """
+    query, values = set_merchant_s2s_token_query(merchant_id, token)
+
+    try:
+        result = await run_parameterized_query(query, values)
+        updated = bool(result)
+        if updated:
+            logger.info(f"Stored S2S token on merchant: {merchant_id}")
+        else:
+            logger.warning(
+                f"Cannot store S2S token: merchant '{merchant_id}' not found"
+            )
+        return updated
+    except Exception as e:
+        logger.error(f"Error storing S2S token on merchant {merchant_id}: {e}")
+        raise
+
+
+async def get_merchant_s2s_token(merchant_id: str) -> Optional[str]:
+    """Read a merchant's stored S2S token, or None if unset."""
+    query, values = get_merchant_s2s_token_query(merchant_id)
+
+    try:
+        result = await run_parameterized_query(query, values)
+        row = result[0] if result else None
+        if not row or not row["s2s_token"]:
+            return None
+        return row["s2s_token"]
+    except Exception as e:
+        logger.error(f"Error reading S2S token for merchant {merchant_id}: {e}")
         raise

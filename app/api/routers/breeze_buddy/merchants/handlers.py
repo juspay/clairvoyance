@@ -2,11 +2,13 @@
 Handlers for merchant endpoints.
 """
 
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import asyncpg
 from fastapi import HTTPException
 
+from app.api.security.breeze_buddy.rbac_token import rbac_token_manager
 from app.core.logger import logger
 from app.core.security.scope import resolve_merchant_ids
 from app.database.accessor.breeze_buddy import merchants as merchant_accessors
@@ -113,6 +115,32 @@ async def create_merchant_handler(
             raise HTTPException(
                 status_code=500, detail="Failed to create merchant entity"
             )
+
+        # Optionally mint a per-merchant S2S token, store it on the merchant row,
+        # and return it once (e.g. to use as a webhook HMAC secret).
+        if merchant_data.issue_token:
+            if not reseller_id:
+                raise HTTPException(
+                    status_code=400,
+                    detail="reseller_id is required to issue a token",
+                )
+            expires_delta = timedelta(days=merchant_data.token_lifetime_days)
+            token = rbac_token_manager.create_access_token_with_rbac(
+                user_id=f"merchant:{merchant_data.merchant_id}",
+                username=f"merchant-{merchant_data.merchant_id}",
+                role=UserRole.MERCHANT,
+                reseller_ids=[reseller_id],
+                merchant_ids=[merchant_data.merchant_id],
+                owner_id=current_user.id,
+                expires_delta=expires_delta,
+            )
+            await merchant_accessors.set_merchant_s2s_token(
+                merchant_data.merchant_id, token
+            )
+            merchant.token = token
+            merchant.token_expires_at = (
+                datetime.now(timezone.utc) + expires_delta
+            ).isoformat()
 
         return merchant
 

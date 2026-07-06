@@ -29,6 +29,7 @@ from app.api.routers.breeze_buddy.template_generator import (
 )
 from app.api.routers.breeze_buddy.templates import router as templates_router
 from app.api.routers.breeze_buddy.users import router as users_router
+from app.api.routers.breeze_buddy.webhooks import router as webhooks_router
 from app.api.routers.breeze_buddy.websocket import router as websocket_router
 
 # Widget public mode (CHAT_MODE.md §14): per-merchant widget_config
@@ -78,6 +79,9 @@ router.include_router(blacklist_router, prefix="", tags=["blacklist"])
 
 # Merchants (merchant identifiers - admin only)
 router.include_router(merchants_router, prefix="", tags=["merchants"])
+
+# E-commerce order webhooks (generic /webhook/{platform}/{merchant_id})
+router.include_router(webhooks_router, prefix="", tags=["webhooks"])
 
 # User Accounts (login accounts with RBAC)
 router.include_router(users_router, prefix="", tags=["users"])
