@@ -35,6 +35,9 @@ from app.api.routers.breeze_buddy.resellers import router as resellers_router
 
 # Self-service signup and Google SSO (public, unauthenticated)
 from app.api.routers.breeze_buddy.signup import router as signup_router
+
+# Global (template-independent) STT: one-shot transcription behind RBAC auth
+from app.api.routers.breeze_buddy.stt import router as stt_router
 from app.api.routers.breeze_buddy.telephony import router as telephony_router
 from app.api.routers.breeze_buddy.template_generator import (
     router as template_generator_router,
@@ -106,6 +109,9 @@ router.include_router(webhooks_router, prefix="", tags=["webhooks"])
 
 # User Accounts (login accounts with RBAC)
 router.include_router(users_router, prefix="", tags=["users"])
+
+# Global STT (template-independent one-shot transcription, RBAC-gated)
+router.include_router(stt_router, prefix="", tags=["stt"])
 
 # Leads (call requests/trackers)
 router.include_router(leads_router, prefix="", tags=["leads"])
