@@ -13,6 +13,10 @@ from datetime import datetime, timedelta, timezone
 import jwt
 from fastapi import HTTPException, Response, status
 
+from app.api.security.breeze_buddy.launch_code import (
+    mint_launch_code,
+    redeem_launch_code,
+)
 from app.api.security.breeze_buddy.rbac_token import rbac_token_manager
 from app.core.config.static import (
     BREEZE_BUDDY_DASHBOARD_PASSWORD,
@@ -24,8 +28,14 @@ from app.core.config.static import (
 from app.core.logger import logger
 from app.core.security.password import verify_password
 from app.core.security.scope import resolve_merchant_ids, resolve_reseller_ids
+from app.database.accessor.breeze_buddy.merchants import (
+    get_merchant_by_merchant_identifier,
+)
 from app.database.accessor.breeze_buddy.users import get_user_by_username
 from app.schemas import (
+    ExchangeRequest,
+    LaunchCodeRequest,
+    LaunchCodeResponse,
     LoginRequest,
     S2STokenRequest,
     S2STokenResponse,
@@ -346,3 +356,68 @@ async def logout_handler() -> dict:
             "note": "Token remains valid until expiration but client discards it",
         },
     }
+
+
+async def mint_launch_code_handler(request: LaunchCodeRequest) -> LaunchCodeResponse:
+    """Mint a one-time Loom dashboard launch code for a merchant.
+
+    Called server-to-server by Nautilus (admin-gated route) after it has verified
+    the Shopify session, so ``merchant_id`` is already trusted. We just record a
+    single-use, short-lived code that Loom can later redeem.
+    """
+    code = await mint_launch_code(request.merchant_id, request.target)
+    logger.info(
+        f"Loom launch code minted for merchant {request.merchant_id} "
+        f"(target: {request.target})"
+    )
+    return LaunchCodeResponse(code=code)
+
+
+async def exchange_launch_code_handler(request: ExchangeRequest) -> TokenResponse:
+    """Exchange a one-time launch code for a normal merchant session token.
+
+    Public endpoint (Loom calls it with no bearer). Security rests on the code
+    being single-use, short-lived, and recognised only by this server. The minted
+    token is always scoped to a single merchant with the MERCHANT role.
+    """
+    redeemed = await redeem_launch_code(request.code)
+    if redeemed is None:
+        logger.warning("Loom launch code exchange failed: invalid/expired/used code")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired launch code",
+        )
+
+    merchant_id, _target = redeemed
+
+    # Only mint a session for a known, active merchant.
+    merchant = await get_merchant_by_merchant_identifier(merchant_id)
+    if merchant is None or not merchant.is_active:
+        logger.warning(
+            f"Loom launch code exchange rejected: unknown/inactive merchant {merchant_id}"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired launch code",
+        )
+
+    reseller_ids = [merchant.reseller_id] if merchant.reseller_id else []
+
+    # Same minting path as login_handler — role is forced to MERCHANT and scoped to
+    # this single shop, so the token can never exceed merchant scope.
+    access_token = rbac_token_manager.create_access_token_with_rbac(
+        user_id=merchant_id,
+        username=merchant_id,
+        role=UserRole.MERCHANT,
+        reseller_ids=reseller_ids,
+        merchant_ids=[merchant_id],
+        email=None,
+    )
+    expires_in = JWT_ACCESS_TOKEN_EXPIRE_MINUTES * 60
+
+    logger.info(f"Loom launch code exchanged for session token: merchant {merchant_id}")
+    return TokenResponse(
+        access_token=access_token,
+        token_type="Bearer",
+        expires_in=expires_in,
+    )

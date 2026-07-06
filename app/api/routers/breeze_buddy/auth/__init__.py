@@ -13,23 +13,29 @@ Endpoints:
 For backward compatibility, old session-based logout is also supported.
 """
 
-from fastapi import APIRouter, Depends, Response
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from fastapi.responses import RedirectResponse
 
 from app.api.security.breeze_buddy.rbac_token import get_current_user_with_rbac
 from app.schemas import (
+    ExchangeRequest,
+    LaunchCodeRequest,
+    LaunchCodeResponse,
     LoginRequest,
     S2STokenRequest,
     S2STokenResponse,
     TokenResponse,
     UserInfo,
+    UserRole,
 )
 
 from .handlers import (
+    exchange_launch_code_handler,
     generate_s2s_token_handler,
     get_user_info_handler,
     login_handler,
     logout_handler,
+    mint_launch_code_handler,
 )
 
 router = APIRouter()
@@ -209,3 +215,32 @@ async def logout():
     response.headers["Pragma"] = "no-cache"
     response.headers["Expires"] = "0"
     return response
+
+
+@router.post("/auth/launch-code", response_model=LaunchCodeResponse)
+async def mint_launch_code_route(
+    request: LaunchCodeRequest,
+    current_user: UserInfo = Depends(get_current_user_with_rbac),
+):
+    """Mint a one-time Loom dashboard launch code (server-to-server, admin only).
+
+    Nautilus calls this with its admin S2S token after verifying the Shopify
+    session. Only admin callers may mint codes — this is what proves the request
+    originated from a trusted backend, not an arbitrary client.
+    """
+    if current_user.role != UserRole.ADMIN:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only admin (server-to-server) callers can mint launch codes.",
+        )
+    return await mint_launch_code_handler(request)
+
+
+@router.post("/auth/exchange", response_model=TokenResponse)
+async def exchange_launch_code_route(request: ExchangeRequest):
+    """Exchange a one-time launch code for a merchant session token (public).
+
+    Called by Loom (no bearer). Returns 401 if the code is unknown, expired, or
+    already used. The minted token is always single-merchant, MERCHANT-role.
+    """
+    return await exchange_launch_code_handler(request)
