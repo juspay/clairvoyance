@@ -73,6 +73,11 @@ async def end_conversation(context: TemplateContext, args, transition_to=None):
         # Collect transcription
         transcription = []
         filtered_transcript = []
+        # Ephemeral knowledge-base context blocks (auto_retrieve injections /
+        # full_injection role message) start with the configured header —
+        # retrieved chunks are grounding data, not conversation transcript.
+        kb_config = getattr(context.configurations, "knowledge_base", None)
+        kb_header = kb_config.injection_header if kb_config is not None else None
         if context.context:
             history = context.context.messages
             logger.debug(
@@ -86,8 +91,15 @@ async def end_conversation(context: TemplateContext, args, transition_to=None):
                     and "content" in msg
                     and isinstance(msg["content"], str)
                 ):
+                    if (
+                        kb_header
+                        and msg["role"] == "system"
+                        and msg["content"].startswith(kb_header)
+                    ):
+                        continue
                     # Skip Pipecat internal async-tool protocol messages
-                    # (injected as user-role JSON blobs to coordinate async tool calls)
+                    # (tool/developer-role JSON blobs coordinating async tool
+                    # calls; matched by parsed content, not by role)
                     try:
                         parsed = json.loads(msg["content"])
                         if (

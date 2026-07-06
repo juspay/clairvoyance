@@ -101,6 +101,16 @@ class TemplateContext:
         return self.bot.call_sid
 
     @property
+    def configurations(self):
+        """Get the template ConfigurationModel (voice Agent and ChatAgent
+        both expose it; falls back through template.configurations)."""
+        configurations = getattr(self.bot, "configurations", None)
+        if configurations is not None:
+            return configurations
+        template = getattr(self.bot, "template", None)
+        return getattr(template, "configurations", None)
+
+    @property
     def root_span(self):
         """Get OpenTelemetry root span"""
         return self.bot.root_span

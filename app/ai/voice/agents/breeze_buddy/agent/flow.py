@@ -7,9 +7,10 @@ from pipecat_flows import FlowManager, NodeConfig
 from pipecat_flows.types import FlowsDirectFunction, FlowsFunctionSchema
 
 from app.ai.voice.agents.breeze_buddy.agent.utils import validate_template_compat
-from app.ai.voice.agents.breeze_buddy.template import (
-    FlowConfigBuilder,
+from app.ai.voice.agents.breeze_buddy.services.knowledge_base import (
+    build_kb_system_message,
 )
+from app.ai.voice.agents.breeze_buddy.template.builder import FlowConfigBuilder
 from app.ai.voice.agents.breeze_buddy.template.loader import FlowConfigLoader
 from app.ai.voice.agents.breeze_buddy.template.types import (
     ConfigurationModel,
@@ -161,6 +162,7 @@ def prepare_initial_node(
     configurations: Optional[ConfigurationModel],
     has_greeting_source: bool,
     greeting_text: Optional[str] = None,
+    kb_text: Optional[str] = None,
 ) -> NodeConfig:
     """Prepare the initial node configuration with language injection.
 
@@ -170,6 +172,10 @@ def prepare_initial_node(
         configurations: Template configurations
         has_greeting_source: Whether a greeting source exists
         greeting_text: The resolved greeting text that was played to the user
+        kb_text: Full knowledge base text (full_injection mode). Injected once
+            into the initial node's role_messages; pipecat-flows transitions
+            APPEND, so it persists across all nodes. Appended at the tail so
+            the static prompt prefix stays cache-friendly.
 
     Returns:
         Configured NodeConfig for the initial node
@@ -182,6 +188,12 @@ def prepare_initial_node(
         lead_payload.get("language_name", "English"),
         getattr(configurations, "payload_based_language_selection", False),
     )
+
+    if kb_text and configurations and configurations.knowledge_base:
+        role_messages = list(role_messages or []) + [
+            build_kb_system_message(kb_text, configurations.knowledge_base)
+        ]
+        logger.info(f"Injected full KB text into initial node ({len(kb_text)} chars)")
 
     # Add greeting context to task messages if greeting was played
     task_messages = list(node_config["task_messages"])

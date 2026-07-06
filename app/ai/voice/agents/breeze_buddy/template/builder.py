@@ -29,6 +29,10 @@ from app.ai.voice.agents.breeze_buddy.handlers.transport.http_handler import (
 from app.ai.voice.agents.breeze_buddy.template.global_function import (
     GlobalFunctionRegistry,
 )
+from app.ai.voice.agents.breeze_buddy.template.kb_tool import (
+    append_kb_tool,
+    synthesize_kb_tool_function,
+)
 from app.ai.voice.agents.breeze_buddy.template.transition import (
     transition_handler,
 )
@@ -420,14 +424,27 @@ class FlowConfigBuilder:
         Returns:
             List of FlowsFunctionSchema objects to pass to FlowManager(global_functions=[...])
         """
+        # Tool-mode knowledge base: synthesize the query_knowledge_base
+        # builtin from configurations.knowledge_base so one config section
+        # drives all retrieval modes (see template/kb_tool.py). Voice and
+        # chat both flow through this method, so the tool appears uniformly
+        # on both channels.
+        kb_tool_function = synthesize_kb_tool_function(bot_instance, log=self._log)
+
         # Direct mode has a single flat `functions` array. Each entry is
         # routed by `type`: http/builtin/custom go through the global-function
         # adapter registry; everything else is a FlowFunction (hooks-only).
+        # The KB tool is appended BEFORE the disabled filter so per-channel
+        # disabling applies to it like any other function.
         if flow.get("mode") == FlowMode.DIRECT.value:
+            declared_functions = append_kb_tool(
+                flow.get("functions") or [], kb_tool_function
+            )
+            direct_functions = filter_disabled_identifiers(
+                declared_functions, self._disabled_names, "function"
+            )
             return self._build_direct_mode_functions(
-                filter_disabled_identifiers(
-                    flow.get("functions") or [], self._disabled_names, "function"
-                ),
+                direct_functions,
                 bot_instance=bot_instance,
             )
 
@@ -437,11 +454,14 @@ class FlowConfigBuilder:
         # filter is a no-op in voice mode (returns the same list), so we can
         # always run it; we shallow-copy the flow dict to avoid mutating the
         # caller's structure when assigning the filtered list back.
+        global_functions = filter_disabled_identifiers(
+            append_kb_tool(flow.get("global_functions") or [], kb_tool_function),
+            self._disabled_names,
+            "function",
+        )
         flow_for_globals = {
             **flow,
-            "global_functions": filter_disabled_identifiers(
-                flow.get("global_functions") or [], self._disabled_names, "function"
-            ),
+            "global_functions": global_functions,
         }
 
         return GlobalFunctionRegistry.build(

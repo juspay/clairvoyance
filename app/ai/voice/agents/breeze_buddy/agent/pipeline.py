@@ -45,6 +45,7 @@ from pipecat.turns.user_turn_strategies import UserTurnStrategies
 from app.ai.voice.agents.breeze_buddy.llm import get_llm_service
 from app.ai.voice.agents.breeze_buddy.observability.tracing_setup import setup_tracing
 from app.ai.voice.agents.breeze_buddy.processors import (
+    KnowledgeRetrievalProcessor,
     TranscriptCollectorProcessor,
     TranscriptionGateProcessor,
     UserIdleCallbackHandler,
@@ -198,6 +199,7 @@ async def build_pipeline(
     configurations: Optional[ConfigurationModel] = None,
     on_user_idle_timeout: Optional[Callable[[int], Any]] = None,
     mode: Literal["agent", "stream"] = "agent",
+    kb_processor: Optional[KnowledgeRetrievalProcessor] = None,
 ) -> tuple[
     Pipeline,
     LLMContext,
@@ -235,6 +237,9 @@ async def build_pipeline(
         configurations: Template configuration model
         on_user_idle_timeout: Async callback to handle user idle timeout (triggers full end_conversation flow)
         mode: "agent" for full LLM-driven flow, "stream" for STT/TTS-only with turn events
+        kb_processor: KnowledgeRetrievalProcessor for per-turn KB retrieval
+            (auto_retrieve mode). Agent mode only — inserted between the user
+            aggregator and the LLM; ignored in stream/realtime modes
 
     Returns:
         6-tuple of (pipeline, context, context_aggregator, user_idle_callback_handler, transcription_gate, transcript_collector)
@@ -512,6 +517,10 @@ async def build_pipeline(
         # the LLM and TTS to emit `ui-op` RTVI events) is DEFERRED — the
         # processor module is kept but not plugged in. See
         # docs/widget/VOICE_GENERATIVE_UI_TODO.md for the re-wiring steps.
+        # KB auto-retrieve sits between the user aggregator and the LLM so
+        # retrieval finishes (or fails open) before this turn's inference.
+        if kb_processor is not None:
+            pipeline_parts.append(kb_processor)
         pipeline_parts.extend(
             [llm, tts, transport.output(), context_aggregator.assistant()]
         )

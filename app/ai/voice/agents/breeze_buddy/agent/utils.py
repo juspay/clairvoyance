@@ -11,7 +11,11 @@ from fastapi import WebSocket
 from pipecat.frames.frames import OutputAudioRawFrame
 from pipecat.pipeline.task import PipelineTask
 
-from app.ai.voice.agents.breeze_buddy.template.types import FlowMode, TemplateModel
+from app.ai.voice.agents.breeze_buddy.template.types import (
+    FlowMode,
+    KnowledgeBaseMode,
+    TemplateModel,
+)
 from app.ai.voice.agents.breeze_buddy.utils.common import (
     prepare_initial_greeting_payload,
     track_error,
@@ -281,6 +285,24 @@ def validate_template_compat(template: TemplateModel) -> None:
             "builds its own turn strategies and WakePhraseUserTurnStartStrategy "
             f"is never installed. Disable wake_phrase on template {template.id} "
             "or disable realtime."
+        )
+
+    kb_config = (
+        getattr(configurations, "knowledge_base", None)
+        if configurations is not None
+        else None
+    )
+    if (
+        kb_config is not None
+        and getattr(kb_config, "enabled", False)
+        and kb_config.mode in (KnowledgeBaseMode.AUTO, KnowledgeBaseMode.AUTO_RETRIEVE)
+    ):
+        raise ValueError(
+            "Realtime LLMs (llm_configurations.realtime set) cannot be "
+            "combined with knowledge_base mode 'auto'/'auto_retrieve' — the "
+            "realtime pipeline has no pre-LLM text hop for per-turn retrieval "
+            f"injection. Use mode='full_injection' or 'tool' on template "
+            f"{template.id}, or disable realtime."
         )
 
     logger.info(
