@@ -11,6 +11,7 @@ Dispatch logic:
 
 from __future__ import annotations
 
+import asyncio
 from typing import Union
 
 from pipecat.services.azure.llm import AzureLLMService
@@ -183,10 +184,6 @@ async def _resolve_vertex(llm_config: LLMConfiguration) -> GoogleVertexLLMServic
     credentials_json = await GOOGLE_VERTEX_CREDENTIALS_JSON()
     project_id = await GOOGLE_VERTEX_PROJECT_ID()
 
-    if not credentials_json:
-        raise ValueError(
-            "GOOGLE_VERTEX_CREDENTIALS_JSON is required for google_vertex provider"
-        )
     if not project_id:
         raise ValueError(
             "GOOGLE_VERTEX_PROJECT_ID is required for google_vertex provider"
@@ -223,23 +220,22 @@ async def _resolve_vertex(llm_config: LLMConfiguration) -> GoogleVertexLLMServic
         thinking_budget = llm_config.thinking.thinking_budget
         thinking_level = llm_config.thinking.thinking_level
 
-    return build_vertex_llm(
-        VertexConfig(
-            credentials_json=credentials_json,
-            project_id=project_id,
-            location=llm_config.region,
-            model=llm_config.model,
-            temperature=llm_config.temperature,
-            max_tokens=llm_config.max_tokens,
-            thinking_budget=thinking_budget,
-            thinking_level=thinking_level,
-            function_call_timeout_secs=(
-                llm_config.function_call_timeout_secs
-                if llm_config.function_call_timeout_secs
-                else 10.0
-            ),
-        )
+    config = VertexConfig(
+        credentials_json=credentials_json,
+        project_id=project_id,
+        location=llm_config.region,
+        model=llm_config.model,
+        temperature=llm_config.temperature,
+        max_tokens=llm_config.max_tokens,
+        thinking_budget=thinking_budget,
+        thinking_level=thinking_level,
+        function_call_timeout_secs=(
+            llm_config.function_call_timeout_secs
+            if llm_config.function_call_timeout_secs
+            else 10.0
+        ),
     )
+    return await asyncio.to_thread(build_vertex_llm, config)
 
 
 async def _resolve_claude_vertex(
@@ -249,10 +245,6 @@ async def _resolve_claude_vertex(
     credentials_json = await GOOGLE_VERTEX_CREDENTIALS_JSON()
     project_id = await GOOGLE_VERTEX_PROJECT_ID()
 
-    if not credentials_json:
-        raise ValueError(
-            "GOOGLE_VERTEX_CREDENTIALS_JSON is required for claude_vertex provider"
-        )
     if not project_id:
         raise ValueError(
             "GOOGLE_VERTEX_PROJECT_ID is required for claude_vertex provider"
@@ -286,22 +278,24 @@ async def _resolve_claude_vertex(
         thinking_enabled = True
         thinking_budget_tokens = llm_config.thinking.budget_tokens
 
-    return build_claude_vertex_llm(
-        ClaudeVertexConfig(
-            credentials_json=credentials_json,
-            project_id=project_id,
-            region=llm_config.region,
-            model=llm_config.model,
-            temperature=llm_config.temperature,
-            max_tokens=llm_config.max_tokens,
-            thinking_enabled=thinking_enabled,
-            thinking_budget_tokens=thinking_budget_tokens,
-            function_call_timeout_secs=(
-                llm_config.function_call_timeout_secs
-                if llm_config.function_call_timeout_secs
-                else 10.0
-            ),
+    config = ClaudeVertexConfig(
+        credentials_json=credentials_json,
+        project_id=project_id,
+        region=llm_config.region,
+        model=llm_config.model,
+        temperature=llm_config.temperature,
+        max_tokens=llm_config.max_tokens,
+        thinking_enabled=thinking_enabled,
+        thinking_budget_tokens=thinking_budget_tokens,
+        function_call_timeout_secs=(
+            llm_config.function_call_timeout_secs
+            if llm_config.function_call_timeout_secs
+            else 10.0
         ),
+    )
+    return await asyncio.to_thread(
+        build_claude_vertex_llm,
+        config,
         pooled=pooled,
     )
 

@@ -24,6 +24,7 @@ Design note — sync vs. async client:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from typing import Any, AsyncIterator, cast
@@ -142,23 +143,29 @@ class TemplateGeneratorService:
             yield _format_sse("done", {"template": None})
             return
 
-        if not credentials_json:
-            yield _format_sse(
-                "error",
-                {
-                    "code": "auth_error",
-                    "message": "GOOGLE_VERTEX_CREDENTIALS_JSON is not configured",
-                },
-            )
-            yield _format_sse("done", {"template": None})
-            return
-
         try:
-            client = get_anthropic_vertex_client(
+            client = await asyncio.to_thread(
+                get_anthropic_vertex_client,
                 credentials_json=credentials_json,
                 project_id=project_id,
                 region=static.TEMPLATE_BUILDER_VERTEX_REGION,
             )
+        except ValueError as exc:
+            logger.error(
+                f"TemplateGeneratorService: Vertex credentials unavailable: {exc}"
+            )
+            yield _format_sse(
+                "error",
+                {
+                    "code": "auth_error",
+                    "message": (
+                        "Vertex authentication is unavailable; configure Google "
+                        "ADC or fallback credentials"
+                    ),
+                },
+            )
+            yield _format_sse("done", {"template": None})
+            return
         except Exception as exc:
             logger.error(f"TemplateGeneratorService: failed to build client: {exc}")
             yield _format_sse(

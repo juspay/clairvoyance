@@ -10,19 +10,19 @@ downsamples to 16 kHz before returning so it is compatible with the shared
 
 from __future__ import annotations
 
-import json
+import asyncio
 from dataclasses import dataclass
 from typing import Optional, Sequence
 
 import numpy as np
 from google.cloud import texttospeech_v1
-from google.oauth2 import service_account
 from pipecat.services.google.tts import GeminiTTSService
 from pipecat.transcriptions.language import Language
 
 from app.core.config.dynamic import GEMINI_TTS_MODEL
 from app.core.config.static import GOOGLE_CREDENTIALS_JSON
 from app.core.logger import logger
+from app.services.gcp.credentials import get_google_auth_input, get_google_credentials
 
 __all__ = ["GeminiConfig", "build_gemini_tts", "_generate_gemini_audio"]
 
@@ -59,17 +59,26 @@ async def build_gemini_tts(config: GeminiConfig) -> GeminiTTSService:
     """
     text_filters = list(config.text_filters) if config.text_filters else None
     model = config.model or await GEMINI_TTS_MODEL()
-
-    return GeminiTTSService(
-        credentials=config.credentials or GOOGLE_CREDENTIALS_JSON or None,
-        settings=GeminiTTSService.Settings(
-            model=model,
-            voice=config.voice_id,
-            language=config.language,
-            prompt=config.style_prompt,
-        ),
-        text_filters=text_filters,
+    legacy_credentials_json = config.credentials or GOOGLE_CREDENTIALS_JSON
+    auth = await asyncio.to_thread(
+        get_google_auth_input,
+        credentials_json=legacy_credentials_json,
+        service_name="Gemini TTS",
     )
+
+    def _build(credentials_arg: str | None) -> GeminiTTSService:
+        return GeminiTTSService(
+            credentials=credentials_arg,
+            settings=GeminiTTSService.Settings(
+                model=model,
+                voice=config.voice_id,
+                language=config.language,
+                prompt=config.style_prompt,
+            ),
+            text_filters=text_filters,
+        )
+
+    return _build(auth.value)
 
 
 async def _generate_gemini_audio(
@@ -97,14 +106,8 @@ async def _generate_gemini_audio(
         when called with `input_format="raw"`.
 
     Raises:
-        ValueError: If GOOGLE_CREDENTIALS_JSON is not set.
+        ValueError: If neither ADC nor GOOGLE_CREDENTIALS_JSON is available.
     """
-    credentials_json = GOOGLE_CREDENTIALS_JSON
-    if not credentials_json:
-        raise ValueError(
-            "GOOGLE_CREDENTIALS_JSON is required for Gemini TTS pre-synthesis"
-        )
-
     final_voice = voice_id or "Kore"
     final_model = model or await GEMINI_TTS_MODEL()
     final_language = language or "en-IN"
@@ -115,9 +118,12 @@ async def _generate_gemini_audio(
     )
 
     # Build authenticated client
-    json_account_info = json.loads(credentials_json)
-    creds = service_account.Credentials.from_service_account_info(json_account_info)
-    client = texttospeech_v1.TextToSpeechAsyncClient(credentials=creds)
+    auth = await asyncio.to_thread(
+        get_google_credentials,
+        credentials_json=GOOGLE_CREDENTIALS_JSON,
+        service_name="Gemini TTS pre-synthesis",
+    )
+    client = texttospeech_v1.TextToSpeechAsyncClient(credentials=auth.credentials)
 
     try:
         # Voice params — model_name routes to the Gemini TTS model

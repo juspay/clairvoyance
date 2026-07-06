@@ -11,18 +11,18 @@ downsamples to 16 kHz before returning so it is compatible with the shared
 
 from __future__ import annotations
 
-import json
+import asyncio
 from dataclasses import dataclass
-from typing import Any, Optional, Sequence
+from typing import Optional, Sequence
 
 import numpy as np
 from google.cloud import texttospeech_v1
-from google.oauth2 import service_account
 from pipecat.services.google.tts import GoogleTTSService
 from pipecat.transcriptions.language import Language
 
 from app.core.config.static import GOOGLE_CREDENTIALS_JSON
 from app.core.logger import logger
+from app.services.gcp.credentials import get_google_auth_input, get_google_credentials
 
 __all__ = ["GoogleConfig", "build_google_tts", "_generate_google_audio"]
 
@@ -36,21 +36,29 @@ class GoogleConfig:
 
     voice_id: str
     language: Language = Language.EN_IN
-    credentials: Optional[Any] = None
+    credentials: Optional[str] = None
     text_filters: Optional[Sequence] = None
 
 
-def build_google_tts(config: GoogleConfig):
+def build_google_tts(config: GoogleConfig) -> GoogleTTSService:
     """Create a Google TTS service."""
 
     text_filters = list(config.text_filters) if config.text_filters else None
-
-    return GoogleTTSService(
-        voice_id=config.voice_id,
-        settings=GoogleTTSService.Settings(language=config.language),
-        credentials=config.credentials,
-        text_filters=text_filters,
+    legacy_credentials_json = config.credentials or GOOGLE_CREDENTIALS_JSON
+    auth = get_google_auth_input(
+        credentials_json=legacy_credentials_json,
+        service_name="Google TTS",
     )
+
+    def _build(credentials_arg: str | None) -> GoogleTTSService:
+        return GoogleTTSService(
+            voice_id=config.voice_id,
+            settings=GoogleTTSService.Settings(language=config.language),
+            credentials=credentials_arg,
+            text_filters=text_filters,
+        )
+
+    return _build(auth.value)
 
 
 async def _generate_google_audio(
@@ -76,14 +84,8 @@ async def _generate_google_audio(
         when called with `input_format="raw"`.
 
     Raises:
-        ValueError: If GOOGLE_CREDENTIALS_JSON is not set.
+        ValueError: If neither ADC nor GOOGLE_CREDENTIALS_JSON is available.
     """
-    credentials_json = GOOGLE_CREDENTIALS_JSON
-    if not credentials_json:
-        raise ValueError(
-            "GOOGLE_CREDENTIALS_JSON is required for Google TTS pre-synthesis"
-        )
-
     final_voice = voice_id or "en-IN-Chirp3-HD-Despina"
     final_language = language or "en-IN"
 
@@ -92,9 +94,12 @@ async def _generate_google_audio(
         f"[voice={final_voice}, lang={final_language}]"
     )
 
-    json_account_info = json.loads(credentials_json)
-    creds = service_account.Credentials.from_service_account_info(json_account_info)
-    client = texttospeech_v1.TextToSpeechAsyncClient(credentials=creds)
+    auth = await asyncio.to_thread(
+        get_google_credentials,
+        credentials_json=GOOGLE_CREDENTIALS_JSON,
+        service_name="Google TTS pre-synthesis",
+    )
+    client = texttospeech_v1.TextToSpeechAsyncClient(credentials=auth.credentials)
 
     try:
         # Chirp voice name selects the model — no model_name needed.
