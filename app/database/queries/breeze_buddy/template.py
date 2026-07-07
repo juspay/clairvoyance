@@ -6,6 +6,12 @@ from typing import Any, Dict, List, Optional, Tuple
 
 # Table name constants
 TEMPLATE_TABLE = "template"
+TEMPLATE_FULL_COLUMNS = (
+    "id, reseller_id, merchant_id, name, flow, expected_payload_schema, "
+    "expected_callback_response_schema, configurations, secrets, "
+    "outbound_number_id, is_active, supported_channels, data_sources, "
+    "created_at, updated_at"
+)
 
 
 def get_template_by_merchant_query(
@@ -28,10 +34,7 @@ def get_template_by_merchant_query(
         values.append(name)
 
     query = f"""
-        SELECT id,
-               reseller_id,
-               merchant_id,
-               name, flow, expected_payload_schema, expected_callback_response_schema, configurations, secrets, outbound_number_id, is_active, supported_channels, created_at, updated_at
+        SELECT {TEMPLATE_FULL_COLUMNS}
         FROM {TEMPLATE_TABLE}
         WHERE {" AND ".join(conditions)}
     """
@@ -62,14 +65,15 @@ def create_template_query(
     ],  # Changed: moved before is_active to match SQL column order
     is_active: bool,
     supported_channels: List[str],
+    data_sources: Optional[str],
     created_at,
     updated_at,
 ) -> Tuple[str, List[Any]]:
     """Generate query to create a new template."""
     query = f"""
-        INSERT INTO {TEMPLATE_TABLE} (id, reseller_id, merchant_id, name, flow, expected_payload_schema, expected_callback_response_schema, configurations, secrets, outbound_number_id, is_active, supported_channels, created_at, updated_at)
-        VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7::jsonb, $8::jsonb, $9::jsonb, $10, $11, $12, $13, $14)
-        RETURNING id, reseller_id, merchant_id, name, flow, expected_payload_schema, expected_callback_response_schema, configurations, secrets, outbound_number_id, is_active, supported_channels, created_at, updated_at
+        INSERT INTO {TEMPLATE_TABLE} (id, reseller_id, merchant_id, name, flow, expected_payload_schema, expected_callback_response_schema, configurations, secrets, outbound_number_id, is_active, supported_channels, data_sources, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7::jsonb, $8::jsonb, $9::jsonb, $10, $11, $12, $13::jsonb, $14, $15)
+        RETURNING {TEMPLATE_FULL_COLUMNS}
     """
 
     return query, [
@@ -85,6 +89,7 @@ def create_template_query(
         outbound_number_id,
         is_active,
         supported_channels,
+        data_sources,
         created_at,
         updated_at,
     ]
@@ -217,10 +222,7 @@ def get_template_by_id_query(template_id: str) -> Tuple[str, List[Any]]:
         Tuple of (query string, values list)
     """
     query = f"""
-        SELECT id,
-               reseller_id,
-               merchant_id,
-               name, flow, expected_payload_schema, expected_callback_response_schema, configurations, secrets, outbound_number_id, is_active, supported_channels, created_at, updated_at
+        SELECT {TEMPLATE_FULL_COLUMNS}
         FROM {TEMPLATE_TABLE}
         WHERE id = $1
         LIMIT 1
@@ -251,10 +253,7 @@ def get_template_by_outbound_number_id_query(
         )
 
     query = f"""
-        SELECT id,
-               reseller_id,
-               merchant_id,
-               name, flow, expected_payload_schema, expected_callback_response_schema, configurations, secrets, outbound_number_id, is_active, supported_channels, created_at, updated_at
+        SELECT {TEMPLATE_FULL_COLUMNS}
         FROM {TEMPLATE_TABLE}
         WHERE {' AND '.join(conditions)}
         LIMIT 1
@@ -339,6 +338,7 @@ def replace_template_query(
     is_active: bool,
     merchant_id: Optional[str],
     supported_channels: List[str],
+    data_sources: Optional[str],
     updated_at,
 ) -> Tuple[str, List[Any]]:
     """
@@ -357,6 +357,7 @@ def replace_template_query(
         is_active: Whether template is active
         merchant_id: Merchant identifier or None
         supported_channels: Channels (voice/chat) the template is allowed on
+        data_sources: Data-source refs JSON string or None
         updated_at: Updated timestamp
 
     Returns:
@@ -375,12 +376,10 @@ def replace_template_query(
             reseller_id = $9,
             merchant_id = $10,
             supported_channels = $11,
-            updated_at = $12
-        WHERE id = $13
-        RETURNING id,
-                  reseller_id,
-                  merchant_id,
-                  name, flow, expected_payload_schema, expected_callback_response_schema, configurations, secrets, outbound_number_id, is_active, supported_channels, created_at, updated_at
+            data_sources = $12::jsonb,
+            updated_at = $13
+        WHERE id = $14
+        RETURNING {TEMPLATE_FULL_COLUMNS}
     """
 
     return query, [
@@ -395,6 +394,7 @@ def replace_template_query(
         reseller_id,
         merchant_id,
         supported_channels,
+        data_sources,
         updated_at,
         template_id,
     ]

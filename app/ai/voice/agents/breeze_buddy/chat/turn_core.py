@@ -36,6 +36,7 @@ from app.ai.voice.agents.breeze_buddy.chat.block_codec import (
 from app.ai.voice.agents.breeze_buddy.chat.sse import SSEEvent
 from app.ai.voice.agents.breeze_buddy.llm import get_llm_service
 from app.ai.voice.agents.breeze_buddy.template.cache import get_template_by_id_cached
+from app.ai.voice.agents.breeze_buddy.template.loader import FlowConfigLoader
 from app.ai.voice.agents.breeze_buddy.template.types import TemplateModel
 from app.core.config.dynamic import CHAT_HISTORY_REPLAY_LIMIT
 from app.core.logger import logger
@@ -87,6 +88,18 @@ async def build_render_template_vars(
     if persisted:
         merged.update(persisted)
     return merged
+
+
+async def prepare_template_data_sources_for_chat(
+    template: TemplateModel, template_vars: Dict[str, Any]
+) -> tuple[TemplateModel, Dict[str, Any]]:
+    """Load data sources for one chat turn without mutating cached templates."""
+    if not template.data_sources:
+        return template, {}
+
+    template = template.model_copy(deep=True)
+    await FlowConfigLoader().load_data_sources(template, template_vars)
+    return template, template.flow.pop("_runtime_data", {})
 
 
 async def run_chat_turn(
@@ -189,6 +202,9 @@ async def run_chat_turn(
         else {}
     )
     template_vars = await build_render_template_vars(template, persisted_template_vars)
+    template, runtime_data = await prepare_template_data_sources_for_chat(
+        template, template_vars
+    )
 
     if llm is None:
         llm = await get_llm_service(resolve_llm_configuration(template), pooled=True)
@@ -198,6 +214,7 @@ async def run_chat_turn(
         template=template,
         llm=llm,
         template_vars=template_vars,
+        runtime_data=runtime_data,
         agent_state=agent_state,
         context_placement=context_placement,
     )
@@ -276,6 +293,9 @@ async def run_chat_approval_continuation(
         else {}
     )
     template_vars = await build_render_template_vars(template, persisted_template_vars)
+    template, runtime_data = await prepare_template_data_sources_for_chat(
+        template, template_vars
+    )
     if llm is None:
         llm = await get_llm_service(resolve_llm_configuration(template), pooled=True)
 
@@ -284,6 +304,7 @@ async def run_chat_approval_continuation(
         template=template,
         llm=llm,
         template_vars=template_vars,
+        runtime_data=runtime_data,
         agent_state=agent_state,
     )
     async for event in agent.run_approval_turn(

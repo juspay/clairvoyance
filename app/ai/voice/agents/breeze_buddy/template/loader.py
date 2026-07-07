@@ -4,7 +4,9 @@ Flow Configuration Loader
 This module provides functionality to load templates from the database.
 """
 
-from typing import Dict, Optional, Tuple
+import asyncio
+import json
+from typing import Any, Dict, Optional, Tuple
 
 from app.ai.voice.agents.breeze_buddy.template.transformation_function import (
     TEMPLATE_FUNCTION_REGISTRY,
@@ -20,6 +22,10 @@ from app.database.accessor.breeze_buddy.credentials import (
 )
 from app.database.accessor.breeze_buddy.template import (
     get_template_by_id_with_fallback,
+)
+from app.services.data_sources.runtime import (
+    DEFAULT_DATA_SOURCE_FETCH_TIMEOUT_SECONDS,
+    get_or_fetch_bundle,
 )
 
 
@@ -108,6 +114,65 @@ class FlowConfigLoader:
             for option in node.get("options", []) or []:
                 if isinstance(option, dict) and "message" in option:
                     option["message"] = _sub(option["message"])
+
+    def _dataset_content(self, dataset: Dict[str, Any]) -> str:
+        if "content" in dataset:
+            return str(dataset["content"])
+        return json.dumps(dataset, ensure_ascii=False, default=str)
+
+    async def load_data_sources(
+        self, template_obj: TemplateModel, template_vars: Dict[str, Any]
+    ) -> None:
+        if template_obj.flow.get("mode") == FlowMode.IVR.value:
+            return
+
+        refs = [ref for ref in (template_obj.data_sources or []) if ref.is_active]
+        if not refs:
+            return
+
+        runtime_data: Dict[str, Any] = {}
+
+        bundles = await asyncio.gather(
+            *(
+                get_or_fetch_bundle(
+                    template_id=template_obj.id,
+                    ref=ref,
+                    timeout_seconds=DEFAULT_DATA_SOURCE_FETCH_TIMEOUT_SECONDS,
+                    write_cache=True,
+                )
+                for ref in refs
+            ),
+            return_exceptions=True,
+        )
+        for ref, bundle in zip(refs, bundles, strict=True):
+            if isinstance(bundle, BaseException):
+                logger.warning(
+                    "Skipping data source '%s' after runtime load failure: %s",
+                    ref.name,
+                    bundle,
+                )
+                continue
+            if not bundle:
+                continue
+
+            runtime_data[ref.name] = bundle.get("datasets", {})
+
+            for target, dataset in bundle.get("datasets", {}).items():
+                variable_name = dataset.get("variable_name")
+                if not variable_name:
+                    continue
+                if variable_name in template_vars:
+                    logger.warning(
+                        "Skipping data-source variable '%s' from %s.%s because it "
+                        "already exists in template_vars",
+                        variable_name,
+                        ref.name,
+                        target,
+                    )
+                    continue
+                template_vars[variable_name] = self._dataset_content(dataset)
+
+        template_obj.flow["_runtime_data"] = runtime_data
 
     def render_task_messages(
         self, task_messages: list, variables: Dict[str, str]
@@ -232,6 +297,8 @@ class FlowConfigLoader:
                     logger.info(
                         f"Injected extra payload field '{field_name}' into template_vars"
                     )
+
+        await self.load_data_sources(template_obj, template_vars)
 
         # Direct mode has a flat structure (system_prompt + flat function list)
         # rather than a nodes array, so render the top-level message fields and

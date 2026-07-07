@@ -51,6 +51,7 @@ def apply_playground_overrides(
     logger.info(f"Flow override from metaData: {flow_override is not None}")
     if flow_override and isinstance(flow_override, dict):
         try:
+            runtime_data = template.flow.get("_runtime_data")
             if template_vars:
                 for node in flow_override.get("nodes", []):
                     # Re-render task_messages
@@ -65,6 +66,8 @@ def apply_playground_overrides(
                             msg["content"] = replace_placeholders(
                                 msg["content"], template_vars
                             )
+            if runtime_data is not None:
+                flow_override["_runtime_data"] = runtime_data
             template.flow = flow_override
             logger.info(f"Applied playground flow override for lead {lead.id}")
 

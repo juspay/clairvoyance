@@ -2381,6 +2381,66 @@ def _default_supported_channels() -> List[Literal["voice", "chat"]]:
     return ["voice"]
 
 
+class DataSourceSelector(BaseModel):
+    """Google Sheet tab selection for one runtime dataset."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    sheet_name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+    range: Optional[
+        Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+    ] = None
+    max_rows: Optional[int] = Field(default=None, gt=0)
+
+    @model_validator(mode="after")
+    def validate_selector(self) -> "DataSourceSelector":
+        if self.range and self.max_rows:
+            raise ValueError(
+                "selector.range and selector.max_rows cannot be used together"
+            )
+        return self
+
+
+class DatasetUse(BaseModel):
+    """One selected source tab rendered as text for custom code and prompts."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    target: Annotated[
+        str,
+        StringConstraints(strip_whitespace=True, pattern=r"^[a-zA-Z_][a-zA-Z0-9_]*$"),
+    ]
+    selector: DataSourceSelector
+    format: Literal["csv", "markdown"] = "csv"
+    variable_name: Optional[
+        Annotated[
+            str,
+            StringConstraints(
+                strip_whitespace=True, pattern=r"^[a-zA-Z_][a-zA-Z0-9_]*$"
+            ),
+        ]
+    ] = None
+
+
+class TemplateDataSourceRef(BaseModel):
+    """A template's usage of a reusable data source."""
+
+    name: Annotated[
+        str,
+        StringConstraints(strip_whitespace=True, pattern=r"^[a-zA-Z_][a-zA-Z0-9_]*$"),
+    ]
+    data_source_id: str
+    is_active: bool = True
+    datasets: List[DatasetUse]
+
+    @model_validator(mode="after")
+    def validate_ref(self) -> "TemplateDataSourceRef":
+        targets = [dataset.target for dataset in self.datasets]
+        if len(targets) != len(set(targets)):
+            raise ValueError("dataset target values must be unique per data source")
+        return self
+
+
 class TemplateModel(BaseModel):
     # Read-only fields (set by server, not editable via API).
     # These are intentionally excluded from ReplaceTemplateRequest so that
@@ -2409,6 +2469,7 @@ class TemplateModel(BaseModel):
         default_factory=_default_supported_channels,
         min_length=1,
     )
+    data_sources: Optional[List[TemplateDataSourceRef]] = None
 
 
 # Request models for API
@@ -2452,6 +2513,7 @@ class CreateTemplateRequest(BaseModel):
         default_factory=_default_supported_channels,
         min_length=1,
     )
+    data_sources: Optional[List[TemplateDataSourceRef]] = None
 
 
 class ReplaceTemplateRequest(BaseModel):
@@ -2500,3 +2562,4 @@ class ReplaceTemplateRequest(BaseModel):
         default=None,
         min_length=1,
     )
+    data_sources: Optional[List[TemplateDataSourceRef]] = None

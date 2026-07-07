@@ -15,6 +15,7 @@ from app.api.routers.breeze_buddy.credentials import router as credentials_route
 
 # Daily transport (web/mobile clients via Daily.co)
 from app.api.routers.breeze_buddy.daily import router as daily_router
+from app.api.routers.breeze_buddy.data_sources import router as data_sources_router
 from app.api.routers.breeze_buddy.demo import router as demo_router
 
 # Knowledge base (RAG) management: KBs, documents, retrieval testing
@@ -64,6 +65,9 @@ router.include_router(configurations_router, prefix="", tags=["configurations"])
 
 # Credentials (API keys, tokens - centralized secret management)
 router.include_router(credentials_router, prefix="", tags=["credentials"])
+
+# Data Sources (Google Sheets in v1; source-agnostic dataset model)
+router.include_router(data_sources_router, prefix="", tags=["data-sources"])
 
 # Outbound Numbers (phone numbers for making calls)
 router.include_router(numbers_router, prefix="", tags=["numbers"])

@@ -190,6 +190,10 @@ def decode_template(result: asyncpg.Record) -> Optional[TemplateModel]:
     # so the model always has at least one channel.
     supported_channels = result.get("supported_channels") or ["voice"]
 
+    data_sources_data = result.get("data_sources")
+    if data_sources_data and isinstance(data_sources_data, str):
+        data_sources_data = json.loads(data_sources_data)
+
     return TemplateModel(
         id=str(result["id"]),
         reseller_id=result["reseller_id"],
@@ -207,6 +211,7 @@ def decode_template(result: asyncpg.Record) -> Optional[TemplateModel]:
         ),
         is_active=result["is_active"],
         supported_channels=list(supported_channels),
+        data_sources=data_sources_data,
         created_at=result["created_at"],
         updated_at=result["updated_at"],
     )

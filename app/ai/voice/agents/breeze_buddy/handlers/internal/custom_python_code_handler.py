@@ -7,6 +7,7 @@ Invoked when LLM calls a custom function.
 Follows the same pattern as http_function_handler and builtin_function_dispatcher.
 """
 
+import copy
 from typing import Any, Dict, Optional, Tuple
 
 from app.ai.voice.agents.breeze_buddy.template.context import TemplateContext
@@ -70,6 +71,7 @@ async def custom_python_code_handler(
         "lead": context.lead.model_dump() if context.lead else {},
         "call_sid": context.call_sid,
         "lead_id": getattr(context.lead, "id", None) if context.lead else None,
+        "data": copy.deepcopy(context.runtime_data),
         # Future expansion: transcripts, node history, merchant config
     }
 

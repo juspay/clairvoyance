@@ -86,6 +86,11 @@ class TemplateContext:
         return self.bot.context
 
     @property
+    def runtime_data(self) -> Dict[str, Any]:
+        """Get normalized data-source runtime data for this call."""
+        return getattr(self.bot, "runtime_data", {})
+
+    @property
     def lead(self):
         """Get lead information"""
         return self.bot.lead
