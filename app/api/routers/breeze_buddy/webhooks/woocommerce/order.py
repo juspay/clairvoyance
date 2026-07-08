@@ -11,6 +11,8 @@ from app.core.logger import logger
 
 from .utils import TOPIC_ORDER_CONFIRMATION, normalize_indian_phone, push_lead
 
+CALLABLE_ORDER_STATUSES = {"processing", "on-hold"}
+
 
 def evaluate_trigger(order: Dict[str, Any], all_orders: bool) -> Tuple[bool, str]:
     """Decide whether an order should push a lead, per the ?all_orders= preference.
@@ -104,6 +106,16 @@ async def process_order_confirmation(
     order_id = order.get("id")
     if not order_id:
         return {"status": "ignored", "reason": "no order id in payload"}
+
+    # Only call freshly placed orders — skip terminal/fulfilled statuses so
+    # cancel / delivered / tracking updates on old orders don't trigger a call.
+    order_status = (order.get("status") or "").lower()
+    if order_status not in CALLABLE_ORDER_STATUSES:
+        logger.info(
+            f"woocommerce order {order_id} skipped: status '{order_status}' "
+            f"not callable"
+        )
+        return {"status": "skipped", "reason": f"status not callable: {order_status}"}
 
     should_push, reason = evaluate_trigger(order, all_orders)
     if not should_push:
