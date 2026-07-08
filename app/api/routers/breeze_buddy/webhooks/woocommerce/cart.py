@@ -12,7 +12,12 @@ from typing import Any, Dict, Optional, Tuple
 
 from app.core.logger import logger
 
-from .utils import TOPIC_ABANDONED_CHECKOUT, first, push_lead
+from .utils import (
+    TOPIC_ABANDONED_CHECKOUT,
+    first,
+    normalize_indian_phone,
+    push_lead,
+)
 
 
 def summarize_cart_items(data: Dict[str, Any]) -> str:
@@ -51,11 +56,11 @@ def build_abandoned_checkout_payload(
     """
     billing = data.get("billing") or {}
 
-    phone = (
+    phone = normalize_indian_phone(
         billing.get("phone")
         or first(data, "phone", "wcf_phone_number", "customer_mobile_number")
         or ""
-    ).strip()
+    )
 
     first_name = billing.get("first_name") or first(
         data, "first_name", "wcf_first_name"

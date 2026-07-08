@@ -22,6 +22,32 @@ TOPIC_ORDER_CONFIRMATION = "order-confirmation"
 TOPIC_ABANDONED_CHECKOUT = "abandoned-checkout"
 
 
+def normalize_indian_phone(raw: Optional[str]) -> str:
+    """Normalize a phone number to E.164 for dialing (defaults to India / +91).
+
+    Telephony providers require E.164 (e.g. +919876543210). WooCommerce / cart
+    checkouts often store a bare 10-digit number, or with spaces, a leading 0,
+    or a ``91`` prefix without ``+``. Numbers already in ``+<country>...`` form
+    are kept (only stripped of separators).
+    """
+    if not raw:
+        return ""
+    s = str(raw).strip()
+    if s.startswith("+"):
+        return "+" + "".join(ch for ch in s[1:] if ch.isdigit())
+    digits = "".join(ch for ch in s if ch.isdigit())
+    if not digits:
+        return ""
+    if len(digits) == 11 and digits.startswith("0"):
+        digits = digits[1:]  # drop trunk 0
+    if len(digits) == 12 and digits.startswith("91"):
+        return "+" + digits
+    if len(digits) == 10:
+        return "+91" + digits
+    # Unknown shape — assume it already carries a country code.
+    return "+" + digits
+
+
 def first(data: Dict[str, Any], *keys: str) -> Optional[Any]:
     """Return the first non-empty value among the given keys (nested-aware).
 

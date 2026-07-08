@@ -9,7 +9,7 @@ from typing import Any, Dict, Optional, Tuple
 
 from app.core.logger import logger
 
-from .utils import TOPIC_ORDER_CONFIRMATION, push_lead
+from .utils import TOPIC_ORDER_CONFIRMATION, normalize_indian_phone, push_lead
 
 
 def evaluate_trigger(order: Dict[str, Any], all_orders: bool) -> Tuple[bool, str]:
@@ -34,7 +34,7 @@ def build_order_payload(
     ``phone`` is returned separately so the caller can skip when empty.
     """
     billing = order.get("billing") or {}
-    phone = (billing.get("phone") or order.get("phone") or "").strip()
+    phone = normalize_indian_phone(billing.get("phone") or order.get("phone") or "")
 
     customer_name = " ".join(
         part
