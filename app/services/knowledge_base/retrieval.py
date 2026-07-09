@@ -1,7 +1,7 @@
 """
 Knowledge base retrieval service -- the latency-critical path.
 
-``retrieve()`` = query embedding (Redis-cached) + one hybrid SQL round trip
+``retrieve()`` = query embedding (one provider API call) + one hybrid SQL round trip
 (vector KNN + full-text + trigram, RRF-fused). Callers on the voice hot path
 wrap it in ``asyncio.wait_for`` and fail open. Full-KB text / token totals
 (for full-injection mode) are cached in Redis under version-stamped keys;
@@ -26,7 +26,6 @@ import json
 import time
 from typing import List, Optional, Tuple
 
-from app.core.config.dynamic import KB_EMBED_CACHE_TTL_SECONDS
 from app.core.logger import logger
 from app.database.accessor.breeze_buddy.knowledge_base import (
     get_kb_full_text_rows,
@@ -43,8 +42,7 @@ _TOKEN_TOTAL_CACHE_TTL_SECONDS = 3600
 
 
 def _normalize_query(query: str) -> str:
-    """Collapse whitespace so trivially-different phrasings share one
-    embedding cache entry (and one consistent FTS/trigram input)."""
+    """Collapse whitespace for a consistent FTS/trigram input."""
     return " ".join(query.split()).strip()
 
 
@@ -84,35 +82,18 @@ async def _resolve_embedding_config(kb_ids: List[str]) -> EmbeddingConfig:
     return kb.embedding_config
 
 
-async def _embed_query_cached(query: str, config: EmbeddingConfig) -> List[float]:
-    """Embed the query with a Redis cache in front (dodges the fat p95 tail
-    of embedding APIs for repeated phrasings)."""
-    normalized = _normalize_query(query)
-    cache_key = (
-        f"kb:emb:{config.provider}:{config.model}:"
-        f"{hashlib.sha1(normalized.lower().encode()).hexdigest()}"
+async def _embed_query(query: str, config: EmbeddingConfig) -> List[float]:
+    """Embed the retrieval query via the provider — one API call per
+    retrieval, no caching. A query-embedding Redis cache existed here and
+    was removed on purpose: real conversation queries are near-unique
+    (multi-turn joins), so the hit rate never justified the memory and
+    complexity. If repeat-heavy traffic ever shows up in logs, prefer a
+    semantic result cache over resurrecting exact-text caching.
+    """
+    vectors = await get_embedding_provider(config).embed(
+        [_normalize_query(query)], input_type="query"
     )
-
-    redis = None
-    try:
-        redis = await get_redis_service()
-        cached = await redis.get(cache_key)
-        if cached:
-            return json.loads(cached)
-    except Exception:
-        pass  # cache is best-effort
-
-    provider = get_embedding_provider(config)
-    vectors = await provider.embed([normalized], input_type="query")
-    vector = vectors[0]
-
-    if redis is not None:
-        try:
-            ttl = await KB_EMBED_CACHE_TTL_SECONDS()
-            await redis.setex(cache_key, json.dumps(vector), ttl)
-        except Exception:
-            pass
-    return vector
+    return vectors[0]
 
 
 async def retrieve(
@@ -134,7 +115,7 @@ async def retrieve(
 
     started = time.perf_counter()
     config = await _resolve_embedding_config(kb_ids)
-    query_embedding = await _embed_query_cached(normalized, config)
+    query_embedding = await _embed_query(normalized, config)
     embed_ms = (time.perf_counter() - started) * 1000
 
     chunks = await hybrid_search_chunks(

@@ -29,7 +29,7 @@ def get_embedding_provider(config: EmbeddingConfig) -> EmbeddingProvider:
     """Resolve (and cache) an EmbeddingProvider from a KB's embedding_config.
 
     The two call sites are the seams where providers plug in: ingestion's
-    embed loop and retrieval's ``_embed_query_cached``. Instances are cached
+    embed loop and retrieval's ``_embed_query``. Instances are cached
     per ``provider:model`` — they're stateless besides the shared HTTP
     session, so one per process is enough. Unknown providers raise
     immediately with the list of valid keys.
