@@ -9,9 +9,16 @@ from typing import Any, Dict, Optional, Tuple
 
 from app.core.logger import logger
 
-from .utils import TOPIC_ORDER_CONFIRMATION, normalize_indian_phone, push_lead
+from .utils import (
+    TOPIC_ORDER_CONFIRMATION,
+    abort_backlog_leads,
+    normalize_indian_phone,
+    push_lead,
+)
 
 CALLABLE_ORDER_STATUSES = {"processing", "on-hold"}
+# A placed order that got cancelled — abort any not-yet-dialed leads for it.
+CANCELLED_ORDER_STATUSES = {"cancelled"}
 
 
 def evaluate_trigger(order: Dict[str, Any], all_orders: bool) -> Tuple[bool, str]:
@@ -107,9 +114,18 @@ async def process_order_confirmation(
     if not order_id:
         return {"status": "ignored", "reason": "no order id in payload"}
 
+    order_status = (order.get("status") or "").lower()
+
+    # Merchant cancelled the order before we called: abort any not-yet-dialed
+    # (BACKLOG) leads for it so we don't ring to confirm a cancelled order. A
+    # call already in progress is left as-is.
+    if order_status in CANCELLED_ORDER_STATUSES:
+        return await abort_backlog_leads(
+            TOPIC_ORDER_CONFIRMATION, order_id, merchant_id, "merchant cancelled order"
+        )
+
     # Only call freshly placed orders — skip terminal/fulfilled statuses so
     # cancel / delivered / tracking updates on old orders don't trigger a call.
-    order_status = (order.get("status") or "").lower()
     if order_status not in CALLABLE_ORDER_STATUSES:
         logger.info(
             f"woocommerce order {order_id} skipped: status '{order_status}' "
