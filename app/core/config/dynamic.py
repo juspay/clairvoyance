@@ -654,8 +654,3 @@ async def KB_MERCHANT_MAX_CHUNKS() -> int:
     per reseller on a 15GB instance); the per-KB cap above only binds once
     this one has been raised for a reseller."""
     return await get_config("KB_MERCHANT_MAX_CHUNKS", 20000, int)
-
-
-async def KB_EMBED_CACHE_TTL_SECONDS() -> int:
-    """TTL for the Redis query-embedding cache on the retrieval hot path."""
-    return await get_config("KB_EMBED_CACHE_TTL_SECONDS", 3600, int)
