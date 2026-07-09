@@ -603,6 +603,22 @@ async def AZURE_OPENAI_REALTIME_ENDPOINT() -> str:
 
 
 # --- Knowledge Base (RAG) ---
+async def KB_AZURE_OPENAI_ENDPOINT() -> str:
+    """Azure endpoint for the ``azure_openai`` EMBEDDING provider (the
+    default for new KBs). Deliberately separate from the LLM's static
+    AZURE_OPENAI_ENDPOINT so repointing or rotating one never silently
+    moves the other; Redis-settable at runtime, so the embed endpoint can
+    be changed without a deploy."""
+    return await get_config("KB_AZURE_OPENAI_ENDPOINT", "", str)
+
+
+async def KB_AZURE_OPENAI_API_KEY() -> str:
+    """API key for the ``azure_openai`` embedding provider — kept separate
+    from the LLM's AZURE_OPENAI_API_KEY on purpose (see
+    KB_AZURE_OPENAI_ENDPOINT); Redis-settable for no-deploy rotation."""
+    return await get_config("KB_AZURE_OPENAI_API_KEY", "", str)
+
+
 async def KB_INGEST_BATCH_SIZE() -> int:
     """Max documents the ingestion worker claims per tick/kick."""
     return await get_config("KB_INGEST_BATCH_SIZE", 5, int)
