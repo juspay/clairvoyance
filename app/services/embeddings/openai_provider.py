@@ -1,5 +1,6 @@
 """
-OpenAI embeddings provider (default).
+OpenAI (direct) embeddings provider — explicit opt-in; the platform default
+is the in-region ``azure_openai`` provider.
 
 Calls the REST endpoint directly through the shared aiohttp factory (proxy
 aware) -- no SDK dependency. ``text-embedding-3-small`` supports the

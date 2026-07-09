@@ -9,6 +9,9 @@ entry -- retrieval and ingestion are provider-agnostic.
 from typing import Callable, Dict
 
 from app.schemas.breeze_buddy.knowledge_base import EmbeddingConfig
+from app.services.embeddings.azure_openai_provider import (
+    AzureOpenAIEmbeddingProvider,
+)
 from app.services.embeddings.base import (
     TARGET_DIMENSIONS,
     EmbeddingProvider,
@@ -18,6 +21,10 @@ from app.services.embeddings.openai_provider import OpenAIEmbeddingProvider
 
 _PROVIDER_REGISTRY: Dict[str, Callable[[str], EmbeddingProvider]] = {
     "openai": lambda model: OpenAIEmbeddingProvider(model=model),
+    # DEFAULT (EmbeddingConfig defaults here): in-region Azure deployment of
+    # the same models; ``model`` is the Azure deployment name. See the
+    # provider module for the latency rationale.
+    "azure_openai": lambda model: AzureOpenAIEmbeddingProvider(model=model),
 }
 
 # Instances are stateless besides the shared HTTP session; cache per
