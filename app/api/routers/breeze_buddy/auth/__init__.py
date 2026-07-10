@@ -13,7 +13,7 @@ Endpoints:
 For backward compatibility, old session-based logout is also supported.
 """
 
-from fastapi import APIRouter, Depends, Response
+from fastapi import APIRouter, Depends
 from fastapi.responses import RedirectResponse
 
 from app.api.security.breeze_buddy.rbac_token import get_current_user_with_rbac
@@ -36,13 +36,11 @@ router = APIRouter()
 
 
 @router.post("/login", include_in_schema=False, response_model=TokenResponse)
-async def login(login_request: LoginRequest, response: Response):
+async def login(login_request: LoginRequest):
     """
     Login endpoint with JWT token-based authentication.
 
-    This endpoint supports both:
-    1. Database users with RBAC (new system)
-    2. Hardcoded credentials for backward compatibility (legacy system)
+    This endpoint supports database users with RBAC.
 
     Returns JWT access token with user information and RBAC data.
 
@@ -61,10 +59,9 @@ async def login(login_request: LoginRequest, response: Response):
 
     Security:
         - Database users: bcrypt password hashing
-        - Legacy users: Hardcoded credentials (backward compatibility)
         - Returns 401 if credentials are invalid or account is inactive
     """
-    return await login_handler(login_request, response)
+    return await login_handler(login_request)
 
 
 @router.post("/auth/s2s/token", response_model=S2STokenResponse)

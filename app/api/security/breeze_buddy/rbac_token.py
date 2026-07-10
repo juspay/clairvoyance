@@ -130,6 +130,13 @@ class BreezeBuddyRBACTokenManager:
                     detail="Could not validate credentials",
                     headers={"WWW-Authenticate": "Bearer"},
                 )
+            if user_id == "legacy_admin":
+                logger.warning("RBAC verifier: rejected legacy admin token")
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Could not validate credentials",
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
 
             # Extract Breeze Buddy RBAC data
             # Normalize legacy "shop" role to "user" for old JWTs still in circulation
@@ -175,6 +182,8 @@ class BreezeBuddyRBACTokenManager:
                 detail="Could not validate credentials",
                 headers={"WWW-Authenticate": "Bearer"},
             )
+        except HTTPException:
+            raise
         except Exception as e:
             logger.error(f"Unexpected error verifying RBAC token: {e}")
             raise HTTPException(
