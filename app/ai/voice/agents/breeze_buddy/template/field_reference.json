@@ -17,7 +17,8 @@
     "secrets":                           { "description": "Flat dict of credential key-value pairs injected as template vars, overriding reseller-level credentials for the same keys. Values substitute into {secret_key} placeholders in HTTP URLs, headers, and bodies.", "example": { "api_token": "Bearer sk-prod-abc123", "webhook_secret": "wh_live_xyz789" } },
     "outbound_number_id":                { "description": "UUID of the outbound phone number record to use for calls from this template. Must belong to the reseller. Null to use the reseller-default number.", "example": "eb0df4e9-a438-4ce4-a828-addf9db5ce3a" },
     "is_active":                         { "description": "When false, the template is soft-disabled: dispatch will not enqueue new leads for it. Set to false (not delete) when retiring a template.", "example": true },
-    "supported_channels":                { "description": "Channels this template may be served on. Default ['voice']. Add 'chat' to enable the Buddy Assist web-chat mode. Must have at least one entry.", "example": ["voice"] }
+    "supported_channels":                { "description": "Channels this template may be served on. Default ['voice']. Add 'chat' to enable the Buddy Assist web-chat mode. Must have at least one entry.", "example": ["voice"] },
+    "data_sources":                      { "description": "Reusable runtime data sources attached to this template. Each entry references a data source and selects tabs/datasets to load as CSV text into context.data; optional variable_name exposes a selected dataset as a prompt template variable.", "example": [{ "name": "aarokya_bot", "data_source_id": "992bb6e1-168a-4142-aaee-ec25d6a9c92a", "datasets": [{ "target": "faqs", "selector": { "sheet_name": "FAQs" }, "format": "csv", "variable_name": "faqs_text" }] }] }
   },
 
   "ConfigurationModel": {

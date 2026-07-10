@@ -205,6 +205,7 @@ def mask_template_secrets(template: TemplateModel) -> TemplateModel:
         # templates appear voice-only to API clients — which then PUT the
         # default back, silently disabling chat on round-trip edits.
         supported_channels=list(template.supported_channels),
+        data_sources=template.data_sources,
         created_at=template.created_at,
         updated_at=template.updated_at,
     )

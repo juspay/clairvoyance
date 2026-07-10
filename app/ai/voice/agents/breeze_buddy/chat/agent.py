@@ -160,12 +160,14 @@ class ChatAgent:
         template: TemplateModel,
         llm: Any,
         template_vars: Optional[dict] = None,
+        runtime_data: Optional[Dict[str, Any]] = None,
         agent_state: Optional[Dict[str, Any]] = None,
         context_placement: Optional[str] = None,
     ) -> None:
         self.session_id = session_id
         self.template = template
         self.template_vars = template_vars or {}
+        self.runtime_data: Dict[str, Any] = dict(runtime_data or {})
         self._llm = llm
         # Generic per-session state dict — the canonical store for any
         # identifiers the template's reducers care about (cart_id,

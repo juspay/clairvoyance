@@ -170,6 +170,7 @@ class Agent:
         self.flow_builder: Any = None
         self.template: Optional[TemplateModel] = None
         self.configurations: Optional[ConfigurationModel] = None
+        self.runtime_data: Dict[str, Any] = {}
         self.flow_config: Optional[Dict[str, Any]] = None
         self.end_conversation_callbacks: List = []
         self.expected_callback_response_schema: Any = None
@@ -371,6 +372,7 @@ class Agent:
                 self.configurations,
                 self.template_vars,
             ) = await load_template_config(self.lead)
+            self.runtime_data = self.template.flow.pop("_runtime_data", {})
         except ValueError as e:
             logger.error(f"Failed to load template config for Daily mode: {e}")
             raise
@@ -568,6 +570,7 @@ class Agent:
                 self.configurations,
                 self.template_vars,
             ) = await load_template_config(self.lead)
+            self.runtime_data = self.template.flow.pop("_runtime_data", {})
         except ValueError as e:
             error_msg = f"Template loading failed: {str(e)}"
             logger.error(error_msg)

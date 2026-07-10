@@ -14,6 +14,7 @@ from app.ai.voice.agents.breeze_buddy.template.types import (
     CreateTemplateRequest,
     FlowMode,
     ReplaceTemplateRequest,
+    TemplateDataSourceRef,
 )
 from app.ai.voice.agents.breeze_buddy.utils.secrets import (
     mask_template_secrets,
@@ -21,7 +22,11 @@ from app.ai.voice.agents.breeze_buddy.utils.secrets import (
     merge_secrets,
 )
 from app.core.logger import logger
-from app.database.accessor import get_outbound_number_by_id, get_template_by_merchant
+from app.database.accessor import (
+    get_outbound_number_by_id,
+    get_template_by_merchant,
+)
+from app.database.accessor.breeze_buddy.data_source import get_data_source_by_id
 from app.database.accessor.breeze_buddy.template import (
     check_template_usage,
     create_template,
@@ -37,6 +42,52 @@ from app.schemas.breeze_buddy.template import (
 )
 
 from .rbac import apply_hierarchical_template_filters, validate_template_access
+
+
+async def _validate_template_data_sources(
+    data_sources: Optional[List[TemplateDataSourceRef]],
+    reseller_id: str,
+    merchant_id: Optional[str],
+) -> None:
+    """Validate data-source refs are active and inside template scope."""
+    if not data_sources:
+        return
+
+    names = [ref.name for ref in data_sources]
+    if len(names) != len(set(names)):
+        raise ValueError("data_sources names must be unique per template")
+
+    for ref in data_sources:
+        data_source = await get_data_source_by_id(
+            ref.data_source_id,
+            include_inactive=True,
+        )
+        if not data_source:
+            raise ValueError(f"Data source {ref.data_source_id} does not exist")
+
+        if not data_source.is_active:
+            raise ValueError(f"Data source {ref.data_source_id} is inactive")
+
+        if data_source.reseller_id != reseller_id:
+            raise ValueError(
+                f"Data source {ref.data_source_id} does not belong to reseller {reseller_id}"
+            )
+
+        if (
+            data_source.merchant_id is not None
+            and data_source.merchant_id != merchant_id
+        ):
+            raise ValueError(
+                f"Data source {ref.data_source_id} is not available to merchant {merchant_id}"
+            )
+
+
+def _dump_template_data_sources(
+    data_sources: Optional[List[TemplateDataSourceRef]],
+) -> Optional[List[Dict[str, Any]]]:
+    if data_sources is None:
+        return None
+    return [ref.model_dump(mode="json", exclude_none=True) for ref in data_sources]
 
 
 async def create_template_handler(
@@ -108,6 +159,12 @@ async def create_template_handler(
                     detail=f"Outbound number with ID {template_data.outbound_number_id} does not exist",
                 )
 
+        await _validate_template_data_sources(
+            template_data.data_sources,
+            template_data.reseller_id,
+            template_data.merchant_id,
+        )
+
         # Create the template
         now = datetime.now(timezone.utc)
 
@@ -140,6 +197,7 @@ async def create_template_handler(
             outbound_number_id=template_data.outbound_number_id,
             is_active=template_data.is_active,
             supported_channels=list(template_data.supported_channels),
+            data_sources=_dump_template_data_sources(template_data.data_sources),
             now=now,
         )
 
@@ -521,6 +579,16 @@ async def replace_template_handler(
                 else existing_template.supported_channels
             )
         ]
+        data_sources = (
+            template_data.data_sources
+            if template_data.data_sources is not None
+            else existing_template.data_sources
+        )
+        await _validate_template_data_sources(
+            data_sources,
+            reseller_id,
+            template_data.merchant_id,
+        )
 
         updated_template = await replace_template(
             template_id=template_id,
@@ -535,6 +603,7 @@ async def replace_template_handler(
             is_active=template_data.is_active,
             merchant_id=template_data.merchant_id,
             supported_channels=supported_channels,
+            data_sources=_dump_template_data_sources(data_sources),
             now=now,
         )
 
