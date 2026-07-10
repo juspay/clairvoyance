@@ -2,7 +2,7 @@
 Authentication handlers for breeze buddy.
 
 This module contains the business logic for authentication operations:
-- User login (database users + legacy hardcoded credentials)
+- User login (database users)
 - S2S token generation (long-lived tokens for server-to-server auth)
 - User info retrieval
 - Logout handling
@@ -10,16 +10,11 @@ This module contains the business logic for authentication operations:
 
 from datetime import datetime, timedelta, timezone
 
-import jwt
-from fastapi import HTTPException, Response, status
+from fastapi import HTTPException, status
 
 from app.api.security.breeze_buddy.rbac_token import rbac_token_manager
 from app.core.config.static import (
-    BREEZE_BUDDY_DASHBOARD_PASSWORD,
-    BREEZE_BUDDY_DASHBOARD_USERNAME,
-    BREEZE_BUDDY_SESSION_SECRET_KEY,
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES,
-    JWT_ALGORITHM,
 )
 from app.core.logger import logger
 from app.core.security.password import verify_password
@@ -36,18 +31,15 @@ from app.schemas import (
 
 
 async def login_handler(
-    login_request: LoginRequest, response: Response
+    login_request: LoginRequest,
 ) -> TokenResponse:
     """
     Handle user login with JWT token-based authentication.
 
-    Supports both:
-    1. Database users with RBAC (new system)
-    2. Hardcoded credentials for backward compatibility (legacy system)
+    Supports database users with RBAC.
 
     Args:
         login_request: Login credentials (username, password)
-        response: FastAPI Response object for setting cookies
 
     Returns:
         TokenResponse with access_token, token_type, expires_in
@@ -55,7 +47,6 @@ async def login_handler(
     Raises:
         HTTPException: 401 if credentials are invalid or account is inactive
     """
-    # Try database authentication first (new RBAC system)
     user = await get_user_by_username(login_request.username)
 
     if user:
@@ -127,41 +118,6 @@ async def login_handler(
             f"Successful login for database user: {user.username} "
             f"(role: {user.role}, resellers: {user.reseller_ids}, shops: {user.merchant_ids})"
         )
-
-        return TokenResponse(
-            access_token=access_token,
-            token_type="Bearer",
-            expires_in=expires_in,
-        )
-
-    # Fallback to hardcoded credentials (legacy system for backward compatibility)
-    if (
-        login_request.username == BREEZE_BUDDY_DASHBOARD_USERNAME
-        and login_request.password == BREEZE_BUDDY_DASHBOARD_PASSWORD
-    ):
-        # Create legacy session cookie for old dashboard
-        session_data = {
-            "username": login_request.username,
-            "exp": datetime.now(timezone.utc) + timedelta(hours=1),
-        }
-        session_cookie = jwt.encode(
-            session_data, BREEZE_BUDDY_SESSION_SECRET_KEY, algorithm=JWT_ALGORITHM
-        )
-        response.set_cookie(key="session", value=session_cookie, httponly=True)
-
-        # Also create JWT token for API access (assume admin role)
-        access_token = rbac_token_manager.create_access_token_with_rbac(
-            user_id="legacy_admin",
-            username=login_request.username,
-            role=UserRole.ADMIN,
-            reseller_ids=["*"],  # Admin has access to all resellers
-            merchant_ids=["*"],  # Admin has access to all merchants
-            email=None,
-        )
-
-        expires_in = JWT_ACCESS_TOKEN_EXPIRE_MINUTES * 60
-
-        logger.info(f"Successful login for legacy admin: {login_request.username}")
 
         return TokenResponse(
             access_token=access_token,

@@ -74,7 +74,7 @@ async def _resolve_user_scopes(
         return None  # Can't resolve → grant unrestricted rather than lock out
 
     if not owner:
-        # Owner not in DB (e.g. legacy_admin) — treat as admin-equivalent
+        # Owner not in DB (deleted admin/account) — treat as admin-equivalent
         logger.info(
             f"User {username} has owner_id {owner_id} but owner not found in DB — "
             "granting unrestricted merchant access"
@@ -226,7 +226,7 @@ async def _resolve_reseller_scopes(
         return None  # Can't resolve → grant unrestricted rather than lock out
 
     if not owner:
-        # Owner not in DB (e.g. legacy_admin) — treat as admin-equivalent
+        # Owner not in DB (deleted admin/account) — treat as admin-equivalent
         logger.info(
             f"User {username} has owner_id {owner_id} but owner not found in DB — "
             "granting unrestricted reseller access"

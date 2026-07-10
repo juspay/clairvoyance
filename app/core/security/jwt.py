@@ -2,11 +2,10 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
 import jwt
-from fastapi import Depends, HTTPException, Request, status
+from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.core.config.static import (
-    BREEZE_BUDDY_SESSION_SECRET_KEY,
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES,
     JWT_ALGORITHM,
     JWT_SECRET_KEY,
@@ -247,27 +246,3 @@ async def get_current_user(
 
     return jwt_manager.verify_token(credentials.credentials)
 
-
-# Breeze Authentication Functions
-
-
-async def get_breeze_buddy_session(request: Request):
-    session_cookie = request.cookies.get("session")
-    if not session_cookie:
-        return None
-    try:
-        # Algorithm goes through the same allowlist as JWTManager —
-        # JWT_ALGORITHM is validated at JWTManager construction, but
-        # this decode bypasses the manager, so we re-assert here.
-        if JWT_ALGORITHM not in _ALLOWED_JWT_ALGORITHMS:
-            logger.error(
-                f"get_breeze_buddy_session: JWT_ALGORITHM={JWT_ALGORITHM!r} "
-                "not in allowlist — refusing to decode."
-            )
-            return None
-        payload = jwt.decode(
-            session_cookie, BREEZE_BUDDY_SESSION_SECRET_KEY, algorithms=[JWT_ALGORITHM]
-        )
-        return payload
-    except jwt.PyJWTError:
-        return None
