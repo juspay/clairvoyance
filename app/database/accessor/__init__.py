@@ -18,6 +18,7 @@ from .breeze_buddy.call_execution_config import (
     get_all_call_execution_configs,
     get_call_execution_config_by_id,
     get_call_execution_config_by_merchant_id,
+    get_call_execution_config_by_template_id,
     update_call_execution_config,
 )
 from .breeze_buddy.credentials import (
@@ -89,6 +90,7 @@ __all__ = [
     "create_call_execution_config",
     "get_call_execution_config_by_id",
     "get_call_execution_config_by_merchant_id",
+    "get_call_execution_config_by_template_id",
     "get_all_call_execution_configs",
     "update_call_execution_config",
     "delete_call_execution_config",

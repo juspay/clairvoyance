@@ -52,7 +52,7 @@ from app.database.accessor import (
     acquire_lock_on_lead_by_id,
     create_lead_call_tracker,
     decrement_outbound_number_channels,
-    get_call_execution_config_by_merchant_id,
+    get_call_execution_config_by_template_id,
     get_lead_by_call_id,
     get_leads_by_status_and_time_before,
     get_outbound_number_based_on_status_and_provider,
@@ -82,34 +82,11 @@ async def _get_lead_config(lead: LeadCallTracker) -> Optional[CallExecutionConfi
     Retrieves the call execution configuration for a given lead.
     """
 
-    configs = await get_call_execution_config_by_merchant_id(
-        lead.reseller_id, lead.merchant_id, template_name=lead.template
+    config = (
+        await get_call_execution_config_by_template_id(lead.template_id)
+        if lead.template_id
+        else None
     )
-    if not configs:
-        logger.warning(
-            f"No call execution config found for reseller: {lead.reseller_id} and shop: {lead.merchant_id}"
-        )
-        return None
-
-    # Two-step: prefer exact template_id match; fall back to name only when
-    # no template_id match exists or the config has no template_id of its own
-    # (prevents accidentally picking a config with a conflicting template_id).
-    config: Optional[CallExecutionConfig] = None
-    if lead.template_id:
-        config = next(
-            (c for c in configs if c.template_id and c.template_id == lead.template_id),
-            None,
-        )
-    if not config:
-        config = next(
-            (
-                c
-                for c in configs
-                if c.template == lead.template
-                and (not lead.template_id or not c.template_id)
-            ),
-            None,
-        )
     if not config:
         logger.warning(
             f"No call execution config found for template: {lead.template} (template_id={lead.template_id})"

@@ -21,6 +21,7 @@ from app.database.queries.breeze_buddy.call_execution_config import (
     get_all_merchants_query,
     get_call_execution_config_by_id_query,
     get_call_execution_config_by_merchant_id_query,
+    get_call_execution_config_by_template_id_query,
     insert_call_execution_config_query,
     update_call_execution_config_query,
 )
@@ -125,27 +126,19 @@ async def create_call_execution_config(
 async def get_call_execution_config_by_merchant_id(
     reseller_id: str,
     merchant_id: Optional[str] = None,
-    template_name: Optional[str] = None,
 ) -> List[CallExecutionConfig]:
     """
-    Get call execution config by reseller ID.
+    List call execution configs for a reseller (optionally one merchant).
 
-    When template_name is provided the lookup is template-aware:
-      1. Query with reseller_id + merchant_id + template_name
-      2. If not found, retry with merchant_id=NULL (reseller-level fallback)
-
-    This mirrors the template accessor fallback so a merchant that shares a
-    reseller-level config for a given template is resolved correctly even
-    when the merchant has other merchant-specific configs for different templates.
-
-    When template_name is omitted the existing behaviour is preserved (returns
-    all configs for the merchant/reseller scope).
+    This is a plain scope listing for admin/dashboard views. Runtime
+    resolution is id-only via ``get_call_execution_config_by_template_id`` —
+    there is deliberately no name-based or fallback lookup here.
     """
     logger.info(f"Getting call execution config by reseller ID: {reseller_id}")
 
     try:
         query_text, values = get_call_execution_config_by_merchant_id_query(
-            reseller_id, merchant_id, template_name
+            reseller_id, merchant_id
         )
         result = await run_parameterized_query(query_text, values)
 
@@ -156,28 +149,39 @@ async def get_call_execution_config_by_merchant_id(
             )
             return decoded_result
 
-        if merchant_id:
-            # If no config is found for the specific merchant_id, try with NULL
-            logger.info(
-                f"No config found for merchant_id {merchant_id}, trying generic config."
-            )
-            query_text, values = get_call_execution_config_by_merchant_id_query(
-                reseller_id, None, template_name
-            )
-            result = await run_parameterized_query(query_text, values)
-            if result:
-                decoded_result = decode_call_execution_config_list(result)
-                logger.info(
-                    f"Found {len(decoded_result)} generic call execution configs for reseller ID: {reseller_id}"
-                )
-                return decoded_result
-
         logger.info(f"No call execution config found with reseller ID: {reseller_id}")
         return []
 
     except Exception as e:
         logger.error(f"Error getting call execution config by reseller ID: {e}")
         return []
+
+
+async def get_call_execution_config_by_template_id(
+    template_id: str,
+) -> Optional[CallExecutionConfig]:
+    """
+    Get the call execution config owned by a template (1:1 by template_id).
+    """
+    logger.info(f"Getting call execution config by template_id: {template_id}")
+
+    try:
+        query_text, values = get_call_execution_config_by_template_id_query(template_id)
+        result = await run_parameterized_query(query_text, values)
+
+        if result and get_row_count(result) > 0:
+            if get_row_count(result) > 1:
+                logger.warning(
+                    f"Multiple call execution configs linked to template {template_id}; "
+                    "using the first one. Data needs dedup."
+                )
+            return decode_call_execution_config(result)
+
+        return None
+
+    except Exception as e:
+        logger.error(f"Error getting call execution config by template_id: {e}")
+        return None
 
 
 async def get_all_call_execution_configs() -> List[CallExecutionConfig]:
@@ -204,9 +208,7 @@ async def get_all_call_execution_configs() -> List[CallExecutionConfig]:
 
 
 async def update_call_execution_config(
-    reseller_id: str,
-    template: str,
-    merchant_id: Optional[str] = None,
+    config_id: str,
     initial_offset: Optional[int] = None,
     retry_offset: Optional[int] = None,
     call_start_time: Optional[time] = None,
@@ -232,18 +234,16 @@ async def update_call_execution_config(
     telephony_config: Optional[TelephonyConfig] = None,
 ) -> Optional[CallExecutionConfig]:
     """
-    Update an existing call execution config record based on reseller_id, template, and merchant_id.
+    Update an existing call execution config record by its id.
     Only updates fields that are provided (not None).
 
     Args:
-        template_id: UUID of the template (optional update)
-        template: Name of the template (kept for backward compatibility)
+        config_id: id of the config row to update
+        template_id: UUID of the owning template (set-once adoption only)
         pre_checks: List of PreCheckConfig objects for call pre-validation
         telephony_config: Optional telephony provider overrides
     """
-    logger.info(
-        f"Updating call execution config for reseller: {reseller_id}, template: {template}, merchant_id: {merchant_id}"
-    )
+    logger.info(f"Updating call execution config: {config_id}")
 
     try:
         # Serialize telephony_config for the query:
@@ -263,9 +263,7 @@ async def update_call_execution_config(
             serialized_telephony = None
 
         query_text, values = update_call_execution_config_query(
-            reseller_id=reseller_id,
-            template=template,
-            merchant_id=merchant_id,
+            config_id=config_id,
             initial_offset=initial_offset,
             retry_offset=retry_offset,
             call_start_time=call_start_time,
@@ -297,9 +295,7 @@ async def update_call_execution_config(
             logger.info(f"Call execution config updated successfully: {decoded_result}")
             return decoded_result
 
-        logger.error(
-            f"Failed to update call execution config for reseller: {reseller_id}, template: {template}, merchant_id: {merchant_id}"
-        )
+        logger.error(f"Failed to update call execution config: {config_id}")
         return None
 
     except Exception as e:

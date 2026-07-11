@@ -150,53 +150,47 @@ def insert_call_execution_config_query(
 
 def get_call_execution_config_by_merchant_id_query(
     reseller_id: str,
-    merchant_id: Optional[str],
-    template_name: Optional[str] = None,
+    merchant_id: Optional[str] = None,
 ) -> Tuple[str, List[Any]]:
     """
-    Generate query to get call execution config by reseller ID and merchant identifier.
-
-    When template_name is provided the query filters by template name, enabling
-    the accessor to apply a merchant→reseller fallback that is template-aware.
-    When template_name is omitted the query returns all configs for the given
-    scope (existing behaviour, used by admin listing and inbound handlers).
+    Generate query to list call execution configs for a reseller scope
+    (optionally narrowed to one merchant). Admin/dashboard listing only —
+    runtime resolution is id-only via the template_id query.
     """
     if merchant_id:
-        if template_name:
-            text = f"""
-                SELECT *
-                FROM "{CALL_EXECUTION_CONFIG_TABLE}"
-                WHERE reseller_id = $1
-                AND merchant_id = $2
-                AND template = $3;
-            """
-            values: List[Any] = [reseller_id, merchant_id, template_name]
-        else:
-            text = f"""
-                SELECT *
-                FROM "{CALL_EXECUTION_CONFIG_TABLE}" 
-                WHERE reseller_id = $1 
-                AND merchant_id = $2;
-            """
-            values = [reseller_id, merchant_id]
+        text = f"""
+            SELECT *
+            FROM "{CALL_EXECUTION_CONFIG_TABLE}"
+            WHERE reseller_id = $1
+            AND merchant_id = $2;
+        """
+        values: List[Any] = [reseller_id, merchant_id]
     else:
-        if template_name:
-            # Reseller-level fallback: only rows where merchant_id IS NULL
-            text = f"""
-                SELECT *
-                FROM "{CALL_EXECUTION_CONFIG_TABLE}"
-                WHERE reseller_id = $1
-                AND merchant_id IS NULL
-                AND template = $2;
-            """
-            values = [reseller_id, template_name]
-        else:
-            text = f"""
-                SELECT *
-                FROM "{CALL_EXECUTION_CONFIG_TABLE}" 
-                WHERE reseller_id = $1;
-            """
-            values = [reseller_id]
+        text = f"""
+            SELECT *
+            FROM "{CALL_EXECUTION_CONFIG_TABLE}"
+            WHERE reseller_id = $1;
+        """
+        values = [reseller_id]
+    return text, values
+
+
+def get_call_execution_config_by_template_id_query(
+    template_id: str,
+) -> Tuple[str, List[Any]]:
+    """
+    Generate query to get the call execution config owned by a template.
+
+    template_id is the primary linkage between a template and its calling
+    config (1:1); name-based lookup remains only as a legacy fallback for
+    rows created before the link was enforced.
+    """
+    text = f"""
+        SELECT *
+        FROM "{CALL_EXECUTION_CONFIG_TABLE}"
+        WHERE template_id = $1;
+    """
+    values: List[Any] = [template_id]
     return text, values
 
 
@@ -234,9 +228,7 @@ def delete_call_execution_config_query(config_id: str) -> Tuple[str, List[Any]]:
 
 
 def update_call_execution_config_query(
-    reseller_id: str,
-    template: str,
-    merchant_id: Optional[str] = None,
+    config_id: str,
     initial_offset: Optional[int] = None,
     retry_offset: Optional[int] = None,
     call_start_time: Optional[time] = None,
@@ -262,7 +254,7 @@ def update_call_execution_config_query(
     telephony_config: Optional[str] = None,
 ) -> Tuple[str, List[Any]]:
     """
-    Generate query to update call execution config record based on reseller_id, template, and merchant_id.
+    Generate query to update a call execution config record by its id.
     Only updates fields that are provided (not None).
     """
     updates = []
@@ -337,26 +329,12 @@ def update_call_execution_config_query(
     values.append(datetime.now())
     param_count += 1
 
-    # Build WHERE clause based on reseller_id, template, and merchant_id
-    values.append(reseller_id)
-    reseller_id_param = param_count
-    param_count += 1
-
-    values.append(template)
-    template_param = param_count
-    param_count += 1
-
-    if merchant_id:
-        values.append(merchant_id)
-        merchant_identifier_param = param_count
-        where_clause = f'reseller_id = ${reseller_id_param} AND "template" = ${template_param} AND merchant_id = ${merchant_identifier_param}'
-    else:
-        where_clause = f'reseller_id = ${reseller_id_param} AND "template" = ${template_param} AND merchant_id IS NULL'
-
+    # Address the row by its own id — never by scope/name.
+    values.append(config_id)
     text = f"""
         UPDATE "{CALL_EXECUTION_CONFIG_TABLE}"
         SET {", ".join(updates)}
-        WHERE {where_clause}
+        WHERE "id" = ${param_count}
         RETURNING *;
     """
 

@@ -62,7 +62,7 @@ from app.core.config.dynamic import (
 from app.core.config.static import APP_BASE_URL
 from app.core.logger import logger
 from app.database.accessor import (
-    get_call_execution_config_by_merchant_id,
+    get_call_execution_config_by_template_id,
     get_lead_by_call_id,
 )
 from app.database.accessor.breeze_buddy.lead_call_tracker import (
@@ -633,16 +633,17 @@ async def handle_provider_answer(request: Request, provider: str) -> Response:
 
         if reseller_id:
             merchant_id = templates[0].merchant_id if templates else None
-            configs = await get_call_execution_config_by_merchant_id(
-                reseller_id, merchant_id
-            )
-            config_map = {c.template: c for c in configs}
-
             allowed_templates = []
             last_block_result = None
 
             for t in templates:
-                config = config_map.get(t.name)
+                # Config is owned by the template (1:1 by template_id) —
+                # no name-based matching.
+                config = (
+                    await get_call_execution_config_by_template_id(str(t.id))
+                    if t.id
+                    else None
+                )
                 if not config:
                     # No config for this template — allow by default
                     allowed_templates.append(t)

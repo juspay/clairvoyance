@@ -16,6 +16,8 @@ from app.database.accessor import (
     get_all_call_execution_configs,
     get_call_execution_config_by_id,
     get_call_execution_config_by_merchant_id,
+    get_call_execution_config_by_template_id,
+    get_template_by_id,
     update_call_execution_config,
 )
 from app.schemas import (
@@ -32,7 +34,13 @@ async def create_configuration_handler(
     config: CreateCallExecutionConfigRequest, current_user: UserInfo
 ) -> CallExecutionConfig:
     """
-    Create a new call execution configuration.
+    Create a new call execution configuration for a template.
+
+    The owning template is loaded by ``config.template_id``; scope
+    (reseller_id, merchant_id) and the template name are derived from the
+    template row, so a config can never be created pointing at a template
+    the caller cannot access or with a mismatched scope. One config per
+    template (409 on duplicates).
 
     Args:
         config: Configuration creation request
@@ -42,14 +50,40 @@ async def create_configuration_handler(
         Created configuration object
 
     Raises:
-        HTTPException: 400 if creation fails
+        HTTPException: 404 unknown template, 403 access denied,
+            409 template already has a config
     """
     logger.info(
         f"User {current_user.username} (role: {current_user.role}) creating configuration "
-        f"for reseller: {config.reseller_id}, template: {config.template}"
+        f"for template_id: {config.template_id}"
     )
 
     try:
+        template = await get_template_by_id(config.template_id)
+        if not template:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Template {config.template_id} not found",
+            )
+
+        # RBAC against the template's real scope, not client-sent fields
+        validate_config_access(
+            current_user,
+            template.reseller_id,
+            template.merchant_id,
+            operation="create configuration for",
+        )
+
+        existing = await get_call_execution_config_by_template_id(str(template.id))
+        if existing:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"Template {config.template_id} already has a call "
+                    f"execution config ({existing.id}); update it instead"
+                ),
+            )
+
         call_execution_config = await create_call_execution_config(
             id=str(uuid4()),
             initial_offset=config.initial_offset,
@@ -58,9 +92,10 @@ async def create_configuration_handler(
             call_end_time=config.call_end_time,
             max_retry=config.max_retry,
             calling_provider=config.calling_provider,
-            reseller_id=config.reseller_id,
-            template=config.template,
-            merchant_id=config.merchant_id,
+            reseller_id=template.reseller_id,
+            template=template.name,
+            merchant_id=template.merchant_id,
+            template_id=str(template.id),
             enable_international_call=config.enable_international_call,
             enable_calling=(
                 config.enable_calling if config.enable_calling is not None else True
@@ -102,7 +137,8 @@ async def create_configuration_handler(
         if call_execution_config:
             logger.info(
                 f"Configuration created successfully: ID={call_execution_config.id}, "
-                f"reseller={config.reseller_id}, template={config.template}"
+                f"reseller={template.reseller_id}, template={template.name}, "
+                f"template_id={template.id}"
             )
             return call_execution_config
         else:
@@ -111,6 +147,8 @@ async def create_configuration_handler(
                 detail="Failed to create configuration",
             )
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error creating configuration: {e}", exc_info=True)
         raise HTTPException(
@@ -121,25 +159,28 @@ async def create_configuration_handler(
 
 async def list_configurations_handler(
     reseller_id: Optional[str],
-    template: Optional[str],
     merchant_id: Optional[str],
     current_user: UserInfo,
+    template_id: Optional[str] = None,
 ) -> List[CallExecutionConfig]:
     """
     List configurations with optional filters.
 
+    Filtering is by scope (reseller/merchant) or owning template UUID —
+    template names are display data and never a filter or lookup key.
+
     Args:
         reseller_id: Optional reseller ID filter
-        template: Optional template filter
         merchant_id: Optional merchant ID filter
         current_user: Current authenticated user
+        template_id: Optional owning-template UUID filter
 
     Returns:
         List of configurations (RBAC filtering applied separately)
     """
     logger.info(
         f"User {current_user.username} (role: {current_user.role}) listing configurations "
-        f"(reseller={reseller_id}, template={template}, merchant={merchant_id})"
+        f"(reseller={reseller_id}, template_id={template_id}, merchant={merchant_id})"
     )
 
     try:
@@ -153,8 +194,8 @@ async def list_configurations_handler(
             configs = await get_all_call_execution_configs()
 
         # Apply additional filters
-        if template:
-            configs = [c for c in configs if c.template == template]
+        if template_id:
+            configs = [c for c in configs if c.template_id == template_id]
 
         if merchant_id:
             configs = [c for c in configs if c.merchant_id == merchant_id]
@@ -250,31 +291,52 @@ async def update_configuration_handler(
             operation="update configuration for",
         )
 
-        # Validate that identity fields match the existing configuration
-        # This prevents accidentally updating a different record
-        if existing_config.reseller_id != config.reseller_id:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Cannot change reseller_id from {existing_config.reseller_id} to {config.reseller_id}",
-            )
+        # template_id link: immutable once set; a config that predates the
+        # link may adopt its owning template (validated against scope+name,
+        # and the template must not already own another config).
+        adopt_template_id: Optional[str] = None
+        if config.template_id is not None:
+            if existing_config.template_id:
+                if config.template_id != existing_config.template_id:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=(
+                            f"Cannot change template_id from "
+                            f"{existing_config.template_id} to {config.template_id}"
+                        ),
+                    )
+            else:
+                tpl = await get_template_by_id(config.template_id)
+                if (
+                    not tpl
+                    or tpl.reseller_id != existing_config.reseller_id
+                    or tpl.merchant_id != existing_config.merchant_id
+                    or tpl.name != existing_config.template
+                ):
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=(
+                            f"template_id {config.template_id} does not match "
+                            f"this configuration's scope and template name"
+                        ),
+                    )
+                other = await get_call_execution_config_by_template_id(
+                    config.template_id
+                )
+                if other and other.id != existing_config.id:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail=(
+                            f"Template {config.template_id} already has a call "
+                            f"execution config ({other.id})"
+                        ),
+                    )
+                adopt_template_id = config.template_id
 
-        if existing_config.template != config.template:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Cannot change template from {existing_config.template} to {config.template}",
-            )
-
-        if existing_config.merchant_id != config.merchant_id:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Cannot change merchant_id from {existing_config.merchant_id} to {config.merchant_id}",
-            )
-
-        # Update configuration
+        # Update configuration (addressed by its own id — scope and template
+        # name are immutable and never part of the update).
         updated_config = await update_call_execution_config(
-            reseller_id=config.reseller_id,
-            template=config.template,
-            merchant_id=config.merchant_id,
+            config_id=config_id,
             initial_offset=config.initial_offset,
             retry_offset=config.retry_offset,
             call_start_time=config.call_start_time,
@@ -299,6 +361,7 @@ async def update_configuration_handler(
             rate_limit_max_calls=config.rate_limit_max_calls,
             rate_limit_window_seconds=config.rate_limit_window_seconds,
             rate_limit_whitelist=config.rate_limit_whitelist,
+            template_id=adopt_template_id,
             pre_checks=config.pre_checks,
             telephony_config=config.telephony_config,
         )

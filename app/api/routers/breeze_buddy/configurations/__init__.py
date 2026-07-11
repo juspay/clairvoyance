@@ -60,9 +60,7 @@ async def create_configuration(
 
     Request Body:
         {
-            "reseller_id": "reseller_123",
-            "template": "order-confirmation",
-            "merchant_id": "merchant_123",
+            "template_id": "3f0e6f6e-...",
             "initial_offset": 0,
             "retry_offset": 300,
             "call_start_time": "09:00",
@@ -72,25 +70,23 @@ async def create_configuration(
             "enable_international_call": false
         }
 
+    The config is owned by the template: scope (reseller/merchant) and the
+    template name are derived from the template row. Legacy scope fields are
+    accepted but must match the template. One config per template.
+
     Returns:
         Created configuration object with generated ID
     """
-    # RBAC: Check if user has permission to create config for this reseller/shop
-    validate_config_access(
-        current_user,
-        config.reseller_id,
-        config.merchant_id,
-        operation="create configuration for",
-    )
-
+    # RBAC is enforced in the handler against the owning template's scope
+    # (request scope fields are optional legacy inputs and can't be trusted).
     return await create_configuration_handler(config, current_user)
 
 
 @router.get("/configurations", response_model=List[CallExecutionConfig])
 async def list_configurations(
     reseller_id: Optional[str] = Query(None, description="Filter by reseller ID"),
-    template: Optional[str] = Query(
-        None, description="Filter by template name (e.g., 'order-confirmation')"
+    template_id: Optional[str] = Query(
+        None, description="Filter by owning template UUID"
     ),
     merchant_id: Optional[str] = Query(None, description="Filter by merchant_id"),
     current_user: UserInfo = Depends(get_current_user_with_rbac),
@@ -100,8 +96,10 @@ async def list_configurations(
 
     Query Parameters:
     - reseller_id: Filter configurations by reseller
-    - template: Filter by template name (order-confirmation, appointment-reminder, etc.)
+    - template_id: Filter by owning template UUID
     - merchant_id: Filter by specific shop
+
+    Template names are display data — filtering is by scope or template UUID.
 
     RBAC Filtering:
     - Admin: Sees all configurations (or filtered by query params)
@@ -109,7 +107,7 @@ async def list_configurations(
 
     Example Requests:
         GET /configurations                                    # All accessible configs
-        GET /configurations?template=order-confirmation        # Filter by template
+        GET /configurations?template_id=3f0e6f6e-...           # Filter by template
         GET /configurations?reseller_id=reseller_123           # Filter by reseller
         GET /configurations?merchant_id=merchant_456           # Filter by merchant
 
@@ -129,7 +127,7 @@ async def list_configurations(
             )
     # Get configurations
     configs = await list_configurations_handler(
-        reseller_id, template, merchant_id, current_user
+        reseller_id, merchant_id, current_user, template_id=template_id
     )
 
     # Apply RBAC filtering
