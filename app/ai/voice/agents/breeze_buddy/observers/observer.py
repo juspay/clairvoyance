@@ -15,6 +15,7 @@ existing ``update_outcome_in_database`` hook and runs the configured
 ``FlowAction`` through the handler_map.
 """
 
+import time
 from typing import Any, Dict
 
 from pipecat.adapters.schemas.function_schema import FunctionSchema
@@ -79,6 +80,7 @@ class RealtimeObserver:
             return False
 
         try:
+            start = time.monotonic()
             tool_name, tool_args = await call_llm(
                 llm_service=self._llm_service,
                 transcript_text=transcript_text,
@@ -86,15 +88,23 @@ class RealtimeObserver:
                 tools=self._tools,
                 observer_name=self.name,
             )
+            latency_ms = (time.monotonic() - start) * 1000
 
             if tool_name is None:
+                logger.info(
+                    f"Observer {self.name} no detection, " f"latency={latency_ms:.0f}ms"
+                )
                 return False
 
-            logger.info(f"Observer '{self.name}' tool called: {tool_name}({tool_args})")
+            self._last_detection = tool_args or {}
+            logger.info(
+                f"Observer {self.name} detected: "
+                f"{tool_name}, latency={latency_ms:.0f}ms"
+            )
             return True
 
-        except Exception as e:
-            logger.warning(f"Observer '{self.name}' check failed: {e}")
+        except Exception:
+            logger.exception(f"Observer {self.name} check failed")
 
         return False
 
@@ -127,12 +137,12 @@ class RealtimeObserver:
 
         if handler:
             logger.info(
-                f"Observer '{self.name}' executing action: "
+                f"Observer {self.name} executing action: "
                 f"{handler_name}, outcome={outcome}"
             )
             await handler(action.args or {})
         else:
             logger.error(
-                f"Observer '{self.name}': handler '{handler_name}' "
+                f"Observer {self.name}: handler {handler_name} "
                 f"not found in handler_map"
             )

@@ -75,10 +75,10 @@ async def build_observers(
                 RealtimeObserver(cfg, llm_service, agent_context, handler_map)
             )
             logger.info(
-                f"Built observer '{cfg.name}' with model="
+                f"Built observer {cfg.name} with model="
                 f"{merged_config.model}, start_after_turn={cfg.start_after_turn}"
             )
         except Exception:
-            logger.exception(f"Failed to build observer '{cfg.name}'")
+            logger.exception(f"Failed to build observer {cfg.name}")
 
     return observers

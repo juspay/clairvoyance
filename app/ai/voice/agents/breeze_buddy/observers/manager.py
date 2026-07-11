@@ -88,7 +88,7 @@ class ObserverManager:
 
             transcript = self._build_transcript()
 
-            logger.debug(
+            logger.info(
                 f"Observer check ({event_name}): turn {self._turn_count}, "
                 f"running {len(eligible)} observer(s): "
                 f"{[obs.name for obs in eligible]}"
@@ -107,16 +107,14 @@ class ObserverManager:
                 if self._action_taken:
                     return
                 if isinstance(result, Exception):
-                    logger.warning(f"Observer '{obs.name}' check failed: {result}")
+                    logger.error(f"Observer {obs.name} check failed: {result}")
                     continue
                 if result is True:
                     self._action_taken = True
                     try:
                         await obs.execute_action()
                     except Exception as e:
-                        logger.error(
-                            f"Observer '{obs.name}' execute_action failed: {e}"
-                        )
+                        logger.error(f"Observer {obs.name} execute_action failed: {e}")
                     return
 
     # ------------------------------------------------------------------

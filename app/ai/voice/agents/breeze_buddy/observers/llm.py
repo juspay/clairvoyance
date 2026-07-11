@@ -73,9 +73,7 @@ async def _call_openai(
 
     message = response.choices[0].message
     if not message.tool_calls:
-        logger.debug(
-            f"Observer '{observer_name}' no tool call, content='{message.content}'"
-        )
+        logger.info(f"Observer {observer_name} no tool call")
         return None, None
 
     for tool_call in message.tool_calls:
@@ -117,7 +115,7 @@ async def _call_anthropic(
         if block.type == "tool_use":
             return block.name, block.input or {}
 
-    logger.debug(f"Observer '{observer_name}' no tool_use block in response")
+    logger.info(f"Observer {observer_name} no tool_use block in response")
     return None, None
 
 
@@ -160,5 +158,5 @@ async def _call_google(
             if part.function_call:
                 return part.function_call.name, part.function_call.args or {}
 
-    logger.debug(f"Observer '{observer_name}' no function_call in response")
+    logger.info(f"Observer {observer_name} no function_call in response")
     return None, None
