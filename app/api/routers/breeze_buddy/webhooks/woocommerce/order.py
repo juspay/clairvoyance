@@ -5,7 +5,7 @@ Decides which placed orders push a call lead (per the ?all_orders= preference)
 and maps the WooCommerce order into the lead payload.
 """
 
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Tuple
 
 from app.core.logger import logger
 
@@ -105,8 +105,7 @@ async def process_order_confirmation(
     merchant_id: str,
     reseller_id: str,
     shop_name: str,
-    template: Optional[str],
-    template_id: Optional[str],
+    template_id: str,
     all_orders: bool,
 ) -> Dict[str, Any]:
     """Handle a placed-order webhook: push a lead per the ?all_orders= preference."""
@@ -146,7 +145,6 @@ async def process_order_confirmation(
         payload,
         merchant_id,
         reseller_id,
-        template,
         template_id,
         reason,
     )

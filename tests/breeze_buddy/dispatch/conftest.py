@@ -521,9 +521,7 @@ class DispatchHarness:
             lead.outcome = outcome
         return lead
 
-    async def get_template_by_id_with_fallback(
-        self, template_id: str, reseller_id: str, merchant_id: Optional[str], name: str
-    ) -> Optional[Any]:
+    async def get_template_by_id(self, template_id: str) -> Optional[Any]:
         # Returning None is fine — the worker skips greeting prep gracefully.
         return None
 
@@ -625,8 +623,8 @@ def harness(monkeypatch, fake_redis) -> DispatchHarness:
     )
     monkeypatch.setattr(
         worker_mod,
-        "get_template_by_id_with_fallback",
-        h.get_template_by_id_with_fallback,
+        "get_template_by_id",
+        h.get_template_by_id,
     )
     monkeypatch.setattr(worker_mod, "is_number_blacklisted", h.is_number_blacklisted)
 

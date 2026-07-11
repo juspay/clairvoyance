@@ -21,7 +21,7 @@ from app.ai.voice.agents.breeze_buddy.utils.secrets import (
     merge_secrets,
 )
 from app.core.logger import logger
-from app.database.accessor import get_outbound_number_by_id, get_template_by_merchant
+from app.database.accessor import get_outbound_number_by_id, get_template_in_scope
 from app.database.accessor.breeze_buddy.template import (
     check_template_usage,
     create_template,
@@ -83,11 +83,10 @@ async def create_template_handler(
                 raise ValueError("nodes must be specified in flow structure")
 
         # Check if template already exists
-        existing = await get_template_by_merchant(
+        existing = await get_template_in_scope(
             template_data.reseller_id,
             template_data.merchant_id,
             template_data.name,
-            should_prioritize_merchant_specific=False,
         )
 
         if existing:
@@ -171,57 +170,6 @@ async def create_template_handler(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error creating template: {str(e)}",
-        )
-
-
-async def get_template_handler(
-    reseller_id: str,
-    merchant_id: Optional[str],
-    name: Optional[str],
-    current_user: UserInfo,
-):
-    """
-    Get template(s) by reseller, shop, and name.
-
-    Args:
-        reseller_id: Reseller ID
-        merchant_id: Optional Merchant ID
-        name: Optional template name
-        current_user: Current authenticated user
-
-    Returns:
-        Template object or list of templates
-    """
-    logger.info(
-        f"User {current_user.username} (role: {current_user.role}) requesting template "
-        f"for reseller: {reseller_id}, shop: {merchant_id}, name: {name}"
-    )
-
-    try:
-        template = await get_template_by_merchant(
-            reseller_id=reseller_id,
-            merchant_id=merchant_id,
-            name=name,
-        )
-
-        if template:
-            logger.info(f"Template found: {template.id}")
-            return mask_template_secrets(template)
-        else:
-            logger.info(
-                f"No template found for reseller: {reseller_id}, "
-                f"merchant_id: {merchant_id}, name: {name}"
-            )
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Template '{name}' not found for reseller: {reseller_id}",
-            )
-
-    except Exception as e:
-        logger.error(f"Error getting template: {e}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error getting template: {str(e)}",
         )
 
 
@@ -424,11 +372,10 @@ async def replace_template_handler(
             or template_data.name != existing_template.name
         )
         if identity_changed:
-            conflicting = await get_template_by_merchant(
+            conflicting = await get_template_in_scope(
                 reseller_id,
                 template_data.merchant_id,
                 template_data.name,
-                should_prioritize_merchant_specific=False,
             )
             if conflicting and str(conflicting.id) != str(template_id):
                 raise HTTPException(

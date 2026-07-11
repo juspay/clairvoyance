@@ -74,10 +74,8 @@ async def connect_to_agent(
         loader = FlowConfigLoader()
         template, template_vars = await loader.load_template(
             reseller_id=bot.lead.reseller_id,
-            template=bot.lead.template,
-            merchant_id=bot.lead.merchant_id,
-            call_payload=bot.lead.payload,
             template_id=target_template_id,
+            call_payload=bot.lead.payload,
         )
         validate_template_compat(template)
         if template.flow.get("mode") == FlowMode.IVR.value:
