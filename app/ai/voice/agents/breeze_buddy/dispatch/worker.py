@@ -471,7 +471,9 @@ class Worker:
                     customer_mobile,
                     number.number,
                     reseller_id=locked.reseller_id,
-                    template_name=locked.template,
+                    # answer-url observability tag only (never parsed back);
+                    # id-only convention — no template names in routing.
+                    template_name=locked.template_id or "",
                 )
             except Exception as e:  # noqa: BLE001
                 logger.error(

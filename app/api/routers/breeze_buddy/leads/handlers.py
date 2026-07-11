@@ -51,7 +51,7 @@ from app.core.logger import logger
 from app.database.accessor import (
     append_metadata_field,
     create_lead_call_tracker,
-    get_call_execution_config_by_merchant_id,
+    get_call_execution_config_by_template_id,
     get_lead_by_call_id,
     get_lead_by_id,
     get_leads_by_request_id,
@@ -282,40 +282,9 @@ async def push_lead_handler(req: PushLeadRequest, current_user: UserInfo) -> Dic
 
             logger.info(f"Payload validation successful for reseller {req.reseller_id}")
 
-        # Get call execution config
-        call_execution_configs = await get_call_execution_config_by_merchant_id(
-            req.reseller_id, req.merchant_id, template_name=template.name
-        )
-
-        if not call_execution_configs:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Call execution config not found for reseller_id: {req.reseller_id}",
-            )
-
-        # Two-step config match: prefer exact template_id, fall back to name
-        # (only consider name-match for configs that have no template_id set,
-        #  to avoid accidentally picking a config with a conflicting template_id)
-        config = None
-        if template.id:
-            config = next(
-                (
-                    c
-                    for c in call_execution_configs
-                    if c.template_id and c.template_id == str(template.id)
-                ),
-                None,
-            )
-        if not config:
-            config = next(
-                (
-                    c
-                    for c in call_execution_configs
-                    if c.template == template.name
-                    and (not template.id or not c.template_id)
-                ),
-                None,
-            )
+        # Get call execution config: owned by the template, resolved by
+        # template_id only (no name-based matching anywhere).
+        config = await get_call_execution_config_by_template_id(str(template.id))
 
         if not config:
             raise HTTPException(

@@ -38,7 +38,7 @@ from app.ai.voice.agents.breeze_buddy.utils.transport.websockets import (
 )
 from app.core.logger import logger
 from app.database.accessor import (
-    get_call_execution_config_by_merchant_id,
+    get_call_execution_config_by_template_id,
     get_lead_by_call_id,
     update_lead_call_completion_details,
     update_lead_template,
@@ -193,10 +193,11 @@ async def _check_deferred_inbound_policy(
         if not reseller_id:
             return False
 
-        configs = await get_call_execution_config_by_merchant_id(
-            reseller_id, template.merchant_id
+        config = (
+            await get_call_execution_config_by_template_id(str(template.id))
+            if template.id
+            else None
         )
-        config = next((c for c in configs if c.template == template.name), None)
         if not config:
             return False
 

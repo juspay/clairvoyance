@@ -234,17 +234,21 @@ class TelephonyConfig(BaseModel):
 
 
 class CreateCallExecutionConfigRequest(BaseModel):
-    """Request to create call execution configuration"""
+    """Request to create call execution configuration.
 
+    The config is owned by a template: ``template_id`` is required and the
+    scope (reseller_id, merchant_id) plus the template name are derived from
+    the template row — clients never send them (legacy scope fields in the
+    body are ignored).
+    """
+
+    template_id: str
     initial_offset: int
     retry_offset: int
     call_start_time: time
     call_end_time: time
     max_retry: int
     calling_provider: CallProvider
-    reseller_id: str
-    template: str
-    merchant_id: Optional[str] = None
     enable_international_call: bool = True
     enable_calling: Optional[bool] = True
     enable_inbound: Optional[bool] = True
@@ -286,11 +290,17 @@ class CreateCallExecutionConfigRequest(BaseModel):
 
 
 class UpdateCallExecutionConfigRequest(BaseModel):
-    """Request to update call execution configuration"""
+    """Request to update call execution configuration.
 
-    reseller_id: str
-    template: str
-    merchant_id: Optional[str] = None
+    The config is addressed by its own id (path parameter); scope and
+    template name are immutable display data and are not part of the
+    request. ``template_id`` is optional: when the stored config already
+    has one it must match (the link is immutable); when the stored config
+    predates the link it may be supplied to adopt the config onto its
+    template. Legacy scope fields in the body are ignored.
+    """
+
+    template_id: Optional[str] = None
     initial_offset: Optional[int] = None
     retry_offset: Optional[int] = None
     call_start_time: Optional[time] = None
