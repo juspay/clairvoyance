@@ -77,7 +77,7 @@ from app.database.accessor import (
     acquire_lock_on_lead_by_id,
     defer_lead_next_attempt_and_release_lock,
     get_lead_by_id,
-    get_template_by_id_with_fallback,
+    get_template_by_id,
     is_number_blacklisted,
     release_lock_on_lead_by_id,
     update_lead_call_completion_details,
@@ -324,11 +324,12 @@ class Worker:
                 lock_released = await self._defer_and_release(locked.id, 300)
                 return
 
-            template = await get_template_by_id_with_fallback(
-                template_id=locked.template_id,
-                reseller_id=config.reseller_id,
-                merchant_id=config.merchant_id,
-                name=config.template,
+            # id-only resolution: leads always carry the template_id they
+            # resolved to at push time; name fallback was removed.
+            template = (
+                await get_template_by_id(locked.template_id)
+                if locked.template_id
+                else None
             )
 
             if not await _run_pre_checks_for_lead(config, locked, template, session):

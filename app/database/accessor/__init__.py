@@ -64,8 +64,7 @@ from .breeze_buddy.outbound_number import (
 from .breeze_buddy.template import (
     create_template,
     get_template_by_id,
-    get_template_by_id_with_fallback,
-    get_template_by_merchant,
+    get_template_in_scope,
 )
 
 __all__ = [
@@ -77,8 +76,7 @@ __all__ = [
     "mask_phone",
     "create_template",
     "get_template_by_id",
-    "get_template_by_merchant",
-    "get_template_by_id_with_fallback",
+    "get_template_in_scope",
     "create_outbound_number",
     "get_outbound_number_by_id",
     "update_outbound_number_status",

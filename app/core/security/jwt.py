@@ -245,4 +245,3 @@ async def get_current_user(
         )
 
     return jwt_manager.verify_token(credentials.credentials)
-

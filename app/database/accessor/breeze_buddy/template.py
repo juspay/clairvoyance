@@ -10,7 +10,6 @@ import asyncpg
 from app.ai.voice.agents.breeze_buddy.template.types import (
     TemplateModel,
 )
-from app.core.deprecation import deprecated
 from app.core.logger import logger
 from app.database.decoder.breeze_buddy.template import decode_template
 from app.database.queries import run_parameterized_query
@@ -23,8 +22,8 @@ from app.database.queries.breeze_buddy.template import (
     delete_template_if_not_referenced_query,
     get_all_templates_by_outbound_number_id_query,
     get_template_by_id_query,
-    get_template_by_merchant_query,
     get_template_by_outbound_number_id_query,
+    get_template_in_scope_query,
     get_templates_count_query,
     get_templates_list_query,
     replace_template_query,
@@ -39,54 +38,28 @@ def get_row_count(result: Optional[list[asyncpg.Record]]) -> int:
     return len(result) if result else 0
 
 
-@deprecated(
-    "Name-based template lookup. Pass template_id and use get_template_by_id_with_fallback() instead.",
-    replacement="get_template_by_id_with_fallback()",
-)
-async def get_template_by_merchant(
+async def get_template_in_scope(
     reseller_id: str,
-    merchant_id: Optional[str] = None,
-    name: Optional[str] = None,
-    should_prioritize_merchant_specific: bool = True,
+    merchant_id: Optional[str],
+    name: str,
 ) -> Optional[TemplateModel]:
-    """Get a template by reseller ID and optional filters."""
-    logger.info(f"Getting template by reseller: {reseller_id}")
+    """Get a template by its exact (reseller, merchant, name) scope.
 
+    merchant_id=None matches only reseller-level rows (merchant_id IS NULL).
+    There is deliberately NO merchant→reseller fallback: runtime resolution
+    is id-only (get_template_by_id); this exists for uniqueness checks and
+    fixed internal lookups.
+    """
     try:
-        query, values = get_template_by_merchant_query(reseller_id, merchant_id, name)
+        query, values = get_template_in_scope_query(reseller_id, merchant_id, name)
         result = await run_parameterized_query(query, values)
 
         if result and get_row_count(result) > 0:
-            decoded_result = decode_template(result[0])
-            if decoded_result:
-                logger.info(f"Template found: {decoded_result.id} with flow structure")
-            else:
-                logger.info(f"Template decoding failed for reseller: {reseller_id}")
-            return decoded_result
-
-        # If no template found with merchant_id, retry with merchant_id=None
-        if merchant_id is not None and should_prioritize_merchant_specific:
-            logger.info(
-                f"No template found with merchant_id: {merchant_id}, retrying with merchant_id=None"
-            )
-            query, values = get_template_by_merchant_query(reseller_id, None, name)
-            result = await run_parameterized_query(query, values)
-
-            if result and get_row_count(result) > 0:
-                decoded_result = decode_template(result[0])
-                if decoded_result:
-                    logger.info(
-                        f"Template found: {decoded_result.id} with flow structure (merchant_id=None)"
-                    )
-                else:
-                    logger.info(f"Template decoding failed for reseller: {reseller_id}")
-                return decoded_result
-
-        logger.info(f"No template found for reseller: {reseller_id}")
+            return decode_template(result[0])
         return None
 
     except Exception as e:
-        logger.error(f"Error getting template by reseller: {e}")
+        logger.error(f"Error getting template in scope for {reseller_id}: {e}")
         return None
 
 
@@ -284,48 +257,6 @@ async def get_templates_list(
     except Exception as e:
         logger.error(f"Error getting templates list: {e}", exc_info=True)
         return [], 0
-
-
-async def get_template_by_id_with_fallback(
-    template_id: Optional[str],
-    reseller_id: str,
-    merchant_id: Optional[str],
-    name: Optional[str] = None,
-) -> Optional[TemplateModel]:
-    """
-    Resolve a template by ID or fall back to name-based lookup.
-
-    Ownership is already validated at lead push time, so no re-validation is
-    performed here. The name-based fallback is inherently scoped to
-    reseller_id/merchant_id at the SQL level.
-
-    Resolution order:
-      1. If template_id is provided: fetch by ID directly.
-      2. If name is provided (and no ID result): fetch by reseller/merchant/name.
-
-    Args:
-        template_id: Optional template UUID (preferred)
-        reseller_id: Reseller identifier — used for name-based fallback only
-        merchant_id: Optional merchant identifier — used for name-based fallback only
-        name: Optional template name used as fallback
-
-    Returns:
-        TemplateModel if found, None otherwise
-    """
-    if template_id:
-        template = await get_template_by_id(template_id)
-        if template is not None:
-            logger.info("Resolved template by ID: %s", template.id)
-            return template
-        logger.warning(
-            "Template not found by ID=%s, falling back to name-based lookup",
-            template_id,
-        )
-
-    if name:
-        return await get_template_by_merchant(reseller_id, merchant_id, name)
-
-    return None
 
 
 async def get_template_by_id(template_id: str) -> Optional[TemplateModel]:

@@ -8,12 +8,17 @@ from typing import Any, Dict, List, Optional, Tuple
 TEMPLATE_TABLE = "template"
 
 
-def get_template_by_merchant_query(
+def get_template_in_scope_query(
     reseller_id: str,
     merchant_id: Optional[str] = None,
     name: Optional[str] = None,
 ) -> Tuple[str, List[Any]]:
-    """Generate query to get a template by reseller ID and optional filters."""
+    """Query a template by its exact (reseller, merchant, name) scope.
+
+    merchant_id=None matches reseller-level rows only (merchant_id IS NULL);
+    no fallback. Runtime resolution is id-only — this serves uniqueness
+    checks and fixed internal lookups.
+    """
     conditions = ["reseller_id = $1"]
     values = [reseller_id]
 

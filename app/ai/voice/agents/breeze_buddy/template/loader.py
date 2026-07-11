@@ -19,7 +19,7 @@ from app.database.accessor.breeze_buddy.credentials import (
     get_credentials_as_template_vars,
 )
 from app.database.accessor.breeze_buddy.template import (
-    get_template_by_id_with_fallback,
+    get_template_by_id,
 )
 
 
@@ -28,29 +28,20 @@ class FlowConfigLoader:
 
     async def _load_template_from_db(
         self,
-        reseller_id: str,
-        name: str = "order-confirmation",
-        merchant_id: Optional[str] = None,
-        template_id: Optional[str] = None,
+        template_id: Optional[str],
     ) -> Optional[TemplateModel]:
         """
-        Load complete template from database.
-
-        Args:
-            reseller_id: Reseller identifier
-            name: Template name (defaults to "order-confirmation")
-            merchant_id: Optional merchant-specific identifier
-            template_id: Optional template UUID (preferred over name-based lookup)
+        Load complete template from database by id (id-only — name-based
+        resolution was removed).
 
         Returns:
             TemplateModel if found, None otherwise
         """
-        template = await get_template_by_id_with_fallback(
-            template_id=template_id,
-            reseller_id=reseller_id,
-            merchant_id=merchant_id,
-            name=name,
-        )
+        if not template_id:
+            logger.error("No template_id provided — cannot load template")
+            return None
+
+        template = await get_template_by_id(template_id)
 
         if template:
             nodes_count = len(template.flow.get("nodes", []))
@@ -60,12 +51,7 @@ class FlowConfigLoader:
                 nodes_count,
             )
         else:
-            logger.warning(
-                "No template found for reseller=%s, name=%s (template_id=%s)",
-                reseller_id,
-                name,
-                template_id,
-            )
+            logger.error("No template found for template_id=%s", template_id)
 
         return template
 
@@ -118,20 +104,17 @@ class FlowConfigLoader:
     async def load_template(
         self,
         reseller_id: str,
-        template: str,
-        merchant_id: Optional[str] = None,
+        template_id: Optional[str],
         call_payload: Optional[Dict[str, str]] = None,
-        template_id: Optional[str] = None,
     ) -> Tuple[TemplateModel, Dict[str, str]]:
         """
-        Load template and render task messages with variables.
+        Load template by id and render task messages with variables.
 
         Args:
-            reseller_id: Reseller identifier
-            template: Template name (used as fallback if template_id not provided)
-            merchant_id: Optional merchant-specific identifier
+            reseller_id: Reseller identifier (used for credential loading)
+            template_id: Template UUID (the ONLY resolution key — name-based
+                lookup was removed)
             call_payload: Optional payload variables
-            template_id: Optional template UUID (preferred over name-based lookup)
 
         Returns:
             TemplateModel with rendered task messages, and dictionary of template variables
@@ -141,13 +124,11 @@ class FlowConfigLoader:
         """
 
         # Load template from database
-        template_obj = await self._load_template_from_db(
-            reseller_id, template, merchant_id, template_id=template_id
-        )
+        template_obj = await self._load_template_from_db(template_id)
 
         if not template_obj:
             raise ValueError(
-                f"No template found for reseller={reseller_id}, template={template}"
+                f"No template found for reseller={reseller_id}, template_id={template_id}"
             )
 
         template_vars = {}

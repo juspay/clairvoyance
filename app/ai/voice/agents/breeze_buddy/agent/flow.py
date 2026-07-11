@@ -41,10 +41,8 @@ async def load_template_config(
 
     template, template_vars = await flow_loader.load_template(
         reseller_id=lead.reseller_id,
-        template=lead.template,
-        merchant_id=lead.merchant_id if lead else None,
-        call_payload=lead.payload,
         template_id=lead.template_id,
+        call_payload=lead.payload,
     )
 
     # Apply overrides and re-render if playground mode

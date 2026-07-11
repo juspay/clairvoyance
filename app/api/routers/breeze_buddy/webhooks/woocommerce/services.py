@@ -41,13 +41,12 @@ async def handle_woocommerce(
 ) -> Dict[str, Any]:
     """Verify + process a WooCommerce webhook, dispatching on topic.
 
-    Reads the ``template`` / ``template_id`` / ``all_orders`` query params off
+    Reads the ``template_id`` / ``all_orders`` query params off
     the request. Authenticated by the X-WC-Webhook-Signature HMAC (secret = the
     stored token). Returns 200 for every authenticated non-push outcome so
     WooCommerce doesn't retry-storm.
     """
     query = request.query_params
-    template = query.get("template")
     template_id = query.get("template_id")
     all_orders = query.get("all_orders", "").lower() == "true"
 
@@ -97,10 +96,12 @@ async def handle_woocommerce(
     except json.JSONDecodeError:
         order = {}
 
-    if not template and not template_id:
+    if not template_id:
+        # Templates resolve by id only — name support was removed; webhook
+        # URLs must carry ?template_id=<uuid>.
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Missing template (pass ?template= or ?template_id= in the URL)",
+            detail="Missing template_id (pass ?template_id= in the URL)",
         )
 
     merchant = await get_merchant_by_merchant_identifier(merchant_id)
@@ -120,13 +121,12 @@ async def handle_woocommerce(
             merchant_id,
             reseller_id,
             shop_name,
-            template,
             template_id,
             all_orders,
         )
     if topic == TOPIC_ABANDONED_CHECKOUT:
         return await process_abandoned_checkout(
-            order, merchant_id, reseller_id, shop_name, template, template_id
+            order, merchant_id, reseller_id, shop_name, template_id
         )
 
     raise HTTPException(

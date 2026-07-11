@@ -8,7 +8,7 @@ aliases are checked — adjust the lookups here if your plugin nests data
 differently.
 """
 
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Tuple
 
 from app.core.logger import logger
 
@@ -113,8 +113,7 @@ async def process_abandoned_checkout(
     merchant_id: str,
     reseller_id: str,
     shop_name: str,
-    template: Optional[str],
-    template_id: Optional[str],
+    template_id: str,
 ) -> Dict[str, Any]:
     """Handle an abandoned-checkout webhook: always call (no payment yet)."""
     checkout_id = order.get("id") or first(
@@ -131,7 +130,6 @@ async def process_abandoned_checkout(
         payload,
         merchant_id,
         reseller_id,
-        template,
         template_id,
         "abandoned checkout",
     )

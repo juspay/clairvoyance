@@ -17,7 +17,7 @@ from app.database.accessor import create_lead_call_tracker, handle_lead_abort
 from app.database.accessor.breeze_buddy.lead_call_tracker import (
     update_lead_call_completion_details,
 )
-from app.database.accessor.breeze_buddy.template import get_template_by_merchant
+from app.database.accessor.breeze_buddy.template import get_template_in_scope
 from app.schemas import ExecutionMode, LeadCallStatus
 from app.services.redis import is_redis_configured
 from app.services.redis.client import get_redis_service
@@ -198,7 +198,9 @@ async def breeze_buddy_demo_connect_handler(
     await _rate_limit(client_ip)
 
     # Ensure template exists for this merchant/shop before proceeding
-    template = await get_template_by_merchant(
+    # Fixed internal demo templates: exact-scope lookup (no fallback);
+    # runtime template resolution elsewhere is id-only.
+    template = await get_template_in_scope(
         reseller_id=DEMO_RESELLER_ID,
         merchant_id=DEMO_MERCHANT_ID,
         name=body.agent,

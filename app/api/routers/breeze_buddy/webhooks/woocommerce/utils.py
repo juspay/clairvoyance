@@ -79,8 +79,7 @@ async def push_lead(
     payload: Dict[str, Any],
     merchant_id: str,
     reseller_id: str,
-    template: Optional[str],
-    template_id: Optional[str],
+    template_id: str,
     trigger_reason: str,
 ) -> Dict[str, Any]:
     """Idempotently push a lead through the existing lead pipeline."""
@@ -104,7 +103,6 @@ async def push_lead(
     lead_req = PushLeadRequest(
         request_id=request_id,
         payload=payload,
-        template=template,
         template_id=template_id,
         reseller_id=reseller_id,
         merchant_id=merchant_id,
