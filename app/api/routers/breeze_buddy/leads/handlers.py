@@ -251,6 +251,25 @@ async def push_lead_handler(req: PushLeadRequest, current_user: UserInfo) -> Dic
                 f"(template_id={req.template_id})",
             )
 
+        # Agent types are exclusive (2026-07-13): 'chat' in supported_channels
+        # makes this a chat (widget) agent — 'voice' alongside it only enables
+        # in-widget WebRTC voice mode, never telephony. Leads are telephony,
+        # so chat agents are not lead-pushable; note the check is on 'chat'
+        # membership, NOT on 'voice' absence.
+        if "chat" in (template.supported_channels or []):
+            logger.warning(
+                "Rejected lead push at chat template %s (reseller %s): "
+                "chat agents are widget-only",
+                req.template_id,
+                req.reseller_id,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Template {req.template_id} is a chat (widget) agent — "
+                "it cannot receive telephony leads. Push leads to a voice "
+                "template instead.",
+            )
+
         # Check if customer phone number is blacklisted
         customer_mobile = req.payload.get("customer_mobile_number")
         if customer_mobile and await is_number_blacklisted(
