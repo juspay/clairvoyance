@@ -1,0 +1,196 @@
+{
+ "run_id": "ac-wave-6-20260711T122154Z",
+ "mode": "apply",
+ "reseller": "BB_SHOPIFY",
+ "family": "abandoned-checkout",
+ "base_template_id": "59f196c8-a6b4-4cfc-8435-58d059877549",
+ "base_hash": "71730ea10fbcbd83",
+ "base_updated_at": "2026-07-05T17:02:48.676202+00:00",
+ "shared_config_id": "de9fb349-2ef9-4400-910d-9ee85af85fd2",
+ "universe_active_merchants": 539,
+ "already_have_template": 503,
+ "to_create_templates": 36,
+ "to_create_configs": 36,
+ "merchants": [
+  {
+   "merchant_id": "dwcrn3-cc.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "afebd2.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "b1k18x-qr.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "sumadhura-official.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "ix0j46-ma.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "sayhjr-vg.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "thygu0-bp.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "yf41q1-mz.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "pardewale.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "49umsh-gf.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "2nakig-4d.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "needy-bucket.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "au04dp-cv.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "natuure-in.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "aexhtf-sr.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "tt6df8-00.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "8h9uxx-xt.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "edoreind.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "4cc8hi-3d.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "rudrm.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "fikijk-j7.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "knz1z3-uj.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "ha3uvz-fu.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "xsxsyv-j8.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "skdxij-5z.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "vnkrfn-s1.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "a94f40-40.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "admin-196180485595487.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "0uukg9-kt.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "nfkpmh-bg.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "kartariafoods.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "beyond-bound.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "77e20c-3.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "aksobha2015.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "k585vc-aw.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "8f1vik-d1.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  }
+ ]
+}

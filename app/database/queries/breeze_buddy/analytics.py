@@ -138,20 +138,20 @@ def build_analytics_where_clause(
         conditions.append(f"lct.{date_column} < ${len(values) + value_offset}")
 
     # Standard column filters
-    # Template filter - supports BOTH template name and template_id for backward compatibility
+    # Template filter — ID ONLY (2026-07-13): name-based filtering removed;
+    # template names are mutable display strings, not identifiers. The
+    # `template` key survives only as a UUID-carrying alias of template_id
+    # (the schema validator rejects names; this raise is defense-in-depth so
+    # a bypassing caller can never silently get UNSCOPED analytics).
     if "template" in filters and filters["template"]:
         template_value = filters["template"]
-        # Auto-detect if it's a UUID (template_id) or a name (template)
-        if is_uuid(template_value):
-            # Filter by template_id (UUID)
-            values.append(template_value)
-            conditions.append(f"lct.template_id = ${len(values) + value_offset}::UUID")
-            logger.debug(f"Filtering by template_id (UUID): {template_value}")
-        else:
-            # Filter by template name (backward compat)
-            values.append(template_value)
-            conditions.append(f"lct.template = ${len(values) + value_offset}")
-            logger.debug(f"Filtering by template name: {template_value}")
+        if not is_uuid(template_value):
+            raise ValueError(
+                "analytics template filter must be a template UUID; "
+                "name-based filtering was removed"
+            )
+        values.append(template_value)
+        conditions.append(f"lct.template_id = ${len(values) + value_offset}::UUID")
 
     # Explicit template_id filter (takes precedence if both provided)
     if "template_id" in filters and filters["template_id"]:

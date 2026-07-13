@@ -1,0 +1,51 @@
+{
+ "run_id": "wave-6-20260711T121606Z",
+ "mode": "apply",
+ "reseller": "BB_SHOPIFY",
+ "family": "order-confirmation",
+ "base_template_id": "5f4e4da3-18a8-4f72-8373-ceec94984fac",
+ "base_hash": "9658c463c2168ccf",
+ "base_updated_at": "2026-07-10T11:20:54.527037+00:00",
+ "shared_config_id": "9a6cffc7-6884-4333-868e-ede0a279ff5d",
+ "universe_active_merchants": 539,
+ "already_have_template": 533,
+ "to_create_templates": 7,
+ "to_create_configs": 2,
+ "merchants": [
+  {
+   "merchant_id": "nfkpmh-bg.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "kartariafoods.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "beyond-bound.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "77e20c-3.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "aksobha2015.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "k585vc-aw.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "8f1vik-d1.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  }
+ ]
+}

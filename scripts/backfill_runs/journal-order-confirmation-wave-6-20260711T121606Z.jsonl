@@ -1,0 +1,9 @@
+{"event": "run_start", "run_id": "wave-6-20260711T121606Z", "mode": "apply", "reseller": "BB_SHOPIFY", "family": "order-confirmation", "base_template_id": "5f4e4da3-18a8-4f72-8373-ceec94984fac", "base_hash": "9658c463c2168ccf", "base_updated_at": "2026-07-10T11:20:54.527037+00:00", "shared_config_id": "9a6cffc7-6884-4333-868e-ede0a279ff5d", "universe_active_merchants": 539, "already_have_template": 533, "to_create_templates": 7, "to_create_configs": 2}
+{"event": "created", "merchant_id": "nfkpmh-bg.myshopify.com", "template_id": "5c10f08a-b434-44aa-949f-233b14ca3b55", "config_id": "d98c3330-c2ea-4e84-bd33-00174524bb1c", "at": "2026-07-11T12:16:07.441061+00:00"}
+{"event": "created", "merchant_id": "kartariafoods.myshopify.com", "template_id": "21c6df29-5337-45a0-8e16-db146a297e8b", "config_id": null, "at": "2026-07-11T12:16:07.531426+00:00"}
+{"event": "created", "merchant_id": "beyond-bound.myshopify.com", "template_id": "462eaa59-e12b-474a-911e-d532870bc5bb", "config_id": null, "at": "2026-07-11T12:16:07.620460+00:00"}
+{"event": "created", "merchant_id": "77e20c-3.myshopify.com", "template_id": "851ca8fa-561d-4ed2-9830-def17eec7759", "config_id": null, "at": "2026-07-11T12:16:07.706636+00:00"}
+{"event": "created", "merchant_id": "aksobha2015.myshopify.com", "template_id": "ced66eb9-e145-42eb-b63e-9d82a1471c7a", "config_id": null, "at": "2026-07-11T12:16:07.795734+00:00"}
+{"event": "created", "merchant_id": "k585vc-aw.myshopify.com", "template_id": "bc42fded-0721-4005-950f-ef31ca147cec", "config_id": "18222d09-ca05-4554-b2c1-b1bec942a4a0", "at": "2026-07-11T12:16:07.912425+00:00"}
+{"event": "created", "merchant_id": "8f1vik-d1.myshopify.com", "template_id": "012b1fc6-8a13-40b3-93fa-aadb67745ca3", "config_id": null, "at": "2026-07-11T12:16:08.002613+00:00"}
+{"event": "run_end", "created_templates": 7, "created_configs": 2, "failed": 0}

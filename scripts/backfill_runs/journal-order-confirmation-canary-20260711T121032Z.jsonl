@@ -1,0 +1,4 @@
+{"event": "run_start", "run_id": "canary-20260711T121032Z", "mode": "apply", "reseller": "BB_SHOPIFY", "family": "order-confirmation", "base_template_id": "5f4e4da3-18a8-4f72-8373-ceec94984fac", "base_hash": "9658c463c2168ccf", "base_updated_at": "2026-07-10T11:20:54.527037+00:00", "shared_config_id": "9a6cffc7-6884-4333-868e-ede0a279ff5d", "universe_active_merchants": 539, "already_have_template": 31, "to_create_templates": 2, "to_create_configs": 0}
+{"event": "created", "merchant_id": "rajarshi-beta-store.myshopify.com", "template_id": "a4aa8e34-5f24-4222-b94f-f7f374bd4a61", "config_id": null, "at": "2026-07-11T12:10:33.573389+00:00"}
+{"event": "created", "merchant_id": "breeze-gcp-beta.myshopify.com", "template_id": "290a613a-6fcf-4410-8ea9-78e52709d859", "config_id": null, "at": "2026-07-11T12:10:33.684564+00:00"}
+{"event": "run_end", "created_templates": 2, "created_configs": 0, "failed": 0}

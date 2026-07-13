@@ -1,0 +1,2561 @@
+{
+ "run_id": "run-20260711T120706Z",
+ "mode": "dry-run",
+ "reseller": "BB_SHOPIFY",
+ "family": "order-confirmation",
+ "base_template_id": "5f4e4da3-18a8-4f72-8373-ceec94984fac",
+ "base_hash": "9658c463c2168ccf",
+ "base_updated_at": "2026-07-10T11:20:54.527037+00:00",
+ "shared_config_id": "9a6cffc7-6884-4333-868e-ede0a279ff5d",
+ "universe_active_merchants": 539,
+ "already_have_template": 31,
+ "to_create_templates": 509,
+ "to_create_configs": 91,
+ "merchants": [
+  {
+   "merchant_id": "shirttheoryindia.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "kanha-kothi.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "qkqpgm-af.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "k4jxdu-wq.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "bj6yiy-fm.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "breeze-priyanshi-gcp.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "drw57i-wz.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "htd091-es.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "velorinparisstore.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "8f55a4-12.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "breeze-mocking-wand-horcrux.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "4b0cc7-4.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "rsumi3-cw.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "8b01c4-2.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "ayurvedapower.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "r38kyq-hn.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "yq5bim-r7.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "bpunch.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "3pr01g-k0.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "prnt1c-0t.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "nnjyk7-uy.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "1mitfu-1z.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "jzi4jn-y3.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "fpn6uv-ui.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "f35jy4-ah.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "shop4marq.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "j7dfzg-nt.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "nc0vgm-5f.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "ee2106-02.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "4a1gb1-3x.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "xvbbz8-3f.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "yourjerseyj.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "ermnindia.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "chewbells.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "m8g51y-0d.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "xmaqpv-6q.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "breeze-supercheckout.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "j17rnp-jh.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "bdrpza-uh.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "6dc27a.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "glossiafashion.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "dde5f0-9e.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "kjg1nf-fn.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "vjugwh-cu.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "2sgivu-2k.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "pretty-parsi-cook.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "g8xy1a-pq.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "thefablesstore.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "vastrasin.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "0cbevi-bk.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "bwutyq-dv.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "654xne-c5.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "11nj4r-c1.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "sqvckg-33.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "rx10fh-bm.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "jashnbazaar.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "qzrqkc-tv.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "mqss5k-pa.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "cm1pc7-eb.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "c6360d-bd.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "ygdkvt-ki.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "szbyp3-wv.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "a30211-5f.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "qgntst-ez.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "ft6stj-93.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "wqvdja-ee.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "tir31n-hf.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "breeze-test-2027.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "81ab93-44.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "v1xhww-8b.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "stonesoup-shop.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "carlton-bags-india.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "bomaachi.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "drsachinn.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "moondust-supply.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "bkfgay-1n.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "88sydp-de.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "livingearthfarmland.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "ccdqyn-qx.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "q12xkh-3x.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "the-new-perfume-store.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "1vyjef-u4.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "h2t3t1-81.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "bvrbqe-mr.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "0nadgr-k8.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "0vmnwf-1q.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "4wpk0j-u1.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "jc624x-bm.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "4hf1fb-kw.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "fzwbbr-x9.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "07izq8-pk.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "ainaura.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "1wqgky-wn.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "test-store-1100000000000000000000000000000003542.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "46r85j-7s.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "e4d03b-ed.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "vmi900-e2.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "f11p33-tk.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "nwhx60-1q.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "rz3xkh-jb.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "g1bakr-dv.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "raxmon-com.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "0ef4q1-qp.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "fairycub.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "2cffb3-2.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "dwkkwt-ac.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "cepvpd-6k.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "breeze-smb-test.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "wph1aq-d0.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "jqxazi-4v.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "2pm4y0-qw.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "gwr7wt-vu.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "dvsf1y-nk.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "wearwearo.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "breeze-dragonstone-prod.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "squaloaudio.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "sfb0dk-cj.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "ezrn1j-rv.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "497f20-38.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "dopecart18.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "proudstag-com.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "solar-for-nature.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "met1xh-2t.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "xzepvh-qw.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "0u7z3v-ak.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "velomora-com.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "tangyoak.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "34454f-e7.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "keejy3-bc.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "3scvdw-1n.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "d9dzde-jy.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "silkmart-sarees.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "nv2825.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "ei17pj-bg.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "9ta3bs-i0.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "0n0frr-0u.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "2wuyfy-11.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "3rjndz-vx.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "bakty5-ma.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "baqe0a-mu.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "nxtkcm-vr.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "5cgwve-qf.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "gymxshop1.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "shopwithus-co-in.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "dd0zke-ey.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "cz0f06-kc.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "qhbapj-kc.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "bk5jwr-zk.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "x7s5dw-jw.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "523c2e.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "tkbqcy-az.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "qdx22v-mk.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "0xc0cc-de.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "88hhk0-qj.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "ep00j1-6c.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "aihw5n-kh.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "rbautk-rb.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "4e6ry0-p8.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "keptjz-if.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "txw47s-ne.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "d2c-store-beta.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "daj8kw-mh.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "a0u0fx-0t.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "breeze-rishabh-beta-store.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "0neczs-a9.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "wfyeb0-e0.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "grtabi-ds.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "fvjys0-01.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "b8ty3h-0w.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "qhitqa-ux.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "a9ba1e-4.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "kozeecub.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "r82tdp-ix.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "cng12c-ep.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "jftaht-ud.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "aa1k2f-ue.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "npxfbe-t0.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "uu801f-tf.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "wbpgq1-91.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "yype9n-7r.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "pc0n9k-as.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "550f77-3.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "hdq204-im.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "gdj1zb-w9.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "test-development12.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "sd8bqu-6d.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "sutqbc-bs.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "scxngj-sn.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "ue7chi-f9.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "kiwibh-9c.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "a4145a-7a.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "bmut0f-g0.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "kmwazx-gr.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "uq91zh-ys.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "nsx3kw-hk.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "qua9gq-by.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "58d70f-95.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "n5zizs-um.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "et01ve-yb.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "da12p7-dq.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "pmvatt-hc.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "f9f66c-92.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "breeze-it-store.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "nativeforever.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "7b83e1-b0.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "smzqi7-6v.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "k0cddp-n5.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "ugxnfw-u9.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "1rvdwx-ma.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "hh61xs-1s.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "r2npur-zu.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "3tztxq-q0.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "npymuz-jk.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "uybj0g-ad.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "xg9bv6-vd.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "dd4ec8-fe.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "dyda6m-sj.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "ebu0q0-rt.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "0itd6c-wr.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "giftingstudio-in.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "1ycrad-r0.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "neerajfashions.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "67xihs-n0.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "cx6fd8-5p.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "0qgd2p-kg.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "i1cpga-bm.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "x04csq-m1.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "yaxqmv-bi.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "vhdhdj-jq.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "prod-testing-store1.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "hcuenu-jd.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "tsky6e-ih.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "1d1x19-du.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "zre00q-ih.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "fc6d56.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "jaipuri-dhaaga.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "1dfy89-jp.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "dqahrk-89.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "fccc65-2.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "firstbud.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "0a01uy-b1.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "2skruf-pd.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "e9fb7b-2.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "8vcm5a-2z.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "killerjeansstore.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "showkrey.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "grand-pit-stop.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "7db749-44.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "supervek.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "ck4vdu-xi.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "5m0jfs-qp.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "t0sgcc-pw.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "acn92v-zy.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "durvalife.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "zfcp7x-gq.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "breeze-badri-testing.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "acb1d8-b2.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "cavasachocolates.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "vip-bags-india.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "vip-lhb2021.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "d202ej-pn.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "1esezk-p5.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "bwhkfe-gb.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "knmdab-z1.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "breeze-rishabh-beta-store-testing.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "gcp-beta.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "xbbf0y-vp.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "swaroop-juspay.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "b0q7r3-wd.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "396ba9-ea.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "dxvdav-7p.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "4tdqzz-d9.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "9mx6a8-kf.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "mahaved.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "qqfipn-ts.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "zk0dwd-fv.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "pw70ye-k0.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "vfgznj-0j.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "742d76-e0.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "it1jru-e3.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "ccz0yt-yg.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "mz1i2r-zq.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "nmrbuy-vm.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "khadisadan.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "nrk857-dz.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "m6fw41-0a.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "rxirbx-q2.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "sazeracstore.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "14fev1-yj.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "3a4rgd-1f.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "hnv11j-1n.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "unikaar.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "e0z0pu-x1.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "08e8df.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "shri-watches-2.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "ecgr1f-na.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "de15e7-2.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "7b04e4-80.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "5g1kdp-sr.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "9heieb-e0.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "tejus-skincare.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "51xpjb-9j.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "jjbnj4-cc.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "gh8bbu-8m.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "rbpjff-nt.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "1qjf1e-j1.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "drxme8-z5.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "g80uxk-kz.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "lumos-store01.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "ijc13j-i1.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "b7pk60-u9.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "0ngtzs-1s.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "kcy1jc-qy.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "duvxjd-vc.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "f71bg4-t1.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "ixs6f1-h8.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "aktk35-dy.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "vpp013-fc.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "the-laser-art.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "mqhs7u-s9.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "j7jyvr-ih.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "dashiastore.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "qxbtta-nu.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "rpxjdh-1f.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "rus8ui-1c.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "951d28-8e.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "xgxkpj-3f.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "nfw0sn-dn.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "5yvtk3-ab.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "yvq044-tj.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "6n4pdz-a0.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "xp8yze-as.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "test-buddy-papdeunt.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "r80m7m-i4.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "walawalidev.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "23e96b.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "umecg1-u7.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "1natdc-73.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "testing-buddy-store.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "breeze-utkarsh-beta-store-testing.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "nayore1.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "utkarsh-prod-store.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "testing-breeze-buddy-store.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "nmdjvi-69.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "my-mushroom-world.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "d90r0q-yq.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "gqf23w-1v.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "6j07v3-uf.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "1k1ihf-yk.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "tacjqf-c0.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "e97f92-0e.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "zw0kvi-zw.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "ed3v7t-i3.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "fx8w0a-7x.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "qqkqsa-je.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "6np1tv-rx.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "55bcbb-e2.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "bknu1q-0j.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "vc7sq1-y0.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "tkzbgz-fm.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "2aa4e8-76.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "jyizhu-mw.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "ebpg99-bu.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "790e2b-a8.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "gzhbjm-hs.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "5k0i0i-hs.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "wpc0wc-ye.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "matsyaveda-herbals.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "haps-ecom-store.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "hypothesis-test-store.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "xwnvhi-w1.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "s1jzxb-f1.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "f46af6-7b-2.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "vgxsps-v0.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "1s5cxv-jj.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "hbmhej-kq.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "kjiww0-cn.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "arp3zk-63.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "6j6z7e-fu.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "afhh30-q0.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "spmky5-t6.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "hycchx-bc.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "x4anme-iy.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "ryqyyx-2t.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "betterhood-shop.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "breeze-amreet-test4.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "jva4pf-pz.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "xrg82k-2b.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "aare-beauty.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "fszrdq-1r.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "ihv7zv-9n.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "c3jzsy-yk.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "y3pjxd-y2.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "bedsheet-company.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "38idqj-es.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "83afdc-3.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "kfkp1e-9y.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "i6fu47-6y.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "ejkekc-fx.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "proecolife.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "breeze-amreet-test1.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "gk0jru-qn.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "czh0ka-3e.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "95bd0d.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "myauindia.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "b3986e-3.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "3nzwvf-ub.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "z3f71n-n0.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "0sdtvw-0v.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "leather-chappal-6633.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "a11xpg-p0.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "6c04bm-d3.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "furnisquare.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "aqpktb-d0.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "4i02pe-8c.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "trilonium.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "pmatab-nj.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "vzswdm-wd.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "skmbdf-c1.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "mihbsj-e8.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "eqtiq0-jz.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "dd2b75-4e.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "qtncqg-ws.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "kbs9jh-f2.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "aw1vys-r0.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "wtenje-d0.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "cxz0xi-kv.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "itwxgt-eu.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "kyrug0-cx.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "ixqge3-ky.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "creeklifestyl.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "efrfue-yn.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "10t0fk-bi.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "z70hcb-gb.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "3ny1nw-8u.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "k0e1a0-4s.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "i4zese-5h.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "0dzec0-g5.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "x099au-ms.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "p08dig-hg.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "mqq1dk-wv.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "2d7xqc-uz.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "e6c21e-2b.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "ve08bg-5r.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "2kdmqa-23.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "and1ug-x8.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "fkzxaj-np.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "ds0vht-kj.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "indiawholesaleshop.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "b8nje1-40.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "eeb9fc-4.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "pgwmb3-0s.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "wwhw5a-r1.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "rfxnh0-pe.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "rvx90c-9a.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "vida-herbals.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "2h63sy-vy.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "mxa5bc-a3.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "y2ab29-6e.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "gk68r9-ag.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "nextgenstore-8448.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "f4e7c5.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "rmnq02-mu.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "zx0t0m-23.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "udy1p1-3w.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "5b2fd9-4.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "0a80ir-jd.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "nrtxp1-nz.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "thegfi-uh.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "43147d-61.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "ckxcyf-as.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "app-review-abf621bb-r2391-a0.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "nczp0f-hv.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "1esd1t-ut.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "dwcrn3-cc.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "b1k18x-qr.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "sumadhura-official.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "ix0j46-ma.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "sayhjr-vg.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "thygu0-bp.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "yf41q1-mz.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "49umsh-gf.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "2nakig-4d.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "needy-bucket.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "au04dp-cv.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "natuure-in.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "aexhtf-sr.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "tt6df8-00.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "8h9uxx-xt.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "edoreind.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "fikijk-j7.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "knz1z3-uj.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "ha3uvz-fu.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "rajarshi-beta-store.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "xsxsyv-j8.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "skdxij-5z.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "breeze-gcp-beta.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "bd08f1-2.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "vnkrfn-s1.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "a94f40-40.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "admin-196180485595487.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "0uukg9-kt.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "nfkpmh-bg.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "kartariafoods.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "beyond-bound.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "77e20c-3.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "aksobha2015.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  },
+  {
+   "merchant_id": "k585vc-aw.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "8f1vik-d1.myshopify.com",
+   "create_template": true,
+   "create_config": false
+  }
+ ]
+}

@@ -631,15 +631,15 @@ async def get_performance_analytics(
         elif "busy" in outcome_lower:
             calls_busy += count
 
+    # Picked = calls a human answered. BUSY counts as picked (customer
+    # answered and cut the call); only NO-ANSWER comes out.
     calls_picked = total_calls - calls_no_answer
 
     success_rate = summary.get("success_rate", 0.0)
 
-    answer_rate = (
-        ((calls_picked + calls_no_answer) / total_calls * 100)
-        if total_calls > 0
-        else 0.0
-    )
+    # (The previous formula added no_answer back into the numerator, so
+    # answer_rate was always exactly 100%.)
+    answer_rate = (calls_picked / total_calls * 100) if total_calls > 0 else 0.0
 
     failure_rate = (failed_calls / total_calls * 100) if total_calls > 0 else 0.0
 

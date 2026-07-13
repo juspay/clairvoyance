@@ -142,6 +142,10 @@ def _build_template_list_conditions(
     elif "merchant_id" in filters and filters["merchant_id"]:
         values.append(filters["merchant_id"])
         conditions.append(f"merchant_id = ${len(values)}")
+    elif filters.get("merchant_id_is_null"):
+        # Generic (reseller-level) templates only — used by the list
+        # fallback so it cannot widen beyond merchant_id IS NULL rows.
+        conditions.append("merchant_id IS NULL")
 
     if "is_active" in filters:
         values.append(filters["is_active"])
