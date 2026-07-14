@@ -19,10 +19,12 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from app.ai.voice.agents.breeze_buddy.chat.ui_stream import HealerResult
 from app.ai.voice.agents.breeze_buddy.template.ui_catalog import (
+    QUICK_REPLIES_MAX_ITEMS,
     UI_CATALOG,
     is_known_type,
 )
@@ -179,6 +181,99 @@ def _rule_tag_flatten_array_text(
     return op, "tag_flattened_array_text"
 
 
+def _rule_clamp_quickreplies_items(
+    op: Dict[str, Any], ctx: HealerContext
+) -> Tuple[Dict[str, Any], Optional[str]]:
+    """``QuickReplies`` over the item cap → truncate to the cap instead of
+    letting the whole row drop on ``max_length``. The LLM occasionally emits
+    more pills than allowed (e.g. every category in a storefront with more
+    categories than the cap); showing the first N beats showing nothing.
+    ``min_length`` underflow is left for the validator — the healer can't
+    invent options."""
+    if op.get("op") != "add" or op.get("type") != "QuickReplies":
+        return op, None
+    props = op.get("props")
+    if not isinstance(props, dict):
+        return op, None
+    items = props.get("items")
+    if not isinstance(items, list) or len(items) <= QUICK_REPLIES_MAX_ITEMS:
+        return op, None
+    dropped = len(items) - QUICK_REPLIES_MAX_ITEMS
+    props["items"] = items[:QUICK_REPLIES_MAX_ITEMS]
+    op["props"] = props
+    return op, f"clamped_quickreplies_items:-{dropped}"
+
+
+# Every ``url``/``src`` prop reachable here is a pydantic ``HttpUrl`` field —
+# Handoff.url, Image.src, Icon.url, OpenUrlAction.url (nested in *.action),
+# TileMedia.src (nested in *.media). The lone str-typed exception, ``SideEffect.url``
+# (deliberately same-origin-relative), is excluded by the type guard in the rule
+# below so its relative paths (e.g. ``cart.js``) survive untouched. Anything
+# already carrying a scheme (http:, https:, mailto:, tel:) is left alone; a bare
+# host like ``shop.com/cart`` — which ``HttpUrl`` rejects as "relative URL without
+# a base" and drops the op — gets an ``https://`` prefix. Host-less relatives
+# (leading ``/`` ``#`` ``?``) have no host to attach a scheme to → left for the
+# validator.
+_URL_PROP_KEYS = frozenset({"url", "src"})
+_HAS_SCHEME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.\-]*:")
+
+
+def _coerce_url_string(value: Any) -> Tuple[Any, bool]:
+    if not isinstance(value, str):
+        return value, False
+    s = value.strip()
+    if not s or _HAS_SCHEME_RE.match(s):
+        return value, False
+    if s.startswith("//"):  # protocol-relative → pin to https
+        return "https:" + s, True
+    if s[0] in "/#?":  # host-less relative path / anchor / query — can't fix
+        return value, False
+    head = s.split("/", 1)[0].split("?", 1)[0]
+    if "." in head and " " not in head:  # looks like a domain
+        return "https://" + s, True
+    return value, False
+
+
+def _walk_coerce_urls(node: Any) -> int:
+    coerced = 0
+    if isinstance(node, dict):
+        for k, v in list(node.items()):
+            if k in _URL_PROP_KEYS:
+                new_v, changed = _coerce_url_string(v)
+                if changed:
+                    node[k] = new_v
+                    coerced += 1
+            else:
+                coerced += _walk_coerce_urls(v)
+    elif isinstance(node, list):
+        for item in node:
+            coerced += _walk_coerce_urls(item)
+    return coerced
+
+
+def _rule_coerce_scheme_less_urls(
+    op: Dict[str, Any], ctx: HealerContext
+) -> Tuple[Dict[str, Any], Optional[str]]:
+    """Prepend ``https://`` to scheme-less host URLs in ``url`` / ``src`` props
+    (including nested action / media). Rescues the checkout ``Handoff`` and any
+    bare-domain link the LLM emits without a scheme — pydantic ``HttpUrl`` would
+    otherwise reject it and the op would drop.
+
+    Scoped to ``add`` ops (whose ``type`` we can trust) and skips ``SideEffect``,
+    whose ``url`` is a deliberately same-origin-relative ``str`` (not ``HttpUrl``)
+    — coercing it would corrupt a valid relative path like ``cart.js``."""
+    if op.get("op") != "add" or op.get("type") == "SideEffect":
+        return op, None
+    props = op.get("props")
+    if not isinstance(props, dict):
+        return op, None
+    coerced = _walk_coerce_urls(props)
+    if not coerced:
+        return op, None
+    op["props"] = props
+    return op, f"coerced_scheme_less_url:{coerced}"
+
+
 def _rule_dedupe_id(
     op: Dict[str, Any], ctx: HealerContext
 ) -> Tuple[Dict[str, Any], Optional[str]]:
@@ -233,8 +328,9 @@ def _rule_drop_orphan_add(
 
 # Order matters: rename aliases first (so Tag.label → Tag.text doesn't
 # get stripped); then strip remaining unknowns; then per-primitive
-# coercions; then dedupe last (the rename can mutate id-bearing props
-# in theory). Drops run after, gating on the cleaned-up shape.
+# coercions (incl. QuickReplies item-clamp and scheme-less URL repair, which
+# run on the cleaned props); then dedupe last (the rename can mutate
+# id-bearing props in theory). Drops run after, gating on the cleaned-up shape.
 _TRANSFORM_RULES: List[
     Callable[[Dict[str, Any], HealerContext], Tuple[Dict[str, Any], Optional[str]]]
 ] = [
@@ -242,6 +338,8 @@ _TRANSFORM_RULES: List[
     _rule_strip_unknown_props,
     _rule_button_default_label,
     _rule_tag_flatten_array_text,
+    _rule_clamp_quickreplies_items,
+    _rule_coerce_scheme_less_urls,
     _rule_dedupe_id,
 ]
 

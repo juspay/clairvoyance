@@ -261,19 +261,29 @@ class QuickReplyItem(BaseModel):
     )
 
 
+# Max pills in a ``QuickReplies`` row. Raised 8 → 12 so option/category
+# menus (e.g. a storefront with 9 categories) render as chiclets instead
+# of the whole row failing ``max_length`` validation and being dropped.
+# The healer clamps any over-emission down to this same cap (see
+# ``chat/ui_healer._rule_clamp_quickreplies_items``) so >cap degrades to
+# the first N pills rather than dropping the row whole.
+QUICK_REPLIES_MAX_ITEMS = 12
+
+
 class QuickReplies(_CatalogBase):
     """Turn-scoped quick-reply row — the LLM-driven equivalent of startup
     chicklets.
 
-    Emit at the end of any assistant turn where you want to suggest 2–5
-    follow-up options. The widget renders them as pill buttons right below
-    the message; clicking one fires a ``to_assistant`` action and disables
-    the whole row (one-shot).
+    Emit at the end of an assistant turn to offer tappable follow-ups or a
+    short option/category menu (2–12 pills). The widget renders them as pill
+    buttons right below the message; clicking one fires a ``to_assistant``
+    action and disables the whole row (one-shot).
 
     Use ``QuickReplies`` instead of ``Buttons`` when the options are
-    *transient turn suggestions* (e.g. "Do you want to confirm?", "See
-    more options", "Back to menu"). Use ``Buttons``/``Button`` when the
-    action is a persistent CTA (checkout, product link, handoff).
+    *transient turn suggestions* or a category/option menu (e.g. "Do you
+    want to confirm?", "See more options", "Back to menu", a category
+    list). Use ``Buttons``/``Button`` when the action is a persistent CTA
+    (checkout, product link, handoff).
 
     Example::
 
@@ -287,8 +297,8 @@ class QuickReplies(_CatalogBase):
     items: List[QuickReplyItem] = Field(
         ...,
         min_length=2,
-        max_length=8,
-        description="2–8 reply options. Shown as pill buttons.",
+        max_length=QUICK_REPLIES_MAX_ITEMS,
+        description="2–12 reply options. Shown as pill buttons.",
     )
 
 
