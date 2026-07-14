@@ -3,6 +3,8 @@ Database module for the application.
 This module contains database connection and models.
 """
 
+from typing import Optional
+
 import asyncpg
 
 from app.core.config.static import (
@@ -20,12 +22,23 @@ from app.services.aws.kms import decrypt_kms
 pool = None
 
 
-async def init_db_pool():
+async def init_db_pool(min_size: Optional[int] = None, max_size: Optional[int] = None):
     """
     Initialize the database connection pool.
+
+    Args:
+        min_size: Connections opened eagerly. Defaults to POSTGRES_POOL_SIZE.
+            Per-call bot subprocesses pass an explicit small size so each
+            child doesn't open the API pod's full pool.
+        max_size: Pool ceiling. Defaults to POSTGRES_POOL_SIZE +
+            POSTGRES_MAX_OVERFLOW.
     """
     global pool
     if pool is None:
+        if min_size is None:
+            min_size = POSTGRES_POOL_SIZE
+        if max_size is None:
+            max_size = POSTGRES_POOL_SIZE + POSTGRES_MAX_OVERFLOW
         db_env_vars = [
             POSTGRES_USER,
             POSTGRES_PASSWORD,
@@ -54,8 +67,8 @@ async def init_db_pool():
                 database=POSTGRES_DB,
                 host=POSTGRES_HOST,
                 port=POSTGRES_PORT,
-                min_size=POSTGRES_POOL_SIZE,
-                max_size=POSTGRES_POOL_SIZE + POSTGRES_MAX_OVERFLOW,
+                min_size=min_size,
+                max_size=max_size,
             )
             logger.info("Database pool initialized successfully.")
         except Exception as e:

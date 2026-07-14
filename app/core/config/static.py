@@ -260,6 +260,26 @@ POSTGRES_POOL_SIZE = int(os.getenv("POSTGRES_POOL_SIZE", "5"))
 POSTGRES_MAX_OVERFLOW = int(os.getenv("POSTGRES_MAX_OVERFLOW", "10"))
 POSTGRES_POOL_RECYCLE = int(os.getenv("POSTGRES_POOL_RECYCLE", "3600"))  # 1 hour
 
+# Daily voice bot subprocess (per-call child processes; see
+# breeze_buddy/services/daily). Kept next to the API pool settings above so
+# the two are tuned together.
+# Per-child asyncpg pool: bot_runner calls
+# init_db_pool(min_size=BB_VOICE_BOT_DB_POOL_SIZE, max_size=POOL+OVERFLOW)
+# explicitly — a per-call child must stay far below the API pod's defaults.
+BB_VOICE_BOT_DB_POOL_SIZE = int(os.environ.get("BB_VOICE_BOT_DB_POOL_SIZE", "1"))
+BB_VOICE_BOT_DB_MAX_OVERFLOW = int(os.environ.get("BB_VOICE_BOT_DB_MAX_OVERFLOW", "2"))
+# Per-pod cap on live Daily bots (each is one OS process + 1-3 Postgres
+# connections + a Redis connection + ~300MB RSS). start_daily_session rejects
+# new sessions above this instead of letting a spike exhaust Postgres
+# max_connections.
+BB_MAX_CONCURRENT_DAILY_BOTS = int(os.environ.get("BB_MAX_CONCURRENT_DAILY_BOTS", "20"))
+# Watchdog: kill a bot child still alive past this. Healthy calls end at the
+# 1h Daily room expiry, so anything older is wedged (e.g. a stuck
+# daily-python native thread) and would leak its process/connections forever.
+BB_DAILY_BOT_MAX_LIFETIME_SECS = int(
+    os.environ.get("BB_DAILY_BOT_MAX_LIFETIME_SECS", "4500")
+)
+
 # KMS Configuration
 SKIP_KMS_DECRYPT = os.getenv("SKIP_KMS_DECRYPT", "false").lower() == "true"
 AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
