@@ -6,7 +6,7 @@ from typing import Any, Dict
 
 from fastapi import HTTPException
 
-from app.ai.voice.agents.breeze_buddy.services.daily import start_daily_session
+from app.ai.voice.agents.breeze_buddy.services.daily.daily import start_daily_session
 from app.core.logger import logger
 from app.database.accessor import get_lead_by_id
 from app.schemas import (

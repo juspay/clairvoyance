@@ -119,6 +119,20 @@ async def BB_RECONCILE_BACKLOG_LIMIT() -> int:
     return await get_config("BB_RECONCILE_BACKLOG_LIMIT", 1000, int)
 
 
+async def BB_DAILY_BOT_SUBPROCESS() -> bool:
+    """Run each Daily voice bot in its own OS subprocess (default: True).
+
+    When True, ``start_daily_session`` spawns ``services/daily/bot_runner.py``
+    per call, isolating the audio pipeline from API-traffic event-loop stalls
+    (the widget voice crackle root cause) and containing daily-python native
+    crashes to one call. Flip to False (DevCycle/Redis, or the
+    ``BB_DAILY_BOT_SUBPROCESS`` env var) as the escape hatch back to the
+    legacy in-process asyncio-task launch. Read at launch time only —
+    flipping affects new calls, never live ones.
+    """
+    return await get_config("BB_DAILY_BOT_SUBPROCESS", True, bool)
+
+
 async def DAILY_SUMMARY_HOUR() -> int:
     """Returns DAILY_SUMMARY_HOUR from Redis (24-hour format: 0-23)"""
     return await get_config("DAILY_SUMMARY_HOUR", 21, int)
