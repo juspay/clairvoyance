@@ -6,7 +6,7 @@ import json
 import re
 import uuid
 from datetime import timedelta
-from typing import Any, Dict, List, Optional, Tuple, cast
+from typing import Any, Dict, List, Literal, Optional, Tuple, Union, cast
 
 import httpx
 from mcp.client.session_group import StreamableHttpParameters
@@ -17,8 +17,8 @@ from pipecat.services.llm_service import (
 from pipecat.services.mcp_service import MCPClient
 from pipecat_flows.types import FlowResult, FlowsFunctionSchema
 
-from app.ai.voice.agents.breeze_buddy.handlers.transport.utils.response_transform import (
-    apply_response_transforms,
+from app.ai.voice.agents.breeze_buddy.handlers.transport.utils.tool_pipeline import (
+    apply_result_pipeline_json_str,
 )
 from app.ai.voice.agents.breeze_buddy.mcp.cache import get_or_discover_server_tools
 
@@ -46,7 +46,6 @@ from app.ai.voice.agents.breeze_buddy.template.types import (
     McpServerConfig,
     ResponseTransform,
     ToolUiHint,
-    ToolUiTrigger,
 )
 from app.core.logger import logger
 
@@ -206,101 +205,10 @@ async def close_mcp_pool(pool: Optional[MCPPool]) -> None:
 # NOTE: Uses private _tool_wrapper to integrate with FlowManager's global
 # functions. Public register_tools(llm) bypasses FlowManager orchestration.
 # Pin pipecat-ai version to guard against API changes.
-def _maybe_apply_transforms(
-    result: Any,
-    response_transforms: Optional[List[ResponseTransform]],
-    tool_name: str,
-) -> Any:
-    """Parse → mutate → re-encode if the tool result is a JSON string and the
-    template declared any transforms for this tool. No-op otherwise so plain
-    text responses and missing-transform tools pass through unchanged.
-
-    Re-encoding preserves the return-shape contract pipecat / FlowManager /
-    chat-normalizer expect (a JSON-encoded string sitting under ``data``),
-    so this works identically for voice + chat + any future channel.
-    """
-    if not response_transforms or not isinstance(result, str):
-        return result
-    try:
-        parsed = json.loads(result)
-    except (json.JSONDecodeError, ValueError):
-        return result
-    if not isinstance(parsed, (dict, list)):
-        return result
-    try:
-        # Capture the return value: root-level transforms (path="") rebind
-        # ``parsed`` to a new dict (e.g. ``omit_fields`` dropping the protocol
-        # envelope), and that rebinding only propagates if we pick it up here.
-        # Nested-path transforms still mutate in place, so this is safe either
-        # way.
-        parsed = apply_response_transforms(parsed, response_transforms)
-    except Exception as e:
-        logger.warning(
-            f"[BUDDY_MCP] tool {tool_name!r} response_transforms failed: {e}"
-        )
-        return result
-    try:
-        return json.dumps(parsed)
-    except (TypeError, ValueError):
-        return result
-
-
-def _maybe_inject_ui_instructions(
-    result: Any,
-    ui_hint: Optional[ToolUiHint],
-    tool_name: str,
-) -> Any:
-    """JIT UI instruction injection (Sidekick pattern).
-
-    When the template declares a ``ToolUiHint`` for this tool, splice the
-    hint payload into the tool's response object so the LLM sees it as
-    part of the tool result. Keys used:
-
-      * ``_ui_instructions`` — the free-text guidance string
-      * ``_ui_examples`` — optional list of worked examples (each a dict)
-      * ``_ui_skip`` — boolean True when ``trigger == skip_ui``
-
-    Same return-shape contract as :func:`_maybe_apply_transforms` — parse
-    → mutate → re-encode. No-op for non-JSON string payloads or non-object
-    JSON (lists pass through; only dicts gain extra keys).
-    """
-    if ui_hint is None:
-        return result
-    if not isinstance(result, str):
-        return result
-
-    try:
-        parsed = json.loads(result)
-    except (json.JSONDecodeError, ValueError):
-        return result
-    if not isinstance(parsed, dict):
-        return result
-
-    try:
-        if ui_hint.trigger == ToolUiTrigger.SKIP_UI:
-            parsed["_ui_skip"] = True
-        else:
-            if ui_hint.instructions:
-                parsed["_ui_instructions"] = ui_hint.instructions
-            if ui_hint.examples:
-                parsed["_ui_examples"] = [
-                    ex.model_dump(exclude_none=True) for ex in ui_hint.examples
-                ]
-    except Exception as e:
-        logger.warning(
-            f"[BUDDY_MCP] tool {tool_name!r} ui_instructions inject failed: {e}"
-        )
-        return result
-
-    try:
-        return json.dumps(parsed)
-    except (TypeError, ValueError):
-        return result
-
-
 def _create_direct_http_tool_handler(
     server_params: StreamableHttpParameters,
     tool_name: str,
+    response_schema: Optional[Union[Dict[str, str], Literal["full"]]] = None,
     response_transforms: Optional[List[ResponseTransform]] = None,
     ui_hint: Optional[ToolUiHint] = None,
     default_args: Optional[Dict[str, Any]] = None,
@@ -316,7 +224,8 @@ def _create_direct_http_tool_handler(
     `default_args`.
 
     Same return-shape contract as the pipecat-backed handler — `default_args`
-    deep-merge, response_transforms, ui_hint injection all apply.
+    deep-merge and the shared result pipeline (response_schema projection,
+    response_transforms, ui_hint injection) all apply.
     """
 
     async def handler(args: Dict[str, Any], flow_manager: Any) -> FlowResult:
@@ -403,8 +312,23 @@ def _create_direct_http_tool_handler(
             None,
         )
         result: Any = text_block if text_block is not None else json.dumps(result_obj)
-        result = _maybe_apply_transforms(result, response_transforms, tool_name)
-        result = _maybe_inject_ui_instructions(result, ui_hint, tool_name)
+        # MCP tool-level error: a 2xx JSON-RPC response whose result carries
+        # ``isError: true`` (distinct from the protocol-level ``error`` handled
+        # above). Feed it as is_success=False so the pipeline skips projection /
+        # transforms — otherwise a tool_response_schemas whitelist would strip
+        # the error text and the LLM would see an empty object instead of the
+        # failure reason. The envelope status stays "success" (unchanged): the
+        # LLM reads the error from ``data``, exactly as before this PR.
+        is_error = bool(result_obj.get("isError"))
+        result = apply_result_pipeline_json_str(
+            result,
+            tool_name=tool_name,
+            is_success=not is_error,
+            response_schema=response_schema,
+            response_transforms=response_transforms,
+            ui_hint=ui_hint,
+            args=args,
+        )
         return cast(FlowResult, {"status": "success", "data": result})
 
     return handler
@@ -415,6 +339,7 @@ def _create_mcp_tool_handler(
     tool_name: str,
     pool: Optional[MCPPool] = None,
     server_key: Optional[str] = None,
+    response_schema: Optional[Union[Dict[str, str], Literal["full"]]] = None,
     response_transforms: Optional[List[ResponseTransform]] = None,
     ui_hint: Optional[ToolUiHint] = None,
     default_args: Optional[Dict[str, Any]] = None,
@@ -429,14 +354,12 @@ def _create_mcp_tool_handler(
     plumbed through), the handler falls back to opening + closing a fresh
     MCPClient on every invocation — the pre-pool behaviour.
 
-    When ``response_transforms`` is non-empty, the parsed tool result is
-    walked + mutated in place per the rules before being handed to the
-    LLM. The transform step is channel-agnostic — same code runs whether
-    the caller is voice (pipecat FlowManager) or chat (ChatAgent).
-
-    When ``ui_hint`` is set, the parsed tool result is post-processed via
-    :func:`_maybe_inject_ui_instructions` so the LLM sees per-tool JIT
-    UI authoring guidance alongside the data (Sidekick pattern).
+    The parsed tool result is run through the shared result pipeline
+    (``apply_result_pipeline_json_str``): ``response_schema`` projection →
+    ``response_transforms`` in-place mutation → ``ui_hint`` JIT UI injection,
+    each applied only when its config is set. Channel-agnostic — the same
+    code runs whether the caller is voice (pipecat FlowManager) or chat
+    (ChatAgent), and it is the identical pipeline Global HTTP functions use.
 
     When ``default_args`` is non-empty, those values are deep-merged into
     the caller's ``args`` (caller wins on conflicts) before dispatch. This
@@ -470,14 +393,32 @@ def _create_mcp_tool_handler(
             result_callback=result_callback,
         )
 
+        # NOTE: both branches below pass is_success=True to the pipeline.
+        # Pipecat's MCPClient flattens tool results to a text string and drops
+        # the MCP ``isError`` flag (see pipecat mcp_service._call_tool), so this
+        # discovery path cannot detect a tool-level error to gate projection on
+        # — unlike the declared/UCP direct-HTTP handler above, which reads
+        # isError off the JSON-RPC result. Known limitation: a
+        # ``tool_response_schemas`` projection on a discovery-path tool that
+        # returns an error body may strip it. Discovery-path projection is rare
+        # (UCP is the motivating case and uses the direct handler); revisit if a
+        # discovery tool needs error-aware projection.
+        #
         # Pooled path — chat mode.
         if pool is not None and server_key is not None:
             try:
                 client = await _acquire_pooled_client(pool, server_key, server_params)
                 await asyncio.wait_for(client._tool_wrapper(params), timeout=30)
                 result = await asyncio.wait_for(future, timeout=30)
-                result = _maybe_apply_transforms(result, response_transforms, tool_name)
-                result = _maybe_inject_ui_instructions(result, ui_hint, tool_name)
+                result = apply_result_pipeline_json_str(
+                    result,
+                    tool_name=tool_name,
+                    is_success=True,
+                    response_schema=response_schema,
+                    response_transforms=response_transforms,
+                    ui_hint=ui_hint,
+                    args=args,
+                )
                 return cast(FlowResult, {"status": "success", "data": result})
             except asyncio.TimeoutError:
                 # Evict so the next call in this turn opens a fresh client.
@@ -496,8 +437,15 @@ def _create_mcp_tool_handler(
             async with MCPClient(server_params=server_params) as mcp_client:
                 await asyncio.wait_for(mcp_client._tool_wrapper(params), timeout=30)
             result = await asyncio.wait_for(future, timeout=30)
-            result = _maybe_apply_transforms(result, response_transforms, tool_name)
-            result = _maybe_inject_ui_instructions(result, ui_hint, tool_name)
+            result = apply_result_pipeline_json_str(
+                result,
+                tool_name=tool_name,
+                is_success=True,
+                response_schema=response_schema,
+                response_transforms=response_transforms,
+                ui_hint=ui_hint,
+                args=args,
+            )
             return cast(FlowResult, {"status": "success", "data": result})
         except asyncio.TimeoutError:
             return cast(FlowResult, {"status": "error", "data": "MCP tool timeout"})
@@ -657,6 +605,9 @@ async def _load_server_tools(
                 server.tool_response_transforms.get(schema["name"]) or None
             )
             tool_ui_hint = server.tool_ui_instructions.get(schema["name"])
+            tool_response_schema = (
+                server.tool_response_schemas.get(schema["name"]) or None
+            )
             # HITL: per-tool approval is authored against the RAW upstream
             # name (like transforms/ui), but gated under the REGISTERED name.
             tool_approval = server.tool_approvals.get(schema["name"])
@@ -664,6 +615,7 @@ async def _load_server_tools(
                 _create_direct_http_tool_handler(
                     server_params,
                     schema["name"],
+                    response_schema=tool_response_schema,
                     response_transforms=tool_transforms,
                     ui_hint=tool_ui_hint,
                     default_args=server.default_args,
@@ -717,11 +669,15 @@ async def _load_server_tools(
         # author against the upstream name; the local prefix is internal).
         tool_transforms = server.tool_response_transforms.get(func_schema.name) or None
         tool_ui_hint = server.tool_ui_instructions.get(func_schema.name)
+        tool_response_schema = (
+            server.tool_response_schemas.get(func_schema.name) or None
+        )
         tool_approval = server.tool_approvals.get(func_schema.name)
         handler = _gate_mcp_handler(
             _create_mcp_tool_handler(
                 server_params,
                 func_schema.name,
+                response_schema=tool_response_schema,
                 response_transforms=tool_transforms,
                 ui_hint=tool_ui_hint,
                 default_args=server.default_args,
@@ -864,6 +820,9 @@ async def get_mcp_global_functions_cached(
                     server.tool_response_transforms.get(schema["name"]) or None
                 )
                 tool_ui_hint = server.tool_ui_instructions.get(schema["name"])
+                tool_response_schema = (
+                    server.tool_response_schemas.get(schema["name"]) or None
+                )
                 tool_approval = server.tool_approvals.get(schema["name"])
                 if tool_approval is not None:
                     approval_map[tool_name] = tool_approval
@@ -876,6 +835,7 @@ async def get_mcp_global_functions_cached(
                         handler=_create_direct_http_tool_handler(
                             server_params,
                             schema["name"],
+                            response_schema=tool_response_schema,
                             response_transforms=tool_transforms,
                             ui_hint=tool_ui_hint,
                             default_args=server.default_args,
@@ -911,6 +871,9 @@ async def get_mcp_global_functions_cached(
                 tool_name = f"{server.name}_{tool_name}"
             tool_transforms = server.tool_response_transforms.get(meta["name"]) or None
             tool_ui_hint = server.tool_ui_instructions.get(meta["name"])
+            tool_response_schema = (
+                server.tool_response_schemas.get(meta["name"]) or None
+            )
             tool_approval = server.tool_approvals.get(meta["name"])
             if tool_approval is not None:
                 approval_map[tool_name] = tool_approval
@@ -925,6 +888,7 @@ async def get_mcp_global_functions_cached(
                         meta["name"],
                         pool=mcp_pool,
                         server_key=label,
+                        response_schema=tool_response_schema,
                         response_transforms=tool_transforms,
                         ui_hint=tool_ui_hint,
                         default_args=server.default_args,

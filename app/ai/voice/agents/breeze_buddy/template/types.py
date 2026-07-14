@@ -997,6 +997,19 @@ class McpServerConfig(BaseModel):
             "handlers/transport/utils/response_transform.py."
         ),
     )
+    tool_response_schemas: Dict[str, Union[Dict[str, str], Literal["full"]]] = Field(
+        default_factory=dict,
+        description=(
+            "Per-tool response projection (JMESPath whitelist) applied after the "
+            "MCP tool call returns — before transforms/ui-hint and before the "
+            "result reaches the LLM. The MCP counterpart of "
+            "GlobalHttpFunction.expected_response_schema. Keys are the raw MCP "
+            "tool names; values are either a dict of {llm_field: jmespath} or the "
+            '``"full"`` sentinel (no projection). Applied by the shared result '
+            "pipeline (handlers/transport/utils/tool_pipeline.py). Absent "
+            "(default) → no projection, unchanged behavior."
+        ),
+    )
     tool_ui_instructions: Dict[str, "ToolUiHint"] = Field(
         default_factory=dict,
         description=(
@@ -2173,6 +2186,18 @@ class GlobalHttpFunction(BaseGlobalFunction):
     - **Empty dict ``{}`` (default)**: The full response is passed to the LLM
       unchanged, but **nothing is stored** in node traversal.
     """
+    ui_hint: Optional["ToolUiHint"] = Field(
+        default=None,
+        description=(
+            "Optional JIT UI authoring guidance (Sidekick pattern) spliced into "
+            "this function's result before the LLM sees it — the Global-HTTP "
+            "counterpart of McpServerConfig.tool_ui_instructions. Injected under "
+            "'_ui_instructions' / '_ui_examples' / '_ui_skip' by the shared "
+            "result pipeline (handlers/transport/utils/tool_pipeline.py) per the "
+            "hint's ToolUiTrigger. Absent (default) → no UI hint, unchanged "
+            "behavior."
+        ),
+    )
 
 
 class GlobalBuiltinFunction(BaseGlobalFunction):

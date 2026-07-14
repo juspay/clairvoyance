@@ -19,7 +19,6 @@ Uses the same resolution pattern as hooks:
 - {placeholder} resolution in http_request config
 """
 
-import copy
 import json
 from typing import Any, Dict, Optional, Tuple
 
@@ -30,11 +29,8 @@ from app.ai.voice.agents.breeze_buddy.handlers.transport.rtvi import SseRtviForw
 from app.ai.voice.agents.breeze_buddy.handlers.transport.utils.field_resolver import (
     FieldResolver,
 )
-from app.ai.voice.agents.breeze_buddy.handlers.transport.utils.response_filter import (
-    apply_response_schema,
-)
-from app.ai.voice.agents.breeze_buddy.handlers.transport.utils.response_transform import (
-    apply_response_transforms,
+from app.ai.voice.agents.breeze_buddy.handlers.transport.utils.tool_pipeline import (
+    apply_result_pipeline,
 )
 from app.ai.voice.agents.breeze_buddy.template.context import TemplateContext
 from app.ai.voice.agents.breeze_buddy.template.types import (
@@ -202,39 +198,22 @@ async def http_function_handler(
 
         is_success = 200 <= status_code < 300
 
-        # Apply expected_response_schema: extract only whitelisted fields
-        # before returning data to the LLM. Only applied on successful (2xx)
-        # responses — error bodies pass through unfiltered so the LLM can
-        # read error messages/codes (e.g. "person not found") as-is.
-        if (
-            is_success
-            and config.expected_response_schema
-            and config.expected_response_schema != "full"
-            and isinstance(data, (dict, list))
-        ):
-            data = apply_response_schema(
-                data, config.expected_response_schema, args=args
-            )
-            logger.debug(
-                f"[{function_name}] response filtered via expected_response_schema: "
-                f"{list(config.expected_response_schema.keys())}"
-            )
-
-        # Response transforms — applied after projection so templates can
-        # both narrow AND mutate. Channel-agnostic: voice + chat both
-        # dispatch through this handler. Only 2xx — error bodies stay raw
-        # so the LLM can read them verbatim.
-        #
-        # ``apply_response_transforms`` mutates in place; deep-copy first
-        # so a mid-loop exception leaves the original ``data`` intact
-        # rather than handing the LLM a partially-transformed payload.
-        if is_success and config.response_transforms and isinstance(data, (dict, list)):
-            try:
-                transformed = copy.deepcopy(data)
-                apply_response_transforms(transformed, config.response_transforms)
-                data = transformed
-            except Exception as e:
-                logger.warning(f"[{function_name}] response_transforms failed: {e}")
+        # Centralized result pipeline (shared with MCP tools via
+        # handlers/transport/utils/tool_pipeline.py): projection
+        # (expected_response_schema) → transforms (response_transforms) →
+        # ui-hint. Projection + transforms are 2xx-only so error bodies pass
+        # through raw and the LLM can read messages/codes ("person not found")
+        # verbatim; ui-hint honors its own trigger. Keeping the three in one
+        # chokepoint stops the HTTP + MCP seams from drifting apart again.
+        data = apply_result_pipeline(
+            data,
+            tool_name=function_name,
+            is_success=is_success,
+            response_schema=config.expected_response_schema,
+            response_transforms=config.response_transforms,
+            ui_hint=config.ui_hint,
+            args=args,
+        )
 
         logger.debug(f"[{function_name}] data going to LLM: {data}")
 
@@ -251,7 +230,15 @@ async def http_function_handler(
         # wrap in a dict so they are always storable.
         if config.expected_response_schema:
             if isinstance(data, dict):
-                response_to_store: Optional[Dict[str, Any]] = data
+                # ui_hint splices _ui_* directives into `data` for the LLM; keep
+                # them out of the persisted node-traversal record so analytics /
+                # transcripts hold only the real response fields. No-op (same
+                # object) when ui_hint is unset.
+                response_to_store: Optional[Dict[str, Any]] = (
+                    {k: v for k, v in data.items() if not k.startswith("_ui_")}
+                    if config.ui_hint
+                    else data
+                )
             elif is_success:
                 # 2xx non-dict (e.g. plain string or list) — wrap so it can be persisted
                 response_to_store = {"response": data, "status_code": status_code}
