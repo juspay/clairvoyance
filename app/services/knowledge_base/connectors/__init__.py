@@ -9,9 +9,11 @@ from typing import Dict
 
 from app.services.knowledge_base.connectors.base import KBConnector
 from app.services.knowledge_base.connectors.file_upload import FileUploadConnector
+from app.services.knowledge_base.connectors.google_sheets import GoogleSheetsConnector
 
 SOURCE_CONNECTORS: Dict[str, KBConnector] = {
     FileUploadConnector.source_type: FileUploadConnector(),
+    GoogleSheetsConnector.source_type: GoogleSheetsConnector(),
 }
 
 

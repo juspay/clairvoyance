@@ -36,6 +36,7 @@ from app.core.background_tasks import BackgroundTaskScheduler
 from app.core.config.dynamic import (
     ENABLE_BACKGROUND_TASKS,
     KB_INGESTION_INTERVAL_SECONDS,
+    KB_SHEETS_POLL_INTERVAL_SECONDS,
 )
 from app.core.config.static import (
     BACKGROUND_TASKS_LOOP_INTERVAL_SECONDS,
@@ -61,6 +62,9 @@ from app.core.middleware.widget_cors_bypass import CustomWidgetCorsBypassMiddlew
 from app.database import close_db_pool, init_db_pool
 from app.services.knowledge_base import (
     process_pending_documents as process_pending_kb_documents,
+)
+from app.services.knowledge_base.sheets_poll import (
+    poll_sheet_documents as poll_kb_sheet_documents,
 )
 from app.services.langfuse.tasks.task import initialize_langfuse_tasks
 from app.services.redis import (
@@ -148,6 +152,15 @@ async def lifespan(_app: FastAPI):
                 name="kb_ingestion",
                 func=process_pending_kb_documents,
                 interval_seconds=await KB_INGESTION_INTERVAL_SECONDS(),
+            )
+
+            # Google Sheets freshness poller: one cheap Drive modifiedTime
+            # probe per connected sheet per tick; changed sheets requeue for
+            # ingestion (KB_SHEETS_POLL_ENABLED gates each tick at runtime).
+            _background_scheduler.register_task(
+                name="kb_sheets_poll",
+                func=poll_kb_sheet_documents,
+                interval_seconds=await KB_SHEETS_POLL_INTERVAL_SECONDS(),
             )
 
             # Event-driven dispatch reconcilers (Plane 5). Only registered on

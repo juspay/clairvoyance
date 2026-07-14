@@ -3,6 +3,7 @@ GCS Storage - Google Cloud Storage operations
 Simplified module for uploading audio files to GCS
 """
 
+from datetime import timedelta
 from typing import BinaryIO, Optional
 
 from app.core.config.static import GCS_BUCKET
@@ -92,6 +93,55 @@ class GCSStorage:
         except Exception as e:
             logger.error(
                 f"Failed to download gs://{GCS_BUCKET}/{source_path}: {e}",
+                exc_info=True,
+            )
+            return None
+
+    def generate_signed_url(
+        self,
+        source_path: str,
+        expires_minutes: int = 10,
+        download_filename: Optional[str] = None,
+    ) -> Optional[str]:
+        """
+        Generate a short-lived V4 signed download URL for an object.
+
+        Signing happens locally with the service-account private key (no
+        API call), so this is cheap and synchronous. Used by the knowledge
+        base document-download endpoint to hand the browser a direct GCS
+        link without proxying file bytes through the app.
+
+        Args:
+            source_path (str): The object path in the GCS bucket
+            expires_minutes (int): URL validity window
+            download_filename (Optional[str]): When set, forces
+                Content-Disposition attachment with this filename so the
+                browser saves the file under its original name rather than
+                the storage path's UUID segment
+
+        Returns:
+            Optional[str]: The signed URL, or None on failure
+        """
+        try:
+            if not self.bucket:
+                logger.error("GCS bucket not initialized")
+                return None
+
+            blob = self.bucket.blob(source_path)
+            disposition = (
+                f'attachment; filename="{download_filename}"'
+                if download_filename
+                else None
+            )
+            return blob.generate_signed_url(
+                version="v4",
+                expiration=timedelta(minutes=expires_minutes),
+                response_disposition=disposition,
+            )
+
+        except Exception as e:
+            logger.error(
+                f"Failed to sign URL for gs://{GCS_BUCKET}/{source_path}: {e}",
                 exc_info=True,
             )
             return None

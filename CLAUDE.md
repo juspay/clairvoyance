@@ -146,6 +146,15 @@ Breeze Buddy is the template-driven telephony agent. These patterns MUST be foll
 - Idle session cleanup is one task on the global `BackgroundTaskScheduler` (`chat/cleanup.py`); the scheduler's distributed lock keeps it single-pod-per-tick.
 - Open follow-ups: LLM-generated greeting (today only `static_greeting` works), outcome webhook on `end()`
 
+### Knowledge Base (RAG)
+- Merchant-scoped KBs (documents/sheets → chunks → pgvector) that templates attach via `configurations.knowledge_base` (`KnowledgeBaseConfig` in `template/types.py`) — no join table; KB delete does an in-use scan over template configs
+- Storage: `knowledge_base` / `kb_document` / `kb_chunk` tables (migration 034; pgvector `halfvec(768)` HNSW + `simple`-config tsvector + trigram). All embedding providers normalize to 768 dims (`app/services/embeddings/`, registry keyed by per-KB `embedding_config`; default = `azure_openai`/text-embedding-3-large in-region, `openai` is explicit opt-in)
+- Ingestion: `app/services/knowledge_base/` — connector registry (`file`, `google_sheet`; Onyx-style `load`/`detect_change` contract), source-aware chunking (heading-aware prose ~450 tokens; sheet/CSV rows = one chunk each with headers prepended), scheduler task claims PENDING docs via `FOR UPDATE SKIP LOCKED`, chunk-hash diff re-embeds only changed chunks
+- Retrieval: `retrieval.py::retrieve()` — one SQL, three legs (HNSW KNN + FTS + trigram) fused with RRF; callers own timeouts and ALWAYS fail open (voice ~0.4s, chat 1s, tool 5s)
+- Runtime modes (per template): `auto` (size-tiered) | `full_injection` (whole KB into initial node role_messages, fetched concurrently at boot) | `auto_retrieve` (`KnowledgeRetrievalProcessor` between user aggregator and LLM injects a transient system message, replaced-by-identity each turn) | `tool` (`query_knowledge_base` builtin, synthesized by `FlowConfigBuilder` from config). Realtime LLMs reject `auto`/`auto_retrieve` (`validate_template_compat`)
+- Sheets sync: share-to-service-account; `kb_sheets_poll` scheduler task probes Drive `modifiedTime` (15min default, 5min debounce) and requeues changed sheets; manual re-sync via `POST .../documents/{id}/sync`
+- KB context blocks are ephemeral everywhere: never persisted to `chat_message`, stripped from voice transcripts by `injection_header` prefix in `end_conversation`
+
 ## Important
 
 - IMPORTANT: Never modify migration SQL files directly. Create new sequential migrations (e.g., `026_your_change.sql`)

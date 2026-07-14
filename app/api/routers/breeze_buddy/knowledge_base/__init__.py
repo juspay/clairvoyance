@@ -12,6 +12,8 @@ Endpoints:
 - PUT    /knowledge-bases/{id}                         - Update metadata
 - DELETE /knowledge-bases/{id}                         - Delete (in-use check)
 - POST   /knowledge-bases/{id}/documents               - Upload file (multipart)
+- POST   /knowledge-bases/{id}/documents/sheet         - Connect a Google Sheet
+- GET    /knowledge-bases/sheets/service-account       - SA email to share with
 - GET    /knowledge-bases/{id}/documents               - List documents + status
 - DELETE /knowledge-bases/{id}/documents/{doc_id}      - Delete document
 - POST   /knowledge-bases/{id}/documents/{doc_id}/sync - Manual re-sync
@@ -25,22 +27,28 @@ from fastapi import APIRouter, Depends, File, Query, UploadFile, status
 from app.api.security.breeze_buddy.rbac_token import get_current_user_with_rbac
 from app.schemas import UserInfo
 from app.schemas.breeze_buddy.knowledge_base import (
+    AddSheetDocumentRequest,
     CreateKnowledgeBaseRequest,
     DeleteKnowledgeBaseResponse,
     KbDocument,
+    KbDocumentDownloadResponse,
     KbDocumentListResponse,
     KnowledgeBase,
     KnowledgeBaseListResponse,
     QueryKnowledgeBaseRequest,
     QueryKnowledgeBaseResponse,
+    SheetsServiceAccountResponse,
     UpdateKnowledgeBaseRequest,
 )
 
 from .handlers import (
+    add_sheet_document_handler,
     create_kb_handler,
     delete_document_handler,
     delete_kb_handler,
+    download_document_handler,
     get_kb_handler,
+    get_sheets_service_account_handler,
     list_documents_handler,
     list_kbs_handler,
     query_kb_handler,
@@ -83,6 +91,20 @@ async def list_knowledge_bases(
     return await list_kbs_handler(
         current_user, reseller_id, merchant_id, include_archived, search, page, limit
     )
+
+
+# NOTE: declared before /knowledge-bases/{kb_id} so "sheets" never matches
+# as a kb_id path parameter.
+@router.get(
+    "/knowledge-bases/sheets/service-account",
+    response_model=SheetsServiceAccountResponse,
+)
+async def get_sheets_service_account(
+    current_user: UserInfo = Depends(get_current_user_with_rbac),
+):
+    """The service-account email a merchant must share their sheet with
+    (Viewer) before connecting it."""
+    return get_sheets_service_account_handler()
 
 
 @router.get("/knowledge-bases/{kb_id}", response_model=KnowledgeBase)
@@ -130,6 +152,22 @@ async def upload_document(
     return await upload_document_handler(kb_id, file, current_user)
 
 
+@router.post(
+    "/knowledge-bases/{kb_id}/documents/sheet",
+    response_model=KbDocument,
+    status_code=status.HTTP_201_CREATED,
+)
+async def add_sheet_document(
+    kb_id: str,
+    request: AddSheetDocumentRequest,
+    current_user: UserInfo = Depends(get_current_user_with_rbac),
+):
+    """Connect a Google Sheet (shared with our service account) as a live
+    document. Initial sync runs immediately; afterwards the scheduled poller
+    re-syncs on change (or use the manual sync endpoint)."""
+    return await add_sheet_document_handler(kb_id, request, current_user)
+
+
 @router.get("/knowledge-bases/{kb_id}/documents", response_model=KbDocumentListResponse)
 async def list_documents(
     kb_id: str,
@@ -148,6 +186,20 @@ async def delete_document(
     """Delete a document and its chunks; the stored file is removed and
     runtime knowledge caches refresh on the next turn."""
     return await delete_document_handler(kb_id, document_id, current_user)
+
+
+@router.get(
+    "/knowledge-bases/{kb_id}/documents/{document_id}/download",
+    response_model=KbDocumentDownloadResponse,
+)
+async def download_document(
+    kb_id: str,
+    document_id: str,
+    current_user: UserInfo = Depends(get_current_user_with_rbac),
+):
+    """Get a download link for a document's original source: a short-lived
+    signed GCS URL for uploaded files, or the Google Sheet URL for sheets."""
+    return await download_document_handler(kb_id, document_id, current_user)
 
 
 @router.post(
