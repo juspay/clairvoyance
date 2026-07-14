@@ -35,6 +35,24 @@ def evaluate_trigger(order: Dict[str, Any], all_orders: bool) -> Tuple[bool, str
     return (True, "cod") if is_cod else (False, "not a cod order")
 
 
+def format_line_items(line_items: list) -> str:
+    """Format order line items as "1 Fire Bolt watch, 2 mirrors".
+
+    Each item becomes "<quantity> <name>" and items are joined with ", " — the
+    same format the Shopify service uses (`lineItems.map(formatLineItem)
+    .join(', ')`). For WooCommerce the ``name`` already includes the variation
+    for variable products, so no separate variant suffix is needed.
+    """
+    parts = []
+    for item in line_items:
+        name = item.get("name")
+        if not name:
+            continue
+        qty = item.get("quantity")
+        parts.append(f"{qty} {name}" if qty else str(name))
+    return ", ".join(parts)
+
+
 def build_order_payload(
     order: Dict[str, Any], shop_name: str
 ) -> Tuple[str, Dict[str, Any]]:
@@ -88,14 +106,7 @@ def build_order_payload(
         "payment_method": (order.get("payment_method") or "").lower(),
         "payment_method_title": order.get("payment_method_title"),
         "order_status": (order.get("status") or "").lower(),
-        "items": [
-            {
-                "name": item.get("name"),
-                "quantity": item.get("quantity"),
-                "total": item.get("total"),
-            }
-            for item in (order.get("line_items") or [])
-        ],
+        "items": format_line_items(order.get("line_items") or []),
     }
     return phone, payload
 
