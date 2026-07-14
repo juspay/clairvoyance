@@ -104,6 +104,7 @@ def _create_audio_input_filter(
 def get_transport_params(
     template: Optional[TemplateModel] = None,
     configurations: Optional[ConfigurationModel] = None,
+    daily_audio_out_10ms_chunks: int = 10,
 ) -> dict:
     """Get transport parameters dictionary for all transport types.
 
@@ -113,6 +114,11 @@ def get_transport_params(
     Args:
         template: Optional template model for background sound mixer configuration
         configurations: Optional configuration model for settings (e.g., noise filter)
+        daily_audio_out_10ms_chunks: Daily output write size in 10ms chunks.
+            The live default comes from the BB_DAILY_AUDIO_OUT_10MS_CHUNKS
+            dynamic config, resolved by the async caller and passed in (this
+            function is sync); only the daily transport uses it, so telephony
+            callers leave the fallback default.
 
     Returns:
         Dictionary mapping transport types to parameter factory functions
@@ -128,6 +134,13 @@ def get_transport_params(
         "daily": lambda: DailyParams(
             audio_in_enabled=True,
             audio_out_enabled=True,
+            # Output write size in 10ms chunks (pipecat default 4 = 40ms):
+            # bigger chunks give the paced audio writer more event-loop slack
+            # against stalls in the bot process, which otherwise underrun
+            # Daily's virtual mic and the browser hears crackling
+            # (pipecat#331). Rationale + trade-offs on the
+            # BB_DAILY_AUDIO_OUT_10MS_CHUNKS dynamic config.
+            audio_out_10ms_chunks=daily_audio_out_10ms_chunks,
             audio_out_mixer=daily_mixer,
             audio_in_filter=_create_audio_input_filter(
                 configurations, TRANSPORT_TYPE_DAILY

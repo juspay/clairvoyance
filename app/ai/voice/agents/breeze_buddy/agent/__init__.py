@@ -122,6 +122,7 @@ from app.ai.voice.agents.breeze_buddy.utils.transport.websockets import (
     close_websocket_safely,
 )
 from app.ai.voice.agents.breeze_buddy.utils.warm_transfer import set_transfer_flag
+from app.core.config.dynamic import BB_DAILY_AUDIO_OUT_10MS_CHUNKS
 from app.core.config.static import ENABLE_BREEZE_BUDDY_TRACING
 from app.core.logger import logger
 from app.core.logger.context import (
@@ -453,7 +454,11 @@ class Agent:
             template=self.template,
         )
 
-        transport_params = get_transport_params(self.template, self.configurations)
+        transport_params = get_transport_params(
+            self.template,
+            self.configurations,
+            daily_audio_out_10ms_chunks=await BB_DAILY_AUDIO_OUT_10MS_CHUNKS(),
+        )
         self.transport = await create_transport(runner_args, transport_params)
 
         # Keep-alive: preserve the joined DailyTransportClient across pipeline
