@@ -134,6 +134,19 @@ class DeleteKnowledgeBaseResponse(BaseModel):
     message: str
 
 
+class KbUsageTemplate(BaseModel):
+    """Template referencing a knowledge base (enabled attachments only)."""
+
+    id: str
+    name: str
+    reseller_id: str
+    merchant_id: Optional[str] = None
+
+
+class KbUsageResponse(BaseModel):
+    templates: List[KbUsageTemplate]
+
+
 class QueryKnowledgeBaseRequest(BaseModel):
     """Retrieval-testing request ("hit testing")."""
 

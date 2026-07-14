@@ -33,6 +33,8 @@ from app.schemas.breeze_buddy.knowledge_base import (
     KbDocument,
     KbDocumentListResponse,
     KbDocumentSourceType,
+    KbUsageResponse,
+    KbUsageTemplate,
     KnowledgeBase,
     KnowledgeBaseListResponse,
     QueryKnowledgeBaseRequest,
@@ -162,6 +164,18 @@ async def get_kb_handler(kb_id: str, current_user: UserInfo) -> KnowledgeBase:
     kb = await _get_kb_or_404(kb_id)
     validate_kb_access(current_user, kb.reseller_id, kb.merchant_id, "read")
     return kb
+
+
+async def get_kb_usage_handler(kb_id: str, current_user: UserInfo) -> KbUsageResponse:
+    """Templates whose ENABLED configurations reference this KB.
+
+    Read-gated like get_kb_handler; backs the loom KB detail "Used by" rail
+    (the delete safety check reuses the same accessor).
+    """
+    kb = await _get_kb_or_404(kb_id)
+    validate_kb_access(current_user, kb.reseller_id, kb.merchant_id, "read")
+    rows = await find_templates_using_kb(kb_id)
+    return KbUsageResponse(templates=[KbUsageTemplate(**row) for row in rows])
 
 
 async def update_kb_handler(

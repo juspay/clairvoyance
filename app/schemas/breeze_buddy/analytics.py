@@ -87,6 +87,9 @@ class AnalyticsFilters(BaseModel):
         None, description="Filter by call direction (INBOUND or OUTBOUND)"
     )
     request_id: Optional[str] = Field(None, description="Filter by request ID")
+    campaign_id: Optional[str] = Field(
+        None, description="Filter by campaign UUID (bulk lead pushes)"
+    )
     date_from: Optional[date] = Field(
         None, description="Filter from date (ISO format: YYYY-MM-DD)"
     )
