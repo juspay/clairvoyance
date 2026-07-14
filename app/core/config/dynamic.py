@@ -133,6 +133,22 @@ async def BB_DAILY_BOT_SUBPROCESS() -> bool:
     return await get_config("BB_DAILY_BOT_SUBPROCESS", True, bool)
 
 
+async def BB_DAILY_AUDIO_OUT_10MS_CHUNKS() -> int:
+    """Daily output write size in 10ms chunks (default: 10 = 100ms writes).
+
+    Pipecat's ``audio_out_10ms_chunks`` (upstream default 4 = 40ms). Bigger
+    chunks give the paced audio writer more event-loop slack against stalls in
+    the bot process (ONNX turn detection, GC, LLM/tool work on the same loop)
+    that would otherwise underrun Daily's virtual mic and crackle
+    (pipecat#331). Trade-off: up to one chunk of trailing audio is dropped per
+    utterance until pipecat ships the trailing-flush fix (pipecat#4993) — tune
+    down (e.g. 6) via DevCycle/Redis or the env var to shave the tail clip
+    once crackle is confirmed gone. Read when a bot builds its transport, so
+    a change affects new calls only, never live ones.
+    """
+    return await get_config("BB_DAILY_AUDIO_OUT_10MS_CHUNKS", 10, int)
+
+
 async def DAILY_SUMMARY_HOUR() -> int:
     """Returns DAILY_SUMMARY_HOUR from Redis (24-hour format: 0-23)"""
     return await get_config("DAILY_SUMMARY_HOUR", 21, int)
