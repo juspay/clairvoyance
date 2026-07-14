@@ -8,11 +8,12 @@ ENVIRONMENT = os.environ.get("ENVIRONMENT", "production")
 PROD_LOG_LEVEL = os.environ.get("PROD_LOG_LEVEL", "INFO")
 APP_BASE_URL = os.environ.get("APP_BASE_URL", "")
 
-# DragonTTS caching proxy. Breeze Buddy one-shot TTS (provider="dragontts") is
-# routed here. Override via env for non-local deployments.
-DRAGONTTS_URL = os.environ.get(
-    "DRAGONTTS_URL", "http://dragontts.beta.svc.cluster.local"
-)
+# NOTE: DragonTTS config (DRAGONTTS_URL, DRAGONTTS_HEALTH_TIMEOUT_S,
+# ENABLE_DRAGONTTS_KILL_SWITCH) lives in
+# app/core/config/dynamic.py as async functions (Redis -> env -> default
+# resolution) so it's tunable at runtime. The matching env vars still work as
+# the env-fallback layer. BACKGROUND_TASKS_LOOP_INTERVAL_SECONDS (below) stays
+# static — it's the pre-existing shared scheduler cadence for all tasks.
 
 # Uvicorn
 PORT = int(os.environ.get("PORT", 8000))
@@ -565,7 +566,9 @@ SLACK_TAG_USERS = os.environ.get("SLACK_TAG_USERS", "narsimha.reddy")
 
 BACKGROUND_TASKS_LOOP_INTERVAL_SECONDS = int(
     os.environ.get("BACKGROUND_TASKS_LOOP_INTERVAL_SECONDS", "60")
-)  # How often the scheduler checks tasks (in seconds)
+)  # How often the scheduler checks tasks (in seconds). Pre-existing shared
+# cadence for ALL background tasks (chat cleanup, kb ingestion, reconcilers,
+# the DragonTTS kill-switch probe, ...).
 
 # Langfuse Score Monitoring Configuration
 ENABLE_BB_LANGFUSE_MONITORING_LOOP = (

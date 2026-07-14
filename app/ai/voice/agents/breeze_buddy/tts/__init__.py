@@ -8,6 +8,9 @@ from app.ai.voice.agents.breeze_buddy.template.types import (
     TTSConfig,
     TTSProvider,
 )
+from app.ai.voice.agents.breeze_buddy.tts.dragontts.health import (
+    is_dragontts_healthy,
+)
 from app.ai.voice.agents.breeze_buddy.tts.emoji_filter import (
     EmojiTextFilter,
     strip_emojis,
@@ -43,10 +46,10 @@ from app.core.config.dynamic import (
     BB_STRIP_EMOJIS_FROM_TTS,
     BB_TTS_SERVICE,
     BB_VOICE_PROVIDER_DEFAULTS,
+    DRAGONTTS_URL,
 )
 from app.core.config.static import (
     CARTESIA_API_KEY,
-    DRAGONTTS_URL,
     ELEVENLABS_API_KEY,
     ELEVENLABS_INDIAN_RESIDENCY_API_KEY,
     ELEVENLABS_INDIAN_RESIDENCY_WEBSOCKET_URL,
@@ -66,6 +69,7 @@ _VOICE_CONFIG_FIELDS = (
     "pitch",
     "style_prompt",
     "enable_ssml_parsing",
+    "enable_tts_caching",
 )
 
 
@@ -131,21 +135,36 @@ async def get_tts_service(voice_config: TTSConfig):
     """Build a TTS service from a resolved TTSConfig."""
     provider = voice_config.provider.value
 
-    if provider == "dragontts":
-        # Route the live stream through DragonTTS so every aggregated sentence
-        # is served from its cache (scripted phrases become permanent hits) and
-        # synthesized+stored on miss. ``model`` carries the nested provider as
-        # "<provider>:<model>"; DragonTTS applies the params relevant to it.
-        model_id = voice_config.model
-        if not model_id:
-            raise ValueError("dragontts requires model '<provider>:<model>'")
-        nested = model_id.split(":", 1)
-        if len(nested) != 2 or not nested[0] or not nested[1]:
-            raise ValueError(
-                f"dragontts model must be '<provider>:<model>' with non-empty "
-                f"parts, got {model_id!r}"
-            )
-        nested_provider, nested_model = nested
+    # Route through the DragonTTS caching proxy when the template selects it
+    # directly (legacy provider="dragontts") OR opts in via enable_tts_caching
+    # AND DragonTTS is currently healthy. When DragonTTS is down the health flag
+    # is "0", so enable_tts_caching templates fall through to their upstream
+    # provider directly (graceful — calls work, just uncached). Legacy
+    # provider="dragontts" is intentionally not health-gated.
+    if provider == "dragontts" or (
+        voice_config.enable_tts_caching is True and await is_dragontts_healthy()
+    ):
+        if provider == "dragontts":
+            # Legacy: model already carries "<provider>:<model>".
+            model_id = voice_config.model
+            if not model_id:
+                raise ValueError("dragontts requires model '<provider>:<model>'")
+            nested = model_id.split(":", 1)
+            if len(nested) != 2 or not nested[0] or not nested[1]:
+                raise ValueError(
+                    f"dragontts model must be '<provider>:<model>' with non-empty "
+                    f"parts, got {model_id!r}"
+                )
+            nested_provider = nested[0]
+            nested_model = nested[1]
+        else:
+            # Auto-wrap: provider is the upstream; build the proxy model id.
+            if not voice_config.model:
+                raise ValueError("enable_tts_caching requires a model")
+            nested_provider = provider
+            nested_model = voice_config.model
+            model_id = f"{provider}:{voice_config.model}"
+
         aggregate = await BB_AGGREGATE_SENTENCES(nested_provider)
 
         logger.info(
@@ -156,8 +175,8 @@ async def get_tts_service(voice_config: TTSConfig):
 
         return build_dragontts_tts(
             DragonTTSConfig(
-                url=DRAGONTTS_URL,
-                model_id=model_id,  # full "<provider>:<model>", validated above
+                url=await DRAGONTTS_URL(),
+                model_id=model_id,  # full "<provider>:<model>"
                 voice_id=voice_config.voice_id or "",
                 language=voice_config.language or "",
                 params=_collect_params(voice_config),
@@ -335,6 +354,27 @@ async def generate_audio(
     if await BB_STRIP_EMOJIS_FROM_TTS():
         text = strip_emojis(text)
 
+    # Route greetings/IVR through the DragonTTS caching proxy (same rule as the
+    # live path in get_tts_service): legacy provider="dragontts" always, or an
+    # upstream with enable_tts_caching on AND DragonTTS healthy (synthesize
+    # model "<provider>:<model>"). When DragonTTS is down, enable_tts_caching
+    # greetings synthesize via the upstream directly.
+    if provider == "dragontts" or (
+        provider != "dragontts"
+        and resolved.enable_tts_caching is True
+        and await is_dragontts_healthy()
+    ):
+        if provider != "dragontts":
+            if not resolved.model:
+                raise ValueError("enable_tts_caching requires a model")
+            resolved = resolved.model_copy(
+                update={
+                    "provider": TTSProvider.DRAGONTTS,
+                    "model": f"{provider}:{resolved.model}",
+                }
+            )
+        return await _generate_dragontts_audio(text=text, resolved=resolved)
+
     if provider == "sarvam":
         audio_data = await _generate_sarvam_audio(
             text=text,
@@ -387,9 +427,6 @@ async def generate_audio(
             language=resolved.language,
         )
         input_format = "raw"
-    elif provider == "dragontts":
-        # DragonTTS caching proxy — returns μ-law directly (no local conversion).
-        return await _generate_dragontts_audio(text=text, resolved=resolved)
     else:
         raise ValueError(f"Unsupported TTS provider: {provider}")
 

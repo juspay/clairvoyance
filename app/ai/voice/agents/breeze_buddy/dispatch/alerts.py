@@ -255,6 +255,39 @@ async def raise_orphan_webhook(call_id: str, source: str) -> None:
     )
 
 
+async def raise_dragontts_degraded() -> None:
+    """P1 — DragonTTS is unhealthy; the monitor marked the health flag ``"0"``.
+
+    Calls on templates with ``enable_tts_caching=true`` are now bypassing the
+    cache and routing to their upstream TTS provider directly until an operator
+    restores the flag. Throttled so a sustained outage pages once per 30 min,
+    not once per scheduler tick.
+    """
+    await _send(
+        alert_name="dragontts_degraded",
+        throttle_seconds=_THROTTLE_P1,
+        title="[P1] DragonTTS down — calls bypassing TTS caching",
+        fields=[
+            {
+                "name": "Effect",
+                "value": (
+                    "Templates with enable_tts_caching=true are routing to their "
+                    "upstream TTS provider directly (no caching) until the flag "
+                    "is restored."
+                ),
+            },
+            {
+                "name": "Recovery",
+                "value": (
+                    "Once DragonTTS /health is green, restore with "
+                    "POST /agent/voice/breeze-buddy/admin/dragontts/manage "
+                    '{"action":"restore"}.'
+                ),
+            },
+        ],
+    )
+
+
 # ---------------------------------------------------------------------------
 # Helper used by the health monitor to mark a condition as "cleared". Lets us
 # fire a fresh alert immediately when the same condition returns rather than

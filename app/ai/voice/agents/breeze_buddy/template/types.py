@@ -380,6 +380,18 @@ class TTSConfig(BaseModel):
             "aloud. Leave unset/false for plain text. Ignored by other providers."
         ),
     )
+    enable_tts_caching: Optional[bool] = Field(
+        None,
+        description=(
+            "When true AND provider is not 'dragontts', route TTS through the "
+            "DragonTTS caching proxy at call time using model "
+            "'<provider>:<model>' (e.g. provider=cartesia + model=sonic-3.5 -> "
+            "dragontts:cartesia:sonic-3.5). Default None (off) — opt in per "
+            "template. The DragonTTS kill switch flips this to false on DragonTTS "
+            "failure; it never rewrites provider/model. Ignored when provider is "
+            "already 'dragontts' (those always route through DragonTTS)."
+        ),
+    )
 
 
 class TTSSelectionConfig(BaseModel):
