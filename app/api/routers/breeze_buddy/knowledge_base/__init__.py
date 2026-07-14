@@ -16,6 +16,7 @@ Endpoints:
 - DELETE /knowledge-bases/{id}/documents/{doc_id}      - Delete document
 - POST   /knowledge-bases/{id}/documents/{doc_id}/sync - Manual re-sync
 - POST   /knowledge-bases/{id}/query                   - Retrieval testing
+- GET    /knowledge-bases/{id}/usage                   - Templates using this KB
 """
 
 from typing import Optional
@@ -29,6 +30,7 @@ from app.schemas.breeze_buddy.knowledge_base import (
     DeleteKnowledgeBaseResponse,
     KbDocument,
     KbDocumentListResponse,
+    KbUsageResponse,
     KnowledgeBase,
     KnowledgeBaseListResponse,
     QueryKnowledgeBaseRequest,
@@ -41,6 +43,7 @@ from .handlers import (
     delete_document_handler,
     delete_kb_handler,
     get_kb_handler,
+    get_kb_usage_handler,
     list_documents_handler,
     list_kbs_handler,
     query_kb_handler,
@@ -161,6 +164,15 @@ async def sync_document(
 ):
     """Manually re-sync a document (re-parse file / re-fetch sheet)."""
     return await resync_document_handler(kb_id, document_id, current_user)
+
+
+@router.get("/knowledge-bases/{kb_id}/usage", response_model=KbUsageResponse)
+async def get_knowledge_base_usage(
+    kb_id: str,
+    current_user: UserInfo = Depends(get_current_user_with_rbac),
+):
+    """Templates whose enabled configurations reference this knowledge base."""
+    return await get_kb_usage_handler(kb_id, current_user)
 
 
 @router.post(
