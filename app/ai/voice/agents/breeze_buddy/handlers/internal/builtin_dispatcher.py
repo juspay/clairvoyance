@@ -31,6 +31,10 @@ from app.ai.voice.agents.breeze_buddy.handlers.internal.get_current_time import 
 from app.ai.voice.agents.breeze_buddy.handlers.internal.hold_and_consult import (
     hold_and_consult,
 )
+from app.ai.voice.agents.breeze_buddy.handlers.internal.kb_tab_data import (
+    get_tab_data,
+    list_tabs,
+)
 from app.ai.voice.agents.breeze_buddy.handlers.internal.query_knowledge_base import (
     query_knowledge_base,
 )
@@ -56,7 +60,9 @@ BUILTIN_HANDLERS: Dict[str, Callable] = {
     "connect_to_live_agent": connect_to_live_agent,
     "end_conversation": end_conversation_global,
     "get_current_time": get_current_time,
+    "get_tab_data": get_tab_data,
     "hold_and_consult": hold_and_consult,
+    "list_kb_tabs": list_tabs,
     "query_knowledge_base": query_knowledge_base,
     "update_outcome": update_outcome,
 }

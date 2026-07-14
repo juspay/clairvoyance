@@ -27,13 +27,16 @@ from app.database.queries.breeze_buddy.knowledge_base import (
     get_chunk_hashes_for_document_query,
     get_kb_document_by_id_query,
     get_kb_full_text_query,
+    get_kb_tab_rows_query,
     get_kb_token_total_query,
     get_knowledge_base_by_id_query,
     get_merchant_chunk_total_query,
+    get_sheet_documents_due_for_poll_query,
     hybrid_search_chunks_query,
     insert_kb_document_query,
     insert_knowledge_base_query,
     list_kb_documents_query,
+    list_kb_tab_names_query,
     list_knowledge_bases_query,
     mark_kb_document_for_resync_query,
     requeue_stale_processing_documents_query,
@@ -427,6 +430,28 @@ async def get_kb_full_text_rows(kb_ids: List[str]) -> List[Tuple[str, str]]:
         raise
 
 
+async def get_kb_tab_rows(kb_ids: List[str], tab_name: str) -> List[Tuple[str, str]]:
+    """All READY chunk texts (with document names) tagged with this tab name."""
+    try:
+        query_text, values = get_kb_tab_rows_query(kb_ids, tab_name)
+        result = await run_parameterized_query(query_text, values)
+        return [(row["document_name"], row["text"]) for row in result]
+    except Exception as e:
+        logger.error(f"Error getting tab '{tab_name}' text for {kb_ids}: {e}")
+        raise
+
+
+async def list_kb_tab_names(kb_ids: List[str]) -> List[str]:
+    """Distinct tab/table names available across these KBs' READY chunks."""
+    try:
+        query_text, values = list_kb_tab_names_query(kb_ids)
+        result = await run_parameterized_query(query_text, values)
+        return [row["table_name"] for row in result]
+    except Exception as e:
+        logger.error(f"Error listing tab names for {kb_ids}: {e}")
+        raise
+
+
 async def get_kb_token_total(kb_ids: List[str]) -> int:
     """Total READY token count across KBs (AUTO mode size tiering)."""
     try:
@@ -500,4 +525,21 @@ async def hybrid_search_chunks(
         return []
     except Exception as e:
         logger.error(f"Error in hybrid search over KBs {kb_ids}: {e}")
+        raise
+
+
+async def get_sheet_documents_due_for_poll(
+    min_sync_age_seconds: int,
+    batch_size: int,
+) -> List[KbDocument]:
+    """READY google_sheet documents older than the debounce floor, capped at
+    batch_size (oldest-synced first)."""
+    try:
+        query_text, values = get_sheet_documents_due_for_poll_query(
+            min_sync_age_seconds, batch_size
+        )
+        result = await run_parameterized_query(query_text, values)
+        return decode_kb_document_list(result)
+    except Exception as e:
+        logger.error(f"Error listing sheet documents due for poll: {e}")
         raise

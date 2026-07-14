@@ -30,6 +30,7 @@ from app.database.accessor.breeze_buddy.knowledge_base import (
 )
 from app.schemas import UserInfo
 from app.schemas.breeze_buddy.knowledge_base import (
+    AddSheetDocumentRequest,
     CreateKnowledgeBaseRequest,
     DeleteKnowledgeBaseResponse,
     EmbeddingConfig,
@@ -42,6 +43,7 @@ from app.schemas.breeze_buddy.knowledge_base import (
     KnowledgeBaseListResponse,
     QueryKnowledgeBaseRequest,
     QueryKnowledgeBaseResponse,
+    SheetsServiceAccountResponse,
     UpdateKnowledgeBaseRequest,
 )
 from app.services.gcp.storage.storage import GCSStorage
@@ -345,6 +347,106 @@ async def upload_document_handler(
 
     kick_ingestion()
     return document
+
+
+async def add_sheet_document_handler(
+    kb_id: str, request: "AddSheetDocumentRequest", current_user: UserInfo
+) -> KbDocument:
+    """Connect a Google Sheet: validate SA access -> PENDING doc -> kick."""
+    from app.services.knowledge_base.connectors.google_sheets import (
+        fetch_spreadsheet_meta,
+        parse_spreadsheet_id,
+    )
+
+    kb = await _get_kb_or_404(kb_id)
+    require_kb_write_access(
+        current_user, kb.reseller_id, kb.merchant_id, "connect sheets"
+    )
+
+    max_docs = await KB_MAX_DOCUMENTS_PER_KB()
+    documents = await list_kb_documents(kb_id)
+    if len(documents) >= max_docs:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Knowledge base already has {len(documents)} documents "
+            f"(cap: {max_docs})",
+        )
+
+    try:
+        spreadsheet_id = parse_spreadsheet_id(request.sheet_url)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+    duplicate = next(
+        (
+            d
+            for d in documents
+            if d.source_type == KbDocumentSourceType.GOOGLE_SHEET
+            and d.source_ref.get("spreadsheet_id") == spreadsheet_id
+        ),
+        None,
+    )
+    if duplicate is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"This spreadsheet is already connected as '{duplicate.name}'",
+        )
+
+    try:
+        meta = await fetch_spreadsheet_meta(spreadsheet_id)
+    except ValueError as e:
+        # Access/parse errors carry the share-with-SA guidance.
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception as e:
+        logger.error(f"Sheet validation failed for {spreadsheet_id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Could not reach Google Sheets; try again",
+        )
+
+    document = await create_kb_document(
+        kb_id=kb_id,
+        source_type=KbDocumentSourceType.GOOGLE_SHEET.value,
+        name=request.name or meta["title"],
+        source_ref={
+            "spreadsheet_id": spreadsheet_id,
+            "ranges": request.ranges or [],
+            # download_document_handler's GOOGLE_SHEET branch reads this —
+            # keep in sync with that lookup (sheet_url/spreadsheet_url/url).
+            "sheet_url": f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}/edit",
+        },
+        mime_type="application/vnd.google-apps.spreadsheet",
+    )
+    if document is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to register the sheet",
+        )
+
+    kick_ingestion()
+    return document
+
+
+def get_sheets_service_account_handler() -> "SheetsServiceAccountResponse":
+    """The SA email to share sheets with (shown in the connect-sheet UI)."""
+    from app.services.knowledge_base.connectors.google_sheets import (
+        get_service_account_email,
+    )
+
+    try:
+        email = get_service_account_email()
+    except Exception as e:
+        logger.error(f"Sheets service-account lookup failed: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Google Sheets sync is not configured: set GOOGLE_CREDENTIALS_JSON",
+        ) from e
+    if not email:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Google Sheets service account has no client_email",
+        )
+    return SheetsServiceAccountResponse(email=email)
 
 
 async def list_documents_handler(

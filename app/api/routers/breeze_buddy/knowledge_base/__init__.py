@@ -12,6 +12,8 @@ Endpoints:
 - PUT    /knowledge-bases/{id}                         - Update metadata
 - DELETE /knowledge-bases/{id}                         - Delete (in-use check)
 - POST   /knowledge-bases/{id}/documents               - Upload file (multipart)
+- POST   /knowledge-bases/{id}/documents/sheet         - Connect a Google Sheet
+- GET    /knowledge-bases/sheets/service-account       - SA email to share with
 - GET    /knowledge-bases/{id}/documents               - List documents + status
 - DELETE /knowledge-bases/{id}/documents/{doc_id}      - Delete document
 - POST   /knowledge-bases/{id}/documents/{doc_id}/sync - Manual re-sync
@@ -27,6 +29,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from app.api.security.breeze_buddy.rbac_token import get_current_user_with_rbac
 from app.schemas import UserInfo
 from app.schemas.breeze_buddy.knowledge_base import (
+    AddSheetDocumentRequest,
     CreateKnowledgeBaseRequest,
     DeleteKnowledgeBaseResponse,
     KbDocument,
@@ -36,16 +39,19 @@ from app.schemas.breeze_buddy.knowledge_base import (
     KnowledgeBaseListResponse,
     QueryKnowledgeBaseRequest,
     QueryKnowledgeBaseResponse,
+    SheetsServiceAccountResponse,
     UpdateKnowledgeBaseRequest,
 )
 
 from .handlers import (
+    add_sheet_document_handler,
     create_kb_handler,
     delete_document_handler,
     delete_kb_handler,
     download_document_handler,
     get_kb_handler,
     get_kb_usage_handler,
+    get_sheets_service_account_handler,
     list_documents_handler,
     list_kbs_handler,
     query_kb_handler,
@@ -93,6 +99,20 @@ async def list_knowledge_bases(
     )
 
 
+# NOTE: declared before /knowledge-bases/{kb_id} so "sheets" never matches
+# as a kb_id path parameter.
+@router.get(
+    "/knowledge-bases/sheets/service-account",
+    response_model=SheetsServiceAccountResponse,
+)
+async def get_sheets_service_account(
+    current_user: UserInfo = Depends(get_current_user_with_rbac),
+):
+    """The service-account email a merchant must share their sheet with
+    (Viewer) before connecting it."""
+    return get_sheets_service_account_handler()
+
+
 @router.get("/knowledge-bases/{kb_id}", response_model=KnowledgeBase)
 async def get_knowledge_base(
     kb_id: str,
@@ -136,6 +156,22 @@ async def upload_document(
     parsed/chunked/embedded by the background ingestion worker; poll the
     documents list for READY/ERROR status."""
     return await upload_document_handler(kb_id, file, current_user)
+
+
+@router.post(
+    "/knowledge-bases/{kb_id}/documents/sheet",
+    response_model=KbDocument,
+    status_code=status.HTTP_201_CREATED,
+)
+async def add_sheet_document(
+    kb_id: str,
+    request: AddSheetDocumentRequest,
+    current_user: UserInfo = Depends(get_current_user_with_rbac),
+):
+    """Connect a Google Sheet (shared with our service account) as a live
+    document. Initial sync runs immediately; afterwards the scheduled poller
+    re-syncs on change (or use the manual sync endpoint)."""
+    return await add_sheet_document_handler(kb_id, request, current_user)
 
 
 @router.get("/knowledge-bases/{kb_id}/documents", response_model=KbDocumentListResponse)

@@ -261,7 +261,7 @@ async def SONIOX_ASYNC_MODEL() -> str:
 #   semantics.
 # - The two rate limits are read on every request, so they take effect
 #   immediately on the next request.
-# ============================================================================
+# =====================================================================
 
 
 async def DEMO_MESSAGE_CAP_PER_SESSION() -> int:
@@ -764,3 +764,52 @@ async def DRAGONTTS_HEALTH_TIMEOUT_S() -> float:
 async def PLIVO_INR_CONVERSION_RATE() -> float:
     """Returns PLIVO_INR_CONVERSION_RATE from Redis"""
     return await get_config("PLIVO_INR_CONVERSION_RATE", 80.0, float)
+
+
+async def KB_SHEETS_POLL_ENABLED() -> bool:
+    """Master switch for the scheduled Google Sheets freshness poller."""
+    return await get_config("KB_SHEETS_POLL_ENABLED", "true", bool)
+
+
+async def KB_SHEETS_POLL_INTERVAL_SECONDS() -> int:
+    """Scheduler interval for the sheets poller (read at startup).
+
+    Hardened against malformed env overrides like KB_INGESTION_INTERVAL_SECONDS
+    (a bad value would disable ALL background tasks at startup).
+    """
+    value = await get_config("KB_SHEETS_POLL_INTERVAL_SECONDS", 900, int)
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        logger.warning(
+            f"Invalid KB_SHEETS_POLL_INTERVAL_SECONDS value {value!r}; using 900"
+        )
+        return 900
+
+
+async def KB_SHEETS_MIN_SYNC_INTERVAL_SECONDS() -> int:
+    """Debounce floor: a sheet is never re-synced more often than this,
+    even if Drive reports changes (Sheets bumps modifiedTime aggressively)."""
+    return await get_config("KB_SHEETS_MIN_SYNC_INTERVAL_SECONDS", 300, int)
+
+
+async def KB_SHEETS_POLL_BATCH_SIZE() -> int:
+    """Max sheet documents probed per poller tick.
+
+    Without a cap, a platform with many connected sheets due at once probes
+    all of them serially in one tick — unbounded tick wall-clock, and at
+    KB_SHEETS_PROBE_SPACING_SECONDS pacing (~1 req/s, under the 60 req/min/
+    user Drive quota) that's still one probe per second, so a large backlog
+    needs capping rather than raw throughput. Mirrors KB_INGEST_BATCH_SIZE.
+    """
+    return await get_config("KB_SHEETS_POLL_BATCH_SIZE", 50, int)
+
+
+async def KB_SHEETS_PROBE_SPACING_SECONDS() -> float:
+    """Delay between Drive modifiedTime probes within one poller tick.
+
+    Drive's read quota is 60 req/min/user; 1.0s spacing sits at that
+    ceiling. Redis-settable so ops can loosen/tighten it without a deploy if
+    the real quota ever changes or multiple pods share one service account.
+    """
+    return await get_config("KB_SHEETS_PROBE_SPACING_SECONDS", 1.0, float)
