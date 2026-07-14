@@ -25,6 +25,9 @@ from app.ai.voice.agents.breeze_buddy.managers.calls import (
 from app.ai.voice.agents.breeze_buddy.services.agent_router.client import (
     close_smart_router_client,
 )
+from app.ai.voice.agents.breeze_buddy.tts.dragontts.monitor import (
+    monitor_dragontts_health,
+)
 
 # Database imports
 from app.ai.voice.llm._pools import close_all_pools as close_llm_http_pools
@@ -35,6 +38,7 @@ from app.api.routers.breeze_buddy.chat import cancel_bus as chat_cancel_bus
 from app.core.background_tasks import BackgroundTaskScheduler
 from app.core.config.dynamic import (
     ENABLE_BACKGROUND_TASKS,
+    ENABLE_DRAGONTTS_KILL_SWITCH,
     KB_INGESTION_INTERVAL_SECONDS,
 )
 from app.core.config.static import (
@@ -149,6 +153,21 @@ async def lifespan(_app: FastAPI):
                 func=process_pending_kb_documents,
                 interval_seconds=await KB_INGESTION_INTERVAL_SECONDS(),
             )
+
+            # DragonTTS health monitor — a scheduler task probes DragonTTS
+            # /health each tick and, on failure, one-way marks the health flag
+            # "0" so enable_tts_caching templates bypass the cache and use their
+            # upstream provider directly. Recovery is manual via the admin
+            # endpoint. Rides the scheduler like the reconcilers below; probe
+            # cadence is BACKGROUND_TASKS_LOOP_INTERVAL_SECONDS (default 60s).
+            # Entry point: tts/dragontts/monitor.py
+            # (health gate: tts/dragontts/health.py; kill switch: kill_switch.py).
+            if await ENABLE_DRAGONTTS_KILL_SWITCH():
+                _background_scheduler.register_task(
+                    name="dragon_tts_health_check",
+                    func=monitor_dragontts_health,
+                    interval_seconds=BACKGROUND_TASKS_LOOP_INTERVAL_SECONDS,
+                )
 
             # Event-driven dispatch reconcilers (Plane 5). Only registered on
             # main-server pods; the scheduler's SET NX EX lock further

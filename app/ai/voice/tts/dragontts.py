@@ -40,7 +40,7 @@ from pipecat.services.settings import TTSSettings
 from pipecat.services.tts_service import TextAggregationMode, TTSService
 from pipecat.transcriptions.language import Language
 
-from app.core.config.static import DRAGONTTS_URL
+from app.core.config.dynamic import DRAGONTTS_URL
 from app.core.logger import logger
 
 if TYPE_CHECKING:
@@ -88,7 +88,9 @@ async def _generate_dragontts_audio(*, text: str, resolved: "TTSConfig") -> byte
     )
     async with httpx.AsyncClient(timeout=30.0) as client:
         try:
-            response = await client.post(f"{DRAGONTTS_URL}/tts/bytes", json=body)
+            response = await client.post(
+                f"{await DRAGONTTS_URL()}/tts/bytes", json=body
+            )
             response.raise_for_status()
         except httpx.HTTPStatusError as e:
             logger.error(
