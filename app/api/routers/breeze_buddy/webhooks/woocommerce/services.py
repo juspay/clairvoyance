@@ -6,7 +6,7 @@ resolves the merchant/reseller, then dispatches on the topic to the per-flow
 handlers:
 
 - ``order-confirmation`` -> order.process_order_confirmation
-- ``abandoned-checkout`` -> cart.process_abandoned_checkout
+- ``abandoned-checkout`` -> abandonment.process_abandoned_checkout
 
 Shared helpers (``push_lead``, ``first``, topic constants) live in utils.py.
 
@@ -29,7 +29,7 @@ from app.database.accessor.breeze_buddy.merchants import (
     get_merchant_s2s_token,
 )
 
-from .cart import process_abandoned_checkout
+from .abandonment import process_abandoned_checkout
 from .order import process_order_confirmation
 from .utils import TOPIC_ABANDONED_CHECKOUT, TOPIC_ORDER_CONFIRMATION
 

@@ -16,6 +16,7 @@ from typing import Any, Dict
 
 from fastapi import HTTPException, Request, status
 
+from app.api.routers.breeze_buddy.webhooks.breeze.services import handle_breeze
 from app.api.routers.breeze_buddy.webhooks.woocommerce.services import (
     handle_woocommerce,
 )
@@ -34,6 +35,9 @@ async def handle_webhook(
     """
     if platform == "woocommerce":
         return await handle_woocommerce(topic, merchant_id, request)
+
+    if platform == "breeze":
+        return await handle_breeze(topic, merchant_id, request)
 
     raise HTTPException(
         status_code=status.HTTP_404_NOT_FOUND,
