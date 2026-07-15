@@ -5,6 +5,9 @@ from app.api.routers.breeze_buddy.agent_router.health import router as pod_route
 
 # Modern RESTful routers
 from app.api.routers.breeze_buddy.analytics import router as analytics_router
+from app.api.routers.breeze_buddy.assist_onboarding import (
+    router as assist_onboarding_router,
+)
 
 # Auth, telephony, websocket
 from app.api.routers.breeze_buddy.auth import router as auth_router
@@ -104,3 +107,4 @@ router.include_router(chat_router, prefix="", tags=["chat"])
 # - widget: unified /widget/session/* conversation router (chat ↔ voice)
 router.include_router(widget_config_router, prefix="", tags=["widget-config"])
 router.include_router(widget_router, prefix="", tags=["widget-session"])
+router.include_router(assist_onboarding_router, prefix="", tags=["assist-onboarding"])
