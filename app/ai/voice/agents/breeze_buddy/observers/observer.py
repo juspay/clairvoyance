@@ -126,12 +126,16 @@ class RealtimeObserver:
                 lead.metaData = {}
             lead.metaData["observer_triggered"] = self.name
 
+        action = self.config.action
+
+        # Record observer action in node traversal before set_outcome,
+        # so it's included when metaData is written to DB.
+        ctx = TemplateContext(self._agent_context)
+        ctx.record_observer_action(self.name, action.type, action.args)
+
         if lead and outcome:
             lead.outcome = outcome
-            ctx = TemplateContext(self._agent_context)
             await set_outcome(ctx, outcome, triggered_by=self.name)
-
-        action = self.config.action
         handler_name = action.handler or action.type
         handler = self._handler_map.get(handler_name)
 

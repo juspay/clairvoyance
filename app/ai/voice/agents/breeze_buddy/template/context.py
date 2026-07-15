@@ -353,6 +353,57 @@ class TemplateContext:
             f"'{active_entry.get('node_name')}'"
         )
 
+    def record_observer_action(
+        self,
+        observer_name: str,
+        action_type: str,
+        action_args: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Record an observer-triggered action under the currently active node.
+
+        Appends an entry to the ``observer_actions`` list of the most recent
+        node traversal entry (the one with ``exited_at`` still None).
+
+        Args:
+            observer_name: Name of the observer that triggered (from config).
+            action_type: The action the observer executed (e.g. end_conversation).
+            action_args: Arguments from the observer's configured action.
+        """
+        if not self.lead or not self.lead.metaData:
+            return
+
+        if "node_traversal" not in self.lead.metaData:
+            return
+
+        active_entry = None
+        for entry in reversed(self.lead.metaData["node_traversal"]):
+            if entry.get("exited_at") is None:
+                active_entry = entry
+                break
+
+        if active_entry is None:
+            logger.warning(
+                f"Cannot record observer action '{observer_name}': "
+                "no active node entry found"
+            )
+            return
+
+        if "observer_actions" not in active_entry:
+            active_entry["observer_actions"] = []
+
+        active_entry["observer_actions"].append(
+            {
+                "observer_name": observer_name,
+                "action": action_type,
+                "triggered_at": self._get_ist_timestamp(),
+                "args": action_args,
+            }
+        )
+        logger.info(
+            f"Recorded observer action '{observer_name}' ({action_type}) "
+            f"under node '{active_entry.get('node_name')}'"
+        )
+
     def record_ivr_input(
         self,
         digit: str,
