@@ -331,6 +331,13 @@ class Worker:
                 if locked.template_id
                 else None
             )
+            if not template:
+                logger.error(
+                    f"Worker {self._uuid}: no template found for lead "
+                    f"{locked.id} (template_id={locked.template_id}, "
+                    f"reseller={locked.reseller_id}). Proceeding to dial "
+                    "without a template."
+                )
 
             if not await _run_pre_checks_for_lead(config, locked, template, session):
                 # _run_pre_checks_for_lead already set status to FINISHED on

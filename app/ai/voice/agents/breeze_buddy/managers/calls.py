@@ -88,7 +88,7 @@ async def _get_lead_config(lead: LeadCallTracker) -> Optional[CallExecutionConfi
         else None
     )
     if not config:
-        logger.warning(
+        logger.error(
             f"No call execution config found for template: {lead.template} (template_id={lead.template_id})"
         )
     return config

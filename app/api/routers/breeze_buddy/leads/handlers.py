@@ -245,6 +245,11 @@ async def push_lead_handler(req: PushLeadRequest, current_user: UserInfo) -> Dic
                 req = req.model_copy(update={"merchant_id": template.merchant_id})
 
         if not template:
+            logger.error(
+                "Template not found for reseller %s (template_id=%s)",
+                req.reseller_id,
+                req.template_id,
+            )
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Template not found for reseller: {req.reseller_id} "
@@ -287,6 +292,13 @@ async def push_lead_handler(req: PushLeadRequest, current_user: UserInfo) -> Dic
         config = await get_call_execution_config_by_template_id(str(template.id))
 
         if not config:
+            logger.error(
+                "Call execution config not found for template %s "
+                "(template_id=%s, reseller_id=%s)",
+                template.name,
+                template.id,
+                req.reseller_id,
+            )
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Call execution config not found for template: {template.name}",
