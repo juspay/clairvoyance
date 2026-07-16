@@ -245,7 +245,23 @@ def setup_logging_interception():
     # HTTP transport / SDK chatter — at DEBUG these dump every HPACK header
     # table entry, every chunk, the full LLM request body, etc. Useful when
     # debugging the connection layer; pure noise in normal operation.
-    for noisy in ("h2", "hpack", "hyperframe", "httpcore", "httpx", "openai"):
+    #
+    # aiortc/aioice: the SmallWebRTC (WebRTC) stack logs every RTP packet and
+    # every ICE connectivity check at DEBUG — ~4.5k lines for a 1-minute call.
+    # websockets.client: a child of the (disabled) "websockets" logger whose
+    # `disabled` flag does NOT cascade; at DEBUG it prints full WS request URLs,
+    # which for Cartesia TTS include the api_key query param — a secret leak.
+    for noisy in (
+        "h2",
+        "hpack",
+        "hyperframe",
+        "httpcore",
+        "httpx",
+        "openai",
+        "aiortc",
+        "aioice",
+        "websockets.client",
+    ):
         logging.getLogger(noisy).setLevel(logging.WARNING)
 
 

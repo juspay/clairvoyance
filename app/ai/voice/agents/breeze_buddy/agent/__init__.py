@@ -14,7 +14,7 @@ from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineTask
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.frameworks.rtvi import RTVIServerMessageFrame
-from pipecat.runner.types import RunnerArguments
+from pipecat.runner.types import RunnerArguments, SmallWebRTCRunnerArguments
 from pipecat.runner.utils import (
     _create_telephony_transport,
     create_transport,
@@ -46,12 +46,16 @@ from app.ai.voice.agents.breeze_buddy.agent.pipeline import (
 from app.ai.voice.agents.breeze_buddy.agent.transfer import apply_transfer
 from app.ai.voice.agents.breeze_buddy.agent.transport import (
     TRANSPORT_TYPE_DAILY,
+    TRANSPORT_TYPE_WEBRTC,
     get_transport_params,
 )
 from app.ai.voice.agents.breeze_buddy.agent.utils import (
     end_call_with_errors,
     send_initial_greeting,
     send_initial_greeting_daily,
+)
+from app.ai.voice.agents.breeze_buddy.agent.webrtc_input_governor import (
+    run_input_latency_governor,
 )
 from app.ai.voice.agents.breeze_buddy.chat.voice_bridge import WidgetVoiceBridge
 from app.ai.voice.agents.breeze_buddy.handlers.internal.end_conversation import (
@@ -272,6 +276,15 @@ class Agent:
         return self.transport_type == TRANSPORT_TYPE_DAILY
 
     @property
+    def is_webrtc_mode(self) -> bool:
+        return self.transport_type == TRANSPORT_TYPE_WEBRTC
+
+    @property
+    def is_rtc_mode(self) -> bool:
+        """Daily or SmallWebRTC — the 24 kHz RTC transports (i.e. 'not telephony')."""
+        return self.is_daily_mode or self.is_webrtc_mode
+
+    @property
     def is_stream_mode(self) -> bool:
         return (
             self.lead is not None
@@ -393,14 +406,24 @@ class Agent:
         if not self.lead:
             raise ValueError(f"Lead not found for lead_id: {lead_id}")
 
-        # Update context with call_sid (lead_id already set above)
-        self.call_sid = (
-            self.lead.call_id or f"daily-{datetime.now().strftime('%Y%m%d%H%M%S')}"
-        )
+        # Update context with call_sid (lead_id already set above).
+        # Completion looks the lead up by its primary id. Daily sets
+        # lead.call_id = room.name up front (start_daily_session), so its
+        # fallback is never hit. SmallWebRTC never sets call_id, so its empty
+        # fallback MUST be the lead id — mirroring Daily's "call_id is actually
+        # the lead_id" completion contract. A timestamp fallback here left the
+        # completion update unable to find the row (lead never FINISHED).
+        if self.lead.call_id:
+            self.call_sid = self.lead.call_id
+        elif self.is_webrtc_mode:
+            self.call_sid = self.lead.id
+        else:
+            self.call_sid = f"daily-{datetime.now().strftime('%Y%m%d%H%M%S')}"
         update_log_context(call_sid=self.call_sid)
 
         logger.info(
-            f"Starting Daily bot for lead_id: {lead_id}, call_sid: {self.call_sid}"
+            f"Starting {'WebRTC' if self.is_webrtc_mode else 'Daily'} bot for "
+            f"lead_id: {lead_id}, call_sid: {self.call_sid}"
         )
 
         # Stream mode skips flow builder — no LLM/template nodes needed
@@ -461,14 +484,18 @@ class Agent:
         )
         self.transport = await create_transport(runner_args, transport_params)
 
-        # Keep-alive: preserve the joined DailyTransportClient across pipeline
-        # generations so an agent-transfer rebuild never leaves the room / ejects
-        # the browser client (Daily analog of NonClosingWebSocket). Neutralises
-        # the client's leave()/cleanup(); the one real teardown happens at true
-        # call end in run(). See utils/transport/daily_keepalive.py.
-        daily_transport: Any = self.transport
-        self._daily_client = daily_transport._client
-        self._daily_restore = hold_daily_client(self._daily_client)
+        # Keep-alive is Daily-only: preserve the joined DailyTransportClient
+        # across pipeline generations so an agent-transfer rebuild never leaves
+        # the room / ejects the browser client (Daily analog of
+        # NonClosingWebSocket). Neutralises the client's leave()/cleanup(); the
+        # one real teardown happens at true call end in run(). See
+        # utils/transport/daily_keepalive.py. SmallWebRTC has no room to keep
+        # joined and does not support agent transfer (v1), so it skips this and
+        # lets normal transport teardown close its peer connection.
+        if self.is_daily_mode:
+            daily_transport: Any = self.transport
+            self._daily_client = daily_transport._client
+            self._daily_restore = hold_daily_client(self._daily_client)
 
     async def _setup_telephony_transport(self) -> bool:
         """Initialize transport for telephony mode. Returns False if setup fails."""
@@ -850,6 +877,29 @@ class Agent:
                 )
             await self._handle_unexpected_disconnect("client_disconnected")
 
+            # SmallWebRTC teardown fallback. When the browser/device closes the
+            # peer connection, the EndFrame that end_conversation queues can fail
+            # to reach the end of the pipeline — the output transport keeps
+            # trying to push into the now-closed PC ("Data channel not ready")
+            # and the EndFrame close path (pipecat _wait_for_pipeline_end) waits
+            # on _pipeline_end_event with NO timeout, so the task wedges for ~10
+            # minutes until an external cancel. For webrtc only, bound it: wait
+            # up to 5s for the task to finish on its own, else force a cancel.
+            # The CancelFrame close path IS time-bounded (CANCEL_TIMEOUT_SECS),
+            # unlike the EndFrame path, so this reliably unwinds the pipeline.
+            webrtc_task = self.task
+            if self.is_webrtc_mode and webrtc_task is not None:
+                for _ in range(50):  # ~5s at 0.1s granularity
+                    if webrtc_task.has_finished():
+                        break
+                    await asyncio.sleep(0.1)
+                if not webrtc_task.has_finished():
+                    logger.warning(
+                        "[WEBRTC] pipeline did not finish within 5s of client "
+                        "disconnect — forcing task cancel to unwedge teardown"
+                    )
+                    await webrtc_task.cancel(reason="webrtc_client_disconnect_teardown")
+
         @self.task.event_handler("on_idle_timeout")
         async def on_idle_timeout(task):
             logger.info("Idle timeout detected.")
@@ -1083,7 +1133,7 @@ class Agent:
         # respond_immediately=False — same downstream behavior as telephony.
         # (Stream mode returned above — its greeting is spoken by the voice
         # bridge, not injected into an LLM context.)
-        if self.is_daily_mode and not self.is_stream_mode and self.task:
+        if self.is_rtc_mode and not self.is_stream_mode and self.task:
             greeting_result = await send_initial_greeting_daily(
                 task=self.task,
                 lead=self.lead,
@@ -1203,10 +1253,11 @@ class Agent:
         """
         try:
             self._rebuild.runner_args = runner_args
-            # Setup transport based on mode
-            if self.is_daily_mode:
+            # Setup transport based on mode. Daily and SmallWebRTC share the RTC
+            # setup path (create_transport dispatches on the runner-args type).
+            if self.is_rtc_mode:
                 if not runner_args:
-                    logger.error("runner_args is required for Daily mode")
+                    logger.error("runner_args is required for Daily/WebRTC mode")
                     return
                 await self._setup_daily_transport(runner_args)
             else:
@@ -1259,7 +1310,7 @@ class Agent:
             # returns before any pipeline is built — self.task/self.context stay
             # None, which the reused end_conversation finaliser already handles.
             if (
-                not self.is_daily_mode
+                not self.is_rtc_mode
                 and self.template
                 and self.template.flow.get("mode") == FlowMode.IVR.value
             ):
@@ -1277,6 +1328,17 @@ class Agent:
                 await self._run_generation()
                 if not self.pending_transfer or self.conversation_ended:
                     break
+                # Warm transfer joins a Daily room / bridges a telephony leg;
+                # SmallWebRTC has neither, so human transfer is unsupported (v1).
+                # The device template should not include a transfer node, but
+                # guard here in case one is reached.
+                if self.is_webrtc_mode:
+                    logger.warning(
+                        "Agent transfer requested on SmallWebRTC transport — "
+                        "unsupported (v1), ignoring and ending conversation"
+                    )
+                    self.pending_transfer = None
+                    break
                 transfer = self.pending_transfer
                 self.pending_transfer = None
                 await apply_transfer(self, transfer)
@@ -1286,7 +1348,7 @@ class Agent:
             # Telephony: close the raw ws (NonClosingWebSocket swallowed pipecat's
             # close). Daily: force the room leave + client release that
             # hold_daily_client neutralised.
-            if not self.is_daily_mode and self.ws:
+            if not self.is_rtc_mode and self.ws:
                 await close_websocket_safely(
                     self.ws, code=1000, reason="Conversation ended"
                 )
@@ -1379,10 +1441,13 @@ class Agent:
         self.task = await create_pipeline_task(
             pipeline,
             self.conversation_id,
-            is_daily_mode=self.is_daily_mode,
+            # Flag enables RTVI server events; it applies to both RTC transports
+            # (Daily and SmallWebRTC — the latter carries RTVI over its data
+            # channel natively). It gates no Daily-room-specific code.
+            is_daily_mode=self.is_rtc_mode,
         )
 
-        if self.is_daily_mode and hasattr(self.task, "rtvi") and self.task.rtvi:
+        if self.is_rtc_mode and hasattr(self.task, "rtvi") and self.task.rtvi:
             self._rtvi_processor = self.task.rtvi
             # HITL approval channel (Pattern C — the in-handler gate that
             # blocks a voice global-function on a live RTVI card). This is
@@ -1580,3 +1645,39 @@ async def daily_bot(
         if aiohttp_session:
             await aiohttp_session.close()
             logger.info("[DAILY_MODE] Closed aiohttp session")
+
+
+async def webrtc_bot(
+    runner_args: SmallWebRTCRunnerArguments,
+    completion_function: Callable,
+    aiohttp_session: Any,
+) -> None:
+    """Entry point for SmallWebRTC-based agents (embedded/device clients).
+
+    Runs IN-PROCESS: runner_args.webrtc_connection wraps a live in-memory
+    aiortc peer connection that cannot cross a subprocess boundary (unlike
+    Daily bots). See docs/SMALLWEBRTC_DEVICE_TRANSPORT_SPEC.md.
+
+    Args:
+        runner_args: SmallWebRTCRunnerArguments with the peer connection and
+            lead data (runner_args.body["lead_id"]).
+        completion_function: Callback to handle call completion.
+        aiohttp_session: aiohttp session for HTTP requests.
+    """
+    agent = Agent(
+        transport_type=TRANSPORT_TYPE_WEBRTC,
+        aiohttp_session=aiohttp_session,
+        completion_function=completion_function,
+    )
+    # Keeps mic→STT latency bounded for the lifetime of this bot — see
+    # webrtc_input_governor module docstring for why this is needed.
+    governor_task = asyncio.create_task(
+        run_input_latency_governor(runner_args.webrtc_connection, agent)
+    )
+    try:
+        await agent.run(runner_args)
+    finally:
+        governor_task.cancel()
+        if aiohttp_session:
+            await aiohttp_session.close()
+            logger.info("[WEBRTC_MODE] Closed aiohttp session")

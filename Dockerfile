@@ -26,7 +26,12 @@ RUN apt-get update && apt-get install -y \
     python3-dev \
     curl \
     unzip \
+    libopus0 \
+    libvpx7 \
     && rm -rf /var/lib/apt/lists/*
+# libopus0/libvpx7: audio+video codecs for aiortc (SmallWebRTC transport).
+# aiortc's manylinux wheels bundle codecs and ffmpeg already pulls these in
+# transitively, so this is explicit insurance in case ffmpeg is dropped later.
 
 
 # Create app and model directories
