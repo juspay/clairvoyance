@@ -270,6 +270,7 @@ class CreateCallExecutionConfigRequest(BaseModel):
     inbound_block_action: Optional[InboundBlockAction] = None
     inbound_redirect_number: Optional[str] = None
     inbound_block_message: Optional[str] = None
+    inbound_outside_hours_message: Optional[str] = None
     enforce_blacklist: Optional[bool] = True
     rate_limit_enabled: Optional[bool] = False
     rate_limit_max_calls: Optional[int] = None
@@ -328,6 +329,7 @@ class UpdateCallExecutionConfigRequest(BaseModel):
     inbound_block_action: Optional[InboundBlockAction] = None
     inbound_redirect_number: Optional[str] = None
     inbound_block_message: Optional[str] = None
+    inbound_outside_hours_message: Optional[str] = None
     enforce_blacklist: Optional[bool] = None
     rate_limit_enabled: Optional[bool] = None
     rate_limit_max_calls: Optional[int] = None
@@ -384,6 +386,7 @@ class CallExecutionConfig(BaseModel):
     inbound_block_action: InboundBlockAction = InboundBlockAction.REJECT
     inbound_redirect_number: Optional[str] = None
     inbound_block_message: Optional[str] = None
+    inbound_outside_hours_message: Optional[str] = None
     enforce_blacklist: bool = True
     rate_limit_enabled: bool = False
     rate_limit_max_calls: Optional[int] = None

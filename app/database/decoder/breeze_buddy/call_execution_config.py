@@ -80,6 +80,7 @@ def _decode_single_row(row: asyncpg.Record) -> CallExecutionConfig:
         ),
         inbound_redirect_number=row.get("inbound_redirect_number"),
         inbound_block_message=row.get("inbound_block_message"),
+        inbound_outside_hours_message=row.get("inbound_outside_hours_message"),
         enforce_blacklist=row.get("enforce_blacklist", True),
         rate_limit_enabled=row.get("rate_limit_enabled", False),
         rate_limit_max_calls=row.get("rate_limit_max_calls"),

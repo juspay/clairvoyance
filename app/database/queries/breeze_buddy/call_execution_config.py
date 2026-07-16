@@ -32,6 +32,7 @@ def insert_call_execution_config_query(
     inbound_block_action: Optional[str] = None,
     inbound_redirect_number: Optional[str] = None,
     inbound_block_message: Optional[str] = None,
+    inbound_outside_hours_message: Optional[str] = None,
     enforce_blacklist: bool = True,
     rate_limit_enabled: bool = False,
     rate_limit_max_calls: Optional[int] = None,
@@ -74,6 +75,7 @@ def insert_call_execution_config_query(
             "inbound_block_action",
             "inbound_redirect_number",
             "inbound_block_message",
+            "inbound_outside_hours_message",
             "enforce_blacklist",
             "rate_limit_enabled",
             "rate_limit_max_calls",
@@ -84,7 +86,7 @@ def insert_call_execution_config_query(
             "created_at",
             "updated_at"
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30)
         ON CONFLICT (merchant_id, template) DO UPDATE SET
             initial_offset = EXCLUDED.initial_offset,
             retry_offset = EXCLUDED.retry_offset,
@@ -102,6 +104,7 @@ def insert_call_execution_config_query(
             inbound_block_action = EXCLUDED.inbound_block_action,
             inbound_redirect_number = EXCLUDED.inbound_redirect_number,
             inbound_block_message = EXCLUDED.inbound_block_message,
+            inbound_outside_hours_message = EXCLUDED.inbound_outside_hours_message,
             enforce_blacklist = EXCLUDED.enforce_blacklist,
             rate_limit_enabled = EXCLUDED.rate_limit_enabled,
             rate_limit_max_calls = EXCLUDED.rate_limit_max_calls,
@@ -134,6 +137,7 @@ def insert_call_execution_config_query(
         inbound_block_action,
         inbound_redirect_number,
         inbound_block_message,
+        inbound_outside_hours_message,
         enforce_blacklist,
         rate_limit_enabled,
         rate_limit_max_calls,
@@ -244,6 +248,7 @@ def update_call_execution_config_query(
     inbound_block_action: Optional[str] = None,
     inbound_redirect_number: Optional[str] = None,
     inbound_block_message: Optional[str] = None,
+    inbound_outside_hours_message: Optional[str] = None,
     enforce_blacklist: Optional[bool] = None,
     rate_limit_enabled: Optional[bool] = None,
     rate_limit_max_calls: Optional[int] = None,
@@ -298,6 +303,8 @@ def update_call_execution_config_query(
         _add("inbound_redirect_number", inbound_redirect_number)
     if inbound_block_message is not None:
         _add("inbound_block_message", inbound_block_message)
+    if inbound_outside_hours_message is not None:
+        _add("inbound_outside_hours_message", inbound_outside_hours_message)
     if enforce_blacklist is not None:
         _add("enforce_blacklist", enforce_blacklist)
     if rate_limit_enabled is not None:

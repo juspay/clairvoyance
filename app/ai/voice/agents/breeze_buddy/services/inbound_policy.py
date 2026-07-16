@@ -2,7 +2,8 @@
 Unified inbound call policy enforcement.
 
 Single check function that evaluates all inbound blocking rules
-from CallExecutionConfig: master toggle, business hours, blacklist, rate limit.
+from CallExecutionConfig: master toggle, inbound calling window, blacklist,
+rate limit.
 
 Also provides helpers for Exotel block-redirect flow:
   - Exotel cannot redirect at HTTP answer-time (only returns WebSocket URL).
@@ -46,11 +47,23 @@ class PolicyResult:
     reason: Optional[str] = None
 
 
-def _blocked(config: CallExecutionConfig, reason: str) -> PolicyResult:
+def _blocked(
+    config: CallExecutionConfig,
+    reason: str,
+) -> PolicyResult:
+    block_action = config.inbound_block_action or InboundBlockAction.REJECT
+    block_message = config.inbound_block_message
+    if reason == "outside_business_hours":
+        # Out-of-hours calls should always play TTS then end the call.
+        block_action = InboundBlockAction.REJECT
+        block_message = (
+            config.inbound_outside_hours_message or config.inbound_block_message
+        )
+
     return PolicyResult(
         allowed=False,
-        action=config.inbound_block_action or InboundBlockAction.REJECT,
-        message=config.inbound_block_message,
+        action=block_action,
+        message=block_message,
         redirect_number=config.inbound_redirect_number,
         reason=reason,
     )
@@ -79,7 +92,7 @@ async def check_inbound_policy(
     """
     Evaluate all inbound blocking rules in order:
     1. Master toggle (enable_inbound)
-    2. Business hours
+    2. Inbound calling window (inbound_call_start_time/inbound_call_end_time)
     3. Blacklist
     4. Rate limit (unless skip_rate_limit=True)
     """
@@ -92,7 +105,7 @@ async def check_inbound_policy(
         )
         return _blocked(config, "inbound_disabled")
 
-    # 2. Business hours
+    # 2. Inbound calling window (no fallback to outbound window)
     if config.inbound_call_start_time and config.inbound_call_end_time:
         if not _is_within_business_hours(
             config.inbound_call_start_time,
@@ -102,7 +115,10 @@ async def check_inbound_policy(
             logger.info(
                 f"[INBOUND_POLICY] Outside business hours for {reseller_id}/{config.template}"
             )
-            return _blocked(config, "outside_business_hours")
+            return _blocked(
+                config,
+                "outside_business_hours",
+            )
 
     # 3. Blacklist
     if config.enforce_blacklist:

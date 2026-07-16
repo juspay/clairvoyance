@@ -113,6 +113,7 @@ async def create_configuration_handler(
             ),
             inbound_redirect_number=config.inbound_redirect_number,
             inbound_block_message=config.inbound_block_message,
+            inbound_outside_hours_message=config.inbound_outside_hours_message,
             enforce_blacklist=(
                 config.enforce_blacklist
                 if config.enforce_blacklist is not None
@@ -356,6 +357,7 @@ async def update_configuration_handler(
             ),
             inbound_redirect_number=config.inbound_redirect_number,
             inbound_block_message=config.inbound_block_message,
+            inbound_outside_hours_message=config.inbound_outside_hours_message,
             enforce_blacklist=config.enforce_blacklist,
             rate_limit_enabled=config.rate_limit_enabled,
             rate_limit_max_calls=config.rate_limit_max_calls,
