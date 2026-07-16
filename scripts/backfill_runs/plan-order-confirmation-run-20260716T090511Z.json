@@ -1,0 +1,15 @@
+{
+ "run_id": "run-20260716T090511Z",
+ "mode": "dry-run",
+ "reseller": "BB_SHOPIFY",
+ "family": "order-confirmation",
+ "base_template_id": "5f4e4da3-18a8-4f72-8373-ceec94984fac",
+ "base_hash": "9658c463c2168ccf",
+ "base_updated_at": "2026-07-10T11:20:54.527037+00:00",
+ "shared_config_id": "9a6cffc7-6884-4333-868e-ede0a279ff5d",
+ "universe_active_merchants": 555,
+ "already_have_template": 555,
+ "to_create_templates": 0,
+ "to_create_configs": 0,
+ "merchants": []
+}

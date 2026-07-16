@@ -104,7 +104,10 @@ class RetrievedChunk(BaseModel):
 
 class CreateKnowledgeBaseRequest(BaseModel):
     reseller_id: str
-    merchant_id: Optional[str] = None
+    # Knowledge is merchant-owned by policy: every KB belongs to exactly one
+    # merchant. Resellers get read visibility across their merchants, but a
+    # reseller-wide shared KB cannot be created.
+    merchant_id: str = Field(..., min_length=1)
     name: str = Field(..., min_length=1, max_length=255)
     description: Optional[str] = None
     embedding_config: Optional[EmbeddingConfig] = None

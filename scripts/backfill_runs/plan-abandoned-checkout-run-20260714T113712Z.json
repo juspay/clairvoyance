@@ -1,0 +1,15 @@
+{
+ "run_id": "run-20260714T113712Z",
+ "mode": "dry-run",
+ "reseller": "BB_SHOPIFY",
+ "family": "abandoned-checkout",
+ "base_template_id": "59f196c8-a6b4-4cfc-8435-58d059877549",
+ "base_hash": "71730ea10fbcbd83",
+ "base_updated_at": "2026-07-05T17:02:48.676202+00:00",
+ "shared_config_id": "de9fb349-2ef9-4400-910d-9ee85af85fd2",
+ "universe_active_merchants": 545,
+ "already_have_template": 545,
+ "to_create_templates": 0,
+ "to_create_configs": 0,
+ "merchants": []
+}

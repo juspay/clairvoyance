@@ -1,0 +1,8 @@
+{"event": "run_start", "run_id": "reconcile-1-20260714T113559Z", "mode": "apply", "reseller": "BB_SHOPIFY", "family": "order-confirmation", "base_template_id": "5f4e4da3-18a8-4f72-8373-ceec94984fac", "base_hash": "9658c463c2168ccf", "base_updated_at": "2026-07-10T11:20:54.527037+00:00", "shared_config_id": "9a6cffc7-6884-4333-868e-ede0a279ff5d", "universe_active_merchants": 545, "already_have_template": 540, "to_create_templates": 6, "to_create_configs": 0}
+{"event": "created", "merchant_id": "0jubp7-rn.myshopify.com", "template_id": "8201c6bf-5157-459d-876b-42ec7da40c79", "config_id": null, "at": "2026-07-14T11:36:00.843314+00:00"}
+{"event": "created", "merchant_id": "p9yk6d-wm.myshopify.com", "template_id": "48471385-308c-4a72-b526-884d8b8e5f93", "config_id": null, "at": "2026-07-14T11:36:00.950283+00:00"}
+{"event": "created", "merchant_id": "k0aues-7u.myshopify.com", "template_id": "e6e411ac-6d00-40cc-aa13-867456403721", "config_id": null, "at": "2026-07-14T11:36:01.039735+00:00"}
+{"event": "created", "merchant_id": "i49ngt-xf.myshopify.com", "template_id": "dbeea0f8-15e6-49a8-97d9-32eb67212a75", "config_id": null, "at": "2026-07-14T11:36:01.124220+00:00"}
+{"event": "created", "merchant_id": "aavtar-com.myshopify.com", "template_id": "884e0dae-fcf1-4869-8909-04965f44409c", "config_id": null, "at": "2026-07-14T11:36:01.223539+00:00"}
+{"event": "created", "merchant_id": "wqgm8c-1x.myshopify.com", "template_id": "8484979f-b127-439a-b83a-f47da1acd912", "config_id": null, "at": "2026-07-14T11:36:01.326290+00:00"}
+{"event": "run_end", "created_templates": 6, "created_configs": 0, "failed": 0}

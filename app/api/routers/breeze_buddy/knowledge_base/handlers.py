@@ -3,12 +3,15 @@ Business logic handlers for knowledge base operations.
 """
 
 import asyncio
+import io
 import time
 from typing import Optional
+from urllib.parse import quote
 from uuid import UUID, uuid4
 
 import asyncpg
 from fastapi import HTTPException, UploadFile, status
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from app.core.config.dynamic import KB_MAX_DOCUMENTS_PER_KB, KB_MAX_FILE_MB
 from app.core.logger import logger
@@ -47,7 +50,7 @@ from app.services.knowledge_base.ingestion import bump_kb_version
 
 from .rbac import (
     accessible_scope_filters,
-    require_admin_or_reseller_owner,
+    require_kb_write_access,
     validate_kb_access,
 )
 
@@ -85,7 +88,8 @@ async def create_kb_handler(
 ) -> KnowledgeBase:
     """Create a knowledge base (POST /knowledge-bases).
 
-    Write-gated by ``require_admin_or_reseller_owner`` at the route.
+    Write-gated by ``require_kb_write_access`` at the route (a merchant user
+    may only create a KB for a merchant they own).
     Duplicate (reseller, merchant, name) maps to 409 via the typed
     unique-violation catch; embedding config defaults to OpenAI 768-dim
     and is frozen after creation.
@@ -187,8 +191,8 @@ async def update_kb_handler(
     intentionally not editable here (stored vectors depend on it).
     """
     kb = await _get_kb_or_404(kb_id)
-    require_admin_or_reseller_owner(
-        current_user, kb.reseller_id, "update knowledge bases"
+    require_kb_write_access(
+        current_user, kb.reseller_id, kb.merchant_id, "update knowledge bases"
     )
     updated = await update_knowledge_base(
         kb_id,
@@ -210,8 +214,8 @@ async def delete_kb_handler(
 ) -> DeleteKnowledgeBaseResponse:
     """Delete a knowledge base after the template in-use safety check."""
     kb = await _get_kb_or_404(kb_id)
-    require_admin_or_reseller_owner(
-        current_user, kb.reseller_id, "delete knowledge bases"
+    require_kb_write_access(
+        current_user, kb.reseller_id, kb.merchant_id, "delete knowledge bases"
     )
 
     templates_using = await find_templates_using_kb(kb_id)
@@ -263,7 +267,9 @@ async def upload_document_handler(
     """Upload a file into a knowledge base: validate -> GCS -> PENDING doc
     -> immediate ingestion kick."""
     kb = await _get_kb_or_404(kb_id)
-    require_admin_or_reseller_owner(current_user, kb.reseller_id, "upload documents")
+    require_kb_write_access(
+        current_user, kb.reseller_id, kb.merchant_id, "upload documents"
+    )
 
     filename = file.filename or "upload"
     extension = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
@@ -366,7 +372,9 @@ async def delete_document_handler(
     cross-KB ID probing).
     """
     kb = await _get_kb_or_404(kb_id)
-    require_admin_or_reseller_owner(current_user, kb.reseller_id, "delete documents")
+    require_kb_write_access(
+        current_user, kb.reseller_id, kb.merchant_id, "delete documents"
+    )
 
     _require_uuid(document_id, "Document")
     document = await get_kb_document_by_id(document_id)
@@ -389,6 +397,61 @@ async def delete_document_handler(
     }
 
 
+async def download_document_handler(
+    kb_id: str, document_id: str, current_user: UserInfo
+):
+    """Serve a document's original source (GET .../documents/{id}/download).
+
+    Read-gated like the other read endpoints. FILE docs stream from GCS
+    through the API (dev/user credentials can't mint signed URLs, so no
+    presigned links); SHEET docs answer with their sheet URL as JSON
+    ``{"url": ...}``. Same cross-KB ID-probing guard as delete/resync.
+    """
+    kb = await _get_kb_or_404(kb_id)
+    validate_kb_access(current_user, kb.reseller_id, kb.merchant_id, "download")
+
+    _require_uuid(document_id, "Document")
+    document = await get_kb_document_by_id(document_id)
+    if document is None or document.kb_id != kb_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Document {document_id} not found in knowledge base {kb_id}",
+        )
+
+    if document.source_type == KbDocumentSourceType.GOOGLE_SHEET:
+        sheet_url = (
+            document.source_ref.get("sheet_url")
+            or document.source_ref.get("spreadsheet_url")
+            or document.source_ref.get("url")
+        )
+        if not sheet_url:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="This document has no downloadable source",
+            )
+        return JSONResponse({"url": sheet_url})
+
+    gcs_path = document.source_ref.get("gcs_path")
+    if not gcs_path:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="This document has no downloadable source",
+        )
+    data = await asyncio.to_thread(lambda: GCSStorage().download_as_bytes(gcs_path))
+    if data is None:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Could not fetch the file from storage",
+        )
+    # RFC 5987 filename* so names with spaces/unicode survive the header
+    disposition = f"attachment; filename*=UTF-8''{quote(document.name or 'document')}"
+    return StreamingResponse(
+        io.BytesIO(data),
+        media_type=document.mime_type or "application/octet-stream",
+        headers={"Content-Disposition": disposition},
+    )
+
+
 async def resync_document_handler(
     kb_id: str, document_id: str, current_user: UserInfo
 ) -> KbDocument:
@@ -398,7 +461,9 @@ async def resync_document_handler(
     (follow-up PR) it re-fetches the sheet.
     """
     kb = await _get_kb_or_404(kb_id)
-    require_admin_or_reseller_owner(current_user, kb.reseller_id, "sync documents")
+    require_kb_write_access(
+        current_user, kb.reseller_id, kb.merchant_id, "sync documents"
+    )
 
     _require_uuid(document_id, "Document")
     document = await get_kb_document_by_id(document_id)

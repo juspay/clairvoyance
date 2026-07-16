@@ -1,0 +1,66 @@
+{
+ "run_id": "reconcile-2-20260716T090454Z",
+ "mode": "apply",
+ "reseller": "BB_SHOPIFY",
+ "family": "abandoned-checkout",
+ "base_template_id": "59f196c8-a6b4-4cfc-8435-58d059877549",
+ "base_hash": "9749097a0ed159f2",
+ "base_updated_at": "2026-07-15T07:11:39.470088+00:00",
+ "shared_config_id": "de9fb349-2ef9-4400-910d-9ee85af85fd2",
+ "universe_active_merchants": 555,
+ "already_have_template": 545,
+ "to_create_templates": 10,
+ "to_create_configs": 10,
+ "merchants": [
+  {
+   "merchant_id": "qtwtct-2d.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "9cve1a-by.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "yb91ac-vz.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "dev-store-learn.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "wsdw0x-ms.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "9bb317.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "xcjmpd-wy.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "vxm6nd-be.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "80mmwx-tp.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "cfh6qi-qi.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  }
+ ]
+}

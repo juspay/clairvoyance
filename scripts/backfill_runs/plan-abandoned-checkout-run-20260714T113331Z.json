@@ -1,0 +1,46 @@
+{
+ "run_id": "run-20260714T113331Z",
+ "mode": "dry-run",
+ "reseller": "BB_SHOPIFY",
+ "family": "abandoned-checkout",
+ "base_template_id": "59f196c8-a6b4-4cfc-8435-58d059877549",
+ "base_hash": "71730ea10fbcbd83",
+ "base_updated_at": "2026-07-05T17:02:48.676202+00:00",
+ "shared_config_id": "de9fb349-2ef9-4400-910d-9ee85af85fd2",
+ "universe_active_merchants": 545,
+ "already_have_template": 539,
+ "to_create_templates": 6,
+ "to_create_configs": 6,
+ "merchants": [
+  {
+   "merchant_id": "0jubp7-rn.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "p9yk6d-wm.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "k0aues-7u.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "i49ngt-xf.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "aavtar-com.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  },
+  {
+   "merchant_id": "wqgm8c-1x.myshopify.com",
+   "create_template": true,
+   "create_config": true
+  }
+ ]
+}

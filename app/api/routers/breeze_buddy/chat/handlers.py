@@ -871,6 +871,8 @@ async def list_chat_sessions_handler(
     current_user: UserInfo,
     *,
     template_id: Optional[str] = None,
+    merchant_id: Optional[str] = None,
+    reseller_id: Optional[str] = None,
     session_status: Optional[ChatSessionStatus] = None,
     date_from: Optional[datetime] = None,
     date_to: Optional[datetime] = None,
@@ -881,11 +883,17 @@ async def list_chat_sessions_handler(
 
     Scoped to the caller's accessible resellers/merchants via the shared
     analytics ``apply_hierarchical_filters`` (admins see all; a user with no
-    assignments gets 403). All filtering + pagination happens in SQL.
+    assignments gets 403). A client ``merchant_id`` narrows within that scope
+    — for admins it selects one workspace (kept by apply_hierarchical_filters);
+    scoped users can't widen past their RBAC. All filtering happens in SQL.
     """
     filters: Dict[str, Any] = {}
     if template_id:
         filters["template_id"] = template_id
+    if merchant_id:
+        filters["merchant_id"] = merchant_id
+    if reseller_id:
+        filters["reseller_id"] = reseller_id
     if session_status is not None:
         filters["status"] = session_status.value
     if date_from is not None:
