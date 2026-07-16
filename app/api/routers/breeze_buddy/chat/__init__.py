@@ -115,6 +115,20 @@ async def list_sessions(
     template_id: Optional[str] = Query(
         default=None, description="Filter to one agent/template."
     ),
+    merchant_id: Optional[str] = Query(
+        default=None,
+        description=(
+            "Narrow to one merchant (workspace). Admins use it to view a "
+            "single workspace; scoped users are already limited by RBAC."
+        ),
+    ),
+    reseller_id: Optional[str] = Query(
+        default=None,
+        description=(
+            "Narrow to one reseller (all its merchants). Admins use it to "
+            "view a reseller umbrella; scoped users are limited by RBAC."
+        ),
+    ),
     status_filter: Optional[ChatSessionStatus] = Query(
         default=None, alias="status", description="Filter by session status."
     ),
@@ -144,6 +158,8 @@ async def list_sessions(
     return await list_chat_sessions_handler(
         current_user,
         template_id=template_id,
+        merchant_id=merchant_id,
+        reseller_id=reseller_id,
         session_status=status_filter,
         date_from=date_from,
         date_to=date_to,

@@ -26,6 +26,7 @@ class AnalyticsType(str, Enum):
     DISTINCT_MERCHANT_IDS = "distinct-merchant-ids"
     ATTEMPTS_TO_CONNECT = "attempts-to-connect"
     CALLS_BY_HOUR = "calls-by-hour"
+    CHATS_BY_HOUR = "chats-by-hour"
 
 
 class TimeGranularity(str, Enum):

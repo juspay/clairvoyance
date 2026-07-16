@@ -104,7 +104,9 @@ def stamp_lead_campaign_query(lead_id: str, campaign_id: str) -> Tuple[str, List
 def campaign_stats_query(campaign_ids: List[str]) -> Tuple[str, List[Any]]:
     """Per-campaign lead aggregates in one pass. `picked` follows the console
     honesty rule: a finished lead counts as picked unless its outcome is
-    NO_ANSWER (BUSY etc. count as answered)."""
+    NO_ANSWER (BUSY etc. count as answered) — and never when it was ABORTed
+    (a stopped campaign's leads finish with ABORT and zero attempts; counting
+    them as picked showed "Answered 1 / Dialed 0")."""
     return (
         """
         SELECT
@@ -117,7 +119,7 @@ def campaign_stats_query(campaign_ids: List[str]) -> Tuple[str, List[Any]]:
             COUNT(*) FILTER (
                 WHERE status = 'FINISHED'
                   AND outcome IS NOT NULL
-                  AND outcome <> 'NO_ANSWER'
+                  AND outcome NOT IN ('NO_ANSWER', 'ABORT')
             ) AS picked
         FROM lead_call_tracker
         WHERE campaign_id = ANY($1::UUID[])

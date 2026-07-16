@@ -42,6 +42,7 @@ from .handlers import (
     create_kb_handler,
     delete_document_handler,
     delete_kb_handler,
+    download_document_handler,
     get_kb_handler,
     get_kb_usage_handler,
     list_documents_handler,
@@ -51,7 +52,7 @@ from .handlers import (
     update_kb_handler,
     upload_document_handler,
 )
-from .rbac import require_admin_or_reseller_owner
+from .rbac import require_kb_write_access
 
 router = APIRouter()
 
@@ -66,8 +67,11 @@ async def create_knowledge_base(
     current_user: UserInfo = Depends(get_current_user_with_rbac),
 ):
     """Create a knowledge base scoped to a reseller (optionally a merchant)."""
-    require_admin_or_reseller_owner(
-        current_user, request.reseller_id, "create knowledge bases"
+    require_kb_write_access(
+        current_user,
+        request.reseller_id,
+        request.merchant_id,
+        "create knowledge bases",
     )
     return await create_kb_handler(request, current_user)
 
@@ -151,6 +155,17 @@ async def delete_document(
     """Delete a document and its chunks; the stored file is removed and
     runtime knowledge caches refresh on the next turn."""
     return await delete_document_handler(kb_id, document_id, current_user)
+
+
+@router.get("/knowledge-bases/{kb_id}/documents/{document_id}/download")
+async def download_document(
+    kb_id: str,
+    document_id: str,
+    current_user: UserInfo = Depends(get_current_user_with_rbac),
+):
+    """Serve a document's original source: files stream through the API
+    (Content-Disposition attachment); sheet docs return {"url": ...}."""
+    return await download_document_handler(kb_id, document_id, current_user)
 
 
 @router.post(

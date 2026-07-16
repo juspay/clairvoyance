@@ -394,9 +394,11 @@ async def delete_configuration_handler(config_id: str, current_user: UserInfo) -
         current_user: Current authenticated user
 
     Raises:
-        HTTPException: 404 if not found
+        HTTPException: 404 if not found, 403 if access denied
     """
-    logger.info(f"Admin {current_user.username} deleting configuration: {config_id}")
+    logger.info(
+        f"User {current_user.username} (role: {current_user.role}) deleting configuration: {config_id}"
+    )
 
     try:
         # Verify configuration exists
@@ -406,6 +408,15 @@ async def delete_configuration_handler(config_id: str, current_user: UserInfo) -
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Configuration {config_id} not found",
             )
+
+        # RBAC: Validate access against the existing configuration's scope —
+        # resellers/merchants may delete configs they own (user call 2026-07-14)
+        validate_config_access(
+            current_user,
+            existing_config.reseller_id,
+            existing_config.merchant_id,
+            operation="delete configuration for",
+        )
 
         # Delete configuration
         success = await delete_call_execution_config(config_id)

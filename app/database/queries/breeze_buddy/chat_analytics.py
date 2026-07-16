@@ -18,6 +18,7 @@ from app.database.queries.breeze_buddy.analytics import convert_ist_to_utc, is_u
 
 CHAT_SESSION_TABLE = "chat_session"
 CHAT_MESSAGE_TABLE = "chat_message"
+CHAT_TURN_METRICS_TABLE = "chat_turn_metrics"
 
 
 def build_chat_analytics_where_clause(
@@ -120,13 +121,44 @@ def get_chat_analytics_summary_query(
             ORDER BY total_conversations DESC
         """
     else:
+        # CTE per source table — the grouped LEFT JOIN shape can't carry
+        # AVG/percentile safely (message fan-out would weight sessions by
+        # their message count), so sessions, messages, and turn metrics
+        # each aggregate on their own and the single-row results cross-join.
         text = f"""
-            SELECT
-                {_AGG_METRICS},
-                COUNT(DISTINCT cs.template_id) AS total_agents
-            FROM {CHAT_SESSION_TABLE} cs
-            LEFT JOIN {CHAT_MESSAGE_TABLE} m ON m.session_id = cs.id
-            {where}
+            WITH base AS (
+                SELECT cs.* FROM {CHAT_SESSION_TABLE} cs
+                {where}
+            ),
+            sess AS (
+                SELECT
+                    COUNT(*) AS total_conversations,
+                    COUNT(*) FILTER (WHERE b.status = 'ACTIVE') AS active_conversations,
+                    COUNT(*) FILTER (WHERE b.status = 'IDLE') AS idle_conversations,
+                    COUNT(*) FILTER (WHERE b.status = 'ENDED') AS ended_conversations,
+                    COUNT(*) FILTER (WHERE b.ended_reason = 'user_ended') AS user_ended_conversations,
+                    COUNT(*) FILTER (WHERE b.ended_reason = 'idle_timeout') AS idle_timeout_conversations,
+                    COUNT(DISTINCT b.template_id) AS total_agents,
+                    AVG(EXTRACT(EPOCH FROM (b.last_activity_at - b.created_at))) AS avg_session_seconds
+                FROM base b
+            ),
+            msg AS (
+                SELECT
+                    COUNT(*) AS total_messages,
+                    COUNT(*) FILTER (WHERE m.role = 'user') AS user_messages,
+                    COUNT(*) FILTER (WHERE m.role = 'assistant') AS assistant_messages
+                FROM {CHAT_MESSAGE_TABLE} m
+                JOIN base b ON b.id = m.session_id
+            ),
+            turn AS (
+                SELECT
+                    percentile_cont(0.5) WITHIN GROUP (ORDER BY t.ttft_ms) AS median_reply_ms
+                FROM {CHAT_TURN_METRICS_TABLE} t
+                JOIN base b ON b.id = t.session_id
+                WHERE t.ttft_ms IS NOT NULL
+            )
+            SELECT sess.*, msg.*, turn.*
+            FROM sess, msg, turn
         """
     return text, values
 
@@ -152,5 +184,26 @@ def get_chat_analytics_trends_query(
         {where}
         GROUP BY time_bucket
         ORDER BY time_bucket ASC
+    """
+    return text, values
+
+
+def get_chats_by_hour_query(filters: Dict[str, Any]) -> Tuple[str, List[Any]]:
+    """Distribution of conversations started by hour-of-day (0-23), IST.
+
+    Hour is extracted after an explicit shift to Asia/Kolkata so the buckets
+    match the IST calendar-day filtering regardless of the DB session
+    timezone (the voice calls-by-hour query does the same).
+    """
+    conditions, values = build_chat_analytics_where_clause(filters)
+    where = " WHERE " + " AND ".join(conditions) if conditions else ""
+    text = f"""
+        SELECT
+            EXTRACT(HOUR FROM (cs.created_at AT TIME ZONE 'Asia/Kolkata'))::int AS hour,
+            COUNT(*) AS count
+        FROM {CHAT_SESSION_TABLE} cs
+        {where}
+        GROUP BY 1
+        ORDER BY 1
     """
     return text, values
