@@ -48,9 +48,18 @@ def build_abandoned_checkout_payload(
         ).strip()
         or "Customer"
     )
+    total_price_paise: object = data.get("total_price")
+    if isinstance(total_price_paise, (int, float, str)):
+        try:
+            cart_total = float(total_price_paise) / 100.0
+        except ValueError:
+            cart_total = 0.0
+    else:
+        cart_total = 0.0
+
     payload = {
         "shop_name": shop_name,
-        "cart_total": float(data.get("total_price") or 0),
+        "cart_total": cart_total,
         "customer_name": customer_name,
         "cart_items_summary": summarize_cart_items(data.get("line_items") or []),
         "customer_mobile_number": phone,
