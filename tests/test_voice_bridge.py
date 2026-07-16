@@ -319,6 +319,64 @@ async def test_error_event_emits_rtvi_error(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# WidgetVoiceBridge — terminal-event guarantee (every turn emits exactly one)
+# ---------------------------------------------------------------------------
+
+
+async def test_interrupted_turn_still_emits_terminal_turn_end(monkeypatch):
+    """Root-cause guard: an interrupted turn (barge-in / teardown / a ui-action
+    tap that cancels the in-flight turn) must STILL emit exactly one terminal
+    ``turn-end`` — even though the brain's own ``turn_end`` never arrives — so
+    the client is never left hanging (stuck 'Speaking' / streaming bubble)."""
+    gate = asyncio.Event()
+
+    async def _gen(*, session_id, user_content, llm=None, context_placement=None):
+        yield SSEEvent("assistant_token", {"delta": "First sentence here. "})
+        await gate.wait()  # cancelled before this releases
+        yield SSEEvent("turn_end", {"session_status": "ACTIVE"})
+
+    monkeypatch.setattr(vb, "run_chat_turn", _gen)
+    bridge, _, emit = _make_bridge()
+    await bridge.handle_user_turn("hi")
+    await asyncio.sleep(0.02)
+    await bridge.cancel_inflight()
+    await bridge._drain()
+    ends = _emitted(emit, "turn-end")
+    assert len(ends) == 1 and ends[0] == {"status": None}
+
+
+async def test_stream_ending_without_turn_end_synthesizes_one(monkeypatch):
+    """A brain stream that completes without a ``turn_end`` event still yields a
+    terminal ``turn-end`` for the client."""
+    monkeypatch.setattr(
+        vb,
+        "run_chat_turn",
+        _stub_run_chat_turn(
+            SSEEvent("assistant_token", {"delta": "Done, but no explicit end."}),
+        ),
+    )
+    bridge, _, emit = _make_bridge()
+    await _run_one_turn(bridge)
+    assert len(_emitted(emit, "turn-end")) == 1
+
+
+async def test_normal_turn_end_not_doubled(monkeypatch):
+    """The brain's own ``turn_end`` must NOT be duplicated by the synthetic
+    fallback — exactly one terminal event per turn."""
+    monkeypatch.setattr(
+        vb,
+        "run_chat_turn",
+        _stub_run_chat_turn(
+            SSEEvent("assistant_token", {"delta": "Hello."}),
+            SSEEvent("turn_end", {"session_status": "ACTIVE"}),
+        ),
+    )
+    bridge, _, emit = _make_bridge()
+    await _run_one_turn(bridge)
+    assert len(_emitted(emit, "turn-end")) == 1
+
+
+# ---------------------------------------------------------------------------
 # WidgetVoiceBridge — greeting gating
 # ---------------------------------------------------------------------------
 

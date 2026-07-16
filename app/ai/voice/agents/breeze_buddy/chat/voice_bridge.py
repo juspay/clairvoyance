@@ -287,6 +287,8 @@ class WidgetVoiceBridge:
             logger.warning(
                 f"[voice-bridge] session {self.session_id} lock busy; skipping turn"
             )
+            # The busy `error` IS this turn's terminal signal (the client resets
+            # its turn state on it), so no `turn-end` is owed on this path.
             await self._emit_rtvi(
                 _RTVI_ERROR, {"code": "busy", "message": "One moment, please."}
             )
@@ -295,15 +297,24 @@ class WidgetVoiceBridge:
             return
 
         events = make_events()
+        # Did this turn emit a terminal RTVI event (`turn-end` or `error`)? If not
+        # — a barge-in/teardown CancelledError or a supersession unwinds the
+        # stream without one — the finally synthesizes a `turn-end`. Guarantees
+        # the client ALWAYS gets exactly one terminal signal per turn, so an
+        # interrupted turn can't leave it hanging (stuck "Speaking" / a streaming
+        # transcript bubble). This is the root fix: the client no longer has to
+        # infer the end of an interrupted turn.
+        terminal_emitted = False
         try:
-            await self._consume_events(events, gen)
+            terminal_emitted = await self._consume_events(events, gen)
         except asyncio.CancelledError:
             # Barge-in / teardown. The CancelledError thrown into the async
             # generator already ran its finally (aiohttp + MCP close) as it
             # propagated; the next turn's repair heals any dangling tool_use.
-            # Uncancel so the shielded lock release below isn't re-cancelled
-            # (Python 3.11 cancel-counter gotcha — same fix the chat SSE stream
-            # uses); we don't re-raise, the turn is done.
+            # Uncancel so the shielded emits below aren't re-cancelled (Python
+            # 3.11 cancel-counter gotcha — same fix the chat SSE stream uses);
+            # we don't re-raise, the turn is done. `terminal_emitted` stays False
+            # → the finally sends the synthetic `turn-end`.
             cur = asyncio.current_task()
             if cur is not None:
                 try:
@@ -318,7 +329,18 @@ class WidgetVoiceBridge:
             await self._emit_rtvi(
                 _RTVI_ERROR, {"code": "internal", "message": "voice turn failed"}
             )
+            terminal_emitted = True
         finally:
+            # Synthesize the terminal `turn-end` for interrupted / superseded
+            # turns. Shielded like the lock release so a cancellation landing here
+            # still delivers it (`_emit_rtvi` swallows its own errors).
+            if not terminal_emitted:
+                try:
+                    await asyncio.shield(
+                        self._emit_rtvi(_RTVI_TURN_END, {"status": None})
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
             # Shield the release so a cancellation that lands here still issues
             # the Redis DEL (else the lock lingers until its 180s TTL and the
             # next turn / message 409s).
@@ -329,16 +351,24 @@ class WidgetVoiceBridge:
             if self._inflight is asyncio.current_task():
                 self._inflight = None
 
-    async def _consume_events(self, events: Any, gen: int) -> None:
-        """Adapt one chat-brain SSE stream into TTS frames + RTVI events."""
+    async def _consume_events(self, events: Any, gen: int) -> bool:
+        """Adapt one chat-brain SSE stream into TTS frames + RTVI events.
+
+        Returns True iff a terminal RTVI event (``turn-end`` or ``error``) was
+        emitted for this turn. ``_drive`` uses this to synthesize a ``turn-end``
+        when the stream exits WITHOUT one (a supersession here, or a barge-in /
+        teardown ``CancelledError`` raised through this generator) — so the
+        client is never left without a terminal signal.
+        """
         agg = _SentenceAggregator()
         filler_fired = False
+        terminal_emitted = False
         async for ev in events:
             if gen != self._generation:
                 # Superseded by a newer turn without a task cancel (rare).
                 # Close the generator so its aiohttp/MCP pool is released.
                 await events.aclose()
-                return
+                return terminal_emitted
             if ev.event == "assistant_token":
                 delta = ev.data.get("delta", "") if isinstance(ev.data, dict) else ""
                 for chunk in agg.push(delta):
@@ -418,6 +448,7 @@ class WidgetVoiceBridge:
                     ev.data.get("session_status") if isinstance(ev.data, dict) else None
                 )
                 await self._emit_rtvi(_RTVI_TURN_END, {"status": status})
+                terminal_emitted = True
             elif ev.event == "error":
                 data = ev.data if isinstance(ev.data, dict) else {}
                 await self._emit_rtvi(
@@ -427,8 +458,10 @@ class WidgetVoiceBridge:
                         "message": data.get("message", "voice turn error"),
                     },
                 )
+                terminal_emitted = True
             # user_committed / node_transition are intentionally not echoed: the
             # user transcript already reaches the widget from STT via pipecat RTVI.
+        return terminal_emitted
 
     # -- emission helpers ---------------------------------------------------
 
