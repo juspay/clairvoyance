@@ -181,21 +181,28 @@ async def determine_language_for_call(
     language_code = "en-IN"  # Default to English
 
     if template_configurations:
-        if (
-            hasattr(template_configurations, "stt_language")
-            and template_configurations.stt_language
-        ):
+        # Check new stt_configuration first, fall back to legacy fields if absent
+        stt_config = getattr(template_configurations, "stt_configuration", None)
+        stt_lang = None
+        payload_selection = False
+
+        if stt_config is not None:
+            stt_lang = stt_config.language
+            payload_selection = stt_config.payload_based_language_selection
+        else:
+            stt_lang = getattr(template_configurations, "stt_language", None)
+            payload_selection = getattr(
+                template_configurations, "payload_based_language_selection", False
+            )
+
+        if stt_lang:
             # Highest priority: explicit stt_language setting
             # stt_language can be a string ("hi") or list (["en", "hi"]) — use first entry for language name
-            stt_lang = template_configurations.stt_language
             language_code = stt_lang[0] if isinstance(stt_lang, list) else stt_lang
             logger.info(
                 f"Using explicit stt_language '{stt_lang}' for request {request_id}"
             )
-        elif (
-            hasattr(template_configurations, "payload_based_language_selection")
-            and template_configurations.payload_based_language_selection
-        ):
+        elif payload_selection:
             # Second priority: LLM-based language detection
             llm_detected = await detect_language_from_payload(payload)
             if llm_detected:

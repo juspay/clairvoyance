@@ -1200,14 +1200,25 @@ class ChatAgent:
         role_messages = render_messages_with_vars(
             list(node.get("role_messages", [])), self.template_vars
         )
-        role_messages = inject_language_rules(
-            role_messages,
-            self.template_vars.get("language_name", "English"),
-            getattr(
+        stt_config = (
+            getattr(self.template.configurations, "stt_configuration", None)
+            if self.template.configurations
+            else None
+        )
+        payload_selection = False
+        if stt_config is not None:
+            payload_selection = stt_config.payload_based_language_selection
+        else:
+            payload_selection = getattr(
                 getattr(self.template, "configurations", None),
                 "payload_based_language_selection",
                 False,
-            ),
+            )
+
+        role_messages = inject_language_rules(
+            role_messages,
+            self.template_vars.get("language_name", "English"),
+            payload_selection,
         )
         task_messages = render_messages_with_vars(
             list(node.get("task_messages", [])), self.template_vars
