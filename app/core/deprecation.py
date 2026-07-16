@@ -131,11 +131,13 @@ def log_deprecated_fields(
     for old_field, new_path in field_map.items():
         if old_field in instance.model_fields_set:
             value = getattr(instance, old_field, None)
+            if value is None or value is False:
+                continue
             # Log metadata only — raw values may contain sensitive data
             # (IDs, context JSON, etc.)
-            type_name = type(value).__name__ if value is not None else "NoneType"
+            type_name = type(value).__name__
             try:
-                length = len(str(value)) if value is not None else 0
+                length = len(str(value))
             except Exception:
                 length = -1
             logger.warning(

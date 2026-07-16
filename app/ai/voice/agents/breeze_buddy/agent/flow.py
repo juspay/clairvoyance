@@ -181,6 +181,12 @@ def prepare_initial_node(
     initial_node_name = flow_config["initial_node"]
     node_config = flow_config["nodes"][initial_node_name]
 
+    stt_config = getattr(configurations, "stt_configuration", None)
+    if stt_config is not None:
+        stt_config.payload_based_language_selection
+    else:
+        getattr(configurations, "payload_based_language_selection", False)
+
     role_messages = inject_language_rules(
         node_config.get("role_messages", []),
         lead_payload.get("language_name", "English"),

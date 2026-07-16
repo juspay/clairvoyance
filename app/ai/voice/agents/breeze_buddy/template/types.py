@@ -1530,8 +1530,8 @@ class ConfigurationModel(BaseModel):
         None,
         description="DEPRECATED: Use stt_configuration.soniox.context instead.",
     )
-    payload_based_language_selection: bool = Field(
-        False,
+    payload_based_language_selection: Optional[bool] = Field(
+        None,
         description="DEPRECATED: Use stt_configuration.payload_based_language_selection instead.",
     )
 
@@ -1687,33 +1687,6 @@ class ConfigurationModel(BaseModel):
         "Each observer is a side-LLM that checks the transcript after every turn "
         "and can take action (e.g., end_conversation) on detection.",
     )
-
-    @model_validator(mode="after")
-    def _backfill_legacy_from_stt_config(self):
-        """Mirror stt_configuration values to legacy fields for backward compat.
-
-        Legacy consumers (flow.py, language_detector.py) read top-level
-        stt_language / payload_based_language_selection. When stt_configuration
-        is set but legacy fields are not explicitly provided, backfill so
-        those consumers keep working.
-        """
-        if self.stt_configuration is None:
-            return self
-        stt = self.stt_configuration
-        if "stt_language" not in self.model_fields_set and stt.language is not None:
-            self.stt_language = stt.language
-        if (
-            "soniox_context" not in self.model_fields_set
-            and stt.soniox is not None
-            and stt.soniox.context is not None
-        ):
-            self.soniox_context = stt.soniox.context
-        if (
-            "payload_based_language_selection" not in self.model_fields_set
-            and stt.payload_based_language_selection
-        ):
-            self.payload_based_language_selection = stt.payload_based_language_selection
-        return self
 
     @model_validator(mode="after")
     def _warn_deprecated_fields(self):
