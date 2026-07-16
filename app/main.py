@@ -291,6 +291,20 @@ async def lifespan(_app: FastAPI):
     # Close Redis connections
     await close_redis_connections()
 
+    # LAST: flush + stop loguru's enqueue=True sinks. Each enqueued sink
+    # owns a multiprocessing SimpleQueue/Event/Lock; if their worker
+    # threads are still alive at interpreter exit, resource_tracker
+    # reports the SemLocks as "leaked semaphore objects". complete()
+    # drains pending records, remove() joins the workers and frees the
+    # primitives deterministically. Nothing may log through loguru after
+    # this point, which is why it sits at the very end of shutdown.
+    try:
+        logger.info("Shutdown complete; flushing log queues.")
+        await logger.complete()
+        await asyncio.to_thread(logger.remove)
+    except Exception:  # noqa: BLE001 - never block process exit on logging
+        pass
+
 
 app = FastAPI(title="Breeze Automatic Server", version=__version__, lifespan=lifespan)
 
