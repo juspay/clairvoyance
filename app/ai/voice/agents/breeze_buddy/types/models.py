@@ -6,13 +6,14 @@ from pydantic import BaseModel, field_validator, model_validator
 
 from app.schemas.breeze_buddy.core import ExecutionMode
 
-# TEMPORARY HACK — remove once redbus migrates to template_id.
-# redbus is the one legacy merchant still sending the removed `template`
-# (name) field in lead pushes. This is NOT name-based template resolution:
-# it is a hardcoded alias applied only on an exact name match. Do not add
-# other merchants or names here.
-_REDBUS_LEGACY_TEMPLATE_ALIASES: Dict[str, str] = {
+# TEMPORARY HACK — remove once legacy merchants migrate to template_id.
+# A few legacy merchants still send the removed `template` (name) field in
+# lead pushes. This is NOT name-based template resolution: it is a hardcoded
+# alias applied only on an exact name match when template_id is absent.
+_LEGACY_TEMPLATE_NAME_ALIASES: Dict[str, str] = {
     "redbus-refund-eligibility-verification": "12d435c1-d044-40c9-8c2b-f9a379e8f871",
+    "loan_reminder_dpd_0": "1079319f-7c90-4197-94fc-6d8fb4af24c7",
+    "loan_collections_dpd_0_7_demo": "6742efc7-9385-4f25-94c2-1a8386797e3d",
 }
 
 
@@ -25,7 +26,7 @@ class PushLeadRequest(BaseModel):
     """Lead push request. Templates are identified by id ONLY — name-based
     resolution was removed; a legacy ``template`` field in the body is
     ignored (pydantic drops unknown fields). Sole exception: the hardcoded
-    redbus alias in ``_REDBUS_LEGACY_TEMPLATE_ALIASES`` above."""
+    aliases in ``_LEGACY_TEMPLATE_NAME_ALIASES`` above."""
 
     request_id: str
     payload: Dict[str, Any]
@@ -33,12 +34,12 @@ class PushLeadRequest(BaseModel):
 
     @model_validator(mode="before")
     @classmethod
-    def _apply_redbus_legacy_template_alias(cls, data: Any) -> Any:
-        # TEMPORARY HACK — see _REDBUS_LEGACY_TEMPLATE_ALIASES.
+    def _apply_legacy_template_name_alias(cls, data: Any) -> Any:
+        # TEMPORARY HACK — see _LEGACY_TEMPLATE_NAME_ALIASES.
         if isinstance(data, dict) and not data.get("template_id"):
             template_name = data.get("template")
             if isinstance(template_name, str):
-                alias = _REDBUS_LEGACY_TEMPLATE_ALIASES.get(template_name)
+                alias = _LEGACY_TEMPLATE_NAME_ALIASES.get(template_name)
                 if alias:
                     data["template_id"] = alias
         return data
