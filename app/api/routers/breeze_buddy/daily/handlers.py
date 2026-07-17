@@ -8,7 +8,7 @@ from fastapi import HTTPException
 
 from app.ai.voice.agents.breeze_buddy.services.daily.daily import start_daily_session
 from app.core.logger import logger
-from app.database.accessor import get_lead_by_id
+from app.database.accessor import get_lead_by_id, get_template_by_id
 from app.schemas import (
     BreezeBuddyDailyConnectRequest,
     ExecutionMode,
@@ -68,8 +68,23 @@ async def breeze_buddy_daily_connect_handler(
                 detail=f"Lead already processed. status: {lead.status}",
             )
 
-        # 4. Start Daily session (creates room, tokens, and starts bot)
-        return await start_daily_session(request.lead_id)
+        # 4. Client audio-processing flags. Browser Krisp noise cancellation
+        # defaults ON; templates opt out via
+        # configurations.client_noise_cancellation=false. Echo cancellation
+        # has no server knob — it's a getUserMedia constraint the web clients
+        # always force on (Daily has no room-level echo/noise property; its
+        # enable_noise_cancellation_ui only affects the Prebuilt UI).
+        noise_cancellation = True
+        if lead.template_id:
+            template = await get_template_by_id(str(lead.template_id))
+            cfg = template.configurations if template else None
+            if cfg is not None and cfg.client_noise_cancellation is False:
+                noise_cancellation = False
+
+        # 5. Start Daily session (creates room, tokens, and starts bot)
+        session = await start_daily_session(request.lead_id)
+        session["noise_cancellation"] = noise_cancellation
+        return session
 
     except HTTPException:
         raise

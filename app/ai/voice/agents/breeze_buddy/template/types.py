@@ -1657,6 +1657,15 @@ class ConfigurationModel(BaseModel):
     noise_filter: Optional[NoiseFilterConfig] = Field(
         None, description="Noise filter configuration for audio input processing"
     )
+    client_noise_cancellation: Optional[bool] = Field(
+        None,
+        description=(
+            "Browser-side (Daily Krisp) noise cancellation for web voice "
+            "sessions. None/True = ON (platform default), False = opt out. "
+            "Rides the /connect response as `noise_cancellation`; echo "
+            "cancellation itself is always forced client-side and has no knob."
+        ),
+    )
     keyword_filter: Optional[KeywordFilterConfig] = Field(
         None,
         description="Keyword filter to suppress specific transcriptions while bot is active",
