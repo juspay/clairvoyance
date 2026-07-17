@@ -64,6 +64,7 @@ from app.database.accessor import (
     update_outbound_number_status,
 )
 from app.schemas import (
+    IVR_OPTIONS_TEMPLATE,
     CallDirection,
     CallExecutionConfig,
     CallProvider,
@@ -523,7 +524,7 @@ async def handle_call_completion(
     )
 
     config = None
-    if lead.template == "IVR-OPTIONS":
+    if lead.template == IVR_OPTIONS_TEMPLATE:
         logger.info(
             f"Skipping config check for template IVR-OPTIONS for lead {lead.id}"
         )
@@ -628,7 +629,7 @@ async def handle_unanswered_calls(call_id: str):
         return
 
     config = None
-    if lead.template == "IVR-OPTIONS":
+    if lead.template == IVR_OPTIONS_TEMPLATE:
         logger.info(
             f"Skipping config check for template IVR-OPTIONS for lead {lead.id}"
         )

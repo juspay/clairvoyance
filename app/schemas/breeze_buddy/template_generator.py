@@ -54,6 +54,15 @@ class GenerateChatRequest(BaseModel):
         )
     )
 
+    merchant_id: Optional[str] = Field(
+        default=None,
+        description=(
+            "Merchant (workspace) already chosen in the console for this "
+            "template. When provided, Claude embeds it in the output JSON "
+            "instead of asking the user which merchant to use."
+        ),
+    )
+
     current_template: Optional[Dict[str, Any]] = Field(
         default=None,
         description=(

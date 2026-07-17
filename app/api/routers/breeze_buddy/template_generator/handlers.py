@@ -39,10 +39,27 @@ async def generate_chat_handler(
     """
     messages = [{"role": m.role, "content": m.content} for m in req.messages]
 
+    # Prefer the ids the console already resolved (workspace picked in the
+    # wizard) over the JWT lists: admin JWTs carry ['*'] wildcards, which
+    # make the service prompt tell Claude to ASK the user which
+    # reseller_id/merchant_id to use — a question the console has already
+    # answered. Request ids only shape the generated JSON; RBAC is enforced
+    # at template create, so this is context, not an access decision.
+    reseller_ids = (
+        [req.reseller_id]
+        if req.reseller_id and req.reseller_id != "*"
+        else current_user.reseller_ids
+    )
+    merchant_ids = (
+        [req.merchant_id]
+        if req.merchant_id and req.merchant_id != "*"
+        else current_user.merchant_ids
+    )
+
     service = TemplateGeneratorService(
         messages=messages,
-        reseller_ids=current_user.reseller_ids,
-        merchant_ids=current_user.merchant_ids,
+        reseller_ids=reseller_ids,
+        merchant_ids=merchant_ids,
         current_template=req.current_template,
     )
 
