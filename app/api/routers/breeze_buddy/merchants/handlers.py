@@ -165,8 +165,13 @@ async def get_all_merchants_handler(
     sort_by: str,
     sort_order: str,
     current_user: UserInfo,
+    reseller_id_filter: Optional[str] = None,
 ) -> MerchantListResponse:
-    """Get all merchant entities with pagination and filtering."""
+    """Get all merchant entities with pagination and filtering.
+
+    reseller_id_filter narrows to one umbrella; for scoped callers it
+    composes with their resolved merchant scope (a filter, not an escape).
+    """
     try:
         # Resolve merchant_ids scope (handles wildcard through owner chain)
         resolved = await resolve_merchant_ids(current_user)
@@ -179,6 +184,7 @@ async def get_all_merchants_handler(
                 is_active_filter=is_active_filter,
                 merchant_identifier_filter=merchant_identifier_filter,
                 name_filter=name_filter,
+                reseller_id_filter=reseller_id_filter,
                 sort_by=sort_by,
                 sort_order=sort_order,
             )
@@ -190,6 +196,7 @@ async def get_all_merchants_handler(
                 limit=limit,
                 merchant_identifier_filter=merchant_identifier_filter,
                 name_filter=name_filter,
+                reseller_id_filter=reseller_id_filter,
                 is_active_filter=is_active_filter,
                 sort_by=sort_by,
                 sort_order=sort_order,

@@ -180,6 +180,7 @@ async def get_merchants_by_ids(
     limit: int = 50,
     merchant_identifier_filter: Optional[str] = None,
     name_filter: Optional[str] = None,
+    reseller_id_filter: Optional[str] = None,
     is_active_filter: Optional[bool] = None,
     sort_by: str = "created_at",
     sort_order: str = "desc",
@@ -192,6 +193,7 @@ async def get_merchants_by_ids(
         limit: Items per page
         merchant_identifier_filter: Additional filter by merchant_id (partial match)
         name_filter: Filter by name (partial match, case-insensitive)
+        reseller_id_filter: Filter by owning reseller (exact match)
         is_active_filter: Filter by active status
         sort_by: Field to sort by (merchant_id, name, created_at, updated_at)
         sort_order: Sort direction (asc, desc)
@@ -208,6 +210,7 @@ async def get_merchants_by_ids(
         limit=limit,
         merchant_identifier_filter=merchant_identifier_filter,
         name_filter=name_filter,
+        reseller_id_filter=reseller_id_filter,
         is_active_filter=is_active_filter,
         sort_by=sort_by,
         sort_order=sort_order,

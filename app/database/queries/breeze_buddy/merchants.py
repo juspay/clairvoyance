@@ -218,6 +218,7 @@ def get_merchants_by_ids_query(
     limit: int = 50,
     merchant_identifier_filter: Optional[str] = None,
     name_filter: Optional[str] = None,
+    reseller_id_filter: Optional[str] = None,
     is_active_filter: Optional[bool] = None,
     sort_by: str = "created_at",
     sort_order: str = "desc",
@@ -244,6 +245,11 @@ def get_merchants_by_ids_query(
         where_conditions.append(f"name ILIKE ${param_idx}")
         escaped = name_filter.replace("%", "\\%").replace("_", "\\_")
         params.append(f"%{escaped}%")
+        param_idx += 1
+
+    if reseller_id_filter:
+        where_conditions.append(f"reseller_id = ${param_idx}")
+        params.append(reseller_id_filter)
         param_idx += 1
 
     if is_active_filter is not None:

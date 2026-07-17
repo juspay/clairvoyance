@@ -63,6 +63,9 @@ async def list_merchants(
         None, description="Filter by merchant_id (partial match)"
     ),
     name: Optional[str] = Query(None, description="Filter by name (partial match)"),
+    reseller_id: Optional[str] = Query(
+        None, description="Filter by owning reseller (exact match)"
+    ),
     is_active: Optional[bool] = Query(None, description="Filter by active status"),
     sort_by: str = Query(
         "created_at",
@@ -104,6 +107,7 @@ async def list_merchants(
         sort_by=sort_by,
         sort_order=sort_order,
         current_user=current_user,
+        reseller_id_filter=reseller_id,
     )
 
 
