@@ -106,8 +106,8 @@ def build_analytics_where_clause(
     Returns:
         Tuple of (conditions list, values list)
     """
-    conditions = []
-    values = []
+    conditions: List[str] = []
+    values: List[Any] = []
 
     # Filter by execution_mode to exclude test calls from analytics.
     # HOLD_TRANSFER is included so hold & consult outbound legs appear in
@@ -138,20 +138,20 @@ def build_analytics_where_clause(
         conditions.append(f"lct.{date_column} < ${len(values) + value_offset}")
 
     # Standard column filters
-    # Template filter - supports BOTH template name and template_id for backward compatibility
+    # Template filter — ID ONLY (2026-07-13): name-based filtering removed;
+    # template names are mutable display strings, not identifiers. The
+    # `template` key survives only as a UUID-carrying alias of template_id
+    # (the schema validator rejects names; this raise is defense-in-depth so
+    # a bypassing caller can never silently get UNSCOPED analytics).
     if "template" in filters and filters["template"]:
         template_value = filters["template"]
-        # Auto-detect if it's a UUID (template_id) or a name (template)
-        if is_uuid(template_value):
-            # Filter by template_id (UUID)
-            values.append(template_value)
-            conditions.append(f"lct.template_id = ${len(values) + value_offset}::UUID")
-            logger.debug(f"Filtering by template_id (UUID): {template_value}")
-        else:
-            # Filter by template name (backward compat)
-            values.append(template_value)
-            conditions.append(f"lct.template = ${len(values) + value_offset}")
-            logger.debug(f"Filtering by template name: {template_value}")
+        if not is_uuid(template_value):
+            raise ValueError(
+                "analytics template filter must be a template UUID; "
+                "name-based filtering was removed"
+            )
+        values.append(template_value)
+        conditions.append(f"lct.template_id = ${len(values) + value_offset}::UUID")
 
     # Explicit template_id filter (takes precedence if both provided)
     if "template_id" in filters and filters["template_id"]:
@@ -202,6 +202,19 @@ def build_analytics_where_clause(
         for key, value in filters["payload_filters"].items():
             # Skip invalid keys silently to prevent SQL injection
             if not is_valid_payload_filter_key(key):
+                continue
+            if key == "customer_mobile_number" and isinstance(value, str):
+                # Phone search: digits-contained match. Stored numbers carry
+                # '+'/country-code prefixes the caller can't know, so exact
+                # equality never matched (console search bug, 2026-07-14).
+                digits = "".join(ch for ch in value if ch.isdigit())
+                if not digits:
+                    continue
+                values.append(f"%{digits}%")
+                conditions.append(
+                    "regexp_replace(lct.payload->>'customer_mobile_number', '\\D', '', 'g') "
+                    f"LIKE ${len(values) + value_offset}"
+                )
                 continue
             values.append(value)
             conditions.append(f"lct.payload->>'{key}' = ${len(values) + value_offset}")
@@ -746,7 +759,8 @@ def get_attempts_to_connect_query(filters: Dict[str, Any]) -> Tuple[str, List[An
 
     Attempt ordinal is derived with ROW_NUMBER over attempt_count (then time) so it
     is robust regardless of how attempt_count is based. A "connected" attempt is any
-    row whose outcome is set and not NO_ANSWER / BUSY.
+    row whose outcome is set and not NO_ANSWER / BUSY / ABORT (aborted leads were
+    cancelled — often with zero dials — and must not read as a first-attempt pick).
     """
     conditions, values = build_analytics_where_clause(filters)
     where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
@@ -779,7 +793,7 @@ def get_attempts_to_connect_query(filters: Dict[str, Any]) -> Tuple[str, List[An
         picked AS (
             SELECT request_id, MIN(attempt_no) AS pick_attempt
             FROM attempts
-            WHERE outcome IS NOT NULL AND outcome NOT IN ('NO_ANSWER', 'BUSY')
+            WHERE outcome IS NOT NULL AND outcome NOT IN ('NO_ANSWER', 'BUSY', 'ABORT')
             GROUP BY request_id
         )
         SELECT
@@ -795,8 +809,9 @@ def get_calls_by_hour_query(filters: Dict[str, Any]) -> Tuple[str, List[Any]]:
     """
     Distribution of calls by hour-of-day (0-23), derived from call_initiated_time.
     Honors all standard filters including call_direction; test calls are excluded by
-    build_analytics_where_clause. Hour is extracted in the DB session timezone, matching
-    the day-bucketing used by the trends query (IST conversion is a shared fast-follow).
+    build_analytics_where_clause. Hour is extracted after an explicit shift to
+    Asia/Kolkata so buckets are IST regardless of the DB session timezone —
+    the UI labels this chart "IST".
     """
     conditions, values = build_analytics_where_clause(filters)
     conditions.append("lct.call_initiated_time IS NOT NULL")
@@ -810,7 +825,7 @@ def get_calls_by_hour_query(filters: Dict[str, Any]) -> Tuple[str, List[Any]]:
 
     text = f"""
         SELECT
-            EXTRACT(HOUR FROM lct.call_initiated_time)::int AS hour,
+            EXTRACT(HOUR FROM (lct.call_initiated_time AT TIME ZONE 'Asia/Kolkata'))::int AS hour,
             COUNT(*) as count
         FROM "{LEAD_CALL_TRACKER_TABLE}" lct
         {join_clause}
