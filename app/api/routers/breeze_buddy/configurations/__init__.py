@@ -228,20 +228,14 @@ async def delete_configuration(
 
     Permissions:
     - Admin: Can delete any configuration
-    - Merchant: Cannot delete configurations
+    - Reseller/Merchant: Can delete configurations within their own scope
 
     Returns:
         204 No Content on successful deletion
         404 if configuration not found
         403 if user lacks permission
     """
-    # RBAC: Only admins can delete configurations
-    if current_user.role != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only admin users can delete configurations",
-        )
-
+    # RBAC validation is performed in the handler against the existing configuration
     await delete_configuration_handler(config_id, current_user)
     return None  # 204 No Content
 

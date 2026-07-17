@@ -41,6 +41,9 @@ from app.schemas.breeze_buddy.auth import (
 )
 from app.schemas.breeze_buddy.connection import BreezeBuddyDailyConnectRequest
 from app.schemas.breeze_buddy.core import (
+    IVR_OPTIONS_TEMPLATE,
+    TEMPLATELESS_PLACEHOLDER_TEMPLATES,
+    UNKNOWN_TEMPLATE,
     BlacklistedNumber,
     CallDirection,
     CallExecutionConfig,
@@ -114,6 +117,9 @@ __all__ = [
     "TimeGranularity",
     "TrendDataPoint",
     # Core
+    "IVR_OPTIONS_TEMPLATE",
+    "TEMPLATELESS_PLACEHOLDER_TEMPLATES",
+    "UNKNOWN_TEMPLATE",
     "BlacklistedNumber",
     "CallDirection",
     "CallExecutionConfig",

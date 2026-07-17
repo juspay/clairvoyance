@@ -204,18 +204,34 @@ async def get_templates_list(
         query, values = get_templates_list_query(filters)
         result = await run_parameterized_query(query, values)
 
-        # If no results found and we're filtering by merchant_id, try fallback to generic templates
-        if not result and ("merchant_id" in filters or "merchant_ids" in filters):
+        # If no results found and we're filtering by merchant_id, try fallback
+        # to the reseller's generic templates. Two guards (2026-07-13 fix —
+        # an admin console scoped to an empty merchant used to get EVERY
+        # template on the platform back):
+        #   1. Only fall back when a reseller constraint exists — with no
+        #      reseller filter (admin wildcard), dropping the merchant filter
+        #      would unscope the query entirely; empty means empty.
+        #   2. The fallback pins merchant_id IS NULL instead of merely
+        #      removing the merchant filter, so it returns the reseller's
+        #      generic templates — not other merchants' copies.
+        has_reseller_scope = bool(
+            filters.get("reseller_id") or filters.get("reseller_ids")
+        )
+        if (
+            not result
+            and has_reseller_scope
+            and ("merchant_id" in filters or "merchant_ids" in filters)
+        ):
             logger.info(
                 "No merchant-specific templates found, falling back to generic reseller templates (merchant_id IS NULL)"
             )
 
-            # Create fallback filters without merchant_id
             fallback_filters = {
                 k: v
                 for k, v in filters.items()
                 if k not in ["merchant_id", "merchant_ids"]
             }
+            fallback_filters["merchant_id_is_null"] = True
 
             # Query for generic templates (merchant_id IS NULL)
             effective_filters = fallback_filters

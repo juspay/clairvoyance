@@ -75,7 +75,13 @@ from app.database.accessor.breeze_buddy.template import (
     get_all_templates_by_outbound_number_id,
     get_template_by_id,
 )
-from app.schemas import CallDirection, InboundBlockAction, LeadCallStatus
+from app.schemas import (
+    IVR_OPTIONS_TEMPLATE,
+    UNKNOWN_TEMPLATE,
+    CallDirection,
+    InboundBlockAction,
+    LeadCallStatus,
+)
 from app.services.redis.client import get_redis_service
 
 
@@ -425,7 +431,7 @@ async def _create_inbound_lead_in_answer_handler(
     is_ivr_mode = len(templates) > 1
 
     if is_ivr_mode:
-        lead_template_name = "IVR-OPTIONS"
+        lead_template_name = IVR_OPTIONS_TEMPLATE
         lead_template_id = None
     else:
         lead_template_name = first_template.name
@@ -683,7 +689,9 @@ async def handle_provider_answer(request: Request, provider: str) -> Response:
                         provider=provider,
                         reseller_id=reseller_id,
                         merchant_id=merchant_id,
-                        template_name=templates[0].name if templates else "unknown",
+                        template_name=(
+                            templates[0].name if templates else UNKNOWN_TEMPLATE
+                        ),
                         template_id=str(templates[0].id) if templates else None,
                         outbound_number_id=(
                             str(templates[0].outbound_number_id)

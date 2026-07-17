@@ -37,6 +37,7 @@ from app.database.queries.breeze_buddy.lead_call_tracker import (
     update_lead_template_query,
 )
 from app.schemas import (
+    TEMPLATELESS_PLACEHOLDER_TEMPLATES,
     CallDirection,
     ExecutionMode,
     LeadCallStatus,
@@ -49,6 +50,26 @@ def get_row_count(result: Optional[List[asyncpg.Record]]) -> int:
     Get the number of rows in the result.
     """
     return len(result) if result else 0
+
+
+def require_template_link(template: str, template_id: Optional[str]) -> None:
+    """Guard: every new lead must be id-linked to its template.
+
+    Resolution is id-only (PRs #888/#889) — a name-only lead fails loudly at
+    call time and is invisible to id-filtered analytics. The ONLY sanctioned
+    template_id-less rows are the inbound placeholders in
+    TEMPLATELESS_PLACEHOLDER_TEMPLATES (IVR digit-menu stage / unmapped
+    number), which by definition have no template yet.
+
+    Raises:
+        ValueError: template_id missing for a non-placeholder template.
+    """
+    if not template_id and template not in TEMPLATELESS_PLACEHOLDER_TEMPLATES:
+        raise ValueError(
+            f"lead for template '{template}' created without template_id — "
+            "leads must be id-linked (only the IVR-OPTIONS / unknown inbound "
+            "placeholders may omit it)"
+        )
 
 
 async def create_lead_call_tracker(
@@ -85,8 +106,13 @@ async def create_lead_call_tracker(
         outbound_number_id: Outbound number ID (optional, used for inbound calls)
         call_direction: Direction of call (INBOUND or OUTBOUND, defaults to OUTBOUND)
         outcome: Call outcome (optional, e.g. BLOCKED_REJECT, BLOCKED_REDIRECT)
+
+    Raises:
+        ValueError: when template_id is missing for a non-placeholder
+            template (see require_template_link).
     """
     logger.info(f"Creating lead call tracker for reseller ID: {reseller_id}")
+    require_template_link(template, template_id)
 
     try:
         query_text, values = insert_lead_call_tracker_query(

@@ -57,6 +57,18 @@ class CallDirection(str, Enum):
     OUTBOUND = "OUTBOUND"  # We called customer
 
 
+# The ONLY sanctioned template_id-less lead rows, both inbound artifacts
+# (everything else must be id-linked — resolution is id-only, PRs #888/#889):
+#  - IVR_OPTIONS_TEMPLATE: multi-template number, caller still in the digit
+#    menu; updated with the real template on selection, stays a placeholder
+#    forever if they hang up mid-menu (census 2026-07-14: ~23k such rows/30d
+#    on nammayatri — expected, exclude from cutover template_id audits).
+#  - UNKNOWN_TEMPLATE: blocked call on a number with no template mapping.
+IVR_OPTIONS_TEMPLATE = "IVR-OPTIONS"
+UNKNOWN_TEMPLATE = "unknown"
+TEMPLATELESS_PLACEHOLDER_TEMPLATES = frozenset({IVR_OPTIONS_TEMPLATE, UNKNOWN_TEMPLATE})
+
+
 class PreCheckType(str, Enum):
     """Supported pre-check types"""
 
