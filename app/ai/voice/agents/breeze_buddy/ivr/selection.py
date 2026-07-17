@@ -265,14 +265,16 @@ async def _check_deferred_inbound_policy(
                 meta_data=meta_data,
                 call_end_time=datetime.now(timezone.utc),
             )
-            await update_lead_template(
+            if await update_lead_template(
                 lead_id=existing.id,
                 template=template.name,
                 template_id=str(template.id),
-            )
-            logger.info(
-                f"[IVR] Updated existing lead {existing.id} with outcome={outcome}"
-            )
+            ):
+                logger.info(f"[IVR] Updated template for blocked lead {existing.id}")
+            else:
+                logger.warning(
+                    f"[IVR] Failed to update template for blocked lead {existing.id}"
+                )
         else:
             await log_blocked_call(
                 call_id=call_sid,

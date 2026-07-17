@@ -286,6 +286,13 @@
       "description": "When true, this template is eligible to handle inbound calls. Typically paired with ivr_configuration.",
       "example": false
     },
+    "service_callback": {
+      "description": "Webhook callback fired at the end of every call (inbound and outbound). url is the endpoint to POST to; max_attempts is the total number of HTTP attempts (default 3, minimum 1). Note: a lead's payload.reporting_webhook_url, if still present, overrides this url.",
+      "example": {
+        "url": "https://example.com/webhook/call-summary",
+        "max_attempts": 3
+      }
+    },
     "mcp": {
       "description": "MCP (Model Context Protocol) server configuration. Enables dynamic tool discovery at session start — the agent connects to listed MCP servers and receives available tools before the first LLM turn.",
       "example": {

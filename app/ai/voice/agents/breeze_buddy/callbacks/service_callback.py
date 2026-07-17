@@ -10,9 +10,12 @@ from app.core.logger import logger
 
 async def service_callback(context: TemplateContext, args):
     """
-    Handler to send webhook with call summary to the calling service.
+    Handler to send a call summary to the template service callback.
 
-    This handler sends the call summary data to the reporting webhook URL.
+    This handler sends the call summary data to the service callback configured
+    on the active template. If the lead's payload still carries a
+    `reporting_webhook_url`, that URL takes precedence over the template
+    config; max_attempts always comes from the template.
 
     Args:
         context: Handler context with bot state access
@@ -100,11 +103,18 @@ async def service_callback(context: TemplateContext, args):
             f"call_duration={call_duration}s"
         )
 
-        webhook_url = (
-            context.lead.payload.get("reporting_webhook_url")
-            if context.lead and context.lead.payload
+        callback_config = (
+            context.configurations.service_callback if context.configurations else None
+        )
+        reporting_webhook_url = (
+            (context.lead.payload or {}).get("reporting_webhook_url")
+            if context.lead
             else None
         )
+        webhook_url = reporting_webhook_url or (
+            callback_config.url if callback_config else None
+        )
+        max_attempts = callback_config.max_attempts if callback_config else 3
 
         if webhook_url:
             logger.info(
@@ -116,6 +126,7 @@ async def service_callback(context: TemplateContext, args):
                     context.aiohttp_session,
                     webhook_url,
                     summary_data,
+                    max_retries=max_attempts,
                 )
                 if not success:
                     logger.error(
@@ -135,8 +146,7 @@ async def service_callback(context: TemplateContext, args):
         else:
             logger.info(
                 f"Skipping webhook send for call {context.call_sid} "
-                f"(url={'present' if webhook_url else 'missing'}, "
-                f"outcome={outcome})"
+                f"(no service callback configured, outcome={outcome})"
             )
 
     except Exception as e:

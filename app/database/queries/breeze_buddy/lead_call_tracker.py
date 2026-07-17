@@ -656,7 +656,9 @@ def update_lead_request_id_query(
 
 
 def update_lead_template_query(
-    lead_id: str, template: str, template_id: str
+    lead_id: str,
+    template: str,
+    template_id: str,
 ) -> Tuple[str, List[Any]]:
     """
     Update the template name and template_id for a lead.
@@ -681,7 +683,7 @@ def update_lead_template_query(
         WHERE "id" = $3
         RETURNING *;
     """
-    values = [template, template_id, lead_id]
+    values: List[Any] = [template, template_id, lead_id]
     return text, values
 
 
