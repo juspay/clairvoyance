@@ -16,11 +16,13 @@ Endpoints:
 - DELETE /knowledge-bases/{id}/documents/{doc_id}      - Delete document
 - POST   /knowledge-bases/{id}/documents/{doc_id}/sync - Manual re-sync
 - POST   /knowledge-bases/{id}/query                   - Retrieval testing
+- GET    /knowledge-bases/{id}/usage                   - Templates using this KB
 """
 
-from typing import Optional
+from typing import Optional, Union
 
 from fastapi import APIRouter, Depends, File, Query, UploadFile, status
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from app.api.security.breeze_buddy.rbac_token import get_current_user_with_rbac
 from app.schemas import UserInfo
@@ -29,6 +31,7 @@ from app.schemas.breeze_buddy.knowledge_base import (
     DeleteKnowledgeBaseResponse,
     KbDocument,
     KbDocumentListResponse,
+    KbUsageResponse,
     KnowledgeBase,
     KnowledgeBaseListResponse,
     QueryKnowledgeBaseRequest,
@@ -40,7 +43,9 @@ from .handlers import (
     create_kb_handler,
     delete_document_handler,
     delete_kb_handler,
+    download_document_handler,
     get_kb_handler,
+    get_kb_usage_handler,
     list_documents_handler,
     list_kbs_handler,
     query_kb_handler,
@@ -48,7 +53,7 @@ from .handlers import (
     update_kb_handler,
     upload_document_handler,
 )
-from .rbac import require_admin_or_reseller_owner
+from .rbac import require_kb_write_access
 
 router = APIRouter()
 
@@ -63,8 +68,11 @@ async def create_knowledge_base(
     current_user: UserInfo = Depends(get_current_user_with_rbac),
 ):
     """Create a knowledge base scoped to a reseller (optionally a merchant)."""
-    require_admin_or_reseller_owner(
-        current_user, request.reseller_id, "create knowledge bases"
+    require_kb_write_access(
+        current_user,
+        request.reseller_id,
+        request.merchant_id,
+        "create knowledge bases",
     )
     return await create_kb_handler(request, current_user)
 
@@ -150,6 +158,23 @@ async def delete_document(
     return await delete_document_handler(kb_id, document_id, current_user)
 
 
+# response_model=None is required: a Union of Response subclasses as the
+# return annotation would otherwise make FastAPI try (and fail) to build a
+# response model from it at import time.
+@router.get(
+    "/knowledge-bases/{kb_id}/documents/{document_id}/download",
+    response_model=None,
+)
+async def download_document(
+    kb_id: str,
+    document_id: str,
+    current_user: UserInfo = Depends(get_current_user_with_rbac),
+) -> Union[JSONResponse, StreamingResponse]:
+    """Serve a document's original source: files stream through the API
+    (Content-Disposition attachment); sheet docs return {"url": ...}."""
+    return await download_document_handler(kb_id, document_id, current_user)
+
+
 @router.post(
     "/knowledge-bases/{kb_id}/documents/{document_id}/sync",
     response_model=KbDocument,
@@ -161,6 +186,15 @@ async def sync_document(
 ):
     """Manually re-sync a document (re-parse file / re-fetch sheet)."""
     return await resync_document_handler(kb_id, document_id, current_user)
+
+
+@router.get("/knowledge-bases/{kb_id}/usage", response_model=KbUsageResponse)
+async def get_knowledge_base_usage(
+    kb_id: str,
+    current_user: UserInfo = Depends(get_current_user_with_rbac),
+) -> KbUsageResponse:
+    """Templates whose enabled configurations reference this knowledge base."""
+    return await get_kb_usage_handler(kb_id, current_user)
 
 
 @router.post(
