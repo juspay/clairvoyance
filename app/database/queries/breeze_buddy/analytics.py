@@ -191,6 +191,10 @@ def build_analytics_where_clause(
         values.append(filters["request_id"])
         conditions.append(f"lct.request_id = ${len(values) + value_offset}")
 
+    if "campaign_id" in filters and filters["campaign_id"]:
+        values.append(filters["campaign_id"])
+        conditions.append(f"lct.campaign_id = ${len(values) + value_offset}::UUID")
+
     # Provider filter (list of strings)
     if "provider" in filters and filters["provider"]:
         values.append(filters["provider"])
