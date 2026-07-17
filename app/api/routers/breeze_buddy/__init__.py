@@ -27,6 +27,9 @@ from app.api.routers.breeze_buddy.merchants import router as merchants_router
 from app.api.routers.breeze_buddy.numbers import router as numbers_router
 from app.api.routers.breeze_buddy.playground import router as playground_router
 
+# Reseller (umbrella) entities — first-class since migration 036
+from app.api.routers.breeze_buddy.resellers import router as resellers_router
+
 # Self-service signup and Google SSO (public, unauthenticated)
 from app.api.routers.breeze_buddy.signup import router as signup_router
 from app.api.routers.breeze_buddy.telephony import router as telephony_router
@@ -88,6 +91,9 @@ router.include_router(blacklist_router, prefix="", tags=["blacklist"])
 
 # Merchants (merchant identifiers - admin only)
 router.include_router(merchants_router, prefix="", tags=["merchants"])
+
+# Reseller (umbrella) entity management
+router.include_router(resellers_router, prefix="", tags=["resellers"])
 
 # E-commerce order webhooks (generic /webhook/{platform}/{merchant_id})
 router.include_router(webhooks_router, prefix="", tags=["webhooks"])

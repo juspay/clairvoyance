@@ -21,7 +21,12 @@ from app.core.security.scope import (
 )
 from app.database.accessor.breeze_buddy import users as user_accessors
 from app.database.accessor.breeze_buddy.merchants import get_merchants_by_reseller
+from app.database.accessor.breeze_buddy.resellers import (
+    get_user_umbrella_grants,
+    get_user_workspace_access,
+)
 from app.schemas import UserInfo, UserRole
+from app.schemas.breeze_buddy.resellers import UserAccessResponse
 from app.schemas.breeze_buddy.users import (
     DeleteUserResponse,
     UserCreate,
@@ -438,6 +443,40 @@ async def get_user_by_id_handler(user_id: str, current_user: UserInfo) -> UserRe
         raise
     except Exception as e:
         logger.error(f"Error fetching user {user_id}: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+async def get_user_access_handler(
+    user_id: str, current_user: UserInfo
+) -> UserAccessResponse:
+    """Effective access for one user, read from the normalized grant tables.
+
+    Explicit workspace membership and umbrella grants are reported as-is;
+    workspaces reachable through an all-workspaces umbrella grant appear with
+    source='inherited'. Visibility RBAC is exactly GET /user/{id}'s.
+    """
+    # Reuse the single-user RBAC gate (raises 403/404 as appropriate).
+    user = await get_user_by_id_handler(user_id, current_user)
+
+    if user.role == UserRole.ADMIN:
+        return UserAccessResponse(
+            user_id=user.id, role=user.role.value, unrestricted=True
+        )
+
+    try:
+        grants = await get_user_umbrella_grants(user.id)
+        workspaces = await get_user_workspace_access(user.id)
+        return UserAccessResponse(
+            user_id=user.id,
+            role=user.role.value,
+            unrestricted=False,
+            umbrella_grants=grants,
+            workspaces=workspaces,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching access for user {user_id}: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
 
 

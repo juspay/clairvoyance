@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, Query
 
 from app.api.security.breeze_buddy.rbac_token import get_current_user_with_rbac
 from app.schemas import UserInfo
+from app.schemas.breeze_buddy.resellers import UserAccessResponse
 from app.schemas.breeze_buddy.users import (
     DeleteUserResponse,
     UserCreate,
@@ -23,6 +24,7 @@ from .handlers import (
     create_user_handler,
     delete_user_handler,
     get_all_users_handler,
+    get_user_access_handler,
     get_user_by_id_handler,
     update_user_handler,
 )
@@ -153,6 +155,23 @@ async def get_user_account_by_id(
         500: If there's an error retrieving the user
     """
     return await get_user_by_id_handler(user_id, current_user)
+
+
+@router.get("/user/{user_id}/access", response_model=UserAccessResponse)
+async def get_user_access(
+    user_id: str,
+    current_user: UserInfo = Depends(get_current_user_with_rbac),
+):
+    """
+    Effective access for one user, from the normalized grant tables.
+
+    Returns the user's umbrella grants and every workspace they can reach,
+    each tagged 'explicit' (direct membership row) or 'inherited' (via an
+    all-workspaces umbrella grant). Admin accounts report unrestricted=true.
+
+    Visibility follows the same RBAC as GET /user/{user_id}.
+    """
+    return await get_user_access_handler(user_id, current_user)
 
 
 @router.put("/user/{user_id}", response_model=UserResponse)
