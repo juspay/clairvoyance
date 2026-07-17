@@ -6,7 +6,8 @@ Business logic for three public signup/SSO flows:
 1. signup_with_password_handler
    - Validates input
    - Checks merchant_id + username uniqueness
-   - Creates merchant entity in `merchants` table (reseller_id = "breeze")
+   - Creates merchant entity in `merchants` table (reseller_id =
+     the self-serve umbrella, see SELF_SIGNUP_RESELLER_ID)
    - Creates user login account in `users` table (role = merchant, owner_id = None)
    - Returns JWT
 
@@ -25,9 +26,11 @@ Business logic for three public signup/SSO flows:
 
 Security invariants (enforced here, never trusted from client):
   - role is always UserRole.MERCHANT
-  - reseller_id is always "breeze"
+  - reseller_id is always the self-serve umbrella (SELF_SIGNUP_RESELLER_ID,
+    default "breeze-self-serve" — env-overridable) so self-registered
+    merchants are distinguishable from manually onboarded ones (breeze)
   - merchant_ids is always [merchant_id] (the just-created merchant)
-  - reseller_ids is always ["breeze"]
+  - reseller_ids is always [SELF_SIGNUP_RESELLER_ID]
   - owner_id is always None (self-registered → no parent user)
   - No admin / reseller role is ever assigned by these handlers
 """
@@ -42,7 +45,11 @@ from google.auth.transport import requests as google_requests
 from google.oauth2 import id_token as google_id_token
 
 from app.api.security.breeze_buddy.rbac_token import rbac_token_manager
-from app.core.config.static import GOOGLE_CLIENT_ID, JWT_ACCESS_TOKEN_EXPIRE_MINUTES
+from app.core.config.static import (
+    GOOGLE_CLIENT_ID,
+    JWT_ACCESS_TOKEN_EXPIRE_MINUTES,
+    SELF_SIGNUP_RESELLER_ID,
+)
 from app.core.logger import logger
 from app.core.security.password import verify_password
 from app.core.security.scope import resolve_merchant_ids, resolve_reseller_ids
@@ -57,10 +64,6 @@ from app.schemas.breeze_buddy.signup import (
     GoogleMerchantSignupRequest,
     MerchantSignupRequest,
 )
-
-# Fixed reseller for all self-registered merchants.
-_SELF_SIGNUP_RESELLER_ID = "breeze"
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Helpers
@@ -189,7 +192,7 @@ async def signup_with_password_handler(
     1. Validate that merchant_id is available.
     2. Validate that username is available.
     3. Validate that email is available (if provided).
-    4. Create the merchant entity (reseller_id = "breeze").
+    4. Create the merchant entity (reseller_id = SELF_SIGNUP_RESELLER_ID).
     5. Create the user account (role = merchant, merchant_ids = [merchant_id]).
     6. Mint and return a JWT.
     """
@@ -226,7 +229,7 @@ async def signup_with_password_handler(
             merchant_id=request.merchant_id,
             merchant_name=request.name,
             merchant_description=request.description,
-            reseller_id=_SELF_SIGNUP_RESELLER_ID,
+            reseller_id=SELF_SIGNUP_RESELLER_ID,
             user_id=request.merchant_id,
             username=request.username,
             password=request.password,
@@ -241,7 +244,7 @@ async def signup_with_password_handler(
 
     logger.info(
         f"Self-service signup: merchant='{request.merchant_id}' "
-        f"user='{request.username}' reseller='{_SELF_SIGNUP_RESELLER_ID}'"
+        f"user='{request.username}' reseller='{SELF_SIGNUP_RESELLER_ID}'"
     )
 
     # 5. Fetch the full UserInDB to build the token (create_user returns UserResponse)
@@ -304,7 +307,7 @@ async def google_signup_handler(request: GoogleMerchantSignupRequest) -> TokenRe
     Register a new merchant via Google SSO (step 2 after google_login_handler 404).
 
     Re-verifies the id_token, then creates:
-    - A merchant entity with reseller_id = "breeze"
+    - A merchant entity with reseller_id = SELF_SIGNUP_RESELLER_ID
     - A user account with role = merchant, email = Google email, no password
     """
     claims = _verify_google_id_token(request.id_token)
@@ -359,7 +362,7 @@ async def google_signup_handler(request: GoogleMerchantSignupRequest) -> TokenRe
             merchant_id=request.merchant_id,
             merchant_name=request.name,
             merchant_description=request.description,
-            reseller_id=_SELF_SIGNUP_RESELLER_ID,
+            reseller_id=SELF_SIGNUP_RESELLER_ID,
             user_id=request.merchant_id,
             username=username,
             password=random_password,
@@ -375,7 +378,7 @@ async def google_signup_handler(request: GoogleMerchantSignupRequest) -> TokenRe
     logger.info(
         f"Google SSO signup: merchant='{request.merchant_id}' "
         f"user='{username}' email='{google_email}' "
-        f"reseller='{_SELF_SIGNUP_RESELLER_ID}'"
+        f"reseller='{SELF_SIGNUP_RESELLER_ID}'"
     )
 
     user_in_db = await user_accessors.get_user_by_username(username)

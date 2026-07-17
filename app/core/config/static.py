@@ -305,6 +305,12 @@ ENABLE_LIGHTHOUSE_AUTH = os.getenv("ENABLE_LIGHTHOUSE_AUTH", "false").lower() ==
 # Obtain from: https://console.cloud.google.com/apis/credentials
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
 
+# Umbrella reseller stamped on every self-registered merchant (signup
+# routes). Kept separate from "breeze" (manual onboarding) so self-serve
+# accounts are distinguishable in every reseller-scoped view; override for
+# staging or an instant rollback without a deploy.
+SELF_SIGNUP_RESELLER_ID = os.getenv("BB_SELF_SIGNUP_RESELLER_ID", "breeze-self-serve")
+
 BREEZE_BUDDY_STT_SERVICE = os.getenv(
     "BREEZE_BUDDY_STT_SERVICE", "soniox"
 ).lower()  # "soniox", "sarvam", "openai", "deepgram", or "google"
