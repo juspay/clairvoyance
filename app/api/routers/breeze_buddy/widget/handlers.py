@@ -861,11 +861,20 @@ async def voice_connect_handler(
                 detail="Failed to start widget voice session. Try again shortly.",
             )
 
+        # Client audio flag: browser Krisp noise cancellation defaults ON;
+        # the template opts out via configurations.client_noise_cancellation
+        # = false. Same contract as the web-voice /connect response.
+        tpl_cfg = template.configurations
+        noise_cancellation = not (
+            tpl_cfg is not None and tpl_cfg.client_noise_cancellation is False
+        )
+
         return WidgetVoiceConnectResponse(
             room_url=session_info["room_url"],
             daily_token=session_info["token"],
             lead_id=lead_id,
             ttl_seconds=_DAILY_ROOM_TTL_SECONDS,
+            noise_cancellation=noise_cancellation,
         )
     finally:
         await lock.release()

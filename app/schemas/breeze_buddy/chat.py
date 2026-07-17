@@ -565,6 +565,13 @@ class WidgetVoiceConnectResponse(BaseModel):
         description="Daily room expiry (typ. 3600s). The widget_token "
         "outlives this; you can reconnect voice within the widget_token TTL.",
     )
+    noise_cancellation: bool = Field(
+        True,
+        description="Whether the client should apply browser-side (Krisp) "
+        "noise cancellation to the mic input. False only when the template "
+        "sets configurations.client_noise_cancellation=false. Mirrors the "
+        "same flag on the web-voice /connect response.",
+    )
 
 
 class WidgetVoiceEndResponse(BaseModel):
