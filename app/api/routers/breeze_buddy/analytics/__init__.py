@@ -24,6 +24,7 @@ from .handlers import (
     get_call_details_grouped_analytics,
     get_calls_by_hour_analytics,
     get_chat_based_analytics,
+    get_chats_by_hour_analytics,
     get_conversion_analytics,
     get_distinct_merchant_ids,
     get_distinct_outcomes,
@@ -56,6 +57,7 @@ _ANALYTICS_HANDLERS: Dict[AnalyticsType, Callable[..., Awaitable]] = {
     AnalyticsType.DISTINCT_MERCHANT_IDS: get_distinct_merchant_ids,
     AnalyticsType.ATTEMPTS_TO_CONNECT: get_attempts_to_connect_analytics,
     AnalyticsType.CALLS_BY_HOUR: get_calls_by_hour_analytics,
+    AnalyticsType.CHATS_BY_HOUR: get_chats_by_hour_analytics,
 }
 
 

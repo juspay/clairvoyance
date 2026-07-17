@@ -33,6 +33,7 @@ from app.database.accessor.breeze_buddy.analytics import (
 from app.database.accessor.breeze_buddy.chat_analytics import (
     get_chat_summary_from_db,
     get_chat_trends_from_db,
+    get_chats_by_hour_from_db,
 )
 from app.schemas import CallDetailGroupedResult, CallDetailResult, UserInfo
 from app.utils.common import parse_json
@@ -166,6 +167,9 @@ async def get_chat_based_analytics(
             data_point: Dict[str, Any] = {
                 "conversations_started": row["conversations_started"] or 0,
                 "ended_conversations": row["ended_conversations"] or 0,
+                "total_messages": row.get("total_messages") or 0,
+                "user_messages": row.get("user_messages") or 0,
+                "assistant_messages": row.get("assistant_messages") or 0,
             }
             _format_time_bucket(data_point, row["time_bucket"], time_granularity)
             results.append(data_point)
@@ -195,18 +199,38 @@ async def get_chat_based_analytics(
         row = rows[0] if rows else {}
         total_conversations = row.get("total_conversations") or 0
         total_messages = row.get("total_messages") or 0
+        avg_session_seconds = row.get("avg_session_seconds")
+        median_reply_ms = row.get("median_reply_ms")
         results = [
             {
                 "total_conversations": total_conversations,
                 "active_conversations": row.get("active_conversations") or 0,
                 "idle_conversations": row.get("idle_conversations") or 0,
                 "ended_conversations": row.get("ended_conversations") or 0,
+                "user_ended_conversations": row.get("user_ended_conversations") or 0,
+                "idle_timeout_conversations": row.get("idle_timeout_conversations")
+                or 0,
                 "total_agents": row.get("total_agents") or 0,
                 "total_messages": total_messages,
+                "user_messages": row.get("user_messages") or 0,
+                "assistant_messages": row.get("assistant_messages") or 0,
                 "avg_messages_per_conversation": (
                     round(total_messages / total_conversations, 2)
                     if total_conversations
                     else 0.0
+                ),
+                # session span = first-to-last activity; NULL (→ None) when
+                # no sessions matched, so the UI can show an em dash
+                "avg_session_seconds": (
+                    round(float(avg_session_seconds), 1)
+                    if avg_session_seconds is not None
+                    else None
+                ),
+                # median time-to-first-token across assistant turns
+                "median_reply_ms": (
+                    round(float(median_reply_ms), 1)
+                    if median_reply_ms is not None
+                    else None
                 ),
             }
         ]
@@ -216,6 +240,20 @@ async def get_chat_based_analytics(
         "filters_applied": filters,
         "time_granularity": None,
         "results": results,
+    }
+
+
+async def get_chats_by_hour_analytics(
+    filters: Dict[str, Any],
+    options: Dict[str, Any],
+    current_user: UserInfo,
+) -> Dict[str, Any]:
+    """Distribution of conversations started by hour-of-day (0-23, IST)."""
+    hours = await get_chats_by_hour_from_db(filters)
+    return {
+        "type": "chats-by-hour",
+        "filters_applied": filters,
+        "results": hours,
     }
 
 
@@ -631,15 +669,15 @@ async def get_performance_analytics(
         elif "busy" in outcome_lower:
             calls_busy += count
 
+    # Picked = calls a human answered. BUSY counts as picked (customer
+    # answered and cut the call); only NO-ANSWER comes out.
     calls_picked = total_calls - calls_no_answer
 
     success_rate = summary.get("success_rate", 0.0)
 
-    answer_rate = (
-        ((calls_picked + calls_no_answer) / total_calls * 100)
-        if total_calls > 0
-        else 0.0
-    )
+    # (The previous formula added no_answer back into the numerator, so
+    # answer_rate was always exactly 100%.)
+    answer_rate = (calls_picked / total_calls * 100) if total_calls > 0 else 0.0
 
     failure_rate = (failed_calls / total_calls * 100) if total_calls > 0 else 0.0
 

@@ -4,7 +4,7 @@ from datetime import date, datetime
 from enum import Enum
 from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class AnalyticsType(str, Enum):
@@ -26,6 +26,7 @@ class AnalyticsType(str, Enum):
     DISTINCT_MERCHANT_IDS = "distinct-merchant-ids"
     ATTEMPTS_TO_CONNECT = "attempts-to-connect"
     CALLS_BY_HOUR = "calls-by-hour"
+    CHATS_BY_HOUR = "chats-by-hour"
 
 
 class TimeGranularity(str, Enum):
@@ -40,12 +41,34 @@ class AnalyticsFilters(BaseModel):
     """Filters for analytics queries - all filters applied with AND logic"""
 
     template: Optional[str] = Field(
-        None, description="Filter by template name (e.g., 'order-confirmation')"
+        None,
+        description=(
+            "Deprecated alias of template_id — must be a template UUID. "
+            "Filtering by template NAME was removed 2026-07-13: names are "
+            "mutable display strings, not identifiers."
+        ),
     )
     template_id: Optional[str] = Field(
         None,
         description="Filter by template UUID (chat analytics key off template_id, which has no name column)",
     )
+
+    @field_validator("template")
+    @classmethod
+    def _template_must_be_uuid(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        import uuid
+
+        try:
+            uuid.UUID(v)
+        except (ValueError, AttributeError, TypeError):
+            raise ValueError(
+                "filtering analytics by template name is no longer supported — "
+                "pass the template UUID (template_id)"
+            )
+        return v
+
     # New field names
     merchant_id: Optional[str] = Field(
         None, description="Filter by single merchant identifier"
