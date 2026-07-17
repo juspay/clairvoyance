@@ -12,6 +12,10 @@ from typing import List, Optional, Tuple
 from app.core.logger import logger
 from app.core.security.password import hash_password
 from app.database import get_db_connection
+from app.database.accessor.breeze_buddy.access_grants import (
+    ensure_reseller_on_conn,
+    sync_user_access_on_conn,
+)
 from app.database.decoder.breeze_buddy.users import decode_user
 from app.database.queries import run_parameterized_query
 from app.database.queries.breeze_buddy.merchants import create_merchant_query
@@ -158,8 +162,19 @@ async def create_merchant_and_user_atomically(
 
     async for conn in get_db_connection():
         async with conn.transaction():
+            # The umbrella must exist before the merchants-row FK lands
+            # (BB_SELF_SIGNUP_RESELLER_ID may point at an unprovisioned slug).
+            await ensure_reseller_on_conn(conn, reseller_id)
             await conn.execute(merchant_q, *merchant_v)
             await conn.execute(user_q, *user_v)
+            await sync_user_access_on_conn(
+                conn,
+                user_id=user_id,
+                role=getattr(role, "value", role),
+                reseller_ids=[reseller_id],
+                merchant_ids=[merchant_id],
+                username=username,
+            )
         return
 
 
@@ -210,13 +225,28 @@ async def create_user(
     )
 
     try:
-        result = await run_parameterized_query(query, values)
-        row = result[0] if result else None
+        async for conn in get_db_connection():
+            async with conn.transaction():
+                result = await conn.fetch(query, *values)
+                row = result[0] if result else None
+                if row:
+                    # Keep the grant tables a projection of the JSONB arrays
+                    # (dual-write; arrays stay authoritative until cutover).
+                    await sync_user_access_on_conn(
+                        conn,
+                        user_id=id,
+                        role=getattr(role, "value", role),
+                        reseller_ids=reseller_ids,
+                        merchant_ids=merchant_ids,
+                        created_by=owner_id,
+                        username=username,
+                    )
 
-        if row:
-            logger.info(f"Created user account: {username} (role: {role})")
-            return decode_user(row)
+            if row:
+                logger.info(f"Created user account: {username} (role: {role})")
+                return decode_user(row)
 
+            return None
         return None
     except Exception as e:
         logger.error(f"Error creating user {username}: {e}")
@@ -346,14 +376,38 @@ async def update_user(
     if not values:
         return await get_user_by_id(user_id)
 
+    access_changed = reseller_ids is not None or merchant_ids is not None
+
     try:
-        result = await run_parameterized_query(query, values)
-        row = result[0] if result else None
+        async for conn in get_db_connection():
+            async with conn.transaction():
+                result = await conn.fetch(query, *values)
+                row = result[0] if result else None
+                if row and access_changed:
+                    # Re-project from the post-update arrays (RETURNING row),
+                    # so the grant tables track whatever the arrays now say.
+                    await sync_user_access_on_conn(
+                        conn,
+                        user_id=user_id,
+                        role=row["role"],
+                        reseller_ids=(
+                            json.loads(row["reseller_ids"])
+                            if row.get("reseller_ids")
+                            else []
+                        ),
+                        merchant_ids=(
+                            json.loads(row["merchant_ids"])
+                            if row.get("merchant_ids")
+                            else []
+                        ),
+                        username=row["username"],
+                    )
 
-        if row:
-            logger.info(f"Updated user: {user_id}")
-            return decode_user(row)
+            if row:
+                logger.info(f"Updated user: {user_id}")
+                return decode_user(row)
 
+            return None
         return None
     except Exception as e:
         logger.error(f"Error updating user {user_id}: {e}")

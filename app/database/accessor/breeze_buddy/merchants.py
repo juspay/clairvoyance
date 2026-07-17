@@ -9,6 +9,8 @@ decoders from decoder.breeze_buddy.merchants.
 from typing import List, Optional, Tuple
 
 from app.core.logger import logger
+from app.database import get_db_connection
+from app.database.accessor.breeze_buddy.access_grants import ensure_reseller_on_conn
 from app.database.decoder.breeze_buddy.merchants import decode_merchant
 from app.database.queries import run_parameterized_query
 from app.database.queries.breeze_buddy.merchants import (
@@ -73,13 +75,21 @@ async def create_merchant(
     )
 
     try:
-        result = await run_parameterized_query(query, values)
-        row = result[0] if result else None
+        async for conn in get_db_connection():
+            async with conn.transaction():
+                if reseller_id:
+                    # merchants.reseller_id carries an FK to resellers; keep
+                    # legacy callers working by materializing unknown umbrella
+                    # slugs as bare resellers rows.
+                    await ensure_reseller_on_conn(conn, reseller_id)
+                result = await conn.fetch(query, *values)
+            row = result[0] if result else None
 
-        if row:
-            logger.info(f"Created merchant entity: {merchant_id}")
-            return decode_merchant(row)
+            if row:
+                logger.info(f"Created merchant entity: {merchant_id}")
+                return decode_merchant(row)
 
+            return None
         return None
     except Exception as e:
         logger.error(f"Error creating merchant entity {merchant_id}: {e}")
@@ -286,13 +296,20 @@ async def update_merchant(
         return await get_merchant_by_merchant_identifier(merchant_id)
 
     try:
-        result = await run_parameterized_query(query, values)
-        row = result[0] if result else None
+        async for conn in get_db_connection():
+            async with conn.transaction():
+                if reseller_id:
+                    # Reassignment must satisfy the resellers FK; materialize
+                    # unknown umbrella slugs like create_merchant does.
+                    await ensure_reseller_on_conn(conn, reseller_id)
+                result = await conn.fetch(query, *values)
+            row = result[0] if result else None
 
-        if row:
-            logger.info(f"Updated merchant entity: {merchant_id}")
-            return decode_merchant(row)
+            if row:
+                logger.info(f"Updated merchant entity: {merchant_id}")
+                return decode_merchant(row)
 
+            return None
         return None
     except Exception as e:
         logger.error(f"Error updating merchant entity {merchant_id}: {e}")
