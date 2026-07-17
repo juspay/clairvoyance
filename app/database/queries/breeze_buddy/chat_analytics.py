@@ -166,7 +166,14 @@ def get_chat_analytics_summary_query(
 def get_chat_analytics_trends_query(
     filters: Dict[str, Any], time_granularity: str = "day"
 ) -> Tuple[str, List[Any]]:
-    """Time-bucketed "chats started" series (conversations created per bucket)."""
+    """Time-bucketed chat series: conversations created per bucket, plus
+    message volume per bucket.
+
+    Messages are bucketed by the MESSAGE's own created_at (a real
+    messages-per-day series), while belonging to the session universe the
+    filters select — a session-start bucket would pile a long session's
+    whole thread onto its first day.
+    """
     conditions, values = build_chat_analytics_where_clause(filters)
     where = " WHERE " + " AND ".join(conditions) if conditions else ""
     # Whitelisted — never interpolate raw user input into SQL.
@@ -176,14 +183,39 @@ def get_chat_analytics_trends_query(
         else "month" if time_granularity == "month" else "day"
     )
     text = f"""
+        WITH base AS (
+            SELECT cs.id, cs.created_at, cs.status
+            FROM {CHAT_SESSION_TABLE} cs
+            {where}
+        ),
+        sess AS (
+            SELECT
+                DATE_TRUNC('{date_trunc}', b.created_at) AS time_bucket,
+                COUNT(*) AS conversations_started,
+                COUNT(*) FILTER (WHERE b.status = 'ENDED') AS ended_conversations
+            FROM base b
+            GROUP BY 1
+        ),
+        msg AS (
+            SELECT
+                DATE_TRUNC('{date_trunc}', m.created_at) AS time_bucket,
+                COUNT(*) AS total_messages,
+                COUNT(*) FILTER (WHERE m.role = 'user') AS user_messages,
+                COUNT(*) FILTER (WHERE m.role = 'assistant') AS assistant_messages
+            FROM {CHAT_MESSAGE_TABLE} m
+            JOIN base b ON b.id = m.session_id
+            GROUP BY 1
+        )
         SELECT
-            DATE_TRUNC('{date_trunc}', cs.created_at) AS time_bucket,
-            COUNT(*) AS conversations_started,
-            COUNT(*) FILTER (WHERE cs.status = 'ENDED') AS ended_conversations
-        FROM {CHAT_SESSION_TABLE} cs
-        {where}
-        GROUP BY time_bucket
-        ORDER BY time_bucket ASC
+            COALESCE(s.time_bucket, g.time_bucket) AS time_bucket,
+            COALESCE(s.conversations_started, 0) AS conversations_started,
+            COALESCE(s.ended_conversations, 0) AS ended_conversations,
+            COALESCE(g.total_messages, 0) AS total_messages,
+            COALESCE(g.user_messages, 0) AS user_messages,
+            COALESCE(g.assistant_messages, 0) AS assistant_messages
+        FROM sess s
+        FULL OUTER JOIN msg g ON g.time_bucket = s.time_bucket
+        ORDER BY 1 ASC
     """
     return text, values
 

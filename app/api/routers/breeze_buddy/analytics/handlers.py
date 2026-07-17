@@ -167,6 +167,9 @@ async def get_chat_based_analytics(
             data_point: Dict[str, Any] = {
                 "conversations_started": row["conversations_started"] or 0,
                 "ended_conversations": row["ended_conversations"] or 0,
+                "total_messages": row.get("total_messages") or 0,
+                "user_messages": row.get("user_messages") or 0,
+                "assistant_messages": row.get("assistant_messages") or 0,
             }
             _format_time_bucket(data_point, row["time_bucket"], time_granularity)
             results.append(data_point)
