@@ -54,10 +54,22 @@ def validate_kb_access(
             )
 
 
-def require_admin_or_reseller_owner(
-    current_user: UserInfo, reseller_id: str, operation: str = "perform this operation"
+def require_kb_write_access(
+    current_user: UserInfo,
+    reseller_id: str,
+    merchant_id: Optional[str],
+    operation: str = "modify this knowledge base",
 ) -> None:
-    """Write-gate: admin, or a user owning the target reseller.
+    """Merchant-aware write gate.
+
+    A reseller-only gate would pass any MERCHANT user carrying that reseller
+    in the JWT, letting them write to a SIBLING merchant's KB under the same
+    reseller. This enforces the real ownership hierarchy:
+
+    - admin: everything
+    - reseller (role): any KB under their reseller, incl. all its merchants
+    - merchant: only KBs for a merchant they own (a reseller-level KB with
+      no merchant_id is off-limits to merchant users)
 
     Raises:
         HTTPException: 403 if the user lacks permission
@@ -65,16 +77,39 @@ def require_admin_or_reseller_owner(
     if current_user.role == "admin":
         return
 
-    if reseller_id in current_user.reseller_ids or "*" in current_user.reseller_ids:
+    # Must own the reseller first.
+    if reseller_id not in (current_user.reseller_ids or []) and "*" not in (
+        current_user.reseller_ids or []
+    ):
+        logger.warning(
+            f"User {current_user.username} attempted to {operation} for "
+            f"unauthorized reseller: {reseller_id}"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Access denied to {operation} for reseller {reseller_id}",
+        )
+
+    # A reseller-role user owning the reseller may write any of its KBs.
+    if current_user.role == "reseller":
+        return
+
+    # Non-reseller (merchant / user) roles must own the specific merchant; a
+    # reseller-level KB (no merchant) is never theirs to write — wildcard
+    # merchant scope widens WHICH merchants they own, not their role, so it
+    # only counts when the KB actually targets a merchant.
+    merchant_ids = current_user.merchant_ids or []
+    if merchant_id and ("*" in merchant_ids or merchant_id in merchant_ids):
         return
 
     logger.warning(
         f"User {current_user.username} (role: {current_user.role}) attempted "
-        f"to {operation} for unauthorized reseller: {reseller_id}"
+        f"to {operation} for unauthorized merchant: {merchant_id}"
     )
     raise HTTPException(
         status_code=status.HTTP_403_FORBIDDEN,
-        detail=f"Access denied to {operation} for reseller {reseller_id}",
+        detail=f"Access denied to {operation}"
+        + (f" for merchant {merchant_id}" if merchant_id else ""),
     )
 
 
