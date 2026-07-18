@@ -27,15 +27,21 @@ from app.core.security.authorization import require_admin
 from app.schemas import UserInfo
 from app.schemas.breeze_buddy.template import (
     DeleteTemplateResponse,
+    RollbackTemplateResponse,
     TemplateListResponse,
+    TemplateVersionDetail,
+    TemplateVersionListResponse,
 )
 
 from .handlers import (
     create_template_handler,
     delete_template_handler,
     get_template_by_id_handler,
+    get_template_version_handler,
+    list_template_versions_handler,
     list_templates_handler,
     replace_template_handler,
+    rollback_template_handler,
 )
 from .rbac import require_admin_or_reseller_owner
 
@@ -260,3 +266,58 @@ async def delete_template_by_id(
     require_admin(current_user)
 
     return await delete_template_handler(template_id, current_user)
+
+
+@router.get(
+    "/templates/{template_id}/versions",
+    response_model=TemplateVersionListResponse,
+)
+async def list_template_versions_endpoint(
+    template_id: str,
+    page: int = Query(1, ge=1, description="Page number (1-based)"),
+    limit: int = Query(20, ge=1, le=100, description="Page size"),
+    current_user: UserInfo = Depends(get_current_user_with_rbac),
+):
+    """History panel: newest-first version metadata (no flow/config blobs).
+
+    The row with the highest version_number is the active version — the
+    live template row always equals it (see docs/TEMPLATE_VERSIONING.md).
+    """
+    return await list_template_versions_handler(template_id, page, limit, current_user)
+
+
+@router.get(
+    "/templates/{template_id}/versions/{version_number}",
+    response_model=TemplateVersionDetail,
+)
+async def get_template_version_endpoint(
+    template_id: str,
+    version_number: int,
+    current_user: UserInfo = Depends(get_current_user_with_rbac),
+):
+    """Full snapshot of one version. Dashboard fetches two and diffs client-side.
+
+    MCP auth values are stored masked; snapshots never contain secrets.
+    """
+    return await get_template_version_handler(template_id, version_number, current_user)
+
+
+@router.post(
+    "/templates/{template_id}/versions/{version_number}/rollback",
+    response_model=RollbackTemplateResponse,
+)
+async def rollback_template_endpoint(
+    template_id: str,
+    version_number: int,
+    current_user: UserInfo = Depends(get_current_user_with_rbac),
+):
+    """Restore version n as a new latest version (append-only — v6..v10
+    survive a rollback to v5). The restored content is live immediately:
+    voice loads fresh per call; chat picks it up on cache bust.
+
+    Restores flow + configurations + payload schemas. Keeps the live row's
+    name, secrets, outbound number, is_active and channels.
+
+    Permissions: same as PUT /templates/{id}.
+    """
+    return await rollback_template_handler(template_id, version_number, current_user)

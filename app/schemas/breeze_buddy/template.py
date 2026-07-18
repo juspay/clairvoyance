@@ -1,7 +1,7 @@
 """Response schemas for template endpoints."""
 
 from datetime import datetime
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel
 
@@ -45,3 +45,46 @@ class DeleteTemplateResponse(BaseModel):
     status: str
     message: str
     deleted_template: TemplateMetadata
+
+
+class TemplateVersionMetadata(BaseModel):
+    """One row of the template history panel (no JSON blobs)."""
+
+    id: str
+    template_id: str
+    version_number: int
+    name: str
+    updated_by: Optional[str] = None
+    change_source: str
+    restored_from: Optional[int] = None
+    created_at: datetime
+
+
+class TemplateVersionDetail(TemplateVersionMetadata):
+    """Full snapshot of one version, for diff rendering and rollback.
+
+    Blobs are raw dicts on purpose: snapshots may predate the current
+    ConfigurationModel shape, and the read path must always be able to
+    show them. Normalization through today's models happens only on the
+    rollback WRITE path (same pipeline as PUT).
+    """
+
+    flow: Dict[str, Any]
+    configurations: Optional[Dict[str, Any]] = None
+    expected_payload_schema: Optional[Dict[str, Any]] = None
+    expected_callback_response_schema: Optional[Dict[str, Any]] = None
+
+
+class TemplateVersionListResponse(BaseModel):
+    status: str = "success"
+    versions: List[TemplateVersionMetadata]
+    total: int
+    active_version: Optional[int] = None
+
+
+class RollbackTemplateResponse(BaseModel):
+    status: str = "success"
+    template_id: str
+    restored_from: int
+    new_version: int
+    message: str

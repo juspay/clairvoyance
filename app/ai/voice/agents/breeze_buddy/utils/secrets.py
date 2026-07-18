@@ -106,11 +106,20 @@ def merge_masked_mcp_auth(
     If the schema gains another auth-bearing path under configurations, extend
     this walker.
     """
-    if not new_configurations or not existing_configurations:
+    if not new_configurations:
         return new_configurations
 
-    new_servers = ((new_configurations.get("mcp") or {}).get("servers")) or []
-    existing_servers = ((existing_configurations.get("mcp") or {}).get("servers")) or []
+    new_mcp = new_configurations.get("mcp")
+    new_servers = new_mcp.get("servers") if isinstance(new_mcp, dict) else []
+    if not isinstance(new_servers, list):
+        new_servers = []
+
+    existing_mcp = (existing_configurations or {}).get("mcp")
+    existing_servers = (
+        existing_mcp.get("servers") if isinstance(existing_mcp, dict) else []
+    )
+    if not isinstance(existing_servers, list):
+        existing_servers = []
     if not new_servers:
         return new_configurations
 
