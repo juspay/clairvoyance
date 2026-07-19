@@ -122,6 +122,7 @@ from app.ai.voice.agents.breeze_buddy.utils.transport.websockets import (
     close_websocket_safely,
 )
 from app.ai.voice.agents.breeze_buddy.utils.warm_transfer import set_transfer_flag
+from app.ai.voice.tts.dragontts import DragonTTSCacheStats, DragonTTSService
 from app.core.config.dynamic import BB_DAILY_AUDIO_OUT_10MS_CHUNKS
 from app.core.config.static import ENABLE_BREEZE_BUDDY_TRACING
 from app.core.logger import logger
@@ -132,12 +133,14 @@ from app.core.logger.context import (
 )
 from app.database.accessor import get_lead_by_call_id, update_lead_call_initiated_time
 from app.database.accessor.breeze_buddy.lead_call_tracker import (
+    append_metadata_field,
     update_lead_call_initiated_time_by_id,
     update_lead_template,
 )
 from app.database.accessor.breeze_buddy.template import get_template_by_id
 from app.schemas import CallProvider
 from app.schemas.breeze_buddy.core import ExecutionMode, LeadCallTracker
+from app.services.tts_cache_metrics import flush_call_cache_stats
 
 DEFAULT_OUTCOME = "BUSY"
 TTS_SPEAK_MAX_CHARS = 2000
@@ -220,6 +223,10 @@ class Agent:
 
         # Error tracking
         self.errors: List[Dict[str, Any]] = []
+
+        # DragonTTS cache attribution — one stats object per generation whose
+        # TTS routed through DragonTTS; flushed once at true call end.
+        self._dragontts_stats: List[DragonTTSCacheStats] = []
 
         # Widget voice-as-chat bridge (stream mode + a bound chat_session).
         # Constructed in _register_event_handlers once self.task exists; drives
@@ -1281,6 +1288,9 @@ class Agent:
                 self.pending_transfer = None
                 await apply_transfer(self, transfer)
 
+            # Persist DragonTTS cache attribution (stats-only, fail-open).
+            await self._flush_tts_cache_stats()
+
             # The Agent owns the ONE real teardown at true call end — per-generation
             # teardown is suppressed so transfers never drop the connection.
             # Telephony: close the raw ws (NonClosingWebSocket swallowed pipecat's
@@ -1294,6 +1304,46 @@ class Agent:
                 await force_teardown_daily_client(self._daily_client)
         finally:
             clear_log_context()
+
+    async def _flush_tts_cache_stats(self) -> None:
+        """Persist DragonTTS cache attribution at true call end (fail-open).
+
+        Writes per-call totals into ``lead.meta_data['tts_cache']`` and folds
+        the same numbers into the Redis day-counters that bb_ttscache_rollup
+        aggregates into ``tts_cache_daily``. Stats must never fail a call.
+        """
+        try:
+            stats_list = [s for s in self._dragontts_stats if s.has_data]
+            if not stats_list or not self.lead:
+                return
+            for stats in stats_list:
+                await flush_call_cache_stats(
+                    stats,
+                    reseller_id=self.lead.reseller_id,
+                    merchant_id=self.lead.merchant_id,
+                    template_id=self.lead.template_id,
+                )
+            meta: Dict[str, Any]
+            if len(stats_list) == 1:
+                meta = stats_list[0].as_meta()
+            else:
+                # Rare: agent transfer rebuilt TTS — one entry per generation,
+                # combined totals on top so dashboards read one shape.
+                hit_words = sum(s.hit_words for s in stats_list)
+                miss_words = sum(s.miss_words for s in stats_list)
+                total = hit_words + miss_words
+                meta = {
+                    "provider": ",".join(dict.fromkeys(s.provider for s in stats_list)),
+                    "hit_requests": sum(s.hit_requests for s in stats_list),
+                    "miss_requests": sum(s.miss_requests for s in stats_list),
+                    "hit_words": hit_words,
+                    "miss_words": miss_words,
+                    "cache_word_ratio": round(hit_words / total, 4) if total else None,
+                    "generations": [s.as_meta() for s in stats_list],
+                }
+            await append_metadata_field(self.lead.id, {"tts_cache": meta})
+        except Exception as e:
+            logger.warning(f"TTS cache stats flush failed (ignored): {e}")
 
     async def _run_generation(self) -> None:
         """Build and run one pipeline generation via the cold-start path.
@@ -1312,6 +1362,8 @@ class Agent:
         )
         if not is_stream:
             assert llm is not None, "LLM is required in agent mode"
+        if isinstance(tts, DragonTTSService):
+            self._dragontts_stats.append(tts.cache_stats)
 
         # Knowledge base runtime resolution (fail-open). Stream mode goes
         # through the chat brain, which has its own KB hooks; realtime LLMs

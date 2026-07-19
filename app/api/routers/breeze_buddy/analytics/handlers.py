@@ -8,6 +8,7 @@ import io
 import json
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
+from zoneinfo import ZoneInfo
 
 from starlette.responses import StreamingResponse
 
@@ -34,6 +35,10 @@ from app.database.accessor.breeze_buddy.chat_analytics import (
     get_chat_summary_from_db,
     get_chat_trends_from_db,
     get_chats_by_hour_from_db,
+)
+from app.database.accessor.breeze_buddy.tts_cache import (
+    get_tts_cache_daily,
+    round_ratio,
 )
 from app.schemas import CallDetailGroupedResult, CallDetailResult, UserInfo
 from app.utils.common import parse_json
@@ -1026,4 +1031,78 @@ async def get_distinct_merchant_ids(
         "results": {
             "merchant_ids": merchant_ids,
         },
+    }
+
+
+async def handle_tts_cache_analytics(
+    filters: Dict[str, Any],
+    options: Dict[str, Any],
+    current_user: UserInfo,
+) -> Dict[str, Any]:
+    """DragonTTS cache hit/miss attribution, optionally grouped.
+
+    DragonTTS sits as a caching proxy in front of the nested TTS provider
+    (cartesia/elevenlabs/sarvam/gemini): a "hit" is a request served from
+    cache, a "miss" is one the nested provider actually had to synthesize.
+
+    ``options.group_by`` (one of "provider", "merchant", "template", "date")
+    controls the aggregation dimension in the accessor; anything else is
+    treated as ungrouped (one row per date_ist + provider).
+    """
+    db_filters: Dict[str, Any] = {
+        k: v
+        for k, v in filters.items()
+        if k in ("date_from", "date_to", "reseller_ids", "merchant_ids", "template_id")
+    }
+
+    # apply_hierarchical_filters validates the singular reseller_id /
+    # merchant_id forms but leaves them singular (and skips injecting the
+    # user's scope when one is present). The query builder only filters on
+    # the plural keys, so fold singular into plural here — singular wins
+    # over plural because RBAC validated only the singular when both were
+    # sent. Without this, a scoped caller passing reseller_id would get an
+    # UNSCOPED query (cross-tenant leak).
+    if filters.get("reseller_id"):
+        db_filters["reseller_ids"] = [filters["reseller_id"]]
+    if filters.get("merchant_id"):
+        db_filters["merchant_ids"] = [filters["merchant_id"]]
+
+    # AnalyticsFilters.provider is a List[str]; the query builder matches a
+    # list via = ANY(...) and a scalar via equality, so pass through as-is.
+    provider = filters.get("provider")
+    if provider:
+        db_filters["provider"] = provider
+
+    # Unbounded queries scan the whole table as history accumulates — default
+    # to the last 90 IST days when the caller supplies no date filter at all.
+    if not db_filters.get("date_from") and not db_filters.get("date_to"):
+        db_filters["date_from"] = (
+            datetime.now(ZoneInfo("Asia/Kolkata")) - timedelta(days=90)
+        ).date()
+
+    group_by = options.get("group_by")
+    if group_by in ("provider", "merchant", "template", "date"):
+        db_filters["group_by"] = group_by
+
+    rows = await get_tts_cache_daily(db_filters)
+
+    hit_requests = sum(row.get("hit_requests") or 0 for row in rows)
+    miss_requests = sum(row.get("miss_requests") or 0 for row in rows)
+    hit_words = sum(row.get("hit_words") or 0 for row in rows)
+    miss_words = sum(row.get("miss_words") or 0 for row in rows)
+
+    summary = {
+        "hit_requests": hit_requests,
+        "miss_requests": miss_requests,
+        "hit_words": hit_words,
+        "miss_words": miss_words,
+        "request_hit_rate": round_ratio(hit_requests, hit_requests + miss_requests),
+        "word_cache_ratio": round_ratio(hit_words, hit_words + miss_words),
+    }
+
+    return {
+        "type": "tts-cache",
+        "filters_applied": filters,
+        "results": rows,
+        "summary": summary,
     }
