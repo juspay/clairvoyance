@@ -45,6 +45,7 @@ from app.core.config.static import (
     BB_RECONCILE_BACKLOG_INTERVAL_S,
     BB_RECONCILE_CHANNELS_INTERVAL_S,
     BB_RECONCILE_STUCK_PROCESSING_INTERVAL_S,
+    BB_TTSCACHE_ROLLUP_INTERVAL_S,
     BOT_MAX_DRAIN_SECONDS,
     CHAT_SESSION_END_TIMEOUT_LOOP_INTERVAL_SECONDS,
     CORS_ALLOWED_ORIGINS,
@@ -68,6 +69,7 @@ from app.services.redis import (
     get_redis_service,
     is_redis_configured,
 )
+from app.services.tts_cache_metrics.rollup import rollup_tts_cache_daily
 
 # Flag to indicate if pod is draining (no new connections accepted)
 _is_draining = False
@@ -148,6 +150,16 @@ async def lifespan(_app: FastAPI):
                 name="kb_ingestion",
                 func=process_pending_kb_documents,
                 interval_seconds=await KB_INGESTION_INTERVAL_SECONDS(),
+            )
+
+            # DragonTTS cache-attribution rollup: Redis day counters ->
+            # tts_cache_daily upserts (absolute totals, idempotent). Covers
+            # today + yesterday each tick, so the finished day finalizes
+            # shortly after IST midnight.
+            _background_scheduler.register_task(
+                name="bb_ttscache_rollup",
+                func=rollup_tts_cache_daily,
+                interval_seconds=BB_TTSCACHE_ROLLUP_INTERVAL_S,
             )
 
             # Event-driven dispatch reconcilers (Plane 5). Only registered on

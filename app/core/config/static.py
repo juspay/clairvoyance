@@ -374,6 +374,10 @@ BB_RECONCILE_BACKLOG_INTERVAL_S = int(
     os.environ.get("BB_RECONCILE_BACKLOG_INTERVAL_S", 60)
 )
 BB_REAP_PROCESSING_INTERVAL_S = int(os.environ.get("BB_REAP_PROCESSING_INTERVAL_S", 30))
+# DragonTTS cache-attribution rollup cadence (Redis day counters -> Postgres)
+BB_TTSCACHE_ROLLUP_INTERVAL_S = int(
+    os.environ.get("BB_TTSCACHE_ROLLUP_INTERVAL_S", 900)
+)
 BB_RECONCILE_CHANNELS_INTERVAL_S = int(
     os.environ.get("BB_RECONCILE_CHANNELS_INTERVAL_S", 60)
 )

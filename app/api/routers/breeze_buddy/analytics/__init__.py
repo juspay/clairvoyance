@@ -34,6 +34,7 @@ from .handlers import (
     get_outbound_numbers_analytics,
     get_outcome_counts,
     get_performance_analytics,
+    handle_tts_cache_analytics,
 )
 from .rbac import apply_hierarchical_filters
 
@@ -58,6 +59,7 @@ _ANALYTICS_HANDLERS: Dict[AnalyticsType, Callable[..., Awaitable]] = {
     AnalyticsType.ATTEMPTS_TO_CONNECT: get_attempts_to_connect_analytics,
     AnalyticsType.CALLS_BY_HOUR: get_calls_by_hour_analytics,
     AnalyticsType.CHATS_BY_HOUR: get_chats_by_hour_analytics,
+    AnalyticsType.TTS_CACHE: handle_tts_cache_analytics,
 }
 
 

@@ -27,6 +27,7 @@ class AnalyticsType(str, Enum):
     ATTEMPTS_TO_CONNECT = "attempts-to-connect"
     CALLS_BY_HOUR = "calls-by-hour"
     CHATS_BY_HOUR = "chats-by-hour"
+    TTS_CACHE = "tts-cache"
 
 
 class TimeGranularity(str, Enum):

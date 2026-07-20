@@ -25,7 +25,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 import httpx
 from pipecat.frames.frames import (
@@ -49,6 +49,7 @@ if TYPE_CHECKING:
 __all__ = [
     "DragonTTSConfig",
     "DragonTTSService",
+    "DragonTTSCacheStats",
     "build_dragontts_tts",
     "_generate_dragontts_audio",
 ]
@@ -56,6 +57,82 @@ __all__ = [
 
 # Params DragonTTS folds into the cache key and applies per nested provider.
 _PARAM_FIELDS = ("speed", "volume", "emotion", "pitch", "style_prompt")
+
+
+def _word_count(text: str) -> int:
+    """Whitespace word count — mirrors DragonTTS's own ``_wc`` so our numbers
+    reconcile with its ``/stats/daily`` words_served/words_synthesized."""
+    return len(text.split())
+
+
+@dataclass
+class DragonTTSCacheStats:
+    """Per-call cache attribution built from DragonTTS ``X-Cache`` headers.
+
+    One instance lives on each :class:`DragonTTSService` (one per pipeline
+    generation). ``record`` is called once per aggregated sentence; a turn is
+    the set of sentences sharing a pipecat ``context_id``. Any non-HIT status
+    (MISS, MISS-STITCH, UNKNOWN) counts as a miss — words the nested provider
+    actually synthesized.
+    """
+
+    provider: str  # nested provider, e.g. "cartesia"
+    model: str  # nested model, e.g. "sonic-3.5"
+    hit_requests: int = 0
+    miss_requests: int = 0
+    hit_words: int = 0
+    miss_words: int = 0
+    # context_id -> {"hits", "misses", "hit_words", "miss_words"}; insertion
+    # order == turn order. Capped so a runaway call can't bloat meta_data.
+    turns: Dict[str, Dict[str, int]] = field(default_factory=dict)
+
+    _MAX_TURNS = 200
+
+    def record(self, *, context_id: str, words: int, status: str) -> None:
+        is_hit = status == "HIT"
+        if is_hit:
+            self.hit_requests += 1
+            self.hit_words += words
+        else:
+            self.miss_requests += 1
+            self.miss_words += words
+        turn = self.turns.get(context_id)
+        if turn is None:
+            if len(self.turns) >= self._MAX_TURNS:
+                return
+            turn = {"hits": 0, "misses": 0, "hit_words": 0, "miss_words": 0}
+            self.turns[context_id] = turn
+        if is_hit:
+            turn["hits"] += 1
+            turn["hit_words"] += words
+        else:
+            turn["misses"] += 1
+            turn["miss_words"] += words
+
+    @property
+    def total_words(self) -> int:
+        return self.hit_words + self.miss_words
+
+    @property
+    def has_data(self) -> bool:
+        return bool(self.hit_requests or self.miss_requests)
+
+    def as_meta(self) -> Dict[str, Any]:
+        """Compact dict for ``lead.meta_data['tts_cache']``."""
+        total = self.total_words
+        return {
+            "provider": self.provider,
+            "model": self.model,
+            "hit_requests": self.hit_requests,
+            "miss_requests": self.miss_requests,
+            "hit_words": self.hit_words,
+            "miss_words": self.miss_words,
+            "cache_word_ratio": round(self.hit_words / total, 4) if total else None,
+            "turns": [
+                {"turn": i + 1, **counters}
+                for i, counters in enumerate(self.turns.values())
+            ],
+        }
 
 
 def _collect_params(resolved: "TTSConfig") -> dict:
@@ -177,6 +254,12 @@ class DragonTTSService(TTSService):
         self._language = language or ""
         self._params = dict(params or {})
         self._client: httpx.AsyncClient | None = None
+        # Cache attribution from X-Cache response headers. The agent reads this
+        # off the service at call end; stats must never break the audio path.
+        nested_provider, _, nested_model = model_id.partition(":")
+        self.cache_stats = DragonTTSCacheStats(
+            provider=nested_provider or model_id, model=nested_model
+        )
 
     def language_to_service_language(self, language: Language) -> str | None:
         """DragonTTS accepts a plain language code — no provider mapping needed."""
@@ -230,6 +313,14 @@ class DragonTTSService(TTSService):
                 "POST", f"{self._url}/tts/stream", json=body
             ) as response:
                 response.raise_for_status()
+                try:
+                    self.cache_stats.record(
+                        context_id=context_id,
+                        words=_word_count(text),
+                        status=response.headers.get("X-Cache", "UNKNOWN"),
+                    )
+                except Exception as stats_err:  # stats are best-effort only
+                    logger.warning(f"DragonTTS cache-stats record failed: {stats_err}")
                 async for chunk in response.aiter_bytes():
                     if not chunk:
                         continue
