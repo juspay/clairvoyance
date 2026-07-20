@@ -12,7 +12,8 @@ paths:
 
 ## STT/TTS Providers
 - STT: Soniox (default), Deepgram, Sarvam, OpenAI, Google -- each has different endpoint detection behavior
-- TTS: ElevenLabs (default), Cartesia, Sarvam -- template-level voice configuration overrides
+- TTS: 7 runtime providers -- elevenlabs (default), cartesia, sarvam, gemini, google, soniox, dragontts (a caching proxy in front of the others, not itself voice-owning) -- voice config can be set template-level via `TTSConfig`, overriding global Redis defaults
+- Voice catalog (static `app/ai/voice/tts/catalog.json`, `GET /tts/voices`) covers only the 6 voice-owning providers -- dragontts is excluded since it proxies the others instead of owning voices
 - Provider selection can be static (env var), dynamic (Redis), or template-level
 - When adding a new provider, update: provider init code, config models in types.py, and the selection logic
 

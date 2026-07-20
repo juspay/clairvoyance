@@ -44,6 +44,19 @@ GOOGLE_CREDENTIALS_JSON = os.environ.get("GOOGLE_CREDENTIALS_JSON", "")
 GCS_CREDENTIALS_JSON = os.environ.get("GCS_CREDENTIALS_JSON", "")
 GCS_BUCKET = os.environ.get("GCS_BUCKET", "atoms-sdk")
 
+# TTS Voice Catalog — preview storage (GCS only). Separate from GCS_BUCKET
+# above (which is the recordings bucket) so previews can live in their own.
+#
+# Deliberately NOT validated at import: previews are one optional feature, and
+# raising here would stop every deployment that never uses the voice catalog
+# from booting. When the bucket is unset the catalog simply serves voices
+# without previews (see preview_storage.load_manifest, which fails soft), and
+# any attempt to *write* a preview raises with a message naming this variable.
+TTS_PREVIEW_GCS_BUCKET = os.environ.get("TTS_PREVIEW_GCS_BUCKET", "")
+# Optional: front the bucket with a CDN/custom domain. Defaults to the bucket's
+# own public URL.
+TTS_PREVIEW_PUBLIC_BASE_URL = os.environ.get("TTS_PREVIEW_PUBLIC_BASE_URL", "")
+
 ENABLE_AIC_FILTER = os.environ.get("ENABLE_AIC_FILTER", "false").lower() == "true"
 AIC_LICENSE_KEY = os.environ.get("AIC_LICENSE_KEY", "")
 # Breeze Buddy AIC License Key

@@ -44,6 +44,7 @@ from app.api.routers.breeze_buddy.template_generator import (
     router as template_generator_router,
 )
 from app.api.routers.breeze_buddy.templates import router as templates_router
+from app.api.routers.breeze_buddy.tts_catalog import router as tts_catalog_router
 from app.api.routers.breeze_buddy.users import router as users_router
 from app.api.routers.breeze_buddy.wallet import router as wallet_router
 from app.api.routers.breeze_buddy.webhooks import router as webhooks_router
@@ -102,6 +103,9 @@ router.include_router(playground_router, prefix="", tags=["playground"])
 
 # Blacklist (blocked phone numbers - admin only)
 router.include_router(blacklist_router, prefix="", tags=["blacklist"])
+
+# TTS voice catalog (enabled voices, provider+language filters)
+router.include_router(tts_catalog_router, prefix="", tags=["tts-catalog"])
 
 # Merchants (merchant identifiers - admin only)
 router.include_router(merchants_router, prefix="", tags=["merchants"])

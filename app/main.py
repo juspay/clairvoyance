@@ -32,6 +32,7 @@ from app.ai.voice.agents.breeze_buddy.tts.dragontts.monitor import (
 
 # Database imports
 from app.ai.voice.llm._pools import close_all_pools as close_llm_http_pools
+from app.ai.voice.tts.catalog import get_enabled_voices as load_tts_voice_catalog
 from app.api.routers import breeze_buddy, devcycle, feature_flags, systems
 from app.api.routers.breeze_buddy.chat import cancel_bus as chat_cancel_bus
 
@@ -123,6 +124,18 @@ async def lifespan(_app: FastAPI):
         await chat_cancel_bus.start_subscriber()
     except Exception as e:
         logger.error(f"Failed to start chat cancel-bus subscriber: {e}")
+
+    # TTS voice catalog startup: parse/validate catalog.json. It touches the
+    # filesystem, so it runs here (in a thread) instead of at module import.
+    # Deliberately NOT wrapped in try/except like the external services above:
+    # catalog.json is checked-in code, so a broken file is a bad build that
+    # must fail deployment — swallowing it would serve 500s per request
+    # instead (lru_cache doesn't memoize exceptions, so the failed load would
+    # also retry blocking disk I/O on the event loop for every call).
+    def _prepare_tts_catalog() -> None:
+        load_tts_voice_catalog()
+
+    await asyncio.to_thread(_prepare_tts_catalog)
 
     # DevCycle feature flags are initialized by parent process (run.py) before uvicorn starts
     # Worker processes only need to read from Redis using get_config()
@@ -369,6 +382,9 @@ app.include_router(
 
 # System health endpoints
 app.include_router(systems.router, prefix="", tags=["Systems"])
+
+# TTS voice-catalog previews are served straight from the GCS bucket's public
+# URL, so this app exposes no /tts-previews route.
 
 
 # Root endpoint - health check
