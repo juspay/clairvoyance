@@ -31,6 +31,16 @@ display:
 ai:
   # provider/model OMITTED on purpose — controlled by the workflow.
   temperature: 0.2 # deterministic, review-grade output
+  # Cap review-generation OUTPUT tokens. @juspay/yama's default ai.maxTokens is
+  # 128000 (DefaultConfig.ts); on the private-large model (262144 ctx) that
+  # leaves only ~134K for INPUT, so medium/large PRs (diff + explored context +
+  # project rules) exceed the window and the LiteLLM call never returns — every
+  # generate dies on the client-side timeout and the review fails with no
+  # verdict. A review never emits anywhere near 128K output tokens, so cap it
+  # at 16000 — this raises the usable input ceiling to ~246K and lets large
+  # diffs be reviewed. Same fix as juspay/neurolink@31181493. (The explore
+  # worker defaults to 32000, which is unaffected.)
+  maxTokens: 16000
   timeout: "15m"
   retryAttempts: 3
 
