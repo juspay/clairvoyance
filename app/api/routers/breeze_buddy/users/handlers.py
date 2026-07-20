@@ -20,8 +20,12 @@ from app.core.security.scope import (
     validate_merchant_ids_subset,
 )
 from app.database.accessor.breeze_buddy import users as user_accessors
-from app.database.accessor.breeze_buddy.merchants import get_merchants_by_reseller
+from app.database.accessor.breeze_buddy.merchants import (
+    check_merchant_identifier_exists,
+    get_merchants_by_reseller,
+)
 from app.database.accessor.breeze_buddy.resellers import (
+    get_reseller_by_id,
     get_user_umbrella_grants,
     get_user_workspace_access,
 )
@@ -590,4 +594,215 @@ async def delete_user_handler(
         raise
     except Exception as e:
         logger.error(f"Error deleting user {user_id}: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Membership management (first-class grant/revoke over the dual-written model)
+#
+# These endpoints stay array-authoritative: they compute the new
+# reseller_ids/merchant_ids and write through update_user, whose dual-write
+# keeps the grant tables in sync. They all return the refreshed effective
+# access so the console can re-render without a second call.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+async def _load_target_for_access_change(
+    user_id: str, current_user: UserInfo
+) -> tuple[UserResponse, Optional[List[str]]]:
+    """Fetch the target user and run the update RBAC gate."""
+    user = await user_accessors.get_user_by_id(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    if user.role == UserRole.ADMIN:
+        raise HTTPException(
+            status_code=400,
+            detail="Admin accounts have unrestricted access and take no grants",
+        )
+    allowed = await _check_update_delete_access(current_user, user)
+    return user, allowed
+
+
+async def add_user_workspace_handler(
+    user_id: str, merchant_id: str, current_user: UserInfo
+) -> UserAccessResponse:
+    """Grant a user explicit membership of one workspace."""
+    try:
+        user, allowed = await _load_target_for_access_change(user_id, current_user)
+
+        if current_user.role in {UserRole.RESELLER, UserRole.MERCHANT}:
+            validate_merchant_ids_subset(
+                [merchant_id],
+                allowed,
+                "Cannot grant workspaces outside your scope",
+            )
+
+        if not await check_merchant_identifier_exists(merchant_id):
+            raise HTTPException(status_code=404, detail="Workspace not found")
+
+        current = user.merchant_ids or []
+        new_list = current if merchant_id in current else current + [merchant_id]
+        # Always write, even when the array already lists the workspace: the
+        # dual-write re-projection is idempotent, and this heals the one drift
+        # case where the array gained the id before the workspace existed (the
+        # projection skipped it then; now that it exists, the row lands).
+        await user_accessors.update_user(user_id=user_id, merchant_ids=new_list)
+
+        return await get_user_access_handler(user_id, current_user)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error granting workspace {merchant_id} to {user_id}: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+async def remove_user_workspace_handler(
+    user_id: str, merchant_id: str, current_user: UserInfo
+) -> UserAccessResponse:
+    """Revoke a user's explicit membership of one workspace."""
+    try:
+        user, allowed = await _load_target_for_access_change(user_id, current_user)
+
+        if current_user.role in {UserRole.RESELLER, UserRole.MERCHANT}:
+            validate_merchant_ids_subset(
+                [merchant_id],
+                allowed,
+                "Cannot revoke workspaces outside your scope",
+            )
+
+        current = user.merchant_ids or []
+        if merchant_id not in current:
+            raise HTTPException(
+                status_code=404, detail="User has no explicit membership here"
+            )
+
+        remaining = [m for m in current if m != merchant_id]
+        if user.role in {UserRole.MERCHANT, UserRole.USER} and not remaining:
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot remove the last workspace from merchant/user accounts",
+            )
+
+        await user_accessors.update_user(user_id=user_id, merchant_ids=remaining)
+        return await get_user_access_handler(user_id, current_user)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error revoking workspace {merchant_id} from {user_id}: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+async def set_user_umbrella_handler(
+    user_id: str, reseller_id: str, all_workspaces: bool, current_user: UserInfo
+) -> UserAccessResponse:
+    """Grant (or update) a user's umbrella affiliation. Admin only.
+
+    all_workspaces=true maps to the legacy merchant_ids=["*"] wildcard, which
+    is per-account, not per-umbrella — so it is refused while the user holds
+    any other umbrella affiliation.
+    """
+    if current_user.role != UserRole.ADMIN:
+        raise HTTPException(
+            status_code=403, detail="Only admins can manage umbrella grants"
+        )
+
+    try:
+        user, _ = await _load_target_for_access_change(user_id, current_user)
+
+        if not await get_reseller_by_id(reseller_id):
+            raise HTTPException(status_code=404, detail="Reseller not found")
+
+        current_r = user.reseller_ids or []
+        current_m = user.merchant_ids or []
+
+        if all_workspaces and any(r != reseller_id for r in current_r):
+            raise HTTPException(
+                status_code=409,
+                detail="all_workspaces is account-wide in the legacy arrays; "
+                "remove the user's other umbrella affiliations first",
+            )
+
+        new_r = current_r if reseller_id in current_r else current_r + [reseller_id]
+        if all_workspaces:
+            new_m = current_m if "*" in current_m else current_m + ["*"]
+        else:
+            if "*" in current_m and any(r != reseller_id for r in current_r):
+                # Mirror of the guard above: the legacy wildcard is
+                # account-wide, so stripping it here would silently downgrade
+                # ANOTHER umbrella's all-workspaces grant as a side effect.
+                raise HTTPException(
+                    status_code=409,
+                    detail="This account holds the account-wide all-workspaces "
+                    "wildcard for another umbrella; change that grant first",
+                )
+            new_m = [m for m in current_m if m != "*"]
+            if user.role in {UserRole.MERCHANT, UserRole.USER} and not new_m:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Removing all-workspaces would leave this account "
+                    "with no workspace; grant an explicit workspace first",
+                )
+
+        await user_accessors.update_user(
+            user_id=user_id,
+            reseller_ids=new_r,
+            merchant_ids=new_m if new_m != current_m else None,
+        )
+        return await get_user_access_handler(user_id, current_user)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error setting umbrella {reseller_id} on {user_id}: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+async def revoke_user_umbrella_handler(
+    user_id: str, reseller_id: str, current_user: UserInfo
+) -> UserAccessResponse:
+    """Revoke a user's umbrella affiliation. Admin only."""
+    if current_user.role != UserRole.ADMIN:
+        raise HTTPException(
+            status_code=403, detail="Only admins can manage umbrella grants"
+        )
+
+    try:
+        user, _ = await _load_target_for_access_change(user_id, current_user)
+
+        if user.role == UserRole.RESELLER and reseller_id == user.id:
+            raise HTTPException(
+                status_code=400,
+                detail="A reseller's own umbrella is intrinsic; deactivate or "
+                "delete the login instead",
+            )
+
+        current_r = user.reseller_ids or []
+        if reseller_id not in current_r:
+            raise HTTPException(
+                status_code=404, detail="User has no affiliation with this umbrella"
+            )
+
+        new_r = [r for r in current_r if r != reseller_id]
+        current_m = user.merchant_ids or []
+        new_m = current_m
+        if not new_r and "*" in current_m:
+            # An umbrella-less wildcard would read as admin-style unrestricted;
+            # never leave one behind.
+            new_m = [m for m in current_m if m != "*"]
+            if user.role in {UserRole.MERCHANT, UserRole.USER} and not new_m:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Revoking this umbrella would leave the account "
+                    "with no workspace; grant an explicit workspace first",
+                )
+
+        await user_accessors.update_user(
+            user_id=user_id,
+            reseller_ids=new_r,
+            merchant_ids=new_m if new_m != current_m else None,
+        )
+        return await get_user_access_handler(user_id, current_user)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error revoking umbrella {reseller_id} from {user_id}: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")

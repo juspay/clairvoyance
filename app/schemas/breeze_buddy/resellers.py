@@ -73,6 +73,17 @@ class UmbrellaGrant(BaseModel):
     all_workspaces: bool = False
 
 
+class UmbrellaGrantUpdate(BaseModel):
+    """Body for PUT /user/{id}/umbrellas/{reseller_id}."""
+
+    all_workspaces: bool = Field(
+        False,
+        description="Grant access to every workspace under the umbrella, "
+        "present and future (the explicit form of the legacy "
+        'merchant_ids=["*"] wildcard)',
+    )
+
+
 class WorkspaceAccess(BaseModel):
     """One workspace a user can reach, with how they reach it."""
 
