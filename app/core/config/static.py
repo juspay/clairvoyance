@@ -421,6 +421,15 @@ EXOTEL_API_KEY = os.getenv("EXOTEL_API_KEY", "")
 EXOTEL_API_TOKEN = os.getenv("EXOTEL_API_TOKEN", "")
 # Exotel Webhook Authentication - required for inbound webhook security
 EXOTEL_WEBHOOK_AUTH_TOKEN = os.getenv("EXOTEL_WEBHOOK_AUTH_TOKEN", "")
+
+# Enforce provider signature/token verification on all telephony webhooks
+# (Twilio X-Twilio-Signature, Plivo V3 signature, Exotel auth_token). Secure by
+# default; only set to "false" as a temporary operational escape hatch. Requires
+# TWILIO_AUTH_TOKEN / PLIVO_AUTH_TOKEN / EXOTEL_WEBHOOK_AUTH_TOKEN and a correct
+# APP_BASE_URL to be configured for the corresponding providers.
+ENFORCE_TELEPHONY_WEBHOOK_SIGNATURES = (
+    os.environ.get("ENFORCE_TELEPHONY_WEBHOOK_SIGNATURES", "true").lower() == "true"
+)
 AWS_VAYU_URL = os.environ.get("AWS_VAYU_URL")
 AWS_VAYU_READ_API_KEY = os.environ.get("AWS_VAYU_READ_API_KEY")
 AWS_VAYU_WRITE_API_KEY = os.environ.get("AWS_VAYU_WRITE_API_KEY")
@@ -474,6 +483,36 @@ BREEZE_BUDDY_SONIOX_VAD_FORCE_TURN_ENDPOINT = (
 BREEZE_BUDDY_SONIOX_MAX_ENDPOINT_DELAY_MS = int(
     os.environ.get("BREEZE_BUDDY_SONIOX_MAX_ENDPOINT_DELAY_MS", "500")
 )  # Max delay (ms) for Soniox native endpoint detection (500-3000, default 500)
+
+# Template `custom` global functions execute author-supplied python_code. An
+# in-process interpreter sandbox is NOT a security boundary, so this feature is
+# OFF by default and must be explicitly enabled per-deployment (and only when
+# template authorship is trusted). When disabled, custom python_code functions
+# are skipped at flow-build time and never compiled or executed.
+ENABLE_CUSTOM_PYTHON_FUNCTIONS = (
+    os.environ.get("ENABLE_CUSTOM_PYTHON_FUNCTIONS", "false").lower() == "true"
+)
+
+# Local-dev escape hatch for the SSRF egress guard (app/core/security/ssrf.py):
+# when true, egress to private/loopback ranges is permitted. Defaults to false
+# so the secure posture never depends on ENVIRONMENT being set correctly.
+SSRF_ALLOW_PRIVATE_EGRESS = os.environ.get(
+    "SSRF_ALLOW_PRIVATE_EGRESS", "false"
+).lower() in ("1", "true", "yes")
+
+# Brute-force rate limiting for the unauthenticated credential endpoints
+# (/login, /auth/s2s/token, /signup, /auth/accounts). Fixed-window caps per
+# client IP and per username/email, layered on top of bcrypt + the timing
+# equalization (PT-16) so online guessing is bounded. Set a cap to 0 to disable
+# that dimension. Enforcement fails OPEN on a Redis outage (see
+# app/api/routers/breeze_buddy/auth/rate_limit.py) so a Redis blip can't lock
+# every operator out of login.
+AUTH_RATE_LIMIT_PER_IP_PER_HOUR = int(
+    os.environ.get("AUTH_RATE_LIMIT_PER_IP_PER_HOUR", "40")
+)
+AUTH_RATE_LIMIT_PER_USERNAME_PER_HOUR = int(
+    os.environ.get("AUTH_RATE_LIMIT_PER_USERNAME_PER_HOUR", "15")
+)
 
 ENABLE_BREEZE_BUDDY_USER_INTERRUPTION = (
     os.environ.get("ENABLE_BREEZE_BUDDY_USER_INTERRUPTION", "false").lower() == "true"

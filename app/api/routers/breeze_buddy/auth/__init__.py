@@ -13,10 +13,15 @@ Endpoints:
 For backward compatibility, old session-based logout is also supported.
 """
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import RedirectResponse
+from fastapi.security import HTTPAuthorizationCredentials
 
-from app.api.security.breeze_buddy.rbac_token import get_current_user_with_rbac
+from app.api.routers.breeze_buddy.auth.rate_limit import enforce_credential_rate_limit
+from app.api.security.breeze_buddy.rbac_token import (
+    get_current_user_with_rbac,
+    security,
+)
 from app.schemas import (
     LaunchTokenRequest,
     LaunchTokenResponse,
@@ -39,7 +44,7 @@ router = APIRouter()
 
 
 @router.post("/login", include_in_schema=False, response_model=TokenResponse)
-async def login(login_request: LoginRequest):
+async def login(login_request: LoginRequest, http_request: Request):
     """
     Login endpoint with JWT token-based authentication.
 
@@ -63,12 +68,14 @@ async def login(login_request: LoginRequest):
     Security:
         - Database users: bcrypt password hashing
         - Returns 401 if credentials are invalid or account is inactive
+        - Returns 429 if the caller IP or username is over the attempt cap
     """
+    await enforce_credential_rate_limit(http_request, login_request.username)
     return await login_handler(login_request)
 
 
 @router.post("/auth/s2s/token", response_model=S2STokenResponse)
-async def generate_s2s_token(request: S2STokenRequest):
+async def generate_s2s_token(request: S2STokenRequest, http_request: Request):
     """
     Generate long-lived token for Server-to-Server (S2S) authentication.
 
@@ -113,7 +120,9 @@ async def generate_s2s_token(request: S2STokenRequest):
     Security:
         - Returns 401 if credentials are invalid or account is inactive
         - Returns 403 if user is not an admin
+        - Returns 429 if the caller IP or username is over the attempt cap
     """
+    await enforce_credential_rate_limit(http_request, request.username)
     return await generate_s2s_token_handler(request)
 
 
@@ -199,44 +208,26 @@ async def get_current_user_info(
 
 
 @router.post("/auth/logout")
-async def logout_user():
+async def logout_user(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    current_user: UserInfo = Depends(get_current_user_with_rbac),
+):
     """
-    Logout endpoint for JWT token-based authentication.
+    Log out a JWT-authenticated user.
 
-    Since JWT tokens are stateless and stored client-side:
-    - Backend cannot invalidate the token (no session to destroy)
-    - Client must delete the token from localStorage/cookies
-    - Token will naturally expire after its lifetime
-
-    This endpoint exists for:
-    - API consistency (REST convention)
-    - Future enhancements (e.g., token blacklisting)
-    - Logging logout events
-
-    Client-side logout steps:
-    1. Call this endpoint (optional, for logging)
-    2. Remove token from localStorage/cookies
-    3. Redirect to login page
-    4. Clear any user state in application
+    The presented token is added to the server-side revocation denylist (keyed
+    by a hash of the token, with a TTL equal to its remaining lifetime), so it
+    can no longer authenticate even though its signature stays valid until its
+    natural expiry (PT-22). Clients should still discard their stored copy.
 
     Returns:
         {
             "success": true,
-            "message": "Logout acknowledged. Client should clear token from storage.",
-            "instructions": {
-                "step_1": "Remove token from localStorage or cookies",
-                "step_2": "Clear user state in your application",
-                "step_3": "Redirect to login page",
-                "note": "Token remains valid until expiration but client discards it"
-            }
+            "message": "Logout successful. Token has been revoked server-side.",
+            "revoked": true
         }
-
-    Note:
-        The actual logout happens client-side by removing the token.
-        The token remains technically valid until expiration, but the client
-        discards it and can no longer use it.
     """
-    return await logout_handler()
+    return await logout_handler(credentials.credentials)
 
 
 @router.get("/logout", include_in_schema=False)

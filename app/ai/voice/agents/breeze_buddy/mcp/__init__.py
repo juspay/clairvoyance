@@ -48,6 +48,7 @@ from app.ai.voice.agents.breeze_buddy.template.types import (
     ToolUiHint,
 )
 from app.core.logger import logger
+from app.core.security.ssrf import validate_egress_url
 
 # --- HITL approval for MCP tools -------------------------------------------
 # Watchdog budget for a gated MCP tool: approval wait + the handler's dispatch
@@ -520,7 +521,7 @@ def _build_auth_headers(
     return {}
 
 
-def _build_server_params(
+async def _build_server_params(
     server: McpServerConfig,
     template_vars: Dict[str, Any],
 ) -> StreamableHttpParameters:
@@ -529,8 +530,16 @@ def _build_server_params(
     Shared by the voice loader (per-call clients) and the chat session pool
     (per-turn persistent clients). Substitutes ``{variable}`` placeholders in
     the URL and auth fields from ``template_vars``.
+
+    SECURITY: the resolved URL is a template-controlled destination that we are
+    about to attach decrypted tenant credentials to (via ``_build_auth_headers``)
+    and hit at flow-build time. It MUST pass the shared SSRF egress guard first —
+    https-only, no internal/loopback/link-local/metadata targets — so it cannot
+    be pointed at cloud metadata or an internal service (PT-03). Validation
+    happens before any credential header is built.
     """
     resolved_url = _resolve_placeholders(server.url, template_vars)
+    await validate_egress_url(resolved_url)
     if resolved_url != server.url:
         # Don't log the resolved URL — it can contain customer-identifying
         # values (e.g. shop subdomain). Operators can correlate via the
@@ -572,7 +581,7 @@ async def _load_server_tools(
 
     Each tool handler creates a fresh MCPClient per invocation for thread safety.
     """
-    server_params = _build_server_params(server, template_vars)
+    server_params = await _build_server_params(server, template_vars)
     # Prefer the stable name; fall back to the raw template URL (with
     # placeholders) rather than the resolved URL to avoid logging
     # customer-identifying substitutions.
@@ -787,7 +796,7 @@ async def get_mcp_global_functions_cached(
             continue
 
         try:
-            server_params = _build_server_params(server, template_vars)
+            server_params = await _build_server_params(server, template_vars)
         except Exception as e:
             logger.error(
                 f"[BUDDY_MCP] chat: failed to build server params for "

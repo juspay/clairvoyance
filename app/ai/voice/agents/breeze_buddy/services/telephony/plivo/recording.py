@@ -15,7 +15,11 @@ from app.core.config.static import (
     PLIVO_RECORDING_TIME_LIMIT,
 )
 from app.core.logger import logger
+from app.core.security.ssrf import ssrf_safe_request
 from app.core.transport.http_client import get_proxy_config
+
+# Only ever send Plivo BasicAuth to Plivo's own hosts.
+_PLIVO_HOST_SUFFIXES = ("plivo.com",)
 
 
 def start_call_recording(call_uuid: str) -> bool:
@@ -72,9 +76,16 @@ async def download_call_recording(
 
         logger.info(f"Downloading Plivo recording from: {recording_url}")
 
+        # SSRF: never send Plivo credentials to a non-Plivo or internal host,
+        # even if a forged webhook supplied the URL (PT-05).
         async with aiohttp.ClientSession() as session:
-            async with session.get(
-                recording_url, auth=auth, proxy=proxy_url
+            async with ssrf_safe_request(
+                session,
+                "GET",
+                recording_url,
+                auth=auth,
+                allowed_host_suffixes=_PLIVO_HOST_SUFFIXES,
+                proxy=proxy_url,
             ) as response:
                 if response.status != 200:
                     logger.error(

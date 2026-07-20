@@ -17,6 +17,7 @@ from fastapi import HTTPException
 from app.core.logger import logger
 from app.core.security.scope import (
     resolve_merchant_ids,
+    resolve_reseller_ids,
     validate_merchant_ids_subset,
 )
 from app.database.accessor.breeze_buddy import users as user_accessors
@@ -119,6 +120,18 @@ async def _check_create_access(
             raise HTTPException(
                 status_code=403, detail="Merchants can only create user accounts"
             )
+
+        # Validate reseller_ids are within the merchant's own scope. Previously
+        # skipped entirely — a merchant could plant a foreign reseller_id into a
+        # sub-user and then log in as that user to escalate into the victim
+        # reseller's scope (PT-08). Runs BEFORE the wildcard merchant_ids
+        # early-return so that path cannot bypass the reseller check.
+        allowed_resellers = await resolve_reseller_ids(current_user)
+        validate_merchant_ids_subset(
+            reseller_ids,
+            allowed_resellers,
+            "Cannot assign reseller_ids outside your scope",
+        )
 
         # Validate merchant_ids are within merchant's scope
         # If merchant has wildcard merchant_ids, they can assign wildcard to users

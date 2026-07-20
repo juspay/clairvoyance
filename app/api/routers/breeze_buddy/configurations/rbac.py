@@ -8,6 +8,7 @@ from typing import List, Optional
 from fastapi import HTTPException, status
 
 from app.core.logger import logger
+from app.core.security.authorization import merchant_scope_permitted
 from app.schemas import UserInfo
 
 
@@ -66,19 +67,22 @@ def validate_config_access(
             detail=f"Access denied to reseller {reseller_id}",
         )
 
-    # Check merchant identifier access (only if merchant_id is provided)
-    if (
-        merchant_id
-        and merchant_id not in current_user.merchant_ids
-        and "*" not in current_user.merchant_ids
-    ):
+    # Check merchant identifier access. A null merchant_id marks a
+    # reseller-scoped (reseller-wide) config: only reseller-role accounts (or
+    # admin, handled above) may act on it — a merchant/user role must not fall
+    # through the old `if merchant_id:` skip (PT-14/PT-15).
+    if not merchant_scope_permitted(current_user, merchant_id):
         logger.warning(
             f"User {current_user.username} attempted to {operation} configuration "
             f"for unauthorized merchant: {merchant_id}"
         )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"Access denied to merchant {merchant_id}",
+            detail=(
+                f"Access denied to merchant {merchant_id}"
+                if merchant_id
+                else "Access denied to reseller-scoped configuration"
+            ),
         )
 
 

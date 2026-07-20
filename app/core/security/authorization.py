@@ -8,12 +8,32 @@ Scope resolution (resolve_merchant_ids, resolve_reseller_ids, etc.)
 has been moved to app.core.security.scope.
 """
 
-from typing import List
+from typing import List, Optional
 
 from fastapi import HTTPException, status
 
 from app.core.logger import logger
 from app.schemas import UserInfo, UserRole
+
+
+def merchant_scope_permitted(
+    current_user: UserInfo, merchant_id: Optional[str]
+) -> bool:
+    """
+    Decide whether the caller's merchant scope covers an object with this
+    merchant_id, assuming the caller already passed the reseller-scope check and
+    is not admin.
+
+    A null/empty merchant_id marks a reseller-scoped row. It must NEVER be
+    treated as "no merchant restriction" for merchant/user-role callers — only a
+    reseller-role account (or admin, checked earlier by the caller) may touch
+    reseller-scoped rows. Merchant/user roles must own the specific merchant_id.
+    """
+    if merchant_id:
+        return (
+            merchant_id in current_user.merchant_ids or "*" in current_user.merchant_ids
+        )
+    return current_user.role == UserRole.RESELLER
 
 
 def check_permission(current_user: UserInfo, required_permission: str) -> bool:

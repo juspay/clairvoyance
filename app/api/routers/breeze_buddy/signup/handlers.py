@@ -51,7 +51,7 @@ from app.core.config.static import (
     SELF_SIGNUP_RESELLER_ID,
 )
 from app.core.logger import logger
-from app.core.security.password import verify_password
+from app.core.security.password import DUMMY_PASSWORD_HASH, verify_password
 from app.core.security.scope import resolve_merchant_ids, resolve_reseller_ids
 from app.database.accessor.breeze_buddy import (
     merchants as merchant_accessors,
@@ -64,6 +64,12 @@ from app.schemas.breeze_buddy.signup import (
     GoogleMerchantSignupRequest,
     MerchantSignupRequest,
 )
+
+# Fixed bcrypt budget for the account-list password check. Every request spends
+# exactly this many verifications regardless of how many accounts share the
+# email, so response time cannot be used to count them (PT-16). Raising it costs
+# latency on every call; lowering it truncates multi-account emails sooner.
+ACCOUNT_PASSWORD_CHECK_BUDGET = 5
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Helpers
@@ -398,17 +404,20 @@ async def google_signup_handler(request: GoogleMerchantSignupRequest) -> TokenRe
 async def list_accounts_handler(
     id_token: str | None,
     email: str | None,
+    password: str | None = None,
 ) -> list:
     """
-    Return all user accounts that share a given email address.
+    Return the user accounts that share a given email address.
 
-    Called immediately after Google OAuth or password auth succeeds to
-    give the frontend a list of accounts the user can pick from.
+    Called immediately after Google OAuth or password auth to give the
+    frontend a list of accounts the user can pick from.
 
-    For Google flows: pass `id_token` — the backend verifies it and
-    extracts the email.
-    For password flows: pass `email` directly (already verified by the
-    login handler upstream, so no re-auth needed here).
+    For Google flows: pass `id_token` — the backend verifies it.
+    For password flows: pass `email` AND `password`. The password is
+    verified here so this endpoint cannot be used anonymously to enumerate
+    accounts / PII by email (PT-16). Only accounts whose password matches
+    are returned; any failure yields an identical generic 401 so registration
+    status is not disclosed.
     """
     if id_token:
         claims = _verify_google_id_token(id_token)
@@ -418,15 +427,48 @@ async def list_accounts_handler(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Google account does not have an email address.",
             )
-    elif email:
-        resolved_email = email
+        users = await user_accessors.get_users_by_email(resolved_email)
+        matched = [u for u in users if u.is_active]
+    elif email and password:
+        # Fetch unconditionally so an unregistered email takes the same code
+        # path/timing as a registered one with a wrong password (PT-16).
+        #
+        # The bcrypt count must also be CONSTANT, not just non-zero: verifying
+        # once per candidate leaks the *number* of accounts sharing an email
+        # through response time (N accounts => N bcrypts, 0 => 1). We therefore
+        # spend exactly ACCOUNT_PASSWORD_CHECK_BUDGET verifications on every
+        # request, padding with the dummy hash.
+        users = await user_accessors.get_users_by_email(email)
+        candidates = [u for u in users if u.is_active][:ACCOUNT_PASSWORD_CHECK_BUDGET]
+        if len(users) > ACCOUNT_PASSWORD_CHECK_BUDGET:
+            # Pathological (one email, many accounts): the tail is not checked,
+            # which is preferred over reintroducing a variable-time oracle.
+            logger.warning(
+                f"account-list: {len(users)} accounts share an email; only the "
+                f"first {ACCOUNT_PASSWORD_CHECK_BUDGET} are password-checked"
+            )
+        matched = [
+            u
+            for u in candidates
+            # Substitute the dummy hash for any user missing a password hash so
+            # such an account can never match and never triggers an error path
+            # (defensive: password_hash is NOT NULL today, so this is unreached).
+            if verify_password(password, u.password_hash or DUMMY_PASSWORD_HASH)
+            and u.password_hash
+        ]
+        for _ in range(ACCOUNT_PASSWORD_CHECK_BUDGET - len(candidates)):
+            verify_password(password, DUMMY_PASSWORD_HASH)
+        if not matched:
+            logger.warning(f"Failed account-list attempt for email: {email}")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid email or password.",
+            )
     else:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Either id_token or email must be provided.",
+            detail="Provide either id_token, or email together with password.",
         )
-
-    users = await user_accessors.get_users_by_email(resolved_email)
 
     return [
         AccountSummary(
@@ -438,8 +480,7 @@ async def list_accounts_handler(
             reseller_ids=u.reseller_ids,
             is_active=u.is_active,
         )
-        for u in users
-        if u.is_active
+        for u in matched
     ]
 
 
@@ -483,7 +524,16 @@ async def select_account_handler(
                 detail="Google account does not match the selected account.",
             )
     elif password:
-        # Password: verify against stored hash
+        # Password: verify against stored hash. An SSO-only account may have no
+        # usable hash; bcrypt raises ValueError on an empty hash, which would
+        # surface as a 500. Spend a dummy verification so this branch stays
+        # timing-indistinguishable from a wrong password, then 401.
+        if not target.password_hash:
+            verify_password(password, DUMMY_PASSWORD_HASH)
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Incorrect password.",
+            )
         if not verify_password(password, target.password_hash):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,

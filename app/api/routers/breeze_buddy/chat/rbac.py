@@ -13,6 +13,7 @@ from typing import Optional
 from fastapi import HTTPException, status
 
 from app.core.logger import logger
+from app.core.security.authorization import merchant_scope_permitted
 from app.schemas import UserInfo
 from app.schemas.breeze_buddy.chat import ChatSession
 
@@ -54,19 +55,20 @@ def validate_chat_create_access(
             detail=f"Access denied to reseller {reseller_id}",
         )
 
-    if merchant_id:
-        if (
-            merchant_id not in current_user.merchant_ids
-            and "*" not in current_user.merchant_ids
-        ):
-            logger.warning(
-                f"User {current_user.username} attempted to {operation} "
-                f"for unauthorized merchant: {merchant_id}"
-            )
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Access denied to merchant {merchant_id}",
-            )
+    # Null merchant_id marks a reseller-scoped create: only reseller-role
+    # accounts (or admin, above) may create it — never every merchant sharing the
+    # reseller (PT-15). Mirrors validate_chat_session_access so the create path
+    # can't be looser than the access path (which would otherwise let a merchant
+    # persist a reseller-scoped session it then 404s on).
+    if not merchant_scope_permitted(current_user, merchant_id):
+        logger.warning(
+            f"User {current_user.username} attempted to {operation} "
+            f"for unauthorized merchant: {merchant_id}"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Access denied to merchant {merchant_id}",
+        )
 
 
 def validate_chat_session_access(
@@ -103,16 +105,14 @@ def validate_chat_session_access(
             status_code=status.HTTP_404_NOT_FOUND, detail="Chat session not found"
         )
 
-    if session.merchant_id:
-        if (
-            session.merchant_id not in current_user.merchant_ids
-            and "*" not in current_user.merchant_ids
-        ):
-            logger.warning(
-                f"User {current_user.username} attempted to {operation} "
-                f"chat session {session.id} for unauthorized merchant: "
-                f"{session.merchant_id}"
-            )
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="Chat session not found"
-            )
+    # Null merchant_id (reseller-scoped session) is reachable only by
+    # reseller-role accounts or admin, not every merchant in the reseller (PT-15).
+    if not merchant_scope_permitted(current_user, session.merchant_id):
+        logger.warning(
+            f"User {current_user.username} attempted to {operation} "
+            f"chat session {session.id} for unauthorized merchant: "
+            f"{session.merchant_id}"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Chat session not found"
+        )

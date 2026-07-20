@@ -6,6 +6,7 @@ import re
 from datetime import datetime, timezone
 from io import BytesIO
 from typing import Any, Dict, List, Optional, Tuple, cast
+from urllib.parse import urlparse
 
 from pipecat.frames.frames import OutputAudioRawFrame
 from pydub import AudioSegment
@@ -13,6 +14,7 @@ from pydub import AudioSegment
 from app.core.config.static import ORDER_CONFIRMATION_WEBHOOK_SECRET_KEY
 from app.core.logger import logger
 from app.core.security.sha import calculate_hmac_sha256
+from app.core.security.ssrf import SSRFError, ssrf_safe_request, validate_egress_url
 from app.services.redis.client import get_redis_service
 
 
@@ -128,6 +130,27 @@ async def send_webhook_with_retry(
     Returns:
         bool: True if successful, False if all attempts failed
     """
+    # SSRF: the webhook URL comes from lead payloads (reporting_webhook_url) and
+    # is dereferenced here — possibly long after it was accepted. Validate at
+    # delivery time so a URL that resolves to an internal/metadata address (or
+    # rebound DNS) is rejected with zero network attempts (PT-11).
+    #
+    # allow_http=True deliberately: PT-11 is about the resolved *address*, not
+    # the scheme, and this path had no scheme restriction before. Defaulting to
+    # https-only here would silently drop outcome webhooks for every tenant
+    # still posting to an http endpoint. Plaintext delivery is logged instead.
+    try:
+        await validate_egress_url(url, allow_http=True)
+    except SSRFError as exc:
+        logger.error(f"Webhook URL failed SSRF validation, not sending: {exc}")
+        return False
+
+    if urlparse(url).scheme == "http":
+        logger.warning(
+            f"Reporting webhook delivered over plaintext http: {url} — the "
+            "signed payload is readable in transit; migrate this tenant to https"
+        )
+
     payload = json.dumps(data, separators=(",", ":"), ensure_ascii=False)
     signature = calculate_hmac_sha256(payload, ORDER_CONFIRMATION_WEBHOOK_SECRET_KEY)
     headers = {"Content-Type": "application/json"}
@@ -137,7 +160,11 @@ async def send_webhook_with_retry(
     for attempt in range(1, max_retries + 1):
         try:
             logger.info(f"Webhook attempt {attempt}/{max_retries} to {url}")
-            async with session.post(url, json=data, headers=headers) as response:
+            # allow_redirects=False + per-hop revalidation so a public host can't
+            # 30x-redirect the signed payload to an internal target.
+            async with ssrf_safe_request(
+                session, "POST", url, json=data, headers=headers, allow_http=True
+            ) as response:
                 if response.status == 200:
                     logger.info(f"Webhook succeeded on attempt {attempt}")
                     return True

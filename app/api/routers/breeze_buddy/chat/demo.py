@@ -36,6 +36,7 @@ from app.api.routers.breeze_buddy.chat.handlers import (
     send_chat_message_handler,
     validate_template_for_chat,
 )
+from app.api.routers.breeze_buddy.widget_common import client_ip
 from app.api.security.breeze_buddy.demo_token import (
     DemoSessionContext,
     mint_demo_token,
@@ -74,28 +75,11 @@ router = APIRouter()
 _RATE_WINDOW_SECONDS = 3600
 
 
-def _client_ip(request: Request) -> str:
-    """Best-effort caller IP for rate-limit keying.
-
-    Honours ``X-Forwarded-For`` (first hop) when present so a load
-    balancer / reverse proxy doesn't make every visitor share one
-    bucket. Falls back to ``request.client.host``. Returns ``unknown``
-    if both are missing — treated as one shared bucket, which is the
-    safest default.
-    """
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        return forwarded.split(",")[0].strip() or "unknown"
-    if request.client and request.client.host:
-        return request.client.host
-    return "unknown"
-
-
 async def _enforce_ip_limit(*, request: Request, bucket: str, limit: int) -> None:
     """Raise 429 with ``Retry-After`` if ``request``'s IP is over ``limit``."""
     decision = await check_rate_limit(
         bucket=bucket,
-        identifier=_client_ip(request),
+        identifier=client_ip(request),
         limit=limit,
         window_seconds=_RATE_WINDOW_SECONDS,
         prefix="demo",

@@ -8,6 +8,7 @@ from typing import Any, Optional
 from fastapi import HTTPException, status
 
 from app.core.logger import logger
+from app.core.security.authorization import merchant_scope_permitted
 from app.schemas import UserInfo
 
 
@@ -47,20 +48,19 @@ def validate_lead_access(
             detail=f"Access denied to reseller {reseller_id}",
         )
 
-    # Check merchant access (if merchant_id is specified)
-    if merchant_id:
-        if (
-            merchant_id not in current_user.merchant_ids
-            and "*" not in current_user.merchant_ids
-        ):
-            logger.warning(
-                f"User {current_user.username} attempted to {operation} leads "
-                f"for unauthorized merchant: {merchant_id}"
-            )
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Access denied to merchant {merchant_id}",
-            )
+    # Check merchant scope. A null merchant_id marks a reseller-scoped write:
+    # only reseller-role accounts (or admin, above) may create it — never every
+    # merchant sharing the reseller (PT-15). Mirrors validate_lead_read_access so
+    # the write path can't be looser than the read path.
+    if not merchant_scope_permitted(current_user, merchant_id):
+        logger.warning(
+            f"User {current_user.username} attempted to {operation} leads "
+            f"for unauthorized merchant: {merchant_id}"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Access denied to merchant {merchant_id}",
+        )
 
 
 def validate_lead_read_access(
@@ -94,19 +94,17 @@ def validate_lead_read_access(
             status_code=status.HTTP_404_NOT_FOUND, detail=f"Lead not found"
         )
 
-    # Check shop access
-    if lead.merchant_id:
-        if (
-            lead.merchant_id not in current_user.merchant_ids
-            and "*" not in current_user.merchant_ids
-        ):
-            logger.warning(
-                f"User {current_user.username} attempted to {operation} lead {lead.id} "
-                f"for unauthorized merchant: {lead.merchant_id}"
-            )
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail=f"Lead not found"
-            )
+    # Check shop access. A null merchant_id marks a reseller-scoped lead: only
+    # reseller-role accounts (or admin, above) may read it — not every merchant
+    # sharing the reseller (PT-15).
+    if not merchant_scope_permitted(current_user, lead.merchant_id):
+        logger.warning(
+            f"User {current_user.username} attempted to {operation} lead {lead.id} "
+            f"for unauthorized merchant: {lead.merchant_id}"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Lead not found"
+        )
 
 
 def validate_recording_access(
@@ -146,17 +144,15 @@ def validate_recording_access(
             detail=f"Recording not found for call_sid: {call_sid}",
         )
 
-    # Check merchant access (if merchant_id is specified)
-    if merchant_id:
-        if (
-            merchant_id not in current_user.merchant_ids
-            and "*" not in current_user.merchant_ids
-        ):
-            logger.warning(
-                f"User {current_user.username} attempted to access recording "
-                f"for unauthorized merchant: {merchant_id} (call_sid: {call_sid})"
-            )
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Recording not found for call_sid: {call_sid}",
-            )
+    # Check merchant access. Null merchant_id (reseller-scoped recording) is
+    # reachable only by reseller-role accounts or admin, never every merchant in
+    # the reseller (PT-15).
+    if not merchant_scope_permitted(current_user, merchant_id):
+        logger.warning(
+            f"User {current_user.username} attempted to access recording "
+            f"for unauthorized merchant: {merchant_id} (call_sid: {call_sid})"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Recording not found for call_sid: {call_sid}",
+        )
