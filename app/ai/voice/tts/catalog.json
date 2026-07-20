@@ -1,0 +1,116 @@
+{
+  "voices": [
+    {
+      "provider": "elevenlabs",
+      "voice_id": "fG9s0SXJb213f4UxVHyG",
+      "display_name": "Rachel",
+      "models": ["eleven_flash_v2_5"],
+      "languages": ["en-IN", "hi"],
+      "tags": ["female", "default"]
+    },
+    {
+      "provider": "cartesia",
+      "voice_id": "bec003e2-3cb3-429c-8468-206a393c67ad",
+      "display_name": "Cartesia Default",
+      "models": ["sonic-3.5"],
+      "languages": ["en"],
+      "tags": ["default"]
+    },
+    {
+      "provider": "sarvam",
+      "voice_id": "shreya",
+      "display_name": "Shreya",
+      "models": ["bulbul:v3"],
+      "languages": ["en-IN", "hi"],
+      "tags": ["female", "default"]
+    },
+    {
+      "provider": "sarvam",
+      "voice_id": "priya",
+      "display_name": "Priya",
+      "models": ["bulbul:v3"],
+      "languages": ["en-IN", "hi"],
+      "tags": ["female"]
+    },
+    {
+      "provider": "sarvam",
+      "voice_id": "rahul",
+      "display_name": "Rahul",
+      "models": ["bulbul:v3"],
+      "languages": ["en-IN", "hi"],
+      "tags": ["male"]
+    },
+    {
+      "provider": "sarvam",
+      "voice_id": "kavya",
+      "display_name": "Kavya",
+      "models": ["bulbul:v3"],
+      "languages": ["en-IN", "hi"],
+      "tags": ["female"]
+    },
+    {
+      "provider": "sarvam",
+      "voice_id": "amit",
+      "display_name": "Amit",
+      "models": ["bulbul:v3"],
+      "languages": ["en-IN", "hi"],
+      "tags": ["male"]
+    },
+    {
+      "provider": "soniox",
+      "voice_id": "Priya",
+      "display_name": "Priya",
+      "models": ["tts-rt-v1"],
+      "languages": ["en"],
+      "tags": ["female", "default"]
+    },
+    {
+      "provider": "google",
+      "voice_id": "en-IN-Chirp3-HD-Despina",
+      "display_name": "Despina (Chirp3 HD)",
+      "models": [],
+      "languages": ["en-IN"],
+      "tags": ["default"]
+    },
+    {
+      "provider": "gemini",
+      "voice_id": "Kore",
+      "display_name": "Kore",
+      "models": [],
+      "languages": [],
+      "tags": ["default"]
+    },
+    {
+      "provider": "gemini",
+      "voice_id": "Puck",
+      "display_name": "Puck",
+      "models": [],
+      "languages": [],
+      "tags": []
+    },
+    {
+      "provider": "gemini",
+      "voice_id": "Charon",
+      "display_name": "Charon",
+      "models": [],
+      "languages": [],
+      "tags": []
+    },
+    {
+      "provider": "gemini",
+      "voice_id": "Despina",
+      "display_name": "Despina",
+      "models": [],
+      "languages": [],
+      "tags": []
+    },
+    {
+      "provider": "gemini",
+      "voice_id": "Zephyr",
+      "display_name": "Zephyr",
+      "models": [],
+      "languages": [],
+      "tags": []
+    }
+  ]
+}
