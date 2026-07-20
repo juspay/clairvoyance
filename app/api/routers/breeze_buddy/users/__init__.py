@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, Query
 
 from app.api.security.breeze_buddy.rbac_token import get_current_user_with_rbac
 from app.schemas import UserInfo
-from app.schemas.breeze_buddy.resellers import UserAccessResponse
+from app.schemas.breeze_buddy.resellers import UmbrellaGrantUpdate, UserAccessResponse
 from app.schemas.breeze_buddy.users import (
     DeleteUserResponse,
     UserCreate,
@@ -21,11 +21,15 @@ from app.schemas.breeze_buddy.users import (
 )
 
 from .handlers import (
+    add_user_workspace_handler,
     create_user_handler,
     delete_user_handler,
     get_all_users_handler,
     get_user_access_handler,
     get_user_by_id_handler,
+    remove_user_workspace_handler,
+    revoke_user_umbrella_handler,
+    set_user_umbrella_handler,
     update_user_handler,
 )
 
@@ -172,6 +176,81 @@ async def get_user_access(
     Visibility follows the same RBAC as GET /user/{user_id}.
     """
     return await get_user_access_handler(user_id, current_user)
+
+
+@router.post(
+    "/user/{user_id}/workspaces/{merchant_id}",
+    response_model=UserAccessResponse,
+    status_code=201,
+)
+async def grant_user_workspace(
+    user_id: str,
+    merchant_id: str,
+    current_user: UserInfo = Depends(get_current_user_with_rbac),
+):
+    """
+    Grant a user explicit membership of one workspace.
+
+    Idempotent. RBAC follows PUT /user/{id}: reseller/merchant callers can
+    only grant workspaces inside their own scope. Returns the refreshed
+    effective access.
+    """
+    return await add_user_workspace_handler(user_id, merchant_id, current_user)
+
+
+@router.delete(
+    "/user/{user_id}/workspaces/{merchant_id}", response_model=UserAccessResponse
+)
+async def revoke_user_workspace(
+    user_id: str,
+    merchant_id: str,
+    current_user: UserInfo = Depends(get_current_user_with_rbac),
+):
+    """
+    Revoke a user's explicit membership of one workspace.
+
+    404 if there is no explicit membership (inherited access is revoked by
+    changing the umbrella grant instead). Merchant/user accounts keep at
+    least one workspace. Returns the refreshed effective access.
+    """
+    return await remove_user_workspace_handler(user_id, merchant_id, current_user)
+
+
+@router.put(
+    "/user/{user_id}/umbrellas/{reseller_id}", response_model=UserAccessResponse
+)
+async def set_user_umbrella(
+    user_id: str,
+    reseller_id: str,
+    body: UmbrellaGrantUpdate,
+    current_user: UserInfo = Depends(get_current_user_with_rbac),
+):
+    """
+    Grant or update a user's umbrella affiliation. Admin only.
+
+    all_workspaces=true gives access to every workspace under the umbrella,
+    present and future. Returns the refreshed effective access.
+    """
+    return await set_user_umbrella_handler(
+        user_id, reseller_id, body.all_workspaces, current_user
+    )
+
+
+@router.delete(
+    "/user/{user_id}/umbrellas/{reseller_id}", response_model=UserAccessResponse
+)
+async def revoke_user_umbrella(
+    user_id: str,
+    reseller_id: str,
+    current_user: UserInfo = Depends(get_current_user_with_rbac),
+):
+    """
+    Revoke a user's umbrella affiliation. Admin only.
+
+    A reseller's own umbrella cannot be revoked (it is intrinsic to the
+    login). Returns the refreshed effective access.
+    """
+    return await revoke_user_umbrella_handler(user_id, reseller_id, current_user)
 
 
 @router.put("/user/{user_id}", response_model=UserResponse)

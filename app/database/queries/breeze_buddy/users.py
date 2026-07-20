@@ -162,12 +162,31 @@ def get_all_users_query(
         param_idx += 1
 
     if reseller_id_filter:
-        where_conditions.append(f"reseller_ids ? ${param_idx}")
+        # Umbrella view, from the normalized grant tables: an umbrella grant
+        # on this reseller, OR explicit membership in any of its workspaces
+        # (covers rows whose umbrella affiliation was never recorded).
+        where_conditions.append(
+            f"(EXISTS (SELECT 1 FROM user_reseller_access ura"
+            f" WHERE ura.user_id = users.id AND ura.reseller_id = ${param_idx})"
+            f" OR EXISTS (SELECT 1 FROM user_merchant_access uma"
+            f" JOIN merchants m ON m.merchant_id = uma.merchant_id"
+            f" WHERE uma.user_id = users.id AND m.reseller_id = ${param_idx}))"
+        )
         params.append(reseller_id_filter)
         param_idx += 1
 
     if merchant_identifier_filter:
-        where_conditions.append(f"merchant_ids ? ${param_idx}")
+        # Workspace view: explicit membership row, OR an all-workspaces
+        # umbrella grant on the workspace's reseller ("people with access to
+        # this workspace" includes the umbrella-wide accounts).
+        where_conditions.append(
+            f"(EXISTS (SELECT 1 FROM user_merchant_access uma"
+            f" WHERE uma.user_id = users.id AND uma.merchant_id = ${param_idx})"
+            f" OR EXISTS (SELECT 1 FROM user_reseller_access ura"
+            f" JOIN merchants m ON m.reseller_id = ura.reseller_id"
+            f" WHERE ura.user_id = users.id AND ura.all_workspaces"
+            f" AND m.merchant_id = ${param_idx}))"
+        )
         params.append(merchant_identifier_filter)
         param_idx += 1
 
@@ -182,7 +201,19 @@ def get_all_users_query(
         param_idx += 1
 
     if allowed_merchant_ids is not None and "*" not in allowed_merchant_ids:
-        where_conditions.append(f"merchant_ids ?| ${param_idx}")
+        # RBAC scope: explicit membership in any allowed workspace, OR an
+        # all-workspaces grant on an umbrella owning one. Wildcard accounts
+        # with no umbrella grant (admin-style rows) have no rows here and
+        # stay hidden from scoped callers.
+        where_conditions.append(
+            f"(EXISTS (SELECT 1 FROM user_merchant_access uma"
+            f" WHERE uma.user_id = users.id"
+            f" AND uma.merchant_id = ANY(${param_idx}::text[]))"
+            f" OR EXISTS (SELECT 1 FROM user_reseller_access ura"
+            f" JOIN merchants m ON m.reseller_id = ura.reseller_id"
+            f" WHERE ura.user_id = users.id AND ura.all_workspaces"
+            f" AND m.merchant_id = ANY(${param_idx}::text[])))"
+        )
         params.append(allowed_merchant_ids)
         param_idx += 1
 
