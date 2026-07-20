@@ -22,9 +22,9 @@ from app.core.security.authorization import require_admin
 from app.schemas import UserInfo
 from app.schemas.breeze_buddy.dragontts import (
     DragonTTSStatus,
-    ManageDragonTTSResponse,
     ManageDragonTTSAction,
     ManageDragonTTSRequest,
+    ManageDragonTTSResponse,
 )
 
 router = APIRouter()
@@ -34,7 +34,7 @@ router = APIRouter()
 async def manage_dragon_tts(
     body: ManageDragonTTSRequest,
     current_user: UserInfo = Depends(get_current_user_with_rbac),
-    ) -> ManageDragonTTSResponse:
+) -> ManageDragonTTSResponse:
     """Manage the DragonTTS health flag: ``kill_switch`` -> bypass caching,
     ``restore`` -> resume caching."""
     require_admin(current_user)
