@@ -15,6 +15,8 @@ from app.schemas.breeze_buddy.analytics import (
 )
 from app.schemas.breeze_buddy.auth import (
     AuthTokenData,
+    LaunchTokenRequest,
+    LaunchTokenResponse,
     LoginRequest,
     LoginResponse,
     Permission,
@@ -62,6 +64,8 @@ from app.schemas.breeze_buddy.users import (
 __all__ = [
     # Auth
     "AuthTokenData",
+    "LaunchTokenRequest",
+    "LaunchTokenResponse",
     "LoginRequest",
     "LoginResponse",
     "Permission",

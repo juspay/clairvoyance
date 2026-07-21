@@ -18,6 +18,8 @@ from fastapi.responses import RedirectResponse
 
 from app.api.security.breeze_buddy.rbac_token import get_current_user_with_rbac
 from app.schemas import (
+    LaunchTokenRequest,
+    LaunchTokenResponse,
     LoginRequest,
     S2STokenRequest,
     S2STokenResponse,
@@ -28,6 +30,7 @@ from app.schemas import (
 from .handlers import (
     generate_s2s_token_handler,
     get_user_info_handler,
+    launch_token_handler,
     login_handler,
     logout_handler,
 )
@@ -112,6 +115,55 @@ async def generate_s2s_token(request: S2STokenRequest):
         - Returns 403 if user is not an admin
     """
     return await generate_s2s_token_handler(request)
+
+
+@router.post("/auth/launch-token", response_model=LaunchTokenResponse)
+async def launch_token(
+    request: LaunchTokenRequest,
+    current_user: UserInfo = Depends(get_current_user_with_rbac),
+):
+    """
+    Mint a 1-hour merchant-scoped session JWT to launch the Loom dashboard.
+
+    Used by the Nautilus/Buddy Assist connector: a merchant clicks "Open
+    Dashboard" in the Shopify admin, Nautilus verifies the Shopify session,
+    then calls this endpoint to obtain a signed-in Loom launch URL.
+
+    **RBAC rules:**
+    - Admin: Can mint a launch token for any reseller/merchant.
+    - Reseller: Can only mint for a reseller_id within their own scope.
+    - Merchant/User tokens: Forbidden — this endpoint impersonates a
+      merchant session and must not be self-servable.
+
+    Request Body:
+        {
+            "reseller_id": "BB_ASSIST",
+            "merchant_id": "assist-example.myshopify.com",
+            "source": "nautilus",
+            "redirect": "/home"
+        }
+
+    Returns:
+        {
+            "access_token": "eyJ...",
+            "token_type": "Bearer",
+            "expires_in": 3600,
+            "launch_url": "https://<LOOM_APP_URL>/launch?token=...&redirect=%2Fhome"
+        }
+
+    Security:
+        - Returns 401 if the caller's token is invalid or expired.
+        - Returns 403 if the caller lacks scope over reseller_id.
+        - Returns 404 if the merchant doesn't exist, is inactive, or does not
+          belong to reseller_id (never distinguishes which, to avoid leaking
+          tenant existence).
+        - Returns 400 if source is unknown, or redirect is present but not a
+          safe relative path.
+        - Every mint is audit-logged with the caller id, reseller_id, and
+          merchant_id — this endpoint is impersonation by design and is
+          bounded by RBAC scope plus this log trail.
+    """
+    return await launch_token_handler(request, current_user)
 
 
 @router.get("/auth/me", response_model=UserInfo)

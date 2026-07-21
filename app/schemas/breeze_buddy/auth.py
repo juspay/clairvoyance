@@ -183,6 +183,42 @@ class User(BaseModel):
     updated_at: Optional[datetime] = None
 
 
+class LaunchTokenRequest(BaseModel):
+    """Request to mint a short-lived merchant-scoped Loom launch token.
+
+    Used by trusted callers (e.g. Nautilus/Buddy Assist) to hand a merchant
+    a signed-in Loom session without provisioning a real ``users`` row.
+    """
+
+    reseller_id: str = Field(..., description="Reseller that owns the merchant")
+    merchant_id: str = Field(..., description="Merchant to mint a session for")
+    source: str = Field(
+        ...,
+        description=(
+            "Requesting product (e.g. 'nautilus'). Stamped into the token's "
+            "signed 'src' claim and gated by Loom on sign-in. Must be a known "
+            "launch source."
+        ),
+    )
+    redirect: Optional[str] = Field(
+        None,
+        description=(
+            "Relative path Loom should land on after sign-in. Must start with a "
+            "single '/' and contain only [A-Za-z0-9._~/-] (relative, not "
+            "protocol-relative). Defaults to /home."
+        ),
+    )
+
+
+class LaunchTokenResponse(BaseModel):
+    """Response containing a 1-hour merchant-scoped session JWT for Loom."""
+
+    access_token: str
+    token_type: str = "Bearer"
+    expires_in: int  # seconds
+    launch_url: str
+
+
 class AuthTokenData(BaseModel):
     """Enhanced token data model for JWT payload with RBAC"""
 

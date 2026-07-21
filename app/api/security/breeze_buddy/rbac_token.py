@@ -34,6 +34,7 @@ class BreezeBuddyRBACTokenManager:
         email: Optional[str] = None,
         owner_id: Optional[str] = None,
         expires_delta: Optional[timedelta] = None,
+        src: Optional[str] = None,
     ) -> str:
         """
         Create a JWT access token with Breeze Buddy RBAC information.
@@ -46,6 +47,8 @@ class BreezeBuddyRBACTokenManager:
             merchant_ids: List of accessible merchant identifiers (["*"] for all merchants under the reseller(s))
             email: User's email (optional)
             expires_delta: Optional custom expiration time
+            src: Optional provenance marker recorded on the token (e.g.
+                "nautilus" for Shopify-admin launch tokens)
 
         Returns:
             Encoded JWT token string with RBAC data
@@ -64,6 +67,9 @@ class BreezeBuddyRBACTokenManager:
             "permissions": permissions,
             "owner_id": owner_id,
         }
+
+        if src:
+            payload["src"] = src
 
         # Use the generic JWT manager to create the token
         return self.jwt_manager.create_access_token(payload, expires_delta)
