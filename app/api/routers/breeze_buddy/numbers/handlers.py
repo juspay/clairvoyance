@@ -1,87 +1,195 @@
 """
-Business logic handlers for outbound number operations.
+Business logic handlers for telephony number operations.
 All handlers perform database operations and enforce business rules.
 """
 
-from typing import List, Optional
+from typing import List, Optional, Tuple
 from uuid import uuid4
 
 from fastapi import HTTPException, status
 
 from app.core.logger import logger
 from app.database.accessor import (
-    create_outbound_number,
-    disable_outbound_number,
-    get_all_outbound_numbers,
-    get_outbound_number_by_id,
+    create_telephony_number,
+    disable_telephony_number,
+    get_all_telephony_numbers,
+    get_telephony_number_by_id,
+    update_telephony_number,
+)
+from app.database.accessor.breeze_buddy.merchants import (
+    get_merchant_by_merchant_identifier,
 )
 from app.schemas import (
-    CreateOutboundNumberRequest,
-    OutboundNumber,
+    CreateTelephonyNumberRequest,
+    TelephonyNumber,
+    UpdateTelephonyNumberRequest,
     UserInfo,
 )
 
 
-async def create_number_handler(
-    number: CreateOutboundNumberRequest, current_user: UserInfo
-) -> OutboundNumber:
+async def _resolve_ownership(
+    merchant_id: Optional[str], reseller_id: Optional[str]
+) -> Tuple[Optional[str], Optional[str]]:
     """
-    Create a new outbound number.
+    Validate an ownership pair and auto-fill the umbrella for merchant-owned
+    numbers from merchants.reseller_id. Raises 400 on an unknown merchant.
+    """
+    if merchant_id:
+        merchant = await get_merchant_by_merchant_identifier(merchant_id)
+        if not merchant:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Unknown merchant_id: {merchant_id}",
+            )
+        return merchant_id, reseller_id or merchant.reseller_id
+    return None, reseller_id
+
+
+async def create_number_handler(
+    number: CreateTelephonyNumberRequest, current_user: UserInfo
+) -> TelephonyNumber:
+    """
+    Provision a new telephony number.
+
+    Ownership is explicit: merchant_id (merchant-owned, umbrella auto-filled),
+    reseller_id only (umbrella-owned), or shared_pool=true (shared platform
+    pool — the dispatcher's legacy NULL/NULL fallback).
 
     Args:
-        number: Outbound number creation request
+        number: Telephony number creation request
         current_user: Current authenticated user (must be admin)
 
     Returns:
-        Created outbound number object
+        Created telephony number object
 
     Raises:
-        HTTPException: 400 if creation fails
+        HTTPException: 400 if the ownership shape is invalid or creation fails
     """
     logger.info(
-        f"Admin {current_user.username} creating outbound number: {number.number}"
+        f"Admin {current_user.username} creating telephony number: {number.number}"
     )
 
-    if not number.reseller_id:
+    if not number.merchant_id and not number.reseller_id and not number.shared_pool:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="reseller_id is required",
+            detail=(
+                "Pick an owner: pass merchant_id (merchant-owned) or "
+                "reseller_id (umbrella-owned), or set shared_pool=true for "
+                "the shared platform pool."
+            ),
         )
 
+    merchant_id, reseller_id = await _resolve_ownership(
+        number.merchant_id, number.reseller_id
+    )
+
     try:
-        outbound_number = await create_outbound_number(
+        telephony_number = await create_telephony_number(
             id=str(uuid4()),
             number=number.number,
             provider=number.provider,
             status=number.status,
-            reseller_id=number.reseller_id,
-            merchant_id=number.merchant_id,
+            reseller_id=reseller_id,
+            merchant_id=merchant_id,
             channels=0,
             maximum_channels=number.maximum_channels,
         )
 
-        if outbound_number:
+        if telephony_number:
             logger.info(
-                f"Outbound number {number.number} created successfully with ID {outbound_number.id}"
+                f"Telephony number {number.number} created successfully with ID {telephony_number.id}"
             )
-            return outbound_number
+            return telephony_number
         else:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Failed to create outbound number",
+                detail="Failed to create telephony number",
             )
 
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Error creating outbound number: {e}", exc_info=True)
+        logger.error(f"Error creating telephony number: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error creating outbound number: {str(e)}",
+            detail=f"Error creating telephony number: {str(e)}",
+        )
+
+
+async def update_number_handler(
+    number_id: str, update: UpdateTelephonyNumberRequest, current_user: UserInfo
+) -> TelephonyNumber:
+    """
+    Update a telephony number: assignment (merchant/umbrella), release to the
+    shared pool (clear_ownership), status, or maximum_channels.
+
+    Args:
+        number_id: Telephony number UUID
+        update: Partial update request (None fields = unchanged)
+        current_user: Current authenticated user (must be admin)
+
+    Returns:
+        Updated telephony number object
+
+    Raises:
+        HTTPException: 404 if not found, 400 on invalid ownership
+    """
+    logger.info(
+        f"Admin {current_user.username} updating telephony number {number_id}: "
+        f"{update.model_dump(exclude_none=True)}"
+    )
+
+    existing = await get_telephony_number_by_id(number_id)
+    if not existing:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Telephony number {number_id} not found",
+        )
+
+    # Touching either ownership field is a full reassignment: both columns
+    # get rewritten so e.g. a reseller-only PATCH on a merchant-owned number
+    # nulls the stale merchant_id instead of leaving hybrid ownership behind.
+    set_ownership = (
+        update.merchant_id is not None or update.reseller_id is not None
+    ) and not update.clear_ownership
+    merchant_id, reseller_id = (None, None)
+    if set_ownership:
+        merchant_id, reseller_id = await _resolve_ownership(
+            update.merchant_id, update.reseller_id
+        )
+
+    try:
+        telephony_number = await update_telephony_number(
+            number_id,
+            status=update.status,
+            maximum_channels=update.maximum_channels,
+            reseller_id=reseller_id,
+            merchant_id=merchant_id,
+            clear_ownership=update.clear_ownership,
+            set_ownership=set_ownership,
+        )
+
+        if telephony_number:
+            logger.info(f"Telephony number {number_id} updated successfully")
+            return telephony_number
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Failed to update telephony number",
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating telephony number {number_id}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error updating telephony number: {str(e)}",
         )
 
 
 async def list_numbers_handler(
     provider: Optional[str], status_filter: Optional[str], current_user: UserInfo
-) -> List[OutboundNumber]:
+) -> List[TelephonyNumber]:
     """
     List all outbound numbers with optional filters.
 
@@ -99,7 +207,7 @@ async def list_numbers_handler(
     )
 
     try:
-        numbers = await get_all_outbound_numbers()
+        numbers = await get_all_telephony_numbers()
 
         # Apply filters
         if provider:
@@ -119,7 +227,7 @@ async def list_numbers_handler(
         )
 
 
-async def get_number_handler(number_id: str, current_user: UserInfo) -> OutboundNumber:
+async def get_number_handler(number_id: str, current_user: UserInfo) -> TelephonyNumber:
     """
     Get a single outbound number by ID.
 
@@ -139,7 +247,7 @@ async def get_number_handler(number_id: str, current_user: UserInfo) -> Outbound
     )
 
     try:
-        number = await get_outbound_number_by_id(number_id)
+        number = await get_telephony_number_by_id(number_id)
 
         if not number:
             raise HTTPException(
@@ -161,7 +269,7 @@ async def get_number_handler(number_id: str, current_user: UserInfo) -> Outbound
 
 async def delete_number_handler(
     number_id: str, current_user: UserInfo
-) -> OutboundNumber:
+) -> TelephonyNumber:
     """
     Delete (disable) an outbound number.
 
@@ -180,11 +288,11 @@ async def delete_number_handler(
     logger.info(f"Admin {current_user.username} disabling outbound number: {number_id}")
 
     try:
-        outbound_number = await disable_outbound_number(number_id)
+        telephony_number = await disable_telephony_number(number_id)
 
-        if outbound_number:
+        if telephony_number:
             logger.info(f"Outbound number {number_id} disabled successfully")
-            return outbound_number
+            return telephony_number
         else:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,

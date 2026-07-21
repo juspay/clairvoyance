@@ -28,7 +28,7 @@ from app.ai.voice.agents.breeze_buddy.utils.hold_transfer import (
     subscribe_and_wait,
 )
 from app.core.logger import logger
-from app.database.accessor import get_outbound_number_by_id
+from app.database.accessor import get_telephony_number_by_id
 from app.database.accessor.breeze_buddy.hold_transfer import (
     get_template_summary_by_outbound_number_id,
 )
@@ -99,10 +99,10 @@ async def hold_and_consult(
     )
 
     # ── 3. Lookup outbound number ──────────────────────────────────────
-    outbound_number_record = await get_outbound_number_by_id(
+    telephony_number_record = await get_telephony_number_by_id(
         hold_config.outbound_number_id
     )
-    if not outbound_number_record:
+    if not telephony_number_record:
         logger.error(
             f"[hold_and_consult] Outbound number not found: "
             f"{hold_config.outbound_number_id}"
@@ -111,7 +111,7 @@ async def hold_and_consult(
             "status": "error",
             "message": "Outbound number not found.",
         }
-    outbound_number = outbound_number_record.number
+    telephony_number = telephony_number_record.number
 
     # ── 4. Lookup outbound template ────────────────────────────────────
     outbound_template = await get_template_summary_by_outbound_number_id(
@@ -246,7 +246,7 @@ async def hold_and_consult(
             None,
             lambda: context.telephony_service.make_call(
                 customer_mobile_number=phone_number,
-                outbound_number=outbound_number,
+                telephony_number=telephony_number,
                 reseller_id=outbound_template["reseller_id"],
                 template_name=outbound_template["name"],
             ),

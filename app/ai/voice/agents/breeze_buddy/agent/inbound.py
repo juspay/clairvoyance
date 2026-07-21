@@ -9,8 +9,8 @@ from app.database.accessor import get_lead_by_call_id
 from app.database.accessor.breeze_buddy.lead_call_tracker import (
     create_lead_call_tracker,
 )
-from app.database.accessor.breeze_buddy.outbound_number import (
-    get_outbound_number_by_number,
+from app.database.accessor.breeze_buddy.telephony_number import (
+    get_telephony_number_by_number,
 )
 from app.database.accessor.breeze_buddy.template import (
     get_template_by_id,
@@ -69,18 +69,18 @@ async def handle_inbound_call(
     logger.info(f"Inbound call to: {to_number}, from: {from_number}")
 
     # Look up outbound number by phone number
-    outbound_number = await get_outbound_number_by_number(to_number)
-    if not outbound_number:
+    telephony_number = await get_telephony_number_by_number(to_number)
+    if not telephony_number:
         logger.error(f"No outbound number found for to_number: {to_number}")
         return None, "Outbound number not found"
 
     # Look up template by outbound_number_id (only inbound-enabled templates)
     template = await get_template_by_outbound_number_id(
-        outbound_number.id, enable_inbound_only=True
+        telephony_number.id, enable_inbound_only=True
     )
     if not template:
         logger.error(
-            f"No inbound-enabled template found for outbound_number_id: {outbound_number.id}"
+            f"No inbound-enabled template found for outbound_number_id: {telephony_number.id}"
         )
         return None, "No inbound template configured"
 
@@ -97,7 +97,7 @@ async def handle_inbound_call(
         call_initiated_time=call_initiated_time,
         status=LeadCallStatus.PROCESSING,
         call_id=call_sid,
-        outbound_number_id=outbound_number.id,
+        outbound_number_id=telephony_number.id,
         call_direction=CallDirection.INBOUND,
     )
 

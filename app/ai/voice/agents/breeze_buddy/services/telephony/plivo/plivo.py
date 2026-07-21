@@ -54,7 +54,7 @@ class PlivoProvider(VoiceCallProvider):
     def make_call(
         self,
         customer_mobile_number: str,
-        outbound_number: str,
+        telephony_number: str,
         reseller_id: Optional[str] = None,
         template_name: Optional[str] = None,
     ):
@@ -69,7 +69,7 @@ class PlivoProvider(VoiceCallProvider):
 
         Args:
             customer_mobile_number: Phone number to call
-            outbound_number: Caller ID / outbound number
+            telephony_number: Caller ID / outbound number
             reseller_id: Optional merchant ID for tiered pod allocation
             template_name: Optional template name for WebSocket path routing
         """
@@ -84,7 +84,7 @@ class PlivoProvider(VoiceCallProvider):
 
         try:
             response = self.client.calls.create(
-                from_=outbound_number,
+                from_=telephony_number,
                 to_=customer_mobile_number,
                 answer_url=answer_url,
                 hangup_url=f"{self.APP_BASE_URL}/agent/voice/breeze-buddy/plivo/callback/status",
@@ -133,7 +133,7 @@ async def plivo_dial_xml(
     if not agent_phone.startswith("+"):
         agent_phone = f"+{agent_phone}"
 
-    outbound_number = params.get("outbound_number", "")
+    telephony_number = params.get("outbound_number", "")
     action_url = (
         f"{APP_BASE_URL}/agent/voice/breeze-buddy"
         f"/plivo/callback/transfer/conclude"
@@ -143,7 +143,7 @@ async def plivo_dial_xml(
         f'<?xml version="1.0" encoding="UTF-8"?>'
         f"<Response>"
         f'<Dial action="{action_url}" method="POST"'
-        f' callerId="{outbound_number}" timeout="30">'
+        f' callerId="{telephony_number}" timeout="30">'
         f"<Number>{agent_phone}</Number>"
         f"</Dial></Response>"
     )

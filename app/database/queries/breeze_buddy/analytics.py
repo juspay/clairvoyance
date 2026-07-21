@@ -13,7 +13,7 @@ from app.core.logger import logger
 
 # Table names
 LEAD_CALL_TRACKER_TABLE = "lead_call_tracker"
-OUTBOUND_NUMBER_TABLE = "outbound_number"
+TELEPHONY_NUMBER_TABLE = "telephony_numbers"
 
 # Pattern for valid JSONB key names (alphanumeric, underscore, hyphen only)
 # This prevents SQL injection via malicious key names in payload filters
@@ -245,7 +245,7 @@ def get_analytics_summary_query(
 
     # Add LEFT JOIN only if provider filter is present
     join_clause = (
-        f'LEFT JOIN "{OUTBOUND_NUMBER_TABLE}" ou ON lct.outbound_number_id = ou.id'
+        f'LEFT JOIN "{TELEPHONY_NUMBER_TABLE}" ou ON lct.outbound_number_id = ou.id'
         if "provider" in filters and filters["provider"]
         else ""
     )
@@ -404,7 +404,7 @@ def get_analytics_call_details_query(
             lct.*,
             ou.provider as calling_provider
         FROM "{LEAD_CALL_TRACKER_TABLE}" lct
-        LEFT JOIN "{OUTBOUND_NUMBER_TABLE}" ou ON lct.outbound_number_id = ou.id
+        LEFT JOIN "{TELEPHONY_NUMBER_TABLE}" ou ON lct.outbound_number_id = ou.id
         {where_clause}
         ORDER BY lct.{sort_by} {sort_direction}
         LIMIT ${len(values) + 1}
@@ -465,7 +465,7 @@ def get_call_details_records_query(
             lct.attempt_count + 1 as attempt_count,
             ou.provider as calling_provider
         FROM "{LEAD_CALL_TRACKER_TABLE}" lct
-        LEFT JOIN "{OUTBOUND_NUMBER_TABLE}" ou ON lct.outbound_number_id = ou.id
+        LEFT JOIN "{TELEPHONY_NUMBER_TABLE}" ou ON lct.outbound_number_id = ou.id
         {where_clause}
         ORDER BY lct.{sort_by} {sort_direction}
         {pagination_clause};
@@ -487,7 +487,7 @@ def get_analytics_count_query(
 
     # Add LEFT JOIN only if provider filter is present
     join_clause = (
-        f'LEFT JOIN "{OUTBOUND_NUMBER_TABLE}" ou ON lct.outbound_number_id = ou.id'
+        f'LEFT JOIN "{TELEPHONY_NUMBER_TABLE}" ou ON lct.outbound_number_id = ou.id'
         if "provider" in filters and filters["provider"]
         else ""
     )
@@ -515,7 +515,7 @@ def get_analytics_trends_query(
 
     # Add LEFT JOIN only if provider filter is present
     join_clause = (
-        f'LEFT JOIN "{OUTBOUND_NUMBER_TABLE}" ou ON lct.outbound_number_id = ou.id'
+        f'LEFT JOIN "{TELEPHONY_NUMBER_TABLE}" ou ON lct.outbound_number_id = ou.id'
         if "provider" in filters and filters["provider"]
         else ""
     )
@@ -609,7 +609,7 @@ def get_analytics_lead_based_query(
 
     # Add LEFT JOIN only if provider filter is present
     join_clause = (
-        f'LEFT JOIN "{OUTBOUND_NUMBER_TABLE}" ou ON lct.outbound_number_id = ou.id'
+        f'LEFT JOIN "{TELEPHONY_NUMBER_TABLE}" ou ON lct.outbound_number_id = ou.id'
         if "provider" in filters and filters["provider"]
         else ""
     )
@@ -776,7 +776,7 @@ def get_attempts_to_connect_query(filters: Dict[str, Any]) -> Tuple[str, List[An
         where_clause = f" WHERE {extra_condition}"
 
     join_clause = (
-        f'LEFT JOIN "{OUTBOUND_NUMBER_TABLE}" ou ON lct.outbound_number_id = ou.id'
+        f'LEFT JOIN "{TELEPHONY_NUMBER_TABLE}" ou ON lct.outbound_number_id = ou.id'
         if "provider" in filters and filters["provider"]
         else ""
     )
@@ -822,7 +822,7 @@ def get_calls_by_hour_query(filters: Dict[str, Any]) -> Tuple[str, List[Any]]:
     where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
 
     join_clause = (
-        f'LEFT JOIN "{OUTBOUND_NUMBER_TABLE}" ou ON lct.outbound_number_id = ou.id'
+        f'LEFT JOIN "{TELEPHONY_NUMBER_TABLE}" ou ON lct.outbound_number_id = ou.id'
         if "provider" in filters and filters["provider"]
         else ""
     )
@@ -854,7 +854,7 @@ def get_analytics_lead_based_trends_query(
 
     # Add LEFT JOIN only if provider filter is present
     join_clause = (
-        f'LEFT JOIN "{OUTBOUND_NUMBER_TABLE}" ou ON lct.outbound_number_id = ou.id'
+        f'LEFT JOIN "{TELEPHONY_NUMBER_TABLE}" ou ON lct.outbound_number_id = ou.id'
         if "provider" in filters and filters["provider"]
         else ""
     )
@@ -936,7 +936,7 @@ def get_analytics_lead_based_trends_query(
     return text, values
 
 
-def get_analytics_outbound_numbers_query(
+def get_analytics_telephony_numbers_query(
     filters: Dict[str, Any],
 ) -> Tuple[str, List[Any]]:
     """
@@ -961,13 +961,16 @@ def get_analytics_outbound_numbers_query(
             ou.status,
             ou.channels,
             ou.maximum_channels,
+            ou.reseller_id,
+            ou.merchant_id,
             COUNT(*) as total_calls,
             COUNT(*) FILTER (WHERE lct.outcome != 'NO_ANSWER' AND lct.outcome IS NOT NULL) as calls_picked,
             COUNT(*) FILTER (WHERE lct.outcome = 'NO_ANSWER') as calls_no_answer
         FROM "{LEAD_CALL_TRACKER_TABLE}" lct
-        LEFT JOIN "{OUTBOUND_NUMBER_TABLE}" ou ON lct.outbound_number_id = ou.id
+        LEFT JOIN "{TELEPHONY_NUMBER_TABLE}" ou ON lct.outbound_number_id = ou.id
         {where_clause}
-        GROUP BY ou.id, ou.number, ou.provider, ou.status, ou.channels, ou.maximum_channels
+        GROUP BY ou.id, ou.number, ou.provider, ou.status, ou.channels, ou.maximum_channels,
+                 ou.reseller_id, ou.merchant_id
         ORDER BY total_calls DESC;
     """
 
@@ -1098,7 +1101,7 @@ def get_distinct_outcomes_query(
 
     # Add LEFT JOIN only if provider filter is present
     join_clause = (
-        f'LEFT JOIN "{OUTBOUND_NUMBER_TABLE}" ou ON lct.outbound_number_id = ou.id'
+        f'LEFT JOIN "{TELEPHONY_NUMBER_TABLE}" ou ON lct.outbound_number_id = ou.id'
         if "provider" in filters and filters["provider"]
         else ""
     )
@@ -1134,7 +1137,7 @@ def get_outcome_counts_query(
 
     # Add LEFT JOIN only if provider filter is present
     join_clause = (
-        f'LEFT JOIN "{OUTBOUND_NUMBER_TABLE}" ou ON lct.outbound_number_id = ou.id'
+        f'LEFT JOIN "{TELEPHONY_NUMBER_TABLE}" ou ON lct.outbound_number_id = ou.id'
         if "provider" in filters and filters["provider"]
         else ""
     )
@@ -1177,7 +1180,7 @@ def get_outcome_counts_total_query(
 
     # Add LEFT JOIN only if provider filter is present
     join_clause = (
-        f'LEFT JOIN "{OUTBOUND_NUMBER_TABLE}" ou ON lct.outbound_number_id = ou.id'
+        f'LEFT JOIN "{TELEPHONY_NUMBER_TABLE}" ou ON lct.outbound_number_id = ou.id'
         if "provider" in filters and filters["provider"]
         else ""
     )
@@ -1209,7 +1212,7 @@ def get_analytics_call_details_grouped_count_query(
     where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
 
     join_clause = (
-        f'LEFT JOIN "{OUTBOUND_NUMBER_TABLE}" ou ON lct.outbound_number_id = ou.id'
+        f'LEFT JOIN "{TELEPHONY_NUMBER_TABLE}" ou ON lct.outbound_number_id = ou.id'
         if "provider" in filters and filters["provider"]
         else ""
     )
@@ -1254,7 +1257,7 @@ def get_analytics_call_details_grouped_query(
     sort_direction = "DESC" if sort_order.lower() == "desc" else "ASC"
 
     cte_join_clause = (
-        f'LEFT JOIN "{OUTBOUND_NUMBER_TABLE}" ou ON lct.outbound_number_id = ou.id'
+        f'LEFT JOIN "{TELEPHONY_NUMBER_TABLE}" ou ON lct.outbound_number_id = ou.id'
         if "provider" in filters and filters["provider"]
         else ""
     )
@@ -1282,7 +1285,7 @@ def get_analytics_call_details_grouped_query(
             lct.*,
             ou.provider as calling_provider
         FROM "{LEAD_CALL_TRACKER_TABLE}" lct
-        LEFT JOIN "{OUTBOUND_NUMBER_TABLE}" ou ON lct.outbound_number_id = ou.id
+        LEFT JOIN "{TELEPHONY_NUMBER_TABLE}" ou ON lct.outbound_number_id = ou.id
         {outer_where}
         ORDER BY MAX(lct.{sort_by}) OVER (PARTITION BY lct.request_id) {sort_direction},
                  lct.call_initiated_time ASC;
@@ -1308,7 +1311,7 @@ def get_distinct_resellers_query(
     where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
 
     join_clause = (
-        f'LEFT JOIN "{OUTBOUND_NUMBER_TABLE}" ou ON lct.outbound_number_id = ou.id'
+        f'LEFT JOIN "{TELEPHONY_NUMBER_TABLE}" ou ON lct.outbound_number_id = ou.id'
         if "provider" in filters and filters["provider"]
         else ""
     )
@@ -1340,7 +1343,7 @@ def get_distinct_merchant_ids_query(
     where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
 
     join_clause = (
-        f'LEFT JOIN "{OUTBOUND_NUMBER_TABLE}" ou ON lct.outbound_number_id = ou.id'
+        f'LEFT JOIN "{TELEPHONY_NUMBER_TABLE}" ou ON lct.outbound_number_id = ou.id'
         if "provider" in filters and filters["provider"]
         else ""
     )

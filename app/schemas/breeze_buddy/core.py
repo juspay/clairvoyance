@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field, model_validator
 
 
-class OutboundNumberStatus(str, Enum):
+class TelephonyNumberStatus(str, Enum):
     """Status of outbound phone numbers"""
 
     AVAILABLE = "AVAILABLE"
@@ -208,24 +208,51 @@ class LeadCallTracker(BaseModel):
     updated_at: Optional[datetime] = None
 
 
-class CreateOutboundNumberRequest(BaseModel):
-    """Request to create a new outbound number"""
+class CreateTelephonyNumberRequest(BaseModel):
+    """Request to provision a telephony number.
+
+    Ownership shapes:
+      - merchant_id set          → merchant-owned (reseller_id auto-filled
+                                   from the merchant's umbrella when omitted)
+      - reseller_id only         → umbrella-owned
+      - neither + shared_pool    → shared platform pool (the legacy
+                                   NULL/NULL fallback pool the dispatcher
+                                   scans when a template pins no number)
+      - neither, no shared_pool  → rejected (400) so ownership is always an
+                                   explicit choice
+    """
 
     number: str
     provider: CallProvider
-    status: OutboundNumberStatus = OutboundNumberStatus.AVAILABLE
+    status: TelephonyNumberStatus = TelephonyNumberStatus.AVAILABLE
     maximum_channels: Optional[int] = None
     reseller_id: Optional[str] = None
     merchant_id: Optional[str] = None
+    shared_pool: bool = False
 
 
-class OutboundNumber(BaseModel):
-    """Outbound phone number model"""
+class UpdateTelephonyNumberRequest(BaseModel):
+    """Partial update for a telephony number (admin).
+
+    None = leave unchanged. clear_ownership=True nulls reseller_id AND
+    merchant_id (returns the number to the shared pool) and wins over any
+    ids passed alongside it.
+    """
+
+    status: Optional[TelephonyNumberStatus] = None
+    maximum_channels: Optional[int] = None
+    reseller_id: Optional[str] = None
+    merchant_id: Optional[str] = None
+    clear_ownership: bool = False
+
+
+class TelephonyNumber(BaseModel):
+    """Telephony number model (outbound caller IDs and inbound DIDs)"""
 
     id: str
     number: str
     provider: CallProvider
-    status: OutboundNumberStatus
+    status: TelephonyNumberStatus
     channels: Optional[int] = None
     maximum_channels: Optional[int] = None
     reseller_id: Optional[str] = None

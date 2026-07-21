@@ -11,6 +11,10 @@ from typing import Any, Dict, List, Optional
 
 from starlette.responses import StreamingResponse
 
+from app.api.routers.breeze_buddy.numbers.rbac import (
+    number_in_rbac_scope,
+    rbac_number_scopes,
+)
 from app.database.accessor.breeze_buddy.analytics import (
     get_analytics_count_from_db,
     get_attempts_to_connect_from_db,
@@ -25,15 +29,18 @@ from app.database.accessor.breeze_buddy.analytics import (
     get_lead_based_analytics_from_db,
     get_lead_based_trends_from_db,
     get_lead_status_counts_from_db,
-    get_outbound_numbers_analytics_from_db,
     get_outcome_counts_from_db,
     get_summary_analytics_from_db,
+    get_telephony_numbers_analytics_from_db,
     get_trends_analytics_from_db,
 )
 from app.database.accessor.breeze_buddy.chat_analytics import (
     get_chat_summary_from_db,
     get_chat_trends_from_db,
     get_chats_by_hour_from_db,
+)
+from app.database.accessor.breeze_buddy.telephony_number import (
+    get_template_pinned_number_ids,
 )
 from app.schemas import CallDetailGroupedResult, CallDetailResult, UserInfo
 from app.utils.common import parse_json
@@ -501,11 +508,35 @@ async def get_lead_based_analytics(
             }
 
 
-async def get_outbound_numbers_analytics(
+async def get_telephony_numbers_analytics(
     filters: Dict[str, Any], options: Dict[str, Any], current_user: UserInfo
 ) -> Dict[str, Any]:
-    """Get analytics grouped by outbound number."""
-    outbound_data = await get_outbound_numbers_analytics_from_db(filters)
+    """
+    Get analytics grouped by outbound number.
+
+    The DB query joins every telephony_numbers row that has ever taken a call,
+    so the hierarchical lead filters alone don't scope the numbers themselves.
+    Non-admin results are cut down to the same visibility set as GET /numbers
+    (owned by the caller's merchants/umbrellas, or template-pinned) so phone
+    numbers never leak across tenants.
+    """
+    outbound_data = await get_telephony_numbers_analytics_from_db(filters)
+
+    if current_user.role != "admin":
+        m_ids, r_ids = rbac_number_scopes(current_user)
+        pinned = set(await get_template_pinned_number_ids(list(m_ids), list(r_ids)))
+        outbound_data = [
+            record
+            for record in outbound_data
+            if number_in_rbac_scope(
+                record["id"],
+                record.get("merchant_id"),
+                record.get("reseller_id"),
+                m_ids,
+                r_ids,
+                pinned,
+            )
+        ]
 
     outbound_analytics = []
     for record in outbound_data:
@@ -517,6 +548,8 @@ async def get_outbound_numbers_analytics(
                 "status": record["status"],
                 "channels": record.get("channels"),
                 "maximum_channels": record.get("maximum_channels"),
+                "reseller_id": record.get("reseller_id"),
+                "merchant_id": record.get("merchant_id"),
                 "total_calls": record["total_calls"],
                 "calls_picked": record["calls_picked"],
                 "calls_no_answer": record["calls_no_answer"],

@@ -1,26 +1,37 @@
 """
-Modern RESTful outbound number management endpoints with RBAC.
+Modern RESTful telephony number management endpoints with RBAC.
 
-This module provides clean REST API endpoints for managing outbound phone numbers
-used for making calls. All write operations require admin access.
+This module provides clean REST API endpoints for managing telephony phone
+numbers — outbound caller IDs and inbound DIDs. All write operations require
+admin access; reads are scoped to ownership.
+
+Ownership model (telephony_numbers.reseller_id / merchant_id):
+- merchant_id set          → merchant-owned (preferred by the dispatcher for
+                             that merchant's calls)
+- reseller_id only         → umbrella-owned
+- both NULL                → shared platform pool (legacy fallback the
+                             dispatcher scans when a template pins no number)
 
 Endpoints:
-- POST   /numbers           - Create new outbound number (admin only)
-- GET    /numbers           - List all outbound numbers (with filters)
-- GET    /numbers/{id}      - Get single outbound number by ID
-- DELETE /numbers/{id}      - Disable outbound number (admin only)
+- POST   /numbers           - Provision a number (admin only)
+- GET    /numbers           - List numbers in the caller's scope
+- GET    /numbers/{id}      - Get single number by ID (scoped)
+- PATCH  /numbers/{id}      - Update ownership / status / capacity (admin only)
+- DELETE /numbers/{id}      - Disable a number (admin only)
 
-For backward compatibility, old endpoints are available in deprecated/outbound_numbers.py
+For backward compatibility, old endpoints are available in deprecated/telephony_numbers.py
 """
 
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.api.security.breeze_buddy.rbac_token import get_current_user_with_rbac
+from app.database.accessor import get_template_pinned_number_ids
 from app.schemas import (
-    CreateOutboundNumberRequest,
-    OutboundNumber,
+    CreateTelephonyNumberRequest,
+    TelephonyNumber,
+    UpdateTelephonyNumberRequest,
     UserInfo,
 )
 
@@ -29,24 +40,38 @@ from .handlers import (
     delete_number_handler,
     get_number_handler,
     list_numbers_handler,
+    update_number_handler,
 )
-from .rbac import filter_numbers_by_rbac, require_admin_access
+from .rbac import filter_numbers_by_rbac, rbac_number_scopes, require_admin_access
 
 router = APIRouter()
 
 
+async def _pinned_ids_for(current_user: UserInfo) -> List[str]:
+    """
+    Template-pinned number ids for a non-admin caller's scope. Uses the same
+    role-gated scopes as visibility: merchants get their own templates' pins
+    only, resellers get every pin under their umbrella.
+    """
+    if current_user.role == "admin":
+        return []
+    m_ids, r_ids = rbac_number_scopes(current_user)
+    return await get_template_pinned_number_ids(list(m_ids), list(r_ids))
+
+
 @router.post(
-    "/numbers", response_model=OutboundNumber, status_code=status.HTTP_201_CREATED
+    "/numbers", response_model=TelephonyNumber, status_code=status.HTTP_201_CREATED
 )
-async def create_outbound_number(
-    number: CreateOutboundNumberRequest,
+async def create_telephony_number(
+    number: CreateTelephonyNumberRequest,
     current_user: UserInfo = Depends(get_current_user_with_rbac),
 ):
     """
-    Create a new outbound phone number.
+    Provision a new telephony number.
 
-    Outbound numbers are used by the system to make calls to customers.
-    Each number has a provider (TWILIO, EXOTEL) and channel capacity.
+    Ownership is an explicit choice: pass merchant_id (merchant-owned;
+    reseller_id auto-fills from the merchant's umbrella), reseller_id only
+    (umbrella-owned), or shared_pool=true (shared platform pool).
 
     Permissions:
     - Admin only
@@ -56,22 +81,22 @@ async def create_outbound_number(
             "number": "+1234567890",
             "provider": "EXOTEL",
             "status": "AVAILABLE",
-            "maximum_channels": 10
+            "maximum_channels": 10,
+            "merchant_id": "acme.myshopify.com"
         }
 
     Returns:
-        Created outbound number object with generated ID
+        Created telephony number object with generated ID
     """
-    # RBAC: Only admins can create outbound numbers
-    require_admin_access(current_user, "create outbound numbers")
+    require_admin_access(current_user, "create telephony numbers")
 
     return await create_number_handler(number, current_user)
 
 
-@router.get("/numbers", response_model=List[OutboundNumber])
-async def list_outbound_numbers(
+@router.get("/numbers", response_model=List[TelephonyNumber])
+async def list_telephony_numbers(
     provider: Optional[str] = Query(
-        None, description="Filter by provider (TWILIO, EXOTEL)"
+        None, description="Filter by provider (TWILIO, EXOTEL, PLIVO)"
     ),
     status: Optional[str] = Query(
         None, description="Filter by status (AVAILABLE, IN_USE, DISABLED)"
@@ -79,76 +104,103 @@ async def list_outbound_numbers(
     current_user: UserInfo = Depends(get_current_user_with_rbac),
 ):
     """
-    List all outbound phone numbers with optional filters.
+    List telephony numbers in the caller's scope, with optional filters.
 
     Query Parameters:
-    - provider: Filter by provider (TWILIO, EXOTEL)
+    - provider: Filter by provider (TWILIO, EXOTEL, PLIVO)
     - status: Filter by status (AVAILABLE, IN_USE, DISABLED)
 
     Permissions:
-    - All authenticated users can view outbound numbers
-
-    Example Requests:
-        GET /numbers                          # All numbers
-        GET /numbers?provider=EXOTEL          # Filter by provider
-        GET /numbers?status=AVAILABLE         # Filter by status
+    - Admin sees the whole fleet; everyone else sees numbers owned by their
+      merchants/umbrellas plus the numbers their templates dial from.
 
     Returns:
-        List of outbound number objects
+        List of telephony number objects
     """
-    # Get numbers
     numbers = await list_numbers_handler(provider, status, current_user)
 
-    # Apply RBAC filtering (currently returns all for authenticated users)
-    numbers = filter_numbers_by_rbac(numbers, current_user)
+    pinned = await _pinned_ids_for(current_user)
+    numbers = filter_numbers_by_rbac(numbers, current_user, pinned)
 
     return numbers
 
 
-@router.get("/numbers/{number_id}", response_model=OutboundNumber)
-async def get_outbound_number(
+@router.get("/numbers/{number_id}", response_model=TelephonyNumber)
+async def get_telephony_number(
     number_id: str,
     current_user: UserInfo = Depends(get_current_user_with_rbac),
 ):
     """
-    Get a single outbound number by ID.
+    Get a single telephony number by ID.
 
     Path Parameters:
-    - number_id: Outbound number UUID
+    - number_id: Telephony number UUID
 
     Permissions:
-    - All authenticated users can view outbound numbers
+    - Same visibility rule as the list endpoint (owned or template-pinned);
+      out-of-scope numbers 404 rather than leak.
 
     Returns:
-        Outbound number object if found
-        404 if not found
+        Telephony number object if found and visible
+        404 if not found or out of scope
     """
-    return await get_number_handler(number_id, current_user)
+    number = await get_number_handler(number_id, current_user)
+
+    pinned = await _pinned_ids_for(current_user)
+    if not filter_numbers_by_rbac([number], current_user, pinned):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Telephony number {number_id} not found",
+        )
+    return number
 
 
-@router.delete("/numbers/{number_id}", response_model=OutboundNumber)
-async def delete_outbound_number(
+@router.patch("/numbers/{number_id}", response_model=TelephonyNumber)
+async def update_telephony_number(
     number_id: str,
+    update: UpdateTelephonyNumberRequest,
     current_user: UserInfo = Depends(get_current_user_with_rbac),
 ):
     """
-    Disable an outbound number.
-
-    This performs a soft delete by setting the status to DISABLED.
-    The number record is preserved for historical data.
-
-    Path Parameters:
-    - number_id: Outbound number UUID to disable
+    Update a telephony number: assign it to a merchant/umbrella, release it
+    back to the shared pool (clear_ownership), change status, or resize
+    maximum_channels (the channel-token reconciler re-syncs the Redis
+    semaphore on its next pass).
 
     Permissions:
     - Admin only
 
     Returns:
-        Disabled outbound number object
+        Updated telephony number object
+        404 if number not found
+    """
+    require_admin_access(current_user, "update telephony numbers")
+
+    return await update_number_handler(number_id, update, current_user)
+
+
+@router.delete("/numbers/{number_id}", response_model=TelephonyNumber)
+async def delete_telephony_number(
+    number_id: str,
+    current_user: UserInfo = Depends(get_current_user_with_rbac),
+):
+    """
+    Disable a telephony number.
+
+    This performs a soft delete by setting the status to DISABLED.
+    The number record is preserved for historical data.
+
+    Path Parameters:
+    - number_id: Telephony number UUID to disable
+
+    Permissions:
+    - Admin only
+
+    Returns:
+        Disabled telephony number object
         404 if number not found
         403 if user lacks permission
     """
-    # RBAC: Only admins can delete outbound numbers
-    require_admin_access(current_user, "delete outbound numbers")
+    require_admin_access(current_user, "delete telephony numbers")
 
     return await delete_number_handler(number_id, current_user)

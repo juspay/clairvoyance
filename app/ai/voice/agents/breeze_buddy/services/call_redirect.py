@@ -13,7 +13,7 @@ from app.ai.voice.agents.breeze_buddy.services.telephony.base_provider import (
 from app.ai.voice.agents.breeze_buddy.utils.warm_transfer import set_transfer_flag
 from app.core.config.static import APP_BASE_URL
 from app.core.logger import logger
-from app.database.accessor import get_outbound_number_by_id
+from app.database.accessor import get_telephony_number_by_id
 
 
 async def redirect_call(
@@ -32,7 +32,7 @@ async def redirect_call(
     Returns True on success, False on failure.
     """
     try:
-        outbound_record = await get_outbound_number_by_id(outbound_number_id)
+        outbound_record = await get_telephony_number_by_id(outbound_number_id)
         if not outbound_record:
             logger.error(f"[REDIRECT] Outbound number {outbound_number_id} not found")
             return False
@@ -48,7 +48,7 @@ async def redirect_call(
             conference_name=f"redirect-{call_sid}",
             agent_phone_number=redirect_number,
             customer_call_sid=call_sid,
-            outbound_number=outbound_record.number,
+            telephony_number=outbound_record.number,
         )
 
         if result.get("success"):

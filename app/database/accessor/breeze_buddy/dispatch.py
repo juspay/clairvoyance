@@ -10,7 +10,7 @@ from app.database.decoder.breeze_buddy.lead_call_tracker import decode_lead_call
 from app.database.queries import run_parameterized_query
 from app.database.queries.breeze_buddy.dispatch import (
     clean_stale_bb_locks_query,
-    count_processing_by_outbound_number_query,
+    count_processing_by_telephony_number_query,
     get_unscheduled_backlog_leads_query,
     update_lead_next_attempt_at_query,
 )
@@ -38,16 +38,16 @@ async def get_unscheduled_backlog_leads(
         raise
 
 
-async def count_processing_by_outbound_number() -> Dict[str, int]:
+async def count_processing_by_telephony_number() -> Dict[str, int]:
     """Return ``{outbound_number_id: in_flight_count}`` for active calls."""
     try:
-        query, values = count_processing_by_outbound_number_query()
+        query, values = count_processing_by_telephony_number_query()
         rows = await run_parameterized_query(query, values)
         if not rows:
             return {}
         return {r["outbound_number_id"]: int(r["in_flight"]) for r in rows}
     except Exception as e:
-        logger.error(f"count_processing_by_outbound_number failed: {e}", exc_info=True)
+        logger.error(f"count_processing_by_telephony_number failed: {e}", exc_info=True)
         raise
 
 

@@ -33,8 +33,8 @@ from app.schemas.breeze_buddy.core import (
     CallExecutionConfig,
     InboundBlockAction,
     LeadCallTracker,
-    OutboundNumber,
-    OutboundNumberStatus,
+    TelephonyNumber,
+    TelephonyNumberStatus,
 )
 
 
@@ -360,12 +360,12 @@ def make_config(reseller_id: str = "res-1") -> CallExecutionConfig:
     )
 
 
-def make_number(num_id: str = "num-1") -> OutboundNumber:
-    return OutboundNumber(
+def make_number(num_id: str = "num-1") -> TelephonyNumber:
+    return TelephonyNumber(
         id=num_id,
         number="+15559999999",
         provider=CallProvider.TWILIO,
-        status=OutboundNumberStatus.AVAILABLE,
+        status=TelephonyNumberStatus.AVAILABLE,
         channels=0,
         maximum_channels=2,
         reseller_id="res-1",
@@ -434,7 +434,7 @@ class DispatchHarness:
         self.get_available_returns_none: bool = False
         # Captured alerts so tests can assert no-outbound-number throttled
         # alerts fired without needing a real Slack/Redis round-trip.
-        self.no_outbound_number_alerts: list[dict[str, str]] = []
+        self.no_telephony_number_alerts: list[dict[str, str]] = []
         # Failure injection — tests assign callables to raise on demand.
         self.get_lead_by_id_raises: Optional[Exception] = None
         self.acquire_lock_raises: Optional[Exception] = None
@@ -541,12 +541,14 @@ class DispatchHarness:
     async def _run_pre_checks_for_lead(self, *args, **kwargs) -> bool:
         return self.pre_check_result
 
-    async def _get_available_number(self, config, template) -> Optional[OutboundNumber]:
+    async def _get_available_number(
+        self, config, template
+    ) -> Optional[TelephonyNumber]:
         if self.get_available_returns_none:
             return None
         return self.number
 
-    async def _acquire_number(self, number: OutboundNumber) -> bool:
+    async def _acquire_number(self, number: TelephonyNumber) -> bool:
         return True
 
     async def _release_number(self, number_id: str, provider) -> None:
@@ -652,10 +654,10 @@ def harness(monkeypatch, fake_redis) -> DispatchHarness:
         h.record_outbound_call_attempt,
     )
 
-    async def _capture_no_outbound_number_alert(
+    async def _capture_no_telephony_number_alert(
         reseller_id: str, template: str, merchant_id: object
     ) -> None:
-        h.no_outbound_number_alerts.append(
+        h.no_telephony_number_alerts.append(
             {
                 "reseller_id": reseller_id,
                 "template": template,
@@ -664,7 +666,7 @@ def harness(monkeypatch, fake_redis) -> DispatchHarness:
         )
 
     monkeypatch.setattr(
-        worker_mod, "raise_no_outbound_number", _capture_no_outbound_number_alert
+        worker_mod, "raise_no_telephony_number", _capture_no_telephony_number_alert
     )
     monkeypatch.setattr(
         worker_mod,

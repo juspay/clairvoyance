@@ -15,7 +15,7 @@ class AnalyticsType(str, Enum):
     CHAT_BASED = "chat-based"
     LEAD_BASED = "lead-based"
     LEAD_STATUS_COUNTS = "lead-status-counts"
-    OUTBOUND_NUMBERS = "outbound-numbers"
+    TELEPHONY_NUMBERS = "outbound-numbers"
     CONVERSION = "conversion"
     PERFORMANCE = "performance"
     CALL_DETAILS_DOWNLOAD = "call-details-download"
@@ -222,7 +222,7 @@ class TrendDataPoint(BaseModel):
     success_rate: Optional[float] = None
 
 
-class OutboundNumberStat(BaseModel):
+class TelephonyNumberStat(BaseModel):
     """Statistics for a single outbound number"""
 
     id: str

@@ -2,11 +2,11 @@
 Channel-capacity semaphore — one Redis LIST per outbound number.
 
 Each list ``bb:channel:{outbound_number_id}`` holds M opaque tokens, where
-M = ``outbound_number.maximum_channels``. Workers ``BLPOP`` a token before
+M = ``telephony_number.maximum_channels``. Workers ``BLPOP`` a token before
 dialing; call-end webhooks ``LPUSH`` a token back. Token identity is
 irrelevant — only the count matters.
 
-This replaces the DB-counter ``increment_outbound_number_channels`` on the
+This replaces the DB-counter ``increment_telephony_number_channels`` on the
 hot path. The DB counter is retained as the eventually-consistent view used
 by ``reconcile_channel_tokens`` to detect leaks.
 """

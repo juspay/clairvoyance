@@ -60,7 +60,7 @@ class ExotelProvider(VoiceCallProvider):
     def make_call(
         self,
         customer_mobile_number: str,
-        outbound_number: str,
+        telephony_number: str,
         reseller_id: Optional[str] = None,
         template_name: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
@@ -84,7 +84,7 @@ class ExotelProvider(VoiceCallProvider):
 
         payload = {
             "From": customer_mobile_number,
-            "CallerId": outbound_number,
+            "CallerId": telephony_number,
             "Url": flow_url,
             "StatusCallback": (
                 self.APP_BASE_URL + "/agent/voice/breeze-buddy/exotel/callback/status"

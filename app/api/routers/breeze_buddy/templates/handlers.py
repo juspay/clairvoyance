@@ -20,8 +20,9 @@ from app.ai.voice.agents.breeze_buddy.utils.secrets import (
     merge_masked_mcp_auth,
     merge_secrets,
 )
+from app.api.routers.breeze_buddy.numbers.rbac import require_number_in_tenant_scope
 from app.core.logger import logger
-from app.database.accessor import get_outbound_number_by_id, get_template_in_scope
+from app.database.accessor import get_telephony_number_by_id, get_template_in_scope
 from app.database.accessor.breeze_buddy.template import (
     check_template_usage,
     create_template,
@@ -96,16 +97,23 @@ async def create_template_handler(
                 f"and template name: {template_data.name}",
             )
 
-        # Validate outbound_number_id if provided
+        # Validate outbound_number_id if provided: it must exist AND belong to
+        # this template's tenant (shared pool / own merchant / own umbrella) —
+        # a new template can never pin another merchant's number.
         if template_data.outbound_number_id:
-            outbound_number = await get_outbound_number_by_id(
+            telephony_number = await get_telephony_number_by_id(
                 template_data.outbound_number_id
             )
-            if not outbound_number:
+            if not telephony_number:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=f"Outbound number with ID {template_data.outbound_number_id} does not exist",
                 )
+            require_number_in_tenant_scope(
+                telephony_number,
+                template_reseller_id=template_data.reseller_id,
+                template_merchant_id=template_data.merchant_id,
+            )
 
         # Create the template
         now = datetime.now(timezone.utc)
@@ -401,15 +409,28 @@ async def replace_template_handler(
             if "nodes" not in flow or not flow["nodes"]:
                 raise ValueError("nodes must be specified in flow structure")
 
-        # Validate outbound_number_id if provided
+        # Validate outbound_number_id if provided. Tenant-scope enforcement
+        # applies to NEW or CHANGED pins only: legacy templates that already
+        # carry a cross-merchant pin (pre-ownership data) must keep passing
+        # unrelated GET → edit → PUT round-trips until the ownership backfill
+        # cleans them up. The picker logs those grandfathered pins at call
+        # time.
         if template_data.outbound_number_id:
-            outbound_number = await get_outbound_number_by_id(
+            telephony_number = await get_telephony_number_by_id(
                 template_data.outbound_number_id
             )
-            if not outbound_number:
+            if not telephony_number:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=f"Outbound number with ID {template_data.outbound_number_id} does not exist",
+                )
+            if str(template_data.outbound_number_id) != str(
+                existing_template.outbound_number_id or ""
+            ):
+                require_number_in_tenant_scope(
+                    telephony_number,
+                    template_reseller_id=reseller_id,
+                    template_merchant_id=template_data.merchant_id,
                 )
 
         # Update the template

@@ -31,9 +31,9 @@ from .handlers import (
     get_distinct_resellers,
     get_lead_based_analytics,
     get_lead_status_counts,
-    get_outbound_numbers_analytics,
     get_outcome_counts,
     get_performance_analytics,
+    get_telephony_numbers_analytics,
 )
 from .rbac import apply_hierarchical_filters
 
@@ -48,7 +48,7 @@ _ANALYTICS_HANDLERS: Dict[AnalyticsType, Callable[..., Awaitable]] = {
     AnalyticsType.CHAT_BASED: get_chat_based_analytics,
     AnalyticsType.LEAD_BASED: get_lead_based_analytics,
     AnalyticsType.LEAD_STATUS_COUNTS: get_lead_status_counts,
-    AnalyticsType.OUTBOUND_NUMBERS: get_outbound_numbers_analytics,
+    AnalyticsType.TELEPHONY_NUMBERS: get_telephony_numbers_analytics,
     AnalyticsType.CONVERSION: get_conversion_analytics,
     AnalyticsType.PERFORMANCE: get_performance_analytics,
     AnalyticsType.DISTINCT_OUTCOMES: get_distinct_outcomes,

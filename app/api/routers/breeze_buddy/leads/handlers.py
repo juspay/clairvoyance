@@ -55,7 +55,7 @@ from app.database.accessor import (
     get_lead_by_call_id,
     get_lead_by_id,
     get_leads_by_request_id,
-    get_outbound_number_by_id,
+    get_telephony_number_by_id,
     get_template_by_id,
     handle_lead_abort,
     is_number_blacklisted,
@@ -520,15 +520,15 @@ async def get_call_recording_handler(
             detail=f"Unable to determine call provider for call_sid: {call_sid}",
         )
 
-    outbound_number = await get_outbound_number_by_id(lead.outbound_number_id)
-    if not outbound_number:
+    telephony_number = await get_telephony_number_by_id(lead.outbound_number_id)
+    if not telephony_number:
         logger.error(f"Outbound number not found: {lead.outbound_number_id}")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Unable to determine call provider for call_sid: {call_sid}",
         )
 
-    call_provider = outbound_number.provider.value
+    call_provider = telephony_number.provider.value
 
     # Step 6: Fetch audio with provider-specific credentials
     logger.info(f"Fetching recording from URL: {lead.recording_url}")

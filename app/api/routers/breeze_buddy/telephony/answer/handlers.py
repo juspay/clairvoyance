@@ -68,8 +68,8 @@ from app.database.accessor import (
 from app.database.accessor.breeze_buddy.lead_call_tracker import (
     create_lead_call_tracker,
 )
-from app.database.accessor.breeze_buddy.outbound_number import (
-    get_outbound_number_by_number,
+from app.database.accessor.breeze_buddy.telephony_number import (
+    get_telephony_number_by_number,
 )
 from app.database.accessor.breeze_buddy.template import (
     get_all_templates_by_outbound_number_id,
@@ -93,7 +93,7 @@ async def resolve_call_templates(
 
     1. Check if lead exists for call_sid (outbound detection)
     2. If outbound: look up template from lead
-    3. If inbound: look up outbound_number by to_number, get all templates
+    3. If inbound: look up telephony_number by to_number, get all templates
     4. Build template_list with IVR descriptions
     5. Resolve IVR config (voice, greeting, goodbye) from template configurations
 
@@ -154,17 +154,17 @@ async def resolve_call_templates(
         return {"error": "Missing To number", "error_status": 400}
 
     # Look up outbound number by phone number
-    outbound_number = await get_outbound_number_by_number(to_number)
-    if not outbound_number:
+    telephony_number = await get_telephony_number_by_number(to_number)
+    if not telephony_number:
         logger.error(f"[Answer] No outbound number found for: {to_number}")
         return {"error": "Number not configured", "error_status": 404}
 
     # Get all templates for this outbound number
-    templates = await get_all_templates_by_outbound_number_id(outbound_number.id)
+    templates = await get_all_templates_by_outbound_number_id(telephony_number.id)
 
     if not templates:
         logger.error(
-            f"[Answer] No templates found for outbound_number_id: {outbound_number.id}"
+            f"[Answer] No templates found for outbound_number_id: {telephony_number.id}"
         )
         return {"error": "No templates available", "error_status": 404}
 
@@ -212,7 +212,7 @@ async def resolve_call_templates(
     if len(templates) > 1 and ivr_greeting is None:
         logger.warning(
             f"[Answer] IVR mode with {len(templates)} templates but no ivr greeting configured "
-            f"for outbound_number: {to_number}"
+            f"for telephony_number: {to_number}"
         )
 
     return {
