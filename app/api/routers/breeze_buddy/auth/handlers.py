@@ -8,19 +8,25 @@ This module contains the business logic for authentication operations:
 - Logout handling
 """
 
+import re
 from datetime import datetime, timedelta, timezone
+from urllib.parse import quote
 
 from fastapi import HTTPException, status
 
 from app.api.security.breeze_buddy.rbac_token import rbac_token_manager
 from app.core.config.static import (
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES,
+    LOOM_APP_URL,
 )
 from app.core.logger import logger
 from app.core.security.password import verify_password
 from app.core.security.scope import resolve_merchant_ids, resolve_reseller_ids
+from app.database.accessor.breeze_buddy import merchants as merchant_accessors
 from app.database.accessor.breeze_buddy.users import get_user_by_username
 from app.schemas import (
+    LaunchTokenRequest,
+    LaunchTokenResponse,
     LoginRequest,
     S2STokenRequest,
     S2STokenResponse,
@@ -28,6 +34,24 @@ from app.schemas import (
     UserInfo,
     UserRole,
 )
+
+# Relative-path guard for the `redirect` param: strict allowlist rather than
+# a denylist. Must start with a single leading slash (not `//`), and contain
+# only a restricted character set. This intentionally rejects backslashes,
+# so WHATWG-URL-parser tricks like "/\evil.com" (which browsers normalize to
+# the protocol-relative "//evil.com" for special-scheme URLs) never validate.
+# Must match the equivalent guard in loom-v2 — the two services validate
+# independently and must not diverge.
+_REDIRECT_PATTERN = re.compile(r"^/(?!/)[A-Za-z0-9._~/-]*$")
+_REDIRECT_MAX_LENGTH = 512
+
+DEFAULT_LAUNCH_REDIRECT = "/home"
+
+# Upstream products allowed to mint a Loom launch token. The value is stamped
+# into the token's signed `src` claim (so it cannot be tampered with) and Loom
+# gates sign-in on it. Adding a new integration (e.g. euler, lighthouse) is a
+# one-line change here — Loom must separately enable it on its accept side.
+KNOWN_LAUNCH_SOURCES = frozenset({"nautilus"})
 
 
 async def login_handler(
@@ -276,6 +300,125 @@ async def get_user_info_handler(current_user: UserInfo) -> UserInfo:
         f"User info request from {current_user.username} (role: {current_user.role})"
     )
     return current_user
+
+
+async def _check_launch_token_access(current_user: UserInfo, reseller_id: str) -> None:
+    """Gate access to launch-token minting.
+
+    - Admin: can mint for any reseller/merchant.
+    - Reseller: can only mint for a reseller_id within their own resolved scope
+      (mirrors the owning-reseller check used for merchant create/update).
+    - Anyone else: forbidden — this endpoint impersonates a merchant session
+      and must not be reachable by merchant/user-role tokens.
+    """
+    if current_user.role == UserRole.ADMIN:
+        return
+
+    if current_user.role != UserRole.RESELLER:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only admins and resellers can mint launch tokens",
+        )
+
+    allowed_reseller_ids = await resolve_reseller_ids(current_user)
+    if allowed_reseller_ids is not None and reseller_id not in allowed_reseller_ids:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You can only mint launch tokens for resellers you own",
+        )
+
+
+async def launch_token_handler(
+    request: LaunchTokenRequest, current_user: UserInfo
+) -> LaunchTokenResponse:
+    """
+    Mint a 1-hour merchant-scoped Loom session JWT for the Nautilus connector.
+
+    Verifies the caller (admin or owning reseller) has scope over the
+    requested reseller, that the merchant exists/is active/belongs to that
+    reseller, then mints a virtual-subject merchant token
+    (``sub=f"merchant:{merchant_id}"``, no real ``users`` row) with a signed
+    ``src`` claim (the requesting product) that Loom gates sign-in on.
+
+    Args:
+        request: reseller_id, merchant_id, source, and optional redirect path
+        current_user: Authenticated caller (admin or reseller)
+
+    Returns:
+        LaunchTokenResponse with access_token, expires_in, and launch_url
+
+    Raises:
+        HTTPException: 403 if caller lacks scope for the reseller
+        HTTPException: 404 if merchant doesn't exist / is inactive / belongs
+            to a different reseller
+        HTTPException: 400 if source is unknown, or redirect is present but not
+            a safe relative path
+    """
+    if request.source not in KNOWN_LAUNCH_SOURCES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown launch source: {request.source!r}",
+        )
+
+    await _check_launch_token_access(current_user, request.reseller_id)
+
+    merchant = await merchant_accessors.get_merchant_by_merchant_identifier(
+        request.merchant_id
+    )
+    if (
+        not merchant
+        or not merchant.is_active
+        or merchant.reseller_id != request.reseller_id
+    ):
+        raise HTTPException(status_code=404, detail="Merchant not found")
+
+    redirect = (
+        request.redirect if request.redirect is not None else DEFAULT_LAUNCH_REDIRECT
+    )
+    if len(redirect) > _REDIRECT_MAX_LENGTH or not _REDIRECT_PATTERN.match(redirect):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid redirect: must be a relative path (e.g. /home)",
+        )
+
+    access_token = rbac_token_manager.create_access_token_with_rbac(
+        user_id=f"merchant:{request.merchant_id}",
+        username=f"merchant-{request.merchant_id}",
+        role=UserRole.MERCHANT,
+        reseller_ids=[request.reseller_id],
+        merchant_ids=[request.merchant_id],
+        owner_id=current_user.id,
+        src=request.source,
+        # Pin the impersonation window to a fixed 60 minutes rather than
+        # inheriting JWT_ACCESS_TOKEN_EXPIRE_MINUTES: this token grants a live
+        # merchant session, so its TTL must not silently drift if the shared
+        # login-session config is later retuned.
+        expires_delta=timedelta(minutes=60),
+    )
+
+    expires_in = 60 * 60  # fixed 60-minute window, decoupled from login config
+
+    launch_url = (
+        f"{LOOM_APP_URL.rstrip('/')}/launch"
+        f"?token={quote(access_token, safe='')}"
+        f"&redirect={quote(redirect, safe='')}"
+    )
+
+    # Mandatory audit log: launch-token minting is impersonation by design
+    # (an admin/reseller-token holder mints a live merchant session), so every
+    # mint must be attributable to the caller who requested it.
+    logger.info(
+        f"Launch token minted by caller={current_user.id} "
+        f"({current_user.username}, role={current_user.role}) "
+        f"for reseller_id={request.reseller_id} merchant_id={request.merchant_id}"
+    )
+
+    return LaunchTokenResponse(
+        access_token=access_token,
+        token_type="Bearer",
+        expires_in=expires_in,
+        launch_url=launch_url,
+    )
 
 
 async def logout_handler() -> dict:

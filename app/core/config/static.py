@@ -189,6 +189,9 @@ SONIOX_MAX_ENDPOINT_DELAY_MS = int(
 LIGHTHOUSE_APP_URL = os.environ.get("LIGHTHOUSE_APP_URL", "http://localhost:5173")
 
 
+LOOM_APP_URL = os.environ.get("LOOM_APP_URL", "https://breezebuddy.ai")
+
+
 AZURE_BREEZE_BUDDY_OPENAI_MODEL = os.environ.get(
     "AZURE_BREEZE_BUDDY_OPENAI_MODEL", "gpt-4o-automatic"
 )
