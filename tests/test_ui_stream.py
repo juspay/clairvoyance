@@ -412,3 +412,221 @@ def test_summarize_handles_unknown_type_gracefully():
     ]
     out = summarize_ui_ops(ops)
     assert "1 FutureThingy" in out
+
+
+# ---------------------------------------------------------------------------
+# Recovery of BARE op-lines emitted WITHOUT the <ui_stream> wrapper
+# ---------------------------------------------------------------------------
+#
+# The LLM stochastically forgets to wrap its SpecStream ops. Without recovery
+# those lines leak to the user as raw JSON. The extractor now routes a bare
+# op-line into the same JsonlOpLine path a wrapped line takes, so it renders as
+# UI; genuine prose is untouched and still streams smoothly.
+
+
+def _feed_all(deltas):
+    """Feed each delta then flush; return the flat list of yielded items."""
+    ex = UiStreamExtractor()
+    out: list = []
+    for d in deltas:
+        out.extend(ex.feed(d))
+    out.extend(ex.flush())
+    return out
+
+
+def test_bare_op_lines_recovered_as_op_not_prose():
+    items = _feed_all(
+        [
+            '{"+":"root:Card@root"}\n',
+            '{"+":"t:Text@root","text":"hi"}\n',
+        ]
+    )
+    assert all(isinstance(i, JsonlOpLine) for i in items)
+    assert items[0].raw == '{"+":"root:Card@root"}'
+    assert items[1].raw == '{"+":"t:Text@root","text":"hi"}'
+
+
+def test_verbose_bare_op_line_recovered():
+    items = _feed_all(['{"op":"add","id":"r","type":"Stack"}\n'])
+    assert len(items) == 1 and isinstance(items[0], JsonlOpLine)
+
+
+def test_prose_is_never_recovered_as_op():
+    items = _feed_all(["Here are the cheapest days to fly.\n"])
+    assert items == [TextOut(value="Here are the cheapest days to fly.\n")]
+
+
+def test_prose_with_braces_stays_prose():
+    # Looks jsonish but has no op marker → must remain visible prose.
+    items = _feed_all(['{"note":"not an op"}\n'])
+    assert len(items) == 1 and isinstance(items[0], TextOut)
+
+
+def test_bare_op_line_split_across_deltas_is_recovered():
+    items = _feed_all(['{"+":"root:', 'Card@root","variant":"hi', 'ghlighted"}\n'])
+    assert len(items) == 1 and isinstance(items[0], JsonlOpLine)
+    assert items[0].raw == '{"+":"root:Card@root","variant":"highlighted"}'
+
+
+def test_mixed_prose_then_bare_ops():
+    items = _feed_all(
+        [
+            "Best deal below:\n",
+            '{"+":"c:Card@root"}\n',
+            '{"+":"t:Text@c","text":"IndiGo"}\n',
+        ]
+    )
+    kinds = [type(i).__name__ for i in items]
+    assert kinds == ["TextOut", "JsonlOpLine", "JsonlOpLine"]
+    assert items[0].value == "Best deal below:\n"
+
+
+def test_final_bare_op_line_without_newline_recovered_on_flush():
+    # No trailing newline — must still be recovered (not leaked) at flush.
+    items = _feed_all(['{"+":"root:Card@root"}'])
+    assert len(items) == 1 and isinstance(items[0], JsonlOpLine)
+
+
+def test_wrapped_ops_still_work_after_recovery_change():
+    # Regression: the explicit <ui_stream> path is unchanged.
+    items = _feed_all(
+        [
+            "here <ui_stream>\n",
+            '{"op":"add","id":"root","type":"Stack"}\n',
+            "</ui_stream> done",
+        ]
+    )
+    kinds = [type(i).__name__ for i in items]
+    assert kinds == ["TextOut", "JsonlOpLine", "TextOut"]
+    assert items[0].value == "here "
+    assert items[2].value == " done"
+
+
+def test_prose_streams_immediately_without_newline():
+    # A prose delta with no newline must emit right away (no buffering stall).
+    ex = UiStreamExtractor()
+    out = list(ex.feed("streaming prose no newline yet"))
+    assert out == [TextOut(value="streaming prose no newline yet")]
+
+
+# ---------------------------------------------------------------------------
+# Contact-CTA URL schemes (mailto/tel) + structured drop reasons
+# ---------------------------------------------------------------------------
+
+
+def test_parse_button_mailto_action_validates():
+    line = (
+        '{"op":"add","id":"b1","type":"Button","parent":"root",'
+        '"props":{"label":"Email us","action":{"type":"open_url",'
+        '"url":"mailto:support@example.com"}}}'
+    )
+    r = parse_op_line(line)
+    assert r.error is None
+    assert r.op["props"]["action"]["url"].startswith("mailto:")
+
+
+def test_parse_button_tel_action_validates():
+    line = (
+        '{"op":"add","id":"b1","type":"Button","parent":"root",'
+        '"props":{"label":"Call us","action":{"type":"open_url",'
+        '"url":"tel:+911234567890"}}}'
+    )
+    r = parse_op_line(line)
+    assert r.error is None
+    assert r.op["props"]["action"]["url"].startswith("tel:")
+
+
+def test_parse_button_javascript_scheme_still_drops():
+    line = (
+        '{"op":"add","id":"b1","type":"Button","parent":"root",'
+        '"props":{"label":"x","action":{"type":"open_url",'
+        '"url":"javascript:alert(1)"}}}'
+    )
+    r = parse_op_line(line)
+    assert r.op is None
+    assert r.error and r.error.startswith("props_validation_failed")
+
+
+def test_parse_validation_error_reason_names_failing_field():
+    """Drop reasons must carry the type + field path so [CHAT_METRICS]
+    drop_reasons is diagnosable without payload access."""
+    line = (
+        '{"op":"add","id":"t1","type":"Tag","parent":"root",'
+        '"props":{"text":"new","weight":"bold"}}'
+    )
+    r = parse_op_line(line)
+    assert r.op is None
+    assert r.error.startswith("props_validation_failed:Tag:")
+    assert "weight" in r.error
+    # Structural only — the offending input value never appears.
+    assert "bold" not in r.error
+
+
+# ---------------------------------------------------------------------------
+# Drop funnel — ui_op_dropped carries evidence; healer drops join the funnel
+# ---------------------------------------------------------------------------
+
+
+def test_validator_drop_event_carries_raw_line():
+    line = (
+        '{"op":"add","id":"b1","type":"Button","parent":"root",'
+        '"props":{"label":"x","action":{"type":"open_url","url":"ftp://no"}}}'
+    )
+    dropped = [e for e in process_op_line(line) if e.event == "ui_op_dropped"]
+    assert len(dropped) == 1
+    assert dropped[0].data["raw"] == line
+    assert dropped[0].data["op"] == {"op": "add", "id": "b1", "type": "Button"}
+    assert dropped[0].data["reason"].startswith("props_validation_failed:Button:")
+
+
+def test_healer_drop_emits_ui_op_dropped_not_healer_applied():
+    """Healer drops must land in the SAME funnel counter as validator drops —
+    they were previously invisible in ui_dropped."""
+    from app.ai.voice.agents.breeze_buddy.chat.ui_healer import (
+        HealerContext,
+        make_healer_fn,
+    )
+
+    ctx = HealerContext(session_data={}, known_ids={"root"})
+    line = '{"op":"add","id":"x","type":"NotARealPrimitive","parent":"root"}'
+    events = process_op_line(line, healer=make_healer_fn(ctx), known_ids={"root"})
+    names = [e.event for e in events]
+    assert "ui_op_dropped" in names
+    assert "healer_applied" not in names
+    drop = next(e for e in events if e.event == "ui_op_dropped")
+    assert drop.data["reason"].startswith("dropped_unknown_type")
+    assert drop.data["raw"] == line
+
+
+def test_healer_repair_note_still_emits_healer_applied():
+    from app.ai.voice.agents.breeze_buddy.chat.ui_healer import (
+        HealerContext,
+        make_healer_fn,
+    )
+
+    ctx = HealerContext(session_data={}, known_ids={"root"})
+    line = '{"op":"add","id":"t","type":"Tag","parent":"root","props":{"label":"hi"}}'
+    events = process_op_line(line, healer=make_healer_fn(ctx), known_ids={"root"})
+    names = [e.event for e in events]
+    assert "healer_applied" in names
+    assert "ui_op" in names
+    assert "ui_op_dropped" not in names
+
+
+def test_turn_metrics_collects_drop_details_but_logs_stay_structural():
+    from app.ai.voice.agents.breeze_buddy.chat.metrics import TurnMetrics
+    from app.ai.voice.agents.breeze_buddy.chat.ui_stream import ui_op_dropped_event
+
+    line = (
+        '{"op":"add","id":"email_btn","type":"Button","parent":"root",'
+        '"props":{"label":"Email us","action":{"type":"open_url",'
+        '"url":"mailto:x@y.com"}}}'
+    )
+    tm = TurnMetrics(session_id="s", template_id="t", t0=0.0)
+    tm.observe(ui_op_dropped_event(line, "props_validation_failed:Button:action"))
+    assert tm.ui_dropped == 1
+    assert len(tm.drops) == 1
+    assert tm.drops[0]["sig"] == {"op": "add", "id": "email_btn", "type": "Button"}
+    assert tm.drops[0]["raw"] == line
+    # The log line must never carry the raw payload.
+    assert "mailto" not in ";".join(tm.drop_reasons)

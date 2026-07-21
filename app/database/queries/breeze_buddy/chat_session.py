@@ -32,7 +32,7 @@ _AGENT_STATE_COLUMNS = """
 _TURN_METRICS_COLUMNS = """
     session_id, idx, ttft_ms, ttfui_ms, ttlui_ms, total_ms,
     ui_ops, ui_dropped, healer_applied, tool_calls,
-    prose_chars, ui_chars, status, phase, created_at
+    prose_chars, ui_chars, status, phase, drops, created_at
 """
 
 
@@ -554,21 +554,23 @@ def record_chat_turn_metrics_query(
     ui_chars: int,
     status: Optional[str],
     phase: str,
+    drops_json: Optional[str] = None,
 ) -> Tuple[str, List[Any]]:
     """Upsert one turn's structural metrics, keyed by the assistant idx.
 
     ON CONFLICT keeps the write idempotent — a re-emit for the same
-    (session_id, idx) overwrites rather than erroring. The values are the
-    same fields the router's ``TurnMetrics`` already computed for the
-    ``[CHAT_METRICS]`` log line; nothing here is payload content.
+    (session_id, idx) overwrites rather than erroring. The counters mirror
+    the router's ``TurnMetrics``; ``drops_json`` is the per-drop evidence
+    array (migration 041) — transcript-class content, see the migration
+    header for the sensitivity rationale. None when nothing dropped.
     """
     query = f"""
         INSERT INTO {CHAT_TURN_METRICS_TABLE} (
             session_id, idx, ttft_ms, ttfui_ms, ttlui_ms, total_ms,
             ui_ops, ui_dropped, healer_applied, tool_calls,
-            prose_chars, ui_chars, status, phase
+            prose_chars, ui_chars, status, phase, drops
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15::jsonb)
         ON CONFLICT (session_id, idx) DO UPDATE SET
             ttft_ms = EXCLUDED.ttft_ms,
             ttfui_ms = EXCLUDED.ttfui_ms,
@@ -581,7 +583,8 @@ def record_chat_turn_metrics_query(
             prose_chars = EXCLUDED.prose_chars,
             ui_chars = EXCLUDED.ui_chars,
             status = EXCLUDED.status,
-            phase = EXCLUDED.phase
+            phase = EXCLUDED.phase,
+            drops = EXCLUDED.drops
         RETURNING {_TURN_METRICS_COLUMNS}
     """
     return query, [
@@ -599,6 +602,7 @@ def record_chat_turn_metrics_query(
         ui_chars,
         status,
         phase,
+        drops_json,
     ]
 
 

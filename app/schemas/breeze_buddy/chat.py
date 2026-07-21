@@ -167,13 +167,27 @@ class AgentSessionState(BaseModel):
     updated_at: Optional[datetime] = None
 
 
+class ChatTurnDrop(BaseModel):
+    """One dropped UI op's evidence (``chat_turn_metrics.drops`` entries,
+    migration 041). ``sig`` is the structural op signature
+    (op/id/type or a content hash); ``reason`` the structured drop reason
+    (e.g. ``props_validation_failed:Button:action.OpenUrlAction.url:url_scheme``);
+    ``raw`` the dropped JSONL line itself (capped) — transcript-class
+    content, surfaced in the log-detail UI so drops diagnose themselves."""
+
+    sig: Optional[Dict[str, Any]] = None
+    reason: Optional[str] = None
+    raw: Optional[str] = None
+
+
 class ChatTurnMetrics(BaseModel):
-    """One row of ``chat_turn_metrics`` (migration 032).
+    """One row of ``chat_turn_metrics`` (migration 032 + 041).
 
     A joinable mirror of the structural ``[CHAT_METRICS]`` log line, keyed by
     the assistant ``chat_message.idx`` the turn produced so the
-    conversational-log UI can show latency next to each assistant turn. Every
-    field is a timing, a count, or a status — no payload content.
+    conversational-log UI can show latency next to each assistant turn.
+    Counters/timings are structural; ``drops`` carries per-drop evidence
+    (see :class:`ChatTurnDrop`).
     """
 
     session_id: str
@@ -190,6 +204,7 @@ class ChatTurnMetrics(BaseModel):
     ui_chars: int = 0
     status: Optional[str] = None
     phase: str = "baseline"
+    drops: Optional[List[ChatTurnDrop]] = None
     created_at: Optional[datetime] = None
 
 
