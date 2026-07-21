@@ -1036,6 +1036,14 @@ class McpServerConfig(BaseModel):
     tool_context_retention: Dict[str, Literal["last_turn_only", "session"]] = Field(
         default_factory=dict,
         description=(
+            "SCOPE — MCP-server tools ONLY. This field lives on "
+            "``McpServerConfig`` and is aggregated in chat/agent.py by "
+            "iterating ``configurations.mcp.servers``. It does NOT read global "
+            "HTTP / builtin / custom functions. For those, set the per-function "
+            "``context_retention`` / ``context_projection`` on "
+            "``BaseGlobalFunction`` — chat/agent.py merges them into the SAME "
+            "retention map this feeds, so the tool-agnostic context_compactor "
+            "handles MCP and global-function results identically.\n"
             "Per-tool conversation-context retention policy, applied at "
             "message-prep time before the LLM call. Keys are the registered "
             "tool names: the raw upstream MCP name, except a tool whose name "
@@ -1058,6 +1066,8 @@ class McpServerConfig(BaseModel):
     tool_context_projection: Dict[str, List[str]] = Field(
         default_factory=dict,
         description=(
+            "SCOPE — MCP-server tools ONLY (same as ``tool_context_retention``). "
+            "For global functions use ``BaseGlobalFunction.context_projection``.\n"
             "Per-tool identity keep-list, paired with ``last_turn_only`` "
             "retention. Keys follow the same rule as ``tool_context_retention`` "
             "(raw upstream MCP tool name; ``<server.name>_<name>`` only when "
@@ -2114,6 +2124,32 @@ class BaseGlobalFunction(BaseModel):
             "names from handlers/transport/utils/response_transform.py."
         ),
     )
+    context_retention: Optional[Literal["last_turn_only", "session"]] = Field(
+        default=None,
+        description=(
+            "Per-function chat-context retention — the global-function twin of "
+            "``McpServerConfig.tool_context_retention``. The context_compactor "
+            "is tool-agnostic (it keys stale tool_result blocks by name), so a "
+            "value here is merged into the same retention map as MCP tools in "
+            "chat/agent.py and compacted identically. ``None`` (default) = "
+            "``session`` (kept full — unchanged behavior). Set "
+            "``last_turn_only`` for heavy / easily-re-derived results (searches, "
+            "fare calendars) so older calls collapse to a stub/projection and "
+            "don't accumulate token cost across a session."
+        ),
+    )
+    context_projection: Optional[List[str]] = Field(
+        default=None,
+        description=(
+            "Per-function identity keep-list paired with "
+            "``context_retention='last_turn_only'`` — the global-function twin "
+            "of ``McpServerConfig.tool_context_projection``. Stale results are "
+            "compacted to ONLY these keep-paths (grammar: ``a.b`` descends, "
+            "``a[*].b`` iterates a list) instead of a 1-line stub, so durable "
+            "referents survive follow-up turns at ~1% of the tokens. ``None`` = "
+            "fall back to the stub."
+        ),
+    )
 
 
 class GlobalHttpFunction(BaseGlobalFunction):
@@ -2123,6 +2159,15 @@ class GlobalHttpFunction(BaseGlobalFunction):
     Global functions are registered with FlowManager and can be called by the LLM
     from any node in the conversation. Unlike hooks (fire-and-forget), global
     functions wait for the HTTP response and return data to the LLM.
+
+    Context management: keep results lean at the source with
+    ``expected_response_schema`` (a JMESPath whitelist) — it trims the payload
+    *before* it ever enters the context. For cross-turn hygiene, declare
+    ``context_retention='last_turn_only'`` (+ optional ``context_projection``)
+    on the function: unlike the MCP-server-scoped ``tool_context_retention``,
+    these per-function fields (on ``BaseGlobalFunction``) ARE honored for global
+    functions — chat/agent.py merges them into the same map the tool-agnostic
+    context_compactor consumes.
 
     Example:
         {

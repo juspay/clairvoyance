@@ -10,6 +10,8 @@ so the cases here cover both the happy paths and the don't-blow-up paths.
 
 from __future__ import annotations
 
+import json
+
 from app.ai.voice.agents.breeze_buddy.chat.context_compactor import (
     compact_tool_results,
 )
@@ -350,3 +352,57 @@ def test_projection_non_json_content_falls_back_to_stub():
     )
     # Unparseable content can't be projected → stub keeps it bounded.
     assert "[pruned: search_catalog" in out[1]["content"][0]["content"]
+
+
+# ---------------------------------------------------------------------------
+# Bridge — global-function results compact identically to MCP tools
+# ---------------------------------------------------------------------------
+#
+# The compactor keys by tool NAME only; it is agnostic to whether the tool is
+# an MCP tool or a global HTTP/builtin/custom function. So a global function's
+# policy (aggregated from BaseGlobalFunction.context_retention /
+# .context_projection in chat/agent.py) compacts its stale results exactly like
+# an MCP tool's. These lock that behavior in.
+
+
+def test_global_function_result_compacts_like_mcp_tool():
+    messages = [
+        {"role": "user", "content": "flights DEL to BOM tomorrow"},
+        _assistant_with_tool_use("f1", "search_flights", {"from_code": "DEL"}),
+        _user_with_tool_result("f1", '{"flights":["a","b"]}' * 200),  # bulky
+        {"role": "assistant", "content": "Here are flights."},
+        {"role": "user", "content": "and BLR to DEL?"},
+        _assistant_with_tool_use("f2", "search_flights", {"from_code": "BLR"}),
+        _user_with_tool_result("f2", '{"flights":["c"]}' * 200),  # bulky, NEWEST
+    ]
+    out = compact_tool_results(
+        messages, retention={"search_flights": "last_turn_only"}, recent_keep=1
+    )
+    # Older search stubbed, newest intact — identical to the MCP catalog case.
+    assert "[pruned: search_flights" in out[2]["content"][0]["content"]
+    assert len(out[6]["content"][0]["content"]) > 1000
+
+
+def test_global_function_projection_keeps_identity_paths():
+    big = {
+        "flights": [
+            {"id": "6E-123", "priceText": "5,717", "junk": "x" * 5000},
+            {"id": "AI-456", "priceText": "6,000", "junk": "y" * 5000},
+        ]
+    }
+    messages = [
+        _assistant_with_tool_use("f1", "search_flights", {"q": 1}),
+        _user_with_tool_result("f1", json.dumps(big)),
+        _assistant_with_tool_use("f2", "search_flights", {"q": 2}),
+        _user_with_tool_result("f2", json.dumps(big)),
+    ]
+    out = compact_tool_results(
+        messages,
+        retention={"search_flights": "last_turn_only"},
+        recent_keep=1,
+        projection={"search_flights": ["flights[*].id", "flights[*].priceText"]},
+    )
+    stale = out[1]["content"][0]["content"]
+    assert "6E-123" in stale and "5,717" in stale  # identity kept
+    assert "junk" not in stale  # heavy field dropped
+    assert len(stale) < 500  # tiny vs the original ~10k

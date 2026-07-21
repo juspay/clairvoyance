@@ -1,5 +1,22 @@
 # Tool-result context projection (chat mode)
 
+> **Two config sources, one engine.** The compactor (`compact_tool_results`) is
+> **tool-agnostic** — it keys stale `tool_result` blocks by tool *name* and
+> knows nothing about MCP vs global functions. Only the *config* comes from two
+> places, both merged in `chat/agent.py`:
+>
+> 1. **MCP tools** — `McpServerConfig.tool_context_retention` /
+>    `tool_context_projection` (aggregated over `configurations.mcp.servers`).
+> 2. **Global HTTP / builtin / custom functions** — the per-function
+>    `context_retention` / `context_projection` on `BaseGlobalFunction`
+>    (aggregated over `flow["functions"]`).
+>
+> So a global-function template (no MCP servers) can now opt into
+> `last_turn_only` + projection too. Still prefer trimming at the source with
+> each function's `expected_response_schema` (JMESPath whitelist) — that keeps
+> the payload small *before* it enters context; retention is the cross-turn
+> backstop for what does land.
+
 ## Problem
 
 Chat-mode MCP tools like `search_catalog` return large payloads (~33k tokens
