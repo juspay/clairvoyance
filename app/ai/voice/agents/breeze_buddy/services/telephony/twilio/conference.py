@@ -29,7 +29,7 @@ class TwilioConferenceService:
         self,
         conference_name: str,
         agent_phone_number: str,
-        outbound_number: str,
+        telephony_number: str,
         status_callback_url: Optional[str] = None,
     ) -> Dict:
         logger.info(
@@ -54,7 +54,7 @@ class TwilioConferenceService:
             )
 
             agent_call = self.client.calls.create(
-                from_=outbound_number, to=agent_phone_number, twiml=twiml
+                from_=telephony_number, to=agent_phone_number, twiml=twiml
             )
 
             agent_call_sid = agent_call.sid
@@ -290,7 +290,7 @@ class TwilioConferenceService:
         conference_name: str,
         agent_phone_number: str,
         customer_call_sid: str,
-        outbound_number: str,
+        telephony_number: str,
         callback: Optional[Callable] = None,
         status_callback_url: Optional[str] = None,
         customer_phone_number: Optional[str] = None,
@@ -306,7 +306,7 @@ class TwilioConferenceService:
             conference_name: Unique name for the conference
             agent_phone_number: Phone number of the agent to call
             customer_call_sid: SID of the ongoing customer call
-            outbound_number: Number to use for outbound call to agent
+            telephony_number: Number to use for outbound call to agent
             callback: Optional callback function executed after customer transfer
             status_callback_url: Optional webhook URL for conference status events
 
@@ -330,7 +330,7 @@ class TwilioConferenceService:
             agent_result = self._add_agent_to_conference(
                 conference_name,
                 agent_phone_number,
-                outbound_number,
+                telephony_number,
                 status_callback_url,
             )
 

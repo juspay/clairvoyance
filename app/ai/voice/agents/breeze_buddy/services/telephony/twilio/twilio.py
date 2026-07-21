@@ -77,7 +77,7 @@ class TwilioProvider(VoiceCallProvider):
     def make_call(
         self,
         customer_mobile_number: str,
-        outbound_number: str,
+        telephony_number: str,
         reseller_id: Optional[str] = None,
         template_name: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
@@ -96,7 +96,7 @@ class TwilioProvider(VoiceCallProvider):
 
         Args:
             customer_mobile_number: Phone number to call
-            outbound_number: Caller ID / outbound number
+            telephony_number: Caller ID / outbound number
             reseller_id: Optional merchant ID for tiered pod allocation
             template_name: Optional template name for WebSocket path routing
         """
@@ -126,7 +126,7 @@ class TwilioProvider(VoiceCallProvider):
 
                 call = self.client.calls.create(
                     to=customer_mobile_number,
-                    from_=outbound_number,
+                    from_=telephony_number,
                     url=webhook_url,
                     fallback_url=fallback_url,
                     record=True,
@@ -155,7 +155,7 @@ class TwilioProvider(VoiceCallProvider):
 
                 call = self.client.calls.create(
                     to=customer_mobile_number,
-                    from_=outbound_number,
+                    from_=telephony_number,
                     twiml=str(voice_call_payload),
                     record=True,
                     recording_status_callback=(

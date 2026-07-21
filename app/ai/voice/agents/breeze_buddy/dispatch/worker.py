@@ -28,7 +28,7 @@ from typing import Any, List, Optional, cast
 import aiohttp
 
 from app.ai.voice.agents.breeze_buddy.dispatch.alerts import (
-    raise_no_outbound_number,
+    raise_no_telephony_number,
 )
 from app.ai.voice.agents.breeze_buddy.dispatch.channel_semaphore import (
     acquire_channel_token,
@@ -389,14 +389,14 @@ class Worker:
                     "Marking FINISHED with NUMBER_UNAVAILABLE."
                 )
                 try:
-                    await raise_no_outbound_number(
+                    await raise_no_telephony_number(
                         reseller_id=config.reseller_id,
                         template=config.template,
                         merchant_id=config.merchant_id,
                     )
                 except Exception as alert_exc:  # noqa: BLE001
                     logger.warning(
-                        f"Worker {self._uuid}: raise_no_outbound_number "
+                        f"Worker {self._uuid}: raise_no_telephony_number "
                         f"failed for lead {locked.id}: {alert_exc}"
                     )
                 lock_released = await self._fail_and_release(
@@ -413,7 +413,7 @@ class Worker:
                 )
                 return
 
-            # DB-side bookkeeping: ``outbound_number.status`` (Twilio) or
+            # DB-side bookkeeping: ``telephony_number.status`` (Twilio) or
             # ``channels`` (Exotel/Plivo) is the operator-visible view used by
             # admin UI, analytics, and the channel-token reconciler. The Redis
             # token is the actual capacity gate; the DB write is eventually

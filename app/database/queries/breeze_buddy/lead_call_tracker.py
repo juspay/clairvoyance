@@ -10,7 +10,7 @@ from app.schemas import CallDirection, ExecutionMode, LeadCallStatus
 
 # Table names
 LEAD_CALL_TRACKER_TABLE = "lead_call_tracker"
-OUTBOUND_NUMBER_TABLE = "outbound_number"
+TELEPHONY_NUMBER_TABLE = "telephony_numbers"
 
 
 # Lead call tracker queries
@@ -394,7 +394,7 @@ def get_all_lead_call_trackers_query(
         FROM
             "{LEAD_CALL_TRACKER_TABLE}" lct
         LEFT JOIN
-            "{OUTBOUND_NUMBER_TABLE}" ou ON lct.outbound_number_id = ou.id
+            "{TELEPHONY_NUMBER_TABLE}" ou ON lct.outbound_number_id = ou.id
     """
     values: List[Any] = []
     conditions = []

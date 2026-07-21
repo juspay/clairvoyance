@@ -40,7 +40,7 @@ from app.ai.voice.agents.breeze_buddy.utils.transport.websockets import (
 from app.ai.voice.agents.breeze_buddy.utils.warm_transfer import set_transfer_flag
 from app.core.config.static import APP_BASE_URL
 from app.core.logger import logger
-from app.database.accessor import get_outbound_number_by_id
+from app.database.accessor import get_telephony_number_by_id
 from app.schemas import CallProvider
 
 
@@ -77,20 +77,20 @@ async def connect_to_live_agent(
             "message": "Outbound number not configured for this call",
         }
 
-    outbound_number_record = await get_outbound_number_by_id(
+    telephony_number_record = await get_telephony_number_by_id(
         context.lead.outbound_number_id
     )
-    if not outbound_number_record:
+    if not telephony_number_record:
         logger.error(
             f"Transfer failed for call {context.call_sid}: outbound number not found"
         )
         return {
             "status": "failed",
-            "reason": "outbound_number_not_found",
+            "reason": "telephony_number_not_found",
             "message": "Outbound number configuration not found",
         }
 
-    outbound_number = outbound_number_record.number
+    telephony_number = telephony_number_record.number
 
     # Get transfer number from template configuration
     configurations = getattr(context.bot, "configurations", None)
@@ -163,7 +163,7 @@ async def connect_to_live_agent(
             conference_service=conference_service,
             agent_phone_number=agent_phone_number,
             conference_name=conference_name,
-            outbound_number=outbound_number,
+            telephony_number=telephony_number,
             customer_phone_number=customer_phone_number,
         )
 
@@ -172,7 +172,7 @@ async def connect_to_live_agent(
         conference_service=conference_service,
         agent_phone_number=agent_phone_number,
         conference_name=conference_name,
-        outbound_number=outbound_number,
+        telephony_number=telephony_number,
         customer_phone_number=customer_phone_number,
     )
 
@@ -183,7 +183,7 @@ async def _transfer_via_mpc(
     conference_service: Any,
     agent_phone_number: str,
     conference_name: str,
-    outbound_number: str,
+    telephony_number: str,
     customer_phone_number: Optional[str],
 ) -> Dict[str, Any]:
     """Dial-first MPC transfer (Plivo).
@@ -240,7 +240,7 @@ async def _transfer_via_mpc(
             conference_name=conference_name,
             agent_phone_number=agent_phone_number,
             customer_call_sid=context.call_sid,
-            outbound_number=outbound_number,
+            telephony_number=telephony_number,
         )
 
         if not conference_result.get("success"):
@@ -380,7 +380,7 @@ async def _transfer_legacy(
     conference_service: Any,
     agent_phone_number: str,
     conference_name: str,
-    outbound_number: str,
+    telephony_number: str,
     customer_phone_number: Optional[str],
 ) -> Dict[str, Any]:
     """Legacy immediate transfer.
@@ -414,7 +414,7 @@ async def _transfer_legacy(
             conference_name=conference_name,
             agent_phone_number=agent_phone_number,
             customer_call_sid=context.call_sid,
-            outbound_number=outbound_number,
+            telephony_number=telephony_number,
             callback=None,
             status_callback_url=status_callback_url,
             customer_phone_number=customer_phone_number,

@@ -124,7 +124,7 @@ async def test_atomic_record_rejection_releases_resources_and_defers(
 
       - Channel token MUST be released (so other leads on this number
         aren't starved by a rejected-but-still-holding-the-slot worker).
-      - DB outbound_number MUST be released (mirror of the channel
+      - DB telephony_number MUST be released (mirror of the channel
         release; keeps the operator-visible counter consistent).
       - Lead MUST be deferred by the rate-limit window (default 3600s)
         so the dispatcher doesn't immediately re-pick and burn through
@@ -408,9 +408,9 @@ async def test_get_available_number_returns_none_marks_lead_finished(
     assert lead.status == LeadCallStatus.FINISHED
     assert lead.outcome == "NUMBER_UNAVAILABLE"
     # Throttled alert fired once with the right scope.
-    assert len(harness.no_outbound_number_alerts) == 1
-    assert harness.no_outbound_number_alerts[0]["reseller_id"] == lead.reseller_id
-    assert harness.no_outbound_number_alerts[0]["template"] == lead.template
+    assert len(harness.no_telephony_number_alerts) == 1
+    assert harness.no_telephony_number_alerts[0]["reseller_id"] == lead.reseller_id
+    assert harness.no_telephony_number_alerts[0]["template"] == lead.template
     # Rate-limit ZSET untouched.
     assert harness.rate_limit_records == []
 

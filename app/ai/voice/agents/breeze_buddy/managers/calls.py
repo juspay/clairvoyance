@@ -51,17 +51,17 @@ from app.core.transport.http_client import create_aiohttp_session
 from app.database.accessor import (
     acquire_lock_on_lead_by_id,
     create_lead_call_tracker,
-    decrement_outbound_number_channels,
+    decrement_telephony_number_channels,
     get_call_execution_config_by_template_id,
     get_lead_by_call_id,
     get_leads_by_status_and_time_before,
-    get_outbound_number_based_on_status_and_provider,
-    get_outbound_number_by_id,
-    increment_outbound_number_channels,
+    get_telephony_number_based_on_status_and_provider,
+    get_telephony_number_by_id,
+    increment_telephony_number_channels,
     release_lock_on_lead_by_id,
     update_lead_call_completion_details,
     update_lead_call_recording_url,
-    update_outbound_number_status,
+    update_telephony_number_status,
 )
 from app.schemas import (
     IVR_OPTIONS_TEMPLATE,
@@ -71,8 +71,8 @@ from app.schemas import (
     ExecutionMode,
     LeadCallStatus,
     LeadCallTracker,
-    OutboundNumber,
-    OutboundNumberStatus,
+    TelephonyNumber,
+    TelephonyNumberStatus,
 )
 from app.services.gcp.storage.storage import upload_file_to_gcs
 from app.services.redis.client import get_redis_service
@@ -183,7 +183,7 @@ async def _run_pre_checks_for_lead(
 async def _get_available_number(
     config: CallExecutionConfig,
     template: Optional[TemplateModel],
-) -> Optional[OutboundNumber]:
+) -> Optional[TelephonyNumber]:
     """
     Resolve the outbound number to dial from. Returns None only for
     permanent / semi-permanent failures:
@@ -212,11 +212,34 @@ async def _get_available_number(
         logger.info(
             f"Using new approach: template {config.template} has outbound_number_id {template.outbound_number_id}"
         )
-        outbound_number = await get_outbound_number_by_id(template.outbound_number_id)
+        telephony_number = await get_telephony_number_by_id(template.outbound_number_id)
 
-        if outbound_number and outbound_number.status == OutboundNumberStatus.AVAILABLE:
-            number = outbound_number
-        elif outbound_number is None:
+        if (
+            telephony_number
+            and telephony_number.status == TelephonyNumberStatus.AVAILABLE
+        ):
+            # Grandfathered cross-merchant pin: the template routes calls
+            # through a number provisioned for a DIFFERENT merchant. New and
+            # changed pins are rejected at the template API, but existing
+            # rows keep working until the ownership backfill re-labels the
+            # numbers — blocking here would drop live traffic. Warn loudly
+            # so the backfill has an audit trail.
+            if (
+                telephony_number.merchant_id is not None
+                and config.merchant_id is not None
+                and telephony_number.merchant_id != config.merchant_id
+            ):
+                # error (not warning) on purpose: error-level feeds the
+                # ops alerting, so every grandfathered pin that still dials
+                # shows up until the ownership relabel clears them.
+                logger.error(
+                    f"_get_available_number: grandfathered cross-merchant pin — "
+                    f"template {config.template} (merchant {config.merchant_id}) "
+                    f"dials from number_id {telephony_number.id} owned by "
+                    f"merchant {telephony_number.merchant_id}."
+                )
+            number = telephony_number
+        elif telephony_number is None:
             logger.error(
                 f"_get_available_number: template {config.template} references "
                 f"outbound_number_id {template.outbound_number_id} which does not "
@@ -224,32 +247,41 @@ async def _get_available_number(
             )
         else:
             logger.warning(
-                f"_get_available_number: outbound number {outbound_number.id} "
-                f"is in status {outbound_number.status.value} (not AVAILABLE) "
+                f"_get_available_number: outbound number {telephony_number.id} "
+                f"is in status {telephony_number.status.value} (not AVAILABLE) "
                 f"for template {config.template}."
             )
 
     else:
         logger.info(
-            f"Using backward compatible approach for reseller "
-            f"{config.reseller_id}, shop {config.merchant_id}: scanning the "
-            f"unassigned-default pool (outbound_number rows with reseller_id "
-            f"and merchant_id both NULL) on provider "
+            f"No pinned number on template {config.template}: looking for a "
+            f"number owned by merchant {config.merchant_id}, then falling "
+            f"back to the shared pool (telephony_numbers rows with "
+            f"reseller_id and merchant_id both NULL) on provider "
             f"{config.calling_provider}."
         )
 
         # Get all available numbers
-        all_available_numbers = await get_outbound_number_based_on_status_and_provider(
-            OutboundNumberStatus.AVAILABLE, config.calling_provider
+        all_available_numbers = await get_telephony_number_based_on_status_and_provider(
+            TelephonyNumberStatus.AVAILABLE, config.calling_provider
         )
+
+        # Prefer a number provisioned for this merchant. Merchants without
+        # owned numbers keep the exact legacy behavior below, so shared
+        # numbers serving many merchants/templates are unaffected.
+        owned_numbers = [
+            n
+            for n in all_available_numbers
+            if n.merchant_id is not None and n.merchant_id == config.merchant_id
+        ]
 
         # Legacy fallback: any number with no explicit reseller/merchant
         # assignment serves as a shared default. The caller's reseller_id /
         # merchant_id from `config` are intentionally NOT used as a filter
-        # here — the fallback is the unassigned-default pool, not a per-
-        # tenant pool. See raise_no_outbound_number() in dispatch/alerts.py
+        # for THIS pool — it is the unassigned-default pool, not a per-
+        # tenant pool. See raise_no_telephony_number() in dispatch/alerts.py
         # for the operator guidance that matches this behavior.
-        matching_numbers = [
+        matching_numbers = owned_numbers or [
             n
             for n in all_available_numbers
             if n.reseller_id is None and n.merchant_id is None
@@ -269,13 +301,13 @@ async def _get_available_number(
         return None
 
     logger.info(
-        f"Using outbound number {number.number} (provider: {number.provider}) "
+        f"Using outbound number_id {number.id} (provider: {number.provider}) "
         f"for template {config.template}, reseller {config.reseller_id}, shop {config.merchant_id}"
     )
     return number
 
 
-async def _acquire_number(number: OutboundNumber) -> bool:
+async def _acquire_number(number: TelephonyNumber) -> bool:
     """
     Marks an outbound number as in use.
     Uses atomic increment to avoid race conditions.
@@ -283,15 +315,15 @@ async def _acquire_number(number: OutboundNumber) -> bool:
     Returns True if acquisition succeeded, False if at capacity.
     """
     if number.provider == CallProvider.TWILIO:
-        result = await update_outbound_number_status(
-            number.id, OutboundNumberStatus.IN_USE
+        result = await update_telephony_number_status(
+            number.id, TelephonyNumberStatus.IN_USE
         )
         return result is not None
     elif number.provider == CallProvider.EXOTEL:
-        result = await increment_outbound_number_channels(number.id)
+        result = await increment_telephony_number_channels(number.id)
         return result is not None
     elif number.provider == CallProvider.PLIVO:
-        result = await increment_outbound_number_channels(number.id)
+        result = await increment_telephony_number_channels(number.id)
         return result is not None
     return False
 
@@ -302,11 +334,11 @@ async def _release_number(number_id: str, provider: CallProvider):
     Uses atomic decrement to avoid race conditions.
     """
     if provider == CallProvider.TWILIO:
-        await update_outbound_number_status(number_id, OutboundNumberStatus.AVAILABLE)
+        await update_telephony_number_status(number_id, TelephonyNumberStatus.AVAILABLE)
     elif provider == CallProvider.EXOTEL:
-        await decrement_outbound_number_channels(number_id)
+        await decrement_telephony_number_channels(number_id)
     elif provider == CallProvider.PLIVO:
-        await decrement_outbound_number_channels(number_id)
+        await decrement_telephony_number_channels(number_id)
 
 
 async def _retry_call(
@@ -445,13 +477,15 @@ async def reconcile_stuck_processing_leads():
             )
 
             if locked_lead.outbound_number_id:
-                outbound_number = await get_outbound_number_by_id(
+                telephony_number = await get_telephony_number_by_id(
                     locked_lead.outbound_number_id
                 )
-                if outbound_number:
-                    await _release_number(outbound_number.id, outbound_number.provider)
+                if telephony_number:
+                    await _release_number(
+                        telephony_number.id, telephony_number.provider
+                    )
                     # Event-driven dispatch: return token to channel semaphore.
-                    await release_channel_token(outbound_number.id)
+                    await release_channel_token(telephony_number.id)
 
             # Only retry outbound telephony calls - inbound and test calls should not be retried
             config = await _get_lead_config(locked_lead)
@@ -500,13 +534,13 @@ async def handle_call_completion(
 
     # Always release outbound number (including transfers — bot leaves, cleanup happens here)
     if lead.outbound_number_id:
-        outbound_number = await get_outbound_number_by_id(lead.outbound_number_id)
-        if outbound_number:
-            await _release_number(outbound_number.id, outbound_number.provider)
+        telephony_number = await get_telephony_number_by_id(lead.outbound_number_id)
+        if telephony_number:
+            await _release_number(telephony_number.id, telephony_number.provider)
             # Event-driven dispatch: return a token to the channel semaphore.
             # Idempotent in aggregate — reconcile_channel_tokens trims any
             # over-count caused by duplicate webhooks within 60s.
-            await release_channel_token(outbound_number.id)
+            await release_channel_token(telephony_number.id)
         else:
             logger.error(
                 f"Could not find outbound number with id: {lead.outbound_number_id} to release."
@@ -607,11 +641,11 @@ async def handle_unanswered_calls(call_id: str):
     # channel must be freed regardless of lead status. _release_number is idempotent
     # (SQL uses GREATEST(0, ...)), so duplicate releases are safe.
     if lead.outbound_number_id:
-        outbound_number = await get_outbound_number_by_id(lead.outbound_number_id)
-        if outbound_number:
-            await _release_number(outbound_number.id, outbound_number.provider)
+        telephony_number = await get_telephony_number_by_id(lead.outbound_number_id)
+        if telephony_number:
+            await _release_number(telephony_number.id, telephony_number.provider)
             # Event-driven dispatch: return token to channel semaphore.
-            await release_channel_token(outbound_number.id)
+            await release_channel_token(telephony_number.id)
         else:
             logger.error(
                 f"Could not find outbound number with id: {lead.outbound_number_id} to release."

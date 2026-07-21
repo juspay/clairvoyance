@@ -35,13 +35,13 @@ _DIAL_UP_PATH = "/agent/voice/breeze-buddy/plivo/callback/transfer/dial-up"
 
 def _dial_up_url(
     customer_call_sid: str,
-    outbound_number: str,
+    telephony_number: str,
     status_callback_url: Optional[str] = None,
 ) -> str:
     """Build the URL for the dial-up callback during a legacy call transfer."""
     params: Dict[str, str] = {
         "customer_call_sid": customer_call_sid,
-        "outbound_number": outbound_number,
+        "outbound_number": telephony_number,
     }
     if status_callback_url:
         params["status_callback_url"] = status_callback_url
@@ -67,7 +67,7 @@ class PlivoConferenceService:
         self,
         mpc_name: str,
         agent_phone_number: str,
-        outbound_number: str,
+        telephony_number: str,
         customer_call_sid: str,
     ) -> Dict:
         """
@@ -89,7 +89,7 @@ class PlivoConferenceService:
                     self.client.multi_party_calls.add_participant,
                     friendly_name=mpc_name,
                     role="agent",
-                    from_=outbound_number,
+                    from_=telephony_number,
                     to_=agent_phone_number,
                     ring_timeout=30,
                     end_mpc_on_exit=True,
@@ -178,7 +178,7 @@ class PlivoConferenceService:
         conference_name: str,
         agent_phone_number: str,
         customer_call_sid: str,
-        outbound_number: str,
+        telephony_number: str,
     ) -> Dict:
         """
         Execute a warm transfer by dialling the agent into an MPC.
@@ -208,7 +208,7 @@ class PlivoConferenceService:
             result = await self._add_agent_to_mpc(
                 mpc_name=mpc_name,
                 agent_phone_number=agent_phone_number,
-                outbound_number=outbound_number,
+                telephony_number=telephony_number,
                 customer_call_sid=customer_call_sid,
             )
 
@@ -248,7 +248,7 @@ class PlivoConferenceService:
     async def _transfer_call(
         self,
         customer_call_sid: str,
-        outbound_number: str,
+        telephony_number: str,
         status_callback_url: Optional[str] = None,
     ) -> Dict:
         """
@@ -259,7 +259,7 @@ class PlivoConferenceService:
         """
         answer_url = _dial_up_url(
             customer_call_sid=customer_call_sid,
-            outbound_number=outbound_number,
+            telephony_number=telephony_number,
             status_callback_url=status_callback_url,
         )
 
@@ -322,7 +322,7 @@ class PlivoConferenceService:
         conference_name: str,
         agent_phone_number: str,
         customer_call_sid: str,
-        outbound_number: str,
+        telephony_number: str,
         callback: Optional[Callable] = None,
         status_callback_url: Optional[str] = None,
         customer_phone_number: Optional[str] = None,
@@ -355,7 +355,7 @@ class PlivoConferenceService:
             # Transfer customer leg
             transfer_result = await self._transfer_call(
                 customer_call_sid=customer_call_sid,
-                outbound_number=outbound_number,
+                telephony_number=telephony_number,
                 status_callback_url=status_callback_url,
             )
 

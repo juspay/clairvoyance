@@ -171,7 +171,7 @@ async def raise_channel_drift(
     )
 
 
-async def raise_no_outbound_number(
+async def raise_no_telephony_number(
     reseller_id: str,
     template: str,
     merchant_id: Optional[str],
@@ -182,7 +182,7 @@ async def raise_no_outbound_number(
     Raised when ``_get_available_number`` returns None: the template's
     assigned ``outbound_number_id`` is missing/disabled, or — for templates
     on the legacy fallback path — the unassigned-default pool
-    (``outbound_number`` rows where both ``reseller_id`` and ``merchant_id``
+    (``telephony_number`` rows where both ``reseller_id`` and ``merchant_id``
     are NULL) is empty. This is a misconfiguration that will not self-heal
     — every lead for this (reseller, template) is being marked FINISHED
     with outcome NUMBER_UNAVAILABLE until it's fixed.
@@ -191,7 +191,7 @@ async def raise_no_outbound_number(
     page repeatedly while we're working through its backlog.
     """
     await _send(
-        alert_name=f"no_outbound_number:{reseller_id}:{template}",
+        alert_name=f"no_telephony_number:{reseller_id}:{template}",
         throttle_seconds=_THROTTLE_P1,
         title="[P1] Breeze Buddy: no outbound number for lead",
         fields=[
@@ -209,7 +209,7 @@ async def raise_no_outbound_number(
                 "name": "Action",
                 "value": (
                     "Verify `template.outbound_number_id` points to an existing "
-                    "`outbound_number` row in status AVAILABLE. If using the "
+                    "`telephony_number` row in status AVAILABLE. If using the "
                     "legacy fallback path, confirm the unassigned-default pool "
                     "(rows with both `reseller_id` and `merchant_id` NULL) has "
                     "at least one AVAILABLE number on the requested provider. "

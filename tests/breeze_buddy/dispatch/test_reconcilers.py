@@ -83,8 +83,8 @@ async def test_reconcile_channels_initialises_missing_list(fake_redis, monkeypat
     async def _fake_in_flight():
         return {}  # no calls in flight
 
-    monkeypatch.setattr(rc, "get_all_outbound_numbers", _fake_numbers)
-    monkeypatch.setattr(rc, "count_processing_by_outbound_number", _fake_in_flight)
+    monkeypatch.setattr(rc, "get_all_telephony_numbers", _fake_numbers)
+    monkeypatch.setattr(rc, "count_processing_by_telephony_number", _fake_in_flight)
 
     await rc.reconcile_channel_tokens()
 
@@ -106,8 +106,8 @@ async def test_reconcile_channels_skips_disabled_numbers(fake_redis, monkeypatch
     async def _fake_in_flight():
         return {}
 
-    monkeypatch.setattr(rc, "get_all_outbound_numbers", _fake_numbers)
-    monkeypatch.setattr(rc, "count_processing_by_outbound_number", _fake_in_flight)
+    monkeypatch.setattr(rc, "get_all_telephony_numbers", _fake_numbers)
+    monkeypatch.setattr(rc, "count_processing_by_telephony_number", _fake_in_flight)
 
     await rc.reconcile_channel_tokens()
 
@@ -128,8 +128,8 @@ async def test_reconcile_channels_preserves_zero_maximum_channels(
     async def _fake_in_flight():
         return {}
 
-    monkeypatch.setattr(rc, "get_all_outbound_numbers", _fake_numbers)
-    monkeypatch.setattr(rc, "count_processing_by_outbound_number", _fake_in_flight)
+    monkeypatch.setattr(rc, "get_all_telephony_numbers", _fake_numbers)
+    monkeypatch.setattr(rc, "count_processing_by_telephony_number", _fake_in_flight)
 
     await rc.reconcile_channel_tokens()
 
@@ -147,8 +147,8 @@ async def test_reconcile_channels_tops_up_short_list(fake_redis, monkeypatch):
     async def _fake_in_flight():
         return {}
 
-    monkeypatch.setattr(rc, "get_all_outbound_numbers", _fake_numbers)
-    monkeypatch.setattr(rc, "count_processing_by_outbound_number", _fake_in_flight)
+    monkeypatch.setattr(rc, "get_all_telephony_numbers", _fake_numbers)
+    monkeypatch.setattr(rc, "count_processing_by_telephony_number", _fake_in_flight)
 
     await rc.reconcile_channel_tokens()
 
@@ -166,8 +166,8 @@ async def test_reconcile_channels_trims_excess(fake_redis, monkeypatch):
     async def _fake_in_flight():
         return {}
 
-    monkeypatch.setattr(rc, "get_all_outbound_numbers", _fake_numbers)
-    monkeypatch.setattr(rc, "count_processing_by_outbound_number", _fake_in_flight)
+    monkeypatch.setattr(rc, "get_all_telephony_numbers", _fake_numbers)
+    monkeypatch.setattr(rc, "count_processing_by_telephony_number", _fake_in_flight)
 
     await rc.reconcile_channel_tokens()
 
@@ -183,8 +183,8 @@ async def test_reconcile_channels_accounts_for_in_flight(fake_redis, monkeypatch
     async def _fake_in_flight():
         return {"num-A": 2}
 
-    monkeypatch.setattr(rc, "get_all_outbound_numbers", _fake_numbers)
-    monkeypatch.setattr(rc, "count_processing_by_outbound_number", _fake_in_flight)
+    monkeypatch.setattr(rc, "get_all_telephony_numbers", _fake_numbers)
+    monkeypatch.setattr(rc, "count_processing_by_telephony_number", _fake_in_flight)
 
     await rc.reconcile_channel_tokens()
 

@@ -26,7 +26,7 @@ class ExotelConferenceService:
         conference_name: str,
         agent_phone_number: str,
         customer_call_sid: str,
-        outbound_number: str,
+        telephony_number: str,
         callback: Optional[Callable] = None,
         status_callback_url: Optional[str] = None,
         customer_phone_number: Optional[str] = None,
@@ -43,7 +43,7 @@ class ExotelConferenceService:
             conference_name: Conference identifier
             agent_phone_number: Not used (agent lookup happens in callback)
             customer_call_sid: Customer call SID
-            outbound_number: Not used
+            telephony_number: Not used
             callback: Not used
             status_callback_url: Not used
             customer_phone_number: Not used

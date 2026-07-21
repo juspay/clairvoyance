@@ -6,10 +6,10 @@ from typing import List, Optional
 
 import asyncpg
 
-from app.schemas import CallProvider, OutboundNumber, OutboundNumberStatus
+from app.schemas import CallProvider, TelephonyNumber, TelephonyNumberStatus
 
 
-def decode_outbound_number(result: List[asyncpg.Record]) -> Optional[OutboundNumber]:
+def decode_telephony_number(result: List[asyncpg.Record]) -> Optional[TelephonyNumber]:
     """
     Decode outbound number from database result using Pydantic model.
     """
@@ -18,11 +18,11 @@ def decode_outbound_number(result: List[asyncpg.Record]) -> Optional[OutboundNum
 
     row = result[0]
 
-    return OutboundNumber(
+    return TelephonyNumber(
         id=row["id"],
         number=row["number"],
         provider=CallProvider(row["provider"]),
-        status=OutboundNumberStatus(row["status"]),
+        status=TelephonyNumberStatus(row["status"]),
         channels=row["channels"],
         maximum_channels=row["maximum_channels"],
         reseller_id=row["reseller_id"],
@@ -32,7 +32,7 @@ def decode_outbound_number(result: List[asyncpg.Record]) -> Optional[OutboundNum
     )
 
 
-def decode_outbound_number_list(result: List[asyncpg.Record]) -> List[OutboundNumber]:
+def decode_telephony_number_list(result: List[asyncpg.Record]) -> List[TelephonyNumber]:
     """
     Decode multiple outbound number records from database result using Pydantic models.
     """
@@ -42,11 +42,11 @@ def decode_outbound_number_list(result: List[asyncpg.Record]) -> List[OutboundNu
     result[0]
 
     return [
-        OutboundNumber(
+        TelephonyNumber(
             id=row["id"],
             number=row["number"],
             provider=CallProvider(row["provider"]),
-            status=OutboundNumberStatus(row["status"]),
+            status=TelephonyNumberStatus(row["status"]),
             channels=row["channels"],
             maximum_channels=row["maximum_channels"],
             reseller_id=row["reseller_id"],

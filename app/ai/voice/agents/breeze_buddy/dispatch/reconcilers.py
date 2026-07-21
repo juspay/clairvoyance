@@ -39,16 +39,16 @@ from app.ai.voice.agents.breeze_buddy.dispatch.queue import (
 from app.core.config import dynamic as dyn_cfg
 from app.core.logger import logger
 from app.database.accessor import (
-    get_all_outbound_numbers,
+    get_all_telephony_numbers,
     get_lead_by_id,
 )
 from app.database.accessor.breeze_buddy.dispatch import (
     clean_stale_bb_locks as accessor_clean_stale_bb_locks,
-    count_processing_by_outbound_number,
+    count_processing_by_telephony_number,
     get_unscheduled_backlog_leads,
 )
 from app.schemas import LeadCallStatus
-from app.schemas.breeze_buddy.core import OutboundNumberStatus
+from app.schemas.breeze_buddy.core import TelephonyNumberStatus
 from app.services.redis import get_redis_service
 
 # ---------------------------------------------------------------------------
@@ -219,7 +219,7 @@ async def reconcile_channel_tokens() -> None:
         and top up or trim to match.
     """
     try:
-        numbers = await get_all_outbound_numbers()
+        numbers = await get_all_telephony_numbers()
     except Exception as e:  # noqa: BLE001
         logger.error(f"reconcile_channel_tokens: DB read (numbers) failed: {e}")
         return
@@ -229,12 +229,12 @@ async def reconcile_channel_tokens() -> None:
 
     # Skip DISABLED numbers — they aren't dispatchable, so maintaining channel
     # state for them inflates Redis and skews drift alerts.
-    numbers = [n for n in numbers if n.status != OutboundNumberStatus.DISABLED]
+    numbers = [n for n in numbers if n.status != TelephonyNumberStatus.DISABLED]
     if not numbers:
         return
 
     try:
-        in_flight = await count_processing_by_outbound_number()
+        in_flight = await count_processing_by_telephony_number()
     except Exception as e:  # noqa: BLE001
         logger.error(f"reconcile_channel_tokens: DB count failed: {e}")
         return

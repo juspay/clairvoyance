@@ -16,8 +16,8 @@ from app.database.queries.breeze_buddy.analytics import (
     get_analytics_lead_based_trends_query,
     get_analytics_lead_status_counts_query,
     get_analytics_lead_status_counts_total_query,
-    get_analytics_outbound_numbers_query,
     get_analytics_summary_query,
+    get_analytics_telephony_numbers_query,
     get_analytics_trends_query,
     get_attempts_to_connect_query,
     get_call_details_records_query,
@@ -333,7 +333,7 @@ async def get_lead_based_analytics_from_db(
         raise
 
 
-async def get_outbound_numbers_analytics_from_db(
+async def get_telephony_numbers_analytics_from_db(
     filters: Dict[str, Any],
 ) -> List[Dict[str, Any]]:
     """
@@ -347,7 +347,7 @@ async def get_outbound_numbers_analytics_from_db(
     )
 
     try:
-        query_text, values = get_analytics_outbound_numbers_query(filters)
+        query_text, values = get_analytics_telephony_numbers_query(filters)
         result = await run_parameterized_query(query_text, values)
         logger.info(
             f"[Analytics DB] Outbound numbers analytics returned {len(result) if result else 0} numbers"

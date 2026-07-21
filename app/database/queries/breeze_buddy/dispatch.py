@@ -36,7 +36,7 @@ def get_unscheduled_backlog_leads_query(
     return text, [str(lookahead_seconds), limit]
 
 
-def count_processing_by_outbound_number_query() -> Tuple[str, List[Any]]:
+def count_processing_by_telephony_number_query() -> Tuple[str, List[Any]]:
     """
     For ``reconcile_channel_tokens``: how many calls are PROCESSING right
     now for each outbound number? The reconciler compares this against
