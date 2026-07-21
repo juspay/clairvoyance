@@ -186,3 +186,23 @@ def test_healer_alias_does_not_override_canonical_when_both_present():
     assert out["props"]["text"] == "explicit"
     # `label` was stripped (unknown prop), not renamed.
     assert "label" not in out["props"]
+
+
+def test_healer_infers_missing_op_as_add():
+    """LLM omitted the `op` discriminator on an add-shaped line → healed."""
+    import json
+
+    r = heal_op_line(
+        '{"id":"x","type":"Text","parent":"root","props":{"text":"hi"}}',
+        _ctx(known_ids={"root"}),
+    )
+    assert r.drop is False
+    assert "inferred_missing_op:add" in r.notes
+    assert json.loads(r.line)["op"] == "add"  # type: ignore[arg-type]
+
+
+def test_healer_does_not_infer_op_without_type_and_id():
+    """Anything less add-shaped passes through untouched (drops downstream)."""
+    r = heal_op_line('{"id":"x","props":{}}', _ctx())
+    assert r.drop is False
+    assert r.notes == []

@@ -29,6 +29,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Iterator, List, Literal, Optional, Set, Union
 
+from pydantic import ValidationError
+
 from app.ai.voice.agents.breeze_buddy.chat.sse import SSEEvent
 from app.ai.voice.agents.breeze_buddy.template.ui_catalog import (
     is_known_type,
@@ -40,6 +42,35 @@ _log = logging.getLogger(__name__)
 _OPEN = "<ui_stream>"
 _CLOSE = "</ui_stream>"
 _CARRY_MAX = max(len(_OPEN), len(_CLOSE)) - 1
+
+# Compact op markers ("+" add / "~" replace / "-" remove) and the verbose
+# ``{"op": ...}`` verbs. Used to recognize a bare SpecStream op-line the LLM
+# emitted WITHOUT the ``<ui_stream>`` wrapper, so it can be recovered into the
+# op path instead of leaking to the user as raw JSON. See ``_is_op_line``.
+_OP_MARKERS: Set[str] = {"+", "~", "-"}
+_OP_VERBS: Set[str] = {"add", "replace", "remove"}
+
+
+def _is_op_line(text: str) -> bool:
+    """True iff ``text`` is a bare SpecStream op-line.
+
+    Conservative on purpose: the line must parse to a JSON **object** carrying
+    an op marker (compact ``{"+"|"~"|"-": …}`` or verbose
+    ``{"op": "add"|"replace"|"remove", …}``). Ordinary prose — even prose that
+    contains braces or a stray JSON value — never matches, so nothing that
+    isn't genuinely UI gets diverted out of the visible reply.
+    """
+    if not text.startswith("{"):
+        return False
+    try:
+        obj = json.loads(text)
+    except (ValueError, TypeError):
+        return False
+    if not isinstance(obj, dict):
+        return False
+    if _OP_MARKERS & obj.keys():
+        return True
+    return obj.get("op") in _OP_VERBS
 
 
 # ---------------------------------------------------------------------------
@@ -91,6 +122,10 @@ class UiStreamExtractor:
         self._carry: str = ""
         # Partial JSONL line accumulator (active while INSIDE).
         self._line_buf: str = ""
+        # OUTSIDE accumulator: holds only a pending line that STARTS with "{"
+        # (a possible bare op-line) until a newline decides op-vs-prose. Prose
+        # never sits here — it streams immediately — so smoothness is preserved.
+        self._out_line_buf: str = ""
 
     def feed(self, delta: str) -> Iterator[YieldItem]:
         """Process one text delta. Yields zero or more text/op_line items."""
@@ -108,9 +143,14 @@ class UiStreamExtractor:
         ``<ui_stream>`` but never closed it.
         """
         if self._state == "OUTSIDE":
-            if self._carry:
-                yield TextOut(value=self._carry)
+            # A held partial op-line (no trailing newline) + any marker-prefix
+            # carry. Route through the op recogniser so a wrapper-less final op
+            # is recovered rather than leaked; anything else falls back to prose.
+            leftover = self._out_line_buf + self._carry
+            self._out_line_buf = ""
             self._carry = ""
+            if leftover:
+                yield from self._emit_outside_line(leftover)
             return
         partial = self._line_buf + self._carry
         _log.warning(
@@ -128,18 +168,19 @@ class UiStreamExtractor:
             if self._state == "OUTSIDE":
                 idx = buffer.find(_OPEN)
                 if idx != -1:
-                    if idx > 0:
-                        yield TextOut(value=buffer[:idx])
+                    # Definite boundary before the open marker — flush any held
+                    # partial op-line too, then switch INSIDE.
+                    yield from self._emit_outside(buffer[:idx], flush_partial=True)
                     buffer = buffer[idx + len(_OPEN) :]
                     self._state = "INSIDE"
                     continue
                 hold = _tail_marker_prefix(buffer, _OPEN)
                 if hold:
-                    if len(buffer) > hold:
-                        yield TextOut(value=buffer[:-hold])
+                    body = buffer[:-hold] if len(buffer) > hold else ""
+                    yield from self._emit_outside(body, flush_partial=False)
                     self._carry = buffer[-hold:]
                 else:
-                    yield TextOut(value=buffer)
+                    yield from self._emit_outside(buffer, flush_partial=False)
                     self._carry = ""
                 return
 
@@ -177,6 +218,50 @@ class UiStreamExtractor:
             if line:
                 yield JsonlOpLine(raw=line)
             buffer = buffer[newline_idx + 1 :]
+
+    def _emit_outside(self, text: str, flush_partial: bool) -> Iterator[YieldItem]:
+        """Emit OUTSIDE (non-block) text, recovering a bare op-line the LLM
+        forgot to wrap in ``<ui_stream>``.
+
+        Prose streams immediately for smoothness; only a line that *starts*
+        with ``{`` is held (until its newline) so we can decide op-vs-prose. A
+        recovered op-line is yielded as ``JsonlOpLine`` — the same item a
+        wrapped line produces — so it flows through the identical heal/render
+        path and shows as UI instead of leaking as raw JSON. ``flush_partial``
+        forces a held partial line out (used when a definite ``<ui_stream>``
+        boundary follows).
+        """
+        self._out_line_buf += text
+        while self._out_line_buf:
+            starts_brace = self._out_line_buf.lstrip().startswith("{")
+            newline_idx = self._out_line_buf.find("\n")
+            if not starts_brace:
+                # Definitely prose — stream up to the newline, or all of it.
+                if newline_idx == -1:
+                    yield TextOut(value=self._out_line_buf)
+                    self._out_line_buf = ""
+                    return
+                yield TextOut(value=self._out_line_buf[: newline_idx + 1])
+                self._out_line_buf = self._out_line_buf[newline_idx + 1 :]
+                continue
+            # Might be a bare op-line — need the whole line to know.
+            if newline_idx == -1:
+                if flush_partial:
+                    yield from self._emit_outside_line(self._out_line_buf)
+                    self._out_line_buf = ""
+                return
+            line = self._out_line_buf[: newline_idx + 1]
+            self._out_line_buf = self._out_line_buf[newline_idx + 1 :]
+            yield from self._emit_outside_line(line)
+
+    def _emit_outside_line(self, line: str) -> Iterator[YieldItem]:
+        """Classify one OUTSIDE line: a bare op-line is recovered as a
+        ``JsonlOpLine`` (so it renders); anything else is prose (``TextOut``)."""
+        stripped = line.strip()
+        if _is_op_line(stripped):
+            yield JsonlOpLine(raw=stripped)
+        elif line:
+            yield TextOut(value=line)
 
 
 def _tail_marker_prefix(buffer: str, marker: str) -> int:
@@ -490,7 +575,18 @@ def parse_op_line(line: str, *, allowlist: Optional[Set[str]] = None) -> OpResul
     if op_kind == "add":
         try:
             validated = validate_props(op["type"], props)
-        except Exception as exc:  # ValidationError + defensive
+        except ValidationError as exc:
+            # Structural detail only — field paths + pydantic error kinds,
+            # never input values (privacy contract shared with
+            # ``ui_op_dropped_event``). This is what makes drop telemetry
+            # actionable: "Button:action.OpenUrlAction.url:url_scheme"
+            # diagnoses itself; a bare "ValidationError" does not.
+            details = ";".join(
+                f"{'.'.join(str(p) for p in err.get('loc', ()))}:{err.get('type')}"
+                for err in exc.errors()[:5]
+            )
+            return OpResult(error=f"props_validation_failed:{op['type']}:{details}")
+        except Exception as exc:  # defensive
             return OpResult(error=f"props_validation_failed: {type(exc).__name__}")
         # Replace props with the model_dump so downstream callers see
         # normalized values (enum → string, HttpUrl → str, defaults filled).
@@ -546,18 +642,33 @@ def healer_applied_event(line: str, note: str) -> SSEEvent:
     )
 
 
+# Cap on the raw dropped line carried in the event — a pathological repeat
+# expansion can't bloat the SSE frame or the persisted drops row.
+_DROP_RAW_MAX = 2000
+
+
 def ui_op_dropped_event(line: str, reason: str) -> SSEEvent:
     """Observability event — fired when a line failed validation and was
     dropped. Widget ignores.
 
-    Emits a structural-only op signature (never the resolved payload) and the
-    first line of ``reason`` — Pydantic errors echo ``input_value`` on later
-    lines, so we drop those here too (defense-in-depth alongside the metrics
-    layer's own truncation).
+    Emits a structural-only op signature and the first line of ``reason`` —
+    Pydantic errors echo ``input_value`` on later lines, so we drop those
+    here too (defense-in-depth alongside the metrics layer's own truncation).
+
+    ``raw`` carries the dropped line itself (capped) so the metrics observer
+    can persist it beside the transcript (chat_turn_metrics.drops, migration
+    041) — that row is what makes drops diagnosable from the dashboard
+    without log archaeology. Same-session assistant-generated content only;
+    it must never be copied into log lines.
     """
     first_reason = reason.split("\n", 1)[0][:200]
     return SSEEvent(
-        event="ui_op_dropped", data={"op": _op_signature(line), "reason": first_reason}
+        event="ui_op_dropped",
+        data={
+            "op": _op_signature(line),
+            "reason": first_reason,
+            "raw": line[:_DROP_RAW_MAX],
+        },
     )
 
 
@@ -621,9 +732,19 @@ def process_op_line(
     for line in expanded:
         if healer is not None:
             result = healer(line, session_state or {})
+            # A ``dropped_*`` note is the drop's reason, not a repair —
+            # surface it as ``ui_op_dropped`` (below) rather than
+            # ``healer_applied``, so healer drops land in the SAME funnel
+            # counter as validator drops. Before this, healer drops were
+            # invisible in ``ui_dropped`` — the badge under-counted.
+            drop_note: Optional[str] = None
             for note in result.notes:
-                events.append(healer_applied_event(line, note))
+                if note.startswith("dropped_"):
+                    drop_note = drop_note or note
+                else:
+                    events.append(healer_applied_event(line, note))
             if result.drop:
+                events.append(ui_op_dropped_event(line, drop_note or "healer_drop"))
                 continue
             if result.line is not None:
                 line = result.line

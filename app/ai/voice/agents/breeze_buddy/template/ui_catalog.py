@@ -39,13 +39,15 @@ body rows; locale-aware reformatting is the upstream tool's job.
 from __future__ import annotations
 
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional, Set, Type, Union
+from typing import Annotated, Any, Dict, List, Literal, Optional, Set, Type, Union
 
 from pydantic import (
+    AnyUrl,
     BaseModel,
     ConfigDict,
     Field,
     HttpUrl,
+    UrlConstraints,
     field_validator,
     model_validator,
 )
@@ -85,17 +87,28 @@ class ToAssistantAction(BaseModel):
     )
 
 
+# Schemes a click action may open. ``mailto:`` / ``tel:`` hand off to the
+# OS mail/phone handler — support-contact CTAs ("email us", "call us") are
+# a top real-traffic emission and used to drop on HttpUrl's http/https-only
+# rule. ``javascript:``/``data:`` and everything else stay rejected.
+# Display assets (``Image.src``, ``Icon.url``) remain HttpUrl-only.
+OpenableUrl = Annotated[
+    AnyUrl, UrlConstraints(allowed_schemes=["http", "https", "mailto", "tel"])
+]
+
+
 class OpenUrlAction(BaseModel):
-    """Open ``url``. Server-provided URLs only.
+    """Open ``url``. Server-provided URLs only (http/https/mailto/tel).
 
     ``target`` controls where it opens: ``new_tab`` (default — preserves the
     historical behavior) or ``same_tab`` to navigate the current page (e.g.
-    a checkout redirect)."""
+    a checkout redirect). ``mailto:``/``tel:`` URLs open the OS handler
+    regardless of target."""
 
     model_config = ConfigDict(extra="forbid")
 
     type: Literal["open_url"] = "open_url"
-    url: HttpUrl
+    url: OpenableUrl
     target: Literal["new_tab", "same_tab"] = Field(
         "new_tab",
         description=(

@@ -76,6 +76,22 @@ _PROP_ALIASES: Dict[Tuple[str, str], str] = {
 }
 
 
+def _rule_infer_missing_op(
+    op: Dict[str, Any], ctx: HealerContext
+) -> Tuple[Dict[str, Any], Optional[str]]:
+    """Line missing the ``op`` discriminator but carrying ``type`` + ``id``
+    (the shape of an ``add``) → default to ``add``. Real-traffic drops show
+    the LLM occasionally omits the key on otherwise-valid ops
+    (``unknown_op:None`` telemetry). Anything less add-shaped stays
+    untouched and drops downstream — we won't guess remove/replace."""
+    if "op" in op:
+        return op, None
+    if isinstance(op.get("type"), str) and isinstance(op.get("id"), str):
+        op["op"] = "add"
+        return op, "inferred_missing_op:add"
+    return op, None
+
+
 def _rule_rename_prop_aliases(
     op: Dict[str, Any], ctx: HealerContext
 ) -> Tuple[Dict[str, Any], Optional[str]]:
@@ -231,13 +247,15 @@ def _rule_drop_orphan_add(
 # ---------------------------------------------------------------------------
 
 
-# Order matters: rename aliases first (so Tag.label → Tag.text doesn't
+# Order matters: infer a missing ``op`` first (every later rule gates on
+# ``op == "add"``); then rename aliases (so Tag.label → Tag.text doesn't
 # get stripped); then strip remaining unknowns; then per-primitive
 # coercions; then dedupe last (the rename can mutate id-bearing props
 # in theory). Drops run after, gating on the cleaned-up shape.
 _TRANSFORM_RULES: List[
     Callable[[Dict[str, Any], HealerContext], Tuple[Dict[str, Any], Optional[str]]]
 ] = [
+    _rule_infer_missing_op,
     _rule_rename_prop_aliases,
     _rule_strip_unknown_props,
     _rule_button_default_label,

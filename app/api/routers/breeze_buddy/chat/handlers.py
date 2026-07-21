@@ -113,6 +113,7 @@ async def _persist_turn_metrics(metrics: TurnMetrics) -> None:
             ui_chars=metrics.ui_chars,
             status=metrics.status,
             phase=metrics.phase,
+            drops=metrics.drops or None,
         )
     except Exception as exc:  # noqa: BLE001 - telemetry must not break a turn
         logger.warning(

@@ -32,6 +32,11 @@ from app.core.logger import logger
 # unbounded.
 _MAX_DROP_REASONS = 20
 
+# Cap persisted per-drop evidence entries (chat_turn_metrics.drops). Sized to
+# the real distribution — observed turns drop 0-1 ops; 10 already means the
+# turn is pathological and the first 10 tell the story.
+_MAX_DROP_DETAILS = 10
+
 
 class TurnMetrics:
     """Accumulates structural metrics for one chat turn.
@@ -66,6 +71,11 @@ class TurnMetrics:
         self.prose_chars = 0
         self.ui_chars = 0
         self.drop_reasons: List[str] = []
+        # Per-drop evidence for chat_turn_metrics.drops (migration 041):
+        # [{"sig": {...}, "reason": str, "raw": str}]. ``raw`` is the dropped
+        # line itself — transcript-class content, persisted to the DB beside
+        # the session, NEVER echoed into the [CHAT_METRICS] log line.
+        self.drops: List[dict] = []
         self.status: Optional[str] = None
         # The assistant chat_message.idx this turn produced (from the
         # turn_end event). Keys the persisted chat_turn_metrics row
@@ -101,6 +111,15 @@ class TurnMetrics:
             elif name == "ui_op_dropped":
                 self.ui_dropped += 1
                 reason = data.get("reason")
+                if len(self.drops) < _MAX_DROP_DETAILS:
+                    raw = data.get("raw")
+                    self.drops.append(
+                        {
+                            "sig": data.get("op"),
+                            "reason": reason if isinstance(reason, str) else None,
+                            "raw": raw if isinstance(raw, str) else None,
+                        }
+                    )
                 if (
                     isinstance(reason, str)
                     and len(self.drop_reasons) < _MAX_DROP_REASONS

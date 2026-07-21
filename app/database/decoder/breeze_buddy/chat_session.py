@@ -131,5 +131,6 @@ def decode_chat_turn_metrics(row: asyncpg.Record) -> Optional[ChatTurnMetrics]:
         ui_chars=row.get("ui_chars") or 0,
         status=row.get("status"),
         phase=row.get("phase") or "baseline",
+        drops=cast(Optional[List[Dict[str, Any]]], parse_json(row, "drops")),
         created_at=row["created_at"],
     )

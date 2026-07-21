@@ -499,10 +499,12 @@ async def record_chat_turn_metrics(
     ui_chars: int,
     status: Optional[str],
     phase: str,
+    drops: Optional[List[Dict[str, Any]]] = None,
 ) -> Optional[ChatTurnMetrics]:
     """Upsert one turn's structural metrics, keyed by the assistant idx.
 
-    Mirrors the router's ``[CHAT_METRICS]`` log line into a joinable row. The
+    Mirrors the router's ``[CHAT_METRICS]`` log line into a joinable row,
+    plus the per-drop evidence array (``drops``, migration 041). The
     caller (router stream ``finally``) treats this as best-effort — it wraps
     the call so a write failure never affects the turn. Per accessor
     convention this still logs + re-raises; the router swallows.
@@ -522,6 +524,7 @@ async def record_chat_turn_metrics(
         ui_chars=ui_chars,
         status=status,
         phase=phase,
+        drops_json=json.dumps(drops) if drops else None,
     )
     try:
         result = await run_parameterized_query(query, values)
