@@ -5,8 +5,6 @@ from app.api.routers.breeze_buddy.agent_router.health import router as pod_route
 
 # Modern RESTful routers
 from app.api.routers.breeze_buddy.analytics import router as analytics_router
-
-# Auth, telephony, websocket
 from app.api.routers.breeze_buddy.auth import router as auth_router
 from app.api.routers.breeze_buddy.blacklist import router as blacklist_router
 from app.api.routers.breeze_buddy.chat import router as chat_router
@@ -36,6 +34,8 @@ from app.api.routers.breeze_buddy.websocket import router as websocket_router
 # (anonymous, public_widget_key + Origin gated).
 from app.api.routers.breeze_buddy.widget import router as widget_router
 from app.api.routers.breeze_buddy.widget_config import router as widget_config_router
+
+from app.api.routers.website_scraping import router as website_scraping_router
 
 router = APIRouter()
 
@@ -69,6 +69,9 @@ router.include_router(templates_router, prefix="", tags=["templates"])
 
 # AI-assisted template generation / refinement (streaming SSE)
 router.include_router(template_generator_router, prefix="", tags=["template-generator"])
+
+# Website scraping only; no template/widget provisioning.
+router.include_router(website_scraping_router, prefix="", tags=["website-scraping"])
 
 # Playground (configuration exploration)
 router.include_router(playground_router, prefix="", tags=["playground"])
