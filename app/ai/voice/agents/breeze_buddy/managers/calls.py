@@ -498,6 +498,15 @@ async def handle_call_completion(
         await raise_orphan_webhook(call_id=call_id, source="call_completion")
         return
 
+    # Guard: if a concurrent callback already finished this lead, skip to avoid
+    # redundant DB updates, redundant outbound number releases, and duplicate
+    # retry scheduling caused by racing completion callbacks for the same lead.
+    if lead.status == LeadCallStatus.FINISHED:
+        logger.info(
+            f"Lead {lead.id} is already FINISHED for call_id: {call_id}, skipping duplicate completion callback."
+        )
+        return lead
+
     # Always release outbound number (including transfers — bot leaves, cleanup happens here)
     if lead.outbound_number_id:
         outbound_number = await get_outbound_number_by_id(lead.outbound_number_id)
