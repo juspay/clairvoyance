@@ -1,7 +1,7 @@
 name: PR Build Check
 
 on:
-  pull_request_target:
+  pull_request:
     branches:
       - main
       - release
@@ -20,7 +20,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
 
       # Step 2: Set up Python
       - name: Set up Python
@@ -68,6 +68,7 @@ jobs:
 
       # Step 9: Check commit count (must be exactly 1)
       - name: Check commit count
+        if: github.event_name == 'pull_request'
         run: |
           COMMIT_COUNT=${{ github.event.pull_request.commits }}
           echo "Commit count: $COMMIT_COUNT"
