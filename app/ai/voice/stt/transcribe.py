@@ -54,10 +54,15 @@ LanguageHint = Optional[Union[str, List[str]]]
 
 @dataclass
 class Transcription:
-    """Result of a one-shot transcription."""
+    """Result of a one-shot transcription.
+
+    ``provider`` and ``model`` report what actually produced the text — after
+    any fallback — so callers never have to guess which model applied.
+    """
 
     text: str
     provider: str
+    model: Optional[str] = None
 
 
 class TranscriptionError(Exception):
@@ -91,16 +96,17 @@ async def _openai(
     lang: Optional[str],
     model: Optional[str] = None,
 ) -> Transcription:
+    applied_model = model or OPENAI_STT_MODEL or "whisper-1"
     headers = {"Authorization": f"Bearer {OPENAI_STT_API_KEY}"}
     files = {"file": (filename, audio, content_type or "audio/webm")}
-    data = {"model": model or OPENAI_STT_MODEL or "whisper-1"}
+    data = {"model": applied_model}
     if lang:
         data["language"] = lang
     async with create_http_client(timeout=_HTTP_TIMEOUT_SECONDS) as client:
         resp = await client.post(_OPENAI_URL, headers=headers, files=files, data=data)
     resp.raise_for_status()
     text = (resp.json().get("text") or "").strip()
-    return Transcription(text=text, provider="openai")
+    return Transcription(text=text, provider="openai", model=applied_model)
 
 
 async def _deepgram(
@@ -109,8 +115,9 @@ async def _deepgram(
     lang: Optional[str],
     model: Optional[str] = None,
 ) -> Transcription:
+    applied_model = model or "nova-3"
     params = {
-        "model": model or "nova-3",
+        "model": applied_model,
         "smart_format": "true",
         "language": lang or "multi",
     }
@@ -125,7 +132,7 @@ async def _deepgram(
     resp.raise_for_status()
     alts = resp.json()["results"]["channels"][0]["alternatives"]
     text = (alts[0]["transcript"] if alts else "").strip()
-    return Transcription(text=text, provider="deepgram")
+    return Transcription(text=text, provider="deepgram", model=applied_model)
 
 
 async def _sarvam(
@@ -135,14 +142,17 @@ async def _sarvam(
     lang_code: str,
     model: Optional[str] = None,
 ) -> Transcription:
+    applied_model = model or "saarika:v2"
     headers = {"api-subscription-key": SARVAM_API_KEY or ""}
     files = {"file": (filename, audio, content_type or "audio/wav")}
-    data = {"model": model or "saarika:v2", "language_code": lang_code}
+    data = {"model": applied_model, "language_code": lang_code}
     async with create_http_client(timeout=_HTTP_TIMEOUT_SECONDS) as client:
         resp = await client.post(_SARVAM_URL, headers=headers, files=files, data=data)
     resp.raise_for_status()
     return Transcription(
-        text=(resp.json().get("transcript") or "").strip(), provider="sarvam"
+        text=(resp.json().get("transcript") or "").strip(),
+        provider="sarvam",
+        model=applied_model,
     )
 
 
@@ -194,8 +204,9 @@ async def _soniox(
             # 2. Create the async transcription job. A caller-supplied model
             #    overrides; otherwise it resolves Redis → env → default, so it
             #    can be bumped without a deploy.
+            applied_model = model or await SONIOX_ASYNC_MODEL()
             body: Dict[str, Any] = {
-                "model": model or await SONIOX_ASYNC_MODEL(),
+                "model": applied_model,
                 "file_id": file_id,
             }
             hints = _soniox_lang_hints(language)
@@ -234,7 +245,7 @@ async def _soniox(
                 ).strip()
             if not text:
                 raise RuntimeError("soniox returned empty transcript")
-            return Transcription(text=text, provider="soniox")
+            return Transcription(text=text, provider="soniox", model=applied_model)
         finally:
             # 5. Best-effort cleanup — never break the request path.
             cleanup_paths: List[str] = []
@@ -270,6 +281,8 @@ async def transcribe_audio(
     specific, so it is only forwarded to the direct provider call — never to the
     OpenAI Whisper fallback below, unless the selected provider was OpenAI itself
     (a Deepgram/Sarvam/Soniox model name would be meaningless to Whisper).
+    The returned :class:`Transcription` reports the provider and model that
+    actually produced the text, after any fallback.
     """
     if not audio:
         raise TranscriptionError("empty audio")

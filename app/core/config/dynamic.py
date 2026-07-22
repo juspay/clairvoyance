@@ -215,6 +215,15 @@ async def WIDGET_STT_MAX_AUDIO_BYTES() -> int:
     return await get_config("WIDGET_STT_MAX_AUDIO_BYTES", 10 * 1024 * 1024, int)
 
 
+async def STT_MAX_AUDIO_BYTES() -> int:
+    """Max audio upload accepted by the standalone ``POST /stt/transcribe``
+    endpoint (template-independent one-shot transcription). Same rationale as
+    the widget limit: clips are short and the default 10 MB sits well under
+    provider caps. Read per request so it can be tightened during abuse
+    without a deploy."""
+    return await get_config("STT_MAX_AUDIO_BYTES", 10 * 1024 * 1024, int)
+
+
 async def SONIOX_ASYNC_MODEL() -> str:
     """Soniox async/file model for one-shot (push-to-talk) transcription.
 
