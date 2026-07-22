@@ -224,6 +224,20 @@ async def STT_MAX_AUDIO_BYTES() -> int:
     return await get_config("STT_MAX_AUDIO_BYTES", 10 * 1024 * 1024, int)
 
 
+async def STT_STREAM_MAX_SECONDS() -> int:
+    """Hard cap on a single realtime transcription stream
+    (``WS /stt/stream``). Bounds provider websocket cost per connection;
+    long-running use cases should reconnect."""
+    return await get_config("STT_STREAM_MAX_SECONDS", 300, int)
+
+
+async def STT_STREAM_IDLE_TIMEOUT_SECONDS() -> int:
+    """Close a realtime transcription stream when the client sends nothing
+    (no audio, no control message) for this long. Keeps abandoned
+    connections from holding provider websockets open."""
+    return await get_config("STT_STREAM_IDLE_TIMEOUT_SECONDS", 60, int)
+
+
 async def SONIOX_ASYNC_MODEL() -> str:
     """Soniox async/file model for one-shot (push-to-talk) transcription.
 

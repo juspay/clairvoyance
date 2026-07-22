@@ -7,7 +7,7 @@ from datetime import timedelta
 from typing import List, Optional
 
 import jwt as pyjwt
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, WebSocket, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.core.logger import logger
@@ -264,6 +264,32 @@ async def get_current_user_with_rbac(
         )
 
     return rbac_token_manager.verify_rbac_token(credentials.credentials)
+
+
+def get_user_from_websocket(websocket: WebSocket) -> UserInfo:
+    """Authenticate a WebSocket connection with the standard RBAC bearer token.
+
+    The FastAPI ``Depends(HTTPBearer())`` guards are HTTP-only, so WebSocket
+    routes call this directly after ``accept()``. Token sources, in order:
+    the ``Authorization: Bearer`` header, then a ``token`` query parameter
+    (browser WebSocket clients cannot set headers).
+
+    Raises:
+        HTTPException: 401 when the token is missing or invalid — callers
+        translate this into a WebSocket close.
+    """
+    auth_header = websocket.headers.get("authorization") or ""
+    token = ""
+    if auth_header.lower().startswith("bearer "):
+        token = auth_header[len("bearer ") :].strip()
+    if not token:
+        token = (websocket.query_params.get("token") or "").strip()
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing credentials",
+        )
+    return rbac_token_manager.verify_rbac_token(token)
 
 
 async def get_active_user(
