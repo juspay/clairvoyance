@@ -1,8 +1,8 @@
 """Schemas for the standalone (template-independent) STT endpoints."""
 
-from typing import Optional
+from typing import List, Optional, Union
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 from app.ai.voice.agents.breeze_buddy.template.types import STTProvider
 
@@ -31,6 +31,50 @@ class TranscriptionRequest(BaseModel):
     def _blank_to_none(cls, value: object) -> object:
         if isinstance(value, str):
             return value.strip() or None
+        return value
+
+
+class TranscriptionStreamRequest(BaseModel):
+    """First (JSON text) message on ``WS /agent/voice/breeze-buddy/stt/stream``.
+
+    After this message the client sends binary frames of raw PCM16 mono audio
+    at ``sample_rate``. ``language`` accepts a single code or a list (list is
+    provider-dependent, e.g. Soniox hints). OpenAI has no realtime streaming
+    path and is rejected; Sarvam streams are pinned to the platform rate.
+    """
+
+    provider: STTProvider
+    model: Optional[str] = None
+    language: Optional[Union[str, List[str]]] = None
+    sample_rate: int = Field(
+        16000,
+        ge=8000,
+        le=48000,
+        description="Sample rate (Hz) of the PCM16 mono audio frames.",
+    )
+
+    @field_validator("provider", mode="before")
+    @classmethod
+    def _normalize_provider(cls, value: object) -> object:
+        if isinstance(value, str):
+            return value.strip().lower()
+        return value
+
+    @field_validator("model", mode="before")
+    @classmethod
+    def _blank_to_none(cls, value: object) -> object:
+        if isinstance(value, str):
+            return value.strip() or None
+        return value
+
+    @field_validator("language", mode="before")
+    @classmethod
+    def _blank_language_to_none(cls, value: object) -> object:
+        if isinstance(value, str):
+            return value.strip() or None
+        if isinstance(value, list):
+            cleaned = [v.strip() for v in value if isinstance(v, str) and v.strip()]
+            return cleaned or None
         return value
 
 
