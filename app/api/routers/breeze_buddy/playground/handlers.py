@@ -6,6 +6,8 @@ from app.ai.voice.agents.breeze_buddy.template.types import (
     BackgroundSoundFile,
     InterruptionMode,
     KeywordMatchType,
+    NoiseFilterModel,
+    NoiseFilterProvider,
     NoiseFilterType,
     STTProvider,
     TTSConfig,
@@ -74,7 +76,16 @@ async def get_configuration_options_handler():
         for sound in BackgroundSoundFile
     ]
 
-    # Noise filter types
+    # Keep each supported provider/model pair together so clients cannot build
+    # invalid combinations. Legacy types remain for older playground versions.
+    noise_filter_options = [
+        {
+            "provider": NoiseFilterProvider.AIC.value,
+            "model": model.value,
+            "label": model.value.replace("_", " ").title(),
+        }
+        for model in NoiseFilterModel
+    ]
     noise_filter_types = [
         {"value": filter_type.value, "label": filter_type.value.upper()}
         for filter_type in NoiseFilterType
@@ -126,6 +137,7 @@ async def get_configuration_options_handler():
         "tts_configuration_fields": tts_configuration_fields,
         "stt_languages": stt_languages,
         "background_sounds": background_sounds,
+        "noise_filter_options": noise_filter_options,
         "noise_filter_types": noise_filter_types,
         "keyword_match_types": keyword_match_types,
         "interruption_modes": interruption_modes,

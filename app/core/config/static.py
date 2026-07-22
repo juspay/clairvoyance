@@ -8,12 +8,12 @@ ENVIRONMENT = os.environ.get("ENVIRONMENT", "production")
 PROD_LOG_LEVEL = os.environ.get("PROD_LOG_LEVEL", "INFO")
 APP_BASE_URL = os.environ.get("APP_BASE_URL", "")
 
-# NOTE: DragonTTS config (DRAGONTTS_URL, DRAGONTTS_HEALTH_TIMEOUT_S,
-# ENABLE_DRAGONTTS_KILL_SWITCH) lives in
-# app/core/config/dynamic.py as async functions (Redis -> env -> default
-# resolution) so it's tunable at runtime. The matching env vars still work as
-# the env-fallback layer. BACKGROUND_TASKS_LOOP_INTERVAL_SECONDS (below) stays
-# static — it's the pre-existing shared scheduler cadence for all tasks.
+# DragonTTS URL and health timeout live in dynamic.py for runtime tuning.
+# The monitor enable switch is intentionally static: env -> default only, read
+# once at process startup, and never resolved through Redis.
+ENABLE_DRAGONTTS_KILL_SWITCH = (
+    os.environ.get("ENABLE_DRAGONTTS_KILL_SWITCH", "true").lower() == "true"
+)
 
 # Uvicorn
 PORT = int(os.environ.get("PORT", 8000))
@@ -63,6 +63,10 @@ AIC_MODEL_PATH = os.environ.get(
 AIC_MODEL_PATH_16KHZ = os.environ.get(
     "AIC_MODEL_PATH_16KHZ",
     "/app/models/voice/aic/quail_l_16khz.aicmodel",
+)
+AIC_VOICE_FOCUS_MODEL_PATH = os.environ.get(
+    "AIC_VOICE_FOCUS_MODEL_PATH",
+    "/app/models/voice/aic/quail_vf_2_1_l_16khz.aicmodel",
 )
 
 # TTS Configuration

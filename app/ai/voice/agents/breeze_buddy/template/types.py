@@ -257,18 +257,83 @@ class STTConfiguration(BaseModel):
 
 
 class NoiseFilterType(str, Enum):
-    """Types of noise filters available for audio input processing."""
+    """Legacy noise-filter identifiers kept for template compatibility."""
 
     AIC = "aic"  # ai-coustics noise enhancement filter
+    AIC_VOICE_FOCUS = "aic_voice_focus"  # primary-speaker isolation
+
+
+class NoiseFilterProvider(str, Enum):
+    """Audio-filter integrations available to the voice pipeline."""
+
+    AIC = "aic"
+
+
+class NoiseFilterModel(str, Enum):
+    """Models available from the selected noise-filter provider."""
+
+    NOISE_CANCELLATION = "noise_cancellation"
+    VOICE_FOCUS = "voice_focus"
 
 
 class NoiseFilterConfig(BaseModel):
     """Configuration for audio input noise filtering."""
 
     enable: bool = Field(False, description="Whether to enable the noise filter")
-    type: NoiseFilterType = Field(
-        NoiseFilterType.AIC, description="Type of noise filter to use"
+    type: Optional[NoiseFilterType] = Field(
+        None,
+        description=(
+            "DEPRECATED compatibility field. Existing configurations may use "
+            "this instead of provider/model."
+        ),
+        exclude_if=lambda value: value is None,
+        json_schema_extra={"deprecated": True},
     )
+    provider: Optional[NoiseFilterProvider] = Field(
+        None,
+        description="Noise-filter integration provider.",
+        exclude_if=lambda value: value is None,
+    )
+    model: Optional[NoiseFilterModel] = Field(
+        None,
+        description="Noise cancellation preserves speech from all speakers; Voice "
+        "Focus isolates the foreground speaker.",
+        exclude_if=lambda value: value is None,
+    )
+    enhancement_level: Optional[float] = Field(
+        None,
+        ge=0.0,
+        le=1.0,
+        description="ai-coustics enhancement strength. None uses the selected "
+        "model's default; Voice Focus experiments should start at 0.5.",
+        exclude_if=lambda value: value is None,
+    )
+
+    @model_validator(mode="after")
+    def _reject_mixed_selector_shapes(self) -> "NoiseFilterConfig":
+        """Accept the legacy or canonical selector shape, never both."""
+        if self.type is not None and (
+            self.provider is not None or self.model is not None
+        ):
+            raise ValueError(
+                "noise_filter must use either legacy 'type' or new "
+                "'provider'/'model' fields, not both"
+            )
+        if (self.provider is None) != (self.model is None):
+            raise ValueError(
+                "noise_filter 'provider' and 'model' must be provided together"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _warn_deprecated_fields(self) -> "NoiseFilterConfig":
+        log_deprecated_fields(
+            self,
+            {
+                "type": "noise_filter.provider/noise_filter.model",
+            },
+        )
+        return self
 
 
 class TTSProvider(str, Enum):

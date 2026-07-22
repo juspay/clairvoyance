@@ -537,7 +537,7 @@ auto-filled from the dict key — do not repeat it inside the entry.
 "interruption": {"mode": "enabled", "min_words": 2}
 // mode options: "enabled" (default) or "disabled_discard"
 
-"noise_filter": {"enable": true, "type": "aic"}
+"noise_filter": {"enable": true, "provider": "aic", "model": "noise_cancellation"}
 
 "transfer_number": "+91XXXXXXXXXX"
 // Required when flow uses connect_to_live_agent builtin
