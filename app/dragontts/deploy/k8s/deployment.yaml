@@ -1,0 +1,201 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dragontts
+  namespace: beta
+  labels:
+    app: dragontts
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: dragontts
+  template:
+    metadata:
+      labels:
+        app: dragontts
+    spec:
+      securityContext:
+        fsGroup: 1000
+        runAsNonRoot: true
+        runAsUser: 1000
+      nodeSelector:
+        cloud.google.com/gke-nodepool: beta-pool
+      containers:
+        - name: dragontts
+          image: asia-south1-docker.pkg.dev/breeze-automatic-prod/dragontts/dragontts:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8000
+              name: http
+          env:
+            # --- Storage ---
+            - name: DB_PATH
+              value: "/app/data/dragontts.db"
+            - name: BLOB_DIR
+              value: "/app/data/blobs"
+            # --- Cache policy ---
+            - name: MAX_CACHE_BYTES
+              value: "0"
+            - name: ENABLE_WRITE_THROUGH
+              value: "true"
+            # --- Length-scaled TTL (applied to every stored entry; no permanent
+            # tier). ttl = clamp(BASE + PER_WORD*words, BASE, MAX). A background
+            # purge (TTL_PURGE_INTERVAL_SECONDS) deletes expired rows + blobs.
+            # TTL_SECONDS is legacy/unused (kept for back-compat).
+            - name: CACHE_TTL_BASE_SECONDS
+              value: "172800"        # 48h floor — min TTL for any phrase
+            - name: CACHE_TTL_PER_WORD_SECONDS
+              value: "21600"         # +6h per word
+            - name: CACHE_TTL_MAX_SECONDS
+              value: "518400"        # 6d cap
+            - name: TTL_PURGE_INTERVAL_SECONDS
+              value: "1200"          # purge sweep every 20 min
+            # Backfill range for pre-existing NULL-TTL entries (trigger once via
+            # POST /cache/backfill-ttl after deploying — not run at startup).
+            - name: CACHE_TTL_BACKFILL_MIN_HOURS
+              value: "48"
+            - name: CACHE_TTL_BACKFILL_MAX_HOURS
+              value: "72"
+            # --- TTS text normalization ---
+            # Expand numbers to words (Indian: lakh/crore) before synth AND in the
+            # Number normalization is OFF by default (not needed yet). When on it
+            # expands digits to words in the synth text + cache key, so ElevenLabs
+            # reads "5 hundred 99" correctly and "599" collapses to one entry.
+            # Clear the cache after toggling. NOTE: the ElevenLabs leading dot
+            # (TTS_LEADING_DOT) is INDEPENDENT of this and stays on below.
+            - name: TTS_NORMALIZE_NUMBERS
+              value: "false"
+            # ElevenLabs only: prepend a leading "." if missing (true/false).
+            # Independent of TTS_NORMALIZE_NUMBERS — the dot applies even when
+            # number normalization is off.
+            - name: TTS_LEADING_DOT
+              value: "true"
+            # --- Performance ---
+            - name: CARTESIA_STREAM_POOL_SIZE
+              value: "4"
+            - name: SARVAM_STREAM_POOL_SIZE
+              value: "2"
+            - name: ELEVENLABS_STREAM_POOL_SIZE
+              value: "2"
+            - name: CARTESIA_WS_FORCE_IPV4
+              value: "true"
+            - name: THREAD_POOL_WORKERS
+              value: "32"
+            - name: BULK_CREATE_MAX
+              value: "1000"
+            # --- Resilience: per-provider bulkhead (caps in-flight synths; excess waits up to wait_timeout_ms then 503) ---
+            - name: PROVIDER_RESILIENCE
+              value: '{"cartesia":{"max_concurrent":8,"wait_timeout_ms":3000},"sarvam":{"max_concurrent":8,"wait_timeout_ms":3000},"elevenlabs":{"max_concurrent":8,"wait_timeout_ms":3000}}'
+            # --- Predictive warming ---
+            - name: PREDICTIVE_WARM_ENABLED
+              value: "false"
+            - name: PREDICTIVE_WARM_THRESHOLD
+              value: "5"
+            - name: PREDICTIVE_WARM_THRESHOLD_STEP
+              value: "1"
+            - name: PREDICTIVE_WARM_THRESHOLD_FLOOR
+              value: "2"
+            - name: PREDICTIVE_WARM_MIN_WORDS
+              value: "1"
+            - name: PREDICTIVE_WARM_MAX_WORDS
+              value: "12"
+            - name: PREDICTIVE_WARM_SPLIT_CHARS
+              value: "."
+            # Slice a warmed phrase's timestamped audio into sub-phrase cache entries
+            # (Cartesia only). OFF by default — the whole phrase is already cached by
+            # the request path; sub-phrases only feed stitch assembly. Set "true" to
+            # opt back into the substring-closed split.
+            - name: PREDICTIVE_WARM_SPLIT_ENABLED
+              value: "false"
+            - name: PREDICTIVE_WARM_DECAY_FACTOR
+              value: "0.94"
+            - name: PREDICTIVE_WARM_DECAY_INTERVAL_S
+              value: "300"
+            - name: PREDICTIVE_WARM_MIN_FLOOR
+              value: "0.5"
+            # --- Predictive stitching ---
+            - name: PREDICTIVE_STITCH_ENABLED
+              value: "false"
+            - name: PREDICTIVE_STITCH_STREAM_ENABLED
+              value: "false"
+            - name: PREDICTIVE_STITCH_MIN_COVERAGE
+              value: "0.5"
+            # Progressive pass-through stitch (opt-in). OFF by default: the
+            # existing assemble-then-stream stitch path is unchanged. When on,
+            # /tts/stream emits the cached prefix immediately while the first gap
+            # synthesizes (TTFB ~0). Only fires for pcm_s16le@16k requests with a
+            # cached prefix >= PASS_THROUGH_STITCH_MIN_WORDS words.
+            - name: ENABLE_PASS_THROUGH_STITCH
+              value: "false"
+            - name: PASS_THROUGH_STITCH_MIN_WORDS
+              value: "2"
+            # --- Metrics ---
+            # Fraction of requests timed for the latency rollup (0.4 = 40%).
+            # Higher = more samples -> more stable p95; cost is negligible.
+            - name: METRICS_LATENCY_SAMPLE_RATE
+              value: "0.3"
+            # --- Slack daily summary ---
+            # SLACK_WEBHOOK_URL is a SECRET — injected via kubectl at deploy time,
+            # never committed (empty here = feature off until set). The other three
+            # are non-secret config. Matches clairvoyance's webhook pattern (same
+            # env-var names). Posts a cache-economics summary daily at
+            # SLACK_SUMMARY_TIME_UTC (17:30 UTC == 11 PM IST) to SLACK_TAG_USERS.
+            - name: SLACK_WEBHOOK_URL
+              value: ""
+            - name: SLACK_TAG_USERS
+              value: "<!subteam^S05KD5LN31Q>"
+            - name: SLACK_SUMMARY_TIME_UTC
+              value: "16:30"
+            - name: SLACK_COST_PER_WORD
+              value: '{"cartesia":0.000002,"elevenlabs":0.00032,"gemini":0.00016,"sarvam":0.000005}'
+            # USD -> INR for the cost-saved display (rupees, rounded, no paisa).
+            - name: SLACK_USD_TO_INR
+              value: "96"
+            # --- Provider credentials ---
+            - name: CARTESIA_API_KEY
+              value: ""
+            - name: SARVAM_API_KEY
+              value: ""
+            - name: ELEVENLABS_INDIAN_RESIDENCY_API_KEY
+              value: ""
+            - name: ELEVENLABS_INDIAN_RESIDENCY_BASE_URL
+              value: ""
+            - name: GOOGLE_CREDENTIALS_JSON
+              value: ""
+            - name: GOOGLE_CREDENTIALS_PATH
+              value: ""
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 15
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 1000m
+              memory: 1900Mi
+              ephemeral-storage: 1Gi
+            limits:
+              cpu: 1000m
+              memory: 2300Mi
+              ephemeral-storage: 2Gi
+          volumeMounts:
+            - name: data
+              mountPath: /app/data
+              subPath: data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: dragontts-data

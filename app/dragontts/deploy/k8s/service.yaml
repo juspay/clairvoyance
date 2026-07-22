@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: dragontts
+  namespace: beta
+  labels:
+    app: dragontts
+spec:
+  type: ClusterIP
+  selector:
+    app: dragontts
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8000
+      protocol: TCP

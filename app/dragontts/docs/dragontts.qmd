@@ -1,0 +1,231 @@
+---
+title: "DragonTTS — System Overview"
+subtitle: "Caching TTS proxy for Clairvoyance voice bots"
+format:
+  html:
+    toc: true
+    toc-location: left
+    toc-depth: 3
+    page-layout: article
+    theme:
+      light: cosmo
+      dark: darkly
+    css: style.css
+    code-link: true
+    mermaid:
+      theme: default
+execute:
+  echo: false
+  warning: false
+---
+
+# What it is
+
+DragonTTS is a **caching proxy** that sits between Clairvoyance (the voice-bot
+app) and the TTS providers — Cartesia, ElevenLabs (Indian residency), Gemini, and
+Sarvam. It speaks the same request shape the providers do, so Clairvoyance points
+its TTS services at DragonTTS and gets transparent caching:
+
+- **HIT** → streams the cached audio instantly (no provider call, ~free).
+- **MISS** → synthesizes from the provider, streams it live, and stores it so the
+  next identical request is a HIT.
+
+State lives on a **single GCE Persistent Disk** (RWO PVC) as SQLite (metadata) +
+filesystem blobs (audio). One pod, one disk — durable across restarts.
+
+```{mermaid}
+flowchart LR
+  subgraph Caller[" "]
+    CV["Clairvoyance<br/>pipecat TTS services<br/>(per-sentence /tts/stream)"]
+  end
+  CV -->|"/tts/stream · /tts/bytes"| DT["DragonTTS<br/>FastAPI cache proxy"]
+  DT -->|"HIT → stream cached"| PVC[("SQLite + blobs<br/>on RWO PVC")]
+  DT -->|"MISS → synth"| C[Cartesia]
+  DT -->|"MISS → synth"| E[ElevenLabs IN]
+  DT -->|"MISS → synth"| G[Gemini]
+  DT -->|"MISS → synth"| S[Sarvam]
+  DT -.->|"write-behind metrics"| PVC
+  DT -.->|"daily summary (16:30 UTC)"| SL["Slack<br/>Breeze Sentinels"]
+```
+
+# Architecture
+
+| Component | Role |
+|---|---|
+| **FastAPI + uvicorn** | `--workers 4`, uvloop; serves `/tts/*`, `/cache/*`, `/stats/*`. |
+| **SQLite (WAL)** | Cache metadata + daily metrics rollups + latency samples. Per-thread conns, autocommit, `mmap_size=256 MiB`. |
+| **Filesystem blobs** | The audio itself, keyed by the cache hash, on the PVC. |
+| **Provider adapters** | One per backend; `synth()` (one-shot) + `stream_synth()` (live chunks). Warm WS/gRPC pools. |
+| **Write-behind metrics** | Batches HIT touches + counters off the read path; flushes on interval/threshold/shutdown. |
+| **Resilience bulkhead** | Per-provider concurrency cap (`PROVIDER_RESILIENCE`); excess waits, then `503 ProviderBusy`. |
+
+**Why one pod / one disk.** The PVC is `ReadWriteOnce` — only one node can mount
+it. That's fine and intentional: the cache is the value, the pod is disposable,
+and the disk follows the pod wherever it runs. Scaling out to multiple pods would
+require shared storage (Postgres/GCS) — deferred until needed.
+
+# Request flow
+
+Clairvoyance aggregates the LLM output into **sentences** and sends one
+`/tts/stream` request per sentence (`pcm_s16le@16k`). DragonTTS resolves a cache
+key and either serves or synthesizes:
+
+```{mermaid}
+flowchart TD
+  R["Request /tts/stream<br/>(text, provider, voice, model, lang, params)"] --> K["Cache key = sha256(<br/>normalize(text) + provider + voice +<br/>model + language + params_canonical)"]
+  K --> L{"In cache AND<br/>not expired?"}
+  L -->|"HIT"| H["Stream cached blob<br/>X-Cache: HIT"]
+  L -->|"MISS"| SY["stream_synth() → provider<br/>live 16k chunks (low TTFB)"]
+  SY --> ST["Write-through: store native clip<br/>+ length-scaled TTL"]
+  ST --> RP["Stream to caller<br/>X-Cache: MISS"]
+```
+
+**Two endpoints:**
+
+- `POST /tts/stream` — the live call path. Streams chunks as they're synthesized
+  (low TTFB); on a MISS, tees the full clip into the cache when complete.
+- `POST /tts/bytes` — one-shot. Returns the whole audio body; used for greetings /
+  batch warm.
+
+::: {.callout-note title="Format-agnostic key"}
+The cache key deliberately **excludes `output_format`**. Audio is stored once in
+the provider's native format (16 kHz PCM) and converted on serve (e.g. to μ-law
+8 kHz for telephony). So one entry serves every format.
+:::
+
+## `X-Cache` response header
+
+Every TTS response carries `X-Cache`:
+
+| Value | Meaning |
+|---|---|
+| `HIT` | exact-match cache serve |
+| `MISS` | full provider synthesis |
+| `MISS-STITCH` | assembled from cached fragments + synth gaps *(stitch is currently OFF)* |
+| `MISS-STITCH-PASSTHROUGH` | stitch streamed prefix-first *(OFF)* |
+
+# Cache policy
+
+- **Write-through is ON** (`ENABLE_WRITE_THROUGH=true`). Every MISS/STITCH result
+  is stored on the request path — so recurring phrases become single full-phrase
+  entries automatically.
+- **Length-scaled TTL** — every entry gets `ttl = clamp(BASE + PER_WORD·words,
+  BASE, MAX)`:
+  - `BASE = 48 h` (min for any phrase), `+6 h` per word, capped at **6 days**.
+  - A background purge deletes expired rows + blobs every 20 min.
+- **Predictive warming / stitch / pass-through are OFF** (retired defaults).
+  Write-through alone is the cache — one full-phrase entry per unique
+  (text + provider + voice + model + language + params). Sub-phrase splitting
+  and stitch assembly can be re-enabled per-env if needed.
+
+::: {.callout-tip title="One key = one audio, always"}
+Single-flight collapses concurrent identical misses to one synth + one store, and
+`INSERT OR IGNORE` + a key-derived blob path mean a phrase is always exactly one
+row and one file — never duplicates, even under concurrency or after TTL refresh.
+:::
+
+# Slack daily summary
+
+A background task posts a **cache-economics digest** to Slack once a day.
+
+```{mermaid}
+flowchart LR
+  M["metrics rollups<br/>(daily + per-provider)"] --> B["build_summary<br/>overall + per provider"]
+  B --> G{"past 16:30 UTC<br/>AND wins once-per-day claim?"}
+  G -->|"yes"| SL[("Slack webhook<br/>Block Kit card · cc Breeze Sentinels")]
+  G -->|"no"| W["wait for next tick (5 min)"]
+```
+
+- **Posts at 16:30 UTC (10 PM IST)** — a once-per-day SQLite claim ensures only
+  one of the 4 workers posts (no Redis; the DB is the coordination point). Never
+  affects serving; a Slack outage logs + skips.
+- **Card contents** — overall + per-provider: cache hit rate, words-from-cache %,
+  and **estimated cost saved**.
+- **Cost model** — `cost_saved(provider) = words_from_cache(provider) × rate(provider)`,
+  summed across providers (each has its own $/word). Displayed in **INR (₹),
+  rounded to whole rupees at 1 USD = ₹96**.
+- **Force-send** — `POST /slack-summary` posts immediately (testing / recovering
+  a missed day).
+
+Example card:
+
+```
+📊 DragonTTS Daily Cache Summary - 16-07-26
+  Cache hit rate:   80% (33,920 / 42,187 requests)
+  Words from cache: 75% (307,757 / 409,917 words)
+  Est. cost saved:  ₹6,336 (all providers)
+  Window:           2026-07-15 → 2026-07-16 (UTC)
+
+  gemini:
+  • hit rate: 83% (27,562 / 33,214)
+  • words from cache: 75% (…)
+  • cost saved: ₹5,280
+  elevenlabs:
+  • hit rate: 71% (6,358 / 8,973)
+  • words from cache: 55% (…)
+  • cost saved: ₹1,056
+  Cache:
+  • entries: 11,168
+  • size: 1.6 GB
+  • PVC: 1.6 GB / 29.4 GB (6%)
+```
+
+# Observability
+
+| Endpoint | Use |
+|---|---|
+| `GET /stats?from=&to=` | Aggregate metrics + cache snapshot + latency (date-filterable). |
+| `GET /stats/daily?from=&to=` | Day-wise × per-provider breakdown (hit rate, words-from-cache %, cost inputs). |
+| `GET /cache?q=&match=&limit=` | Browse/search cached entries. |
+| `GET /health` · `GET /providers` | Liveness + configured providers. |
+
+- **Latency** is sampled at 30% (`METRICS_LATENCY_SAMPLE_RATE=0.3`) across four
+  kinds: `ttfb` (time-to-first-byte), `total`, `synth`, `cache_serve` — stored as
+  avg + p95 (µs), pruned to 14 days.
+- **Per-provider `words_synthesized`** is now persisted, so per-provider
+  words-from-cache % and per-provider cost-saved both work.
+- `X-Cache` on every TTS response; the Slack card rolls it all up daily.
+
+# Operations
+
+All infra commands are run by you (operator); DragonTTS never runs them.
+
+```bash
+# roll a new image
+kubectl -n beta rollout restart deployment/dragontts
+# port-forward to hit the API locally
+kubectl -n beta port-forward deployment/dragontts 18000:8000
+# PVC / cache utilization
+kubectl -n beta exec deployment/dragontts -- sh -c 'du -sh /app/data; df -h /app/data'
+```
+
+::: {.callout-warning title="Clear/delete via the API only"}
+Never delete DB/blob files while the pod runs — use `POST /cache/clear`
+(`?dry_run=true` first), `POST /cache/delete-by-text`, or `DELETE /cache/{key}`.
+`delete-by-text` / `delete-by-age` default to `dry_run=true`.
+:::
+
+See `docs/endpoints.md` for the full endpoint + curl reference.
+
+# Configuration
+
+Key environment knobs (set in `deploy/k8s/deployment.yaml`; secrets like
+`SLACK_WEBHOOK_URL` and provider keys are injected via kubectl, never committed).
+
+| Env | Prod | Purpose |
+|---|---|---|
+| `ENABLE_WRITE_THROUGH` | `true` | store MISS results on the request path |
+| `CACHE_TTL_BASE_SECONDS` | `172800` (48h) | min TTL for any phrase |
+| `CACHE_TTL_PER_WORD_SECONDS` | `21600` (+6h) | added per word |
+| `CACHE_TTL_MAX_SECONDS` | `518400` (6d) | cap |
+| `TTL_PURGE_INTERVAL_SECONDS` | `1200` (20m) | purge sweep cadence |
+| `METRICS_LATENCY_SAMPLE_RATE` | `0.3` | fraction of requests timed |
+| `PREDICTIVE_WARM_ENABLED` | `false` | retired (write-through only) |
+| `PREDICTIVE_STITCH_ENABLED` | `false` | retired |
+| `ENABLE_PASS_THROUGH_STITCH` | `false` | retired |
+| `SLACK_WEBHOOK_URL` | *(secret)* | empty = Slack feature off |
+| `SLACK_SUMMARY_TIME_UTC` | `16:30` | daily post time (10 PM IST) |
+| `SLACK_TAG_USERS` | `<!subteam^…>` | who to cc (Breeze Sentinels) |
+| `SLACK_COST_PER_WORD` | `{…}` | per-provider $/word (JSON map) |
+| `SLACK_USD_TO_INR` | `96` | USD→INR for the cost display |
+| `PROVIDER_RESILIENCE` | `{…max_concurrent:8…}` | per-provider bulkhead |

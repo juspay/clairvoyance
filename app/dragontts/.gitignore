@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# Node
+node_modules/
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Claude (local tooling state — never commit)
+.claude/
+
+# DragonTTS runtime storage (SQLite db + audio blobs)
+data/
+*.db
+
+# Audio artifacts
+*.wav
+*.mp3
+*.ogg
+/samples/
