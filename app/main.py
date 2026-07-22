@@ -38,7 +38,6 @@ from app.api.routers.breeze_buddy.chat import cancel_bus as chat_cancel_bus
 from app.core.background_tasks import BackgroundTaskScheduler
 from app.core.config.dynamic import (
     ENABLE_BACKGROUND_TASKS,
-    ENABLE_DRAGONTTS_KILL_SWITCH,
     KB_INGESTION_INTERVAL_SECONDS,
 )
 from app.core.config.static import (
@@ -53,6 +52,7 @@ from app.core.config.static import (
     CHAT_SESSION_END_TIMEOUT_LOOP_INTERVAL_SECONDS,
     CORS_ALLOWED_ORIGINS,
     ENABLE_DISPATCHER,
+    ENABLE_DRAGONTTS_KILL_SWITCH,
     ENABLE_SIGTERM_HANDLER,
     HOST,
     POD_ROLE,
@@ -162,7 +162,7 @@ async def lifespan(_app: FastAPI):
             # cadence is BACKGROUND_TASKS_LOOP_INTERVAL_SECONDS (default 60s).
             # Entry point: tts/dragontts/monitor.py
             # (health gate: tts/dragontts/health.py; kill switch: kill_switch.py).
-            if await ENABLE_DRAGONTTS_KILL_SWITCH():
+            if ENABLE_DRAGONTTS_KILL_SWITCH:
                 _background_scheduler.register_task(
                     name="dragon_tts_health_check",
                     func=monitor_dragontts_health,

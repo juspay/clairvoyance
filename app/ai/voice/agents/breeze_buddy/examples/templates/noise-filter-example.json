@@ -22,7 +22,8 @@
     "tts_voice_name": "rhea",
     "noise_filter": {
       "enable": true,
-      "type": "aic"
+      "provider": "aic",
+      "model": "noise_cancellation"
     }
   },
   "flow": {

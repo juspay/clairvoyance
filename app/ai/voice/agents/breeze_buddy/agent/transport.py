@@ -15,6 +15,8 @@ from pipecat.transports.websocket.fastapi import FastAPIWebsocketParams
 
 from app.ai.voice.agents.breeze_buddy.template.types import (
     ConfigurationModel,
+    NoiseFilterModel,
+    NoiseFilterProvider,
     NoiseFilterType,
     TemplateModel,
 )
@@ -31,7 +33,7 @@ TRANSPORT_TYPE_TELEPHONY = "telephony"
 
 
 def _get_aic_model_path(transport_type: str) -> Path:
-    """Select appropriate AIC model based on transport.
+    """Select the standard Quail AIC model based on transport.
 
     Auto-selects the AIC model's input processing rate based on transport:
     - Daily (web): 16kHz AIC model
@@ -61,7 +63,8 @@ def _create_audio_input_filter(
     """Create audio input filter based on configuration.
 
     Currently supports:
-        - AIC filter (ai-coustics noise enhancement)
+        - AIC filter (ai-coustics noise enhancement, preserves all speakers)
+        - AIC Voice Focus (foreground/primary-speaker isolation)
 
     Future filters can be added here with their own enable flags.
 
@@ -80,18 +83,59 @@ def _create_audio_input_filter(
     if not noise_filter_config or not noise_filter_config.enable:
         return None
 
-    # Create filter based on type
-    if noise_filter_config.type == NoiseFilterType.AIC:
+    # Resolve either the new provider/model shape or the legacy type shape at
+    # runtime without rewriting the template configuration.
+    provider = noise_filter_config.provider or NoiseFilterProvider.AIC
+    model = noise_filter_config.model or (
+        NoiseFilterModel.VOICE_FOCUS
+        if noise_filter_config.type == NoiseFilterType.AIC_VOICE_FOCUS
+        else NoiseFilterModel.NOISE_CANCELLATION
+    )
+
+    if provider == NoiseFilterProvider.AIC:
         if not static.BREEZE_BUDDY_AIC_LICENSE_KEY:
             logger.warning("AIC filter enabled but license key not configured")
             return None
-        model_path = _get_aic_model_path(transport_type)
-        try:
-            aic_filter = AICFilter(
-                license_key=static.BREEZE_BUDDY_AIC_LICENSE_KEY,
-                model_path=model_path,
+
+        # Follow the same local-file approach as standard noise cancellation.
+        # Docker provisions the models before startup; the application never
+        # downloads model artifacts at runtime.
+        model_path = (
+            Path(static.AIC_VOICE_FOCUS_MODEL_PATH)
+            if model == NoiseFilterModel.VOICE_FOCUS
+            else _get_aic_model_path(transport_type)
+        )
+        if not model_path.is_file():
+            # AICFilter validates the artifact only when the transport starts.
+            # Fail open here so a soft-failed Docker copy cannot abort a call.
+            logger.warning(
+                "AIC filter model file is unavailable; proceeding without it: {}",
+                model_path,
             )
-            logger.info(f"AIC filter initialized successfully with model: {model_path}")
+            return None
+
+        try:
+            if noise_filter_config.enhancement_level is None:
+                # Preserve the existing AIC behavior exactly: omitting this
+                # argument lets the selected model use its own default.
+                aic_filter = AICFilter(
+                    license_key=static.BREEZE_BUDDY_AIC_LICENSE_KEY,
+                    model_path=model_path,
+                )
+            else:
+                aic_filter = AICFilter(
+                    license_key=static.BREEZE_BUDDY_AIC_LICENSE_KEY,
+                    model_path=model_path,
+                    enhancement_level=noise_filter_config.enhancement_level,
+                )
+            logger.info(
+                "AIC filter initialized: provider={}, model={}, path={}, "
+                "enhancement_level={}",
+                provider.value,
+                model.value,
+                model_path,
+                noise_filter_config.enhancement_level,
+            )
             return aic_filter
         except Exception as e:
             logger.warning(

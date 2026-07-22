@@ -726,16 +726,18 @@ async def KB_MERCHANT_MAX_CHUNKS() -> int:
 
 
 # ----------------------------------------------------------------------------
-# DragonTTS caching proxy + kill switch. Migrated from static env vars so the
-# proxy URL / health-probe timeout / enable flag can be tuned live via Redis
-# (devcycle:flags blob) without a redeploy. Resolution chain is the standard
-# get_config one: Redis -> env -> the literal default below.
+# DragonTTS caching proxy settings. When ENABLE_REDIS_DYNAMIC_CONFIG is true,
+# the proxy URL and health-probe timeout can be tuned live via Redis
+# (devcycle:flags blob) without a redeploy; resolution is Redis -> env -> the
+# literal default below. When it is false, Redis is skipped and resolution is
+# env -> the literal default.
 #
 # (BACKGROUND_TASKS_LOOP_INTERVAL_SECONDS — the shared scheduler loop cadence —
 # stays in static.py: it's a pre-existing knob for ALL background tasks and the
 # scheduler binds it once at startup, so a Redis change would only take effect
-# on the next pod restart anyway. DRAGONTTS_URL below is awaited on every call
-# and every health probe.)
+# on the next pod restart anyway. ENABLE_DRAGONTTS_KILL_SWITCH is also static
+# and env-only by design. DRAGONTTS_URL below is awaited on every call and every
+# health probe.)
 # ----------------------------------------------------------------------------
 
 
@@ -754,8 +756,3 @@ async def DRAGONTTS_HEALTH_TIMEOUT_S() -> float:
     except (TypeError, ValueError):
         logger.warning(f"Invalid DRAGONTTS_HEALTH_TIMEOUT_S value {value!r}; using 3.0")
         return 3.0
-
-
-async def ENABLE_DRAGONTTS_KILL_SWITCH() -> bool:
-    """Enable the DragonTTS health-monitor kill switch (default True)."""
-    return await get_config("ENABLE_DRAGONTTS_KILL_SWITCH", True, bool)
