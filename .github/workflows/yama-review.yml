@@ -83,17 +83,17 @@ jobs:
         # External consumer → published action. For strict supply-chain
         # immutability pin the full commit SHA behind this ref.
         #
-        # Pinned to v2.6.0, NOT v2.7.x: v2.7.x bundles @juspay/neurolink 9.70.7,
-        # which drops the configured ai.timeout ("15m") on the litellm generate
-        # path — every call falls back to the 30s global default, and
-        # review-sized generations on private-large need longer than that, so
-        # large-PR reviews always fail with "timed out after 30000" and no
-        # verdict. v2.6.0 bundles neurolink 9.42.0, which propagates the
-        # timeout correctly — the same pin juspay/neurolink and juspay/dopamine
-        # use (their Yama runs pass on the same LiteLLM proxy + model). Only
-        # bump past v2.6.0 once a yama release bundles a neurolink that honors
-        # ai.timeout for litellm (or ships juspay/neurolink#1216's 5m default).
-        uses: juspay/yama@v2.6.0
+        # Pinned to the juspay/yama main commit fe1de54c (the merge of
+        # juspay/yama#62), which bundles @juspay/neurolink 10.1.2 — its
+        # DEFAULT_TIMEOUTS carries litellm: "5m" (juspay/neurolink#1216), so
+        # review-sized generations on private-large no longer fall back to the
+        # 30s global default that made large-PR reviews fail with "timed out
+        # after 30000" and no verdict on v2.7.x. Pinned to the full commit SHA
+        # (not a release tag) because yama's release pipeline is currently
+        # broken — release.yml runs Node 20 but `npm install -g npm@latest`
+        # needs Node >=22, so no tag > v2.7.1 has been cut. Re-pin to that tag
+        # once a fixed release lands (see the release.yml Node-bump PR).
+        uses: juspay/yama@fe1de54cb2e015b679bc5edbed0cb2f3f35e5944
         with:
           github-token: ${{ secrets.YAMA_GITHUB_TOKEN }}
           ai-provider: litellm
