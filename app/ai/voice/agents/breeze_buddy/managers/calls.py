@@ -238,6 +238,21 @@ async def _get_available_number(
                     f"dials from number_id {telephony_number.id} owned by "
                     f"merchant {telephony_number.merchant_id}."
                 )
+            elif (
+                telephony_number.merchant_id is None
+                and telephony_number.reseller_id is not None
+                and config.reseller_id is not None
+                and telephony_number.reseller_id != config.reseller_id
+            ):
+                # same audit trail for umbrella-owned numbers dialed from
+                # another umbrella's template (e.g. breeze templates pinning
+                # a BB_SHOPIFY-owned number) — never blocks, only alerts.
+                logger.error(
+                    f"_get_available_number: grandfathered cross-umbrella pin — "
+                    f"template {config.template} (umbrella {config.reseller_id}) "
+                    f"dials from number_id {telephony_number.id} owned by "
+                    f"umbrella {telephony_number.reseller_id}."
+                )
             number = telephony_number
         elif telephony_number is None:
             logger.error(
@@ -294,7 +309,9 @@ async def _get_available_number(
         # Support both new and old field names for config
         config_reseller_id = config.reseller_id
         config_merchant_id = config.merchant_id
-        logger.warning(
+        # error level: the call silently cannot dial — this must reach the
+        # ops alerting, unlike the routine shared-pool fallback (info).
+        logger.error(
             f"No outbound number found for reseller {config_reseller_id}, "
             f"template {config.template}, shop {config_merchant_id}"
         )

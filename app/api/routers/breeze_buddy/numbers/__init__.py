@@ -42,7 +42,14 @@ from .handlers import (
     list_numbers_handler,
     update_number_handler,
 )
-from .rbac import filter_numbers_by_rbac, rbac_number_scopes, require_admin_access
+from .rbac import (
+    filter_numbers_by_rbac,
+    may_view_as,
+    narrow_numbers_to_umbrella,
+    narrow_numbers_to_workspace,
+    rbac_number_scopes,
+    require_admin_access,
+)
 
 router = APIRouter()
 
@@ -101,6 +108,22 @@ async def list_telephony_numbers(
     status: Optional[str] = Query(
         None, description="Filter by status (AVAILABLE, IN_USE, DISABLED)"
     ),
+    merchant_id: Optional[str] = Query(
+        None,
+        description=(
+            "Workspace view-as filter: narrow the result to what a user of "
+            "this merchant would see (owned + template-pinned numbers). "
+            "Narrowing only — never widens the caller's own scope."
+        ),
+    ),
+    reseller_id: Optional[str] = Query(
+        None,
+        description=(
+            "Umbrella view-as filter: narrow to the reseller view (umbrella-"
+            "owned + merchant-owned under it + umbrella pins). merchant_id "
+            "wins when both are passed. Narrowing only."
+        ),
+    ),
     current_user: UserInfo = Depends(get_current_user_with_rbac),
 ):
     """
@@ -109,10 +132,14 @@ async def list_telephony_numbers(
     Query Parameters:
     - provider: Filter by provider (TWILIO, EXOTEL, PLIVO)
     - status: Filter by status (AVAILABLE, IN_USE, DISABLED)
+    - merchant_id: Narrow to one workspace's view (owned + pinned) — used by
+      the console's workspace switcher so admins/resellers see exactly what
+      that merchant's users see.
 
     Permissions:
     - Admin sees the whole fleet; everyone else sees numbers owned by their
       merchants/umbrellas plus the numbers their templates dial from.
+      merchant_id then intersects that scope, so it can only narrow.
 
     Returns:
         List of telephony number objects
@@ -121,6 +148,17 @@ async def list_telephony_numbers(
 
     pinned = await _pinned_ids_for(current_user)
     numbers = filter_numbers_by_rbac(numbers, current_user, pinned)
+
+    if merchant_id:
+        if not may_view_as(current_user, workspace_merchant_id=merchant_id):
+            return []
+        workspace_pins = await get_template_pinned_number_ids([merchant_id], [])
+        numbers = narrow_numbers_to_workspace(numbers, merchant_id, workspace_pins)
+    elif reseller_id:
+        if not may_view_as(current_user, workspace_reseller_id=reseller_id):
+            return []
+        umbrella_pins = await get_template_pinned_number_ids([], [reseller_id])
+        numbers = narrow_numbers_to_umbrella(numbers, reseller_id, umbrella_pins)
 
     return numbers
 
