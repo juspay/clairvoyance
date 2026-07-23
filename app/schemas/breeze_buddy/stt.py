@@ -1,10 +1,20 @@
 """Schemas for the standalone (template-independent) STT endpoints."""
 
+import json
 from typing import List, Optional, Union
 
 from pydantic import BaseModel, Field, field_validator
 
-from app.ai.voice.agents.breeze_buddy.template.types import STTProvider
+from app.ai.voice.agents.breeze_buddy.template.types import (
+    DeepgramSTTConfig,
+    SarvamSTTConfig,
+    SonioxSTTConfig,
+    STTProvider,
+)
+
+# Cap on a single provider-config JSON form field. Real configs are well
+# under 1 KiB; the cap bounds json.loads work on hostile multipart input.
+_MAX_CONFIG_JSON_BYTES = 64 * 1024
 
 
 class TranscriptionRequest(BaseModel):
@@ -13,11 +23,22 @@ class TranscriptionRequest(BaseModel):
     ``provider`` selects the STT provider; ``model`` optionally overrides that
     provider's default model, and ``language`` is a BCP-47 / ISO-639 hint.
     Values are trimmed; a blank ``model``/``language`` means "use the default".
+
+    Provider-specific tuning goes in the matching nested config (``soniox`` /
+    ``deepgram`` / ``sarvam``) — the same models templates use (e.g. Soniox
+    ``context``, Deepgram ``smart_format``/``numerals``, Sarvam
+    ``language_code``). In multipart form data these arrive as JSON strings.
+    A model explicitly set in the selected provider's nested config wins over
+    the flat ``model`` shortcut; otherwise the flat value fills in. Configs
+    for other providers are ignored.
     """
 
     provider: STTProvider
     model: Optional[str] = None
     language: Optional[str] = None
+    soniox: Optional[SonioxSTTConfig] = None
+    deepgram: Optional[DeepgramSTTConfig] = None
+    sarvam: Optional[SarvamSTTConfig] = None
 
     @field_validator("provider", mode="before")
     @classmethod
@@ -33,6 +54,28 @@ class TranscriptionRequest(BaseModel):
             return value.strip() or None
         return value
 
+    @field_validator("soniox", "deepgram", "sarvam", mode="before")
+    @classmethod
+    def _parse_json_form_field(cls, value: object) -> object:
+        if isinstance(value, str):
+            stripped = value.strip()
+            if not stripped:
+                return None
+            if len(stripped) > _MAX_CONFIG_JSON_BYTES:
+                raise ValueError(
+                    f"provider config exceeds {_MAX_CONFIG_JSON_BYTES} bytes"
+                )
+            try:
+                return json.loads(stripped)
+            except RecursionError:
+                # json.loads recurses per nesting level; pathological input
+                # (~1000 deep) raises RecursionError, which Pydantic would
+                # NOT convert to a validation error — it would surface as an
+                # unhandled 500. Re-raise as ValueError so it becomes a 422
+                # like any other bad JSON.
+                raise ValueError("JSON too deeply nested") from None
+        return value
+
 
 class TranscriptionStreamRequest(BaseModel):
     """First (JSON text) message on ``WS /agent/voice/breeze-buddy/stt/stream``.
@@ -41,6 +84,14 @@ class TranscriptionStreamRequest(BaseModel):
     at ``sample_rate``. ``language`` accepts a single code or a list (list is
     provider-dependent, e.g. Soniox hints). OpenAI has no realtime streaming
     path and is rejected; Sarvam streams are pinned to the platform rate.
+
+    Provider-specific tuning goes in the matching nested config (``soniox`` /
+    ``deepgram`` / ``sarvam``) — the same models templates use, passed through
+    to the streaming service builders verbatim (e.g. Soniox ``context`` and
+    ``enable_language_identification``, Deepgram ``endpointing_ms`` and
+    ``smart_format``). A model explicitly set in the selected provider's
+    nested config wins over the flat ``model`` shortcut; otherwise the flat
+    value fills in. Configs for other providers are ignored.
     """
 
     provider: STTProvider
@@ -52,6 +103,9 @@ class TranscriptionStreamRequest(BaseModel):
         le=48000,
         description="Sample rate (Hz) of the PCM16 mono audio frames.",
     )
+    soniox: Optional[SonioxSTTConfig] = None
+    deepgram: Optional[DeepgramSTTConfig] = None
+    sarvam: Optional[SarvamSTTConfig] = None
 
     @field_validator("provider", mode="before")
     @classmethod
@@ -83,7 +137,10 @@ class TranscriptionResponse(BaseModel):
 
     ``provider`` and ``model`` report what actually produced the transcript.
     They may differ from the request when the shared core falls back to OpenAI
-    Whisper (streaming-only provider, missing API key, or transient failure).
+    Whisper (streaming-only provider, missing API key, or transient failure) —
+    but only for provider-default requests: an explicit ``model`` or nested
+    provider config pins the request, and provider failure then returns 502
+    instead of degrading to Whisper.
     """
 
     text: str
