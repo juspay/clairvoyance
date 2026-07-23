@@ -36,7 +36,7 @@ def get_template_in_scope_query(
         SELECT id,
                reseller_id,
                merchant_id,
-               name, flow, expected_payload_schema, expected_callback_response_schema, configurations, secrets, outbound_number_id, is_active, supported_channels, created_at, updated_at
+               name, flow, expected_payload_schema, expected_callback_response_schema, configurations, secrets, telephony_number_id, is_active, supported_channels, created_at, updated_at
         FROM {TEMPLATE_TABLE}
         WHERE {" AND ".join(conditions)}
     """
@@ -62,7 +62,7 @@ def create_template_query(
     secrets: Optional[
         str
     ],  # JSON string containing secrets and variables for HTTP functions
-    outbound_number_id: Optional[
+    telephony_number_id: Optional[
         str
     ],  # Changed: moved before is_active to match SQL column order
     is_active: bool,
@@ -72,9 +72,9 @@ def create_template_query(
 ) -> Tuple[str, List[Any]]:
     """Generate query to create a new template."""
     query = f"""
-        INSERT INTO {TEMPLATE_TABLE} (id, reseller_id, merchant_id, name, flow, expected_payload_schema, expected_callback_response_schema, configurations, secrets, outbound_number_id, is_active, supported_channels, created_at, updated_at)
+        INSERT INTO {TEMPLATE_TABLE} (id, reseller_id, merchant_id, name, flow, expected_payload_schema, expected_callback_response_schema, configurations, secrets, telephony_number_id, is_active, supported_channels, created_at, updated_at)
         VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7::jsonb, $8::jsonb, $9::jsonb, $10, $11, $12, $13, $14)
-        RETURNING id, reseller_id, merchant_id, name, flow, expected_payload_schema, expected_callback_response_schema, configurations, secrets, outbound_number_id, is_active, supported_channels, created_at, updated_at
+        RETURNING id, reseller_id, merchant_id, name, flow, expected_payload_schema, expected_callback_response_schema, configurations, secrets, telephony_number_id, is_active, supported_channels, created_at, updated_at
     """
 
     return query, [
@@ -87,7 +87,7 @@ def create_template_query(
         expected_callback_response_schema,
         configurations,
         secrets,
-        outbound_number_id,
+        telephony_number_id,
         is_active,
         supported_channels,
         created_at,
@@ -229,7 +229,7 @@ def get_template_by_id_query(template_id: str) -> Tuple[str, List[Any]]:
         SELECT id,
                reseller_id,
                merchant_id,
-               name, flow, expected_payload_schema, expected_callback_response_schema, configurations, secrets, outbound_number_id, is_active, supported_channels, created_at, updated_at
+               name, flow, expected_payload_schema, expected_callback_response_schema, configurations, secrets, telephony_number_id, is_active, supported_channels, created_at, updated_at
         FROM {TEMPLATE_TABLE}
         WHERE id = $1
         LIMIT 1
@@ -238,19 +238,19 @@ def get_template_by_id_query(template_id: str) -> Tuple[str, List[Any]]:
     return query, [template_id]
 
 
-def get_template_by_outbound_number_id_query(
-    outbound_number_id: str,
+def get_template_by_telephony_number_id_query(
+    telephony_number_id: str,
     enable_inbound_only: bool = False,
 ) -> Tuple[str, List[Any]]:
     """
-    Generate query to get a template by outbound_number_id.
+    Generate query to get a template by telephony_number_id.
 
     Args:
-        outbound_number_id: Outbound number UUID
+        telephony_number_id: Telephony number UUID
         enable_inbound_only: If True, only return templates with
                              configurations.enable_inbound = true
     """
-    conditions = ["outbound_number_id = $1"]
+    conditions = ["telephony_number_id = $1"]
 
     if enable_inbound_only:
         # Filter by enable_inbound in configurations JSON
@@ -263,19 +263,19 @@ def get_template_by_outbound_number_id_query(
         SELECT id,
                reseller_id,
                merchant_id,
-               name, flow, expected_payload_schema, expected_callback_response_schema, configurations, secrets, outbound_number_id, is_active, supported_channels, created_at, updated_at
+               name, flow, expected_payload_schema, expected_callback_response_schema, configurations, secrets, telephony_number_id, is_active, supported_channels, created_at, updated_at
         FROM {TEMPLATE_TABLE}
         WHERE {' AND '.join(conditions)}
         LIMIT 1
     """
-    return query, [outbound_number_id]
+    return query, [telephony_number_id]
 
 
-def get_all_templates_by_outbound_number_id_query(
-    outbound_number_id: str,
+def get_all_templates_by_telephony_number_id_query(
+    telephony_number_id: str,
 ) -> Tuple[str, List[Any]]:
     """
-    Generate query to get ALL templates by outbound_number_id.
+    Generate query to get ALL templates by telephony_number_id.
     Used for IVR to list all available templates for a phone number.
 
     Only returns templates that are:
@@ -292,16 +292,16 @@ def get_all_templates_by_outbound_number_id_query(
         SELECT id,
                reseller_id,
                merchant_id,
-               name, flow, expected_payload_schema, expected_callback_response_schema, configurations, outbound_number_id, is_active, supported_channels, created_at, updated_at
+               name, flow, expected_payload_schema, expected_callback_response_schema, configurations, telephony_number_id, is_active, supported_channels, created_at, updated_at
         FROM {TEMPLATE_TABLE}
-        WHERE outbound_number_id = $1
+        WHERE telephony_number_id = $1
         AND is_active = TRUE
         AND COALESCE((configurations->>'enable_inbound')::boolean, FALSE) = TRUE
         ORDER BY 
             COALESCE((configurations->>'ivr_priority')::integer, 999999) ASC,
             name ASC
     """
-    return query, [outbound_number_id]
+    return query, [telephony_number_id]
 
 
 def check_template_usage_query(template_id: str) -> Tuple[str, List[Any]]:
@@ -344,7 +344,7 @@ def replace_template_query(
     expected_callback_response_schema: Optional[str],
     configurations: Optional[str],
     secrets: Optional[str],
-    outbound_number_id: Optional[str],
+    telephony_number_id: Optional[str],
     is_active: bool,
     merchant_id: Optional[str],
     supported_channels: List[str],
@@ -362,7 +362,7 @@ def replace_template_query(
         expected_callback_response_schema: Expected callback response schema JSON string or None
         configurations: Configurations JSON string or None
         secrets: Secrets and variables JSON string or None
-        outbound_number_id: Outbound number ID or None
+        telephony_number_id: Telephony number ID or None
         is_active: Whether template is active
         merchant_id: Merchant identifier or None
         supported_channels: Channels (voice/chat) the template is allowed on
@@ -379,7 +379,7 @@ def replace_template_query(
             expected_callback_response_schema = $4::jsonb,
             configurations = $5::jsonb,
             secrets = $6::jsonb,
-            outbound_number_id = $7,
+            telephony_number_id = $7,
             is_active = $8,
             reseller_id = $9,
             merchant_id = $10,
@@ -389,7 +389,7 @@ def replace_template_query(
         RETURNING id,
                   reseller_id,
                   merchant_id,
-                  name, flow, expected_payload_schema, expected_callback_response_schema, configurations, secrets, outbound_number_id, is_active, supported_channels, created_at, updated_at
+                  name, flow, expected_payload_schema, expected_callback_response_schema, configurations, secrets, telephony_number_id, is_active, supported_channels, created_at, updated_at
     """
 
     return query, [
@@ -399,7 +399,7 @@ def replace_template_query(
         expected_callback_response_schema,
         configurations,
         secrets,
-        outbound_number_id,
+        telephony_number_id,
         is_active,
         reseller_id,
         merchant_id,

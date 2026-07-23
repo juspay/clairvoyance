@@ -69,7 +69,7 @@ class PlivoProvider(VoiceCallProvider):
 
         Args:
             customer_mobile_number: Phone number to call
-            telephony_number: Caller ID / outbound number
+            telephony_number: Caller ID / telephony number
             reseller_id: Optional merchant ID for tiered pod allocation
             template_name: Optional template name for WebSocket path routing
         """

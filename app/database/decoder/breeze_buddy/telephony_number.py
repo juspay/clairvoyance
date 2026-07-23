@@ -1,5 +1,5 @@
 """
-Decoder functions for outbound number.
+Decoder functions for telephony number.
 """
 
 from typing import List, Optional
@@ -11,7 +11,7 @@ from app.schemas import CallProvider, TelephonyNumber, TelephonyNumberStatus
 
 def decode_telephony_number(result: List[asyncpg.Record]) -> Optional[TelephonyNumber]:
     """
-    Decode outbound number from database result using Pydantic model.
+    Decode telephony number from database result using Pydantic model.
     """
     if not result or len(result) == 0:
         return None
@@ -34,7 +34,7 @@ def decode_telephony_number(result: List[asyncpg.Record]) -> Optional[TelephonyN
 
 def decode_telephony_number_list(result: List[asyncpg.Record]) -> List[TelephonyNumber]:
     """
-    Decode multiple outbound number records from database result using Pydantic models.
+    Decode multiple telephony number records from database result using Pydantic models.
     """
     if not result:
         return []

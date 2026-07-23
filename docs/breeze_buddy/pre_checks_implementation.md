@@ -19,7 +19,7 @@ In `app/ai/voice/agents/breeze_buddy/managers/calls.py` → `process_backlog_lea
    c. Check calling hours
    d. Get template
    e. Prepare initial greeting
-   f. Get available outbound number
+   f. Get available telephony number
    g. Acquire number
    h. make_call()
 ```
@@ -237,7 +237,7 @@ process_backlog_leads()
   │     │     └── If ANY pre-check fails → skip lead, release lock, continue
   │     │
   │     ├── Prepare initial greeting (existing)
-  │     ├── Get outbound number (existing)
+  │     ├── Get telephony number (existing)
   │     ├── Acquire number (existing)
   │     └── make_call() (existing)
 ```

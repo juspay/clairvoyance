@@ -20,9 +20,9 @@ PROCESSING_LIST_PREFIX = "bb:processing:leads:"  # + worker_uuid
 # TTL BB_WORKER_HEARTBEAT_TTL_S; absence => worker is presumed dead.
 WORKER_HEARTBEAT_PREFIX = "bb:worker:heartbeat:"  # + worker_uuid
 
-# Per-outbound-number capacity semaphore. LIST of opaque tokens; LLEN ==
+# Per-telephony-number capacity semaphore. LIST of opaque tokens; LLEN ==
 # remaining free channels.
-CHANNEL_PREFIX = "bb:channel:"  # + outbound_number_id
+CHANNEL_PREFIX = "bb:channel:"  # + telephony_number_id
 
 # Leader-election lock for the promoter. SET NX EX, value = pod instance id.
 PROMOTER_LEADER = "bb:promoter:leader"
@@ -47,8 +47,8 @@ def worker_heartbeat_key(worker_uuid: str) -> str:
     return f"{WORKER_HEARTBEAT_PREFIX}{worker_uuid}"
 
 
-def channel_key(outbound_number_id: str) -> str:
-    return f"{CHANNEL_PREFIX}{outbound_number_id}"
+def channel_key(telephony_number_id: str) -> str:
+    return f"{CHANNEL_PREFIX}{telephony_number_id}"
 
 
 def reseller_paused_key(reseller_id: str) -> str:

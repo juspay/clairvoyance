@@ -52,7 +52,7 @@ async def create_telephony_number(
     merchant_id set = merchant-owned, reseller_id only = umbrella-owned,
     both None = shared platform pool.
     """
-    logger.info(f"Creating outbound number with ID: {id}")
+    logger.info(f"Creating telephony number with ID: {id}")
 
     try:
         query_text, values = insert_telephony_number_query(
@@ -69,168 +69,170 @@ async def create_telephony_number(
         result = await run_parameterized_query(query_text, values)
         if result and get_row_count(result) > 0:
             decoded_result = decode_telephony_number(result)
-            logger.info(f"Outbound number created successfully: {decoded_result}")
+            logger.info(f"Telephony number created successfully: {decoded_result}")
             return decoded_result
 
-        logger.error("Failed to create outbound number")
+        logger.error("Failed to create telephony number")
         return None
 
     except Exception as e:
-        logger.error(f"Error creating outbound number: {e}")
+        logger.error(f"Error creating telephony number: {e}")
         return None
 
 
 async def get_telephony_number_by_id(
-    outbound_number_id: str,
+    telephony_number_id: str,
 ) -> Optional[TelephonyNumber]:
     """
-    Get outbound number by ID.
+    Get telephony number by ID.
     """
-    logger.info(f"Getting outbound number by ID: {outbound_number_id}")
+    logger.info(f"Getting telephony number by ID: {telephony_number_id}")
 
     try:
-        query_text, values = get_telephony_number_by_id_query(outbound_number_id)
+        query_text, values = get_telephony_number_by_id_query(telephony_number_id)
         result = await run_parameterized_query(query_text, values)
 
         if result and get_row_count(result) > 0:
             decoded_result = decode_telephony_number(result)
-            logger.info(f"Outbound number found: {decoded_result}")
+            logger.info(f"Telephony number found: {decoded_result}")
             return decoded_result
 
-        logger.info(f"No outbound number found with ID: {outbound_number_id}")
+        logger.info(f"No telephony number found with ID: {telephony_number_id}")
         return None
 
     except Exception as e:
-        logger.error(f"Error getting outbound number by ID: {e}")
+        logger.error(f"Error getting telephony number by ID: {e}")
         return None
 
 
 async def update_telephony_number_status(
-    outbound_number_id: str, status: TelephonyNumberStatus
+    telephony_number_id: str, status: TelephonyNumberStatus
 ) -> Optional[TelephonyNumber]:
     """
-    Update outbound number status.
+    Update telephony number status.
     """
     logger.info(
-        f"Updating outbound number status for ID: {outbound_number_id}, new status: {status}"
+        f"Updating telephony number status for ID: {telephony_number_id}, new status: {status}"
     )
 
     try:
         query_text, values = update_telephony_number_status_query(
-            outbound_number_id, status
+            telephony_number_id, status
         )
         result = await run_parameterized_query(query_text, values)
 
         if result and get_row_count(result) > 0:
             decoded_result = decode_telephony_number(result)
-            logger.info(f"Outbound number status updated: {decoded_result}")
+            logger.info(f"Telephony number status updated: {decoded_result}")
             return decoded_result
 
         logger.error(
-            f"Failed to update outbound number status for ID: {outbound_number_id}"
+            f"Failed to update telephony number status for ID: {telephony_number_id}"
         )
         return None
 
     except Exception as e:
-        logger.error(f"Error updating outbound number status: {e}")
+        logger.error(f"Error updating telephony number status: {e}")
         return None
 
 
 async def increment_telephony_number_channels(
-    outbound_number_id: str,
+    telephony_number_id: str,
 ) -> Optional[TelephonyNumber]:
     """
-    Atomically increment outbound number channels by 1.
+    Atomically increment telephony number channels by 1.
     Only succeeds if channels < maximum_channels (enforces capacity limit).
     Returns None if the number is at capacity or doesn't exist.
     This avoids race conditions by using database-level atomic increment with constraint.
     """
-    logger.info(f"Incrementing outbound number channels for ID: {outbound_number_id}")
+    logger.info(f"Incrementing telephony number channels for ID: {telephony_number_id}")
 
     try:
         query_text, values = increment_telephony_number_channels_query(
-            outbound_number_id
+            telephony_number_id
         )
         result = await run_parameterized_query(query_text, values)
 
         if result and get_row_count(result) > 0:
             decoded_result = decode_telephony_number(result)
-            logger.info(f"Outbound number channels incremented: {decoded_result}")
+            logger.info(f"Telephony number channels incremented: {decoded_result}")
             return decoded_result
 
         # No rows updated means either the number doesn't exist or it's at capacity
         logger.warning(
-            f"Could not increment channels for ID: {outbound_number_id} - "
+            f"Could not increment channels for ID: {telephony_number_id} - "
             "number may be at maximum capacity or does not exist"
         )
         return None
 
     except Exception as e:
-        logger.error(f"Error incrementing outbound number channels: {e}")
+        logger.error(f"Error incrementing telephony number channels: {e}")
         return None
 
 
 async def decrement_telephony_number_channels(
-    outbound_number_id: str,
+    telephony_number_id: str,
 ) -> Optional[TelephonyNumber]:
     """
-    Atomically decrement outbound number channels by 1.
+    Atomically decrement telephony number channels by 1.
     Uses GREATEST to ensure channels never goes below 0.
     This avoids race conditions by using database-level atomic decrement.
     """
-    logger.info(f"Decrementing outbound number channels for ID: {outbound_number_id}")
+    logger.info(f"Decrementing telephony number channels for ID: {telephony_number_id}")
 
     try:
         query_text, values = decrement_telephony_number_channels_query(
-            outbound_number_id
+            telephony_number_id
         )
         result = await run_parameterized_query(query_text, values)
 
         if result and get_row_count(result) > 0:
             decoded_result = decode_telephony_number(result)
-            logger.info(f"Outbound number channels decremented: {decoded_result}")
+            logger.info(f"Telephony number channels decremented: {decoded_result}")
             return decoded_result
 
         logger.warning(
-            f"Failed to decrement outbound number channels for ID: {outbound_number_id}"
+            f"Failed to decrement telephony number channels for ID: {telephony_number_id}"
         )
         return None
 
     except Exception as e:
-        logger.error(f"Error decrementing outbound number channels: {e}")
+        logger.error(f"Error decrementing telephony number channels: {e}")
         return None
 
 
 async def disable_telephony_number(
-    outbound_number_id: str,
+    telephony_number_id: str,
 ) -> Optional[TelephonyNumber]:
     """
-    Disable outbound number by ID.
+    Disable telephony number by ID.
     """
-    logger.info(f"Disabling outbound number with ID: {outbound_number_id}")
+    logger.info(f"Disabling telephony number with ID: {telephony_number_id}")
 
     try:
-        query_text, values = disable_telephony_number_query(outbound_number_id)
+        query_text, values = disable_telephony_number_query(telephony_number_id)
         result = await run_parameterized_query(query_text, values)
 
         if result and get_row_count(result) > 0:
             decoded_result = decode_telephony_number(result)
-            logger.info(f"Outbound number disabled successfully: {decoded_result}")
+            logger.info(f"Telephony number disabled successfully: {decoded_result}")
             return decoded_result
 
-        logger.error(f"Failed to disable outbound number with ID: {outbound_number_id}")
+        logger.error(
+            f"Failed to disable telephony number with ID: {telephony_number_id}"
+        )
         return None
 
     except Exception as e:
-        logger.error(f"Error disabling outbound number: {e}")
+        logger.error(f"Error disabling telephony number: {e}")
         return None
 
 
 async def get_all_telephony_numbers() -> List[TelephonyNumber]:
     """
-    Get all outbound numbers.
+    Get all telephony numbers.
     """
-    logger.info("Getting all outbound numbers")
+    logger.info("Getting all telephony numbers")
 
     try:
         query_text, values = get_all_telephony_numbers_query()
@@ -238,14 +240,14 @@ async def get_all_telephony_numbers() -> List[TelephonyNumber]:
 
         if result:
             decoded_result = decode_telephony_number_list(result)
-            logger.info(f"Found {len(decoded_result)} outbound number records")
+            logger.info(f"Found {len(decoded_result)} telephony number records")
             return decoded_result
 
-        logger.info("No outbound numbers found")
+        logger.info("No telephony numbers found")
         return []
 
     except Exception as e:
-        logger.error(f"Error getting all outbound numbers: {e}")
+        logger.error(f"Error getting all telephony numbers: {e}")
         return []
 
 
@@ -254,9 +256,9 @@ async def get_all_telephony_numbers_with_call_count(
     end_date: Optional[datetime] = None,
 ) -> List[asyncpg.Record]:
     """
-    Get all outbound numbers with their call counts.
+    Get all telephony numbers with their call counts.
     """
-    logger.info("Getting all outbound numbers with call counts")
+    logger.info("Getting all telephony numbers with call counts")
 
     try:
         query_text, values = get_all_telephony_numbers_with_call_count_query(
@@ -267,7 +269,7 @@ async def get_all_telephony_numbers_with_call_count(
         return result if result else []
     except Exception as e:
         logger.error(
-            f"Error getting outbound numbers with call counts: {e}", exc_info=True
+            f"Error getting telephony numbers with call counts: {e}", exc_info=True
         )
         return []
 
@@ -276,10 +278,10 @@ async def get_telephony_number_based_on_status_and_provider(
     status: TelephonyNumberStatus, provider: CallProvider
 ) -> List[TelephonyNumber]:
     """
-    Get outbound numbers by status and provider.
+    Get telephony numbers by status and provider.
     """
     logger.info(
-        f"Getting outbound numbers with status: {status} and provider: {provider}"
+        f"Getting telephony numbers with status: {status} and provider: {provider}"
     )
 
     try:
@@ -290,16 +292,16 @@ async def get_telephony_number_based_on_status_and_provider(
 
         if result:
             decoded_result = decode_telephony_number_list(result)
-            logger.info(f"Found {len(decoded_result)} outbound numbers")
+            logger.info(f"Found {len(decoded_result)} telephony numbers")
             return decoded_result
 
         logger.info(
-            f"No outbound numbers found with status: {status} and provider: {provider}"
+            f"No telephony numbers found with status: {status} and provider: {provider}"
         )
         return []
 
     except Exception as e:
-        logger.error(f"Error getting outbound numbers: {e}")
+        logger.error(f"Error getting telephony numbers: {e}")
         return []
 
 
@@ -366,14 +368,14 @@ async def get_template_pinned_number_ids(
             merchant_ids, reseller_ids
         )
         result = await run_parameterized_query(query_text, values)
-        # template.outbound_number_id is a UUID column, so asyncpg decodes
+        # template.telephony_number_id is a UUID column, so asyncpg decodes
         # uuid.UUID objects — but telephony_numbers.id is VARCHAR (str), and
         # the RBAC membership checks are plain set lookups where str never
         # equals uuid.UUID. Coerce here, the single choke point.
         return [
-            str(r["outbound_number_id"])
+            str(r["telephony_number_id"])
             for r in result or []
-            if r["outbound_number_id"]
+            if r["telephony_number_id"]
         ]
     except Exception as e:
         logger.error(f"Error getting template-pinned number ids: {e}")
@@ -382,9 +384,9 @@ async def get_template_pinned_number_ids(
 
 async def get_telephony_number_by_number(number: str) -> Optional[TelephonyNumber]:
     """
-    Get outbound number by phone number.
+    Get telephony number by phone number.
     """
-    logger.info(f"Getting outbound number by phone number: {number}")
+    logger.info(f"Getting telephony number by phone number: {number}")
 
     try:
         query_text, values = get_telephony_number_by_number_query(number)
@@ -392,12 +394,12 @@ async def get_telephony_number_by_number(number: str) -> Optional[TelephonyNumbe
 
         if result and get_row_count(result) > 0:
             decoded_result = decode_telephony_number(result)
-            logger.info(f"Outbound number found: {decoded_result}")
+            logger.info(f"Telephony number found: {decoded_result}")
             return decoded_result
 
-        logger.info(f"No outbound number found with number: {number}")
+        logger.info(f"No telephony number found with number: {number}")
         return None
 
     except Exception as e:
-        logger.error(f"Error getting outbound number by number: {e}")
+        logger.error(f"Error getting telephony number by number: {e}")
         return None

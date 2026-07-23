@@ -14,7 +14,7 @@ from app.database.accessor.breeze_buddy.telephony_number import (
 )
 from app.database.accessor.breeze_buddy.template import (
     get_template_by_id,
-    get_template_by_outbound_number_id,
+    get_template_by_telephony_number_id,
 )
 from app.schemas import CallDirection, CallProvider, LeadCallStatus
 from app.schemas.breeze_buddy.core import LeadCallTracker
@@ -68,19 +68,19 @@ async def handle_inbound_call(
 
     logger.info(f"Inbound call to: {to_number}, from: {from_number}")
 
-    # Look up outbound number by phone number
+    # Look up telephony number by phone number
     telephony_number = await get_telephony_number_by_number(to_number)
     if not telephony_number:
-        logger.error(f"No outbound number found for to_number: {to_number}")
-        return None, "Outbound number not found"
+        logger.error(f"No telephony number found for to_number: {to_number}")
+        return None, "Telephony number not found"
 
-    # Look up template by outbound_number_id (only inbound-enabled templates)
-    template = await get_template_by_outbound_number_id(
+    # Look up template by telephony_number_id (only inbound-enabled templates)
+    template = await get_template_by_telephony_number_id(
         telephony_number.id, enable_inbound_only=True
     )
     if not template:
         logger.error(
-            f"No inbound-enabled template found for outbound_number_id: {telephony_number.id}"
+            f"No inbound-enabled template found for telephony_number_id: {telephony_number.id}"
         )
         return None, "No inbound template configured"
 
@@ -97,7 +97,7 @@ async def handle_inbound_call(
         call_initiated_time=call_initiated_time,
         status=LeadCallStatus.PROCESSING,
         call_id=call_sid,
-        outbound_number_id=telephony_number.id,
+        telephony_number_id=telephony_number.id,
         call_direction=CallDirection.INBOUND,
     )
 
@@ -173,7 +173,7 @@ async def create_lead_from_template_id(
         call_initiated_time=call_initiated_time,
         status=LeadCallStatus.PROCESSING,
         call_id=call_sid,
-        outbound_number_id=template.outbound_number_id,
+        telephony_number_id=template.telephony_number_id,
         call_direction=CallDirection.INBOUND,
     )
 

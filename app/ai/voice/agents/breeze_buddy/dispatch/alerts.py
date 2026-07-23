@@ -147,17 +147,17 @@ async def raise_schedule_depth_high(schedule_size: int, threshold: int) -> None:
 
 
 async def raise_channel_drift(
-    outbound_number_id: str,
+    telephony_number_id: str,
     expected_free: int,
     actual_free: int,
 ) -> None:
     """P2 — channel-token drift large enough to suggest sustained webhook loss."""
     await _send(
-        alert_name=f"channel_drift:{outbound_number_id}",
+        alert_name=f"channel_drift:{telephony_number_id}",
         throttle_seconds=_THROTTLE_P2,
         title="[P2] Breeze Buddy channel token drift",
         fields=[
-            {"name": "Outbound number id", "value": outbound_number_id},
+            {"name": "Telephony number id", "value": telephony_number_id},
             {"name": "Expected free", "value": str(expected_free)},
             {"name": "Actual free (LLEN)", "value": str(actual_free)},
             {
@@ -177,10 +177,10 @@ async def raise_no_telephony_number(
     merchant_id: Optional[str],
 ) -> None:
     """
-    P1 — a dispatchable lead has no usable outbound number to dial from.
+    P1 — a dispatchable lead has no usable telephony number to dial from.
 
     Raised when ``_get_available_number`` returns None: the template's
-    assigned ``outbound_number_id`` is missing/disabled, or — for templates
+    assigned ``telephony_number_id`` is missing/disabled, or — for templates
     on the legacy fallback path — the unassigned-default pool
     (``telephony_number`` rows where both ``reseller_id`` and ``merchant_id``
     are NULL) is empty. This is a misconfiguration that will not self-heal
@@ -193,7 +193,7 @@ async def raise_no_telephony_number(
     await _send(
         alert_name=f"no_telephony_number:{reseller_id}:{template}",
         throttle_seconds=_THROTTLE_P1,
-        title="[P1] Breeze Buddy: no outbound number for lead",
+        title="[P1] Breeze Buddy: no telephony number for lead",
         fields=[
             {"name": "Reseller", "value": reseller_id},
             {"name": "Template", "value": template},
@@ -208,7 +208,7 @@ async def raise_no_telephony_number(
             {
                 "name": "Action",
                 "value": (
-                    "Verify `template.outbound_number_id` points to an existing "
+                    "Verify `template.telephony_number_id` points to an existing "
                     "`telephony_number` row in status AVAILABLE. If using the "
                     "legacy fallback path, confirm the unassigned-default pool "
                     "(rows with both `reseller_id` and `merchant_id` NULL) has "

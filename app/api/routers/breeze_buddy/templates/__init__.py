@@ -192,7 +192,7 @@ async def replace_template(
     replace an existing template.
 
     replaces all fields of the template. Non-nullable fields (name, flow, is_active)
-    must be provided. Nullable fields (merchant_id, outbound_number_id,
+    must be provided. Nullable fields (merchant_id, telephony_number_id,
     expected_payload_schema, expected_callback_response_schema, configurations)
     - if not provided, they will be set to NULL.
 
@@ -208,7 +208,7 @@ async def replace_template(
             "reseller_id": "reseller_id",
             "name": "updated-template-name",
             "merchant_id": "merchant_id",
-            "outbound_number_id": "uuid",
+            "telephony_number_id": "uuid",
             "is_active": true,
             "flow": {...},
             "expected_payload_schema": {...},

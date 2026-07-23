@@ -39,18 +39,18 @@ def get_unscheduled_backlog_leads_query(
 def count_processing_by_telephony_number_query() -> Tuple[str, List[Any]]:
     """
     For ``reconcile_channel_tokens``: how many calls are PROCESSING right
-    now for each outbound number? The reconciler compares this against
+    now for each telephony number? The reconciler compares this against
     LLEN of the channel LIST and tops up or trims to maintain
     ``M - in_flight == LLEN``.
     """
     text = f"""
-        SELECT "outbound_number_id", COUNT(*) AS in_flight
+        SELECT "telephony_number_id", COUNT(*) AS in_flight
         FROM "{LEAD_CALL_TRACKER_TABLE}"
         WHERE "status" = 'PROCESSING'
-          AND "outbound_number_id" IS NOT NULL
+          AND "telephony_number_id" IS NOT NULL
           AND "call_direction" = 'OUTBOUND'
           AND "execution_mode" IN ('TELEPHONY', 'TELEPHONY_TEST')
-        GROUP BY "outbound_number_id";
+        GROUP BY "telephony_number_id";
     """
     return text, []
 

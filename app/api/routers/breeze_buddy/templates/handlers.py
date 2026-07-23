@@ -97,17 +97,17 @@ async def create_template_handler(
                 f"and template name: {template_data.name}",
             )
 
-        # Validate outbound_number_id if provided: it must exist AND belong to
+        # Validate telephony_number_id if provided: it must exist AND belong to
         # this template's tenant (shared pool / own merchant / own umbrella) —
         # a new template can never pin another merchant's number.
-        if template_data.outbound_number_id:
+        if template_data.telephony_number_id:
             telephony_number = await get_telephony_number_by_id(
-                template_data.outbound_number_id
+                template_data.telephony_number_id
             )
             if not telephony_number:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Outbound number with ID {template_data.outbound_number_id} does not exist",
+                    detail=f"Telephony number with ID {template_data.telephony_number_id} does not exist",
                 )
             require_number_in_tenant_scope(
                 telephony_number,
@@ -144,7 +144,7 @@ async def create_template_handler(
             expected_callback_response_schema=template_data.expected_callback_response_schema,
             configurations=configurations,
             secrets=template_data.secrets,
-            outbound_number_id=template_data.outbound_number_id,
+            telephony_number_id=template_data.telephony_number_id,
             is_active=template_data.is_active,
             supported_channels=list(template_data.supported_channels),
             now=now,
@@ -409,23 +409,23 @@ async def replace_template_handler(
             if "nodes" not in flow or not flow["nodes"]:
                 raise ValueError("nodes must be specified in flow structure")
 
-        # Validate outbound_number_id if provided. Tenant-scope enforcement
+        # Validate telephony_number_id if provided. Tenant-scope enforcement
         # applies to NEW or CHANGED pins only: legacy templates that already
         # carry a cross-merchant pin (pre-ownership data) must keep passing
         # unrelated GET → edit → PUT round-trips until the ownership backfill
         # cleans them up. The picker logs those grandfathered pins at call
         # time.
-        if template_data.outbound_number_id:
+        if template_data.telephony_number_id:
             telephony_number = await get_telephony_number_by_id(
-                template_data.outbound_number_id
+                template_data.telephony_number_id
             )
             if not telephony_number:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Outbound number with ID {template_data.outbound_number_id} does not exist",
+                    detail=f"Telephony number with ID {template_data.telephony_number_id} does not exist",
                 )
-            if str(template_data.outbound_number_id) != str(
-                existing_template.outbound_number_id or ""
+            if str(template_data.telephony_number_id) != str(
+                existing_template.telephony_number_id or ""
             ):
                 require_number_in_tenant_scope(
                     telephony_number,
@@ -499,7 +499,7 @@ async def replace_template_handler(
             expected_callback_response_schema=template_data.expected_callback_response_schema,
             configurations=configurations,
             secrets=merged_secrets,
-            outbound_number_id=template_data.outbound_number_id,
+            telephony_number_id=template_data.telephony_number_id,
             is_active=template_data.is_active,
             merchant_id=template_data.merchant_id,
             supported_channels=supported_channels,

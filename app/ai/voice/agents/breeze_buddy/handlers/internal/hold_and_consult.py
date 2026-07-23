@@ -30,7 +30,7 @@ from app.ai.voice.agents.breeze_buddy.utils.hold_transfer import (
 from app.core.logger import logger
 from app.database.accessor import get_telephony_number_by_id
 from app.database.accessor.breeze_buddy.hold_transfer import (
-    get_template_summary_by_outbound_number_id,
+    get_template_summary_by_telephony_number_id,
 )
 from app.database.accessor.breeze_buddy.lead_call_tracker import (
     create_lead_call_tracker,
@@ -98,33 +98,40 @@ async def hold_and_consult(
         f"source={'config' if hold_config.phone_number else 'outbound_payload'}"
     )
 
-    # ── 3. Lookup outbound number ──────────────────────────────────────
-    telephony_number_record = await get_telephony_number_by_id(
-        hold_config.outbound_number_id
-    )
-    if not telephony_number_record:
+    # ── 3. Lookup telephony number ──────────────────────────────────────
+    # The field is Optional only to admit the deprecated outbound_number_id
+    # key during validation — the model validator guarantees it is set.
+    hold_number_id = hold_config.telephony_number_id
+    if not hold_number_id:
         logger.error(
-            f"[hold_and_consult] Outbound number not found: "
-            f"{hold_config.outbound_number_id}"
+            f"[hold_and_consult] hold_transfer config for call {call_sid} "
+            f"has no telephony_number_id"
         )
         return {
             "status": "error",
-            "message": "Outbound number not found.",
+            "message": "Hold transfer is missing its telephony number.",
+        }
+    telephony_number_record = await get_telephony_number_by_id(hold_number_id)
+    if not telephony_number_record:
+        logger.error(f"[hold_and_consult] Telephony number not found: {hold_number_id}")
+        return {
+            "status": "error",
+            "message": "Telephony number not found.",
         }
     telephony_number = telephony_number_record.number
 
     # ── 4. Lookup outbound template ────────────────────────────────────
-    outbound_template = await get_template_summary_by_outbound_number_id(
-        hold_config.outbound_number_id
+    outbound_template = await get_template_summary_by_telephony_number_id(
+        hold_number_id
     )
     if not outbound_template:
         logger.error(
-            f"[hold_and_consult] No template linked to outbound_number_id "
-            f"{hold_config.outbound_number_id}"
+            f"[hold_and_consult] No template linked to telephony_number_id "
+            f"{hold_config.telephony_number_id}"
         )
         return {
             "status": "error",
-            "message": "No template configured for the outbound number.",
+            "message": "No template configured for the telephony number.",
         }
 
     # ── 5. Check telephony service availability ────────────────────────
@@ -193,7 +200,7 @@ async def hold_and_consult(
             call_initiated_time=datetime.now(timezone.utc),
             status=LeadCallStatus.PROCESSING,
             call_id=None,  # populated after make_call returns
-            outbound_number_id=hold_config.outbound_number_id,
+            telephony_number_id=hold_config.telephony_number_id,
             call_direction=CallDirection.OUTBOUND,
             execution_mode=ExecutionMode.HOLD_TRANSFER,
             request_id=inbound_lead_id,

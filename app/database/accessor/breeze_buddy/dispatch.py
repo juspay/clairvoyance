@@ -39,13 +39,13 @@ async def get_unscheduled_backlog_leads(
 
 
 async def count_processing_by_telephony_number() -> Dict[str, int]:
-    """Return ``{outbound_number_id: in_flight_count}`` for active calls."""
+    """Return ``{telephony_number_id: in_flight_count}`` for active calls."""
     try:
         query, values = count_processing_by_telephony_number_query()
         rows = await run_parameterized_query(query, values)
         if not rows:
             return {}
-        return {r["outbound_number_id"]: int(r["in_flight"]) for r in rows}
+        return {r["telephony_number_id"]: int(r["in_flight"]) for r in rows}
     except Exception as e:
         logger.error(f"count_processing_by_telephony_number failed: {e}", exc_info=True)
         raise

@@ -1,4 +1,4 @@
-"""Core domain schemas for Breeze Buddy (leads, outbound numbers, configurations)."""
+"""Core domain schemas for Breeze Buddy (leads, telephony numbers, configurations)."""
 
 from datetime import datetime, time
 from enum import Enum
@@ -183,7 +183,7 @@ class LeadCallTracker(BaseModel):
     """Lead call tracking model"""
 
     id: str
-    outbound_number_id: Optional[str] = None
+    telephony_number_id: Optional[str] = None
     reseller_id: str
     template: str
     template_id: Optional[str] = None

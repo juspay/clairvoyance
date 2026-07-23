@@ -191,7 +191,7 @@ async def list_numbers_handler(
     provider: Optional[str], status_filter: Optional[str], current_user: UserInfo
 ) -> List[TelephonyNumber]:
     """
-    List all outbound numbers with optional filters.
+    List all telephony numbers with optional filters.
 
     Args:
         provider: Optional provider filter
@@ -199,10 +199,10 @@ async def list_numbers_handler(
         current_user: Current authenticated user
 
     Returns:
-        List of outbound numbers
+        List of telephony numbers
     """
     logger.info(
-        f"User {current_user.username} (role: {current_user.role}) listing outbound numbers "
+        f"User {current_user.username} (role: {current_user.role}) listing telephony numbers "
         f"(provider={provider}, status={status_filter})"
     )
 
@@ -216,34 +216,34 @@ async def list_numbers_handler(
         if status_filter:
             numbers = [n for n in numbers if n.status == status_filter]
 
-        logger.info(f"Found {len(numbers)} outbound numbers")
+        logger.info(f"Found {len(numbers)} telephony numbers")
         return numbers
 
     except Exception as e:
-        logger.error(f"Error listing outbound numbers: {e}", exc_info=True)
+        logger.error(f"Error listing telephony numbers: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error listing outbound numbers: {str(e)}",
+            detail=f"Error listing telephony numbers: {str(e)}",
         )
 
 
 async def get_number_handler(number_id: str, current_user: UserInfo) -> TelephonyNumber:
     """
-    Get a single outbound number by ID.
+    Get a single telephony number by ID.
 
     Args:
-        number_id: Outbound number UUID
+        number_id: Telephony number UUID
         current_user: Current authenticated user
 
     Returns:
-        Outbound number object
+        Telephony number object
 
     Raises:
         HTTPException: 404 if not found
     """
     logger.info(
         f"User {current_user.username} (role: {current_user.role}) "
-        f"requesting outbound number: {number_id}"
+        f"requesting telephony number: {number_id}"
     )
 
     try:
@@ -252,7 +252,7 @@ async def get_number_handler(number_id: str, current_user: UserInfo) -> Telephon
         if not number:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Outbound number {number_id} not found",
+                detail=f"Telephony number {number_id} not found",
             )
 
         return number
@@ -260,10 +260,10 @@ async def get_number_handler(number_id: str, current_user: UserInfo) -> Telephon
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error getting outbound number {number_id}: {e}", exc_info=True)
+        logger.error(f"Error getting telephony number {number_id}: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error getting outbound number: {str(e)}",
+            detail=f"Error getting telephony number: {str(e)}",
         )
 
 
@@ -271,39 +271,43 @@ async def delete_number_handler(
     number_id: str, current_user: UserInfo
 ) -> TelephonyNumber:
     """
-    Delete (disable) an outbound number.
+    Delete (disable) an telephony number.
 
     Note: This performs a soft delete by setting status to DISABLED.
 
     Args:
-        number_id: Outbound number UUID
+        number_id: Telephony number UUID
         current_user: Current authenticated user (must be admin)
 
     Returns:
-        Disabled outbound number object
+        Disabled telephony number object
 
     Raises:
         HTTPException: 404 if not found
     """
-    logger.info(f"Admin {current_user.username} disabling outbound number: {number_id}")
+    logger.info(
+        f"Admin {current_user.username} disabling telephony number: {number_id}"
+    )
 
     try:
         telephony_number = await disable_telephony_number(number_id)
 
         if telephony_number:
-            logger.info(f"Outbound number {number_id} disabled successfully")
+            logger.info(f"Telephony number {number_id} disabled successfully")
             return telephony_number
         else:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Outbound number {number_id} not found",
+                detail=f"Telephony number {number_id} not found",
             )
 
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error disabling outbound number {number_id}: {e}", exc_info=True)
+        logger.error(
+            f"Error disabling telephony number {number_id}: {e}", exc_info=True
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error disabling outbound number: {str(e)}",
+            detail=f"Error disabling telephony number: {str(e)}",
         )

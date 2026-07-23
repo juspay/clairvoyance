@@ -77,7 +77,7 @@ async def get_analytics(
     - call-based: Aggregate or time-series call statistics (use time_granularity for trends)
     - call-details: Paginated call records with all fields
     - lead-based: Aggregate or time-series lead statistics (use time_granularity for trends)
-    - outbound-numbers: Analytics grouped by outbound number
+    - telephony-numbers: Per-number telephony analytics (calls, pickup, capacity)
     - conversion: Conversion funnel metrics
     - performance: Performance metrics
 

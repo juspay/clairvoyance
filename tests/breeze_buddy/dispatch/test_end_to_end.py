@@ -86,7 +86,7 @@ async def test_full_round_trip_happy_path(harness, fake_redis):
     # Status was advanced.
     assert lead.status == LeadCallStatus.PROCESSING
     assert lead.call_id == "CA-test-sid"
-    assert lead.outbound_number_id == harness.number.id
+    assert lead.telephony_number_id == harness.number.id
 
     # Channel token was consumed (2 → 1) and not yet returned (waiting on webhook).
     assert await channel_tokens_available(harness.number.id) == 1
@@ -377,7 +377,7 @@ async def test_get_available_number_returns_none_marks_lead_finished(
 ):
     """
     Permanent failure: ``_get_available_number`` returning None means the
-    template's outbound_number_id is missing/disabled (or the fallback pool
+    template's telephony_number_id is missing/disabled (or the fallback pool
     has nothing). The old behavior — defer 10s and retry forever — was a
     hot loop on an unresolvable state.
 

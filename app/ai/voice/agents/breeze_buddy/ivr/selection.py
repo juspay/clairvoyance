@@ -184,7 +184,7 @@ async def _check_deferred_inbound_policy(
     Returns True if the call was blocked (WebSocket closed).
     """
     try:
-        # Look up template to get name, reseller_id, and outbound_number_id
+        # Look up template to get name, reseller_id, and telephony_number_id
         template = await get_template_by_id(template_id)
         if not template:
             return False  # Can't enforce without template info
@@ -227,12 +227,12 @@ async def _check_deferred_inbound_policy(
             policy.action == InboundBlockAction.REDIRECT
             and redirect_number
             and telephony_service
-            and template.outbound_number_id
+            and template.telephony_number_id
         ):
             await redirect_call(
                 call_sid=call_sid,
                 redirect_number=redirect_number,
-                outbound_number_id=template.outbound_number_id,
+                telephony_number_id=template.telephony_number_id,
                 reseller_id=reseller_id,
                 merchant_id=template.merchant_id,
                 telephony_service=telephony_service,
@@ -283,9 +283,9 @@ async def _check_deferred_inbound_policy(
                 merchant_id=template.merchant_id,
                 template_name=template.name,
                 template_id=str(template.id),
-                outbound_number_id=(
-                    str(template.outbound_number_id)
-                    if template.outbound_number_id
+                telephony_number_id=(
+                    str(template.telephony_number_id)
+                    if template.telephony_number_id
                     else None
                 ),
                 block_action=policy.action,

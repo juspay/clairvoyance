@@ -197,7 +197,7 @@ def mask_template_secrets(template: TemplateModel) -> TemplateModel:
         expected_callback_response_schema=template.expected_callback_response_schema,
         configurations=template.configurations,
         secrets=mask_secrets(template.secrets),
-        outbound_number_id=template.outbound_number_id,
+        telephony_number_id=template.telephony_number_id,
         is_active=template.is_active,
         # ``supported_channels`` must be carried through the masked copy.
         # If not preserved, GET / PUT response paths fall back to the

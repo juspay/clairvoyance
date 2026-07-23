@@ -20,9 +20,9 @@ from app.database.queries.breeze_buddy.template import (
     check_template_usage_query,
     create_template_query,
     delete_template_if_not_referenced_query,
-    get_all_templates_by_outbound_number_id_query,
+    get_all_templates_by_telephony_number_id_query,
     get_template_by_id_query,
-    get_template_by_outbound_number_id_query,
+    get_template_by_telephony_number_id_query,
     get_template_in_scope_query,
     get_templates_count_query,
     get_templates_list_query,
@@ -74,7 +74,7 @@ async def create_template(
     now,
     configurations: Optional[dict] = None,
     secrets: Optional[dict] = None,
-    outbound_number_id: Optional[str] = None,
+    telephony_number_id: Optional[str] = None,
     is_active: bool = True,
     supported_channels: Optional[List[str]] = None,
 ) -> Optional[TemplateModel]:
@@ -113,7 +113,7 @@ async def create_template(
             expected_callback_response_schema_json,
             configurations_json,
             secrets_json,
-            outbound_number_id,  # Moved: now matches SQL column order
+            telephony_number_id,  # Moved: now matches SQL column order
             is_active,
             supported_channels or ["voice"],
             now,
@@ -316,7 +316,7 @@ async def replace_template(
     expected_callback_response_schema: Optional[dict],
     configurations: Optional[dict],
     secrets: Optional[dict],
-    outbound_number_id: Optional[str],
+    telephony_number_id: Optional[str],
     is_active: bool,
     merchant_id: Optional[str],
     now,
@@ -335,7 +335,7 @@ async def replace_template(
         expected_callback_response_schema: Expected callback response schema (optional, set to NULL if not provided)
         configurations: Template configurations (optional, set to NULL if not provided)
         secrets: Secrets and variables for HTTP functions (optional, set to NULL if not provided)
-        outbound_number_id: Outbound number ID (optional, set to NULL if not provided)
+        telephony_number_id: Telephony number ID (optional, set to NULL if not provided)
         is_active: Whether template is active (required)
         merchant_id: Merchant identifier (optional, set to NULL if not provided)
         now: Current timestamp
@@ -376,7 +376,7 @@ async def replace_template(
             expected_callback_response_schema_json,
             configurations_json,
             secrets_json,
-            outbound_number_id,
+            telephony_number_id,
             is_active,
             merchant_id,
             supported_channels or ["voice"],
@@ -401,26 +401,26 @@ async def replace_template(
         return None
 
 
-async def get_template_by_outbound_number_id(
-    outbound_number_id: str,
+async def get_template_by_telephony_number_id(
+    telephony_number_id: str,
     enable_inbound_only: bool = False,
 ) -> Optional[TemplateModel]:
     """
-    Get a template by outbound_number_id.
+    Get a template by telephony_number_id.
 
     Args:
-        outbound_number_id: Outbound number UUID
+        telephony_number_id: Telephony number UUID
         enable_inbound_only: If True, only return templates with
                              configurations.enable_inbound = true
 
     Returns:
         TemplateModel if found, None otherwise
     """
-    logger.info(f"Getting template by outbound_number_id: {outbound_number_id}")
+    logger.info(f"Getting template by telephony_number_id: {telephony_number_id}")
 
     try:
-        query, values = get_template_by_outbound_number_id_query(
-            outbound_number_id, enable_inbound_only
+        query, values = get_template_by_telephony_number_id_query(
+            telephony_number_id, enable_inbound_only
         )
         result = await run_parameterized_query(query, values)
 
@@ -430,16 +430,18 @@ async def get_template_by_outbound_number_id(
                 logger.info(f"Template found: {decoded_result.id}")
             else:
                 logger.info(
-                    f"Template decoding failed for outbound_number_id: {outbound_number_id}"
+                    f"Template decoding failed for telephony_number_id: {telephony_number_id}"
                 )
             return decoded_result
 
-        logger.info(f"No template found with outbound_number_id: {outbound_number_id}")
+        logger.info(
+            f"No template found with telephony_number_id: {telephony_number_id}"
+        )
         return None
 
     except Exception as e:
         logger.error(
-            f"Error getting template by outbound_number_id: {e}", exc_info=True
+            f"Error getting template by telephony_number_id: {e}", exc_info=True
         )
         return None
 
@@ -511,24 +513,24 @@ async def delete_template_if_not_referenced(
         return None
 
 
-async def get_all_templates_by_outbound_number_id(
-    outbound_number_id: str,
+async def get_all_templates_by_telephony_number_id(
+    telephony_number_id: str,
 ) -> List[TemplateModel]:
     """
-    Get ALL templates by outbound_number_id.
+    Get ALL templates by telephony_number_id.
     Used for IVR to list all available templates for a phone number.
 
     Args:
-        outbound_number_id: Outbound number UUID
+        telephony_number_id: Telephony number UUID
 
     Returns:
         List of TemplateModel (empty list if none found)
     """
-    logger.info(f"Getting all templates by outbound_number_id: {outbound_number_id}")
+    logger.info(f"Getting all templates by telephony_number_id: {telephony_number_id}")
 
     try:
-        query, values = get_all_templates_by_outbound_number_id_query(
-            outbound_number_id
+        query, values = get_all_templates_by_telephony_number_id_query(
+            telephony_number_id
         )
         result = await run_parameterized_query(query, values)
 
@@ -537,15 +539,17 @@ async def get_all_templates_by_outbound_number_id(
                 t for t in (decode_template(row) for row in result) if t is not None
             ]
             logger.info(
-                f"Found {len(templates)} templates for outbound_number_id: {outbound_number_id}"
+                f"Found {len(templates)} templates for telephony_number_id: {telephony_number_id}"
             )
             return templates
 
-        logger.info(f"No templates found with outbound_number_id: {outbound_number_id}")
+        logger.info(
+            f"No templates found with telephony_number_id: {telephony_number_id}"
+        )
         return []
 
     except Exception as e:
         logger.error(
-            f"Error getting all templates by outbound_number_id: {e}", exc_info=True
+            f"Error getting all templates by telephony_number_id: {e}", exc_info=True
         )
         return []

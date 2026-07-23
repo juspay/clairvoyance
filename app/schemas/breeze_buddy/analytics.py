@@ -6,6 +6,8 @@ from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
+from app.core.deprecation import log_deprecated_usage
+
 
 class AnalyticsType(str, Enum):
     """Types of analytics queries supported"""
@@ -15,7 +17,7 @@ class AnalyticsType(str, Enum):
     CHAT_BASED = "chat-based"
     LEAD_BASED = "lead-based"
     LEAD_STATUS_COUNTS = "lead-status-counts"
-    TELEPHONY_NUMBERS = "outbound-numbers"
+    TELEPHONY_NUMBERS = "telephony-numbers"  # accepts deprecated "outbound-numbers"
     CONVERSION = "conversion"
     PERFORMANCE = "performance"
     CALL_DETAILS_DOWNLOAD = "call-details-download"
@@ -27,6 +29,17 @@ class AnalyticsType(str, Enum):
     ATTEMPTS_TO_CONNECT = "attempts-to-connect"
     CALLS_BY_HOUR = "calls-by-hour"
     CHATS_BY_HOUR = "chats-by-hour"
+
+    @classmethod
+    def _missing_(cls, value: object) -> Optional["AnalyticsType"]:
+        # Pre-rename alias: keep old clients working while flagging them
+        # for migration.
+        if value == "outbound-numbers":
+            log_deprecated_usage(
+                "outbound-numbers", "telephony-numbers", kind="analytics type"
+            )
+            return cls.TELEPHONY_NUMBERS
+        return None
 
 
 class TimeGranularity(str, Enum):
@@ -223,7 +236,7 @@ class TrendDataPoint(BaseModel):
 
 
 class TelephonyNumberStat(BaseModel):
-    """Statistics for a single outbound number"""
+    """Statistics for a single telephony number"""
 
     id: str
     number: str

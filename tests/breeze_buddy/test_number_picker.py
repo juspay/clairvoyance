@@ -2,7 +2,7 @@
 Unit tests for telephony-number selection and RBAC scoping.
 
 _get_available_number resolves in three tiers:
-  1. template.outbound_number_id pin (explicit config always wins)
+  1. template.telephony_number_id pin (explicit config always wins)
   2. a number provisioned for the calling merchant (merchant_id match)
   3. the legacy shared pool (reseller_id and merchant_id both NULL) —
      the backward-compatibility guarantee for numbers shared across many
@@ -99,7 +99,7 @@ async def test_template_pin_wins_over_owned_and_shared(pool):
     pool.numbers = [owned, shared]
     pool.by_id = {pinned.id: pinned}
 
-    template: Any = SimpleNamespace(outbound_number_id=pinned.id)
+    template: Any = SimpleNamespace(telephony_number_id=pinned.id)
     got = await calls_mod._get_available_number(make_config(), template)
     assert got is pinned
 
@@ -272,7 +272,7 @@ async def test_grandfathered_cross_merchant_pin_still_dials(pool, monkeypatch):
         ),
     )
 
-    template: Any = SimpleNamespace(outbound_number_id=foreign.id)
+    template: Any = SimpleNamespace(telephony_number_id=foreign.id)
     got = await calls_mod._get_available_number(make_config(), template)
     assert got is foreign
     assert any("grandfathered cross-merchant pin" in e for e in errors)
@@ -314,7 +314,7 @@ def test_update_query_without_ownership_flags_leaves_ownership_untouched():
 @pytest.mark.asyncio
 async def test_pinned_ids_are_strs_even_though_column_is_uuid(monkeypatch):
     """
-    template.outbound_number_id is a UUID column (asyncpg decodes uuid.UUID),
+    template.telephony_number_id is a UUID column (asyncpg decodes uuid.UUID),
     telephony_numbers.id is VARCHAR (str). Without str() coercion in the
     accessor the RBAC set lookups never match — every template pin was
     silently dropped from visibility. Regression for exactly that.
@@ -326,7 +326,7 @@ async def test_pinned_ids_are_strs_even_though_column_is_uuid(monkeypatch):
     pin = uuid.uuid4()
 
     async def fake_query(query_text, values):
-        return [{"outbound_number_id": pin}, {"outbound_number_id": None}]
+        return [{"telephony_number_id": pin}, {"telephony_number_id": None}]
 
     monkeypatch.setattr(accessor_mod, "run_parameterized_query", fake_query)
 
@@ -458,7 +458,7 @@ async def test_grandfathered_cross_umbrella_pin_errors_and_dials(pool, monkeypat
         ),
     )
 
-    template: Any = SimpleNamespace(outbound_number_id=foreign_umbrella.id)
+    template: Any = SimpleNamespace(telephony_number_id=foreign_umbrella.id)
     got = await calls_mod._get_available_number(make_config(), template)
     assert got is foreign_umbrella  # never blocks
     assert any("grandfathered cross-umbrella pin" in e for e in errors)
@@ -482,7 +482,7 @@ async def test_own_umbrella_pin_stays_quiet(pool, monkeypatch):
         ),
     )
 
-    template: Any = SimpleNamespace(outbound_number_id=own_umbrella.id)
+    template: Any = SimpleNamespace(telephony_number_id=own_umbrella.id)
     got = await calls_mod._get_available_number(make_config(), template)
     assert got is own_umbrella
     assert errors == []
@@ -507,7 +507,7 @@ async def test_no_number_available_logs_error(pool, monkeypatch):
 
     got = await calls_mod._get_available_number(make_config(), None)
     assert got is None
-    assert any("No outbound number found" in e for e in errors)
+    assert any("No telephony number found" in e for e in errors)
 
 
 @pytest.mark.asyncio

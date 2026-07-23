@@ -804,24 +804,46 @@ class HoldTransferConfig(BaseModel):
     """Configuration for hold & consultative transfer.
 
     When the AI agent places the inbound caller on hold and makes an outbound
-    call to a third party, this config tells the handler which outbound number
+    call to a third party, this config tells the handler which telephony number
     (and therefore which template) to use for the outbound conversation.
 
     Example:
         {
-            "outbound_number_id": "uuid-of-outbound-number",
+            "telephony_number_id": "uuid-of-telephony-number",
             "hold_music": "typing",
             "hold_timeout_seconds": 180,
             "summarize": true
         }
     """
 
-    outbound_number_id: str = Field(
-        ...,
-        description="Outbound number ID used to make the outbound call. "
-        "The template associated with this outbound_number_id "
+    telephony_number_id: Optional[str] = Field(
+        default=None,
+        description="Telephony number ID used to make the outbound call. "
+        "The template associated with this telephony_number_id "
         "will be used for the outbound conversation.",
     )
+    # Deprecated alias: stored template configurations predating the telephony
+    # rename carry this key in their JSON. It keeps parsing (and logs
+    # [Deprecated] per occurrence, the house convention for tracking legacy
+    # fields) but is excluded from serialization, so any GET->PUT cycle
+    # rewrites a template to the new key.
+    outbound_number_id: Optional[str] = Field(default=None, exclude=True)
+
+    @model_validator(mode="after")
+    def _coalesce_number_id_and_warn(
+        self, info: ValidationInfo
+    ) -> "HoldTransferConfig":
+        log_deprecated_fields(
+            self,
+            {"outbound_number_id": "hold_transfer.telephony_number_id"},
+            context=info.context,
+        )
+        if self.telephony_number_id is None:
+            self.telephony_number_id = self.outbound_number_id
+        if self.telephony_number_id is None:
+            raise ValueError("hold_transfer requires telephony_number_id")
+        return self
+
     hold_music: FillerSoundtrack = Field(
         FillerSoundtrack.ON_HOLD_RINGTONE,
         description="Hold music soundtrack played while the inbound caller waits.",
@@ -2651,7 +2673,7 @@ class TemplateModel(BaseModel):
     expected_callback_response_schema: Optional[Dict[str, Any]] = None
     configurations: Optional[ConfigurationModel] = None
     secrets: Optional[Dict[str, Any]] = None
-    outbound_number_id: Optional[str] = None
+    telephony_number_id: Optional[str] = None
     is_active: bool = True
     # Channels this template is allowed to be served on. Defaults to
     # voice-only so existing templates are unaffected. Add "chat" to
@@ -2694,7 +2716,11 @@ class CreateTemplateRequest(BaseModel):
     reseller_id: ResellerId
     name: str
     merchant_id: Optional[str] = None
-    outbound_number_id: Optional[str] = None
+    telephony_number_id: Optional[str] = None
+    # Deprecated: pre-rename key, accepted from older API clients and
+    # converted to telephony_number_id (which wins when both are sent).
+    # Every use is logged [Deprecated] so migration can be tracked.
+    outbound_number_id: Optional[str] = Field(default=None, exclude=True)
     is_active: bool = True
     flow: Dict[str, Any]
     expected_payload_schema: Optional[Dict[str, Any]] = None
@@ -2705,6 +2731,19 @@ class CreateTemplateRequest(BaseModel):
         default_factory=_default_supported_channels,
         min_length=1,
     )
+
+    @model_validator(mode="after")
+    def _coalesce_number_id_and_warn(
+        self, info: ValidationInfo
+    ) -> "CreateTemplateRequest":
+        log_deprecated_fields(
+            self,
+            {"outbound_number_id": "telephony_number_id"},
+            context=info.context,
+        )
+        if self.telephony_number_id is None:
+            self.telephony_number_id = self.outbound_number_id
+        return self
 
 
 class ReplaceTemplateRequest(BaseModel):
@@ -2719,7 +2758,7 @@ class ReplaceTemplateRequest(BaseModel):
     BOTH TemplateModel and this model with the SAME field name.
 
     Non-nullable fields (name, flow, is_active) must be provided - throws 400 if not.
-    Nullable fields (merchant_id, outbound_number_id, expected_payload_schema,
+    Nullable fields (merchant_id, telephony_number_id, expected_payload_schema,
     expected_callback_response_schema, configurations) - if not provided, set to NULL.
 
     ``reseller_id`` is optional (``None`` default) for backward compatibility:
@@ -2742,7 +2781,13 @@ class ReplaceTemplateRequest(BaseModel):
     reseller_id: Optional[ResellerId] = None
     name: str
     merchant_id: Optional[str] = None
-    outbound_number_id: Optional[str] = None
+    telephony_number_id: Optional[str] = None
+    # Deprecated: pre-rename key, accepted and converted. The new key wins
+    # when both are present — a round-tripped GET body already carries
+    # telephony_number_id — while old clients building PUT bodies from
+    # scratch (only the old key) keep their pin instead of silently clearing
+    # it. Every use is logged [Deprecated] so migration can be tracked.
+    outbound_number_id: Optional[str] = Field(default=None, exclude=True)
     is_active: bool
     flow: Dict[str, Any]
     expected_payload_schema: Optional[Dict[str, Any]] = None
@@ -2753,3 +2798,16 @@ class ReplaceTemplateRequest(BaseModel):
         default=None,
         min_length=1,
     )
+
+    @model_validator(mode="after")
+    def _coalesce_number_id_and_warn(
+        self, info: ValidationInfo
+    ) -> "ReplaceTemplateRequest":
+        log_deprecated_fields(
+            self,
+            {"outbound_number_id": "telephony_number_id"},
+            context=info.context,
+        )
+        if self.telephony_number_id is None:
+            self.telephony_number_id = self.outbound_number_id
+        return self

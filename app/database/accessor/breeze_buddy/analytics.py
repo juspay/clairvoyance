@@ -337,25 +337,25 @@ async def get_telephony_numbers_analytics_from_db(
     filters: Dict[str, Any],
 ) -> List[Dict[str, Any]]:
     """
-    Get outbound numbers analytics.
+    Get telephony numbers analytics.
 
     Returns:
-        List of outbound number statistics
+        List of telephony number statistics
     """
     logger.info(
-        f"[Analytics DB] Getting outbound numbers analytics with filters: {filters}"
+        f"[Analytics DB] Getting telephony numbers analytics with filters: {filters}"
     )
 
     try:
         query_text, values = get_analytics_telephony_numbers_query(filters)
         result = await run_parameterized_query(query_text, values)
         logger.info(
-            f"[Analytics DB] Outbound numbers analytics returned {len(result) if result else 0} numbers"
+            f"[Analytics DB] Telephony numbers analytics returned {len(result) if result else 0} numbers"
         )
         return [dict(row) for row in result] if result else []
 
     except Exception as e:
-        logger.error(f"Error getting outbound numbers analytics: {e}", exc_info=True)
+        logger.error(f"Error getting telephony numbers analytics: {e}", exc_info=True)
         raise
 
 

@@ -513,7 +513,7 @@ async def get_telephony_numbers_analytics(
     filters: Dict[str, Any], options: Dict[str, Any], current_user: UserInfo
 ) -> Dict[str, Any]:
     """
-    Get analytics grouped by outbound number.
+    Get analytics grouped by telephony number.
 
     The DB query joins every telephony_numbers row that has ever taken a call,
     so the hierarchical lead filters alone don't scope the numbers themselves.
@@ -608,7 +608,7 @@ async def get_telephony_numbers_analytics(
         )
 
     return {
-        "type": "outbound-numbers",
+        "type": "telephony-numbers",
         "filters_applied": filters,
         "results": outbound_analytics,
     }

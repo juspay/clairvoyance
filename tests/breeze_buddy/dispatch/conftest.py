@@ -432,7 +432,7 @@ class DispatchHarness:
         self.rate_limit_records: list[dict[str, str]] = []
         self.cas_succeeds: bool = True
         self.get_available_returns_none: bool = False
-        # Captured alerts so tests can assert no-outbound-number throttled
+        # Captured alerts so tests can assert no-telephony-number throttled
         # alerts fired without needing a real Slack/Redis round-trip.
         self.no_telephony_number_alerts: list[dict[str, str]] = []
         # Failure injection — tests assign callables to raise on demand.
@@ -486,7 +486,7 @@ class DispatchHarness:
         status: LeadCallStatus,
         call_id: str,
         call_initiated_time: datetime,
-        outbound_number_id: str,
+        telephony_number_id: str,
     ) -> Optional[LeadCallTracker]:
         if not self.cas_succeeds:
             return None
@@ -496,7 +496,7 @@ class DispatchHarness:
         lead.status = status
         lead.call_id = call_id
         lead.call_initiated_time = call_initiated_time
-        lead.outbound_number_id = outbound_number_id
+        lead.telephony_number_id = telephony_number_id
         return lead
 
     async def update_lead_call_completion_details(
