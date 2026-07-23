@@ -476,7 +476,11 @@ async def reconcile_stuck_processing_leads():
                 call_end_time=datetime.now(timezone.utc),
             )
 
-            if locked_lead.outbound_number_id:
+            if (
+                locked_lead.outbound_number_id
+                and locked_lead.call_direction == CallDirection.OUTBOUND
+                and is_dispatchable(locked_lead.execution_mode)
+            ):
                 telephony_number = await get_telephony_number_by_id(
                     locked_lead.outbound_number_id
                 )
@@ -533,7 +537,11 @@ async def handle_call_completion(
         return
 
     # Always release outbound number (including transfers — bot leaves, cleanup happens here)
-    if lead.outbound_number_id:
+    if (
+        lead.outbound_number_id
+        and lead.call_direction == CallDirection.OUTBOUND
+        and is_dispatchable(lead.execution_mode)
+    ):
         telephony_number = await get_telephony_number_by_id(lead.outbound_number_id)
         if telephony_number:
             await _release_number(telephony_number.id, telephony_number.provider)
@@ -640,7 +648,11 @@ async def handle_unanswered_calls(call_id: str):
     # Release outbound number channel — do this before the FINISHED guard because the
     # channel must be freed regardless of lead status. _release_number is idempotent
     # (SQL uses GREATEST(0, ...)), so duplicate releases are safe.
-    if lead.outbound_number_id:
+    if (
+        lead.outbound_number_id
+        and lead.call_direction == CallDirection.OUTBOUND
+        and is_dispatchable(lead.execution_mode)
+    ):
         telephony_number = await get_telephony_number_by_id(lead.outbound_number_id)
         if telephony_number:
             await _release_number(telephony_number.id, telephony_number.provider)

@@ -48,6 +48,8 @@ def count_processing_by_telephony_number_query() -> Tuple[str, List[Any]]:
         FROM "{LEAD_CALL_TRACKER_TABLE}"
         WHERE "status" = 'PROCESSING'
           AND "outbound_number_id" IS NOT NULL
+          AND "call_direction" = 'OUTBOUND'
+          AND "execution_mode" IN ('TELEPHONY', 'TELEPHONY_TEST')
         GROUP BY "outbound_number_id";
     """
     return text, []
