@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import functools
 import inspect
-from typing import Any, Callable, Dict
+from typing import Any, Callable, Dict, Optional
 
 from pydantic import BaseModel
 
@@ -98,9 +98,28 @@ def deprecated(
     return decorator
 
 
+def _sanitize(value: Any) -> str:
+    """Strip control characters so metadata can't corrupt log records."""
+    return "".join(ch for ch in str(value) if ch.isprintable())
+
+
+def format_template_ref(
+    template_id: Optional[str] = None,
+    template_name: Optional[str] = None,
+) -> str:
+    """Build a ``" (template_id=..., template_name='...')"`` log suffix."""
+    if not template_id:
+        return ""
+    ref = f" (template_id={_sanitize(template_id)}"
+    if template_name:
+        ref += f", template_name='{_sanitize(template_name)}'"
+    return ref + ")"
+
+
 def log_deprecated_fields(
     instance: BaseModel,
     field_map: Dict[str, str],
+    context: Optional[Dict[str, Any]] = None,
 ) -> None:
     """Log warnings for deprecated Pydantic fields that were explicitly set.
 
@@ -114,6 +133,8 @@ def log_deprecated_fields(
     Args:
         instance: The Pydantic model instance to check.
         field_map: Mapping of ``{deprecated_field: replacement_path}``.
+        context: Optional identity info (e.g. Pydantic validation context
+            with ``template_id`` / ``template_name``) appended to the message.
 
     Example::
 
@@ -128,6 +149,9 @@ def log_deprecated_fields(
                 })
                 return self
     """
+    ctx = context if isinstance(context, dict) else {}
+    ref = format_template_ref(ctx.get("template_id"), ctx.get("template_name"))
+
     for old_field, new_path in field_map.items():
         if old_field in instance.model_fields_set:
             value = getattr(instance, old_field, None)
@@ -141,9 +165,10 @@ def log_deprecated_fields(
             except Exception:
                 length = -1
             logger.warning(
-                "[Deprecated] field '{}' is set (type: {}, length: {}). Use '{}' instead.",
+                "[Deprecated] field '{}' is set (type: {}, length: {}){}. Use '{}' instead.",
                 old_field,
                 type_name,
                 length,
+                ref,
                 new_path,
             )
