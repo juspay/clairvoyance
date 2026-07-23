@@ -24,6 +24,54 @@ def test_request_normalizes_provider_and_blank_fields() -> None:
     assert request.language is None
 
 
+def test_request_parses_nested_config_from_json_string() -> None:
+    request = TranscriptionRequest.model_validate(
+        {"provider": "soniox", "soniox": '{"context": "brand names"}'}
+    )
+    assert request.soniox is not None
+    assert request.soniox.context == "brand names"
+
+    with pytest.raises(ValueError):
+        TranscriptionRequest.model_validate(
+            {"provider": "soniox", "soniox": "{not json"}
+        )
+
+
+def test_batch_model_and_options_resolution() -> None:
+    request = TranscriptionRequest.model_validate(
+        {"provider": "soniox", "model": "stt-async-v2", "soniox": {"context": "acme"}}
+    )
+    model, opts = handlers._batch_model_and_options(request)
+    assert model == "stt-async-v2"
+    assert opts == {"context": "acme"}
+
+    request = TranscriptionRequest.model_validate(
+        {
+            "provider": "deepgram",
+            "model": "ignored",
+            "deepgram": {"model": "nova-3-medical", "numerals": False},
+        }
+    )
+    model, opts = handlers._batch_model_and_options(request)
+    assert model == "nova-3-medical"
+    assert opts is not None
+    assert opts["numerals"] is False
+    assert "endpointing_ms" not in opts
+
+    request = TranscriptionRequest.model_validate(
+        {"provider": "sarvam", "sarvam": {"language_code": "hi-IN"}}
+    )
+    assert handlers._batch_model_and_options(request) == (
+        None,
+        {"language_code": "hi-IN"},
+    )
+
+    request = TranscriptionRequest.model_validate(
+        {"provider": "openai", "model": "whisper-1"}
+    )
+    assert handlers._batch_model_and_options(request) == ("whisper-1", None)
+
+
 @pytest.mark.parametrize(
     ("result_provider", "result_model"),
     [("deepgram", "nova-3"), ("openai", "whisper-1")],

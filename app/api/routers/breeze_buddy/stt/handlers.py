@@ -49,6 +49,44 @@ _WS_UNAUTHORIZED = 4401
 _WS_TIMEOUT = 4408
 
 
+def _batch_model_and_options(
+    request: TranscriptionRequest,
+) -> tuple[str | None, dict | None]:
+    """Resolve the effective model + provider extras for the batch core.
+
+    The selected provider's nested config wins over the flat ``model``
+    shortcut; only options meaningful to the one-shot provider APIs are
+    forwarded (streaming-only knobs like Deepgram endpointing stay behind).
+    """
+    provider = request.provider
+    if provider == STTProvider.SONIOX and request.soniox:
+        cfg = request.soniox
+        opts = {
+            key: value
+            for key, value in {
+                "context": cfg.context,
+                "enable_language_identification": cfg.enable_language_identification,
+            }.items()
+            if value is not None
+        }
+        return cfg.model or request.model, opts or None
+    if provider == STTProvider.DEEPGRAM and request.deepgram:
+        cfg = request.deepgram
+        return cfg.model, {
+            "smart_format": cfg.smart_format,
+            "punctuate": cfg.punctuate,
+            "numerals": cfg.numerals,
+            "profanity_filter": cfg.profanity_filter,
+            "diarize": cfg.diarize,
+            "auto_detect_language": cfg.auto_detect_language,
+        }
+    if provider == STTProvider.SARVAM and request.sarvam:
+        cfg = request.sarvam
+        opts = {"language_code": cfg.language_code} if cfg.language_code else None
+        return cfg.model or request.model, opts
+    return request.model, None
+
+
 async def handle_transcription_request(
     audio: UploadFile,
     request: TranscriptionRequest,
@@ -61,6 +99,8 @@ async def handle_transcription_request(
     ``transcribe_audio`` core (Soniox uses its async file API; Google — and any
     provider whose key is unset — falls back to Whisper inside that core). The
     response reports the provider/model that actually produced the text.
+    Provider-specific tuning arrives via the request's nested configs and is
+    resolved by :func:`_batch_model_and_options`.
     """
     max_bytes = await STT_MAX_AUDIO_BYTES()
     chunks: list[bytes] = []
@@ -83,14 +123,16 @@ async def handle_transcription_request(
             detail="Empty audio upload",
         )
 
+    model, provider_options = _batch_model_and_options(request)
     try:
         result = await transcribe_audio(
             data,
             audio.content_type,
             provider=request.provider.value,
-            model=request.model,
+            model=model,
             language=request.language,
             filename=audio.filename or "audio.webm",
+            options=provider_options,
         )
     except TranscriptionError as e:
         logger.warning(
@@ -110,27 +152,31 @@ async def handle_transcription_request(
 
 
 def _stream_configuration(request: TranscriptionStreamRequest) -> STTConfiguration:
-    """Map the stream config message onto the template ``STTConfiguration``."""
-    model = request.model
+    """Map the stream config message onto the template ``STTConfiguration``.
+
+    The selected provider's nested config passes through verbatim — full
+    parity with template STT settings (Soniox context, Deepgram endpointing,
+    ...). The flat ``model`` is a shortcut used only when the matching nested
+    config is absent; nested configs for other providers are dropped.
+    """
     provider = request.provider
+    model = request.model
+    soniox = request.soniox if provider == STTProvider.SONIOX else None
+    deepgram = request.deepgram if provider == STTProvider.DEEPGRAM else None
+    sarvam = request.sarvam if provider == STTProvider.SARVAM else None
+    if model:
+        if provider == STTProvider.SONIOX and soniox is None:
+            soniox = SonioxSTTConfig(model=model)
+        elif provider == STTProvider.DEEPGRAM and deepgram is None:
+            deepgram = DeepgramSTTConfig(model=model)
+        elif provider == STTProvider.SARVAM and sarvam is None:
+            sarvam = SarvamSTTConfig(model=model)
     return STTConfiguration(
         provider=provider,
         language=request.language,
-        soniox=(
-            SonioxSTTConfig(model=model)
-            if provider == STTProvider.SONIOX and model
-            else None
-        ),
-        deepgram=(
-            DeepgramSTTConfig(model=model)
-            if provider == STTProvider.DEEPGRAM and model
-            else None
-        ),
-        sarvam=(
-            SarvamSTTConfig(model=model)
-            if provider == STTProvider.SARVAM and model
-            else None
-        ),
+        soniox=soniox,
+        deepgram=deepgram,
+        sarvam=sarvam,
     )
 
 

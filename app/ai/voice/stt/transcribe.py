@@ -114,13 +114,20 @@ async def _deepgram(
     content_type: Optional[str],
     lang: Optional[str],
     model: Optional[str] = None,
+    options: Optional[Dict[str, Any]] = None,
 ) -> Transcription:
+    opts = options or {}
     applied_model = model or "nova-3"
     params = {
         "model": applied_model,
-        "smart_format": "true",
-        "language": lang or "multi",
+        "smart_format": str(opts.get("smart_format", True)).lower(),
+        "language": "multi" if opts.get("auto_detect_language") else (lang or "multi"),
     }
+    # Pre-recorded API tuning flags; streaming-only knobs (endpointing,
+    # utterance_end_ms) are intentionally not forwarded here.
+    for key in ("punctuate", "numerals", "profanity_filter", "diarize"):
+        if key in opts:
+            params[key] = str(opts[key]).lower()
     headers = {
         "Authorization": f"Token {DEEPGRAM_API_KEY}",
         "Content-Type": content_type or "audio/webm",
@@ -175,6 +182,7 @@ async def _soniox(
     filename: str,
     language: LanguageHint,
     model: Optional[str] = None,
+    options: Optional[Dict[str, Any]] = None,
 ) -> Transcription:
     """One-shot transcription via Soniox's async file API.
 
@@ -212,6 +220,13 @@ async def _soniox(
             hints = _soniox_lang_hints(language)
             if hints:
                 body["language_hints"] = hints
+            opts = options or {}
+            if opts.get("context"):
+                body["context"] = opts["context"]
+            if opts.get("enable_language_identification") is not None:
+                body["enable_language_identification"] = opts[
+                    "enable_language_identification"
+                ]
             cr = await client.post("/v1/transcriptions", json=body)
             cr.raise_for_status()
             transcription_id = cr.json()["id"]
@@ -268,6 +283,7 @@ async def transcribe_audio(
     model: Optional[str] = None,
     language: LanguageHint = None,
     filename: str = "audio.webm",
+    options: Optional[Dict[str, Any]] = None,
 ) -> Transcription:
     """Transcribe ``audio`` to text using the selected ``provider``.
 
@@ -283,6 +299,12 @@ async def transcribe_audio(
     (a Deepgram/Sarvam/Soniox model name would be meaningless to Whisper).
     The returned :class:`Transcription` reports the provider and model that
     actually produced the text, after any fallback.
+
+    ``options`` carries provider-specific extras validated at the API layer
+    (Soniox: ``context``, ``enable_language_identification``; Deepgram:
+    ``smart_format``/``punctuate``/``numerals``/``profanity_filter``/
+    ``diarize``/``auto_detect_language``; Sarvam: ``language_code``). Like
+    ``model``, they are never forwarded to the Whisper fallback.
     """
     if not audio:
         raise TranscriptionError("empty audio")
@@ -296,13 +318,14 @@ async def transcribe_audio(
     try:
         if p == "soniox" and SONIOX_API_KEY:
             # Pass the raw language (str | list) — Soniox takes a hints array.
-            return await _soniox(audio, content_type, filename, language, model)
-        if p == "deepgram" and DEEPGRAM_API_KEY:
-            return await _deepgram(audio, content_type, lang, model)
-        if p == "sarvam" and SARVAM_API_KEY:
-            return await _sarvam(
-                audio, content_type, filename, _sarvam_lang(language), model
+            return await _soniox(
+                audio, content_type, filename, language, model, options
             )
+        if p == "deepgram" and DEEPGRAM_API_KEY:
+            return await _deepgram(audio, content_type, lang, model, options)
+        if p == "sarvam" and SARVAM_API_KEY:
+            sarvam_lang = (options or {}).get("language_code") or _sarvam_lang(language)
+            return await _sarvam(audio, content_type, filename, sarvam_lang, model)
         if not OPENAI_STT_API_KEY:
             raise TranscriptionError(
                 f"no usable STT provider for '{provider}' (OPENAI_STT_API_KEY unset)"

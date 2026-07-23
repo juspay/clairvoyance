@@ -112,9 +112,9 @@ def stream_env(monkeypatch: pytest.MonkeyPatch) -> dict:
         return stub
 
     monkeypatch.setattr(handlers, "get_user_from_websocket", lambda ws: _USER)
-    monkeypatch.setattr(
-        handlers, "create_stt_from_config", AsyncMock(return_value=object())
-    )
+    create_mock = AsyncMock(return_value=object())
+    monkeypatch.setattr(handlers, "create_stt_from_config", create_mock)
+    created["create_stt"] = create_mock
     monkeypatch.setattr(handlers, "STT_STREAM_MAX_SECONDS", AsyncMock(return_value=300))
     monkeypatch.setattr(
         handlers, "STT_STREAM_IDLE_TIMEOUT_SECONDS", AsyncMock(return_value=60)
@@ -251,6 +251,34 @@ async def test_stream_feeds_audio_and_forwards_transcripts(stream_env: dict) -> 
     assert types[0] == "ready"
     assert "final" in types
     assert ws.closed is not None and ws.closed[0] == 1000
+
+
+async def test_stream_passes_nested_provider_config(stream_env: dict) -> None:
+    ws = FakeWebSocket(
+        json.dumps(
+            {
+                "provider": "soniox",
+                "soniox": {"context": "acme brands", "model": "stt-rt-v4"},
+            }
+        )
+    )
+    await handlers.handle_transcription_stream(as_ws(ws))
+
+    config = stream_env["create_stt"].await_args.args[0]
+    assert config.provider.value == "soniox"
+    assert config.soniox is not None
+    assert config.soniox.context == "acme brands"
+    assert config.soniox.model == "stt-rt-v4"
+
+
+async def test_stream_flat_model_builds_nested_config(stream_env: dict) -> None:
+    ws = FakeWebSocket(json.dumps({"provider": "deepgram", "model": "nova-3-medical"}))
+    await handlers.handle_transcription_stream(as_ws(ws))
+
+    config = stream_env["create_stt"].await_args.args[0]
+    assert config.deepgram is not None
+    assert config.deepgram.model == "nova-3-medical"
+    assert config.soniox is None
 
 
 async def test_stream_ends_when_client_send_fails(stream_env: dict) -> None:
