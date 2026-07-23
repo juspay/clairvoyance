@@ -12,6 +12,7 @@ from app.ai.voice.agents.breeze_buddy.template.types import (
     ConfigurationModel,
     TemplateModel,
 )
+from app.core.deprecation import format_template_ref
 from app.core.logger import logger
 
 
@@ -32,7 +33,9 @@ def _to_provider_config(provider: str, raw: Dict[str, Any]) -> Dict[str, Any]:
     return {k: v for k, v in cfg.items() if v is not None}
 
 
-def _migrate_legacy_voice_config(data: Dict[str, Any]) -> Dict[str, Any]:
+def _migrate_legacy_voice_config(
+    data: Dict[str, Any], template_id: str = "", template_name: str = ""
+) -> Dict[str, Any]:
     """Convert old-format voice fields to the new unified tts_configuration.
 
     Handles templates stored with the old schema:
@@ -44,6 +47,8 @@ def _migrate_legacy_voice_config(data: Dict[str, Any]) -> Dict[str, Any]:
     Transforms them into tts_configuration + tts_configuration_overrides.
     Already-migrated templates (with tts_configuration) pass through unchanged.
     """
+    ref = format_template_ref(template_id, template_name)
+
     if "tts_configuration" in data and data["tts_configuration"]:
         # Already in new format — strip old fields if present
         for old_key in [
@@ -66,7 +71,7 @@ def _migrate_legacy_voice_config(data: Dict[str, Any]) -> Dict[str, Any]:
         )
         default_provider = LEGACY_VOICE_TO_PROVIDER.get(name)
         logger.warning(
-            f"[Deprecated] field 'tts_voice_name' is set (value: '{name}'). "
+            f"[Deprecated] field 'tts_voice_name' is set (value: '{name}'){ref}. "
             "Use 'tts_configuration.provider' instead."
         )
 
@@ -77,17 +82,17 @@ def _migrate_legacy_voice_config(data: Dict[str, Any]) -> Dict[str, Any]:
 
     if old_cartesia:
         logger.warning(
-            "[Deprecated] field 'cartesia_voice_configurations' is set. "
+            f"[Deprecated] field 'cartesia_voice_configurations' is set{ref}. "
             "Use 'tts_configuration_overrides.cartesia' instead."
         )
     if old_elevenlabs:
         logger.warning(
-            "[Deprecated] field 'elevenlabs_voice_configurations' is set. "
+            f"[Deprecated] field 'elevenlabs_voice_configurations' is set{ref}. "
             "Use 'tts_configuration_overrides.elevenlabs' instead."
         )
     if old_mira_voice_id:
         logger.warning(
-            "[Deprecated] field 'mira_voice_id' is set. "
+            f"[Deprecated] field 'mira_voice_id' is set{ref}. "
             "Use 'tts_configuration_overrides.cartesia.voice_id' instead."
         )
 
@@ -173,10 +178,20 @@ def decode_template(result: asyncpg.Record) -> Optional[TemplateModel]:
             configurations_data = json.loads(configurations_data)
 
         # Migrate old voice fields to new unified voice_config
-        configurations_data = _migrate_legacy_voice_config(configurations_data)
+        configurations_data = _migrate_legacy_voice_config(
+            configurations_data,
+            template_id=str(result["id"]),
+            template_name=result["name"],
+        )
 
-        # Create ConfigurationModel from the parsed data
-        configurations = ConfigurationModel(**configurations_data)
+        # Create ConfigurationModel from the parsed data.
+        configurations = ConfigurationModel.model_validate(
+            configurations_data,
+            context={
+                "template_id": str(result["id"]),
+                "template_name": result["name"],
+            },
+        )
 
     # Parse secrets from JSONB (can be str, dict, or None)
     secrets_data = result.get("secrets")

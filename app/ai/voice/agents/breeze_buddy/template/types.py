@@ -12,13 +12,14 @@ from pydantic import (
     SecretStr,
     SerializationInfo,
     StringConstraints,
+    ValidationInfo,
     field_serializer,
     model_validator,
 )
 
 from app.ai.voice.agents.breeze_buddy.template.ui_catalog import ActionUnion, Icon
 from app.ai.voice.llm.types import LLMConfiguration
-from app.core.deprecation import log_deprecated_fields
+from app.core.deprecation import format_template_ref, log_deprecated_fields
 from app.core.logger import logger
 
 
@@ -326,12 +327,13 @@ class NoiseFilterConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
-    def _warn_deprecated_fields(self) -> "NoiseFilterConfig":
+    def _warn_deprecated_fields(self, info: ValidationInfo) -> "NoiseFilterConfig":
         log_deprecated_fields(
             self,
             {
                 "type": "noise_filter.provider/noise_filter.model",
             },
+            context=info.context,
         )
         return self
 
@@ -1636,7 +1638,7 @@ class ConfigurationModel(BaseModel):
 
     @model_validator(mode="before")
     @classmethod
-    def _pre_validate(cls, data: Any) -> Any:
+    def _pre_validate(cls, data: Any, info: ValidationInfo) -> Any:
         """Pre-validation: auto-fill override providers + migrate flat IVR fields."""
         if not isinstance(data, dict):
             return data
@@ -1660,11 +1662,15 @@ class ConfigurationModel(BaseModel):
             if ivr:
                 data["ivr_configuration"] = ivr
                 # Log deprecation warnings for each migrated field
+                ctx = info.context if isinstance(info.context, dict) else {}
+                ref = format_template_ref(
+                    ctx.get("template_id"), ctx.get("template_name")
+                )
                 for old_field in ("ivr_greeting", "ivr_goodbye", "ivr_priority"):
                     if data.get(old_field) is not None:
                         new_field = old_field.replace("ivr_", "")
                         logger.warning(
-                            f"[Deprecated] field '{old_field}' is set. "
+                            f"[Deprecated] field '{old_field}' is set{ref}. "
                             f"Use 'ivr_configuration.{new_field}' instead."
                         )
 
@@ -1788,7 +1794,7 @@ class ConfigurationModel(BaseModel):
     )
 
     @model_validator(mode="after")
-    def _warn_deprecated_fields(self):
+    def _warn_deprecated_fields(self, info: ValidationInfo):
         log_deprecated_fields(
             self,
             {
@@ -1797,6 +1803,7 @@ class ConfigurationModel(BaseModel):
                 "payload_based_language_selection": "stt_configuration.payload_based_language_selection",
                 "mira_voice_id": "cartesia_voice_configurations.voice_id",
             },
+            context=info.context,
         )
         return self
 
