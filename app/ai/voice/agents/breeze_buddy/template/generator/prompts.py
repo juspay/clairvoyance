@@ -503,7 +503,7 @@ auto-filled from the dict key — do not repeat it inside the entry.
 - `configurations.initial_greeting` — the opening line spoken to the customer.
   Supports `{variable}` placeholders. Must sound natural when spoken — no
   markdown, symbols, or bullet points. Write in the primary audience language.
-- `outbound_number_id` — set to `null` (caller provides this)
+- `telephony_number_id` — set to `null` (caller provides this)
 - `configurations.enable_inbound: false` (the default — may be omitted)
 
 **Inbound templates** must have:
@@ -568,7 +568,7 @@ auto-filled from the dict key — do not repeat it inside the entry.
 ]
 
 "hold_transfer": {
-  "outbound_number_id": "<uuid>", "hold_music": "on-hold-ringtone",
+  "telephony_number_id": "<uuid>", "hold_music": "on-hold-ringtone",
   "hold_timeout_seconds": 180, "summarize": true, "hold_music_volume": 0.4
 }
 
@@ -851,7 +851,7 @@ mute→unmute pattern, single shared end node for all outcomes.
     "keyword_filter": {"enabled": true, "keywords": ["hello", "ok", "okay", "hmm", "yes", "yeah"], "match_type": "exact"}
   },
   "secrets": null,
-  "outbound_number_id": null,
+  "telephony_number_id": null,
   "is_active": true,
   "supported_channels": ["voice"]
 }
@@ -1013,7 +1013,7 @@ keyword_filter for Hindi filler words.
     "keyword_filter": { "enabled": true, "keywords": ["hmm", "hm", "ok", "okay", "yes", "hello", "hi", "haan", "acha"], "match_type": "exact" },
     "interruption": { "mode": "enabled", "min_words": 2 }
   },
-  "outbound_number_id": null,
+  "telephony_number_id": null,
   "is_active": true,
   "supported_channels": ["voice"]
 }
@@ -1154,7 +1154,7 @@ deepgram STT for English-only inbound.
     "user_idle_configuration": { "enabled": true, "timeout": 8.0, "idle_message": "The customer has been silent. Check if they are still on the call.", "max_retries": 2 },
     "interruption": { "mode": "enabled", "min_words": 1 }
   },
-  "outbound_number_id": null,
+  "telephony_number_id": null,
   "is_active": true,
   "supported_channels": ["voice"]
 }
@@ -1204,7 +1204,7 @@ supported_channels chat-only.
     "ui_catalog": { "enabled_groups": ["core"], "enabled_primitives": [], "disabled_primitives": [] }
   },
   "secrets": null,
-  "outbound_number_id": null,
+  "telephony_number_id": null,
   "is_active": true,
   "supported_channels": ["chat"]
 }

@@ -383,7 +383,7 @@ class Worker:
                 # be a hot loop on an unresolvable state — instead, mark the
                 # lead FINISHED with a terminal outcome and alert ops.
                 logger.error(
-                    f"Worker {self._uuid}: no outbound number for lead "
+                    f"Worker {self._uuid}: no telephony number for lead "
                     f"{locked.id} (template={config.template}, "
                     f"reseller={config.reseller_id}, merchant={config.merchant_id}). "
                     "Marking FINISHED with NUMBER_UNAVAILABLE."

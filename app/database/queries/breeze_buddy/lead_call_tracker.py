@@ -31,7 +31,7 @@ def insert_lead_call_tracker_query(
     execution_mode: ExecutionMode = ExecutionMode.TELEPHONY,
     status: LeadCallStatus = LeadCallStatus.BACKLOG,  # Status with default for backward compatibility
     call_id: Optional[str] = None,  # For inbound calls where call_sid is known upfront
-    outbound_number_id: Optional[str] = None,  # For inbound calls
+    telephony_number_id: Optional[str] = None,  # For inbound calls
     call_direction: CallDirection = CallDirection.OUTBOUND,  # Direction of call
     outcome: Optional[
         str
@@ -46,7 +46,7 @@ def insert_lead_call_tracker_query(
         template: Name of the template (kept for backward compatibility)
         execution_mode: Execution mode (TELEPHONY, TELEPHONY_TEST, DAILY, DAILY_TEST)
         call_id: Call SID (optional, used for inbound calls where call_sid is known upfront)
-        outbound_number_id: Outbound number ID (optional, used for inbound calls)
+        telephony_number_id: Telephony number ID (optional, used for inbound calls)
         call_direction: Direction of call (INBOUND or OUTBOUND)
         outcome: Call outcome (optional, used for blocked calls e.g. BLOCKED_REJECT, BLOCKED_REDIRECT)
     """
@@ -69,7 +69,7 @@ def insert_lead_call_tracker_query(
             "cost",
             "execution_mode",
             "call_id",
-            "outbound_number_id",
+            "telephony_number_id",
             "call_direction",
             "outcome",
             "created_at",
@@ -95,7 +95,7 @@ def insert_lead_call_tracker_query(
         cost,
         execution_mode.value,
         call_id,
-        outbound_number_id,
+        telephony_number_id,
         call_direction.value,
         outcome,
         datetime.now(),
@@ -196,7 +196,7 @@ def update_lead_call_details_query(
     status: LeadCallStatus,
     call_id: str,
     call_initiated_time: datetime,
-    outbound_number_id: str,
+    telephony_number_id: str,
 ) -> Tuple[str, List[Any]]:
     """
     Generate query to update lead call details.
@@ -206,7 +206,7 @@ def update_lead_call_details_query(
     """
     text = f"""
         UPDATE "{LEAD_CALL_TRACKER_TABLE}"
-        SET "status" = $1, "call_id" = $2, "updated_at" = NOW(), "call_initiated_time" = $3, "outbound_number_id" = $4
+        SET "status" = $1, "call_id" = $2, "updated_at" = NOW(), "call_initiated_time" = $3, "telephony_number_id" = $4
         WHERE "id" = $5 AND "status" = $6
         RETURNING *;
     """
@@ -214,7 +214,7 @@ def update_lead_call_details_query(
         status.value,
         call_id,
         call_initiated_time,
-        outbound_number_id,
+        telephony_number_id,
         id,
         LeadCallStatus.BACKLOG.value,
     ]
@@ -394,7 +394,7 @@ def get_all_lead_call_trackers_query(
         FROM
             "{LEAD_CALL_TRACKER_TABLE}" lct
         LEFT JOIN
-            "{TELEPHONY_NUMBER_TABLE}" ou ON lct.outbound_number_id = ou.id
+            "{TELEPHONY_NUMBER_TABLE}" ou ON lct.telephony_number_id = ou.id
     """
     values: List[Any] = []
     conditions = []

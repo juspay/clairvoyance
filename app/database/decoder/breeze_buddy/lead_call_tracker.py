@@ -24,7 +24,7 @@ def decode_lead_call_tracker(row: asyncpg.Record) -> Optional[LeadCallTracker]:
 
     return LeadCallTracker(
         id=row["id"],
-        outbound_number_id=row["outbound_number_id"],
+        telephony_number_id=row["telephony_number_id"],
         reseller_id=row["reseller_id"],
         template=row["template"],
         template_id=str(row["template_id"]) if row.get("template_id") else None,

@@ -76,17 +76,17 @@ async def test_schedule_depth_alert_carries_threshold(fake_redis, captured_slack
 
 async def test_channel_drift_alert_throttles_per_number(fake_redis, captured_slack):
     """
-    Throttle key includes the outbound_number_id — drift on number A
+    Throttle key includes the telephony_number_id — drift on number A
     must not suppress an alert about number B.
     """
     await alerts.raise_channel_drift(
-        outbound_number_id="num-A", expected_free=5, actual_free=0
+        telephony_number_id="num-A", expected_free=5, actual_free=0
     )
     await alerts.raise_channel_drift(
-        outbound_number_id="num-A", expected_free=5, actual_free=0
+        telephony_number_id="num-A", expected_free=5, actual_free=0
     )
     await alerts.raise_channel_drift(
-        outbound_number_id="num-B", expected_free=5, actual_free=0
+        telephony_number_id="num-B", expected_free=5, actual_free=0
     )
 
     # num-A repeat suppressed; num-B fires fresh.

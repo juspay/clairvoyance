@@ -43,7 +43,7 @@ def require_number_in_tenant_scope(
     template_merchant_id: Optional[str],
 ) -> None:
     """
-    A template may pin (template.outbound_number_id) only:
+    A template may pin (template.telephony_number_id) only:
       - shared-pool numbers (no owner),
       - numbers owned by the template's own merchant, or
       - numbers owned by the template's umbrella.
@@ -144,7 +144,7 @@ def filter_numbers_by_rbac(
       numbers under it — plus their templates' pins.
     - merchant/user: numbers owned by one of their merchants plus
       `pinned_number_ids` — the ids their accessible templates pin via
-      template.outbound_number_id (so a merchant dialing from a shared-pool
+      template.telephony_number_id (so a merchant dialing from a shared-pool
       number still sees THAT number, without the whole shared fleet leaking
       cross-tenant). Umbrella-owned numbers are NOT visible to merchants:
       the reseller_ids their JWT carries mean workspace membership, not
@@ -214,10 +214,13 @@ def may_view_as(
     for that workspace's view? Admins may view any workspace; everyone else
     only workspaces already inside their JWT scope ('*' = unrestricted).
 
-    Defense in depth: the narrowing itself runs AFTER filter_numbers_by_rbac
-    and intersects, so it cannot widen regardless — this gate makes the
-    property structural instead of ordering-dependent, so a future reorder
-    of the filter steps cannot turn the param into a bypass.
+    Defense in depth, not a standalone guarantee: the no-widening property
+    comes from the narrowing being an intersection applied AFTER
+    filter_numbers_by_rbac. This gate adds an independent membership check
+    on top, but it is deliberately permissive for admins and for '*'
+    wildcard scopes — for those callers it passes ANY workspace id, so the
+    intersection ordering is still load-bearing. Keep the narrowing after
+    the RBAC filter.
     """
     if current_user.role == "admin":
         return True

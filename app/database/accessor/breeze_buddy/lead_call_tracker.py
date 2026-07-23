@@ -89,7 +89,7 @@ async def create_lead_call_tracker(
     execution_mode: ExecutionMode = ExecutionMode.TELEPHONY,
     status: LeadCallStatus = LeadCallStatus.BACKLOG,  # Status with default for backward compatibility
     call_id: Optional[str] = None,  # For inbound calls where call_sid is known upfront
-    outbound_number_id: Optional[str] = None,  # For inbound calls
+    telephony_number_id: Optional[str] = None,  # For inbound calls
     call_direction: CallDirection = CallDirection.OUTBOUND,  # Direction of call
     outcome: Optional[
         str
@@ -103,7 +103,7 @@ async def create_lead_call_tracker(
         template: Name of the template (kept for backward compatibility)
         execution_mode: Execution mode (TELEPHONY, TELEPHONY_TEST, DAILY, DAILY_TEST)
         call_id: Call SID (optional, used for inbound calls where call_sid is known upfront)
-        outbound_number_id: Outbound number ID (optional, used for inbound calls)
+        telephony_number_id: Telephony number ID (optional, used for inbound calls)
         call_direction: Direction of call (INBOUND or OUTBOUND, defaults to OUTBOUND)
         outcome: Call outcome (optional, e.g. BLOCKED_REJECT, BLOCKED_REDIRECT)
 
@@ -132,7 +132,7 @@ async def create_lead_call_tracker(
             execution_mode=execution_mode,
             status=status,  # Pass status (defaults to BACKLOG for backward compatibility)
             call_id=call_id,
-            outbound_number_id=outbound_number_id,
+            telephony_number_id=telephony_number_id,
             call_direction=call_direction,
             outcome=outcome,
         )
@@ -261,7 +261,7 @@ async def update_lead_call_details(
     status: LeadCallStatus,
     call_id: str,
     call_initiated_time: datetime,
-    outbound_number_id: str,
+    telephony_number_id: str,
 ) -> Optional[LeadCallTracker]:
     """
     Update lead call details.
@@ -272,7 +272,7 @@ async def update_lead_call_details(
 
     try:
         query_text, values = update_lead_call_details_query(
-            id, status, call_id, call_initiated_time, outbound_number_id
+            id, status, call_id, call_initiated_time, telephony_number_id
         )
         result = await run_parameterized_query(query_text, values)
         if result and get_row_count(result) > 0:

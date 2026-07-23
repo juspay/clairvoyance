@@ -92,7 +92,7 @@ async def test_reconcile_channels_initialises_missing_list(fake_redis, monkeypat
 
 
 async def test_reconcile_channels_skips_disabled_numbers(fake_redis, monkeypatch):
-    """DISABLED outbound numbers are not dispatchable; reconciler must not
+    """DISABLED telephony numbers are not dispatchable; reconciler must not
     create or maintain channel state for them (would inflate Redis +
     drift alerts).
     """

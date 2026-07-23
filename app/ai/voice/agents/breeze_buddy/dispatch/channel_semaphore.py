@@ -1,7 +1,7 @@
 """
-Channel-capacity semaphore — one Redis LIST per outbound number.
+Channel-capacity semaphore — one Redis LIST per telephony number.
 
-Each list ``bb:channel:{outbound_number_id}`` holds M opaque tokens, where
+Each list ``bb:channel:{telephony_number_id}`` holds M opaque tokens, where
 M = ``telephony_number.maximum_channels``. Workers ``BLPOP`` a token before
 dialing; call-end webhooks ``LPUSH`` a token back. Token identity is
 irrelevant — only the count matters.
@@ -28,10 +28,10 @@ def _new_token() -> str:
 
 
 async def init_channel_semaphore(
-    outbound_number_id: str, maximum_channels: int
+    telephony_number_id: str, maximum_channels: int
 ) -> bool:
     """
-    Initialise (or reset) the channel semaphore for an outbound number.
+    Initialise (or reset) the channel semaphore for an telephony number.
 
     Idempotent: ``DEL`` followed by ``RPUSH`` ensures exactly M tokens. Called
     by the reconciler when a channel LIST is missing (cold start, Redis loss).
@@ -41,7 +41,7 @@ async def init_channel_semaphore(
     """
     if maximum_channels <= 0:
         return False
-    key = channel_key(outbound_number_id)
+    key = channel_key(telephony_number_id)
     try:
         redis = await get_redis_service()
         client: Any = cast(Any, await redis.get_client())
@@ -51,33 +51,33 @@ async def init_channel_semaphore(
             await pipe.execute()
         return True
     except Exception as e:  # noqa: BLE001
-        logger.error(f"init_channel_semaphore failed for {outbound_number_id}: {e}")
+        logger.error(f"init_channel_semaphore failed for {telephony_number_id}: {e}")
         return False
 
 
-async def topup_channel_tokens(outbound_number_id: str, count: int) -> int:
+async def topup_channel_tokens(telephony_number_id: str, count: int) -> int:
     """Add ``count`` tokens to an existing semaphore. No-op if count <= 0."""
     if count <= 0:
         return 0
-    key = channel_key(outbound_number_id)
+    key = channel_key(telephony_number_id)
     try:
         redis = await get_redis_service()
         client: Any = cast(Any, await redis.get_client())
         await client.rpush(key, *[_new_token() for _ in range(count)])
         return count
     except Exception as e:  # noqa: BLE001
-        logger.error(f"topup_channel_tokens failed for {outbound_number_id}: {e}")
+        logger.error(f"topup_channel_tokens failed for {telephony_number_id}: {e}")
         return 0
 
 
-async def trim_channel_tokens(outbound_number_id: str, count: int) -> int:
+async def trim_channel_tokens(telephony_number_id: str, count: int) -> int:
     """
     Remove up to ``count`` tokens from an existing semaphore (LPOP loop).
     Used by the reconciler when ``LLEN`` exceeds the expected free count.
     """
     if count <= 0:
         return 0
-    key = channel_key(outbound_number_id)
+    key = channel_key(telephony_number_id)
     removed = 0
     try:
         redis = await get_redis_service()
@@ -89,12 +89,12 @@ async def trim_channel_tokens(outbound_number_id: str, count: int) -> int:
             removed += 1
         return removed
     except Exception as e:  # noqa: BLE001
-        logger.error(f"trim_channel_tokens failed for {outbound_number_id}: {e}")
+        logger.error(f"trim_channel_tokens failed for {telephony_number_id}: {e}")
         return removed
 
 
 async def acquire_channel_token(
-    outbound_number_id: str, timeout_s: Optional[int] = None
+    telephony_number_id: str, timeout_s: Optional[int] = None
 ) -> Optional[str]:
     """
     Block-pop a token. Returns the token string on success, None on timeout.
@@ -103,7 +103,7 @@ async def acquire_channel_token(
     token is held until the call-end webhook calls ``release_channel_token``.
     On failure (exception, rate-limit, etc.) the worker must release manually.
     """
-    key = channel_key(outbound_number_id)
+    key = channel_key(telephony_number_id)
     t = BB_CHANNEL_BLPOP_TIMEOUT_S if timeout_s is None else timeout_s
     try:
         redis = await get_redis_service()
@@ -115,12 +115,12 @@ async def acquire_channel_token(
         _, token = popped
         return token
     except Exception as e:  # noqa: BLE001
-        logger.error(f"acquire_channel_token failed for {outbound_number_id}: {e}")
+        logger.error(f"acquire_channel_token failed for {telephony_number_id}: {e}")
         return None
 
 
 async def release_channel_token(
-    outbound_number_id: str, token: Optional[str] = None
+    telephony_number_id: str, token: Optional[str] = None
 ) -> bool:
     """
     LPUSH a token back into the semaphore. If ``token`` is None, a fresh
@@ -131,35 +131,35 @@ async def release_channel_token(
     by duplicate webhook firings, so calling this from a duplicate webhook
     is self-correcting within one reconciler tick.
     """
-    key = channel_key(outbound_number_id)
+    key = channel_key(telephony_number_id)
     try:
         redis = await get_redis_service()
         client: Any = cast(Any, await redis.get_client())
         await client.lpush(key, token if token is not None else _new_token())
         return True
     except Exception as e:  # noqa: BLE001
-        logger.error(f"release_channel_token failed for {outbound_number_id}: {e}")
+        logger.error(f"release_channel_token failed for {telephony_number_id}: {e}")
         return False
 
 
-async def channel_tokens_available(outbound_number_id: str) -> int:
+async def channel_tokens_available(telephony_number_id: str) -> int:
     """LLEN — used by metrics and the reconciler."""
-    key = channel_key(outbound_number_id)
+    key = channel_key(telephony_number_id)
     try:
         redis = await get_redis_service()
         client: Any = cast(Any, await redis.get_client())
         return int(await client.llen(key))
     except Exception as e:  # noqa: BLE001
-        logger.error(f"channel_tokens_available failed for {outbound_number_id}: {e}")
+        logger.error(f"channel_tokens_available failed for {telephony_number_id}: {e}")
         return 0
 
 
-async def channel_exists(outbound_number_id: str) -> bool:
+async def channel_exists(telephony_number_id: str) -> bool:
     """EXISTS — distinguishes "uninitialised" from "saturated" (LLEN==0)."""
-    key = channel_key(outbound_number_id)
+    key = channel_key(telephony_number_id)
     try:
         redis = await get_redis_service()
         return await redis.exists(key)
     except Exception as e:  # noqa: BLE001
-        logger.error(f"channel_exists failed for {outbound_number_id}: {e}")
+        logger.error(f"channel_exists failed for {telephony_number_id}: {e}")
         return False

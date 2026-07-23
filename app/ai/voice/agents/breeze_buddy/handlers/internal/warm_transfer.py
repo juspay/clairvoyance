@@ -66,28 +66,28 @@ async def connect_to_live_agent(
     """
     logger.info(f"Transfer called for {context.call_sid}")
 
-    # Fetch outbound number from database
-    if not context.lead or not context.lead.outbound_number_id:
+    # Fetch telephony number from database
+    if not context.lead or not context.lead.telephony_number_id:
         logger.error(
-            f"Transfer failed for call {context.call_sid}: no outbound_number_id in lead"
+            f"Transfer failed for call {context.call_sid}: no telephony_number_id in lead"
         )
         return {
             "status": "failed",
-            "reason": "missing_outbound_number_id",
-            "message": "Outbound number not configured for this call",
+            "reason": "missing_telephony_number_id",
+            "message": "Telephony number not configured for this call",
         }
 
     telephony_number_record = await get_telephony_number_by_id(
-        context.lead.outbound_number_id
+        context.lead.telephony_number_id
     )
     if not telephony_number_record:
         logger.error(
-            f"Transfer failed for call {context.call_sid}: outbound number not found"
+            f"Transfer failed for call {context.call_sid}: telephony number not found"
         )
         return {
             "status": "failed",
             "reason": "telephony_number_not_found",
-            "message": "Outbound number configuration not found",
+            "message": "Telephony number configuration not found",
         }
 
     telephony_number = telephony_number_record.number

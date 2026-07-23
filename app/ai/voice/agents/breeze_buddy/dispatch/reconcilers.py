@@ -212,7 +212,7 @@ async def reconcile_channel_tokens() -> None:
     """
     Heal channel-semaphore drift.
 
-    For each active outbound number:
+    For each active telephony number:
       - If the Redis LIST is missing, create it with M tokens (cold-start
         initialisation; this is the ONLY place channel state is created).
       - Otherwise compare ``LLEN`` against ``M - in_flight_calls_from_db``
@@ -281,7 +281,7 @@ async def reconcile_channel_tokens() -> None:
         # webhooks are failing in volume.
         if drift > drift_alert_threshold:
             await raise_channel_drift(
-                outbound_number_id=n.id,
+                telephony_number_id=n.id,
                 expected_free=expected_free,
                 actual_free=actual,
             )

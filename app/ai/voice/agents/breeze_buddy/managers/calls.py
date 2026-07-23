@@ -190,10 +190,10 @@ async def _get_available_number(
     template: Optional[TemplateModel],
 ) -> Optional[TelephonyNumber]:
     """
-    Resolve the outbound number to dial from. Returns None only for
+    Resolve the telephony number to dial from. Returns None only for
     permanent / semi-permanent failures:
 
-      - template.outbound_number_id points at a row that doesn't exist
+      - template.telephony_number_id points at a row that doesn't exist
       - the row's status is not AVAILABLE (manually disabled, or — for
         Twilio's legacy 1-bit gate — currently IN_USE on another call)
       - fallback search found nothing for this reseller/merchant pool
@@ -213,11 +213,13 @@ async def _get_available_number(
 
     number = None
 
-    if template and template.outbound_number_id:
+    if template and template.telephony_number_id:
         logger.info(
-            f"Using new approach: template {config.template} has outbound_number_id {template.outbound_number_id}"
+            f"Using new approach: template {config.template} has telephony_number_id {template.telephony_number_id}"
         )
-        telephony_number = await get_telephony_number_by_id(template.outbound_number_id)
+        telephony_number = await get_telephony_number_by_id(
+            template.telephony_number_id
+        )
 
         if (
             telephony_number
@@ -262,12 +264,12 @@ async def _get_available_number(
         elif telephony_number is None:
             logger.error(
                 f"_get_available_number: template {config.template} references "
-                f"outbound_number_id {template.outbound_number_id} which does not "
+                f"telephony_number_id {template.telephony_number_id} which does not "
                 "exist. This is a misconfiguration that will not self-heal."
             )
         else:
             logger.warning(
-                f"_get_available_number: outbound number {telephony_number.id} "
+                f"_get_available_number: telephony number {telephony_number.id} "
                 f"is in status {telephony_number.status.value} (not AVAILABLE) "
                 f"for template {config.template}."
             )
@@ -317,13 +319,13 @@ async def _get_available_number(
         # error level: the call silently cannot dial — this must reach the
         # ops alerting, unlike the routine shared-pool fallback (info).
         logger.error(
-            f"No outbound number found for reseller {config_reseller_id}, "
+            f"No telephony number found for reseller {config_reseller_id}, "
             f"template {config.template}, shop {config_merchant_id}"
         )
         return None
 
     logger.info(
-        f"Using outbound number_id {number.id} (provider: {number.provider}) "
+        f"Using telephony number_id {number.id} (provider: {number.provider}) "
         f"for template {config.template}, reseller {config.reseller_id}, shop {config.merchant_id}"
     )
     return number
@@ -331,7 +333,7 @@ async def _get_available_number(
 
 async def _acquire_number(number: TelephonyNumber) -> bool:
     """
-    Marks an outbound number as in use.
+    Marks an telephony number as in use.
     Uses atomic increment to avoid race conditions.
     For Exotel, only succeeds if channels < maximum_channels.
     Returns True if acquisition succeeded, False if at capacity.
@@ -352,7 +354,7 @@ async def _acquire_number(number: TelephonyNumber) -> bool:
 
 async def _release_number(number_id: str, provider: CallProvider):
     """
-    Releases an outbound number, making it available for other calls.
+    Releases an telephony number, making it available for other calls.
     Uses atomic decrement to avoid race conditions.
     """
     if provider == CallProvider.TWILIO:
@@ -455,7 +457,7 @@ async def reconcile_stuck_processing_leads():
     """
     Cleans up leads that are stuck in the PROCESSING state — call placed
     but no call-end webhook received within 10 minutes. Closes the row
-    with outcome=UNKNOWN, releases the outbound number + channel token,
+    with outcome=UNKNOWN, releases the telephony number + channel token,
     and triggers a retry where applicable.
 
     Registered on ``BackgroundTaskScheduler``; the scheduler's distributed
@@ -499,12 +501,12 @@ async def reconcile_stuck_processing_leads():
             )
 
             if (
-                locked_lead.outbound_number_id
+                locked_lead.telephony_number_id
                 and locked_lead.call_direction == CallDirection.OUTBOUND
                 and is_dispatchable(locked_lead.execution_mode)
             ):
                 telephony_number = await get_telephony_number_by_id(
-                    locked_lead.outbound_number_id
+                    locked_lead.telephony_number_id
                 )
                 if telephony_number:
                     await _release_number(
@@ -549,7 +551,7 @@ async def handle_call_completion(
     if not lead:
         logger.error(
             f"Could not find lead for call_id: {call_id}. "
-            f"Outbound number channel may be leaked — manual cleanup required. "
+            f"Telephony number channel may be leaked — manual cleanup required. "
             f"This can happen when a prior duplicate-call bug overwrote the call_id on the lead."
         )
         # §7.1 detection: orphan webhook = a call exists at the provider that
@@ -558,13 +560,13 @@ async def handle_call_completion(
         await raise_orphan_webhook(call_id=call_id, source="call_completion")
         return
 
-    # Always release outbound number (including transfers — bot leaves, cleanup happens here)
+    # Always release telephony number (including transfers — bot leaves, cleanup happens here)
     if (
-        lead.outbound_number_id
+        lead.telephony_number_id
         and lead.call_direction == CallDirection.OUTBOUND
         and is_dispatchable(lead.execution_mode)
     ):
-        telephony_number = await get_telephony_number_by_id(lead.outbound_number_id)
+        telephony_number = await get_telephony_number_by_id(lead.telephony_number_id)
         if telephony_number:
             await _release_number(telephony_number.id, telephony_number.provider)
             # Event-driven dispatch: return a token to the channel semaphore.
@@ -573,10 +575,10 @@ async def handle_call_completion(
             await release_channel_token(telephony_number.id)
         else:
             logger.error(
-                f"Could not find outbound number with id: {lead.outbound_number_id} to release."
+                f"Could not find telephony number with id: {lead.telephony_number_id} to release."
             )
     else:
-        logger.info(f"No outbound number id for lead: {lead.id}")
+        logger.info(f"No telephony number id for lead: {lead.id}")
 
     # Check if this is a transfer — for outcome override only
     is_transfer = (
@@ -642,7 +644,7 @@ async def handle_unanswered_calls(call_id: str):
     if not lead:
         logger.error(
             f"Could not find lead for call_id: {call_id}. "
-            f"Outbound number channel may be leaked — manual cleanup required. "
+            f"Telephony number channel may be leaked — manual cleanup required. "
             f"This can happen when a prior duplicate-call bug overwrote the call_id on the lead."
         )
         # §7.1 detection — see handle_call_completion for context.
@@ -661,25 +663,25 @@ async def handle_unanswered_calls(call_id: str):
             f"Failed to delete greeting audio from Redis for lead {lead.id}: {e}"
         )
 
-    # Release outbound number channel — do this before the FINISHED guard because the
+    # Release telephony number channel — do this before the FINISHED guard because the
     # channel must be freed regardless of lead status. _release_number is idempotent
     # (SQL uses GREATEST(0, ...)), so duplicate releases are safe.
     if (
-        lead.outbound_number_id
+        lead.telephony_number_id
         and lead.call_direction == CallDirection.OUTBOUND
         and is_dispatchable(lead.execution_mode)
     ):
-        telephony_number = await get_telephony_number_by_id(lead.outbound_number_id)
+        telephony_number = await get_telephony_number_by_id(lead.telephony_number_id)
         if telephony_number:
             await _release_number(telephony_number.id, telephony_number.provider)
             # Event-driven dispatch: return token to channel semaphore.
             await release_channel_token(telephony_number.id)
         else:
             logger.error(
-                f"Could not find outbound number with id: {lead.outbound_number_id} to release."
+                f"Could not find telephony number with id: {lead.telephony_number_id} to release."
             )
     else:
-        logger.info(f"No outbound number id for lead: {lead.id}")
+        logger.info(f"No telephony number id for lead: {lead.id}")
 
     # Guard: if another callback already finished this lead, skip to avoid duplicate retries.
     # This happens when the lock race causes multiple calls for the same lead — each call's

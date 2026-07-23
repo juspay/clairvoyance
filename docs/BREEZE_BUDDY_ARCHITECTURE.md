@@ -49,7 +49,7 @@ Breeze Buddy is a template-based voice agent system built on top of Pipecat for 
 ├────────────────────────┤  ├──────────────────┤  ├────────────────────────┤
 │ - Lead Call Tracker    │  │ - Template CRUD  │  │ - Agent.py             │
 │ - Call Config          │  │ - Schema mgmt    │  │ - Pipecat pipeline     │
-│ - Outbound Numbers     │  │ - Flow storage   │  │ - FlowManager          │
+│ - Telephony Numbers    │  │ - Flow storage   │  │ - FlowManager          │
 └────────────────────────┘  └──────────────────┘  └───────┬────────────────┘
                                                            │
                                     ┌──────────────────────┴──────────────┐

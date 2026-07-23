@@ -447,7 +447,7 @@ async def get_call_recording_handler(
     1. Fetches lead by call_id to get reseller_id and merchant_id
     2. Validates RBAC access (fails fast before fetching recording)
     3. For Daily mode leads: downloads via Daily API access-link or GCS
-    4. For telephony leads: gets provider from outbound number and downloads
+    4. For telephony leads: gets provider from telephony number and downloads
 
     Args:
         call_sid: The call SID (telephony) or room name (Daily) to fetch recording for
@@ -512,17 +512,17 @@ async def get_call_recording_handler(
             detail=f"Recording not found for call_sid: {call_sid}",
         )
 
-    # Step 5: Get provider from outbound number (telephony only)
-    if not lead.outbound_number_id:
-        logger.error(f"No outbound number ID for call_sid: {call_sid}")
+    # Step 5: Get provider from telephony number (telephony only)
+    if not lead.telephony_number_id:
+        logger.error(f"No telephony number ID for call_sid: {call_sid}")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Unable to determine call provider for call_sid: {call_sid}",
         )
 
-    telephony_number = await get_telephony_number_by_id(lead.outbound_number_id)
+    telephony_number = await get_telephony_number_by_id(lead.telephony_number_id)
     if not telephony_number:
-        logger.error(f"Outbound number not found: {lead.outbound_number_id}")
+        logger.error(f"Telephony number not found: {lead.telephony_number_id}")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Unable to determine call provider for call_sid: {call_sid}",

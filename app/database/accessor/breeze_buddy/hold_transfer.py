@@ -12,15 +12,15 @@ from typing import Any, Dict, Optional
 from app.core.logger import logger
 from app.database.queries import run_parameterized_query
 from app.database.queries.breeze_buddy.template import (
-    get_template_by_outbound_number_id_query,
+    get_template_by_telephony_number_id_query,
 )
 
 
-async def get_template_summary_by_outbound_number_id(
-    outbound_number_id: str,
+async def get_template_summary_by_telephony_number_id(
+    telephony_number_id: str,
     enable_inbound_only: bool = False,
 ) -> Optional[Dict[str, Any]]:
-    """Get a template summary by outbound_number_id.
+    """Get a template summary by telephony_number_id.
 
     Returns a plain dict instead of TemplateModel so this module never
     imports from the ai.voice layer — avoiding the circular dependency:
@@ -29,7 +29,7 @@ async def get_template_summary_by_outbound_number_id(
       → accessor.template
 
     Args:
-        outbound_number_id: Outbound number UUID.
+        telephony_number_id: Telephony number UUID.
         enable_inbound_only: If True, only return templates with
                              configurations.enable_inbound = true.
 
@@ -37,11 +37,13 @@ async def get_template_summary_by_outbound_number_id(
         Dict with keys: id, name, reseller_id, merchant_id, expected_payload_schema.
         None if no template found or on error.
     """
-    logger.info(f"Getting template summary by outbound_number_id: {outbound_number_id}")
+    logger.info(
+        f"Getting template summary by telephony_number_id: {telephony_number_id}"
+    )
 
     try:
-        query, values = get_template_by_outbound_number_id_query(
-            outbound_number_id, enable_inbound_only
+        query, values = get_template_by_telephony_number_id_query(
+            telephony_number_id, enable_inbound_only
         )
         result = await run_parameterized_query(query, values)
 
@@ -62,12 +64,14 @@ async def get_template_summary_by_outbound_number_id(
             logger.info(f"Template summary found: {summary['id']}")
             return summary
 
-        logger.info(f"No template found with outbound_number_id: {outbound_number_id}")
+        logger.info(
+            f"No template found with telephony_number_id: {telephony_number_id}"
+        )
         return None
 
     except Exception as e:
         logger.error(
-            f"Error getting template summary by outbound_number_id: {e}",
+            f"Error getting template summary by telephony_number_id: {e}",
             exc_info=True,
         )
         return None

@@ -15,7 +15,7 @@ Ingest  →  Schedule  →  Promote  →  Dispatch  →  Control
 (HTTP)     (ZSET)      (leader)    (workers)    (reconcilers)
 ```
 
-- **Throughput ceiling** = sum of `maximum_channels` across active outbound numbers. Not cron cadence, not worker count.
+- **Throughput ceiling** = sum of `maximum_channels` across active telephony numbers. Not cron cadence, not worker count.
 - **Dispatch latency** = promoter tick (200ms) + DB CAS + pre-checks + provider HTTP.
 - **No hot-path DB polling.** Ingest writes an event; promoter reads Redis; workers read Redis.
 - **Horizontally scalable.** Add pods → more workers → more throughput, up to the telephony ceiling.
@@ -92,7 +92,7 @@ if not acquire_lock_on_lead_by_id(lead_id, expected_status=BACKLOG): drop
 if not pass_pre_checks(lead): finalize_with_precheck_failure; continue
 if outside_calling_hours(lead): ZADD next_window; release_lock; continue
 if rate_limited(lead.phone): ZADD now + window; release_lock; continue   # before channel
-number = pick_outbound_number(lead)
+number = pick_telephony_number(lead)
 if not number: ZADD now+10s; release_lock; continue
 
 token = BLPOP bb:channel:{number.id} timeout=10s
@@ -110,7 +110,7 @@ except:
 LREM bb:processing:leads:{worker_uuid} 1 lead_id
 ```
 
-**Channel semaphore.** Each outbound number has a Redis LIST `bb:channel:{id}` with `maximum_channels` interchangeable tokens. Workers `BLPOP` to acquire; webhook `LPUSH`es to release. Capacity is enforced by Redis, not by a DB counter — no row-lock contention on hot numbers.
+**Channel semaphore.** Each telephony number has a Redis LIST `bb:channel:{id}` with `maximum_channels` interchangeable tokens. Workers `BLPOP` to acquire; webhook `LPUSH`es to release. Capacity is enforced by Redis, not by a DB counter — no row-lock contention on hot numbers.
 
 Per-customer rate limit is checked **before** the channel `BLPOP` so a rate-limited lead never holds capacity unnecessarily.
 
@@ -122,7 +122,7 @@ Four reconcilers registered on the existing `BackgroundTaskScheduler` (`app/core
 |---|---|---|
 | `reconcile_backlog_to_zset` | 60s | Scan `WHERE status='BACKLOG' AND next_attempt_at <= NOW() + INTERVAL '2 minutes' AND is_locked=FALSE`. `ZADD` any missing from `bb:schedule:leads`. Heals ingest-time `ZADD` losses and Redis flushes. |
 | `reap_stuck_processing_lists` | 30s | For each `bb:processing:leads:{worker_uuid}` whose worker heartbeat (`bb:worker:heartbeat:{uuid}`, TTL 60s) has expired: read DB status. If `PROCESSING`, drop the tracking entry. If `BACKLOG`, re-`ZADD` and `LREM`. |
-| `reconcile_channel_tokens` | 60s | For each active outbound number: if `EXISTS bb:channel:{id}` is 0, `RPUSH` all M tokens (cold-start initialisation). Else compute `M − in_flight_calls_from_db` vs `LLEN` and top up or trim. **This is the only place channel state is created or healed.** No boot-time init logic anywhere else. |
+| `reconcile_channel_tokens` | 60s | For each active telephony number: if `EXISTS bb:channel:{id}` is 0, `RPUSH` all M tokens (cold-start initialisation). Else compute `M − in_flight_calls_from_db` vs `LLEN` and top up or trim. **This is the only place channel state is created or healed.** No boot-time init logic anywhere else. |
 | `clean_stale_bb_locks` | 300s | `UPDATE lead_call_tracker SET is_locked=FALSE WHERE is_locked=TRUE AND locked_at < NOW() − INTERVAL '10 minutes'`. |
 
 The app lifespan triggers `reconcile_channel_tokens` once on startup — via the same scheduler `_execute_task` path so the existing lock guarantees single-pod execution. Cuts the cold-start window from 60s to ~0s.

@@ -215,9 +215,9 @@ def decode_template(result: asyncpg.Record) -> Optional[TemplateModel]:
         expected_callback_response_schema=expected_callback_response_schema_data,
         configurations=configurations,
         secrets=secrets_data,
-        outbound_number_id=(
-            str(result["outbound_number_id"])
-            if result.get("outbound_number_id")
+        telephony_number_id=(
+            str(result["telephony_number_id"])
+            if result.get("telephony_number_id")
             else None
         ),
         is_active=result["is_active"],

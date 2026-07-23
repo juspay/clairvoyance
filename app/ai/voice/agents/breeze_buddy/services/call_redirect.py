@@ -19,7 +19,7 @@ from app.database.accessor import get_telephony_number_by_id
 async def redirect_call(
     call_sid: str,
     redirect_number: str,
-    outbound_number_id: str,
+    telephony_number_id: str,
     reseller_id: str,
     merchant_id: Optional[str],
     telephony_service: VoiceCallProvider,
@@ -32,9 +32,9 @@ async def redirect_call(
     Returns True on success, False on failure.
     """
     try:
-        outbound_record = await get_telephony_number_by_id(outbound_number_id)
+        outbound_record = await get_telephony_number_by_id(telephony_number_id)
         if not outbound_record:
-            logger.error(f"[REDIRECT] Outbound number {outbound_number_id} not found")
+            logger.error(f"[REDIRECT] Telephony number {telephony_number_id} not found")
             return False
 
         if telephony_service.conference_service is None:

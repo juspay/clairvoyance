@@ -116,6 +116,33 @@ def format_template_ref(
     return ref + ")"
 
 
+def log_deprecated_usage(
+    old: str,
+    replacement: str,
+    *,
+    kind: str = "value",
+) -> None:
+    """Log a ``[Deprecated]`` warning for a non-field usage.
+
+    The counterpart to :func:`log_deprecated_fields` for things that are not
+    Pydantic model fields — enum value aliases, query params, headers.
+    Per-occurrence like the field variant (each hit is useful for tracking
+    migration), and the log carries full context via the loguru patcher.
+
+    Example::
+
+        log_deprecated_usage(
+            "outbound-numbers", "telephony-numbers", kind="analytics type"
+        )
+    """
+    logger.warning(
+        "[Deprecated] {} '{}' is used. Use '{}' instead.",
+        kind,
+        _sanitize(old),
+        _sanitize(replacement),
+    )
+
+
 def log_deprecated_fields(
     instance: BaseModel,
     field_map: Dict[str, str],

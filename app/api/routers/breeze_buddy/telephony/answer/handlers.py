@@ -17,7 +17,7 @@ OUTBOUND (we call customer):
 INBOUND (customer calls us):
 1. Customer calls inbound number
 2. Provider calls /{provider}/answer endpoint
-3. Look up templates by outbound number
+3. Look up templates by telephony number
 4. Single template: return direct WebSocket connection
 5. Multiple templates: IVR mode (agent-side for both providers)
    - Pre-generate audio with our TTS
@@ -72,7 +72,7 @@ from app.database.accessor.breeze_buddy.telephony_number import (
     get_telephony_number_by_number,
 )
 from app.database.accessor.breeze_buddy.template import (
-    get_all_templates_by_outbound_number_id,
+    get_all_templates_by_telephony_number_id,
     get_template_by_id,
 )
 from app.schemas import (
@@ -146,25 +146,25 @@ async def resolve_call_templates(
             "reseller_id": lead.reseller_id,
         }
 
-    # Inbound call - look up templates by outbound number
+    # Inbound call - look up templates by telephony number
     logger.info("[Answer] Inbound call detected, looking up templates")
 
     if not to_number:
         logger.error("[Answer] No 'To' number in inbound call request")
         return {"error": "Missing To number", "error_status": 400}
 
-    # Look up outbound number by phone number
+    # Look up telephony number by phone number
     telephony_number = await get_telephony_number_by_number(to_number)
     if not telephony_number:
-        logger.error(f"[Answer] No outbound number found for: {to_number}")
+        logger.error(f"[Answer] No telephony number found for: {to_number}")
         return {"error": "Number not configured", "error_status": 404}
 
-    # Get all templates for this outbound number
-    templates = await get_all_templates_by_outbound_number_id(telephony_number.id)
+    # Get all templates for this telephony number
+    templates = await get_all_templates_by_telephony_number_id(telephony_number.id)
 
     if not templates:
         logger.error(
-            f"[Answer] No templates found for outbound_number_id: {telephony_number.id}"
+            f"[Answer] No templates found for telephony_number_id: {telephony_number.id}"
         )
         return {"error": "No templates available", "error_status": 404}
 
@@ -450,9 +450,9 @@ async def _create_inbound_lead_in_answer_handler(
             call_initiated_time=datetime.now(timezone.utc),
             status=LeadCallStatus.PROCESSING,
             call_id=call_id,
-            outbound_number_id=(
-                str(first_template.outbound_number_id)
-                if first_template.outbound_number_id
+            telephony_number_id=(
+                str(first_template.telephony_number_id)
+                if first_template.telephony_number_id
                 else None
             ),
             call_direction=CallDirection.INBOUND,
@@ -693,9 +693,9 @@ async def handle_provider_answer(request: Request, provider: str) -> Response:
                             templates[0].name if templates else UNKNOWN_TEMPLATE
                         ),
                         template_id=str(templates[0].id) if templates else None,
-                        outbound_number_id=(
-                            str(templates[0].outbound_number_id)
-                            if templates and templates[0].outbound_number_id
+                        telephony_number_id=(
+                            str(templates[0].telephony_number_id)
+                            if templates and templates[0].telephony_number_id
                             else None
                         ),
                         block_action=block_action,

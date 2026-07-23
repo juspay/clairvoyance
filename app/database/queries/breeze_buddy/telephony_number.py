@@ -12,7 +12,7 @@ from app.schemas import CallProvider, TelephonyNumberStatus
 TELEPHONY_NUMBER_TABLE = "telephony_numbers"
 
 
-# Outbound number queries
+# Telephony number queries
 def insert_telephony_number_query(
     id: str,
     number: str,
@@ -24,7 +24,7 @@ def insert_telephony_number_query(
     merchant_id: Optional[str] = None,
 ) -> Tuple[str, List[Any]]:
     """
-    Generate query to insert outbound number record.
+    Generate query to insert telephony number record.
     """
     text = f"""
         INSERT INTO "{TELEPHONY_NUMBER_TABLE}"
@@ -59,24 +59,24 @@ def insert_telephony_number_query(
     return text, values
 
 
-def get_telephony_number_by_id_query(outbound_number_id: str) -> Tuple[str, List[Any]]:
+def get_telephony_number_by_id_query(telephony_number_id: str) -> Tuple[str, List[Any]]:
     """
-    Generate query to get outbound number by ID.
+    Generate query to get telephony number by ID.
     """
     text = f"""
         SELECT *
         FROM "{TELEPHONY_NUMBER_TABLE}"
         WHERE "id" = $1;
     """
-    values = [outbound_number_id]
+    values = [telephony_number_id]
     return text, values
 
 
 def update_telephony_number_status_query(
-    outbound_number_id: str, status: TelephonyNumberStatus
+    telephony_number_id: str, status: TelephonyNumberStatus
 ) -> Tuple[str, List[Any]]:
     """
-    Generate query to update outbound number status.
+    Generate query to update telephony number status.
     """
     text = f"""
         UPDATE "{TELEPHONY_NUMBER_TABLE}"
@@ -84,15 +84,15 @@ def update_telephony_number_status_query(
         WHERE "id" = $1
         RETURNING *;
     """
-    values = [outbound_number_id, status.value]
+    values = [telephony_number_id, status.value]
     return text, values
 
 
 def increment_telephony_number_channels_query(
-    outbound_number_id: str,
+    telephony_number_id: str,
 ) -> Tuple[str, List[Any]]:
     """
-    Generate query to atomically increment outbound number channels by 1.
+    Generate query to atomically increment telephony number channels by 1.
     Only increments if channels < maximum_channels to enforce the capacity limit.
     Returns no rows if the number is at capacity, allowing the caller to detect this.
     This avoids race conditions by using database-level atomic increment with constraint.
@@ -104,15 +104,15 @@ def increment_telephony_number_channels_query(
           AND COALESCE("channels", 0) < COALESCE("maximum_channels", 0)
         RETURNING *;
     """
-    values = [outbound_number_id]
+    values = [telephony_number_id]
     return text, values
 
 
 def decrement_telephony_number_channels_query(
-    outbound_number_id: str,
+    telephony_number_id: str,
 ) -> Tuple[str, List[Any]]:
     """
-    Generate query to atomically decrement outbound number channels by 1.
+    Generate query to atomically decrement telephony number channels by 1.
     Uses GREATEST to ensure channels never goes below 0.
     This avoids race conditions by using database-level atomic decrement.
     """
@@ -122,13 +122,13 @@ def decrement_telephony_number_channels_query(
         WHERE "id" = $1
         RETURNING *;
     """
-    values = [outbound_number_id]
+    values = [telephony_number_id]
     return text, values
 
 
-def disable_telephony_number_query(outbound_number_id: str) -> Tuple[str, List[Any]]:
+def disable_telephony_number_query(telephony_number_id: str) -> Tuple[str, List[Any]]:
     """
-    Generate query to disable outbound number by ID.
+    Generate query to disable telephony number by ID.
     """
     text = f"""
         UPDATE "{TELEPHONY_NUMBER_TABLE}"
@@ -136,13 +136,13 @@ def disable_telephony_number_query(outbound_number_id: str) -> Tuple[str, List[A
         WHERE "id" = $1
         RETURNING *;
     """
-    values = [outbound_number_id, TelephonyNumberStatus.DISABLED.value]
+    values = [telephony_number_id, TelephonyNumberStatus.DISABLED.value]
     return text, values
 
 
 def get_all_telephony_numbers_query() -> Tuple[str, List[Any]]:
     """
-    Generate query to get all outbound numbers.
+    Generate query to get all telephony numbers.
     """
     text = f"""
         SELECT * FROM "{TELEPHONY_NUMBER_TABLE}"
@@ -157,7 +157,7 @@ def get_all_telephony_numbers_with_call_count_query(
     end_date: Optional[datetime] = None,
 ) -> Tuple[str, List[Any]]:
     """
-    Generate query to get all outbound numbers with their call counts and no answer breakdown.
+    Generate query to get all telephony numbers with their call counts and no answer breakdown.
     """
 
     values: List[Any] = []
@@ -181,7 +181,7 @@ def get_all_telephony_numbers_with_call_count_query(
             COALESCE(COUNT(lct.id), 0) AS total_calls,
             COALESCE(COUNT(lct.id) FILTER (WHERE lct.outcome = 'NO_ANSWER'), 0) AS calls_no_answer
         FROM "{TELEPHONY_NUMBER_TABLE}" ou
-        LEFT JOIN "{LEAD_CALL_TRACKER_TABLE}" lct ON ou.id = lct.outbound_number_id{where_clause}
+        LEFT JOIN "{LEAD_CALL_TRACKER_TABLE}" lct ON ou.id = lct.telephony_number_id{where_clause}
         GROUP BY ou.id
         ORDER BY ou.created_at DESC;
     """
@@ -192,7 +192,7 @@ def get_telephony_number_based_on_status_and_provider_query(
     status: TelephonyNumberStatus, provider: CallProvider
 ) -> Tuple[str, List[Any]]:
     """
-    Generate query to get outbound number by status and provider.
+    Generate query to get telephony number by status and provider.
     """
     text = f"""
         SELECT *
@@ -206,7 +206,7 @@ def get_telephony_number_based_on_status_and_provider_query(
 
 def get_telephony_number_by_number_query(number: str) -> Tuple[str, List[Any]]:
     """
-    Generate query to get outbound number by phone number.
+    Generate query to get telephony number by phone number.
     """
     text = f'SELECT * FROM "{TELEPHONY_NUMBER_TABLE}" WHERE "number" = $1;'
     values = [number]
@@ -265,15 +265,15 @@ def get_template_pinned_number_ids_query(
     merchant_ids: List[str], reseller_ids: List[str]
 ) -> Tuple[str, List[Any]]:
     """
-    Generate query for the ids of numbers pinned (template.outbound_number_id)
+    Generate query for the ids of numbers pinned (template.telephony_number_id)
     by templates belonging to any of the given merchants or umbrellas. Used by
     the numbers RBAC filter so non-admins can see the shared-pool numbers their
     agents actually dial from without seeing the whole fleet.
     """
     text = """
-        SELECT DISTINCT "outbound_number_id"
+        SELECT DISTINCT "telephony_number_id"
         FROM "template"
-        WHERE "outbound_number_id" IS NOT NULL
+        WHERE "telephony_number_id" IS NOT NULL
           AND ("merchant_id" = ANY($1) OR "reseller_id" = ANY($2));
     """
     values: List[Any] = [list(merchant_ids), list(reseller_ids)]

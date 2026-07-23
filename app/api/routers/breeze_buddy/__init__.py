@@ -77,7 +77,7 @@ router.include_router(configurations_router, prefix="", tags=["configurations"])
 # Credentials (API keys, tokens - centralized secret management)
 router.include_router(credentials_router, prefix="", tags=["credentials"])
 
-# Outbound Numbers (phone numbers for making calls)
+# Telephony numbers (caller IDs + inbound DIDs)
 router.include_router(numbers_router, prefix="", tags=["numbers"])
 
 # Templates (conversational flow definitions)
