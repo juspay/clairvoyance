@@ -64,7 +64,7 @@ from app.database.accessor import (
     update_telephony_number_status,
 )
 from app.schemas import (
-    IVR_OPTIONS_TEMPLATE,
+    TEMPLATELESS_PLACEHOLDER_TEMPLATES,
     CallDirection,
     CallExecutionConfig,
     CallProvider,
@@ -82,6 +82,11 @@ async def _get_lead_config(lead: LeadCallTracker) -> Optional[CallExecutionConfi
     """
     Retrieves the call execution configuration for a given lead.
     """
+    if lead.template in TEMPLATELESS_PLACEHOLDER_TEMPLATES:
+        logger.info(
+            f"Skipping config check for placeholder template {lead.template} for lead {lead.id}"
+        )
+        return None
 
     config = (
         await get_call_execution_config_by_template_id(lead.template_id)
@@ -557,15 +562,9 @@ async def handle_call_completion(
         lead.metaData and lead.metaData.get("transfer", {}).get("status") == "success"
     )
 
-    config = None
-    if lead.template == IVR_OPTIONS_TEMPLATE:
-        logger.info(
-            f"Skipping config check for template IVR-OPTIONS for lead {lead.id}"
-        )
-    else:
-        config = await _get_lead_config(lead)
-        if not config:
-            return
+    config = await _get_lead_config(lead)
+    if not config and lead.template not in TEMPLATELESS_PLACEHOLDER_TEMPLATES:
+        return
 
     # Override outcome to "TRANSFERRED" for transfer calls
     if is_transfer:
@@ -662,15 +661,9 @@ async def handle_unanswered_calls(call_id: str):
         )
         return
 
-    config = None
-    if lead.template == IVR_OPTIONS_TEMPLATE:
-        logger.info(
-            f"Skipping config check for template IVR-OPTIONS for lead {lead.id}"
-        )
-    else:
-        config = await _get_lead_config(lead)
-        if not config:
-            return
+    config = await _get_lead_config(lead)
+    if not config and lead.template not in TEMPLATELESS_PLACEHOLDER_TEMPLATES:
+        return
 
     await update_lead_call_completion_details(
         id=lead.id,
