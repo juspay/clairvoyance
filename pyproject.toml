@@ -71,7 +71,9 @@ line_length = 88
 combine_as_imports = true
 
 [tool.pyrefly]
-project-excludes = []
+# dragontts/ is a self-contained sub-service (own pyproject/venv, ported from a
+# non-pyrefly repo) — exclude it from clairvoyance's type-check.
+project-excludes = ["dragontts"]
 
 [dependency-groups]
 dev = [

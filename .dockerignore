@@ -104,3 +104,11 @@ coverage.xml
 
 # UV cache (keep .python-version and uv.lock - they're needed in Docker)
 .uv/
+
+# DragonTTS — self-contained sub-service (own Dockerfile/pyproject/venv under
+# dragontts/). The clairvoyance Dockerfile does `COPY . .` (NOT `COPY app ./app`),
+# so this exclusion is LOAD-BEARING: without it, the entire dragontts/ service
+# (its own Dockerfile, pyproject, and app/ subpackage) would be baked into the
+# clairvoyance image. Do NOT remove it thinking it's redundant. dragontts ships
+# its own image via dragontts-docker-publish.yml (context: dragontts).
+dragontts/
