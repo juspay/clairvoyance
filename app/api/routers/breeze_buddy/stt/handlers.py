@@ -39,6 +39,10 @@ from app.schemas.breeze_buddy.stt import (
 # Seconds the client gets to send the JSON config message after connecting.
 _STREAM_CONFIG_TIMEOUT_SECONDS = 10.0
 
+# Per-frame cap on binary audio messages. Generous for real clients (~2.5s of
+# 48kHz PCM16 mono) while bounding what one frame can buffer server-side.
+_MAX_CHUNK_BYTES = 256 * 1024
+
 # Application close codes (4xxx range is free for applications).
 _WS_BAD_REQUEST = 4400
 _WS_UNAUTHORIZED = 4401
@@ -153,7 +157,10 @@ async def handle_transcription_stream(ws: WebSocket) -> None:
        flushes remaining finals and closes.
 
     Streams are bounded by ``STT_STREAM_MAX_SECONDS`` and
-    ``STT_STREAM_IDLE_TIMEOUT_SECONDS`` (both dynamic config).
+    ``STT_STREAM_IDLE_TIMEOUT_SECONDS`` (both dynamic config); individual
+    binary frames are capped at ``_MAX_CHUNK_BYTES``. Provider startup
+    failures are rejected with close code 4400 before ``ready`` is sent;
+    provider death or client send failures mid-stream close with 1011.
     """
     await ws.accept()
 
@@ -210,8 +217,10 @@ async def handle_transcription_stream(ws: WebSocket) -> None:
         await _reject_stream(ws, _WS_BAD_REQUEST, str(e), "provider unavailable")
         return
 
+    send_failed = asyncio.Event()
+
     async def _forward(event: TranscriptEvent) -> None:
-        await send_message(
+        ok = await send_message(
             ws,
             {
                 "type": "final" if event.is_final else "partial",
@@ -219,6 +228,10 @@ async def handle_transcription_stream(ws: WebSocket) -> None:
                 "language": event.language,
             },
         )
+        if not ok:
+            # Flag for the receive loop; transcripts are being dropped, so
+            # the stream must tear down rather than keep paying the provider.
+            send_failed.set()
 
     transcriber = StreamingTranscriber(
         stt_service, sample_rate=request.sample_rate, on_transcript=_forward
@@ -226,7 +239,19 @@ async def handle_transcription_stream(ws: WebSocket) -> None:
     max_seconds = await STT_STREAM_MAX_SECONDS()
     idle_timeout = await STT_STREAM_IDLE_TIMEOUT_SECONDS()
 
-    await transcriber.start()
+    try:
+        await transcriber.start()
+    except RuntimeError as e:
+        logger.warning(
+            "stt stream provider startup failed (provider={}, user={}): {}",
+            request.provider.value,
+            user.id,
+            e,
+        )
+        await _reject_stream(
+            ws, _WS_BAD_REQUEST, "provider connection failed", "provider unavailable"
+        )
+        return
     await send_message(ws, {"type": "ready"})
     logger.info(
         "stt stream started (provider={}, user={}, sample_rate={})",
@@ -239,6 +264,16 @@ async def handle_transcription_stream(ws: WebSocket) -> None:
     deadline = time.monotonic() + max_seconds
     try:
         while True:
+            if transcriber.failed:
+                await send_message(
+                    ws, {"type": "error", "message": "provider connection lost"}
+                )
+                close_code, close_reason = 1011, "provider error"
+                break
+            if send_failed.is_set():
+                close_code, close_reason = 1011, "client send failed"
+                break
+
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 await send_message(
@@ -272,6 +307,18 @@ async def handle_transcription_stream(ws: WebSocket) -> None:
 
             audio = message.get("bytes")
             if audio:
+                if len(audio) > _MAX_CHUNK_BYTES:
+                    await send_message(
+                        ws,
+                        {
+                            "type": "error",
+                            "message": (
+                                f"audio chunk exceeds {_MAX_CHUNK_BYTES} bytes"
+                            ),
+                        },
+                    )
+                    close_code, close_reason = _WS_BAD_REQUEST, "chunk too large"
+                    break
                 await transcriber.feed(audio)
                 continue
 
@@ -285,10 +332,14 @@ async def handle_transcription_stream(ws: WebSocket) -> None:
             if isinstance(control, dict) and control.get("type") == "stop":
                 break
     except Exception as e:
-        logger.error(
-            "stt stream failed (provider={}, user={}): {}",
+        # Broad by design: this loop must reach the close path below no
+        # matter what fails; logger.exception preserves the traceback for
+        # root-cause analysis.
+        logger.exception(
+            "stt stream failed (provider={}, user={}): {}: {}",
             request.provider.value,
             user.id,
+            type(e).__name__,
             e,
         )
         await send_message(ws, {"type": "error", "message": "Internal stream error"})

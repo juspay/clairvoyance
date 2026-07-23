@@ -35,6 +35,13 @@ __all__ = ["StreamingTranscriber", "TranscriptEvent"]
 
 _STOP_TIMEOUT_SECONDS = 5.0
 
+# How long start() lets the pipeline run before declaring it healthy. Provider
+# connect/auth rejections typically surface within this window (as an
+# ErrorFrame or the runner task finishing), letting callers reject the stream
+# before telling the client it is ready. Healthy streams pay this once at
+# startup.
+_STARTUP_GRACE_SECONDS = 1.0
+
 
 @dataclass
 class TranscriptEvent:
@@ -80,7 +87,9 @@ class _TranscriptEmitter(FrameProcessor):
                 try:
                     await self._on_transcript(event)
                 except Exception as e:
-                    logger.warning("transcript callback failed: {}", e)
+                    logger.warning(
+                        "transcript callback failed ({}): {}", type(e).__name__, e
+                    )
 
         await self.push_frame(frame, direction)
 
@@ -112,10 +121,57 @@ class StreamingTranscriber:
         )
         self._runner = PipelineRunner(handle_sigint=False, force_gc=True)
         self._run_future: Optional[asyncio.Task] = None
+        self._failed = asyncio.Event()
+        self._failure: Optional[str] = None
+
+        @self._task.event_handler("on_pipeline_error")
+        async def _on_pipeline_error(task, frame):
+            self._failure = getattr(frame, "error", None) or "pipeline error"
+            self._failed.set()
+            logger.warning("streaming STT pipeline error: {}", self._failure)
+
+    @property
+    def failed(self) -> bool:
+        """True once the pipeline reported an error (e.g. provider died)."""
+        return self._failed.is_set()
 
     async def start(self) -> None:
-        """Start the pipeline (connects the provider websocket)."""
+        """Start the pipeline and fail fast on provider connect/auth errors.
+
+        Waits up to ``_STARTUP_GRACE_SECONDS`` for an early failure — a
+        pipeline ``ErrorFrame`` or the runner task finishing — and raises
+        ``RuntimeError`` so callers can reject the stream cleanly *before*
+        telling the client it is ready.
+        """
         self._run_future = asyncio.create_task(self._runner.run(self._task))
+        failure_wait = asyncio.create_task(self._failed.wait())
+        try:
+            await asyncio.wait(
+                {self._run_future, failure_wait},
+                timeout=_STARTUP_GRACE_SECONDS,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+        finally:
+            if not failure_wait.done():
+                failure_wait.cancel()
+
+        if not self._failed.is_set() and not self._run_future.done():
+            return  # healthy: pipeline is running and reported no error
+
+        message = self._failure or ""
+        if self._run_future.done():
+            exc = self._run_future.exception()
+            if exc is not None:
+                message = message or f"{type(exc).__name__}: {exc}"
+            message = message or "pipeline ended during startup"
+        else:
+            await self._task.cancel()
+            try:
+                await self._run_future
+            except Exception:
+                pass
+        self._run_future = None
+        raise RuntimeError(f"streaming STT failed to start: {message or 'unknown'}")
 
     async def feed(self, audio: bytes) -> None:
         """Queue one chunk of raw PCM16 mono audio for transcription."""
@@ -130,7 +186,12 @@ class StreamingTranscriber:
         )
 
     async def stop(self) -> None:
-        """Flush pending audio, wait for final transcripts, tear down."""
+        """Flush pending audio, wait for final transcripts, tear down.
+
+        Deliberately swallows teardown errors (logging them with type): this
+        runs on the WebSocket close path, which must never raise — a wedged
+        provider teardown should not prevent the client socket from closing.
+        """
         if self._run_future is None:
             return
         run_future, self._run_future = self._run_future, None
@@ -145,4 +206,4 @@ class StreamingTranscriber:
             except Exception:
                 pass
         except Exception as e:
-            logger.warning("streaming STT stop error: {}", e)
+            logger.warning("streaming STT stop error ({}): {}", type(e).__name__, e)
