@@ -21,8 +21,9 @@ class ObserverManager:
     """Coordinates N observers. Reads existing LLMContext.
 
     Triggered by pipeline events (configurable per observer via ``trigger_on``).
-    All eligible observers run in parallel via ``asyncio.gather``.
-    First to detect wins.
+    All eligible observers run concurrently and independently — each
+    observer acts on its own detection without blocking or being
+    blocked by others.
     """
 
     def __init__(
@@ -33,11 +34,12 @@ class ObserverManager:
         self._observers = observers
         self._llm_context = llm_context
         self._turn_count: int = 0
-        self._action_taken: bool = False
+        self._acted: set[str] = set()  # observer names that already acted
         self._check_lock = asyncio.Lock()
         # Strong references to in-flight tasks — prevents GC from collecting
         # them mid-flight when PipelineRunner runs with force_gc=True.
         self._pending: set[asyncio.Task] = set()
+        self._stopped: bool = False
 
     # ------------------------------------------------------------------
     # Data ingestion (called by pipeline event hooks in agent/__init__.py)
@@ -50,7 +52,7 @@ class ObserverManager:
 
     def on_event(self, event_name: str):
         """A pipeline event fired — kick off eligible observer checks."""
-        if self._action_taken:
+        if self._stopped:
             return
         # Only count on one event to avoid double-counting per turn
         if event_name == "on_user_turn_message_added":
@@ -66,18 +68,26 @@ class ObserverManager:
     # ------------------------------------------------------------------
 
     async def _run_checks(self, event_name: str):
-        """Run all eligible observers in parallel. First to detect wins."""
-        if self._action_taken:
+        """Run all eligible observers concurrently and independently.
+
+        Each observer that detects fires its action as a background task
+        without waiting for or blocking other observers.
+        """
+        if self._stopped:
             return
 
+        # Lock only for eligibility + transcript snapshot — released
+        # before any LLM call so the lock is never held while waiting
+        # for slow observers.
         async with self._check_lock:
-            if self._action_taken:
+            if self._stopped:
                 return
 
             eligible = [
                 obs
                 for obs in self._observers
                 if event_name in obs.config.trigger_on
+                and obs.name not in self._acted
                 and (
                     event_name != "on_user_turn_message_added"
                     or self._turn_count > obs.config.start_after_turn
@@ -94,28 +104,28 @@ class ObserverManager:
                 f"{[obs.name for obs in eligible]}"
             )
 
-            # gather() over as_completed(): as_completed wraps futures in
-            # new coroutines so the original future→observer mapping breaks.
-            # gather() returns results in input order which is deterministic
-            # and keeps the observer→result pairing trivial via zip().
-            results = await asyncio.gather(
-                *[obs.check(transcript) for obs in eligible],
-                return_exceptions=True,
+        # Launch checks outside the lock — each completes independently.
+        for obs in eligible:
+            task = asyncio.create_task(
+                self._check_and_act(obs, transcript),
+                name=f"obs-check:{obs.name}",
             )
+            self._track_task(task)
 
-            for obs, result in zip(eligible, results):
-                if self._action_taken:
-                    return
-                if isinstance(result, Exception):
-                    logger.error(f"Observer {obs.name} check failed: {result}")
-                    continue
-                if result is True:
-                    self._action_taken = True
-                    try:
-                        await obs.execute_action()
-                    except Exception as e:
-                        logger.error(f"Observer {obs.name} execute_action failed: {e}")
-                    return
+    async def _check_and_act(self, obs: RealtimeObserver, transcript: str) -> None:
+        """Run a single observer check and fire its action on detection."""
+        try:
+            detected = await obs.check(transcript)
+        except Exception:
+            logger.exception(f"Observer {obs.name} check failed")
+            return
+
+        if detected and obs.name not in self._acted:
+            self._acted.add(obs.name)
+            try:
+                await obs.execute_action()
+            except Exception:
+                logger.exception(f"Observer {obs.name} execute_action failed")
 
     # ------------------------------------------------------------------
     # Transcript building
@@ -207,7 +217,7 @@ class ObserverManager:
 
     async def stop(self):
         """Cleanup. Called when the call ends."""
-        self._action_taken = True
+        self._stopped = True
         for task in self._pending:
             task.cancel()
         self._pending.clear()
