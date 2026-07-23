@@ -52,6 +52,7 @@ from .breeze_buddy.lead_call_tracker import (
     update_lead_template,
 )
 from .breeze_buddy.telephony_number import (
+    check_number_purchase_conflict,
     create_telephony_number,
     decrement_telephony_number_channels,
     disable_telephony_number,
@@ -91,6 +92,7 @@ __all__ = [
     "get_all_telephony_numbers_with_call_count",
     "get_telephony_number_based_on_status_and_provider",
     "get_telephony_number_by_number",
+    "check_number_purchase_conflict",
     "get_template_pinned_number_ids",
     "update_telephony_number",
     "create_call_execution_config",

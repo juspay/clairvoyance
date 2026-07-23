@@ -756,3 +756,11 @@ async def DRAGONTTS_HEALTH_TIMEOUT_S() -> float:
     except (TypeError, ValueError):
         logger.warning(f"Invalid DRAGONTTS_HEALTH_TIMEOUT_S value {value!r}; using 3.0")
         return 3.0
+
+
+# --- Plivo number purchasing ---
+# Drifts with the market, unlike PLIVO_AUTH_ID/TOKEN (long-lived secrets) --
+# keeping it here means updating the rate doesn't need a pod restart.
+async def PLIVO_INR_CONVERSION_RATE() -> float:
+    """Returns PLIVO_INR_CONVERSION_RATE from Redis"""
+    return await get_config("PLIVO_INR_CONVERSION_RATE", 80.0, float)

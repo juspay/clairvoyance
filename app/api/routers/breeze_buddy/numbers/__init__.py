@@ -29,10 +29,17 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from app.api.security.breeze_buddy.rbac_token import get_current_user_with_rbac
 from app.database.accessor import get_template_pinned_number_ids
 from app.schemas import (
+    CallProvider,
     CreateTelephonyNumberRequest,
     TelephonyNumber,
     UpdateTelephonyNumberRequest,
     UserInfo,
+)
+from app.schemas.breeze_buddy.telephony_numbers import (
+    TelephonyNumberBuyRequest,
+    TelephonyNumberBuyResponse,
+    TelephonyNumberSearchParams,
+    TelephonyNumberSearchResponse,
 )
 
 from .handlers import (
@@ -42,6 +49,10 @@ from .handlers import (
     list_numbers_handler,
     update_number_handler,
 )
+from .provider_handlers import (
+    buy_provider_number_handler,
+    search_provider_numbers_handler,
+)
 from .rbac import (
     filter_numbers_by_rbac,
     may_view_as,
@@ -49,9 +60,25 @@ from .rbac import (
     narrow_numbers_to_workspace,
     rbac_number_scopes,
     require_admin_access,
+    require_admin_or_reseller_access,
 )
 
 router = APIRouter()
+
+
+def parse_call_provider(provider_name: str) -> CallProvider:
+    """Parse provider path values case-insensitively."""
+    try:
+        return CallProvider(provider_name.upper())
+    except ValueError:
+        supported_providers = ", ".join(provider.value for provider in CallProvider)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"Unsupported provider '{provider_name}'. "
+                f"Supported providers: {supported_providers}"
+            ),
+        )
 
 
 async def _pinned_ids_for(current_user: UserInfo) -> List[str]:
@@ -161,6 +188,103 @@ async def list_telephony_numbers(
         numbers = narrow_numbers_to_umbrella(numbers, reseller_id, umbrella_pins)
 
     return numbers
+
+
+@router.get(
+    "/numbers/{provider_name}/search", response_model=TelephonyNumberSearchResponse
+)
+async def search_provider_numbers_endpoint(
+    provider_name: str,
+    country_iso: str = Query(
+        default="IN",
+        description="ISO 3166 alpha-2 country code",
+    ),
+    type: Optional[str] = Query(
+        default=None,
+        description="Number type: tollfree, local, mobile, national, fixed",
+    ),
+    pattern: Optional[str] = Query(
+        default=None,
+        description="Number pattern to match (e.g., '022' for Mumbai)",
+    ),
+    services: Optional[str] = Query(
+        default=None,
+        description="Filter by capabilities: voice, sms, voice,sms",
+    ),
+    region: Optional[str] = Query(
+        default=None,
+        description="Region name (e.g., 'Mumbai'). For fixed type only.",
+    ),
+    limit: int = Query(default=20, ge=1, le=20, description="Results per page"),
+    offset: int = Query(default=0, ge=0, description="Pagination offset"),
+    current_user: UserInfo = Depends(get_current_user_with_rbac),
+):
+    """
+    Search available phone numbers from a specific provider's inventory.
+
+    Example Requests:
+        GET /numbers/PLIVO/search?country_iso=IN&type=fixed&pattern=022
+        GET /numbers/TWILIO/search?country_iso=US&type=mobile
+
+    Permissions:
+    - Admin or reseller only.
+
+    Returns:
+        List of available numbers with pricing and metadata
+    """
+    provider = parse_call_provider(provider_name)
+    require_admin_or_reseller_access(current_user, f"search {provider.value} numbers")
+
+    params = TelephonyNumberSearchParams(
+        country_iso=country_iso,
+        type=type,
+        pattern=pattern,
+        services=services,
+        region=region,
+        limit=limit,
+        offset=offset,
+    )
+    return await search_provider_numbers_handler(provider, params, current_user)
+
+
+@router.post(
+    "/numbers/{provider_name}/buy",
+    response_model=TelephonyNumberBuyResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def buy_provider_number_endpoint(
+    provider_name: str,
+    request: TelephonyNumberBuyRequest,
+    current_user: UserInfo = Depends(get_current_user_with_rbac),
+):
+    """
+    Buy a phone number from a provider and register it as a telephony number.
+
+    Atomic operation:
+    1. Purchases the number from the Provider
+    2. Registers it in the telephony_numbers table
+    3. On DB failure, attempts best-effort unrent from Provider
+
+    Request Body:
+        {
+            "number": "912212345678",
+            "reseller_id": "reseller_acme",
+            "merchant_id": "merchant_xyz",  // optional
+            "maximum_channels": 10
+        }
+
+    Permissions:
+    - Admin or reseller only. resolve_buy_scope additionally restricts a
+      reseller to their own umbrella (and merchants under it), never another
+      tenant's -- see numbers/rbac.py.
+
+    Returns:
+        Provider purchase status + created telephony_number record
+    """
+    provider = parse_call_provider(provider_name)
+    require_admin_or_reseller_access(current_user, f"buy {provider.value} numbers")
+
+    return await buy_provider_number_handler(provider, request, current_user)
 
 
 @router.get("/numbers/{number_id}", response_model=TelephonyNumber)

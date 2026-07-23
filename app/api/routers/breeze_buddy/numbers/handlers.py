@@ -3,21 +3,19 @@ Business logic handlers for telephony number operations.
 All handlers perform database operations and enforce business rules.
 """
 
-from typing import List, Optional, Tuple
+from typing import List, Optional
 from uuid import uuid4
 
 from fastapi import HTTPException, status
 
 from app.core.logger import logger
 from app.database.accessor import (
+    check_number_purchase_conflict,
     create_telephony_number,
     disable_telephony_number,
     get_all_telephony_numbers,
     get_telephony_number_by_id,
     update_telephony_number,
-)
-from app.database.accessor.breeze_buddy.merchants import (
-    get_merchant_by_merchant_identifier,
 )
 from app.schemas import (
     CreateTelephonyNumberRequest,
@@ -26,23 +24,7 @@ from app.schemas import (
     UserInfo,
 )
 
-
-async def _resolve_ownership(
-    merchant_id: Optional[str], reseller_id: Optional[str]
-) -> Tuple[Optional[str], Optional[str]]:
-    """
-    Validate an ownership pair and auto-fill the umbrella for merchant-owned
-    numbers from merchants.reseller_id. Raises 400 on an unknown merchant.
-    """
-    if merchant_id:
-        merchant = await get_merchant_by_merchant_identifier(merchant_id)
-        if not merchant:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Unknown merchant_id: {merchant_id}",
-            )
-        return merchant_id, reseller_id or merchant.reseller_id
-    return None, reseller_id
+from .rbac import resolve_ownership as _resolve_ownership
 
 
 async def create_number_handler(
@@ -84,6 +66,12 @@ async def create_number_handler(
     )
 
     try:
+        if await check_number_purchase_conflict(number.number) is not None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Failed to create telephony number",
+            )
+
         telephony_number = await create_telephony_number(
             id=str(uuid4()),
             number=number.number,

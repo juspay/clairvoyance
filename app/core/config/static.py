@@ -433,6 +433,8 @@ PLIVO_AUTH_TOKEN = os.getenv("PLIVO_AUTH_TOKEN", "")
 PLIVO_RECORDING_TIME_LIMIT = int(
     os.getenv("PLIVO_RECORDING_TIME_LIMIT", "14400")
 )  # Default: 4 hours (14400 seconds)
+# PLIVO_INR_CONVERSION_RATE lives in dynamic.py (Redis-backed) -- it drifts
+# with the market and updating it shouldn't need a pod restart.
 
 # Proxy Configuration
 AWS_PROXY_HOST = os.environ.get("AWS_PROXY_HOST")

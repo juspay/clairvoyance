@@ -8,6 +8,9 @@ from typing import List, Optional, Set, Tuple
 from fastapi import HTTPException, status
 
 from app.core.logger import logger
+from app.database.accessor.breeze_buddy.merchants import (
+    get_merchant_by_merchant_identifier,
+)
 from app.schemas import TelephonyNumber, UserInfo
 
 
@@ -34,6 +37,32 @@ def require_admin_access(
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f"Admin access required to {operation}",
+        )
+
+
+def require_admin_or_reseller_access(
+    current_user: UserInfo, operation: str = "perform this operation"
+) -> None:
+    """
+    Validate user is an admin or reseller.
+
+    Gates provider number search/buy: purchasing spends real money, so it is
+    restricted to admin and reseller for now, not the full set resolve_buy_scope
+    is otherwise able to handle (merchant/user). resolve_buy_scope's
+    merchant/user branch stays in place, unused while this gate is active, so
+    widening access later is a one-line change here rather than new logic.
+
+    Raises:
+        HTTPException: 403 if user is neither admin nor reseller
+    """
+    if current_user.role not in ("admin", "reseller"):
+        logger.warning(
+            f"User {current_user.username} (role: {current_user.role}) "
+            f"attempted to {operation}"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Admin or reseller access required to {operation}",
         )
 
 
@@ -83,6 +112,27 @@ def require_number_in_tenant_scope(
                 f"template under '{template_reseller_id}'."
             ),
         )
+
+
+async def resolve_ownership(
+    merchant_id: Optional[str], reseller_id: Optional[str]
+) -> Tuple[Optional[str], Optional[str]]:
+    """
+    Validate an ownership pair and auto-fill the umbrella for merchant-owned
+    numbers from merchants.reseller_id. Raises 400 on an unknown merchant.
+
+    Shared by manual number provisioning and the provider buy flow so both
+    paths land on identical ownership metadata for the same merchant_id.
+    """
+    if merchant_id:
+        merchant = await get_merchant_by_merchant_identifier(merchant_id)
+        if not merchant:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Unknown merchant_id: {merchant_id}",
+            )
+        return merchant_id, reseller_id or merchant.reseller_id
+    return None, reseller_id
 
 
 def rbac_number_scopes(current_user: UserInfo) -> Tuple[Set[str], Set[str]]:
@@ -231,3 +281,102 @@ def may_view_as(
         resellers = current_user.reseller_ids or []
         return "*" in resellers or workspace_reseller_id in resellers
     return True
+
+
+async def resolve_buy_scope(
+    current_user: UserInfo,
+    reseller_id: Optional[str],
+    merchant_id: Optional[str],
+) -> Tuple[Optional[str], Optional[str]]:
+    """
+    Resolve and validate (reseller_id, merchant_id) ownership for a number
+    purchase, scoped to the caller's own role. Runs BEFORE anything is
+    purchased -- a rejection here must never reach the provider.
+
+    Returns (reseller_id, merchant_id) -- note this is the OPPOSITE order from
+    resolve_ownership (which returns (merchant_id, reseller_id)); every branch
+    below flips it explicitly so this function's return order always matches
+    its own parameter order.
+
+    - admin: trusted as given. merchant_id, if any, must be a real merchant
+      (resolve_ownership); reseller_id auto-fills from it when omitted.
+    - reseller: reseller_id is always their own umbrella -- never a client
+      choice. merchant_id, if given, must be one of the merchants currently
+      under that umbrella (rbac_number_scopes, so this can never drift from
+      what GET /numbers considers "theirs"). Omitting merchant_id buys an
+      umbrella-owned (not merchant-specific) number.
+    - merchant/user: merchant_id must be one of their own. Exactly one in
+      scope and omitted -> used automatically (the common case). More than
+      one and omitted -> 400, never guess. reseller_id is always derived
+      from the chosen merchant's own record, never taken from the caller.
+
+    Raises:
+        HTTPException: 400 for missing/ambiguous/unknown input, 403 for
+            anything outside the caller's own scope.
+    """
+    if current_user.role == "admin":
+        if not reseller_id and not merchant_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="reseller_id or merchant_id is required.",
+            )
+        resolved_merchant_id, resolved_reseller_id = await resolve_ownership(
+            merchant_id, reseller_id
+        )
+        return resolved_reseller_id, resolved_merchant_id
+
+    merchant_scope, reseller_scope = rbac_number_scopes(current_user)
+
+    if current_user.role == "reseller":
+        if reseller_id and reseller_id not in reseller_scope:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Access denied to reseller {reseller_id}",
+            )
+        own_reseller_id = reseller_id or (
+            next(iter(reseller_scope)) if len(reseller_scope) == 1 else None
+        )
+        if not own_reseller_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Could not determine your reseller scope.",
+            )
+
+        if not merchant_id:
+            return own_reseller_id, None  # umbrella-owned, no specific merchant
+
+        if merchant_id not in merchant_scope:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Access denied to merchant {merchant_id}",
+            )
+        resolved_merchant_id, resolved_reseller_id = await resolve_ownership(
+            merchant_id, own_reseller_id
+        )
+        return resolved_reseller_id, resolved_merchant_id
+
+    # merchant / user roles: merchant-only scope, reseller_id always derived
+    # from the resolved merchant -- never taken from the caller directly.
+    if merchant_id:
+        if merchant_id not in merchant_scope:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Access denied to merchant {merchant_id}",
+            )
+    elif len(merchant_scope) == 1:
+        merchant_id = next(iter(merchant_scope))
+    elif not merchant_scope:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You have no merchant scope to buy a number for.",
+        )
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="You have access to multiple merchants; specify merchant_id.",
+        )
+
+    resolved_merchant_id, resolved_reseller_id = await resolve_ownership(
+        merchant_id, None
+    )
+    return resolved_reseller_id, resolved_merchant_id
