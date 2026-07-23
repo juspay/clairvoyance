@@ -14,3 +14,5 @@ import os
 
 os.environ.setdefault("JWT_SECRET_KEY", "test-secret-not-used-by-these-tests")
 os.environ.setdefault("JWT_ALGORITHM", "HS256")
+# No AWS in unit tests -- never attempt to reach KMS.
+os.environ.setdefault("SKIP_KMS_DECRYPT", "true")

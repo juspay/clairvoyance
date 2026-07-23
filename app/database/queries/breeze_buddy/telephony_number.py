@@ -207,8 +207,21 @@ def get_telephony_number_based_on_status_and_provider_query(
 def get_telephony_number_by_number_query(number: str) -> Tuple[str, List[Any]]:
     """
     Generate query to get telephony number by phone number.
+
+    A number can have more than one row over its lifetime (bought, disabled,
+    re-bought -- nothing in the DB schema prevents a DISABLED row from
+    coexisting with a new active one for the same number; that rule is
+    enforced at the application level in check_number_purchase_conflict).
+    Ordered by created_at DESC with LIMIT 1 so callers reliably see the
+    CURRENT row rather than an arbitrary one of several historical matches --
+    both existing callers (inbound call routing, and the buy flow's
+    duplicate/re-buy check) only ever look at a single result and need it to
+    reflect current reality.
     """
-    text = f'SELECT * FROM "{TELEPHONY_NUMBER_TABLE}" WHERE "number" = $1;'
+    text = (
+        f'SELECT * FROM "{TELEPHONY_NUMBER_TABLE}" WHERE "number" = $1 '
+        f'ORDER BY "created_at" DESC LIMIT 1;'
+    )
     values = [number]
     return text, values
 

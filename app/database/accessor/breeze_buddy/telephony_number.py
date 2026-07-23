@@ -75,8 +75,15 @@ async def create_telephony_number(
         logger.error("Failed to create telephony number")
         return None
 
+    except asyncpg.exceptions.UniqueViolationError:
+        # Re-raised, not swallowed: callers that need to tell "lost a race to
+        # a concurrent insert" apart from "creation failed" (e.g. the buy flow's
+        # rollback logic) must see this distinctly. Other exception types keep
+        # the fail-soft None contract below, unchanged for existing callers.
+        raise
+
     except Exception as e:
-        logger.error(f"Error creating telephony number: {e}")
+        logger.error(f"Error creating telephony number: {e}", exc_info=True)
         return None
 
 
@@ -403,3 +410,40 @@ async def get_telephony_number_by_number(number: str) -> Optional[TelephonyNumbe
     except Exception as e:
         logger.error(f"Error getting telephony number by number: {e}")
         return None
+
+
+async def check_number_purchase_conflict(
+    number: str,
+) -> Optional[TelephonyNumberStatus]:
+    """
+    Check whether a number is free to purchase, propagating database errors.
+
+    Returns None if the number is available (no existing row, or the existing
+    row is DISABLED -- a released number stays re-buyable, enforced here at
+    the application level, not by a DB constraint). Otherwise returns the
+    status of the row blocking the purchase, for the caller's error message.
+
+    Unlike get_telephony_number_by_number, a database failure raises instead of
+    being reported as "not found". Callers that spend money on the strength of a
+    negative result (e.g. buying a number from a provider) must use this variant,
+    so a DB outage cannot be mistaken for "number is free to purchase".
+    """
+    logger.info(f"Checking purchase conflict for phone number: {number}")
+
+    try:
+        query_text, values = get_telephony_number_by_number_query(number)
+        result = await run_parameterized_query(query_text, values)
+
+        if result and get_row_count(result) > 0:
+            existing = decode_telephony_number(result)
+            if (
+                existing is not None
+                and existing.status != TelephonyNumberStatus.DISABLED
+            ):
+                return existing.status
+
+        return None
+
+    except Exception as e:
+        logger.error(f"Error checking purchase conflict for number: {e}", exc_info=True)
+        raise
