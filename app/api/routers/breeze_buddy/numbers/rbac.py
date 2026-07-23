@@ -168,3 +168,63 @@ def filter_numbers_by_rbac(
         f"(role: {current_user.role}): {len(visible)}/{len(numbers)} visible"
     )
     return visible
+
+
+def narrow_numbers_to_workspace(
+    numbers: List[TelephonyNumber],
+    merchant_id: str,
+    pinned_number_ids: List[str],
+) -> List[TelephonyNumber]:
+    """
+    View-as narrowing for the console's workspace switcher: reduce an
+    already-RBAC-filtered list to exactly what a user of `merchant_id` would
+    see — numbers owned by that merchant plus the ids its templates pin.
+
+    This only ever narrows (it runs AFTER filter_numbers_by_rbac), so a
+    caller can never widen their scope by passing someone else's merchant_id:
+    an admin narrows the fleet, a reseller narrows their umbrella, and a
+    merchant intersecting with their own scope is a no-op or smaller.
+    """
+    pinned = set(pinned_number_ids)
+    return [n for n in numbers if n.merchant_id == merchant_id or n.id in pinned]
+
+
+def narrow_numbers_to_umbrella(
+    numbers: List[TelephonyNumber],
+    reseller_id: str,
+    pinned_number_ids: List[str],
+) -> List[TelephonyNumber]:
+    """
+    Umbrella flavor of narrow_numbers_to_workspace: reduce to the reseller
+    view — umbrella-owned rows AND merchant-owned rows under it (both carry
+    reseller_id) plus the umbrella templates' pins. Narrowing-only, same as
+    the merchant variant.
+    """
+    pinned = set(pinned_number_ids)
+    return [n for n in numbers if n.reseller_id == reseller_id or n.id in pinned]
+
+
+def may_view_as(
+    current_user: UserInfo,
+    workspace_merchant_id: Optional[str] = None,
+    workspace_reseller_id: Optional[str] = None,
+) -> bool:
+    """
+    Explicit gate for the view-as narrowing params: may this caller even ASK
+    for that workspace's view? Admins may view any workspace; everyone else
+    only workspaces already inside their JWT scope ('*' = unrestricted).
+
+    Defense in depth: the narrowing itself runs AFTER filter_numbers_by_rbac
+    and intersects, so it cannot widen regardless — this gate makes the
+    property structural instead of ordering-dependent, so a future reorder
+    of the filter steps cannot turn the param into a bypass.
+    """
+    if current_user.role == "admin":
+        return True
+    if workspace_merchant_id is not None:
+        merchants = current_user.merchant_ids or []
+        return "*" in merchants or workspace_merchant_id in merchants
+    if workspace_reseller_id is not None:
+        resellers = current_user.reseller_ids or []
+        return "*" in resellers or workspace_reseller_id in resellers
+    return True

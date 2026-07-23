@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional
 from starlette.responses import StreamingResponse
 
 from app.api.routers.breeze_buddy.numbers.rbac import (
+    may_view_as,
     number_in_rbac_scope,
     rbac_number_scopes,
 )
@@ -519,6 +520,12 @@ async def get_telephony_numbers_analytics(
     Non-admin results are cut down to the same visibility set as GET /numbers
     (owned by the caller's merchants/umbrellas, or template-pinned) so phone
     numbers never leak across tenants.
+
+    A single merchant_id/reseller_id in the request filters (the console's
+    workspace switcher rides every analytics call) additionally narrows the
+    rows to that workspace's view — owned + template-pinned — so an admin
+    with a workspace selected sees exactly what that workspace's users see.
+    Narrowing runs AFTER the caller's own scope filter, so it never widens.
     """
     outbound_data = await get_telephony_numbers_analytics_from_db(filters)
 
@@ -535,6 +542,50 @@ async def get_telephony_numbers_analytics(
                 m_ids,
                 r_ids,
                 pinned,
+            )
+        ]
+
+    def _single(value: Any) -> Optional[str]:
+        """A concrete workspace pick: one string (or 1-element list)."""
+        if isinstance(value, str):
+            return value
+        if isinstance(value, list) and len(value) == 1 and isinstance(value[0], str):
+            return value[0]
+        return None
+
+    # Same narrowing rule as GET /numbers, through the same shared predicate
+    # (number_in_rbac_scope) and the same explicit gate (may_view_as) — the
+    # gate is defense in depth: apply_hierarchical_filters already 403s
+    # non-admins requesting foreign scopes, and the narrowing runs after the
+    # caller's own scope filter, so it can only shrink either way.
+    ws_merchant = _single(filters.get("merchant_id"))
+    ws_reseller = None if ws_merchant else _single(filters.get("reseller_id"))
+    if ws_merchant and may_view_as(current_user, workspace_merchant_id=ws_merchant):
+        ws_pins = set(await get_template_pinned_number_ids([ws_merchant], []))
+        outbound_data = [
+            r
+            for r in outbound_data
+            if number_in_rbac_scope(
+                r["id"],
+                r.get("merchant_id"),
+                r.get("reseller_id"),
+                {ws_merchant},
+                set(),
+                ws_pins,
+            )
+        ]
+    elif ws_reseller and may_view_as(current_user, workspace_reseller_id=ws_reseller):
+        ws_pins = set(await get_template_pinned_number_ids([], [ws_reseller]))
+        outbound_data = [
+            r
+            for r in outbound_data
+            if number_in_rbac_scope(
+                r["id"],
+                r.get("merchant_id"),
+                r.get("reseller_id"),
+                set(),
+                {ws_reseller},
+                ws_pins,
             )
         ]
 
