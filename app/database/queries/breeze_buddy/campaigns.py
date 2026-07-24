@@ -106,7 +106,16 @@ def campaign_stats_query(campaign_ids: List[str]) -> Tuple[str, List[Any]]:
     honesty rule: a finished lead counts as picked unless its outcome is
     NO_ANSWER (BUSY etc. count as answered) — and never when it was ABORTed
     (a stopped campaign's leads finish with ABORT and zero attempts; counting
-    them as picked showed "Answered 1 / Dialed 0")."""
+    them as picked showed "Answered 1 / Dialed 0").
+
+    `dialed` = at least one call initiated. attempt_count alone is the WRONG
+    predicate for this: the stored column is 0-based (it counts scheduled
+    RETRIES — analytics displays attempt_count + 1), so a lead answered on
+    its first attempt finishes with attempt_count = 0 and a completed
+    campaign showed "0 / N dialed". call_initiated_time is stamped when a
+    call is initiated; the attempt_count > 0 arm keeps retried leads counted
+    even if that stamp is missing on an old row. ABORTed-without-dialing
+    leads have neither, so they stay out."""
     return (
         """
         SELECT
@@ -115,7 +124,9 @@ def campaign_stats_query(campaign_ids: List[str]) -> Tuple[str, List[Any]]:
             COUNT(*) FILTER (WHERE status = 'BACKLOG') AS backlog,
             COUNT(*) FILTER (WHERE status = 'PROCESSING') AS processing,
             COUNT(*) FILTER (WHERE status = 'FINISHED') AS finished,
-            COUNT(*) FILTER (WHERE attempt_count > 0) AS dialed,
+            COUNT(*) FILTER (
+                WHERE attempt_count > 0 OR call_initiated_time IS NOT NULL
+            ) AS dialed,
             COUNT(*) FILTER (
                 WHERE status = 'FINISHED'
                   AND outcome IS NOT NULL

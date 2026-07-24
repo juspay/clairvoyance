@@ -462,7 +462,11 @@ def get_call_details_records_query(
             lct.call_initiated_time,
             lct.call_end_time,
             lct.outcome,
-            lct.attempt_count + 1 as attempt_count,
+            -- attempts MADE: the stored column is a 0-based retry counter,
+            -- and never-dialed leads (ABORT before any call) must show 0
+            lct.attempt_count
+                + CASE WHEN lct.call_initiated_time IS NOT NULL THEN 1 ELSE 0 END
+                as attempt_count,
             ou.provider as calling_provider
         FROM "{LEAD_CALL_TRACKER_TABLE}" lct
         LEFT JOIN "{TELEPHONY_NUMBER_TABLE}" ou ON lct.telephony_number_id = ou.id

@@ -6,17 +6,13 @@ pin under BOTH keys (read-compat for old GET clients); operative old-key
 writes are logged [Deprecated].
 """
 
-import os
-
-os.environ.setdefault("JWT_SECRET_KEY", "test-secret")
-
-from app.ai.voice.agents.breeze_buddy.template.types import (  # noqa: E402
+from app.ai.voice.agents.breeze_buddy.template.types import (
     CreateTemplateRequest,
     HoldTransferConfig,
     ReplaceTemplateRequest,
     TemplateModel,
 )
-from app.schemas.breeze_buddy.analytics import AnalyticsType  # noqa: E402
+from app.schemas.breeze_buddy.analytics import AnalyticsType
 
 _FLOW = {"nodes": []}
 
