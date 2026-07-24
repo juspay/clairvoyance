@@ -12,11 +12,7 @@ Anthropic adapter's role merge (plan review, adversary:chat-design).
 
 from __future__ import annotations
 
-import os
 from typing import Any, Dict, List
-
-os.environ.setdefault("JWT_SECRET_KEY", "test-secret-not-used-by-these-tests")
-os.environ.setdefault("JWT_ALGORITHM", "HS256")
 
 import app.ai.voice.agents.breeze_buddy.chat.agent as agent_module
 from app.ai.voice.agents.breeze_buddy.chat.agent import ChatAgent

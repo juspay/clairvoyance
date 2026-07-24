@@ -348,7 +348,12 @@ def _build_call_detail_result(tracker: Dict[str, Any]) -> CallDetailResult:
         recording_url=tracker.get("recording_url"),
         transcript=transcript,
         calling_provider=tracker.get("calling_provider"),
-        attempt_count=tracker.get("attempt_count"),
+        # Attempts MADE, not the stored 0-based retry counter: the column
+        # counts scheduled retries, so a first-attempt connect stores 0.
+        # +1 only when a call was actually initiated (ABORTed-without-dial
+        # leads honestly show 0).
+        attempt_count=(tracker.get("attempt_count") or 0)
+        + (1 if tracker.get("call_initiated_time") else 0),
         cost=tracker.get("cost"),
         payload=payload,
         call_initiated_time=tracker.get("call_initiated_time"),

@@ -12,27 +12,21 @@ filter_numbers_by_rbac scopes reads: admins see the fleet; everyone else
 sees owned numbers plus the ids their templates pin.
 """
 
-import os
 from types import SimpleNamespace
 from typing import Any, Optional
 
 import pytest
 
-# Router import needs JWT env at module load time; these tests never mint or
-# verify tokens (same pattern as test_block_codec_visibility.py).
-os.environ.setdefault("JWT_SECRET_KEY", "test-secret-not-used-by-these-tests")
-os.environ.setdefault("JWT_ALGORITHM", "HS256")
-
 # Importing the dispatch package first initializes worker -> managers.calls in
 # the supported order; importing managers.calls directly trips the circular
 # import the dispatch/__init__ docstring warns about.
-import app.ai.voice.agents.breeze_buddy.dispatch  # noqa: E402,F401  (import order)
-import app.ai.voice.agents.breeze_buddy.managers.calls as calls_mod  # noqa: E402
-from app.api.routers.breeze_buddy.numbers.rbac import (  # noqa: E402
+import app.ai.voice.agents.breeze_buddy.dispatch  # noqa: F401  (import order)
+import app.ai.voice.agents.breeze_buddy.managers.calls as calls_mod
+from app.api.routers.breeze_buddy.numbers.rbac import (
     filter_numbers_by_rbac,
     require_number_in_tenant_scope,
 )
-from app.schemas import (  # noqa: E402
+from app.schemas import (
     CallProvider,
     TelephonyNumber,
     TelephonyNumberStatus,

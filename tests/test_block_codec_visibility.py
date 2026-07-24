@@ -13,24 +13,16 @@ persistence path that emits ``visibility=internal`` text blocks.
 
 from __future__ import annotations
 
-import os
-
 from app.ai.voice.agents.breeze_buddy.chat.block_codec import (
     VISIBILITY_INTERNAL,
     blocks_to_llm_context_messages,
     filter_visible_blocks,
     internal_text_block,
 )
-
-# Handler import needs JWT_SECRET_KEY at module load time. Tests don't
-# verify tokens, so a dummy value is fine.
-os.environ.setdefault("JWT_SECRET_KEY", "test-secret-not-used-by-these-tests")
-os.environ.setdefault("JWT_ALGORITHM", "HS256")
-
-from app.api.routers.breeze_buddy.chat.handlers import (  # noqa: E402
+from app.api.routers.breeze_buddy.chat.handlers import (
     _sanitize_messages_for_widget,
 )
-from app.schemas.breeze_buddy.chat import ChatMessage, ChatMessageRole  # noqa: E402
+from app.schemas.breeze_buddy.chat import ChatMessage, ChatMessageRole
 
 
 def _mk(idx, **kwargs):
