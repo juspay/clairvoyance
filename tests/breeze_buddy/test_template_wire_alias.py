@@ -1,7 +1,9 @@
 """
 Wire-compat tests for the telephony_number_id rename: template create/replace
 accept the pre-rename "outbound_number_id" key from older API clients and
-convert it to telephony_number_id; responses emit the new name only.
+convert it to telephony_number_id; template responses temporarily mirror the
+pin under BOTH keys (read-compat for old GET clients); operative old-key
+writes are logged [Deprecated].
 """
 
 import os
@@ -41,9 +43,27 @@ def test_create_accepts_new_key():
     assert req.telephony_number_id == "num-2"
 
 
-def test_create_new_key_wins_when_both_sent():
-    req = _create({"telephony_number_id": "new", "outbound_number_id": "old"})
-    assert req.telephony_number_id == "new"
+def test_both_keys_equal_is_a_quiet_roundtrip(monkeypatch):
+    # GET bodies now carry both keys with the same value; PUTting one back
+    # unchanged must neither log nor alter the pin.
+    captured = _capture_warnings(monkeypatch)
+    req = _replace({"telephony_number_id": "same", "outbound_number_id": "same"})
+    assert req.telephony_number_id == "same"
+    assert captured == []
+
+
+def test_old_key_wins_when_values_differ(monkeypatch):
+    # Only an old-key writer produces differing values (it edited the old
+    # key on a round-tripped body) — its edit must not be silently dropped.
+    captured = _capture_warnings(monkeypatch)
+    req = _replace({"telephony_number_id": "stale", "outbound_number_id": "edited"})
+    assert req.telephony_number_id == "edited"
+    assert any("[Deprecated]" in m for m in captured)
+
+
+def test_explicit_old_key_null_clears_pin_from_roundtrip():
+    req = _replace({"telephony_number_id": "stale", "outbound_number_id": None})
+    assert req.telephony_number_id is None
 
 
 def test_create_neither_key_means_no_pin():
@@ -69,7 +89,8 @@ def test_replace_omitting_both_clears_the_pin():
     assert _replace({}).telephony_number_id is None
 
 
-def test_response_emits_new_name_only():
+def test_response_mirrors_pin_under_both_keys():
+    # TEMPORARY read-compat: old GET clients still read outbound_number_id.
     tpl = TemplateModel(
         id="t-1",
         reseller_id="acme",
@@ -79,7 +100,14 @@ def test_response_emits_new_name_only():
     )
     dumped = tpl.model_dump()
     assert dumped["telephony_number_id"] == "num-5"
-    assert "outbound_number_id" not in dumped
+    assert dumped["outbound_number_id"] == "num-5"
+
+
+def test_response_mirror_stays_null_for_unpinned():
+    tpl = TemplateModel(id="t-2", reseller_id="acme", name="t", flow=_FLOW)
+    dumped = tpl.model_dump()
+    assert dumped["telephony_number_id"] is None
+    assert dumped["outbound_number_id"] is None
 
 
 def _capture_warnings(monkeypatch):
