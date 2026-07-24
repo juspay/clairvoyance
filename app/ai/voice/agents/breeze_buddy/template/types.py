@@ -2674,6 +2674,11 @@ class TemplateModel(BaseModel):
     configurations: Optional[ConfigurationModel] = None
     secrets: Optional[Dict[str, Any]] = None
     telephony_number_id: Optional[str] = None
+    # TEMPORARY read-compat: some clients still read outbound_number_id from
+    # template GET responses, so responses mirror the pin under the old key
+    # too (see _mirror_deprecated_number_id). Remove once the [Deprecated]
+    # logs show no client sends the old key on writes anymore.
+    outbound_number_id: Optional[str] = None
     is_active: bool = True
     # Channels this template is allowed to be served on. Defaults to
     # voice-only so existing templates are unaffected. Add "chat" to
@@ -2684,6 +2689,16 @@ class TemplateModel(BaseModel):
         default_factory=_default_supported_channels,
         min_length=1,
     )
+
+    @model_validator(mode="after")
+    def _mirror_deprecated_number_id(self) -> "TemplateModel":
+        # Server code constructs this model with telephony_number_id; the
+        # elif tolerates direct construction from an old-key dict.
+        if self.telephony_number_id is not None:
+            self.outbound_number_id = self.telephony_number_id
+        elif self.outbound_number_id is not None:
+            self.telephony_number_id = self.outbound_number_id
+        return self
 
 
 # Request models for API
@@ -2711,6 +2726,34 @@ class RequestFlowNode(BaseModel):
 ResellerId = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 
 
+def _resolve_deprecated_number_id(model: Any, info: ValidationInfo) -> None:
+    """Shared Create/Replace resolution for the telephony_number_id /
+    outbound_number_id pair.
+
+    GET responses mirror the pin under BOTH keys (read-compat for old
+    clients), so round-tripped PUT bodies routinely carry both. The rules:
+
+    - only ``telephony_number_id`` sent           -> it applies, no log
+    - both sent with the SAME value               -> round-trip, no log
+    - only ``outbound_number_id`` sent, or both
+      sent with DIFFERENT values                  -> the old key is the
+      operative one (only an old-key writer produces this), so it wins and
+      the use is logged [Deprecated]
+    - explicit ``"outbound_number_id": null``     -> clears the pin (the
+      house helper skips logging None values)
+    """
+    if "outbound_number_id" not in model.model_fields_set:
+        return
+    if model.telephony_number_id == model.outbound_number_id:
+        return
+    log_deprecated_fields(
+        model,
+        {"outbound_number_id": "telephony_number_id"},
+        context=info.context,
+    )
+    model.telephony_number_id = model.outbound_number_id
+
+
 class CreateTemplateRequest(BaseModel):
     # New field names
     reseller_id: ResellerId
@@ -2718,8 +2761,8 @@ class CreateTemplateRequest(BaseModel):
     merchant_id: Optional[str] = None
     telephony_number_id: Optional[str] = None
     # Deprecated: pre-rename key, accepted from older API clients and
-    # converted to telephony_number_id (which wins when both are sent).
-    # Every use is logged [Deprecated] so migration can be tracked.
+    # converted (precedence rules in _resolve_deprecated_number_id). Every
+    # operative use is logged [Deprecated] so migration can be tracked.
     outbound_number_id: Optional[str] = Field(default=None, exclude=True)
     is_active: bool = True
     flow: Dict[str, Any]
@@ -2736,13 +2779,7 @@ class CreateTemplateRequest(BaseModel):
     def _coalesce_number_id_and_warn(
         self, info: ValidationInfo
     ) -> "CreateTemplateRequest":
-        log_deprecated_fields(
-            self,
-            {"outbound_number_id": "telephony_number_id"},
-            context=info.context,
-        )
-        if self.telephony_number_id is None:
-            self.telephony_number_id = self.outbound_number_id
+        _resolve_deprecated_number_id(self, info)
         return self
 
 
@@ -2782,11 +2819,11 @@ class ReplaceTemplateRequest(BaseModel):
     name: str
     merchant_id: Optional[str] = None
     telephony_number_id: Optional[str] = None
-    # Deprecated: pre-rename key, accepted and converted. The new key wins
-    # when both are present — a round-tripped GET body already carries
-    # telephony_number_id — while old clients building PUT bodies from
-    # scratch (only the old key) keep their pin instead of silently clearing
-    # it. Every use is logged [Deprecated] so migration can be tracked.
+    # Deprecated: pre-rename key, accepted and converted. Precedence lives
+    # in _resolve_deprecated_number_id: equal round-tripped values are a
+    # no-op, and when the values differ the OLD key wins (only an old-key
+    # writer produces that shape) — so old clients neither lose edits nor
+    # silently clear pins. Every operative use is logged [Deprecated].
     outbound_number_id: Optional[str] = Field(default=None, exclude=True)
     is_active: bool
     flow: Dict[str, Any]
@@ -2803,11 +2840,5 @@ class ReplaceTemplateRequest(BaseModel):
     def _coalesce_number_id_and_warn(
         self, info: ValidationInfo
     ) -> "ReplaceTemplateRequest":
-        log_deprecated_fields(
-            self,
-            {"outbound_number_id": "telephony_number_id"},
-            context=info.context,
-        )
-        if self.telephony_number_id is None:
-            self.telephony_number_id = self.outbound_number_id
+        _resolve_deprecated_number_id(self, info)
         return self
