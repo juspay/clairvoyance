@@ -1,7 +1,7 @@
 """Response schemas for template endpoints."""
 
 from datetime import datetime
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from pydantic import BaseModel
 
@@ -17,6 +17,7 @@ class TemplateMetadata(BaseModel):
     reseller_id: str
     merchant_id: Optional[str] = None
     name: str
+    workflow: str = "non-shopify"
     is_active: bool
     supported_channels: List[str] = ["voice"]
     created_at: datetime
@@ -45,3 +46,31 @@ class DeleteTemplateResponse(BaseModel):
     status: str
     message: str
     deleted_template: TemplateMetadata
+
+
+class BatchConfigResultItem(BaseModel):
+    """Per-template outcome of a batch configurations update.
+
+    ``keys`` maps each requested dotted configuration path to its status:
+    ``patched``, ``created``, ``skipped_not_present``, or ``unchanged_same_value``.
+    """
+
+    id: str
+    reseller_id: str
+    merchant_id: Optional[str] = None
+    name: str
+    workflow: str
+    keys: Dict[str, str]
+
+
+class BatchConfigResponse(BaseModel):
+    """Response for a batch configurations update.
+
+    With ``dry_run=True`` nothing is written; the per-template ``keys`` map is a
+    preview of what would change.
+    """
+
+    dry_run: bool
+    total_templates: int
+    total_patched: int
+    results: List[BatchConfigResultItem]

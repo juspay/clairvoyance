@@ -9,8 +9,10 @@ import asyncpg
 
 from app.ai.voice.agents.breeze_buddy.template.types import (
     TemplateModel,
+    WorkflowType,
 )
 from app.core.logger import logger
+from app.database import get_db_connection
 from app.database.decoder.breeze_buddy.template import decode_template
 from app.database.queries import run_parameterized_query
 from app.database.queries.breeze_buddy.call_execution_config import (
@@ -27,8 +29,14 @@ from app.database.queries.breeze_buddy.template import (
     get_templates_count_query,
     get_templates_list_query,
     replace_template_query,
+    select_templates_by_scope_query,
+    update_template_configurations_query,
 )
-from app.schemas.breeze_buddy.template import TemplateMetadata
+from app.schemas.breeze_buddy.template import (
+    BatchConfigResponse,
+    BatchConfigResultItem,
+    TemplateMetadata,
+)
 
 
 def get_row_count(result: Optional[list[asyncpg.Record]]) -> int:
@@ -77,6 +85,7 @@ async def create_template(
     outbound_number_id: Optional[str] = None,
     is_active: bool = True,
     supported_channels: Optional[List[str]] = None,
+    workflow: Optional[WorkflowType] = None,
 ) -> Optional[TemplateModel]:
     """Create a new template with flow stored as JSON."""
     logger.info(f"Creating template with ID: {template_id}")
@@ -103,6 +112,10 @@ async def create_template(
         # Convert secrets to JSON string
         secrets_json = json.dumps(secrets) if secrets is not None else None
 
+        workflow_value = (
+            workflow.value if workflow is not None else WorkflowType.NON_SHOPIFY.value
+        )
+
         query, values = create_template_query(
             template_id,
             reseller_id,
@@ -118,6 +131,7 @@ async def create_template(
             supported_channels or ["voice"],
             now,
             now,
+            workflow=workflow_value,
         )
 
         result = await run_parameterized_query(query, values)
@@ -251,6 +265,7 @@ async def get_templates_list(
                     reseller_id=row["reseller_id"],
                     merchant_id=row.get("merchant_id"),
                     name=row["name"],
+                    workflow=row.get("workflow") or "non-shopify",
                     is_active=row["is_active"],
                     supported_channels=list(row["supported_channels"]),
                     created_at=row["created_at"],
@@ -496,6 +511,7 @@ async def delete_template_if_not_referenced(
                 reseller_id=row["reseller_id"],
                 merchant_id=row.get("merchant_id"),
                 name=row["name"],
+                workflow=row.get("workflow") or "non-shopify",
                 is_active=row["is_active"],
                 created_at=row["created_at"],
                 updated_at=row["updated_at"],
@@ -549,3 +565,118 @@ async def get_all_templates_by_outbound_number_id(
             f"Error getting all templates by outbound_number_id: {e}", exc_info=True
         )
         return []
+
+
+_MISSING = object()
+
+
+def _resolve_config_path(config: Dict[str, Any], path_parts: List[str]) -> Any:
+    """Return the value at a dotted path inside a configurations dict, or
+    ``_MISSING`` if any segment is absent."""
+    current: Any = config
+    for part in path_parts:
+        if isinstance(current, dict) and part in current:
+            current = current[part]
+        else:
+            return _MISSING
+    return current
+
+
+async def batch_update_template_configurations(
+    filters: Dict[str, Any],
+    patches: Dict[str, Any],
+    create: bool,
+    dry_run: bool,
+) -> BatchConfigResponse:
+    """Apply a flat map of dotted configuration paths to every template
+    matching the given scope.
+
+    Only the ``configurations`` JSONB is touched (never flow/secrets). When
+    ``dry_run`` is True nothing is written; the returned per-template ``keys``
+    map previews the classification of each requested path.
+
+    Args:
+        filters: Scope filters consumed by select_templates_by_scope_query
+            (reseller/merchant scope, optional template_name, optional workflows).
+        patches: ``{"dotted.path": value}`` to apply.
+        create: Create keys that do not already exist (otherwise skip them).
+        dry_run: Preview only; perform no writes.
+    """
+    logger.info(
+        f"Batch config update (dry_run={dry_run}, create={create}) "
+        f"filters={filters} keys={list(patches.keys())}"
+    )
+
+    query, values = select_templates_by_scope_query(filters)
+    rows = await run_parameterized_query(query, values)
+
+    results: List[BatchConfigResultItem] = []
+    total_patched = 0
+    pending_updates: List[Tuple[str, List[Any]]] = []
+
+    for row in rows or []:
+        configurations = row.get("configurations")
+        if isinstance(configurations, str):
+            configurations = json.loads(configurations)
+        if not isinstance(configurations, dict):
+            configurations = {}
+
+        keys_status: Dict[str, str] = {}
+        set_operations: List[Any] = []
+
+        for dotted_path, new_value in patches.items():
+            path_parts = dotted_path.split(".")
+            current = _resolve_config_path(configurations, path_parts)
+
+            if current is _MISSING:
+                if create:
+                    keys_status[dotted_path] = "created"
+                    set_operations.append((path_parts, json.dumps(new_value)))
+                else:
+                    keys_status[dotted_path] = "skipped_not_present"
+            elif current == new_value:
+                keys_status[dotted_path] = "unchanged_same_value"
+            else:
+                keys_status[dotted_path] = "patched"
+                set_operations.append((path_parts, json.dumps(new_value)))
+
+        if set_operations:
+            total_patched += 1
+            if not dry_run:
+                pending_updates.append(
+                    update_template_configurations_query(
+                        str(row["id"]), set_operations, create
+                    )
+                )
+
+        results.append(
+            BatchConfigResultItem(
+                id=str(row["id"]),
+                reseller_id=row["reseller_id"],
+                merchant_id=row.get("merchant_id"),
+                name=row["name"],
+                workflow=row.get("workflow") or "non-shopify",
+                keys=keys_status,
+            )
+        )
+
+    # Apply every matched template's update inside one transaction so the batch
+    # is all-or-nothing -- a failure midway rolls back earlier writes.
+    if pending_updates:
+        async for conn in get_db_connection():
+            async with conn.transaction():
+                for update_query, update_values in pending_updates:
+                    await conn.execute(update_query, *update_values)
+            break
+
+    logger.info(
+        f"Batch config update matched {len(results)} templates, "
+        f"{total_patched} with changes (dry_run={dry_run})"
+    )
+
+    return BatchConfigResponse(
+        dry_run=dry_run,
+        total_templates=len(results),
+        total_patched=total_patched,
+        results=results,
+    )

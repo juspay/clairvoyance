@@ -13,9 +13,9 @@ Endpoints:
 For backward compatibility, old endpoints are available in deprecated/template.py
 """
 
-from typing import Optional
+from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Body, Depends, Header, Query, status
 
 from app.ai.voice.agents.breeze_buddy.template.types import (
     CreateTemplateRequest,
@@ -26,11 +26,13 @@ from app.api.security.breeze_buddy.rbac_token import get_current_user_with_rbac
 from app.core.security.authorization import require_admin
 from app.schemas import UserInfo
 from app.schemas.breeze_buddy.template import (
+    BatchConfigResponse,
     DeleteTemplateResponse,
     TemplateListResponse,
 )
 
 from .handlers import (
+    batch_patch_configurations_handler,
     create_template_handler,
     delete_template_handler,
     get_template_by_id_handler,
@@ -152,6 +154,70 @@ async def list_templates(
         page=page,
         limit=limit,
         search=search,
+    )
+
+
+@router.patch(
+    "/templates/batch-configurations",
+    response_model=BatchConfigResponse,
+    include_in_schema=False,
+)
+async def batch_patch_configurations(
+    patches: Dict[str, Any] = Body(
+        ...,
+        description=(
+            "Flat map of dotted configuration path -> new value, e.g. "
+            '{"tts_configuration.provider": "cartesia"}'
+        ),
+    ),
+    dry_run: bool = Query(True, description="Preview only; write nothing (default)"),
+    create: bool = Query(
+        False,
+        description="Create keys that don't exist (default: update existing only)",
+    ),
+    all_templates: bool = Query(
+        False,
+        alias="all",
+        description="Target every accessible template when no scope is provided",
+    ),
+    x_reseller_id: Optional[str] = Header(
+        None,
+        alias="X-Reseller-Id",
+        description="Reseller id(s); comma-separated for multiple",
+    ),
+    x_merchant_id: Optional[str] = Header(
+        None,
+        alias="X-Merchant-Id",
+        description="Merchant id(s); comma-separated for multiple",
+    ),
+    x_template_name: Optional[str] = Header(None, alias="X-Template-Name"),
+    x_workflow: Optional[str] = Header(
+        None,
+        alias="X-Workflow",
+        description="Workflow(s); comma-separated for multiple (e.g. order-confirmation,abandonment-recovery)",
+    ),
+    current_user: UserInfo = Depends(get_current_user_with_rbac),
+):
+    """
+    Batch-update template ``configurations`` across a scope (admin only).
+
+    Surgically patches only the dotted paths provided in the body; ``flow`` and
+    ``secrets`` are never touched. Scope is the AND of the X-* headers; at least
+    one is required unless ``?all=true``. RBAC always constrains the scope to the
+    caller's accessible resellers/merchants. Defaults to a dry run.
+    """
+    require_admin(current_user)
+
+    return await batch_patch_configurations_handler(
+        patches=patches,
+        dry_run=dry_run,
+        create=create,
+        all_templates=all_templates,
+        x_reseller_id=x_reseller_id,
+        x_merchant_id=x_merchant_id,
+        x_template_name=x_template_name,
+        x_workflow=x_workflow,
+        current_user=current_user,
     )
 
 

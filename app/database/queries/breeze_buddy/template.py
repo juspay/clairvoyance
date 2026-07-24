@@ -36,7 +36,7 @@ def get_template_in_scope_query(
         SELECT id,
                reseller_id,
                merchant_id,
-               name, flow, expected_payload_schema, expected_callback_response_schema, configurations, secrets, outbound_number_id, is_active, supported_channels, created_at, updated_at
+               name, flow, expected_payload_schema, expected_callback_response_schema, configurations, secrets, outbound_number_id, workflow, is_active, supported_channels, created_at, updated_at
         FROM {TEMPLATE_TABLE}
         WHERE {" AND ".join(conditions)}
     """
@@ -69,12 +69,13 @@ def create_template_query(
     supported_channels: List[str],
     created_at,
     updated_at,
+    workflow: str = "non-shopify",
 ) -> Tuple[str, List[Any]]:
     """Generate query to create a new template."""
     query = f"""
-        INSERT INTO {TEMPLATE_TABLE} (id, reseller_id, merchant_id, name, flow, expected_payload_schema, expected_callback_response_schema, configurations, secrets, outbound_number_id, is_active, supported_channels, created_at, updated_at)
-        VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7::jsonb, $8::jsonb, $9::jsonb, $10, $11, $12, $13, $14)
-        RETURNING id, reseller_id, merchant_id, name, flow, expected_payload_schema, expected_callback_response_schema, configurations, secrets, outbound_number_id, is_active, supported_channels, created_at, updated_at
+        INSERT INTO {TEMPLATE_TABLE} (id, reseller_id, merchant_id, name, flow, expected_payload_schema, expected_callback_response_schema, configurations, secrets, outbound_number_id, is_active, supported_channels, created_at, updated_at, workflow)
+        VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7::jsonb, $8::jsonb, $9::jsonb, $10, $11, $12, $13, $14, $15)
+        RETURNING id, reseller_id, merchant_id, name, flow, expected_payload_schema, expected_callback_response_schema, configurations, secrets, outbound_number_id, workflow, is_active, supported_channels, created_at, updated_at
     """
 
     return query, [
@@ -92,6 +93,7 @@ def create_template_query(
         supported_channels,
         created_at,
         updated_at,
+        workflow,
     ]
 
 
@@ -113,7 +115,7 @@ def delete_template_if_not_referenced_query(template_id: str) -> tuple[str, list
         )
         DELETE FROM {TEMPLATE_TABLE}
         WHERE id IN (SELECT id FROM can_delete)
-        RETURNING id, reseller_id, merchant_id, name, is_active, created_at, updated_at
+        RETURNING id, reseller_id, merchant_id, name, workflow, is_active, created_at, updated_at
     """
     return query, [template_id]
 
@@ -190,7 +192,7 @@ def get_templates_list_query(filters: Dict[str, Any]) -> Tuple[str, List[Any]]:
         SELECT id,
                reseller_id,
                merchant_id,
-               name, is_active, supported_channels, created_at, updated_at
+               name, workflow, is_active, supported_channels, created_at, updated_at
         FROM {TEMPLATE_TABLE}
         {where_clause}
         ORDER BY {order_by}
@@ -229,7 +231,7 @@ def get_template_by_id_query(template_id: str) -> Tuple[str, List[Any]]:
         SELECT id,
                reseller_id,
                merchant_id,
-               name, flow, expected_payload_schema, expected_callback_response_schema, configurations, secrets, outbound_number_id, is_active, supported_channels, created_at, updated_at
+               name, flow, expected_payload_schema, expected_callback_response_schema, configurations, secrets, outbound_number_id, workflow, is_active, supported_channels, created_at, updated_at
         FROM {TEMPLATE_TABLE}
         WHERE id = $1
         LIMIT 1
@@ -263,7 +265,7 @@ def get_template_by_outbound_number_id_query(
         SELECT id,
                reseller_id,
                merchant_id,
-               name, flow, expected_payload_schema, expected_callback_response_schema, configurations, secrets, outbound_number_id, is_active, supported_channels, created_at, updated_at
+               name, flow, expected_payload_schema, expected_callback_response_schema, configurations, secrets, outbound_number_id, workflow, is_active, supported_channels, created_at, updated_at
         FROM {TEMPLATE_TABLE}
         WHERE {' AND '.join(conditions)}
         LIMIT 1
@@ -292,7 +294,7 @@ def get_all_templates_by_outbound_number_id_query(
         SELECT id,
                reseller_id,
                merchant_id,
-               name, flow, expected_payload_schema, expected_callback_response_schema, configurations, outbound_number_id, is_active, supported_channels, created_at, updated_at
+               name, flow, expected_payload_schema, expected_callback_response_schema, configurations, outbound_number_id, workflow, is_active, supported_channels, created_at, updated_at
         FROM {TEMPLATE_TABLE}
         WHERE outbound_number_id = $1
         AND is_active = TRUE
@@ -389,7 +391,7 @@ def replace_template_query(
         RETURNING id,
                   reseller_id,
                   merchant_id,
-                  name, flow, expected_payload_schema, expected_callback_response_schema, configurations, secrets, outbound_number_id, is_active, supported_channels, created_at, updated_at
+                  name, flow, expected_payload_schema, expected_callback_response_schema, configurations, secrets, outbound_number_id, workflow, is_active, supported_channels, created_at, updated_at
     """
 
     return query, [
@@ -407,3 +409,117 @@ def replace_template_query(
         updated_at,
         template_id,
     ]
+
+
+def select_templates_by_scope_query(filters: Dict[str, Any]) -> Tuple[str, List[Any]]:
+    """Select templates matching a batch-update scope.
+
+    Returns only the columns needed to classify and patch configurations
+    (never flow/secrets). Supported filter keys:
+        - reseller_id (single) / reseller_ids (list)
+        - merchant_id (single) / merchant_ids (list)
+        - template_name (single)
+        - workflows (list) -- one or more workflow values
+    """
+    conditions: List[str] = []
+    values: List[Any] = []
+
+    if filters.get("reseller_ids"):
+        values.append(filters["reseller_ids"])
+        conditions.append(f"reseller_id = ANY(${len(values)})")
+    elif filters.get("reseller_id"):
+        values.append(filters["reseller_id"])
+        conditions.append(f"reseller_id = ${len(values)}")
+
+    if filters.get("merchant_ids"):
+        values.append(filters["merchant_ids"])
+        conditions.append(f"merchant_id = ANY(${len(values)})")
+    elif filters.get("merchant_id"):
+        values.append(filters["merchant_id"])
+        conditions.append(f"merchant_id = ${len(values)}")
+
+    if filters.get("template_name"):
+        values.append(filters["template_name"])
+        conditions.append(f"name = ${len(values)}")
+
+    if filters.get("workflows"):
+        values.append(filters["workflows"])
+        conditions.append(f"workflow = ANY(${len(values)})")
+
+    where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
+
+    query = f"""
+        SELECT id, reseller_id, merchant_id, name, workflow, configurations
+        FROM {TEMPLATE_TABLE}
+        {where_clause}
+        ORDER BY created_at DESC
+    """
+
+    return query, values
+
+
+def update_template_configurations_query(
+    template_id: str,
+    set_operations: List[Tuple[List[str], str]],
+    create_missing: bool,
+) -> Tuple[str, List[Any]]:
+    """Build a surgical configurations update using nested jsonb_set.
+
+    Args:
+        template_id: Template UUID to update.
+        set_operations: List of (path_parts, json_value) tuples, where
+            path_parts is the JSONB path (e.g. ["tts_configuration", "provider"])
+            and json_value is the already JSON-encoded new value.
+        create_missing: Whether jsonb_set should create a missing leaf key.
+
+    Only the ``configurations`` column is touched; ``flow`` and ``secrets`` are
+    never modified.
+    """
+    base = "COALESCE(configurations, '{}'::jsonb)"
+    expr = base
+    values: List[Any] = []
+    create_flag = "true" if create_missing else "false"
+
+    # jsonb_set is a no-op when an intermediate parent is absent, so seed every
+    # missing parent object (shallowest first) before writing the leaves.
+    seen_parents: set = set()
+    parent_paths: List[List[str]] = []
+    for path_parts, _ in set_operations:
+        for depth in range(1, len(path_parts)):
+            prefix = path_parts[:depth]
+            key = tuple(prefix)
+            if key not in seen_parents:
+                seen_parents.add(key)
+                parent_paths.append(prefix)
+    parent_paths.sort(key=len)
+
+    for prefix in parent_paths:
+        values.append(prefix)
+        prefix_idx = len(values)
+        expr = (
+            f"jsonb_set({expr}, ${prefix_idx}::text[], "
+            f"COALESCE({base} #> ${prefix_idx}::text[], '{{}}'::jsonb), true)"
+        )
+
+    for path_parts, json_value in set_operations:
+        values.append(path_parts)
+        path_idx = len(values)
+        values.append(json_value)
+        value_idx = len(values)
+        expr = (
+            f"jsonb_set({expr}, ${path_idx}::text[], "
+            f"${value_idx}::jsonb, {create_flag})"
+        )
+
+    values.append(template_id)
+    id_idx = len(values)
+
+    query = f"""
+        UPDATE {TEMPLATE_TABLE}
+        SET configurations = {expr},
+            updated_at = NOW()
+        WHERE id = ${id_idx}
+        RETURNING id
+    """
+
+    return query, values
