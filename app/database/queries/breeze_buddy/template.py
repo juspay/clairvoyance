@@ -238,6 +238,18 @@ def get_template_by_id_query(template_id: str) -> Tuple[str, List[Any]]:
     return query, [template_id]
 
 
+def get_merchant_by_template_id_query(template_id: str) -> Tuple[str, List[Any]]:
+    """Generate query to read only a template's owning merchant."""
+    query = f"""
+        SELECT merchant_id
+        FROM {TEMPLATE_TABLE}
+        WHERE id = $1
+        LIMIT 1
+    """
+
+    return query, [template_id]
+
+
 def get_template_by_telephony_number_id_query(
     telephony_number_id: str,
     enable_inbound_only: bool = False,

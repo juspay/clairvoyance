@@ -21,6 +21,7 @@ from app.database.queries.breeze_buddy.template import (
     create_template_query,
     delete_template_if_not_referenced_query,
     get_all_templates_by_telephony_number_id_query,
+    get_merchant_by_template_id_query,
     get_template_by_id_query,
     get_template_by_telephony_number_id_query,
     get_template_in_scope_query,
@@ -305,6 +306,33 @@ async def get_template_by_id(template_id: str) -> Optional[TemplateModel]:
     except Exception as e:
         logger.error(f"Error getting template by ID: {e}", exc_info=True)
         return None
+
+
+async def get_template_merchant_id(template_id: str) -> Optional[str]:
+    """Return only the merchant that owns a template.
+
+    This is used by scope/authorization checks where loading the full template
+    would unnecessarily hydrate flow/configuration/secrets.
+    """
+    logger.info(f"Getting template merchant by ID: {template_id}")
+
+    try:
+        query, values = get_merchant_by_template_id_query(template_id)
+        result = await run_parameterized_query(query, values)
+
+        if not result or get_row_count(result) == 0:
+            logger.info(f"No template merchant found for ID: {template_id}")
+            return None
+
+        merchant_id = result[0]["merchant_id"]
+        return str(merchant_id) if merchant_id is not None else None
+
+    except Exception as e:
+        logger.error(
+            f"Error getting template merchant by ID: {template_id}: {e}",
+            exc_info=True,
+        )
+        raise
 
 
 async def replace_template(
