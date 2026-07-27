@@ -27,6 +27,7 @@ class ActionType(str, Enum):
     TTS_SAY = "tts_say"
     END_CONVERSATION = "end_conversation"
     FUNCTION = "function"
+    ALERT = "alert"
 
 
 class VadConfig(BaseModel):

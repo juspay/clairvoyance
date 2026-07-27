@@ -12,6 +12,7 @@ from typing import Any, List
 
 from pipecat.processors.aggregators.llm_context import LLMContext
 
+from app.ai.voice.agents.breeze_buddy.template.types import ActionType
 from app.core.logger import logger
 
 from .observer import RealtimeObserver
@@ -34,7 +35,9 @@ class ObserverManager:
         self._observers = observers
         self._llm_context = llm_context
         self._turn_count: int = 0
-        self._acted: set[str] = set()  # observer names that already acted
+        self._acted: set[str] = set()  # non-ALERT observers that already fired
+        self._fired_alerts: set[str] = set()  # ALERT observers that already fired
+        self._action_taken: bool = False  # True once any non-ALERT action executes
         self._check_lock = asyncio.Lock()
         # Strong references to in-flight tasks — prevents GC from collecting
         # them mid-flight when PipelineRunner runs with force_gc=True.
@@ -83,14 +86,22 @@ class ObserverManager:
             if self._stopped:
                 return
 
+            def _is_alert(obs: RealtimeObserver) -> bool:
+                return (
+                    obs.config.action is not None
+                    and obs.config.action.type == ActionType.ALERT
+                )
+
             eligible = [
                 obs
                 for obs in self._observers
                 if event_name in obs.config.trigger_on
-                and obs.name not in self._acted
+                and self._turn_count >= obs.config.start_after_turn
                 and (
-                    event_name != "on_user_turn_message_added"
-                    or self._turn_count > obs.config.start_after_turn
+                    _is_alert(obs)
+                    and obs.name not in self._fired_alerts
+                    or not _is_alert(obs)
+                    and obs.name not in self._acted
                 )
             ]
             if not eligible:
@@ -104,28 +115,34 @@ class ObserverManager:
                 f"{[obs.name for obs in eligible]}"
             )
 
-        # Launch checks outside the lock — each completes independently.
-        for obs in eligible:
-            task = asyncio.create_task(
-                self._check_and_act(obs, transcript),
-                name=f"obs-check:{obs.name}",
+            # gather() over as_completed(): as_completed wraps futures in
+            # new coroutines so the original future→observer mapping breaks.
+            # gather() returns results in input order which is deterministic
+            # and keeps the observer→result pairing trivial via zip().
+            results = await asyncio.gather(
+                *[obs.check(transcript) for obs in eligible],
+                return_exceptions=True,
             )
-            self._track_task(task)
 
-    async def _check_and_act(self, obs: RealtimeObserver, transcript: str) -> None:
-        """Run a single observer check and fire its action on detection."""
-        try:
-            detected = await obs.check(transcript)
-        except Exception:
-            logger.exception(f"Observer {obs.name} check failed")
-            return
-
-        if detected and obs.name not in self._acted:
-            self._acted.add(obs.name)
-            try:
-                await obs.execute_action()
-            except Exception:
-                logger.exception(f"Observer {obs.name} execute_action failed")
+            for obs, result in zip(eligible, results):
+                if self._action_taken:
+                    return
+                if isinstance(result, Exception):
+                    logger.error(f"Observer {obs.name} check failed: {result}")
+                    continue
+                if result is True:
+                    is_alert = _is_alert(obs)
+                    if is_alert:
+                        self._fired_alerts.add(obs.name)
+                    else:
+                        self._acted.add(obs.name)
+                        self._action_taken = True
+                    try:
+                        await obs.execute_action()
+                    except Exception as e:
+                        logger.error(f"Observer {obs.name} execute_action failed: {e}")
+                    if self._action_taken:
+                        return
 
     # ------------------------------------------------------------------
     # Transcript building

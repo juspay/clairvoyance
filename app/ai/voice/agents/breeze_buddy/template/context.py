@@ -358,16 +358,18 @@ class TemplateContext:
         observer_name: str,
         action_type: str,
         action_args: Optional[Dict[str, Any]] = None,
+        node_name: Optional[str] = None,
     ) -> None:
-        """Record an observer-triggered action under the currently active node.
+        """Record an observer-triggered action under a specific node.
 
-        Appends an entry to the ``observer_actions`` list of the most recent
-        node traversal entry (the one with ``exited_at`` still None).
+        If ``node_name`` is given, finds that node in traversal history.
+        Otherwise falls back to the currently active (last open) node.
 
         Args:
             observer_name: Name of the observer that triggered (from config).
             action_type: The action the observer executed (e.g. end_conversation).
             action_args: Arguments from the observer's configured action.
+            node_name: Node where the observer detected (captured at check time).
         """
         if not self.lead or not self.lead.metaData:
             return
@@ -375,23 +377,30 @@ class TemplateContext:
         if "node_traversal" not in self.lead.metaData:
             return
 
-        active_entry = None
-        for entry in reversed(self.lead.metaData["node_traversal"]):
-            if entry.get("exited_at") is None:
-                active_entry = entry
-                break
+        target_entry = None
+        if node_name:
+            for entry in reversed(self.lead.metaData["node_traversal"]):
+                if entry.get("node_name") == node_name:
+                    target_entry = entry
+                    break
 
-        if active_entry is None:
+        if target_entry is None:
+            for entry in reversed(self.lead.metaData["node_traversal"]):
+                if entry.get("exited_at") is None:
+                    target_entry = entry
+                    break
+
+        if target_entry is None:
             logger.warning(
                 f"Cannot record observer action '{observer_name}': "
-                "no active node entry found"
+                "no matching node entry found"
             )
             return
 
-        if "observer_actions" not in active_entry:
-            active_entry["observer_actions"] = []
+        if "observer_actions" not in target_entry:
+            target_entry["observer_actions"] = []
 
-        active_entry["observer_actions"].append(
+        target_entry["observer_actions"].append(
             {
                 "observer_name": observer_name,
                 "action": action_type,
@@ -401,7 +410,7 @@ class TemplateContext:
         )
         logger.info(
             f"Recorded observer action '{observer_name}' ({action_type}) "
-            f"under node '{active_entry.get('node_name')}'"
+            f"under node '{target_entry.get('node_name')}'"
         )
 
     def record_ivr_input(
