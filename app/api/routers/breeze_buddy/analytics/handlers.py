@@ -8,7 +8,9 @@ import io
 import json
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
+from uuid import UUID
 
+from fastapi import HTTPException, status
 from starlette.responses import StreamingResponse
 
 from app.api.routers.breeze_buddy.numbers.rbac import (
@@ -39,6 +41,10 @@ from app.database.accessor.breeze_buddy.chat_analytics import (
     get_chat_summary_from_db,
     get_chat_trends_from_db,
     get_chats_by_hour_from_db,
+)
+from app.database.accessor.breeze_buddy.conversation_analysis import (
+    get_topic_conversations,
+    get_topic_dashboard,
 )
 from app.database.accessor.breeze_buddy.telephony_number import (
     get_template_pinned_number_ids,
@@ -90,6 +96,90 @@ def _format_time_bucket(
     elif time_granularity == "month":
         data_point["month"] = time_bucket.strftime("%Y-%m")
         data_point["month_name"] = time_bucket.strftime("%B %Y")
+
+
+def _format_topic_summary_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    return [
+        {
+            "template_id": str(row["template_id"]),
+            "template_name": row["template_name"],
+            "topic_type": row["topic_type"],
+            "label": row["label"],
+            "rank": int(row["rank"]),
+            "is_other": bool(row["is_other"]),
+            "underlying_topic_types": list(row["underlying_topic_types"] or []),
+            "underlying_topic_count": int(row["underlying_topic_count"] or 0),
+            "conversation_count": int(row["conversation_count"] or 0),
+            "voice_count": int(row["voice_count"] or 0),
+            "chat_count": int(row["chat_count"] or 0),
+            "conversation_share": float(row["conversation_share"] or 0),
+        }
+        for row in rows
+    ]
+
+
+def _format_topic_trend_rows(
+    rows: List[Dict[str, Any]], granularity: str
+) -> List[Dict[str, Any]]:
+    results = []
+    for row in rows:
+        point = {
+            "template_id": str(row["template_id"]),
+            "template_name": row["template_name"],
+            "topic_type": row["topic_type"],
+            "label": row["label"],
+            "conversation_count": int(row["conversation_count"] or 0),
+        }
+        _format_time_bucket(point, row["time_bucket"], granularity)
+        results.append(point)
+    return results
+
+
+def _decode_topic_cursor(
+    cursor: Optional[str],
+) -> tuple[Optional[datetime], Optional[UUID]]:
+    if not cursor:
+        return None, None
+    try:
+        timestamp, analysis_id = cursor.split("|", 1)
+        started_at = datetime.fromisoformat(timestamp)
+        if started_at.tzinfo is None:
+            raise ValueError
+        return started_at, UUID(analysis_id)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("invalid topic conversation cursor") from exc
+
+
+def _validate_topic_filters(
+    filters: Dict[str, Any], *, drilldown: bool = False
+) -> None:
+    required = ["date_from", "date_to"]
+    if drilldown:
+        required += ["template_id", "topic_type"]
+    missing = [key for key in required if not filters.get(key)]
+    if missing:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, f"Missing {', '.join(missing)}"
+        )
+    if filters["date_to"] < filters["date_from"]:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, "date_to must not precede date_from"
+        )
+    if filters.get("template_id"):
+        try:
+            UUID(str(filters["template_id"]))
+        except ValueError as exc:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY, "template_id must be a UUID"
+            ) from exc
+    if (
+        drilldown
+        and filters["topic_type"] == "__other__"
+        and not filters.get("topic_types")
+    ):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, "topic_types are required for Other"
+        )
 
 
 async def get_call_based_analytics(
@@ -262,6 +352,88 @@ async def get_chats_by_hour_analytics(
         "type": "chats-by-hour",
         "filters_applied": filters,
         "results": hours,
+    }
+
+
+async def get_topic_dashboard_analytics(
+    filters: Dict[str, Any], options: Dict[str, Any], current_user: UserInfo
+) -> Dict[str, Any]:
+    _validate_topic_filters(filters)
+    rows = await get_topic_dashboard(filters)
+
+    return {
+        "type": "topic-dashboard",
+        "filters_applied": filters,
+        "time_granularity": "day",
+        "summary": _format_topic_summary_rows(
+            [
+                row
+                for row in rows
+                if row["result_type"] == "summary" and row["period"] == "current"
+            ]
+        ),
+        "previous_summary": _format_topic_summary_rows(
+            [
+                row
+                for row in rows
+                if row["result_type"] == "summary" and row["period"] == "previous"
+            ]
+        ),
+        "trends": _format_topic_trend_rows(
+            [row for row in rows if row["result_type"] == "trend"], "day"
+        ),
+    }
+
+
+async def get_topic_conversations_analytics(
+    filters: Dict[str, Any], options: Dict[str, Any], current_user: UserInfo
+) -> Dict[str, Any]:
+    _validate_topic_filters(filters, drilldown=True)
+
+    limit = max(1, min(options.get("limit", 50), 100))
+    try:
+        cursor_started_at, cursor_id = _decode_topic_cursor(options.get("cursor"))
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid topic conversation cursor",
+        )
+    rows = await get_topic_conversations(filters, limit, cursor_started_at, cursor_id)
+    has_more = len(rows) > limit
+    page_rows = rows[:limit]
+    results = []
+    for row in page_rows:
+        channel = row["channel"]
+        source_id = row["source_id"]
+        results.append(
+            {
+                "analysis_id": str(row["id"]),
+                "channel": channel,
+                "lead_id": source_id if channel == "VOICE" else None,
+                "chat_session_id": source_id if channel == "CHAT" else None,
+                "reseller_id": row["reseller_id"],
+                "merchant_id": row.get("merchant_id"),
+                "template_id": (
+                    str(row["template_id"]) if row.get("template_id") else None
+                ),
+                "started_at": row["started_at"],
+                "topics": row.get("topics") or [],
+            }
+        )
+    next_cursor = (
+        f"{page_rows[-1]['started_at'].isoformat()}|{page_rows[-1]['id']}"
+        if has_more and page_rows
+        else None
+    )
+    return {
+        "type": "topic-conversations",
+        "filters_applied": filters,
+        "results": results,
+        "pagination": {
+            "limit": limit,
+            "has_more": has_more,
+            "next_cursor": next_cursor,
+        },
     }
 
 

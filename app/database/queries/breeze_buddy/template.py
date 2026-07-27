@@ -72,9 +72,20 @@ def create_template_query(
 ) -> Tuple[str, List[Any]]:
     """Generate query to create a new template."""
     query = f"""
-        INSERT INTO {TEMPLATE_TABLE} (id, reseller_id, merchant_id, name, flow, expected_payload_schema, expected_callback_response_schema, configurations, secrets, telephony_number_id, is_active, supported_channels, created_at, updated_at)
-        VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7::jsonb, $8::jsonb, $9::jsonb, $10, $11, $12, $13, $14)
-        RETURNING id, reseller_id, merchant_id, name, flow, expected_payload_schema, expected_callback_response_schema, configurations, secrets, telephony_number_id, is_active, supported_channels, created_at, updated_at
+        INSERT INTO {TEMPLATE_TABLE} (
+            id, reseller_id, merchant_id, name, flow,
+            expected_payload_schema, expected_callback_response_schema,
+            configurations, secrets, telephony_number_id, is_active,
+            supported_channels, created_at, updated_at
+        )
+        VALUES (
+            $1, $2, $3, $4, $5::jsonb, $6::jsonb, $7::jsonb,
+            $8::jsonb, $9::jsonb, $10, $11, $12, $13, $14
+        )
+        RETURNING id, reseller_id, merchant_id, name, flow,
+                  expected_payload_schema, expected_callback_response_schema,
+                  configurations, secrets, telephony_number_id, is_active,
+                  supported_channels, created_at, updated_at
     """
 
     return query, [

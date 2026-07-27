@@ -25,6 +25,12 @@ from app.ai.voice.agents.breeze_buddy.template.types import (
 from app.api.security.breeze_buddy.rbac_token import get_current_user_with_rbac
 from app.core.security.authorization import require_admin
 from app.schemas import UserInfo
+from app.schemas.breeze_buddy.conversation_analysis import (
+    TopicCatalogResponse,
+    TopicConfigurationResponse,
+    TopicEvaluationSettingsRequest,
+    UpdateTopicConfigurationRequest,
+)
 from app.schemas.breeze_buddy.template import (
     DeleteTemplateResponse,
     TemplateListResponse,
@@ -34,8 +40,11 @@ from .handlers import (
     create_template_handler,
     delete_template_handler,
     get_template_by_id_handler,
+    get_topic_catalog_handler,
     list_templates_handler,
     replace_template_handler,
+    set_topic_evaluation_enabled_handler,
+    update_topic_configuration_handler,
 )
 from .rbac import require_admin_or_reseller_owner
 
@@ -153,6 +162,49 @@ async def list_templates(
         limit=limit,
         search=search,
     )
+
+
+@router.get(
+    "/templates/{template_id}/topics",
+    response_model=TopicCatalogResponse,
+)
+async def get_topic_catalog(
+    template_id: str,
+    current_user: UserInfo = Depends(get_current_user_with_rbac),
+):
+    """Return discovered topics and the evaluation setting for one agent."""
+    return await get_topic_catalog_handler(template_id, current_user)
+
+
+@router.patch(
+    "/templates/{template_id}/topics/config",
+    response_model=TopicCatalogResponse,
+)
+async def set_topic_evaluation_enabled(
+    template_id: str,
+    request: TopicEvaluationSettingsRequest,
+    current_user: UserInfo = Depends(get_current_user_with_rbac),
+):
+    """Enable or disable topic evaluation for one agent."""
+    return await set_topic_evaluation_enabled_handler(
+        template_id,
+        request,
+        current_user,
+    )
+
+
+@router.patch(
+    "/templates/{template_id}/topics/configuration",
+    response_model=TopicConfigurationResponse,
+)
+async def update_topic_configuration(
+    template_id: str,
+    request: UpdateTopicConfigurationRequest,
+    current_user: UserInfo = Depends(get_current_user_with_rbac),
+):
+    """Update one agent's topic extraction model, prompt, or settings."""
+    require_admin(current_user)
+    return await update_topic_configuration_handler(template_id, request)
 
 
 @router.get("/templates/{template_id}", response_model=TemplateModel)

@@ -7,6 +7,15 @@ from app.services.live_config.store import get_config
 # Dynamic runtime configs
 # -----------------------
 
+
+async def GRID_API_KEY() -> str:
+    return await get_config("GRID_API_KEY", "", str)
+
+
+async def LITELLM_BASE_URL() -> str:
+    return await get_config("LITELLM_BASE_URL", "", str)
+
+
 # --- Per-provider TTS defaults (Redis-backed, overridable at runtime) ---
 # Each provider has a dict of defaults. Template-level TTSConfig fields
 # override these; fields left as None in TTSConfig fall back here.

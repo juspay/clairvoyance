@@ -1756,6 +1756,7 @@ class ConfigurationModel(BaseModel):
         None, description="Default VAD configuration for the template"
     )
     enable_inbound: bool = False  # Whether this template can handle inbound calls
+    enable_topic_evaluation: Optional[bool] = None
     user_idle_configuration: Optional[UserIdleHandlingConfig] = (
         None  # User idle handling config
     )

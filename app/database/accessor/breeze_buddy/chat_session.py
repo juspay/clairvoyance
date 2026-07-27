@@ -9,7 +9,13 @@ import json
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
+from app.ai.voice.agents.breeze_buddy.services.conversation_analysis.queue import (
+    enqueue_topic_analysis,
+)
 from app.core.logger import logger
+from app.database.accessor.breeze_buddy.conversation_analysis import (
+    create_chat_analysis,
+)
 from app.database.decoder.breeze_buddy.chat_session import (
     decode_agent_session_state,
     decode_chat_message,
@@ -126,6 +132,14 @@ async def end_chat_session(
         row = result[0] if result else None
         if row:
             session = decode_chat_session(row)
+            try:
+                analysis_id = await create_chat_analysis(session_id)
+                if analysis_id:
+                    await enqueue_topic_analysis(analysis_id)
+            except Exception as e:
+                logger.error(
+                    f"Failed to create topic analysis for chat {session_id}: {e}"
+                )
             if session:
                 logger.info(f"Ended chat session {session_id} (reason={ended_reason})")
             return session

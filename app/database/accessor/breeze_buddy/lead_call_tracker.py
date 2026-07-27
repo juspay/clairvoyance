@@ -7,7 +7,13 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import asyncpg
 
+from app.ai.voice.agents.breeze_buddy.services.conversation_analysis.queue import (
+    enqueue_topic_analysis,
+)
 from app.core.logger import logger
+from app.database.accessor.breeze_buddy.conversation_analysis import (
+    create_voice_analysis,
+)
 from app.database.decoder.breeze_buddy.lead_call_tracker import decode_lead_call_tracker
 from app.database.queries import run_parameterized_query
 from app.database.queries.breeze_buddy.lead_call_tracker import (
@@ -478,7 +484,15 @@ async def update_lead_call_completion_details(
         )
         result = await run_parameterized_query(query_text, values)
         if result and get_row_count(result) > 0:
-            decoded_result = decode_lead_call_tracker(result[0])
+            row = result[0]
+            decoded_result = decode_lead_call_tracker(row)
+            if status == LeadCallStatus.FINISHED:
+                try:
+                    analysis_id = await create_voice_analysis(id)
+                    if analysis_id:
+                        await enqueue_topic_analysis(analysis_id)
+                except Exception as e:
+                    logger.error(f"Failed to create topic analysis for lead {id}: {e}")
             logger.info(
                 f"Lead call completion details updated successfully: {decoded_result}"
             )
