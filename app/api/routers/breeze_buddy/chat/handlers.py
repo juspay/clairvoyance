@@ -9,7 +9,8 @@ stay thin: validate auth, then delegate.
 import asyncio
 import time
 from datetime import datetime
-from typing import Any, AsyncIterator, Callable, Dict, List, Optional
+from inspect import isawaitable
+from typing import Any, AsyncIterator, Awaitable, Callable, Dict, List, Optional
 
 from fastapi import HTTPException, status
 from fastapi.responses import StreamingResponse
@@ -86,6 +87,11 @@ from app.schemas.breeze_buddy.chat import (
     ToolApprovalStatus,
 )
 from app.schemas.breeze_buddy.conversation_analysis import ConversationChannel
+from app.schemas.breeze_buddy.copilot import COPILOT_SCOPE_METADATA_KEY
+from app.services.breeze_buddy.copilot.scope import (
+    CopilotScopeError,
+    resolve_copilot_scope,
+)
 from app.services.redis.locks import (
     SESSION_LOCK_TTL_SECONDS,
     LockAcquireError,
@@ -94,10 +100,57 @@ from app.services.redis.locks import (
 
 from . import cancel_bus
 
+_RESERVED_METADATA_KEYS = frozenset({"template_vars", COPILOT_SCOPE_METADATA_KEY})
+AccessCheck = Callable[[ChatSession], Awaitable[None] | None]
+
 
 def _lock_key(session_id: str) -> str:
     """Redis key for the per-session distributed lock."""
     return f"chat:session:{session_id}:lock"
+
+
+def _scope_http_error(error: CopilotScopeError) -> HTTPException:
+    return HTTPException(
+        status_code=error.status_code,
+        detail={"code": error.code, "message": error.message},
+    )
+
+
+async def _run_access_check(
+    access_check: Optional[AccessCheck],
+    session: ChatSession,
+) -> None:
+    if access_check is None:
+        return
+    result = access_check(session)
+    if isawaitable(result):
+        await result
+
+
+def _validate_client_metadata(metadata: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    client_metadata = dict(metadata or {})
+    reserved_keys = _RESERVED_METADATA_KEYS.intersection(client_metadata)
+    if reserved_keys:
+        key = sorted(reserved_keys)[0]
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"metadata.{key} is server-owned",
+        )
+    return client_metadata
+
+
+def _build_session_metadata(
+    *,
+    client_metadata: Dict[str, Any],
+    template_vars: Dict[str, Any],
+    server_metadata: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Merge session metadata while protecting server-owned namespaces."""
+    return {
+        **client_metadata,
+        **(server_metadata or {}),
+        "template_vars": template_vars,
+    }
 
 
 async def _persist_turn_metrics(metrics: TurnMetrics) -> None:
@@ -329,13 +382,20 @@ async def create_chat_session_handler(
     transformed_template_vars = _apply_payload_transformations(
         req.template_vars, template.expected_payload_schema
     )
-    # Server-owned `template_vars` must win over any client-supplied
-    # metadata: a crafted `metadata={"template_vars": ...}` would otherwise
-    # corrupt prompt rendering for every subsequent turn on this session.
-    persisted_metadata = {
-        **(req.metadata or {}),
-        "template_vars": transformed_template_vars,
-    }
+    client_metadata = _validate_client_metadata(req.metadata)
+    resolved_server_metadata: Dict[str, Any] = {}
+    if req.copilot_scope is not None:
+        try:
+            scope = await resolve_copilot_scope(req.copilot_scope, current_user)
+        except CopilotScopeError as error:
+            raise _scope_http_error(error) from error
+        resolved_server_metadata.update(scope.session_metadata())
+
+    persisted_metadata = _build_session_metadata(
+        client_metadata=client_metadata,
+        template_vars=transformed_template_vars,
+        server_metadata=resolved_server_metadata,
+    )
     db_session = await create_chat_session(
         template_id=req.template_id,
         reseller_id=template.reseller_id,
@@ -444,7 +504,7 @@ async def send_chat_message_handler(
     session_id: str,
     req: SendChatMessageRequest,
     *,
-    access_check: Optional[Callable[[ChatSession], None]] = None,
+    access_check: Optional[AccessCheck] = None,
     internal: bool = False,
 ) -> StreamingResponse:
     """Drive one turn; stream SSE events until ``turn_end``.
@@ -503,8 +563,7 @@ async def send_chat_message_handler(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Chat session '{session_id}' not found",
             )
-        if access_check is not None:
-            access_check(fresh)
+        await _run_access_check(access_check, fresh)
         if fresh.status == ChatSessionStatus.ENDED:
             raise HTTPException(
                 status_code=status.HTTP_410_GONE,
@@ -670,7 +729,7 @@ async def send_chat_intent_handler(
     parsed: ParsedIntent,
     *,
     context: Any = None,
-    access_check: Optional[Callable[[ChatSession], None]] = None,
+    access_check: Optional[AccessCheck] = None,
 ) -> StreamingResponse:
     """Drive one DIRECT-routed UI intent (RFC-001 §3.3); stream SSE until
     ``turn_end``. The no-LLM sibling of ``send_chat_message_handler`` —
@@ -704,8 +763,7 @@ async def send_chat_intent_handler(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Chat session '{session_id}' not found",
             )
-        if access_check is not None:
-            access_check(fresh)
+        await _run_access_check(access_check, fresh)
         if fresh.status == ChatSessionStatus.ENDED:
             raise HTTPException(
                 status_code=status.HTTP_410_GONE,
@@ -893,7 +951,7 @@ async def approve_chat_tool_handler(
     session_id: str,
     req: ApproveToolRequest,
     *,
-    access_check: Optional[Callable[[ChatSession], None]] = None,
+    access_check: Optional[AccessCheck] = None,
 ) -> StreamingResponse:
     """Apply a HITL decision to a pending tool approval and stream the
     resumed turn (same SSE shape as ``/message``).
@@ -931,8 +989,7 @@ async def approve_chat_tool_handler(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Chat session '{session_id}' not found",
             )
-        if access_check is not None:
-            access_check(fresh)
+        await _run_access_check(access_check, fresh)
         if fresh.status == ChatSessionStatus.ENDED:
             raise HTTPException(
                 status_code=status.HTTP_410_GONE,

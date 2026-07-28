@@ -23,7 +23,8 @@ Loom dashboard
   -> normal Buddy Assist chat session
   -> metadata.copilot
   -> guarded read-only Copilot tools
-  -> typed results/events for Loom rendering
+  -> scoped data returned to the normal Assist chat runtime
+  -> existing Assist AI UI / widget rendering path when the bot emits UI
 ```
 
 Loom owns the visible user context: the dashboard login, selected merchant, and
@@ -37,6 +38,11 @@ It must not become analytics or conversation data scope.
 Future Copilot tools will load the resolved scope from `metadata.copilot` and
 use only `scope.data.data_merchant_id` and optional
 `scope.data.data_template_id` for analytics and conversation reads.
+
+Any path that lets a dashboard user resume or operate on a Copilot session must
+also revalidate that persisted data scope for the current user. The runtime
+session RBAC and the Copilot data-scope RBAC are related, but they are not the
+same boundary.
 
 ## What This PR Adds
 
@@ -70,12 +76,20 @@ The resolver returns an immutable `CopilotScope` with:
 - `date_window`: normalized date range and timezone.
 - `capabilities`: read-only Phase 1 capability names.
 
+The resolved in-memory scope contains the full authenticated actor snapshot, but
+durable session metadata stores only the minimum actor field needed for audit
+correlation. Session metadata is visible through chat-session resume APIs, so
+the persisted Copilot actor must not include username, role, permissions,
+reseller scope, or merchant scope.
+
 The resolved scope can be injected into the normal chat session as:
 
 ```json
 {
   "copilot": {
-    "actor": {},
+    "actor": {
+      "user_id": "user-1"
+    },
     "data": {
       "data_merchant_id": "merchant-1",
       "data_template_id": "11111111-1111-4111-8111-111111111111"
@@ -122,6 +136,11 @@ The ownership lookup uses a lightweight template accessor that selects only
 `merchant_id`. It deliberately avoids loading the full template flow,
 configuration, or secrets for an authorization check.
 
+The same merchant/template ownership checks are reused when an existing chat
+session already has `metadata.copilot`. If a user's merchant access changes
+after creation, the session fails closed before the normal Assist runtime can
+resume or message with a stale Copilot data scope.
+
 ### Date Window Normalization
 
 The resolver accepts an explicit date range or falls back to the previous seven
@@ -151,6 +170,10 @@ Clairvoyance still validates the data boundary after authentication:
 - The dashboard Assist template merchant must not be used as Copilot data
   scope.
 - Runtime template/merchant identity is not stored in `metadata.copilot`.
+- Only `actor.user_id` is stored in durable `metadata.copilot`; actor
+  permission and scope snapshots are not persisted there.
+- Existing sessions carrying `metadata.copilot` must revalidate the stored data
+  merchant/template for the current user before dashboard session operations.
 - Missing `data_template_id` means all agents under `data_merchant_id`.
 - A provided `data_template_id` must be owned by `data_merchant_id`.
 
@@ -167,8 +190,10 @@ tests/test_copilot_scope.py
 ## Out Of Scope
 
 This PR does not create Copilot chat sessions, provision the dashboard Assist
-template, register tools, execute analytics queries, stream typed events, or add
-Loom UI. Those later pieces should consume the scope contract defined here.
+template, register tools, execute analytics queries, or add UI behavior. Later
+UI should use the existing Assist chat AI UI path, not a Loom-specific Copilot
+rendering contract. Those later pieces should consume the scope contract
+defined here.
 
 The next backend slices can rely on `metadata.copilot` as the stable handoff
 between session creation and tool execution.

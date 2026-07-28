@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field, model_validator
 
 from app.ai.voice.agents.breeze_buddy.template.ui_catalog import ActionUnion, Icon
+from app.schemas.breeze_buddy.copilot import CopilotScopeRequest
 
 
 class ChatSessionStatus(str, Enum):
@@ -228,6 +229,14 @@ class CreateChatSessionRequest(BaseModel):
     metadata: Dict[str, Any] = Field(
         default_factory=dict,
         description="Opaque caller-provided context, persisted on chat_session.metadata.",
+    )
+    copilot_scope: Optional[CopilotScopeRequest] = Field(
+        default=None,
+        description=(
+            "Optional dashboard data scope for Buddy Copilot-style Assist "
+            "templates. The server validates and persists the resolved scope "
+            "under metadata.copilot."
+        ),
     )
 
 
