@@ -325,9 +325,10 @@ async def push_lead_handler(req: PushLeadRequest, current_user: UserInfo) -> Dic
 
         uuid = str(uuid4())
 
-        # Calculate next attempt time
+        # Calculate next attempt time: template initial_offset + optional
+        # per-push delay (seconds) carried in the request payload.
         next_attempt_at = datetime.now(timezone.utc) + timedelta(
-            seconds=config.initial_offset
+            seconds=config.initial_offset + req.delay
         )
 
         # Prepare payload with reporting webhook URL

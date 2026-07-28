@@ -2,7 +2,7 @@ from io import BytesIO
 from typing import Any, Dict, List, NamedTuple, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.schemas.breeze_buddy.core import ExecutionMode
 
@@ -67,6 +67,11 @@ class PushLeadRequest(BaseModel):
     flow_override: Optional[Dict[str, Any]] = (
         None  # Override template flow JSON (playground only)
     )
+    # Optional scheduling delay in seconds, added on top of the
+    # template's call-execution initial_offset when computing
+    # next_attempt_at. Omit (or pass 0) for no delay; negative
+    # values are rejected (422).
+    delay: int = Field(default=0, ge=0)
 
 
 class LoginRequest(BaseModel):
