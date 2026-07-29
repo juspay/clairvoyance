@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from .azure_realtime import AzureRealtimeConfig, build_azure_realtime_llm
 from .factory import get_realtime_llm_service
+from .gemini_realtime import GeminiRealtimeConfig, build_gemini_realtime_llm
 from .openai_realtime import OpenAIRealtimeConfig, build_openai_realtime_llm
 from .xai_realtime import XAIRealtimeConfig, build_xai_realtime_llm
 
@@ -23,4 +24,6 @@ __all__ = [
     "build_xai_realtime_llm",
     "AzureRealtimeConfig",
     "build_azure_realtime_llm",
+    "GeminiRealtimeConfig",
+    "build_gemini_realtime_llm",
 ]
