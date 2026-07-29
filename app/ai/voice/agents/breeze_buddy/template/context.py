@@ -66,6 +66,15 @@ class TemplateContext:
         return self.bot.aiohttp_session
 
     @property
+    def credential_cache(self) -> Dict[str, Any]:
+        """Get the per-agent cache for credentials resolved during this call."""
+        cache = getattr(self.bot, "_credential_auth_cache", None)
+        if cache is None:
+            cache = {}
+            self.bot._credential_auth_cache = cache
+        return cache
+
+    @property
     def completion_function(self):
         """Get Completion Function instance"""
         return self.bot.completion_function

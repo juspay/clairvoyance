@@ -273,14 +273,13 @@ Fires an async HTTP call without blocking the conversation.
   "http_request": {
     "url": "{api_base_url}/ratings",
     "method": "POST",
-    "auth": {"type": "bearer", "token": "{api_s2s_token}"},
+    "auth": {"type": "bearer", "credential_id": "configured-credential-id"},
     "body": {"rating": "{rating_value}", "customer_name": "{customer_name}"},
     "timeout": 10,
     "max_retries": 3
   },
   "expected_fields": {
     "api_base_url":   {"source": "static", "value": "{api_base_url}"},
-    "api_s2s_token":  {"source": "static", "value": "{api_s2s_token}"},
     "customer_name":  {"source": "static", "value": "{customer_name}"},
     "rating_value":   {"source": "llm"}
   }
@@ -324,13 +323,12 @@ Available handlers: `connect_to_live_agent`, `get_current_time`,
   "expected_fields": {
     "booking_id":    {"source": "static", "value": "{booking_id}"},
     "api_base_url":  {"source": "static", "value": "{api_base_url}"},
-    "api_s2s_token": {"source": "static", "value": "{api_s2s_token}"},
     "refund_reason": {"source": "llm"}
   },
   "http_request": {
     "url": "{api_base_url}/refund",
     "method": "POST",
-    "auth": {"type": "bearer", "token": "{api_s2s_token}"},
+    "auth": {"type": "bearer", "credential_id": "configured-credential-id"},
     "body": {"booking_id": "{booking_id}", "refund_reason": "{refund_reason}"},
     "timeout": 10,
     "max_retries": 3
@@ -338,8 +336,8 @@ Available handlers: `connect_to_live_agent`, `get_current_time`,
   "cancel_on_interruption": false
 }
 ```
-Auth types: `none`, `bearer` (token), `basic` (username+password),
-`api_key` (header name+value).
+For bearer, basic, and API-key authentication, use a configured
+`credential_id`; the credential value is resolved only while making the request.
 
 ### Custom Python
 ```json

@@ -32,6 +32,10 @@ from app.ai.voice.agents.breeze_buddy.handlers.transport.utils.field_resolver im
 from app.ai.voice.agents.breeze_buddy.handlers.transport.utils.tool_pipeline import (
     apply_result_pipeline,
 )
+from app.ai.voice.agents.breeze_buddy.services.credential_auth import (
+    resolve_credential_auth,
+    resolve_credential_scope,
+)
 from app.ai.voice.agents.breeze_buddy.template.context import TemplateContext
 from app.ai.voice.agents.breeze_buddy.template.types import (
     FieldSource,
@@ -123,12 +127,22 @@ async def http_function_handler(
             f"[{function_name}] Resolved fields: {list(resolved_fields.keys())}"
         )
 
+        template = getattr(context.bot, "template", None)
+        reseller_id, merchant_id = resolve_credential_scope(template, context.lead)
+        resolved_auth = await resolve_credential_auth(
+            config.http_request.auth,
+            reseller_id=reseller_id,
+            merchant_id=merchant_id,
+            credential_cache=context.credential_cache,
+        )
+        request_config = config.http_request.model_copy(update={"auth": resolved_auth})
+
         # Step 2: Create executor
         executor = HttpRequestExecutor(session=context.aiohttp_session)
 
         logger.info(
-            f"[{function_name}] Executing HTTP {config.http_request.method.value} "
-            f"request to {config.http_request.url}"
+            f"[{function_name}] Executing HTTP {request_config.method.value} "
+            f"request to {request_config.url}"
         )
 
         # Step 3: SSE events stream to the client automatically via the forwarder;
@@ -137,7 +151,7 @@ async def http_function_handler(
 
         # Step 4: Execute request (SSE auto-detected from Content-Type)
         result = await executor.execute(
-            config=config.http_request,
+            config=request_config,
             resolved_fields=resolved_fields,
             fire_and_forget=False,
             on_sse_event=sse_forwarder,

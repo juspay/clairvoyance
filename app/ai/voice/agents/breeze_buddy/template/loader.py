@@ -13,7 +13,10 @@ from app.ai.voice.agents.breeze_buddy.template.types import (
     FlowMode,
     TemplateModel,
 )
-from app.ai.voice.agents.breeze_buddy.template.utils import render_messages_with_vars
+from app.ai.voice.agents.breeze_buddy.template.utils import (
+    log_legacy_credential_placeholder_usage,
+    render_messages_with_vars,
+)
 from app.core.logger import logger
 from app.database.accessor.breeze_buddy.credentials import (
     get_credentials_as_template_vars,
@@ -132,8 +135,10 @@ class FlowConfigLoader:
             )
 
         template_vars = {}
+        credential_vars = {}
 
-        # 1. Load credentials from credentials table (global + merchant-specific)
+        # Compatibility path: retained until every stored template uses
+        # credential_id-based authentication.
         try:
             credential_vars = await get_credentials_as_template_vars(reseller_id)
             if credential_vars:
@@ -143,17 +148,14 @@ class FlowConfigLoader:
                 )
         except Exception as e:
             logger.warning(
-                f"Failed to load credentials for merchant {reseller_id}: {e}"
+                f"Failed to load credentials for reseller {reseller_id}: {e}"
             )
-        logger.info(
-            f"Loaded {len(template_vars)} template vars for merchant {reseller_id}"
-        )
 
-        # 2. Load template.secrets (overrides credentials for same keys)
+        # Template secrets override credentials with the same keys.
         if template_obj.secrets:
             template_vars.update(template_obj.secrets)
             logger.info(f"Loaded {len(template_obj.secrets)} secrets from template")
-        # 3. Load payload fields (overrides both credentials and secrets)
+        # 3. Load payload fields (overrides template secrets)
         expected_schema = template_obj.expected_payload_schema or {}
         for field_name, field_schema in expected_schema.items():
             value = None
@@ -213,6 +215,15 @@ class FlowConfigLoader:
                     logger.info(
                         f"Injected extra payload field '{field_name}' into template_vars"
                     )
+
+        log_legacy_credential_placeholder_usage(
+            template_obj,
+            credential_vars,
+            (
+                template_obj.secrets,
+                template_obj.expected_payload_schema,
+            ),
+        )
 
         # Direct mode has a flat structure (system_prompt + flat function list)
         # rather than a nodes array, so render the top-level message fields and

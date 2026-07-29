@@ -21,6 +21,9 @@ from app.ai.voice.agents.breeze_buddy.handlers.transport.utils.tool_pipeline imp
     apply_result_pipeline_json_str,
 )
 from app.ai.voice.agents.breeze_buddy.mcp.cache import get_or_discover_server_tools
+from app.ai.voice.agents.breeze_buddy.services.credential_auth import (
+    resolve_credential_auth,
+)
 
 # gate_call wraps gated MCP tool handlers with the HITL approval gate (voice).
 # Cycle-safe: template.approval only depends on template.context +
@@ -514,18 +517,27 @@ def _resolve_placeholders(value: str, template_vars: Dict[str, Any]) -> str:
     return re.sub(r"\{([^{}]+)\}", replacer, value)
 
 
-def _build_auth_headers(
+async def _build_auth_headers(
     server: McpServerConfig,
     template_vars: Dict[str, Any],
+    reseller_id: Optional[str],
+    merchant_id: Optional[str],
 ) -> Dict[str, str]:
-    """Resolve auth config into HTTP headers, substituting {variable} placeholders."""
+    """Resolve MCP auth into HTTP headers without exposing credential values."""
     if not server.auth or server.auth.type == HttpAuthType.NONE:
         return {}
 
     def resolve(value: str) -> str:
         return _resolve_placeholders(value, template_vars)
 
-    auth = server.auth
+    auth = await resolve_credential_auth(
+        server.auth,
+        reseller_id=reseller_id,
+        merchant_id=merchant_id,
+    )
+    if auth is None:
+        return {}
+
     if auth.type == HttpAuthType.BEARER and auth.token:
         token = resolve(auth.token.get_secret_value())
         return {"Authorization": f"Bearer {token}"}
@@ -540,12 +552,20 @@ def _build_auth_headers(
         ).decode()
         return {"Authorization": f"Basic {creds}"}
 
+    if auth.type == HttpAuthType.CUSTOM and auth.custom_headers:
+        return {
+            header_name: resolve(value.get_secret_value())
+            for header_name, value in auth.custom_headers.items()
+        }
+
     return {}
 
 
-def _build_server_params(
+async def _build_server_params(
     server: McpServerConfig,
     template_vars: Dict[str, Any],
+    reseller_id: Optional[str],
+    merchant_id: Optional[str],
 ) -> StreamableHttpParameters:
     """Resolve a server config + template_vars into StreamableHttpParameters.
 
@@ -564,7 +584,9 @@ def _build_server_params(
 
     headers: Dict[str, str] = {"Content-Type": "application/json"}
     headers.update(server.headers)  # static headers from config
-    headers.update(_build_auth_headers(server, template_vars))  # auth headers
+    headers.update(
+        await _build_auth_headers(server, template_vars, reseller_id, merchant_id)
+    )  # auth headers
 
     return StreamableHttpParameters(
         url=resolved_url,
@@ -579,6 +601,8 @@ async def _load_server_tools(
     server: McpServerConfig,
     template_vars: Dict[str, str],
     existing_names: set,
+    reseller_id: Optional[str],
+    merchant_id: Optional[str],
     bot_instance: Any = None,
 ) -> List[FlowsFunctionSchema]:
     """Connect to a single MCP server and return its tools as FlowsFunctionSchema.
@@ -588,14 +612,19 @@ async def _load_server_tools(
     replaced with the value of ``shop_url`` from template_vars (passed in from the
     Nautilus call payload via the lead's ``shop_url`` field).
 
-    Auth credentials (api_key_value, bearer token, etc.) are also resolved from
-    template_vars, which includes values from the credentials table.
+    Auth credentials are resolved server-side from ``auth.credential_id``.
+    Template variables are used only for non-secret dynamic values such as URLs.
     For servers that need no authentication, set ``auth.type`` to ``none`` or
     leave ``auth`` as null.
 
     Each tool handler creates a fresh MCPClient per invocation for thread safety.
     """
-    server_params = _build_server_params(server, template_vars)
+    server_params = await _build_server_params(
+        server,
+        template_vars,
+        reseller_id,
+        merchant_id,
+    )
     # Prefer the stable name; fall back to the raw template URL (with
     # placeholders) rather than the resolved URL to avoid logging
     # customer-identifying substitutions.
@@ -739,6 +768,8 @@ async def _load_server_tools(
 async def get_mcp_global_functions(
     mcp_config: McpConfig,
     template_vars: Dict[str, str] | None = None,
+    reseller_id: Optional[str] = None,
+    merchant_id: Optional[str] = None,
     bot_instance: Any = None,
 ) -> List[FlowsFunctionSchema]:
     """Fetch tools from all enabled MCP servers and return as FlowManager global functions.
@@ -763,7 +794,12 @@ async def get_mcp_global_functions(
             existing_names = {f.name for f in all_functions}
             task = asyncio.create_task(
                 _load_server_tools(
-                    server, template_vars, existing_names, bot_instance=bot_instance
+                    server,
+                    template_vars,
+                    existing_names,
+                    reseller_id,
+                    merchant_id,
+                    bot_instance=bot_instance,
                 )
             )
             tools = await asyncio.shield(task)
@@ -781,6 +817,8 @@ async def get_mcp_global_functions_cached(
     mcp_config: McpConfig,
     template_vars: Dict[str, Any],
     template_id: str,
+    reseller_id: Optional[str] = None,
+    merchant_id: Optional[str] = None,
     mcp_pool: Optional[MCPPool] = None,
 ) -> Tuple[List[FlowsFunctionSchema], Dict[str, ApprovalConfig]]:
     """Cache-aware variant for chat mode.
@@ -788,7 +826,8 @@ async def get_mcp_global_functions_cached(
     Reads tool metadata from Redis (per-template + URL hash, see
     ``mcp/cache.py``) and rebuilds ``FlowsFunctionSchema`` using
     ``_create_mcp_tool_handler``. Auth headers are rebuilt from
-    ``template_vars`` on every call so credential rotation takes effect on
+    ``template_vars`` on every call for dynamic payload values. Credential IDs
+    are resolved from the database on every call, so rotation takes effect on
     the next turn without cache invalidation.
 
     When ``mcp_pool`` is provided the resulting handlers share one
@@ -810,7 +849,12 @@ async def get_mcp_global_functions_cached(
             continue
 
         try:
-            server_params = _build_server_params(server, template_vars)
+            server_params = await _build_server_params(
+                server,
+                template_vars,
+                reseller_id,
+                merchant_id,
+            )
         except Exception as e:
             logger.error(
                 f"[BUDDY_MCP] chat: failed to build server params for "

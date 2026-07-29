@@ -1017,7 +1017,7 @@ class McpServerConfig(BaseModel):
     """Configuration for a single MCP tool server.
 
     The ``url`` field supports ``{variable}`` placeholder substitution using
-    ``template_vars`` (derived from the call payload and credentials table).
+    ``template_vars`` derived from the call payload.
     This allows dynamic MCP URLs — for example, the Nautilus Shopify app passes
     ``shop_url`` in the lead payload so Clairvoyance can build the full URL at
     call time:
@@ -1040,7 +1040,7 @@ class McpServerConfig(BaseModel):
             }
         }
 
-    Example with credential-based auth (api_key resolved from credentials table)::
+    Example with credential-based auth (resolved server-side at connection time)::
 
         "configurations": {
             "mcp": {
@@ -1052,8 +1052,8 @@ class McpServerConfig(BaseModel):
                         "timeout": 30,
                         "auth": {
                             "type": "api_key",
+                            "credential_id": "credential-uuid",
                             "api_key_name": "X-Shopify-Storefront-Access-Token",
-                            "api_key_value": "{shopify_storefront_token}"
                         }
                     }
                 ]
@@ -1063,10 +1063,11 @@ class McpServerConfig(BaseModel):
     Auth types:
     - ``none``: No authentication — call the MCP server directly.
     - ``api_key``: Pass ``api_key_value`` as an HTTP header named ``api_key_name``.
-      Use ``{credential_name}`` placeholders; the value is resolved from the
-      credentials table (loaded into ``template_vars`` before MCP setup).
+      Set ``credential_id`` and keep the credential value out of the template.
     - ``bearer``: Pass ``token`` as ``Authorization: Bearer <token>``.
     - ``basic``: Pass ``username`` / ``password`` as HTTP Basic auth.
+    - ``custom``: Map named custom-credential fields to request headers with
+      ``header_bindings``. Values are resolved server-side.
     """
 
     enabled: bool = Field(True, description="Whether to enable this MCP server")
@@ -1944,6 +1945,7 @@ class HttpAuthType(str, Enum):
     BEARER = "bearer"
     BASIC = "basic"
     API_KEY = "api_key"
+    CUSTOM = "custom"
 
 
 class SseResponseMode(str, Enum):
@@ -1987,14 +1989,77 @@ class SseResponseHandlerConfig(BaseModel):
 
 
 class HttpAuthConfig(BaseModel):
-    """Authentication configuration for HTTP requests"""
+    """Authentication configuration for HTTP requests.
+
+    ``custom`` auth uses a credential ID and a header-to-field map, for example::
+
+        {
+            "type": "custom",
+            "credential_id": "credential-uuid",
+            "header_bindings": {"X-Client-Secret": "client_secret"},
+        }
+
+    The template stores only field names. The credential value is fetched and
+    attached to the request in memory.
+    """
 
     type: HttpAuthType = HttpAuthType.NONE
+    credential_id: Optional[str] = Field(
+        default=None,
+        min_length=1,
+        description="Credential UUID resolved server-side at request time.",
+    )
     token: Optional[SecretStr] = None  # For bearer auth
     username: Optional[str] = None  # For basic auth
     password: Optional[SecretStr] = None  # For basic auth
     api_key_name: Optional[str] = None  # Header name for API key
     api_key_value: Optional[SecretStr] = None  # API key value
+    header_bindings: Dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "For custom auth, maps outgoing header names to fields in the "
+            "referenced custom credential."
+        ),
+    )
+    custom_headers: Dict[str, SecretStr] = Field(
+        default_factory=dict,
+        exclude=True,
+        repr=False,
+    )
+
+    @model_validator(mode="after")
+    def validate_credential_reference(self) -> "HttpAuthConfig":
+        """Prevent mixing a server-side credential with inline secret values."""
+        if self.type == HttpAuthType.CUSTOM:
+            if not self.credential_id:
+                raise ValueError("custom auth requires credential_id")
+            if not self.header_bindings:
+                raise ValueError("custom auth requires at least one header_binding")
+            for header_name, credential_field in self.header_bindings.items():
+                if (
+                    not isinstance(header_name, str)
+                    or not header_name.strip()
+                    or "\r" in header_name
+                    or "\n" in header_name
+                    or not isinstance(credential_field, str)
+                    or not credential_field.strip()
+                ):
+                    raise ValueError(
+                        "custom header_bindings require non-empty header names and credential fields"
+                    )
+        elif self.header_bindings:
+            raise ValueError("header_bindings are only valid for custom auth")
+
+        if not self.credential_id:
+            return self
+
+        if self.type == HttpAuthType.NONE:
+            raise ValueError(
+                "credential_id requires bearer, basic, api_key, or custom auth"
+            )
+        if self.token or self.username or self.password or self.api_key_value:
+            raise ValueError("credential_id cannot be combined with inline auth values")
+        return self
 
     # Templates are persisted to Postgres as JSON. Pydantic's default
     # JSON serialization for SecretStr produces the masked form
@@ -2006,8 +2071,8 @@ class HttpAuthConfig(BaseModel):
     # All other JSON serialization paths — notably FastAPI response
     # encoding for GET / PUT — see no context, fall through to the
     # masked form, and so do not leak literal tokens that an operator
-    # may have embedded directly (vs. the intended
-    # ``{credential_name}`` placeholder pattern).
+    # may have embedded directly. New template configurations should use
+    # ``credential_id`` instead of an inline auth value.
     @field_serializer("token", "password", "api_key_value", when_used="json")
     def _reveal_secret(
         self, value: Optional[SecretStr], info: SerializationInfo

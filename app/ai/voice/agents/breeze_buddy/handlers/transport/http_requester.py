@@ -33,7 +33,6 @@ from app.ai.voice.agents.breeze_buddy.handlers.transport.utils.field_resolver im
     replace_placeholders,
 )
 from app.ai.voice.agents.breeze_buddy.template.types import (
-    HttpAuthConfig,
     HttpAuthType,
     HttpRequestConfig,
 )
@@ -423,6 +422,17 @@ class HttpRequestExecutor:
             else:
                 logger.warning("API Key auth configured but name/value missing")
 
+        elif auth_config.type == HttpAuthType.CUSTOM:
+            if auth_config.custom_headers:
+                headers.update(
+                    {
+                        header_name: value.get_secret_value()
+                        for header_name, value in auth_config.custom_headers.items()
+                    }
+                )
+            else:
+                logger.warning("Custom auth configured but headers are missing")
+
         return headers
 
     @staticmethod
@@ -734,19 +744,28 @@ class HttpRequestExecutor:
             )
             resolved_api_key_value = SecretStr(resolved_api_key_value_str)
 
-        return HttpAuthConfig(
-            type=auth_config.type,
-            token=resolved_token,
-            username=(
-                replace_placeholders(auth_config.username, resolved_fields)
-                if auth_config.username
-                else None
-            ),
-            password=resolved_password,
-            api_key_name=(
-                replace_placeholders(auth_config.api_key_name, resolved_fields)
-                if auth_config.api_key_name
-                else None
-            ),
-            api_key_value=resolved_api_key_value,
+        resolved_custom_headers = {
+            header_name: SecretStr(
+                replace_placeholders(value.get_secret_value(), resolved_fields)
+            )
+            for header_name, value in auth_config.custom_headers.items()
+        }
+
+        return auth_config.model_copy(
+            update={
+                "token": resolved_token,
+                "username": (
+                    replace_placeholders(auth_config.username, resolved_fields)
+                    if auth_config.username
+                    else None
+                ),
+                "password": resolved_password,
+                "api_key_name": (
+                    replace_placeholders(auth_config.api_key_name, resolved_fields)
+                    if auth_config.api_key_name
+                    else None
+                ),
+                "api_key_value": resolved_api_key_value,
+                "custom_headers": resolved_custom_headers,
+            }
         )

@@ -48,6 +48,7 @@ def decode_credential(
     return Credential(
         id=str(row["id"]),
         reseller_id=row["reseller_id"],
+        merchant_id=row.get("merchant_id"),
         name=row["name"],
         credential_type=CredentialType(row["credential_type"]),
         value=_mask_credential_value(real_value) if mask else real_value,
@@ -82,23 +83,11 @@ def decode_single_credential(
 def decode_credentials_as_dict(
     result: Optional[List[asyncpg.Record]],
 ) -> Dict[str, Any]:
-    """
-    Decode credentials into a flat dict for template_vars resolution.
-    Keys are credential names, values are the first value from the credential dict.
-
-    For api_key type: {"shopify_api_key": "sk-xxx"}
-    For bearer_token: {"api_token": "eyJ..."}
-    For basic_auth: {"api_username": "user", "api_password": "pass"}
-    For custom: all key-value pairs are flattened
-
-    If multiple credentials share the same key, reseller-specific overrides global
-    (query must ORDER BY reseller_id NULLS FIRST).
-    """
+    """Flatten legacy credentials into template placeholder values."""
     if not result:
         return {}
 
     merged: Dict[str, Any] = {}
-
     for row in result:
         real_value = _decrypt_and_parse_value(row["value"], row["is_encrypted"])
         if not real_value:
@@ -106,18 +95,13 @@ def decode_credentials_as_dict(
 
         cred_type = row["credential_type"]
         cred_name = row["name"]
-
         if cred_type == "api_key":
-            # Store as name -> key value
             merged[cred_name] = real_value.get("key", "")
         elif cred_type == "bearer_token":
             merged[cred_name] = real_value.get("token", "")
         elif cred_type == "basic_auth":
-            # Store as name_username and name_password
             merged[f"{cred_name}_username"] = real_value.get("username", "")
             merged[f"{cred_name}_password"] = real_value.get("password", "")
         elif cred_type == "custom":
-            # Flatten all key-value pairs
             merged.update(real_value)
-
     return merged
