@@ -14,6 +14,11 @@ from app.ai.voice.llm.realtime.azure_realtime import (
     AzureRealtimeConfig,
     build_azure_realtime_llm,
 )
+from app.ai.voice.llm.realtime.gemini_realtime import (
+    DEFAULT_GEMINI_REALTIME_MODEL,
+    GeminiRealtimeConfig,
+    build_gemini_realtime_llm,
+)
 from app.ai.voice.llm.realtime.openai_realtime import (
     DEFAULT_OPENAI_REALTIME_MODEL,
     OpenAIRealtimeConfig,
@@ -25,6 +30,7 @@ from app.ai.voice.llm.realtime.xai_realtime import (
     build_xai_realtime_llm,
 )
 from app.ai.voice.llm.types import LLMConfiguration, RealtimeLLMProvider
+from app.core.config import static
 from app.core.config.dynamic import (
     AZURE_OPENAI_REALTIME_API_KEY,
     AZURE_OPENAI_REALTIME_ENDPOINT,
@@ -130,5 +136,24 @@ async def get_realtime_llm_service(llm_config: LLMConfiguration) -> Any:
             f"voice={azure_config.voice or 'default'}"
         )
         return build_azure_realtime_llm(azure_config)
+
+    if realtime.provider == RealtimeLLMProvider.GEMINI:
+        api_key = static.GEMINI_API_KEY
+        if not api_key:
+            raise ValueError(
+                "GEMINI_API_KEY must be set in the environment "
+                "to use Gemini Live Realtime"
+            )
+        gemini_config = GeminiRealtimeConfig(
+            api_key=api_key,
+            model=realtime.model or DEFAULT_GEMINI_REALTIME_MODEL,
+            voice=realtime.voice,
+            function_call_timeout_secs=function_call_timeout,
+        )
+        logger.info(
+            f"Resolving Gemini Live LLM service: model={gemini_config.model}, "
+            f"voice={gemini_config.voice or 'default'}"
+        )
+        return build_gemini_realtime_llm(gemini_config)
 
     raise ValueError(f"Unsupported realtime LLM provider: {realtime.provider!r}")

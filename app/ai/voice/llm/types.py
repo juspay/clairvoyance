@@ -30,6 +30,10 @@ class RealtimeLLMProvider(str, Enum):
     OPENAI = "openai"
     XAI = "xai"
     AZURE = "azure"
+    # Google Gemini Live (voice-to-voice). The model id on RealtimeConfig.model
+    # selects the surface: a Developer-API id (gemini-2.5-flash-native-audio-
+    # preview-12-2025 / gemini-3.1-flash-live-preview) uses the Gemini API.
+    GEMINI = "gemini"
 
 
 class RealtimeConfig(BaseModel):
