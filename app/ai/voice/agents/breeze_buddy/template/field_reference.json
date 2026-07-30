@@ -21,6 +21,20 @@
     "supported_channels":                { "description": "Channels this template may be served on. Default ['voice']. Add 'chat' to enable the Buddy Assist web-chat mode. Must have at least one entry.", "example": ["voice"] }
   },
 
+  "SonioxSpeakerFilterConfig": {
+    "enabled":                 { "description": "Follow the dominant speaker from the first qualifying finalized Soniox transcript and suppress all other session-local speaker IDs.", "example": true },
+    "min_words":               { "description": "Minimum number of words required in the first finalized transcript before its dominant speaker is locked as primary.", "example": 1 },
+    "unknown_speaker_policy":  { "description": "How to handle tokens for which Soniox did not return speaker metadata: 'drop' is fail-closed; 'pass' is fail-open.", "example": "drop" }
+  },
+
+  "SonioxSTTConfig": {
+    "context":                         { "description": "Structured Soniox context JSON for domain terms, conversation setting, and expected speakers.", "example": "{\"general\":[{\"key\":\"setting\",\"value\":\"Outbound customer call\"}]}" },
+    "model":                           { "description": "Soniox real-time model. Defaults to BREEZE_BUDDY_SONIOX_MODEL.", "example": "stt-rt-v5" },
+    "enable_language_identification":  { "description": "Annotate tokens with automatically detected language IDs.", "example": true },
+    "enable_speaker_diarization":      { "description": "Annotate tokens with anonymous, session-local Soniox speaker IDs.", "example": true },
+    "speaker_filter":                  { "description": "Optional primary-speaker gate. Enabling it automatically enables speaker diarization.", "example": { "enabled": true, "min_words": 1, "unknown_speaker_policy": "drop" } }
+  },
+
   "NoiseFilterConfig": {
     "enable":             { "description": "Whether to process incoming audio with the selected ai-coustics model before VAD and STT.", "example": true },
     "provider":           { "description": "Noise-filter integration provider. Currently 'aic'. New configurations must provide this together with model.", "example": "aic" },
@@ -30,7 +44,7 @@
 
   "ConfigurationModel": {
     "llm_configurations":         { "description": "LLM provider, model, and inference parameters. Always set provider=azure and model=gpt-4.1-mini unless a different LLM is explicitly required.", "example": { "provider": "azure", "model": "gpt-4.1-mini" } },
-    "stt_configuration":          { "description": "STT provider, language(s), and provider-specific config. Use provider=deepgram for English-only; provider=soniox with enable_language_identification=true for Hindi, South Indian languages, or any multilingual combination.", "example": { "provider": "soniox", "language": ["en", "hi"], "soniox": { "enable_language_identification": true } } },
+    "stt_configuration":          { "description": "STT provider, language(s), and provider-specific config. Soniox can annotate speaker IDs and optionally follow only the dominant speaker from the first finalized turn.", "example": { "provider": "soniox", "language": ["en", "hi"], "soniox": { "model": "stt-rt-v5", "enable_language_identification": true, "enable_speaker_diarization": true, "speaker_filter": { "enabled": true, "min_words": 1, "unknown_speaker_policy": "drop" } } } },
     "tts_configuration":          { "description": "Primary TTS provider, voice ID, model, and audio parameters. Use provider=elevenlabs for English/Hindi/North Indian templates. Use provider=cartesia as the base for South Indian or mixed-region templates.", "example": { "provider": "elevenlabs", "voice_id": "iB2rIwm9cQCRGWoKDRtX", "model": "eleven_flash_v2_5", "speed": 1.0, "language": "en" } },
     "tts_configuration_overrides": { "description": "Per-provider TTS config overrides keyed by provider name. Used with tts_selection_config to route callers to the right TTS at runtime. The 'provider' field inside each entry is auto-filled from the key — do not repeat it.", "example": { "elevenlabs": { "voice_id": "iB2rIwm9cQCRGWoKDRtX", "model": "eleven_flash_v2_5", "speed": 1.0, "language": "en" } } },
     "tts_selection_config":       { "description": "LLM-based dynamic TTS provider selection driven by a field in the lead payload (typically delivery address). When enabled, Gemini picks one of the listed providers. Use for mixed North+South India templates.", "example": { "enabled": true, "prompt": "Determine the TTS provider from the customer's delivery address. Reply 'elevenlabs' for North/Hindi-English regions, reply 'cartesia' for South Indian regions. Default to 'cartesia'. Respond with exactly one word.", "providers": ["elevenlabs", "cartesia"] } },

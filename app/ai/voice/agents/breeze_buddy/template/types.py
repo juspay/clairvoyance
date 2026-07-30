@@ -62,6 +62,40 @@ class STTProvider(str, Enum):
     GOOGLE = "google"
 
 
+class UnknownSpeakerPolicy(str, Enum):
+    """How the primary-speaker gate handles tokens without speaker metadata."""
+
+    DROP = "drop"
+    PASS = "pass"
+
+
+class SonioxSpeakerFilterConfig(BaseModel):
+    """Follow one session-local Soniox speaker and ignore the others.
+
+    The first finalized transcript containing at least ``min_words`` locks the
+    gate to its dominant speaker. Soniox speaker IDs are anonymous and reset
+    whenever the STT websocket reconnects; this is filtering, not biometric
+    speaker verification.
+    """
+
+    enabled: bool = Field(
+        False,
+        description="Lock to the dominant speaker in the first qualifying "
+        "final transcript and drop other speakers for the rest of the STT session.",
+    )
+    min_words: int = Field(
+        1,
+        ge=1,
+        description="Minimum words required before the first finalized transcript "
+        "can establish the primary speaker.",
+    )
+    unknown_speaker_policy: UnknownSpeakerPolicy = Field(
+        UnknownSpeakerPolicy.DROP,
+        description="Whether to drop or pass transcript tokens when Soniox omits "
+        "speaker metadata.",
+    )
+
+
 class SonioxSTTConfig(BaseModel):
     """Soniox-specific STT settings."""
 
@@ -71,12 +105,28 @@ class SonioxSTTConfig(BaseModel):
         "(business terms, product names). Overrides env default if set.",
     )
     model: Optional[str] = Field(
-        None, description="Soniox model (e.g. 'stt-rt-v4'). Defaults from env."
+        None, description="Soniox model (e.g. 'stt-rt-v5'). Defaults from env."
     )
     enable_language_identification: Optional[bool] = Field(
         None,
         description="Enable automatic language identification. Defaults to None.",
     )
+    enable_speaker_diarization: bool = Field(
+        False,
+        description="Ask Soniox to annotate transcript tokens with session-local "
+        "speaker IDs.",
+    )
+    speaker_filter: Optional[SonioxSpeakerFilterConfig] = Field(
+        None,
+        description="Optional primary-speaker transcript filter. Enabling it also "
+        "enables Soniox speaker diarization.",
+    )
+
+    @model_validator(mode="after")
+    def _enable_diarization_for_speaker_filter(self) -> "SonioxSTTConfig":
+        if self.speaker_filter and self.speaker_filter.enabled:
+            self.enable_speaker_diarization = True
+        return self
 
 
 class DeepgramSTTConfig(BaseModel):

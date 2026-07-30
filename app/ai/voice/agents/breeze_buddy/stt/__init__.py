@@ -139,6 +139,9 @@ async def create_stt_from_config(config: STTConfiguration):
                 log_context="Breeze Buddy",
                 language_hints_strict=bool(language),
                 enable_language_identification=enable_lang_id,
+                enable_speaker_diarization=(
+                    sx.enable_speaker_diarization if sx else False
+                ),
             )
         )
 

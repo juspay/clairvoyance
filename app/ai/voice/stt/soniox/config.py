@@ -40,6 +40,7 @@ class SonioxConfig:
     log_context: str = "Soniox"
     language_hints_strict: bool = False
     enable_language_identification: Optional[bool] = None
+    enable_speaker_diarization: bool = False
 
 
 def _parse_soniox_context(
@@ -148,6 +149,7 @@ def build_soniox_stt(config: SonioxConfig):
         client_reference_id=config.client_reference_id,
         language_hints_strict=config.language_hints_strict,
         enable_language_identification=enable_lang_id,
+        enable_speaker_diarization=config.enable_speaker_diarization,
     )
 
     # Format language hints for logging
@@ -159,13 +161,14 @@ def build_soniox_stt(config: SonioxConfig):
             hints_display = ",".join(config.language_hints)
 
     logger.info(
-        "Using %s Soniox STT service with model: %s, language_hints: %s, "
-        "VAD force endpoint: %s, max_endpoint_delay_ms: %s",
+        "Using {} Soniox STT service with model: {}, language_hints: {}, "
+        "VAD force endpoint: {}, max_endpoint_delay_ms: {}, diarization: {}",
         config.log_context,
         config.model,
         hints_display,
         config.vad_force_turn_endpoint,
         config.max_endpoint_delay_ms,
+        config.enable_speaker_diarization,
     )
 
     return SonioxSTTServiceWithEndpointDelay(
