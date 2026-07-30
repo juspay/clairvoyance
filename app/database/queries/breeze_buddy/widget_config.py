@@ -13,7 +13,8 @@ WIDGET_CONFIG_TABLE = "widget_config"
 _COLUMNS = (
     "id, reseller_id, merchant_id, public_widget_key, template_id, "
     "allowed_origins, max_sessions_per_ip_hour, max_messages_per_ip_hour, "
-    "max_concurrent_per_ip, max_voice_sessions_per_ip_hour, active, "
+    "max_concurrent_per_ip, max_voice_sessions_per_ip_hour, "
+    "human_assist_enabled, human_assist_platform, active, "
     "created_at, updated_at"
 )
 
@@ -30,15 +31,19 @@ def create_widget_config_query(
     max_concurrent_per_ip: int,
     max_voice_sessions_per_ip_hour: int,
     active: bool,
+    human_assist_enabled: bool = False,
+    human_assist_platform: str = "native",
 ) -> Tuple[str, List[Any]]:
     query = f"""
         INSERT INTO {WIDGET_CONFIG_TABLE} (
             reseller_id, merchant_id, public_widget_key, template_id,
             allowed_origins, max_sessions_per_ip_hour, max_messages_per_ip_hour,
             max_concurrent_per_ip, max_voice_sessions_per_ip_hour,
+            human_assist_enabled, human_assist_platform,
             active, created_at, updated_at
         ) VALUES (
-            $1, $2, $3, $4::uuid, $5, $6, $7, $8, $9, $10, $11, $12
+            $1, $2, $3, $4::uuid, $5, $6, $7, $8, $9, $10, $11, $12,
+            $13, $14
         )
         RETURNING {_COLUMNS}
     """
@@ -53,6 +58,8 @@ def create_widget_config_query(
         int(max_messages_per_ip_hour),
         int(max_concurrent_per_ip),
         int(max_voice_sessions_per_ip_hour),
+        bool(human_assist_enabled),
+        human_assist_platform,
         bool(active),
         now,
         now,
@@ -156,6 +163,8 @@ def update_widget_config_query(
     max_messages_per_ip_hour: Optional[int] = None,
     max_concurrent_per_ip: Optional[int] = None,
     max_voice_sessions_per_ip_hour: Optional[int] = None,
+    human_assist_enabled: Optional[bool] = None,
+    human_assist_platform: Optional[str] = None,
     active: Optional[bool] = None,
 ) -> Tuple[str, List[Any]]:
     """Returns ("", []) if no fields were provided — callers should treat
@@ -192,6 +201,16 @@ def update_widget_config_query(
     if max_voice_sessions_per_ip_hour is not None:
         set_clauses.append(f"max_voice_sessions_per_ip_hour = ${idx}")
         params.append(int(max_voice_sessions_per_ip_hour))
+        idx += 1
+
+    if human_assist_enabled is not None:
+        set_clauses.append(f"human_assist_enabled = ${idx}")
+        params.append(bool(human_assist_enabled))
+        idx += 1
+
+    if human_assist_platform is not None:
+        set_clauses.append(f"human_assist_platform = ${idx}")
+        params.append(human_assist_platform)
         idx += 1
 
     if active is not None:

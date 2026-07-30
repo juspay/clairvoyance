@@ -35,6 +35,12 @@ class WidgetConfigCreate(BaseModel):
     max_messages_per_ip_hour: int = Field(600, ge=0)
     max_concurrent_per_ip: int = Field(4, ge=0)
     max_voice_sessions_per_ip_hour: int = Field(10, ge=0)
+    human_assist_enabled: bool = False
+    human_assist_platform: str = Field(
+        "native",
+        pattern=r"^[a-z][a-z0-9_]{0,63}$",
+        description="Registered platform adapter used for new handoffs.",
+    )
     active: bool = Field(True, description="Inactive rows behave like 404.")
 
 
@@ -51,6 +57,10 @@ class WidgetConfigUpdate(BaseModel):
     max_messages_per_ip_hour: Optional[int] = Field(None, ge=0)
     max_concurrent_per_ip: Optional[int] = Field(None, ge=0)
     max_voice_sessions_per_ip_hour: Optional[int] = Field(None, ge=0)
+    human_assist_enabled: Optional[bool] = None
+    human_assist_platform: Optional[str] = Field(
+        None, pattern=r"^[a-z][a-z0-9_]{0,63}$"
+    )
     active: Optional[bool] = None
 
 
@@ -67,6 +77,8 @@ class WidgetConfigResponse(BaseModel):
     max_messages_per_ip_hour: int = 600
     max_concurrent_per_ip: int = 4
     max_voice_sessions_per_ip_hour: int = 10
+    human_assist_enabled: bool = False
+    human_assist_platform: str = "native"
     active: bool = True
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None

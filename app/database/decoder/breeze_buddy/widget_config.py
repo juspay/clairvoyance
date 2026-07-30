@@ -16,6 +16,8 @@ def decode_widget_config(row) -> WidgetConfigResponse:
         max_messages_per_ip_hour=row["max_messages_per_ip_hour"],
         max_concurrent_per_ip=row["max_concurrent_per_ip"],
         max_voice_sessions_per_ip_hour=row["max_voice_sessions_per_ip_hour"],
+        human_assist_enabled=row.get("human_assist_enabled", False),
+        human_assist_platform=row.get("human_assist_platform") or "native",
         active=row.get("active", True),
         created_at=row.get("created_at"),
         updated_at=row.get("updated_at"),
