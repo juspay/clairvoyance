@@ -14,11 +14,17 @@ import gc
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.api.v1 import cache as cache_api, health, tts
 from app.cache.service import CacheService
 from app.core.config import settings
 from app.core.logging import logger
+from app.drain import (
+    decr_inflight,
+    incr_inflight,
+    wait_for_inflight_drain,
+)
 from app.providers.registry import ProviderRegistry
 from app.storage.filesystem import FilesystemBlobStore
 from app.storage.sqlite import SQLiteMetadataStore
@@ -165,6 +171,10 @@ async def lifespan(app: FastAPI):
         await malloc_trim_task
     except (asyncio.CancelledError, Exception):
         pass
+    # Let in-flight requests (live /tts/stream) finish before we tear down the
+    # cache/pools — the preStop /drain already flipped clairvoyance off so no
+    # NEW traffic is arriving. Capped at graceful_drain_max_seconds.
+    await wait_for_inflight_drain()
     await cache.stop()  # flush write-behind metrics (graceful shutdown loses none)
     try:
         await metadata.checkpoint()  # compact the WAL before worker conns close
@@ -178,3 +188,62 @@ app = FastAPI(title="DragonTTS", version="0.1.0", lifespan=lifespan)
 app.include_router(tts.router)
 app.include_router(cache_api.router)
 app.include_router(health.router)
+
+
+class InflightTrackingMiddleware:
+    """Pure-ASGI per-process in-flight gauge for the SIGTERM graceful drain.
+
+    Increments on every HTTP request start and decrements ONLY when the response
+    is fully sent — i.e. on the terminal ASGI body message
+    (``http.response.body`` with ``more_body`` false) or on ``http.disconnect``.
+
+    This MUST be a pure-ASGI middleware, NOT ``@app.middleware("http")`` (which
+    compiles to ``BaseHTTPMiddleware``). BaseHTTPMiddleware's dispatch returns
+    to its caller immediately after ``call_next`` produces the Response object
+    but BEFORE ``await response(scope, receive, send)`` streams a
+    StreamingResponse's body. A ``finally: decr_inflight()`` in that dispatch
+    therefore fires while /tts/stream is still emitting chunks, hitting 0
+    prematurely and letting ``wait_for_inflight_drain()`` return mid-stream on
+    SIGTERM — closing the Cartesia/DB/sockets under live streams.
+
+    Decrementing on the terminal message keeps the gauge honest for the entire
+    streamed lifetime. The ``done`` guard + ``finally`` safety net guarantee
+    exactly-once decrement.
+    """
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        incr_inflight()
+        done = False
+
+        async def send_wrapper(message: Message) -> None:
+            await send(message)
+            nonlocal done
+            if done:
+                return
+            mtype = message.get("type")
+            if mtype == "http.response.body" and not message.get("more_body", False):
+                done = True
+                decr_inflight()
+            elif mtype == "http.disconnect":
+                done = True
+                decr_inflight()
+
+        try:
+            await self.app(scope, receive, send_wrapper)
+        finally:
+            if not done:
+                # App returned/raised without a terminal body message — never
+                # double-decr.
+                decr_inflight()
+
+
+# add_middleware applies LIFO: the last-added middleware is outermost, so this
+# observes the terminal message actually sent to the client.
+app.add_middleware(InflightTrackingMiddleware)

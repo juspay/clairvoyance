@@ -25,13 +25,13 @@ PROVIDER_DEFAULTS: dict[str, dict] = {
         "voice_id": "shreya",
         "model": "bulbul:v3",
         "language": "en-IN",
-        "speed": 0.9,
+        "speed": 1.0,
         "pitch": 0.0,
     },
     "elevenlabs": {
         "voice_id": "fG9s0SXJb213f4UxVHyG",
         "model": "eleven_flash_v2_5",
-        "speed": 1.15,
+        "speed": 1.0,
         "language": "en",
         # SSML off by default. Listed here so canonical_params collapses an
         # explicit False with "absent" into ONE cache key (both = plain-text
@@ -239,6 +239,33 @@ class Settings(BaseSettings):
     # rounded to the nearest ₹ — no paisa). Rates above stay $/word; only the
     # shown figure is converted. Adjust if the FX rate drifts.
     slack_usd_to_inr: float = 96.0
+
+    # --- Graceful drain / clairvoyance kill switch ---
+    # On shutdown (k8s preStop -> GET /drain) dragontts FIRST tells clairvoyance
+    # to bypass it (so enable_tts_caching templates fall back to their upstream
+    # TTS provider), THEN drains its in-flight requests, THEN exits. Restore is
+    # MANUAL: an operator POSTs action=restore to clairvoyance's admin endpoint —
+    # dragontts does NOT auto-restore on startup. Clairvoyance's admin endpoint is
+    # HTTPBearer + require_admin, so a clairvoyance admin JWT must be supplied
+    # (env-injected in prod, never baked
+    # into the image). Empty CLAIRVOYANCE_URL => the notify calls are skipped
+    # (no-op), so the feature degrades cleanly when unconfigured.
+    clairvoyance_url: str = ""
+    clairvoyance_jwt_token: str = ""
+    clairvoyance_manage_path: str = "/agent/voice/breeze-buddy/admin/dragontts/manage"
+    # Short timeout so the /drain preStop hook returns fast (k8s waits on it
+    # before SIGTERM). Best-effort: clairvoyance's own ~60s health monitor is the
+    # backstop if this call fails.
+    clairvoyance_kill_switch_timeout: float = 5.0
+    enable_graceful_drain: bool = True
+    # Lifespan-phase BACKSTOP for in-flight drain. uvicorn's --timeout-graceful-
+    # shutdown (100s in the Dockerfile) runs FIRST and drains the in-flight HTTP/
+    # stream tasks the ASGI gauge tracks; by the time lifespan shutdown calls
+    # wait_for_inflight_drain, inflight is usually already ~0 and this returns
+    # instantly. The 120s ceiling only binds for in-flight work uvicorn doesn't
+    # account for. terminationGracePeriodSeconds must therefore exceed uvicorn's
+    # 100s + preStop (~8s) + lifespan cleanup (~2s) — ~110 minimum, 150 comfortable.
+    graceful_drain_max_seconds: int = 120
 
     @property
     def configured_providers(self) -> list[str]:

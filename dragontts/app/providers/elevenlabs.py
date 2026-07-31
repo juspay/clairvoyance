@@ -12,7 +12,7 @@ requested ``output_format`` (e.g. μ-law 8 kHz for telephony) before caching.
 
 Two paths:
 - :meth:`synth` — one-shot HTTP ``/v1/text-to-speech/{voice}`` (used by
-  ``/tts/bytes`` misses).
+  ``/tts/bytes`` misses, stitch, and the warmer).
 - :meth:`stream_synth` — the warm multi-context WebSocket pool
   (:mod:`app.providers.elevenlabs_pool`), low TTFB on ``/tts/stream`` misses.
   Falls back to one-shot HTTP if no warm socket is available.
@@ -73,11 +73,20 @@ class ElevenLabsProvider(BaseTTSProvider):
         self._pools: dict[tuple[str, str], elevenlabs_pool.ElevenLabsStreamPool] = {}
 
     def _voice_settings(self, params: dict) -> dict:
-        # Caller-supplied voice_settings win; otherwise mirror the one-shot defaults.
+        # Caller-supplied voice_settings win; otherwise mirror the one-shot
+        # defaults. speed is ALWAYS set (explicit, else the DragonTTS default) so
+        # an OMITTED speed and an EXPLICIT speed==default yield identical audio —
+        # canonical_params collapses the latter to "absent", so they must sound
+        # the same or one cache key would serve different-speed audio.
+        speed = (params or {}).get("speed")
+        if speed is None:
+            speed = PROVIDER_DEFAULTS.get("elevenlabs", {}).get("speed", 1.0)
         vs = (params or {}).get("voice_settings")
         if isinstance(vs, dict) and vs:
+            vs = dict(vs)
+            vs.setdefault("speed", speed)
             return vs
-        return {"stability": 0.5, "similarity_boost": 0.75}
+        return {"stability": 0.5, "similarity_boost": 0.75, "speed": speed}
 
     def _get_pool(
         self, voice_id: str, model_id: str, enable_ssml_parsing: bool = False
