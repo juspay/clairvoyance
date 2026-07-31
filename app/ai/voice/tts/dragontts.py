@@ -55,7 +55,18 @@ __all__ = [
 
 
 # Params DragonTTS folds into the cache key and applies per nested provider.
-_PARAM_FIELDS = ("speed", "volume", "emotion", "pitch", "style_prompt")
+# enable_ssml_parsing MUST be here: without it, the cached/dragontts path drops
+# the flag and ElevenLabs parses <break/> as plain text (SSML only "worked" on the
+# direct ElevenLabs path, which forwards it separately). It selects a distinct
+# warm SSML socket + cache key inside DragonTTS.
+_PARAM_FIELDS = (
+    "speed",
+    "volume",
+    "emotion",
+    "pitch",
+    "style_prompt",
+    "enable_ssml_parsing",
+)
 
 
 def _collect_params(resolved: "TTSConfig") -> dict:

@@ -26,4 +26,4 @@ USER appuser
 
 EXPOSE 8000
 
-CMD ["uv", "run", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4", "--loop", "uvloop", "--no-access-log", "--limit-concurrency", "1024"]
+CMD ["uv", "run", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4", "--loop", "uvloop", "--no-access-log", "--limit-concurrency", "1024", "--timeout-graceful-shutdown", "100"]
