@@ -14,7 +14,17 @@ exposes no public streaming-with-tools entry point. Tested with pipecat 1.1.0
 from __future__ import annotations
 
 import json
-from typing import Any, AsyncIterator, Dict, List, Literal, Optional, Tuple, Union
+from typing import (
+    Any,
+    AsyncIterator,
+    Dict,
+    List,
+    Literal,
+    Optional,
+    Tuple,
+    Union,
+    cast,
+)
 
 from pipecat.frames.frames import FunctionCallFromLLM
 from pipecat.processors.aggregators.llm_context import LLMContext
@@ -98,9 +108,14 @@ async def _stream_openai(
     and flush on index advance / stream close.
     """
     adapter = service.get_llm_adapter()
+    # pipecat 1.5.0 types settings values as possibly NOT_GIVEN; the adapter
+    # wants a concrete str | None.
+    system_instruction = service._settings.system_instruction
     invocation_params = adapter.get_llm_invocation_params(
         context,
-        system_instruction=service._settings.system_instruction,
+        system_instruction=(
+            system_instruction if isinstance(system_instruction, str) else None
+        ),
         convert_developer_to_user=not service.supports_developer_role,
     )
 
@@ -344,8 +359,12 @@ async def _stream_gemini(
     from google.genai.types import GenerateContentConfig
 
     adapter = service.get_llm_adapter()
+    system_instruction = service._settings.system_instruction
     invocation_params = adapter.get_llm_invocation_params(
-        context, system_instruction=service._settings.system_instruction
+        context,
+        system_instruction=(
+            system_instruction if isinstance(system_instruction, str) else None
+        ),
     )
 
     # Go through the service builder so model-aware thinking defaults apply
@@ -372,7 +391,9 @@ async def _stream_gemini(
     # SDK's stream cleanup.
     response = await service._client.aio.models.generate_content_stream(
         model=model_name,
-        contents=invocation_params["messages"],
+        # list is invariant: list[Content] doesn't satisfy the SDK's
+        # list[ContentUnion] parameter even though every element does.
+        contents=cast("list[Any]", invocation_params["messages"]),
         config=GenerateContentConfig(**generation_params),
     )
     try:

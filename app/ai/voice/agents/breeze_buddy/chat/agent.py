@@ -14,9 +14,9 @@ from dataclasses import dataclass
 from typing import Any, AsyncIterator, Dict, List, Optional, Set, Tuple, cast
 
 from pipecat.adapters.schemas.tools_schema import ToolsSchema
+from pipecat.flows import FlowsFunctionSchema
 from pipecat.frames.frames import FunctionCallFromLLM
 from pipecat.processors.aggregators.llm_context import LLMContext, LLMContextMessage
-from pipecat_flows import FlowsFunctionSchema
 
 from app.ai.voice.agents.breeze_buddy.chat import llm_driver
 from app.ai.voice.agents.breeze_buddy.chat.block_codec import (

@@ -2,7 +2,9 @@
 
 import uuid
 from datetime import datetime
-from typing import Any, Dict, Optional, Tuple
+from typing import Dict, Optional, Tuple
+
+from pipecat.runner.types import CallData
 
 from app.core.logger import logger
 from app.database.accessor import get_lead_by_call_id
@@ -22,7 +24,7 @@ from app.schemas.breeze_buddy.core import LeadCallTracker
 
 async def handle_inbound_call(
     call_sid: str,
-    call_data: Dict[str, Any],
+    call_data: CallData,
     call_initiated_time: datetime,
     provider: str,
     url_query_params: Optional[Dict[str, str]] = None,
@@ -112,7 +114,7 @@ async def handle_inbound_call(
 async def create_lead_from_template_id(
     template_id: str,
     call_sid: str,
-    call_data: Dict[str, Any],
+    call_data: CallData,
     call_initiated_time: datetime,
     url_query_params: Optional[Dict[str, str]] = None,
 ) -> Tuple[Optional[LeadCallTracker], Optional[str]]:

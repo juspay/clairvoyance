@@ -2,9 +2,8 @@
 
 from typing import Any, Dict, List, Optional, cast
 
-from pipecat.services.azure.llm import AzureLLMService
-from pipecat_flows import FlowManager, NodeConfig
-from pipecat_flows.types import FlowsDirectFunction, FlowsFunctionSchema
+from pipecat.flows import FlowManager, NodeConfig
+from pipecat.flows.types import FlowsDirectFunction, FlowsFunctionSchema
 
 from app.ai.voice.agents.breeze_buddy.services.knowledge_base import (
     build_kb_system_message,
@@ -62,7 +61,7 @@ async def load_template_config(
 
 def setup_flow_manager(
     task: Any,
-    llm: AzureLLMService,
+    llm: Any,
     context_aggregator: Any,
     transport: Any,
     flow_builder: FlowConfigBuilder,
@@ -112,7 +111,7 @@ def setup_flow_manager(
         )
 
     return FlowManager(
-        task=task,
+        worker=task,
         llm=llm,
         context_aggregator=context_aggregator,
         transport=transport,

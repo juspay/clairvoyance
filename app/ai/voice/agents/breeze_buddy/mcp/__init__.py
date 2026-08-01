@@ -10,12 +10,12 @@ from typing import Any, Dict, List, Literal, Optional, Tuple, Union, cast
 
 import httpx
 from mcp.client.session_group import StreamableHttpParameters
+from pipecat.flows.types import FlowResult, FlowsFunctionSchema
 from pipecat.services.llm_service import (
     FunctionCallParams,
     FunctionCallResultProperties,
 )
 from pipecat.services.mcp_service import MCPClient
-from pipecat_flows.types import FlowResult, FlowsFunctionSchema
 
 from app.ai.voice.agents.breeze_buddy.handlers.transport.utils.tool_pipeline import (
     apply_result_pipeline_json_str,
@@ -389,6 +389,9 @@ def _create_mcp_tool_handler(
             tool_call_id="",
             arguments=merged_args,
             llm=None,  # type: ignore[arg-type]
+            # Required field since pipecat 1.5.0; MCPClient._tool_wrapper
+            # never reads it (same synthetic-params contract as llm/context).
+            pipeline_worker=None,  # type: ignore[arg-type]
             context=None,  # type: ignore[arg-type]
             result_callback=result_callback,
         )
