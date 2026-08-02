@@ -11,6 +11,12 @@ from typing import List, Optional, Tuple
 from app.core.logger import logger
 from app.database import get_db_connection
 from app.database.accessor.breeze_buddy.access_grants import ensure_reseller_on_conn
+from app.database.accessor.breeze_buddy.wallets import (
+    create_wallet_on_conn,
+    delete_wallet_on_conn,
+    get_wallet_for_update_on_conn,
+    update_wallet_reseller_id_on_conn,
+)
 from app.database.decoder.breeze_buddy.merchants import decode_merchant
 from app.database.queries import run_parameterized_query
 from app.database.queries.breeze_buddy.merchants import (
@@ -83,6 +89,10 @@ async def create_merchant(
                     # slugs as bare resellers rows.
                     await ensure_reseller_on_conn(conn, reseller_id)
                 result = await conn.fetch(query, *values)
+                if result:
+                    # Every merchant must have exactly one wallet row; create
+                    # it in the same transaction so it can never be missing.
+                    await create_wallet_on_conn(conn, merchant_id, reseller_id)
             row = result[0] if result else None
 
             if row:
@@ -306,6 +316,13 @@ async def update_merchant(
                     # unknown umbrella slugs like create_merchant does.
                     await ensure_reseller_on_conn(conn, reseller_id)
                 result = await conn.fetch(query, *values)
+                if result and reseller_id:
+                    # Keep the wallet's denormalized reseller_id in sync so
+                    # reseller-scoped wallet queries stay accurate after
+                    # a merchant is reassigned to a different reseller.
+                    await update_wallet_reseller_id_on_conn(
+                        conn, merchant_id, reseller_id
+                    )
             row = result[0] if result else None
 
             if row:
@@ -323,11 +340,20 @@ async def delete_merchant(merchant_id: str) -> bool:
     """Delete merchant entity by merchant_id.
 
     Returns True if deleted, False if not found.
-    Raises ValueError if users still reference this merchant_id.
+    Raises ValueError if users still reference this merchant_id, or if the
+    merchant's wallet has a non-zero balance.
     Raises exception on database errors.
 
-    Note: Uses atomic CTE to check dependencies and delete in a single
-    operation to prevent TOCTOU race conditions.
+    Wallet handling: the wallet row is locked and checked in the same
+    transaction as the merchant delete. If balance_credits > 0, deletion is
+    refused. If balance_credits == 0, the wallet row is deleted alongside
+    the merchant. wallet_transactions rows are NEVER touched -- the ledger
+    has no FK to wallets/merchants and is preserved permanently as an
+    append-only audit record, regardless of merchant/wallet lifecycle.
+
+    Note: the merchant delete itself still uses the existing atomic CTE
+    (dependency_check + delete_operation) to check user references and
+    delete in one round trip, avoiding TOCTOU races.
 
     Args:
         merchant_id: The merchant identifier to delete
@@ -338,25 +364,39 @@ async def delete_merchant(merchant_id: str) -> bool:
     query, values = delete_merchant_query(merchant_id)
 
     try:
-        result = await run_parameterized_query(query, values)
-        row = result[0] if result else None
+        async for conn in get_db_connection():
+            async with conn.transaction():
+                wallet = await get_wallet_for_update_on_conn(conn, merchant_id)
+                if wallet and wallet.balance_credits > 0:
+                    raise ValueError(
+                        f"Cannot delete merchant entity '{merchant_id}': "
+                        f"wallet has a non-zero balance ({wallet.balance_credits} credits)"
+                    )
 
-        if row:
-            user_count = row["user_count"]
-            deleted_count = row["deleted_count"]
+                rows = await conn.fetch(query, *values)
+                row = rows[0] if rows else None
 
-            if user_count > 0:
-                raise ValueError(
-                    f"Cannot delete merchant entity '{merchant_id}': {user_count} user(s) still reference it"
-                )
+                if row and row["user_count"] > 0:
+                    raise ValueError(
+                        f"Cannot delete merchant entity '{merchant_id}': "
+                        f"{row['user_count']} user(s) still reference it"
+                    )
+
+                deleted_count = row["deleted_count"] if row else 0
+
+                if deleted_count > 0 and wallet:
+                    # Merchant delete succeeded and a wallet existed
+                    # (balance already verified == 0 above) -- remove it too.
+                    await delete_wallet_on_conn(conn, merchant_id)
 
             if deleted_count > 0:
                 logger.info(f"Deleted merchant entity: {merchant_id}")
                 return True
 
             return False
-
         return False
+    except ValueError:
+        raise
     except Exception as e:
         logger.error(f"Error deleting merchant entity {merchant_id}: {e}")
         raise

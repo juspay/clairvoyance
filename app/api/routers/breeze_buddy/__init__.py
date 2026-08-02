@@ -44,6 +44,7 @@ from app.api.routers.breeze_buddy.template_generator import (
 )
 from app.api.routers.breeze_buddy.templates import router as templates_router
 from app.api.routers.breeze_buddy.users import router as users_router
+from app.api.routers.breeze_buddy.wallet import router as wallet_router
 from app.api.routers.breeze_buddy.webhooks import router as webhooks_router
 from app.api.routers.breeze_buddy.websocket import router as websocket_router
 
@@ -100,6 +101,9 @@ router.include_router(blacklist_router, prefix="", tags=["blacklist"])
 
 # Merchants (merchant identifiers - admin only)
 router.include_router(merchants_router, prefix="", tags=["merchants"])
+
+# Wallet (merchant credit balance - admin only in this phase)
+router.include_router(wallet_router, prefix="", tags=["wallet"])
 
 # Reseller (umbrella) entity management
 router.include_router(resellers_router, prefix="", tags=["resellers"])
