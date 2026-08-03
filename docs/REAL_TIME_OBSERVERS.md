@@ -62,7 +62,7 @@ CALL STARTS
 │   ├── ── OBSERVER SETUP (new) ──────────────
 │   │   │
 │   │   ├── self.configurations.observers         # read from template JSON
-│   │   │   └── [{name, system_prompt, tools, trigger_on, start_after_turn, action}, ...]
+│   │   │   └── [{name, enabled, system_prompt, trigger_on, start_after_turn, llm, action}, ...]
 │   │   │
 │   │   ├── factory.build_observers()
 │   │   │   │
@@ -107,11 +107,10 @@ _run_checks() RUNS IN BACKGROUND
 │   │
 │   │   ┌── Observer 1: voicemail_detector ──────────────────┐
 │   │   │   LLMContext()                                      │
-│   │   │   context.set_tools([report_detection])             │
+│   │   │   context.set_tools([end_conversation])             │
 │   │   │   context.set_tool_choice("required")               │
 │   │   │   build_chat_completion_params + _client.create()   │
-│   │   │   → gpt-4o-mini calls:                              │
-│   │   │     report_detection(detected=true)                 │
+│   │   │   → gpt-4o-mini calls configured action tool        │
 │   │   │   → tool called → detection → True                   │
 │   │   └─────────────────────────────────────────────────────┘
 │   │
@@ -259,18 +258,24 @@ Modified:
 "observers": [
   {
     "name": "voicemail_detector",
+    "enabled": true,
     "system_prompt": "Analyze the call transcript for signs of voicemail...",
     "trigger_on": ["on_user_turn_message_added", "on_assistant_turn_stopped"],
     "start_after_turn": 0,
-    "action": { "type": "end_conversation", "args": { "outcome": "VOICEMAIL" } }
+    "action": {
+      "type": "function",
+      "handler": "end_conversation",
+      "args": { "outcome": "VOICEMAIL" }
+    }
   }
 ]
 ```
 
-- **system_prompt**: Detection instructions for the observer LLM. The LLM receives the configured tools and calls one when it detects something.
-- **tools**: Tool definitions (name, description, properties, required). LLM calls a tool = detection.
+- **enabled**: Optional switch for keeping an observer configured but not active. Defaults to `true`.
+- **system_prompt**: Detection instructions for the observer LLM. The LLM receives one generated tool derived from `action` and calls it when it detects something.
 - **trigger_on**: Pipecat events that trigger this observer. Supported: `on_user_turn_message_added`, `on_user_turn_stopped`, `on_assistant_turn_stopped`, `on_function_calls_started`. Default: `["on_user_turn_message_added"]`.
 - **start_after_turn**: Skip first N events (0 = check from first event).
-- **action**: Reuses FlowAction — supports `end_conversation` and `function` types.
+- **llm**: Optional LLM override. Omit to inherit from the template LLM configuration.
+- **action**: Reuses FlowAction. For `type: "function"`, the observer tool name is `action.handler`; for non-function actions such as `alert`, the tool name is the action type string. The generated detection tool currently has no custom arguments.
 
 Add any observer by adding to this array. No code changes needed.

@@ -233,8 +233,15 @@ class ObserverManager:
                 )
 
     async def stop(self):
-        """Cleanup. Called when the call ends."""
+        """Cleanup. Called when the call ends.
+
+        Waits up to 15 s for in-flight observer checks to finish before
+        cancelling them — prevents CancelledError cutting off an LLM call
+        that is mid-flight when the main pipeline shuts down.
+        """
         self._stopped = True
-        for task in self._pending:
+        if self._pending:
+            await asyncio.wait(set(self._pending), timeout=15)
+        for task in list(self._pending):
             task.cancel()
         self._pending.clear()
