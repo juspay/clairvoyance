@@ -1,13 +1,15 @@
-"""Pure helpers shared between the voice template loader and the chat agent."""
+"""Helpers shared between template runtime paths."""
 
-from typing import Dict
+from typing import Any, Dict, Optional
 
+from app.ai.voice.agents.breeze_buddy.template.context import TemplateContext
 from app.ai.voice.agents.breeze_buddy.template.types import (
     FlowMode,
     KnowledgeBaseMode,
     TemplateModel,
 )
 from app.core.logger import logger
+from app.services.slack.alert import slack_alert
 
 
 def render_messages_with_vars(messages: list, variables: Dict[str, str]) -> list:
@@ -114,3 +116,32 @@ def validate_template_compat(template: TemplateModel) -> None:
         f"Template {template.id} validated: realtime LLM + direct mode "
         f"(provider={realtime.provider.value})"
     )
+
+
+async def send_alert(
+    context: TemplateContext,
+    args: Dict[str, Any],
+    transition_to: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Send a best-effort Slack alert from template-configured args."""
+    title = str(args.get("title") or "Breeze Buddy Alert")
+    raw_fields = args.get("fields")
+    fields = raw_fields if isinstance(raw_fields, list) else []
+    fallback_text = args.get("fallback_text")
+    if fallback_text is not None:
+        fallback_text = str(fallback_text)
+
+    try:
+        await slack_alert.send(
+            title=title,
+            fields=fields,
+            fallback_text=fallback_text,
+        )
+        logger.info(
+            "send_alert succeeded "
+            f"(source={args.get('source')}, call_sid={args.get('call_sid')})"
+        )
+        return {"status": "success"}
+    except Exception as exc:
+        logger.exception(f"send_alert failed: {exc}")
+        return {"status": "error", "error": str(exc)}

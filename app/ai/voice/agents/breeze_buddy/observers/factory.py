@@ -68,6 +68,9 @@ async def build_observers(
     observers: List[RealtimeObserver] = []
 
     for cfg in configs:
+        if not getattr(cfg, "enabled", True):
+            logger.info(f"Observer {cfg.name} is disabled — skipping")
+            continue
         try:
             merged_config = merge_llm_config(cfg.llm, template_llm)
             llm_service = await get_llm_service(merged_config, pooled=True)

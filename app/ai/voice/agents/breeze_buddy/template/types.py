@@ -1862,6 +1862,7 @@ class FlowAction(BaseModel):
     text: Optional[str] = None
     handler: Optional[str] = None
     args: Optional[Dict[str, Any]] = None
+    description: Optional[str] = None
 
 
 class ObserverConfig(BaseModel):
@@ -1873,17 +1874,11 @@ class ObserverConfig(BaseModel):
     """
 
     name: str = Field(..., description="Unique observer identifier")
+    enabled: bool = Field(True, description="Whether this observer runs during calls.")
     system_prompt: str = Field(
         ...,
         description="Detection instructions for the observer LLM. "
-        "The LLM receives the configured tools and should call "
-        "one based on its analysis.",
-    )
-    tools: List[Dict[str, Any]] = Field(
-        ...,
-        description="Tool definitions for this observer. "
-        "Each tool is a dict with name, description, properties, required. "
-        "The LLM will call one of these tools based on its analysis.",
+        "The LLM will call the configured action function when the condition is detected.",
     )
     trigger_on: List[str] = Field(
         default=["on_user_turn_message_added"],

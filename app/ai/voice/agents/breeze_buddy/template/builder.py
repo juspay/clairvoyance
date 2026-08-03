@@ -48,6 +48,7 @@ from app.ai.voice.agents.breeze_buddy.template.types import (
 from app.ai.voice.agents.breeze_buddy.template.ui_prompt import (
     render_primitives_section,
 )
+from app.ai.voice.agents.breeze_buddy.template.utils import send_alert
 from app.core.logger import logger
 
 # Synthetic node name used in direct mode. There is only ever one node so the
@@ -175,6 +176,7 @@ class FlowConfigBuilder:
             "end_conversation": end_conversation,
             "transition_handler": transition_handler,
             "connect_to_live_agent": connect_to_live_agent,
+            "send_alert": send_alert,
             "http_function_handler": http_function_handler,
             "builtin_function_dispatcher": builtin_function_dispatcher,
             "custom_python_code_handler": custom_python_code_handler,
