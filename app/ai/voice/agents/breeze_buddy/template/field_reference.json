@@ -4,153 +4,898 @@
     "check": "uv run pytest tests/test_field_reference_coverage.py -q",
     "how_to_add": "Add a top-level key matching the Pydantic class name exactly (e.g. 'MyModel'). Each field entry must have 'description' and 'example'. For subclass sections add '_parent': 'ParentClass' — only document the fields the subclass adds. Use '_skip': ['field'] to intentionally omit server-set fields (e.g. id, created_at) from drift checking."
   },
-
   "TemplateModel": {
-    "_skip": ["id", "created_at", "updated_at"],
-    "reseller_id":                       { "description": "Reseller namespace this template belongs to. Set at creation — determines which reseller owns the template.", "example": "acme-india" },
-    "merchant_id":                       { "description": "Optional merchant sub-namespace within the reseller. Null for reseller-level templates.", "example": "merchant-42" },
-    "name":                              { "description": "Human-readable display name shown in dashboards and logs.", "example": "COD Confirmation – Hindi+English" },
-    "flow":                              { "description": "Conversation flow. Two modes: (1) flow mode — keys 'initial_node' (str), 'nodes' (list of FlowNodeModel dicts), optional 'end_conversation_callbacks'; (2) direct mode — set 'mode':'direct' with 'system_prompt' + flat 'functions' list.", "example": { "initial_node": "greeting", "nodes": [{ "node_name": "greeting", "task_messages": [{"role": "system", "content": "You are Aria…"}], "functions": [{"name": "confirm_order", "description": "Customer confirms.", "transition_to": "confirm_details"}] }], "end_conversation_callbacks": ["service_callback"] } },
-    "expected_payload_schema":           { "description": "Declares which incoming call-payload fields to inject as {placeholder} template vars. Every {variable} used anywhere in the template must appear here (or in secrets). Keys are field names; values are optional config dicts (may include a 'function' key for named transformations).", "example": { "customer_mobile_number": {}, "customer_name": {}, "order_id": {}, "order_amount": {"function": "format_inr"}, "merchant_name": {}, "delivery_address": {} } },
-    "expected_callback_response_schema": { "description": "Declares which session-outcome metadata fields to include in the end-of-call webhook. Keys are field names; values may include 'optional: true' to suppress the required-field gate that blocks the webhook when the field is absent.", "example": { "confirmed_amount": {}, "cancellation_reason": {"optional": true} } },
-    "configurations":                    { "description": "All voice pipeline settings (LLM, STT, TTS, VAD, interruption, etc.). See ConfigurationModel for full field docs. Null means use reseller-level defaults.", "example": { "llm_configurations": {"provider": "azure", "model": "gpt-4.1-mini"}, "tts_configuration": {"provider": "cartesia", "voice_id": "a167e0f3-df7e-4d52-a786-6f69d05e5b73", "model": "sonic-2", "language": "hi"} } },
-    "secrets":                           { "description": "Flat dict of credential key-value pairs injected as template vars, overriding reseller-level credentials for the same keys. Values substitute into {secret_key} placeholders in HTTP URLs, headers, and bodies.", "example": { "api_token": "Bearer sk-prod-abc123", "webhook_secret": "wh_live_xyz789" } },
-    "telephony_number_id":                { "description": "UUID of the telephony number record to use for calls from this template. Must belong to the reseller. Null to use the reseller-default number.", "example": "eb0df4e9-a438-4ce4-a828-addf9db5ce3a" },
-    "outbound_number_id":                 { "description": "Deprecated pre-rename mirror of telephony_number_id — responses temporarily emit both for old readers; writes using this key are logged [Deprecated]. Do not use in new code.", "example": "eb0df4e9-a438-4ce4-a828-addf9db5ce3a" },
-    "is_active":                         { "description": "When false, the template is soft-disabled: dispatch will not enqueue new leads for it. Set to false (not delete) when retiring a template.", "example": true },
-    "supported_channels":                { "description": "Channels this template may be served on. Default ['voice']. Add 'chat' to enable the Buddy Assist web-chat mode. Must have at least one entry.", "example": ["voice"] }
+    "_skip": [
+      "id",
+      "created_at",
+      "updated_at"
+    ],
+    "reseller_id": {
+      "description": "Reseller namespace this template belongs to. Set at creation — determines which reseller owns the template.",
+      "example": "acme-india"
+    },
+    "merchant_id": {
+      "description": "Optional merchant sub-namespace within the reseller. Null for reseller-level templates.",
+      "example": "merchant-42"
+    },
+    "name": {
+      "description": "Human-readable display name shown in dashboards and logs.",
+      "example": "COD Confirmation – Hindi+English"
+    },
+    "flow": {
+      "description": "Conversation flow. Two modes: (1) flow mode — keys 'initial_node' (str), 'nodes' (list of FlowNodeModel dicts), optional 'end_conversation_callbacks'; (2) direct mode — set 'mode':'direct' with 'system_prompt' + flat 'functions' list.",
+      "example": {
+        "initial_node": "greeting",
+        "nodes": [
+          {
+            "node_name": "greeting",
+            "task_messages": [
+              {
+                "role": "system",
+                "content": "You are Aria…"
+              }
+            ],
+            "functions": [
+              {
+                "name": "confirm_order",
+                "description": "Customer confirms.",
+                "transition_to": "confirm_details"
+              }
+            ]
+          }
+        ],
+        "end_conversation_callbacks": [
+          "service_callback"
+        ]
+      }
+    },
+    "expected_payload_schema": {
+      "description": "Declares which incoming call-payload fields to inject as {placeholder} template vars. Every {variable} used anywhere in the template must appear here (or in secrets). Keys are field names; values are optional config dicts (may include a 'function' key for named transformations).",
+      "example": {
+        "customer_mobile_number": {},
+        "customer_name": {},
+        "order_id": {},
+        "order_amount": {
+          "function": "format_inr"
+        },
+        "merchant_name": {},
+        "delivery_address": {}
+      }
+    },
+    "expected_callback_response_schema": {
+      "description": "Declares which session-outcome metadata fields to include in the end-of-call webhook. Keys are field names; values may include 'optional: true' to suppress the required-field gate that blocks the webhook when the field is absent.",
+      "example": {
+        "confirmed_amount": {},
+        "cancellation_reason": {
+          "optional": true
+        }
+      }
+    },
+    "configurations": {
+      "description": "All voice pipeline settings (LLM, STT, TTS, VAD, interruption, etc.). See ConfigurationModel for full field docs. Null means use reseller-level defaults.",
+      "example": {
+        "llm_configurations": {
+          "provider": "azure",
+          "model": "gpt-4.1-mini"
+        },
+        "tts_configuration": {
+          "provider": "cartesia",
+          "voice_id": "a167e0f3-df7e-4d52-a786-6f69d05e5b73",
+          "model": "sonic-2",
+          "language": "hi"
+        }
+      }
+    },
+    "secrets": {
+      "description": "Flat dict of credential key-value pairs injected as template vars, overriding reseller-level credentials for the same keys. Values substitute into {secret_key} placeholders in HTTP URLs, headers, and bodies.",
+      "example": {
+        "api_token": "Bearer sk-prod-abc123",
+        "webhook_secret": "wh_live_xyz789"
+      }
+    },
+    "telephony_number_id": {
+      "description": "UUID of the telephony number record to use for calls from this template. Must belong to the reseller. Null to use the reseller-default number.",
+      "example": "eb0df4e9-a438-4ce4-a828-addf9db5ce3a"
+    },
+    "outbound_number_id": {
+      "description": "Deprecated pre-rename mirror of telephony_number_id — responses temporarily emit both for old readers; writes using this key are logged [Deprecated]. Do not use in new code.",
+      "example": "eb0df4e9-a438-4ce4-a828-addf9db5ce3a"
+    },
+    "is_active": {
+      "description": "When false, the template is soft-disabled: dispatch will not enqueue new leads for it. Set to false (not delete) when retiring a template.",
+      "example": true
+    },
+    "supported_channels": {
+      "description": "Channels this template may be served on. Default ['voice']. Add 'chat' to enable the Buddy Assist web-chat mode. Must have at least one entry.",
+      "example": [
+        "voice"
+      ]
+    }
   },
-
   "NoiseFilterConfig": {
-    "enable":             { "description": "Whether to process incoming audio with the selected ai-coustics model before VAD and STT.", "example": true },
-    "provider":           { "description": "Noise-filter integration provider. Currently 'aic'. New configurations must provide this together with model.", "example": "aic" },
-    "model":              { "description": "'noise_cancellation' enhances audio while preserving speakers; 'voice_focus' isolates the foreground/primary speaker. New configurations must provide this together with provider.", "example": "voice_focus" },
-    "enhancement_level":  { "description": "ai-coustics enhancement strength from 0.0 to 1.0. Null uses the model default; start Voice Focus experiments at 0.5.", "example": 0.5 }
+    "enable": {
+      "description": "Whether to process incoming audio with the selected ai-coustics model before VAD and STT.",
+      "example": true
+    },
+    "provider": {
+      "description": "Noise-filter integration provider. Currently 'aic'. New configurations must provide this together with model.",
+      "example": "aic"
+    },
+    "model": {
+      "description": "'noise_cancellation' enhances audio while preserving speakers; 'voice_focus' isolates the foreground/primary speaker. New configurations must provide this together with provider.",
+      "example": "voice_focus"
+    },
+    "enhancement_level": {
+      "description": "ai-coustics enhancement strength from 0.0 to 1.0. Null uses the model default; start Voice Focus experiments at 0.5.",
+      "example": 0.5
+    }
   },
-
   "ConfigurationModel": {
-    "llm_configurations":         { "description": "LLM provider, model, and inference parameters. Always set provider=azure and model=gpt-4.1-mini unless a different LLM is explicitly required.", "example": { "provider": "azure", "model": "gpt-4.1-mini" } },
-    "stt_configuration":          { "description": "STT provider, language(s), and provider-specific config. Use provider=deepgram for English-only; provider=soniox with enable_language_identification=true for Hindi, South Indian languages, or any multilingual combination.", "example": { "provider": "soniox", "language": ["en", "hi"], "soniox": { "enable_language_identification": true } } },
-    "tts_configuration":          { "description": "Primary TTS provider, voice ID, model, and audio parameters. Use provider=elevenlabs for English/Hindi/North Indian templates. Use provider=cartesia as the base for South Indian or mixed-region templates.", "example": { "provider": "elevenlabs", "voice_id": "iB2rIwm9cQCRGWoKDRtX", "model": "eleven_flash_v2_5", "speed": 1.0, "language": "en" } },
-    "tts_configuration_overrides": { "description": "Per-provider TTS config overrides keyed by provider name. Used with tts_selection_config to route callers to the right TTS at runtime. The 'provider' field inside each entry is auto-filled from the key — do not repeat it.", "example": { "elevenlabs": { "voice_id": "iB2rIwm9cQCRGWoKDRtX", "model": "eleven_flash_v2_5", "speed": 1.0, "language": "en" } } },
-    "tts_selection_config":       { "description": "LLM-based dynamic TTS provider selection driven by a field in the lead payload (typically delivery address). When enabled, Gemini picks one of the listed providers. Use for mixed North+South India templates.", "example": { "enabled": true, "prompt": "Determine the TTS provider from the customer's delivery address. Reply 'elevenlabs' for North/Hindi-English regions, reply 'cartesia' for South Indian regions. Default to 'cartesia'. Respond with exactly one word.", "providers": ["elevenlabs", "cartesia"] } },
-    "initial_greeting":           { "description": "Fixed spoken text at the very start of every outbound call, before the LLM takes over. Supports {variable} placeholders. Must sound natural when spoken — no markdown, symbols, or bullet points.", "example": "Hi {customer_name}, this is Aria calling from {merchant_name}. I'm reaching out about your order #{order_id}. Do you have a moment?" },
-    "user_idle_configuration":    { "description": "Handles user silence. After `timeout` seconds of quiet the LLM receives `idle_message` to re-engage. After `max_retries` consecutive idle events the call ends with a BUSY outcome.", "example": { "enabled": true, "timeout": 7.0, "idle_message": "The user has been silent. Check if they are still on the call.", "max_retries": 2 } },
-    "noise_filter":               { "description": "Processes incoming audio before VAD and STT. New configurations use provider='aic' with model='noise_cancellation' or model='voice_focus'. Existing configurations using type='aic' or type='aic_voice_focus' remain supported without being rewritten.", "example": { "enable": true, "provider": "aic", "model": "voice_focus", "enhancement_level": 0.5 } },
-    "client_noise_cancellation":  { "description": "Browser-side (Daily Krisp) noise cancellation for web voice sessions. null/true = ON (platform default), false = opt out. Returned to web clients on the /connect response as `noise_cancellation`; echo cancellation is always forced client-side and has no knob.", "example": false },
-    "keyword_filter":             { "description": "Suppresses short STT filler transcriptions (e.g. 'hmm', 'ok') produced while the bot is speaking, preventing false interruption triggers.", "example": { "enabled": true, "keywords": ["hmm", "hm", "ok", "okay", "yes", "hello", "hi", "yeah"], "match_type": "exact" } },
-    "interruption":               { "description": "Controls whether the user can interrupt the bot mid-sentence. mode='enabled' allows interruptions (default). mode='disabled_discard' silently drops user speech during bot playback. min_words prevents single-word fillers from cutting the bot off.", "example": { "mode": "enabled", "min_words": 2 } },
-    "vad_config":                 { "description": "Template-level Voice Activity Detection tuning. Overrides global VAD defaults. Useful when the caller environment has unusual audio characteristics.", "example": { "confidence": 0.7, "start_secs": 0.2, "stop_secs": 0.8, "min_volume": 0.1 } },
-    "enable_background_sound":    { "description": "When true, plays a looping ambient sound during the call. Requires background_sound_file.", "example": false },
-    "background_sound_file":      { "description": "Which ambient sound clip to loop when enable_background_sound is true. Currently the only available value is 'office-ambience'.", "example": "office-ambience" },
-    "background_sound_volume":    { "description": "Volume multiplier for the ambient background sound (0.0 = silent, default 2.0).", "example": 2.0 },
-    "ivr_configuration":          { "description": "IVR settings for inbound phone-menu templates. Preferred over the deprecated ivr_greeting / ivr_goodbye / ivr_priority flat fields.", "example": { "greeting": "Welcome. Press 1 for order queries, press 2 for billing.", "goodbye": "We did not receive your selection. Goodbye.", "priority": 1 } },
-    "ivr_greeting":               { "description": "DEPRECATED — use ivr_configuration.greeting instead. IVR greeting text played when an inbound caller reaches this template.", "example": "Welcome. Press 1 for English, press 2 for Hindi." },
-    "ivr_goodbye":                { "description": "DEPRECATED — use ivr_configuration.goodbye instead. Message played when the inbound caller provides no DTMF input.", "example": "We did not receive your selection. Goodbye." },
-    "ivr_priority":               { "description": "DEPRECATED — use ivr_configuration.priority instead. Ordering priority for this template in the IVR menu (lower = presented earlier).", "example": 1 },
-    "transfer_number":            { "description": "E.164 phone number to transfer the call to. Used in warm-transfer flows where the AI hands off to a human agent.", "example": "+919876543210" },
-    "enable_mpc_transfer":        { "description": "Plivo only. When false (default), warm transfer uses the legacy immediate bridge: the customer is connected to the agent at once, the bot disconnects, and nothing is returned to the LLM. When true, uses dial-first MultiPartyCall: the agent is dialled first while the customer stays with the bot, and if the agent does not answer the AI resumes the conversation. Requires the template prompt to handle a resumed-after-failed-transfer turn.", "example": false },
-    "enable_inbound":             { "description": "When true, this template is eligible to handle inbound calls. Typically paired with ivr_configuration.", "example": false },
-    "mcp":                        { "description": "MCP (Model Context Protocol) server configuration. Enables dynamic tool discovery at session start — the agent connects to listed MCP servers and receives available tools before the first LLM turn.", "example": { "servers": [{ "name": "order-tools", "url": "https://api.example.com/mcp", "auth": { "type": "bearer", "token": "{api_token}" } }] } },
-    "knowledge_base":             { "description": "Knowledge base (RAG) attachment — grounds the agent in the merchant's uploaded documents/sheets. mode selects how content reaches the LLM: 'auto' (default) injects the whole KB into the prompt when it fits full_injection_token_threshold and otherwise retrieves per user turn; 'full_injection' and 'auto_retrieve' force those behaviors; 'tool' instead exposes a query_knowledge_base function (name/description overridable via tool_name/tool_description) the LLM calls explicitly. 'auto'/'auto_retrieve' are rejected on realtime (speech-to-speech) LLM templates. Retrieval is always fail-open — on timeout/error the turn proceeds without KB context.", "example": { "enabled": true, "knowledge_base_ids": ["3f2b8c1a-9d4e-4f6b-8a2c-1e5d7f9b0c3d"], "mode": "auto", "top_k": 5, "max_context_tokens": 2000 } },
-    "hold_transfer":              { "description": "Hold-and-consultative-transfer config. Enables the hold_and_consult built-in handler which places the inbound caller on hold and dials a third-party number.", "example": { "telephony_number_id": "eb0df4e9-a438-4ce4-a828-addf9db5ce3a", "hold_music": "on-hold-ringtone", "hold_timeout_seconds": 180, "summarize": true, "hold_music_volume": 0.4 } },
-    "evaluator_config":           { "description": "LLM-as-judge evaluator names to run for calls using this template. Null or empty means run all configured evaluators ('ALL_EVALS' tag).", "example": ["coherence", "task_completion", "empathy"] },
-    "state_reducers":             { "description": "Rules that extract values from tool-call results and store them in per-session state (agent_session_state.data). Each rule names one tool and a map of state_key → JMESPath expression. Pairs with tool_arg_injection.", "example": [{ "tool_name": "update_cart", "set_paths": { "cart_id": "cart.id", "checkout_url": "cart.checkout_url" }, "only_on_success": true }] },
-    "observers":                  { "description": "Real-time side-LLM observers that watch the conversation transcript in parallel with the main pipeline and run a FlowAction when they detect a problem (voicemail, hallucination, abuse). Each observer defines a name, system_prompt, tool definitions, the pipeline events that trigger it, an optional per-observer LLM override (inherits llm_configurations otherwise), and the action to run on detection.", "example": [{ "name": "voicemail_detector", "system_prompt": "Watch the transcript. If it looks like a voicemail or answering-machine greeting, call flag_voicemail.", "tools": [{ "name": "flag_voicemail", "description": "Call when voicemail is detected.", "properties": { "reason": { "type": "string" } }, "required": ["reason"] }], "trigger_on": ["on_user_turn_message_added"], "start_after_turn": 0, "action": { "type": "end_conversation" } }] },
-    "tool_arg_injection":         { "description": "Rules that automatically inject session-state values or generated values into outgoing tool call arguments. The companion to state_reducers.", "example": [{ "tool_name": "update_cart", "set_paths": { "cart_id": "state.data.cart_id" }, "generators": { "idempotency_key": "uuid_v4" }, "only_if_missing": true }] },
-    "ui_catalog":                 { "description": "Selects which generative-UI primitives the LLM may emit and the Buddy Assist widget will render. Resolution: enabled_groups + enabled_primitives − disabled_primitives.", "example": { "enabled_groups": ["core", "composite"], "enabled_primitives": [], "disabled_primitives": [] } },
-    "client_context":             { "description": "Policy for client-pushed context updates via the /widget/session/{id}/context channel. Allowlists which state/facts keys the storefront embed may write. state_allowlist: keys merged into agent session state (read by tool_arg_injection). facts_allowlist: keys rendered as ambient context the LLM reasons over. Empty allowlists = feature inert.", "example": { "state_allowlist": ["cart_id"], "facts_allowlist": ["cart_summary", "current_page"], "max_bytes": 4096, "render": true, "facts_placement": "user_tail", "trusted_facts": [] } },
-    "quick_replies":              { "description": "Quick-reply chicklet buttons shown on widget open. Each entry has 'label' (button text) and optional 'value' (payload sent to backend; defaults to label). Empty list = no chicklets, normal text composer shown.", "example": [{ "label": "Track my order", "value": "I want to track my order" }, { "label": "Cancel order" }] },
-    "enable_text_input":          { "description": "Whether the free-text composer is visible to the user. Default true. Set false to restrict input to quick-reply buttons only (bot-driven or menu-style flows).", "example": true },
-    "wake_phrase":                { "description": "Require the user to say a trigger phrase before the bot responds. Useful for IVR-style consent flows. phrases: list of accepted trigger words. single_activation: if true, phrase required only once per session.", "example": { "enabled": true, "phrases": ["yes", "haan", "confirm"], "timeout": 10.0, "single_activation": true } }
+    "llm_configurations": {
+      "description": "LLM provider, model, and inference parameters. Always set provider=azure and model=gpt-4.1-mini unless a different LLM is explicitly required.",
+      "example": {
+        "provider": "azure",
+        "model": "gpt-4.1-mini"
+      }
+    },
+    "stt_configuration": {
+      "description": "STT provider, language(s), and provider-specific config. Use provider=deepgram for English-only; provider=soniox with enable_language_identification=true for Hindi, South Indian languages, or any multilingual combination.",
+      "example": {
+        "provider": "soniox",
+        "language": [
+          "en",
+          "hi"
+        ],
+        "soniox": {
+          "enable_language_identification": true
+        }
+      }
+    },
+    "tts_configuration": {
+      "description": "Primary TTS provider, voice ID, model, and audio parameters. Use provider=elevenlabs for English/Hindi/North Indian templates. Use provider=cartesia as the base for South Indian or mixed-region templates.",
+      "example": {
+        "provider": "elevenlabs",
+        "voice_id": "iB2rIwm9cQCRGWoKDRtX",
+        "model": "eleven_flash_v2_5",
+        "speed": 1.0,
+        "language": "en"
+      }
+    },
+    "tts_configuration_overrides": {
+      "description": "Per-provider TTS config overrides keyed by provider name. Used with tts_selection_config to route callers to the right TTS at runtime. The 'provider' field inside each entry is auto-filled from the key — do not repeat it.",
+      "example": {
+        "elevenlabs": {
+          "voice_id": "iB2rIwm9cQCRGWoKDRtX",
+          "model": "eleven_flash_v2_5",
+          "speed": 1.0,
+          "language": "en"
+        }
+      }
+    },
+    "tts_selection_config": {
+      "description": "LLM-based dynamic TTS provider selection driven by a field in the lead payload (typically delivery address). When enabled, Gemini picks one of the listed providers. Use for mixed North+South India templates.",
+      "example": {
+        "enabled": true,
+        "prompt": "Determine the TTS provider from the customer's delivery address. Reply 'elevenlabs' for North/Hindi-English regions, reply 'cartesia' for South Indian regions. Default to 'cartesia'. Respond with exactly one word.",
+        "providers": [
+          "elevenlabs",
+          "cartesia"
+        ]
+      }
+    },
+    "initial_greeting": {
+      "description": "Fixed spoken text at the very start of every outbound call, before the LLM takes over. Supports {variable} placeholders. Must sound natural when spoken — no markdown, symbols, or bullet points.",
+      "example": "Hi {customer_name}, this is Aria calling from {merchant_name}. I'm reaching out about your order #{order_id}. Do you have a moment?"
+    },
+    "user_idle_configuration": {
+      "description": "Handles user silence. After `timeout` seconds of quiet the LLM receives `idle_message` to re-engage. After `max_retries` consecutive idle events the call ends with a BUSY outcome.",
+      "example": {
+        "enabled": true,
+        "timeout": 7.0,
+        "idle_message": "The user has been silent. Check if they are still on the call.",
+        "max_retries": 2
+      }
+    },
+    "noise_filter": {
+      "description": "Processes incoming audio before VAD and STT. New configurations use provider='aic' with model='noise_cancellation' or model='voice_focus'. Existing configurations using type='aic' or type='aic_voice_focus' remain supported without being rewritten.",
+      "example": {
+        "enable": true,
+        "provider": "aic",
+        "model": "voice_focus",
+        "enhancement_level": 0.5
+      }
+    },
+    "client_noise_cancellation": {
+      "description": "Browser-side (Daily Krisp) noise cancellation for web voice sessions. null/true = ON (platform default), false = opt out. Returned to web clients on the /connect response as `noise_cancellation`; echo cancellation is always forced client-side and has no knob.",
+      "example": false
+    },
+    "keyword_filter": {
+      "description": "Suppresses short STT filler transcriptions (e.g. 'hmm', 'ok') produced while the bot is speaking, preventing false interruption triggers.",
+      "example": {
+        "enabled": true,
+        "keywords": [
+          "hmm",
+          "hm",
+          "ok",
+          "okay",
+          "yes",
+          "hello",
+          "hi",
+          "yeah"
+        ],
+        "match_type": "exact"
+      }
+    },
+    "interruption": {
+      "description": "Controls whether the user can interrupt the bot mid-sentence. mode='enabled' allows interruptions (default). mode='disabled_discard' silently drops user speech during bot playback. min_words prevents single-word fillers from cutting the bot off.",
+      "example": {
+        "mode": "enabled",
+        "min_words": 2
+      }
+    },
+    "vad_config": {
+      "description": "Template-level Voice Activity Detection tuning. Overrides global VAD defaults. Useful when the caller environment has unusual audio characteristics.",
+      "example": {
+        "confidence": 0.7,
+        "start_secs": 0.2,
+        "stop_secs": 0.8,
+        "min_volume": 0.1
+      }
+    },
+    "enable_background_sound": {
+      "description": "When true, plays a looping ambient sound during the call. Requires background_sound_file.",
+      "example": false
+    },
+    "background_sound_file": {
+      "description": "Which ambient sound clip to loop when enable_background_sound is true. Currently the only available value is 'office-ambience'.",
+      "example": "office-ambience"
+    },
+    "background_sound_volume": {
+      "description": "Volume multiplier for the ambient background sound (0.0 = silent, default 2.0).",
+      "example": 2.0
+    },
+    "ivr_configuration": {
+      "description": "IVR settings for inbound phone-menu templates. Preferred over the deprecated ivr_greeting / ivr_goodbye / ivr_priority flat fields.",
+      "example": {
+        "greeting": "Welcome. Press 1 for order queries, press 2 for billing.",
+        "goodbye": "We did not receive your selection. Goodbye.",
+        "priority": 1
+      }
+    },
+    "ivr_greeting": {
+      "description": "DEPRECATED — use ivr_configuration.greeting instead. IVR greeting text played when an inbound caller reaches this template.",
+      "example": "Welcome. Press 1 for English, press 2 for Hindi."
+    },
+    "ivr_goodbye": {
+      "description": "DEPRECATED — use ivr_configuration.goodbye instead. Message played when the inbound caller provides no DTMF input.",
+      "example": "We did not receive your selection. Goodbye."
+    },
+    "ivr_priority": {
+      "description": "DEPRECATED — use ivr_configuration.priority instead. Ordering priority for this template in the IVR menu (lower = presented earlier).",
+      "example": 1
+    },
+    "transfer_number": {
+      "description": "E.164 phone number to transfer the call to. Used in warm-transfer flows where the AI hands off to a human agent.",
+      "example": "+919876543210"
+    },
+    "enable_mpc_transfer": {
+      "description": "Plivo only. When false (default), warm transfer uses the legacy immediate bridge: the customer is connected to the agent at once, the bot disconnects, and nothing is returned to the LLM. When true, uses dial-first MultiPartyCall: the agent is dialled first while the customer stays with the bot, and if the agent does not answer the AI resumes the conversation. Requires the template prompt to handle a resumed-after-failed-transfer turn.",
+      "example": false
+    },
+    "enable_inbound": {
+      "description": "When true, this template is eligible to handle inbound calls. Typically paired with ivr_configuration.",
+      "example": false
+    },
+    "mcp": {
+      "description": "MCP (Model Context Protocol) server configuration. Enables dynamic tool discovery at session start — the agent connects to listed MCP servers and receives available tools before the first LLM turn.",
+      "example": {
+        "servers": [
+          {
+            "name": "order-tools",
+            "url": "https://api.example.com/mcp",
+            "auth": {
+              "type": "bearer",
+              "token": "{api_token}"
+            }
+          }
+        ]
+      }
+    },
+    "knowledge_base": {
+      "description": "Knowledge base (RAG) attachment — grounds the agent in the merchant's uploaded documents/sheets. mode selects how content reaches the LLM: 'auto' (default) injects the whole KB into the prompt when it fits full_injection_token_threshold and otherwise retrieves per user turn; 'full_injection' and 'auto_retrieve' force those behaviors; 'tool' instead exposes a query_knowledge_base function (name/description overridable via tool_name/tool_description) the LLM calls explicitly. 'auto'/'auto_retrieve' are rejected on realtime (speech-to-speech) LLM templates. Retrieval is always fail-open — on timeout/error the turn proceeds without KB context.",
+      "example": {
+        "enabled": true,
+        "knowledge_base_ids": [
+          "3f2b8c1a-9d4e-4f6b-8a2c-1e5d7f9b0c3d"
+        ],
+        "mode": "auto",
+        "top_k": 5,
+        "max_context_tokens": 2000
+      }
+    },
+    "hold_transfer": {
+      "description": "Hold-and-consultative-transfer config. Enables the hold_and_consult built-in handler which places the inbound caller on hold and dials a third-party number.",
+      "example": {
+        "telephony_number_id": "eb0df4e9-a438-4ce4-a828-addf9db5ce3a",
+        "hold_music": "on-hold-ringtone",
+        "hold_timeout_seconds": 180,
+        "summarize": true,
+        "hold_music_volume": 0.4
+      }
+    },
+    "evaluator_config": {
+      "description": "LLM-as-judge evaluator names to run for calls using this template. Null or empty means run all configured evaluators ('ALL_EVALS' tag).",
+      "example": [
+        "coherence",
+        "task_completion",
+        "empathy"
+      ]
+    },
+    "state_reducers": {
+      "description": "Rules that extract values from tool-call results and store them in per-session state (agent_session_state.data). Each rule names one tool and a map of state_key → JMESPath expression. Pairs with tool_arg_injection.",
+      "example": [
+        {
+          "tool_name": "update_cart",
+          "set_paths": {
+            "cart_id": "cart.id",
+            "checkout_url": "cart.checkout_url"
+          },
+          "only_on_success": true
+        }
+      ]
+    },
+    "observers": {
+      "description": "Real-time side-LLM observers that watch the conversation transcript in parallel with the main pipeline and run a FlowAction when they detect a problem (voicemail, hallucination, abuse). Each observer defines a name, system_prompt, tool definitions, the pipeline events that trigger it, an optional per-observer LLM override (inherits llm_configurations otherwise), and the action to run on detection.",
+      "example": [
+        {
+          "name": "voicemail_detector",
+          "system_prompt": "Watch the transcript. If it looks like a voicemail or answering-machine greeting, call flag_voicemail.",
+          "tools": [
+            {
+              "name": "flag_voicemail",
+              "description": "Call when voicemail is detected.",
+              "properties": {
+                "reason": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "reason"
+              ]
+            }
+          ],
+          "trigger_on": [
+            "on_user_turn_message_added"
+          ],
+          "start_after_turn": 0,
+          "action": {
+            "type": "end_conversation"
+          }
+        }
+      ]
+    },
+    "tool_arg_injection": {
+      "description": "Rules that automatically inject session-state values or generated values into outgoing tool call arguments. The companion to state_reducers.",
+      "example": [
+        {
+          "tool_name": "update_cart",
+          "set_paths": {
+            "cart_id": "state.data.cart_id"
+          },
+          "generators": {
+            "idempotency_key": "uuid_v4"
+          },
+          "only_if_missing": true
+        }
+      ]
+    },
+    "ui_catalog": {
+      "description": "Selects which generative-UI primitives the LLM may emit and the Buddy Assist widget will render. Resolution: enabled_groups + enabled_primitives − disabled_primitives.",
+      "example": {
+        "enabled_groups": [
+          "core",
+          "composite"
+        ],
+        "enabled_primitives": [],
+        "disabled_primitives": []
+      }
+    },
+    "client_context": {
+      "description": "Policy for client-pushed context updates via the /widget/session/{id}/context channel. Allowlists which state/facts keys the storefront embed may write. state_allowlist: keys merged into agent session state (read by tool_arg_injection). facts_allowlist: keys rendered as ambient context the LLM reasons over. Empty allowlists = feature inert.",
+      "example": {
+        "state_allowlist": [
+          "cart_id"
+        ],
+        "facts_allowlist": [
+          "cart_summary",
+          "current_page"
+        ],
+        "max_bytes": 4096,
+        "render": true,
+        "facts_placement": "user_tail",
+        "trusted_facts": []
+      }
+    },
+    "quick_replies": {
+      "description": "Quick-reply chicklet buttons shown on widget open. Each entry has 'label' (button text) and optional 'value' (payload sent to backend; defaults to label). Empty list = no chicklets, normal text composer shown.",
+      "example": [
+        {
+          "label": "Track my order",
+          "value": "I want to track my order"
+        },
+        {
+          "label": "Cancel order"
+        }
+      ]
+    },
+    "enable_text_input": {
+      "description": "Whether the free-text composer is visible to the user. Default true. Set false to restrict input to quick-reply buttons only (bot-driven or menu-style flows).",
+      "example": true
+    },
+    "wake_phrase": {
+      "description": "Require the user to say a trigger phrase before the bot responds. Useful for IVR-style consent flows. phrases: list of accepted trigger words. single_activation: if true, phrase required only once per session.",
+      "example": {
+        "enabled": true,
+        "phrases": [
+          "yes",
+          "haan",
+          "confirm"
+        ],
+        "timeout": 10.0,
+        "single_activation": true
+      }
+    },
+    "intent_tools": {
+      "description": "Per-template overrides for the tool names, state keys, labels, and URLs a flavor's DIRECT intent executors use (RFC-001 §3.3 Stage B). Role → value maps; unset roles keep the flavor's defaults (commerce: create_cart/update_cart/get_cart, cart_id/checkout_url, 'Review and checkout'). urls.checkout_page (optional) fixes the CartView checkout button's destination — e.g. the storefront /cart page, which the cart-cookie sync populates — instead of the cart tool's checkout-bound continue_url.",
+      "example": {
+        "tools": {
+          "create_cart": "create_cart",
+          "update_cart": "update_cart",
+          "get_cart": "get_cart"
+        },
+        "state_keys": {
+          "cart_id": "cart_id",
+          "checkout_url": "checkout_url"
+        },
+        "labels": {
+          "checkout": "Review and checkout"
+        }
+      }
+    },
+    "tool_annotations": {
+      "description": "Tool-name → safety annotation ('read_only' | 'idempotent' | 'destructive') overrides. Precedence: this map > flavor registry defaults > 'destructive'. read_only calls from one LLM cycle dispatch in parallel; everything else stays serialized.",
+      "example": {
+        "search_catalog": "read_only",
+        "update_cart": "idempotent"
+      }
+    },
+    "parallel_read_only": {
+      "description": "Kill-switch for the read-only parallel fan-out. Absent/true = a cycle whose tool calls are ALL read_only dispatches concurrently; false = strictly sequential.",
+      "example": true
+    },
+    "render_ui_tool": {
+      "description": "RFC-002: expose the render_ui function tool on chat catalog-v2 sessions — UI authoring via function calling instead of the in-band <ui_stream> text protocol (server dual-reads text ops during migration). Absent/false = text channel only.",
+      "example": true
+    },
+    "render_ui_force_after": {
+      "description": "Tool names whose successful result forces a render_ui call on the next LLM cycle (mode=ANY; {decision:'no_ui', reason} is a legal payload). Absent = ['search_catalog'].",
+      "example": [
+        "search_catalog"
+      ]
+    },
+    "plan_enforcement": {
+      "description": "RFC-002 Decision 4: constrain cycles of a declared <plan> (2+ steps) to the current step's tool + revise_plan, verifier-gated completion, revise required after a failed retry. Single-tool turns exempt. Absent/false = plans stay advisory.",
+      "example": true
+    },
+    "trusted_link_urls": {
+      "description": "URL allowlist for the LinkButton component (exact-match), e.g. the storefront cart URL. A LinkButton url must match one of these OR appear verbatim in the current turn's tool results — the model selects links, never authors them.",
+      "example": [
+        "https://www.thebeyondbound.com/cart"
+      ]
+    },
+    "quick_replies_mode": {
+      "description": "Placement policy for the LLM QuickReplies component on render_ui sessions (distinct from quick_replies, the static widget-open chicklets). Absent/'model_choice' = model renders chips whenever it judges they help. 'forced_final' = chips banned mid-turn; one extra forced render_ui cycle after the final reply decides QuickReplies (2-5 follow-ups) or no_ui — chips always paint below the prose. 'off' = QuickReplies never render.",
+      "example": "forced_final"
+    },
+    "greeting_tiles": {
+      "description": "Visual quick-tap tiles on the widget's greeting screen (below the initial greeting): image + label cards that send a configured prompt as the user's message when tapped (label becomes the visible bubble, mirroring quick_replies semantics). 3-4 recommended, playful tilted rendering; images from the merchant's CDN — no catalog fetch, no hydration. Empty list = no tiles.",
+      "example": [
+        {
+          "label": "HIIT ready",
+          "prompt": "Show me gear for HIIT",
+          "image_url": "https://cdn.example.com/hiit.jpg"
+        }
+      ]
+    }
   },
-
   "FlowNodeModel": {
-    "node_name":       { "description": "Unique name for this node. Used in 'transition_to' and 'initial_node' references. Use snake_case (e.g. 'greeting', 'confirm_details').", "example": "greeting" },
-    "task_messages":   { "description": "LLM context messages for this node. Typically a single system-role message with instructions. Supports {variable} placeholders resolved from the payload at call time.", "example": [{ "role": "system", "content": "You are Aria calling {customer_name}. If they confirm → call confirm_order. If busy → call customer_busy." }] },
-    "role_messages":   { "description": "Additional context prepended before task_messages. Use for a static persona or preamble shared across nodes. Leave empty if all instructions fit in task_messages.", "example": [{ "role": "system", "content": "You are a polite and professional customer service agent." }] },
-    "pre_actions":     { "description": "Actions executed once at node entry before any LLM inference. Use to speak a pre-scripted TTS line or invoke a side-effect without the LLM. See FlowAction.", "example": [{ "type": "tts_say", "text": "Please hold while I pull up your details." }] },
-    "post_actions":    { "description": "Actions executed after the node's LLM turn completes. Use for clean-up side-effects at node exit. See FlowAction.", "example": [{ "type": "function", "handler": "update_payload", "args": { "visited_greeting": true } }] },
-    "functions":       { "description": "Tools the LLM may call while in this node. Each entry is a FlowFunction. The LLM must call one to trigger a side-effect or node transition.", "example": [{ "name": "confirm_order", "description": "Customer confirms delivery.", "transition_to": "confirm_details", "hooks": [{ "name": "update_outcome_in_database", "expected_fields": { "outcome": { "source": "static", "value": "CONFIRMED" } } }] }] },
-    "vad_config":      { "description": "Node-specific VAD tuning overriding the template-level vad_config for this node only.", "example": { "stop_secs": 1.2, "min_volume": 0.05 } },
-    "interruption":    { "description": "Node-specific interruption config overriding the template-level setting for this node only.", "example": { "mode": "disabled_discard" } },
-    "input_collection": { "description": "Enables multi-segment input collection for nodes where users dictate long sequences (phone numbers, addresses). Increases user_speech_timeout so natural mid-utterance pauses don't prematurely end the turn.", "example": { "enabled": true, "user_speech_timeout": 3.0 } }
+    "node_name": {
+      "description": "Unique name for this node. Used in 'transition_to' and 'initial_node' references. Use snake_case (e.g. 'greeting', 'confirm_details').",
+      "example": "greeting"
+    },
+    "task_messages": {
+      "description": "LLM context messages for this node. Typically a single system-role message with instructions. Supports {variable} placeholders resolved from the payload at call time.",
+      "example": [
+        {
+          "role": "system",
+          "content": "You are Aria calling {customer_name}. If they confirm → call confirm_order. If busy → call customer_busy."
+        }
+      ]
+    },
+    "role_messages": {
+      "description": "Additional context prepended before task_messages. Use for a static persona or preamble shared across nodes. Leave empty if all instructions fit in task_messages.",
+      "example": [
+        {
+          "role": "system",
+          "content": "You are a polite and professional customer service agent."
+        }
+      ]
+    },
+    "pre_actions": {
+      "description": "Actions executed once at node entry before any LLM inference. Use to speak a pre-scripted TTS line or invoke a side-effect without the LLM. See FlowAction.",
+      "example": [
+        {
+          "type": "tts_say",
+          "text": "Please hold while I pull up your details."
+        }
+      ]
+    },
+    "post_actions": {
+      "description": "Actions executed after the node's LLM turn completes. Use for clean-up side-effects at node exit. See FlowAction.",
+      "example": [
+        {
+          "type": "function",
+          "handler": "update_payload",
+          "args": {
+            "visited_greeting": true
+          }
+        }
+      ]
+    },
+    "functions": {
+      "description": "Tools the LLM may call while in this node. Each entry is a FlowFunction. The LLM must call one to trigger a side-effect or node transition.",
+      "example": [
+        {
+          "name": "confirm_order",
+          "description": "Customer confirms delivery.",
+          "transition_to": "confirm_details",
+          "hooks": [
+            {
+              "name": "update_outcome_in_database",
+              "expected_fields": {
+                "outcome": {
+                  "source": "static",
+                  "value": "CONFIRMED"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "vad_config": {
+      "description": "Node-specific VAD tuning overriding the template-level vad_config for this node only.",
+      "example": {
+        "stop_secs": 1.2,
+        "min_volume": 0.05
+      }
+    },
+    "interruption": {
+      "description": "Node-specific interruption config overriding the template-level setting for this node only.",
+      "example": {
+        "mode": "disabled_discard"
+      }
+    },
+    "input_collection": {
+      "description": "Enables multi-segment input collection for nodes where users dictate long sequences (phone numbers, addresses). Increases user_speech_timeout so natural mid-utterance pauses don't prematurely end the turn.",
+      "example": {
+        "enabled": true,
+        "user_speech_timeout": 3.0
+      }
+    }
   },
-
   "FlowFunction": {
-    "name":          { "description": "Function name exposed to the LLM. Unique within the node. The builder also accepts the legacy key 'function_name' interchangeably.", "example": "confirm_order" },
-    "description":   { "description": "LLM-facing description of when to call this function. Be specific about the condition (e.g. 'Customer explicitly agrees to receive the delivery' not just 'Customer says yes').", "example": "Customer explicitly confirms they will accept the COD delivery at their address." },
-    "properties":    { "description": "JSON Schema properties dict for LLM arguments. Use sparingly — prefer static hook values over having the LLM generate data.", "example": { "reason": { "type": "string", "description": "Reason for refusal as stated by the customer" } } },
-    "required":      { "description": "Property names the LLM must supply. Should match keys in hook expected_fields with source='llm'.", "example": ["reason"] },
-    "transition_to": { "description": "Node to transition to after this function is called. Terminal outcomes (BUSY, CANCELLED, NOT_INTERESTED, RESOLVED, TRANSFERRED, etc.) MUST use 'end_conversation_node'. Use null only to stay in the current node (e.g. a retry loop).", "example": "end_conversation_node" },
-    "hooks":         { "description": "Side-effect hooks to fire on function call. Execute before the node transition. See HookConfig.", "example": [{ "name": "update_outcome_in_database", "expected_fields": { "outcome": { "source": "static", "value": "CONFIRMED" } } }] }
+    "name": {
+      "description": "Function name exposed to the LLM. Unique within the node. The builder also accepts the legacy key 'function_name' interchangeably.",
+      "example": "confirm_order"
+    },
+    "description": {
+      "description": "LLM-facing description of when to call this function. Be specific about the condition (e.g. 'Customer explicitly agrees to receive the delivery' not just 'Customer says yes').",
+      "example": "Customer explicitly confirms they will accept the COD delivery at their address."
+    },
+    "properties": {
+      "description": "JSON Schema properties dict for LLM arguments. Use sparingly — prefer static hook values over having the LLM generate data.",
+      "example": {
+        "reason": {
+          "type": "string",
+          "description": "Reason for refusal as stated by the customer"
+        }
+      }
+    },
+    "required": {
+      "description": "Property names the LLM must supply. Should match keys in hook expected_fields with source='llm'.",
+      "example": [
+        "reason"
+      ]
+    },
+    "transition_to": {
+      "description": "Node to transition to after this function is called. Terminal outcomes (BUSY, CANCELLED, NOT_INTERESTED, RESOLVED, TRANSFERRED, etc.) MUST use 'end_conversation_node'. Use null only to stay in the current node (e.g. a retry loop).",
+      "example": "end_conversation_node"
+    },
+    "hooks": {
+      "description": "Side-effect hooks to fire on function call. Execute before the node transition. See HookConfig.",
+      "example": [
+        {
+          "name": "update_outcome_in_database",
+          "expected_fields": {
+            "outcome": {
+              "source": "static",
+              "value": "CONFIRMED"
+            }
+          }
+        }
+      ]
+    }
   },
-
   "RequestFlowFunction": {
-    "function_name": { "description": "Function name — same as FlowFunction.name but uses the key 'function_name'. The builder normalises this to 'name' at call time. Prefer 'name' in new templates; this form is for legacy compatibility.", "example": "confirm_order" },
-    "description":   { "description": "Same as FlowFunction.description — LLM-facing description of when to call this function.", "example": "Customer explicitly confirms they will accept the COD delivery." },
-    "properties":    { "description": "Same as FlowFunction.properties — JSON Schema properties dict for LLM arguments.", "example": {} },
-    "required":      { "description": "Same as FlowFunction.required — required property names.", "example": [] },
-    "transition_to": { "description": "Same as FlowFunction.transition_to — use 'end_conversation_node' for terminal outcomes, another node name to route forward, or null to stay in current node.", "example": "end_conversation_node" },
-    "hooks":         { "description": "Same as FlowFunction.hooks — side-effect hooks to fire on call. See HookConfig.", "example": [] }
+    "function_name": {
+      "description": "Function name — same as FlowFunction.name but uses the key 'function_name'. The builder normalises this to 'name' at call time. Prefer 'name' in new templates; this form is for legacy compatibility.",
+      "example": "confirm_order"
+    },
+    "description": {
+      "description": "Same as FlowFunction.description — LLM-facing description of when to call this function.",
+      "example": "Customer explicitly confirms they will accept the COD delivery."
+    },
+    "properties": {
+      "description": "Same as FlowFunction.properties — JSON Schema properties dict for LLM arguments.",
+      "example": {}
+    },
+    "required": {
+      "description": "Same as FlowFunction.required — required property names.",
+      "example": []
+    },
+    "transition_to": {
+      "description": "Same as FlowFunction.transition_to — use 'end_conversation_node' for terminal outcomes, another node name to route forward, or null to stay in current node.",
+      "example": "end_conversation_node"
+    },
+    "hooks": {
+      "description": "Same as FlowFunction.hooks — side-effect hooks to fire on call. See HookConfig.",
+      "example": []
+    }
   },
-
   "HookConfig": {
-    "name":             { "description": "Registered hook handler name. Available: 'update_outcome_in_database' (writes call outcome to leads table), 'send_http_request' (outbound HTTP POST), 'end_conversation' (terminates the call).", "example": "update_outcome_in_database" },
-    "expected_fields":  { "description": "Map of field_name → FieldConfig for the hook's inputs. source='static': fixed value or {template_var}. source='llm': value from LLM function call arguments. source='computed': runtime expression (e.g. 'utc_now_minus_hours:1').", "example": { "outcome": { "source": "static", "value": "CONFIRMED" }, "order_id": { "source": "static", "value": "{order_id}" }, "reason": { "source": "llm", "value": "cancellation_reason" } } },
-    "http_request":     { "description": "HTTP request config used only when name='send_http_request'. Specifies the URL, method, headers, auth, and body for the outbound fire-and-forget call.", "example": { "url": "https://api.example.com/webhook", "method": "POST", "headers": { "Content-Type": "application/json" }, "body": { "event": "order_confirmed", "order_id": "{order_id}" } } },
-    "awaited":          { "description": "When true, the pipeline waits for this hook to complete before continuing. Default false (fire-and-forget).", "example": false }
+    "name": {
+      "description": "Registered hook handler name. Available: 'update_outcome_in_database' (writes call outcome to leads table), 'send_http_request' (outbound HTTP POST), 'end_conversation' (terminates the call).",
+      "example": "update_outcome_in_database"
+    },
+    "expected_fields": {
+      "description": "Map of field_name → FieldConfig for the hook's inputs. source='static': fixed value or {template_var}. source='llm': value from LLM function call arguments. source='computed': runtime expression (e.g. 'utc_now_minus_hours:1').",
+      "example": {
+        "outcome": {
+          "source": "static",
+          "value": "CONFIRMED"
+        },
+        "order_id": {
+          "source": "static",
+          "value": "{order_id}"
+        },
+        "reason": {
+          "source": "llm",
+          "value": "cancellation_reason"
+        }
+      }
+    },
+    "http_request": {
+      "description": "HTTP request config used only when name='send_http_request'. Specifies the URL, method, headers, auth, and body for the outbound fire-and-forget call.",
+      "example": {
+        "url": "https://api.example.com/webhook",
+        "method": "POST",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "event": "order_confirmed",
+          "order_id": "{order_id}"
+        }
+      }
+    },
+    "awaited": {
+      "description": "When true, the pipeline waits for this hook to complete before continuing. Default false (fire-and-forget).",
+      "example": false
+    }
   },
-
   "BaseGlobalFunction": {
-    "type":                  { "description": "Function type: 'http' (outbound HTTP/SSE call), 'builtin' (internal handler), 'custom' (user Python code). Required.", "example": "http" },
-    "name":                  { "description": "Function name exposed to the LLM. Must be unique across all global functions in the template.", "example": "check_order_status" },
-    "description":           { "description": "LLM-facing description of what this function does and when to call it.", "example": "Check the real-time status of a customer order using the order ID." },
-    "properties":            { "description": "JSON Schema properties dict for the arguments the LLM must supply.", "example": { "order_id": { "type": "string", "description": "The order ID to look up" } } },
-    "required":              { "description": "Property names the LLM must supply when calling this function.", "example": ["order_id"] },
-    "filler_audio":          { "description": "Audio to play while this function is executing. 'filler_phrases' speaks a TTS phrase; 'background_music' loops ambient audio. Reduces perceived latency for slow operations.", "example": { "filler_phrases": { "phrases": ["Let me check that for you.", "One moment please."], "order": "random", "speed": 1.0 } } },
-    "pre_actions":           { "description": "Actions before the handler runs. JSON key 'pre_actions' (Python alias for func_pre_actions). See FlowAction.", "example": [{ "type": "tts_say", "text": "Let me look that up for you." }] },
-    "post_actions":          { "description": "Actions after the handler completes. JSON key 'post_actions' (Python alias for func_post_actions). See FlowAction.", "example": [] },
-    "cancel_on_interruption": { "description": "false (http default): LLM keeps talking while the function runs. true (builtin default): LLM waits for the function. null = use type default. Override per-function only when the type default is wrong.", "example": null },
-    "timeout_secs":          { "description": "Per-function timeout override in seconds. Null uses the LLM service's global default. Set for known-slow functions (e.g. SSE streaming).", "example": 30.0 },
-    "response_transforms":   { "description": "In-place transforms applied to the tool result before the LLM sees it. Each entry is a registered transform name. Applied after expected_response_schema projection.", "example": [] },
-    "approval":              { "description": "Require human approval before this function executes (HITL). Presence gates the call: in chat the turn pauses at the gated call and resumes on the approval endpoint; in Daily voice the handler waits on an in-process approval; telephony falls back to on_no_channel. Omit to execute immediately.", "example": { "prompt": "Approve issuing a refund of {amount} to {customer}?", "voice_announce": "I need your approval to issue this refund.", "timeout_secs": 120, "chat_expiry_secs": 3600, "on_no_channel": "execute" } }
+    "type": {
+      "description": "Function type: 'http' (outbound HTTP/SSE call), 'builtin' (internal handler), 'custom' (user Python code). Required.",
+      "example": "http"
+    },
+    "name": {
+      "description": "Function name exposed to the LLM. Must be unique across all global functions in the template.",
+      "example": "check_order_status"
+    },
+    "description": {
+      "description": "LLM-facing description of what this function does and when to call it.",
+      "example": "Check the real-time status of a customer order using the order ID."
+    },
+    "properties": {
+      "description": "JSON Schema properties dict for the arguments the LLM must supply.",
+      "example": {
+        "order_id": {
+          "type": "string",
+          "description": "The order ID to look up"
+        }
+      }
+    },
+    "required": {
+      "description": "Property names the LLM must supply when calling this function.",
+      "example": [
+        "order_id"
+      ]
+    },
+    "filler_audio": {
+      "description": "Audio to play while this function is executing. 'filler_phrases' speaks a TTS phrase; 'background_music' loops ambient audio. Reduces perceived latency for slow operations.",
+      "example": {
+        "filler_phrases": {
+          "phrases": [
+            "Let me check that for you.",
+            "One moment please."
+          ],
+          "order": "random",
+          "speed": 1.0
+        }
+      }
+    },
+    "pre_actions": {
+      "description": "Actions before the handler runs. JSON key 'pre_actions' (Python alias for func_pre_actions). See FlowAction.",
+      "example": [
+        {
+          "type": "tts_say",
+          "text": "Let me look that up for you."
+        }
+      ]
+    },
+    "post_actions": {
+      "description": "Actions after the handler completes. JSON key 'post_actions' (Python alias for func_post_actions). See FlowAction.",
+      "example": []
+    },
+    "cancel_on_interruption": {
+      "description": "false (http default): LLM keeps talking while the function runs. true (builtin default): LLM waits for the function. null = use type default. Override per-function only when the type default is wrong.",
+      "example": null
+    },
+    "timeout_secs": {
+      "description": "Per-function timeout override in seconds. Null uses the LLM service's global default. Set for known-slow functions (e.g. SSE streaming).",
+      "example": 30.0
+    },
+    "response_transforms": {
+      "description": "In-place transforms applied to the tool result before the LLM sees it. Each entry is a registered transform name. Applied after expected_response_schema projection.",
+      "example": []
+    },
+    "approval": {
+      "description": "Require human approval before this function executes (HITL). Presence gates the call: in chat the turn pauses at the gated call and resumes on the approval endpoint; in Daily voice the handler waits on an in-process approval; telephony falls back to on_no_channel. Omit to execute immediately.",
+      "example": {
+        "prompt": "Approve issuing a refund of {amount} to {customer}?",
+        "voice_announce": "I need your approval to issue this refund.",
+        "timeout_secs": 120,
+        "chat_expiry_secs": 3600,
+        "on_no_channel": "execute"
+      }
+    }
   },
-
   "GlobalHttpFunction": {
     "_parent": "BaseGlobalFunction",
-    "expected_fields":          { "description": "Map of field_name → FieldConfig defining how to resolve each HTTP request input. source='llm' pulls from LLM arguments; source='static' uses a fixed value or {template_var}; source='computed' evaluates a runtime expression.", "example": { "order_id": { "source": "llm", "value": "order_id" }, "api_key": { "source": "static", "value": "{order_api_key}" } } },
-    "http_request":             { "description": "Full HTTP request spec: URL, method, headers, auth, body, timeout, max_retries. {placeholder} tokens in URL/headers/body are resolved from expected_fields at call time. SSE endpoints (text/event-stream) are handled automatically.", "example": { "url": "https://api.example.com/orders/{order_id}", "method": "GET", "auth": { "type": "bearer", "token": "{api_key}" }, "timeout": 10, "max_retries": 3 } },
-    "sse_response_handler":     { "description": "How to package an SSE event stream for the LLM. mode='full' (default): all event data joined with newlines. mode='select': only the event at select_index (0=first, -1=last). Null = use default (full).", "example": { "mode": "select", "select_index": -1 } },
-    "expected_response_schema": { "description": "JMESPath projection applied to the HTTP response before the LLM sees it. Dict of {output_key: jmespath_expr}. Use 'full' to pass the entire response. Empty dict (default) passes full response but does NOT store in node traversal.", "example": { "status": "orderStatus", "eta": "delivery.estimatedDate", "items": "items[*].name" } },
-    "ui_hint":                  { "description": "Optional JIT UI authoring guidance (Sidekick pattern) spliced into this function's result before the LLM sees it — the Global-HTTP counterpart of an MCP tool's ui instructions. Injected under _ui_instructions / _ui_examples / _ui_skip by the shared result pipeline per the hint's trigger (on_success / on_any / skip_ui). Null (default) means no UI hint.", "example": { "trigger": "on_success", "instructions": "Render the order as a Card with status and ETA." } }
+    "expected_fields": {
+      "description": "Map of field_name → FieldConfig defining how to resolve each HTTP request input. source='llm' pulls from LLM arguments; source='static' uses a fixed value or {template_var}; source='computed' evaluates a runtime expression.",
+      "example": {
+        "order_id": {
+          "source": "llm",
+          "value": "order_id"
+        },
+        "api_key": {
+          "source": "static",
+          "value": "{order_api_key}"
+        }
+      }
+    },
+    "http_request": {
+      "description": "Full HTTP request spec: URL, method, headers, auth, body, timeout, max_retries. {placeholder} tokens in URL/headers/body are resolved from expected_fields at call time. SSE endpoints (text/event-stream) are handled automatically.",
+      "example": {
+        "url": "https://api.example.com/orders/{order_id}",
+        "method": "GET",
+        "auth": {
+          "type": "bearer",
+          "token": "{api_key}"
+        },
+        "timeout": 10,
+        "max_retries": 3
+      }
+    },
+    "sse_response_handler": {
+      "description": "How to package an SSE event stream for the LLM. mode='full' (default): all event data joined with newlines. mode='select': only the event at select_index (0=first, -1=last). Null = use default (full).",
+      "example": {
+        "mode": "select",
+        "select_index": -1
+      }
+    },
+    "expected_response_schema": {
+      "description": "JMESPath projection applied to the HTTP response before the LLM sees it. Dict of {output_key: jmespath_expr}. Use 'full' to pass the entire response. Empty dict (default) passes full response but does NOT store in node traversal.",
+      "example": {
+        "status": "orderStatus",
+        "eta": "delivery.estimatedDate",
+        "items": "items[*].name"
+      }
+    },
+    "ui_hint": {
+      "description": "Optional JIT UI authoring guidance (Sidekick pattern) spliced into this function's result before the LLM sees it — the Global-HTTP counterpart of an MCP tool's ui instructions. Injected under _ui_instructions / _ui_examples / _ui_skip by the shared result pipeline per the hint's trigger (on_success / on_any / skip_ui). Null (default) means no UI hint.",
+      "example": {
+        "trigger": "on_success",
+        "instructions": "Render the order as a Card with status and ETA."
+      }
+    }
   },
-
   "GlobalBuiltinFunction": {
     "_parent": "BaseGlobalFunction",
-    "handler":          { "description": "Key in the builtin handler registry. Common values: 'end_conversation' (ends the call), 'connect_to_live_agent' (warm transfer), 'get_current_time' (returns UTC timestamp), 'hold_and_consult' (places caller on hold).", "example": "end_conversation" },
-    "pre_tts_message":  { "description": "TTS text to speak and wait for before the handler executes. Useful for handlers that terminate the pipeline (e.g. transfer) where the LLM's utterance might get cut off mid-sentence.", "example": "Please hold while I connect you to an agent." },
-    "agent_transfer":   { "description": "Agent-to-agent transfer config. Only read when handler is 'connect_to_agent'. targets allow-lists alias -> target template_id (the LLM picks an alias, never a raw id); max_transfers bounds A->B->A ping-pong; context_mode controls what the next agent inherits (summary | full | fresh). Triggers a full pipeline rebuild — new prompts, tools, STT/TTS/LLM.", "example": { "targets": { "sales": "3f1c2d9a-1111-2222-3333-444455556666", "support": "8a4b7e21-1111-2222-3333-444455556666" }, "max_transfers": 5, "context_mode": "summary" } }
+    "handler": {
+      "description": "Key in the builtin handler registry. Common values: 'end_conversation' (ends the call), 'connect_to_live_agent' (warm transfer), 'get_current_time' (returns UTC timestamp), 'hold_and_consult' (places caller on hold).",
+      "example": "end_conversation"
+    },
+    "pre_tts_message": {
+      "description": "TTS text to speak and wait for before the handler executes. Useful for handlers that terminate the pipeline (e.g. transfer) where the LLM's utterance might get cut off mid-sentence.",
+      "example": "Please hold while I connect you to an agent."
+    },
+    "agent_transfer": {
+      "description": "Agent-to-agent transfer config. Only read when handler is 'connect_to_agent'. targets allow-lists alias -> target template_id (the LLM picks an alias, never a raw id); max_transfers bounds A->B->A ping-pong; context_mode controls what the next agent inherits (summary | full | fresh). Triggers a full pipeline rebuild — new prompts, tools, STT/TTS/LLM.",
+      "example": {
+        "targets": {
+          "sales": "3f1c2d9a-1111-2222-3333-444455556666",
+          "support": "8a4b7e21-1111-2222-3333-444455556666"
+        },
+        "max_transfers": 5,
+        "context_mode": "summary"
+      }
+    }
   },
-
   "GlobalCustomFunction": {
     "_parent": "BaseGlobalFunction",
-    "python_code":      { "description": "Python source string. Must define a top-level 'handler(args, context)' function. 'args' is the dict of LLM-provided arguments; 'context' has 'lead', 'call_sid', 'lead_id'. Must return a JSON-serializable value.", "example": "def handler(args, context):\n    count = int(args.get('order_count', 0))\n    return {'tier': 'gold' if count > 50 else 'bronze'}" },
-    "timeout_seconds":  { "description": "Wall-time execution limit per invocation in seconds (1–30, default 5). Exceeded invocations are cancelled and the LLM receives an error result.", "example": 5 }
+    "python_code": {
+      "description": "Python source string. Must define a top-level 'handler(args, context)' function. 'args' is the dict of LLM-provided arguments; 'context' has 'lead', 'call_sid', 'lead_id'. Must return a JSON-serializable value.",
+      "example": "def handler(args, context):\n    count = int(args.get('order_count', 0))\n    return {'tier': 'gold' if count > 50 else 'bronze'}"
+    },
+    "timeout_seconds": {
+      "description": "Wall-time execution limit per invocation in seconds (1–30, default 5). Exceeded invocations are cancelled and the LLM receives an error result.",
+      "example": 5
+    }
   },
-
   "FlowAction": {
-    "type":    { "description": "Action type: 'tts_say' — speak 'text' via TTS immediately; 'end_conversation' — terminate the call pipeline; 'function' — invoke a named handler from FUNC_POST_ACTION_HANDLERS.", "example": "tts_say" },
-    "text":    { "description": "TTS text to speak. Required when type='tts_say'. Supports {variable} placeholders. Must sound natural — no markdown, symbols, or bullets.", "example": "Thank you for confirming. Our delivery agent will arrive soon. Have a great day!" },
-    "handler": { "description": "Handler name to invoke. Required when type='function'. Must be a key in FUNC_POST_ACTION_HANDLERS (currently: 'update_payload').", "example": "update_payload" },
-    "args":    { "description": "Arguments dict passed to the handler. Required when type='function'. Structure depends on the specific handler.", "example": { "status": "visited", "node": "greeting" } }
+    "type": {
+      "description": "Action type: 'tts_say' — speak 'text' via TTS immediately; 'end_conversation' — terminate the call pipeline; 'function' — invoke a named handler from FUNC_POST_ACTION_HANDLERS.",
+      "example": "tts_say"
+    },
+    "text": {
+      "description": "TTS text to speak. Required when type='tts_say'. Supports {variable} placeholders. Must sound natural — no markdown, symbols, or bullets.",
+      "example": "Thank you for confirming. Our delivery agent will arrive soon. Have a great day!"
+    },
+    "handler": {
+      "description": "Handler name to invoke. Required when type='function'. Must be a key in FUNC_POST_ACTION_HANDLERS (currently: 'update_payload').",
+      "example": "update_payload"
+    },
+    "args": {
+      "description": "Arguments dict passed to the handler. Required when type='function'. Structure depends on the specific handler.",
+      "example": {
+        "status": "visited",
+        "node": "greeting"
+      }
+    }
   },
-
   "TaskMessage": {
-    "role":    { "description": "Message role. Use 'system' for instructions. Use 'user' or 'assistant' only to inject synthetic conversation turns (rare — only for few-shot examples within a node's prompt).", "example": "system" },
-    "content": { "description": "Message text. For role='system', write the node's LLM instructions here. Supports {variable} placeholders resolved from the call payload at runtime.", "example": "You are confirming COD order #{order_id} for {customer_name}. If they agree → call confirm_order. If busy → call customer_busy. If cancelling → call cancel_order." }
+    "role": {
+      "description": "Message role. Use 'system' for instructions. Use 'user' or 'assistant' only to inject synthetic conversation turns (rare — only for few-shot examples within a node's prompt).",
+      "example": "system"
+    },
+    "content": {
+      "description": "Message text. For role='system', write the node's LLM instructions here. Supports {variable} placeholders resolved from the call payload at runtime.",
+      "example": "You are confirming COD order #{order_id} for {customer_name}. If they agree → call confirm_order. If busy → call customer_busy. If cancelling → call cancel_order."
+    }
   },
-
   "sample_template": {
     "_description": "Complete working example — COD order confirmation, Hindi+English, cartesia base TTS with ElevenLabs override for North India, tts_selection_config driven by delivery address.",
     "name": "COD Order Confirmation – Hindi+English",
@@ -171,30 +916,73 @@
               "description": "Customer confirms they are available and willing to accept the delivery.",
               "transition_to": "confirm_address",
               "hooks": [
-                { "name": "update_outcome_in_database", "expected_fields": { "outcome": { "source": "static", "value": "CONFIRMED" } } }
+                {
+                  "name": "update_outcome_in_database",
+                  "expected_fields": {
+                    "outcome": {
+                      "source": "static",
+                      "value": "CONFIRMED"
+                    }
+                  }
+                }
               ]
             },
             {
               "name": "customer_busy",
               "description": "Customer is busy and cannot talk right now.",
               "hooks": [
-                { "name": "update_outcome_in_database", "expected_fields": { "outcome": { "source": "static", "value": "BUSY" } } }
+                {
+                  "name": "update_outcome_in_database",
+                  "expected_fields": {
+                    "outcome": {
+                      "source": "static",
+                      "value": "BUSY"
+                    }
+                  }
+                }
               ]
             },
             {
               "name": "cancel_order",
               "description": "Customer wants to cancel the order.",
-              "properties": { "reason": { "type": "string", "description": "Reason for cancellation as stated by the customer" } },
-              "required": ["reason"],
+              "properties": {
+                "reason": {
+                  "type": "string",
+                  "description": "Reason for cancellation as stated by the customer"
+                }
+              },
+              "required": [
+                "reason"
+              ],
               "hooks": [
-                { "name": "update_outcome_in_database", "expected_fields": { "outcome": { "source": "static", "value": "CANCELLED" }, "cancellation_reason": { "source": "llm", "value": "reason" } } }
+                {
+                  "name": "update_outcome_in_database",
+                  "expected_fields": {
+                    "outcome": {
+                      "source": "static",
+                      "value": "CANCELLED"
+                    },
+                    "cancellation_reason": {
+                      "source": "llm",
+                      "value": "reason"
+                    }
+                  }
+                }
               ]
             },
             {
               "name": "reschedule_delivery",
               "description": "Customer wants to reschedule the delivery.",
               "hooks": [
-                { "name": "update_outcome_in_database", "expected_fields": { "outcome": { "source": "static", "value": "RESCHEDULED" } } }
+                {
+                  "name": "update_outcome_in_database",
+                  "expected_fields": {
+                    "outcome": {
+                      "source": "static",
+                      "value": "RESCHEDULED"
+                    }
+                  }
+                }
               ]
             }
           ]
@@ -212,23 +1000,44 @@
               "name": "address_confirmed",
               "description": "Customer confirms the delivery address is correct.",
               "pre_actions": [
-                { "type": "tts_say", "text": "Wonderful! Your order is confirmed. Our delivery agent will arrive at your address soon. Thank you and have a great day!" }
+                {
+                  "type": "tts_say",
+                  "text": "Wonderful! Your order is confirmed. Our delivery agent will arrive at your address soon. Thank you and have a great day!"
+                }
               ],
               "hooks": [
-                { "name": "update_outcome_in_database", "expected_fields": { "outcome": { "source": "static", "value": "CONFIRMED" } } }
+                {
+                  "name": "update_outcome_in_database",
+                  "expected_fields": {
+                    "outcome": {
+                      "source": "static",
+                      "value": "CONFIRMED"
+                    }
+                  }
+                }
               ]
             },
             {
               "name": "address_incorrect",
               "description": "Customer says the delivery address is incorrect or needs updating.",
               "hooks": [
-                { "name": "update_outcome_in_database", "expected_fields": { "outcome": { "source": "static", "value": "ADDRESS_UPDATE" } } }
+                {
+                  "name": "update_outcome_in_database",
+                  "expected_fields": {
+                    "outcome": {
+                      "source": "static",
+                      "value": "ADDRESS_UPDATE"
+                    }
+                  }
+                }
               ]
             }
           ]
         }
       ],
-      "end_conversation_callbacks": ["service_callback"]
+      "end_conversation_callbacks": [
+        "service_callback"
+      ]
     },
     "expected_payload_schema": {
       "customer_mobile_number": {},
@@ -239,21 +1048,69 @@
       "delivery_address": {}
     },
     "configurations": {
-      "llm_configurations": { "provider": "azure", "model": "gpt-4.1-mini" },
-      "stt_configuration": { "provider": "soniox", "language": ["en", "hi"], "soniox": { "enable_language_identification": true } },
-      "tts_configuration": { "provider": "cartesia", "voice_id": "a167e0f3-df7e-4d52-a786-6f69d05e5b73", "model": "sonic-2", "language": "hi", "speed": 1.0 },
+      "llm_configurations": {
+        "provider": "azure",
+        "model": "gpt-4.1-mini"
+      },
+      "stt_configuration": {
+        "provider": "soniox",
+        "language": [
+          "en",
+          "hi"
+        ],
+        "soniox": {
+          "enable_language_identification": true
+        }
+      },
+      "tts_configuration": {
+        "provider": "cartesia",
+        "voice_id": "a167e0f3-df7e-4d52-a786-6f69d05e5b73",
+        "model": "sonic-2",
+        "language": "hi",
+        "speed": 1.0
+      },
       "tts_configuration_overrides": {
-        "elevenlabs": { "voice_id": "iB2rIwm9cQCRGWoKDRtX", "model": "eleven_flash_v2_5", "speed": 1.0, "language": "en" }
+        "elevenlabs": {
+          "voice_id": "iB2rIwm9cQCRGWoKDRtX",
+          "model": "eleven_flash_v2_5",
+          "speed": 1.0,
+          "language": "en"
+        }
       },
       "tts_selection_config": {
         "enabled": true,
         "prompt": "Determine the TTS provider from the customer's delivery address. Reply 'elevenlabs' for North/Hindi-English regions (Delhi, Haryana, UP, Rajasthan, Gujarat, Maharashtra, Bihar, Uttar Pradesh etc.), reply 'cartesia' for South Indian regions (Karnataka, Tamil Nadu, Kerala, Andhra Pradesh, Telangana). Default to 'cartesia'. Respond with exactly one word.",
-        "providers": ["elevenlabs", "cartesia"]
+        "providers": [
+          "elevenlabs",
+          "cartesia"
+        ]
       },
       "initial_greeting": "Namaste {customer_name} ji, main {merchant_name} ki taraf se Aria bol rahi hoon. Aapke ek Cash on Delivery order #{order_id} ke regarding call kar rahi hoon jiska amount ₹{order_amount} hai. Kya aap abhi baat kar sakte hain?",
-      "user_idle_configuration": { "enabled": true, "timeout": 7.0, "idle_message": "The user has been silent. Politely check if they are still on the call and re-ask the last question.", "max_retries": 2 },
-      "keyword_filter": { "enabled": true, "keywords": ["hmm", "hm", "ok", "okay", "yes", "hello", "hi", "haan", "acha"], "match_type": "exact" },
-      "interruption": { "mode": "enabled", "min_words": 2 }
+      "user_idle_configuration": {
+        "enabled": true,
+        "timeout": 7.0,
+        "idle_message": "The user has been silent. Politely check if they are still on the call and re-ask the last question.",
+        "max_retries": 2
+      },
+      "keyword_filter": {
+        "enabled": true,
+        "keywords": [
+          "hmm",
+          "hm",
+          "ok",
+          "okay",
+          "yes",
+          "hello",
+          "hi",
+          "haan",
+          "acha"
+        ],
+        "match_type": "exact"
+      },
+      "interruption": {
+        "mode": "enabled",
+        "min_words": 2
+      }
     }
   }
 }

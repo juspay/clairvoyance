@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 
-from app.ai.voice.agents.breeze_buddy.chat.ui_stream import (
+from app.ai.voice.agents.breeze_buddy.chat.ui.stream import (
     expand_compact_line,
     expand_compact_op,
     expand_repeat_line,

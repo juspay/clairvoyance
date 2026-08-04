@@ -21,7 +21,7 @@ import json
 import logging
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
-from app.ai.voice.agents.breeze_buddy.chat.ui_stream import HealerResult
+from app.ai.voice.agents.breeze_buddy.chat.ui.stream import HealerResult
 from app.ai.voice.agents.breeze_buddy.template.ui_catalog import (
     UI_CATALOG,
     is_known_type,

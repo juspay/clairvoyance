@@ -759,6 +759,27 @@ class FillerAudioConfig(BaseModel):
         return self
 
 
+class GreetingTileOption(BaseModel):
+    """One visual quick-tap tile on the widget's greeting screen
+    (2026-08-03) — an image-backed sibling of QuickReplyOption.
+
+    Rendered as a small playful card (image + label) below the initial
+    greeting; tapping it sends ``prompt`` as the user's message (the
+    label is the visible bubble text, mirroring chicklet semantics).
+    Purely template-authored: images come from the merchant's CDN, no
+    catalog fetch, no hydration."""
+
+    label: str = Field(..., min_length=1, description="Tile caption shown to the user.")
+    prompt: str = Field(
+        ...,
+        min_length=1,
+        description="Message sent to the agent when the tile is tapped.",
+    )
+    image_url: str = Field(
+        ..., min_length=1, description="Tile image (merchant CDN, https)."
+    )
+
+
 class QuickReplyOption(BaseModel):
     """One quick-reply chicklet shown to the user on widget open.
 
@@ -1275,6 +1296,59 @@ class UiCatalogConfig(BaseModel):
     )
 
 
+class IntentToolsConfig(BaseModel):
+    """Per-template overrides for flavor intent executors (RFC-001 §3.3
+    Stage B).
+
+    Generic role → value mappings — the Python engine knows nothing about
+    which roles exist; each flavor defines its own roles and falls back to
+    its built-in defaults for any role the template leaves unset. The
+    commerce flavor's roles::
+
+        "configurations": {
+            "intent_tools": {
+                "tools": {
+                    "create_cart": "create_cart",
+                    "update_cart": "update_cart",
+                    "get_cart": "get_cart"
+                },
+                "state_keys": {
+                    "cart_id": "cart_id",
+                    "checkout_url": "checkout_url"
+                },
+                "labels": {"checkout": "Review and checkout"}
+            }
+        }
+
+    Lets a merchant whose MCP exposes differently-named cart tools (or
+    whose reducers persist different state keys) run the same DIRECT
+    intent executors without code changes.
+    """
+
+    tools: Dict[str, str] = Field(
+        default_factory=dict,
+        description="Flavor tool role → actual tool name on this template's "
+        "MCP/function surface.",
+    )
+    state_keys: Dict[str, str] = Field(
+        default_factory=dict,
+        description="Flavor state role → agent_session_state key (must match "
+        "this template's state_reducers output).",
+    )
+    labels: Dict[str, str] = Field(
+        default_factory=dict,
+        description="Flavor label role → display string (e.g. the checkout "
+        "button label on the server-authored CartView).",
+    )
+    urls: Dict[str, str] = Field(
+        default_factory=dict,
+        description="Flavor URL role → fixed URL. Commerce: 'checkout_page' "
+        "overrides the CartView checkout button's destination (e.g. the "
+        "storefront /cart page) instead of the cart tool's checkout-bound "
+        "continue_url; unset keeps continue_url.",
+    )
+
+
 class StateReducer(BaseModel):
     """One per-tool rule that maps a tool result onto session state.
 
@@ -1628,6 +1702,95 @@ class ConfigurationModel(BaseModel):
             "section. When absent, defaults to enabling the 'core' group."
         ),
     )
+    intent_tools: Optional["IntentToolsConfig"] = Field(
+        None,
+        description=(
+            "Optional. Per-template overrides for the tool names, state "
+            "keys, and labels a flavor's DIRECT intent executors use "
+            "(RFC-001 §3.3 Stage B). Absent = each flavor's built-in "
+            "defaults (commerce: create_cart/update_cart/get_cart, "
+            "cart_id/checkout_url, 'Review and checkout')."
+        ),
+    )
+    tool_annotations: Optional[Dict[str, str]] = Field(
+        None,
+        description=(
+            "Optional. Per-template tool-name → safety annotation "
+            "('read_only' | 'idempotent' | 'destructive') overrides. "
+            "Precedence: this map > flavor registry defaults > "
+            "'destructive'. read_only tool calls from one LLM cycle "
+            "dispatch in parallel; everything else stays serialized."
+        ),
+    )
+    parallel_read_only: Optional[bool] = Field(
+        None,
+        description=(
+            "Optional kill-switch for the read-only parallel fan-out. "
+            "Absent/true = a cycle whose tool calls are ALL read_only "
+            "dispatches them concurrently; false = strictly sequential "
+            "(pre-Phase-2 behavior)."
+        ),
+    )
+    render_ui_tool: Optional[bool] = Field(
+        None,
+        description=(
+            "RFC-002: expose the render_ui function tool on chat catalog-v2 "
+            "sessions — UI authoring via function calling instead of the "
+            "in-band <ui_stream> text protocol. The server keeps accepting "
+            "text-channel show ops (dual-read) during migration. Absent/"
+            "false = text channel only (fleet default)."
+        ),
+    )
+    render_ui_force_after: Optional[List[str]] = Field(
+        None,
+        description=(
+            "RFC-002 Decision 2 ('force to THINK, not to always SHOW'): "
+            "tool names whose successful result forces a render_ui call on "
+            "the NEXT LLM cycle (mode=ANY; {decision:'no_ui', reason} is a "
+            "legal payload). Absent = ['search_catalog']. Only meaningful "
+            "with render_ui_tool=true."
+        ),
+    )
+    plan_enforcement: Optional[bool] = Field(
+        None,
+        description=(
+            "RFC-002 Decision 4: when the model declares a <plan> (2+ "
+            "steps), constrain each cycle's callable functions to the "
+            "current step's tool + revise_plan, gate step-completion on "
+            "the deterministic verifiers, and require revise_plan after a "
+            "retry fails. Single-tool turns are exempt by construction. "
+            "Absent/false = plans stay advisory (UX skeleton only)."
+        ),
+    )
+    trusted_link_urls: Optional[List[str]] = Field(
+        None,
+        description=(
+            "URL allowlist for the LinkButton component (exact-match), "
+            "e.g. the storefront checkout/cart URL. A LinkButton url is "
+            "accepted only if it matches one of these OR appears verbatim "
+            "in the current turn's tool results — the model selects "
+            "links, it never authors them. Only meaningful on commerce "
+            "catalog-v2 templates with render_ui_tool=true."
+        ),
+    )
+    quick_replies_mode: Optional[Literal["model_choice", "forced_final", "off"]] = (
+        Field(
+            None,
+            description=(
+                "Placement policy for the LLM QuickReplies component on "
+                "render_ui sessions (distinct from `quick_replies`, the "
+                "static widget-open chicklets). Absent/'model_choice' = the "
+                "model may render QuickReplies whenever it judges chips "
+                "help (today's behavior). 'forced_final' = QuickReplies are "
+                "banned mid-turn; after the turn's final reply ONE extra "
+                "forced render_ui cycle runs whose only legal outcomes are "
+                "QuickReplies (2-5 follow-ups grounded in the reply) or "
+                "decision='no_ui' — chips always paint and persist BELOW "
+                "the prose. 'off' = QuickReplies never render. Only "
+                "meaningful with render_ui_tool=true."
+            ),
+        )
+    )
 
     # --- STT (provider + turn detection) ---
     stt_configuration: Optional[STTConfiguration] = Field(
@@ -1716,6 +1879,14 @@ class ConfigurationModel(BaseModel):
         description=(
             "Quick-reply chicklet buttons shown to the user on widget open. "
             "Empty list = no chicklets, normal composer shown."
+        ),
+    )
+    greeting_tiles: List[GreetingTileOption] = Field(
+        default_factory=list,
+        description=(
+            "Visual quick-tap tiles (image + label → prompt) on the widget's "
+            "greeting screen, below the initial greeting. 3-4 recommended; "
+            "empty list = no tiles."
         ),
     )
     enable_text_input: bool = Field(

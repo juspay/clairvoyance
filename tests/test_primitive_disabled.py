@@ -9,7 +9,7 @@ but NOT enabled for the template. The error reason must be distinct from
 
 from __future__ import annotations
 
-from app.ai.voice.agents.breeze_buddy.chat.ui_stream import parse_op_line
+from app.ai.voice.agents.breeze_buddy.chat.ui.stream import parse_op_line
 
 # Load template package first to avoid circular-import trap on first import
 # of chat/* (mirrors test_ui_stream + test_session_state).

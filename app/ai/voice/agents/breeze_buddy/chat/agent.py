@@ -15,7 +15,11 @@ from typing import Any, AsyncIterator, Dict, List, Optional, Set, Tuple, cast
 
 from pipecat.adapters.schemas.tools_schema import ToolsSchema
 from pipecat.frames.frames import FunctionCallFromLLM
-from pipecat.processors.aggregators.llm_context import LLMContext, LLMContextMessage
+from pipecat.processors.aggregators.llm_context import (
+    LLMContext,
+    LLMContextMessage,
+    LLMSpecificMessage,
+)
 from pipecat_flows import FlowsFunctionSchema
 
 from app.ai.voice.agents.breeze_buddy.chat.client_context import (
@@ -30,18 +34,56 @@ from app.ai.voice.agents.breeze_buddy.chat.history.block_codec import (
     tool_results_to_user_blocks,
 )
 from app.ai.voice.agents.breeze_buddy.chat.llm import driver as llm_driver
-from app.ai.voice.agents.breeze_buddy.chat.sse import SSEEvent
-from app.ai.voice.agents.breeze_buddy.chat.tool_result_normalizer import normalize
-from app.ai.voice.agents.breeze_buddy.chat.ui_healer import (
+from app.ai.voice.agents.breeze_buddy.chat.llm.gemini.signatures import (
+    gemini_signature_blocks,
+)
+from app.ai.voice.agents.breeze_buddy.chat.sse import (
+    SSEEvent,
+    plan_event,
+    step_completed_event,
+    step_started_event,
+)
+from app.ai.voice.agents.breeze_buddy.chat.steps.enforcer import PlanEnforcer
+from app.ai.voice.agents.breeze_buddy.chat.steps.labels import (
+    resolve_step_label,
+    resolve_step_status,
+    summarize_step_result,
+)
+from app.ai.voice.agents.breeze_buddy.chat.steps.plan import PlanExtractor
+from app.ai.voice.agents.breeze_buddy.chat.steps.verification import (
+    run_tool_verifiers,
+    verification_error_envelope,
+)
+from app.ai.voice.agents.breeze_buddy.chat.tools.annotations import is_read_only
+from app.ai.voice.agents.breeze_buddy.chat.tools.result_annotators import (
+    run_result_annotators,
+)
+from app.ai.voice.agents.breeze_buddy.chat.tools.result_normalizer import normalize
+from app.ai.voice.agents.breeze_buddy.chat.ui.binding import (
+    BindingStore,
+    resolve_show_op,
+)
+from app.ai.voice.agents.breeze_buddy.chat.ui.healer import (
     HealerContext,
     make_healer_fn,
 )
-from app.ai.voice.agents.breeze_buddy.chat.ui_stream import (
+from app.ai.voice.agents.breeze_buddy.chat.ui.render_ui_tool import (
+    RENDER_UI_TOOL_NAME,
+    REVISE_PLAN_TOOL_NAME,
+    build_render_ui_schema,
+    build_revise_plan_schema,
+    execute_render_ui,
+    render_ui_components,
+    summarize_render,
+)
+from app.ai.voice.agents.breeze_buddy.chat.ui.stream import (
+    ShowResolverFn,
     TextOut,
     UiStreamExtractor,
     process_op_line,
     strip_ui_stream_markers,
     summarize_ui_ops,
+    ui_op_dropped_event,
 )
 from app.ai.voice.agents.breeze_buddy.mcp import (
     MCPPool,
@@ -63,7 +105,11 @@ from app.ai.voice.agents.breeze_buddy.template.session_state import (
     inject_tool_args,
 )
 from app.ai.voice.agents.breeze_buddy.template.types import TemplateModel
-from app.ai.voice.agents.breeze_buddy.template.ui_catalog import resolve_allowlist
+from app.ai.voice.agents.breeze_buddy.template.ui_catalog import (
+    CATALOG_VERSION_V2,
+    data_bound_names,
+    resolve_allowlist,
+)
 from app.ai.voice.agents.breeze_buddy.template.utils import render_messages_with_vars
 from app.ai.voice.agents.breeze_buddy.utils.language_utils.prompt_injections import (
     inject_language_rules,
@@ -88,6 +134,34 @@ from app.schemas.breeze_buddy.chat import ChatMessageRole, ToolApproval
 # stops re-searching what it already found, which keeps real turns well under
 # this ceiling; 20 is headroom, not a target.
 _MAX_TOOL_CYCLES = 20
+
+# The forced final chips cycle's user-role nudge (quick_replies=
+# 'forced_final'). It rides an internal USER row so live context and
+# next-turn replay stay identical AND user/model alternation holds around
+# the chips function call (Vertex rejects consecutive model contents);
+# widget-facing read paths filter internal blocks, so it never shows.
+_CHIPS_NUDGE = (
+    "(final check: call render_ui with quick_replies=[2-4 SHORT follow-ups "
+    "(<=4 words each) grounded in your reply], or decision='no_ui'. Never "
+    "duplicate an action already available on UI rendered this turn — "
+    "cards already carry Add to cart / View.)"
+)
+
+
+def _chip_labels(raw: Any) -> List[str]:
+    """Lift a `quick_replies` arg (strings canonical; {'label': …} dicts
+    tolerated) into clean labels — same tolerance as execute_render_ui's
+    extraction, kept tiny here for the rider-harvest path."""
+    if not isinstance(raw, list):
+        return []
+    labels: List[str] = []
+    for entry in raw:
+        if isinstance(entry, str) and entry.strip():
+            labels.append(entry.strip())
+        elif isinstance(entry, dict) and isinstance(entry.get("label"), str):
+            if entry["label"].strip():
+                labels.append(entry["label"].strip())
+    return labels[:5]
 
 
 def _partition_gated_calls(
@@ -162,6 +236,7 @@ class ChatAgent:
         template_vars: Optional[dict] = None,
         agent_state: Optional[Dict[str, Any]] = None,
         context_placement: Optional[str] = None,
+        catalog_version: Optional[str] = None,
     ) -> None:
         self.session_id = session_id
         self.template = template
@@ -214,6 +289,11 @@ class ChatAgent:
         # assistant text. Each complete JSONL line inside the marker is
         # healed (S1.2) → catalog-validated → emitted as a `ui_op` SSE event.
         self._ui_extractor = UiStreamExtractor()
+        # Plan-as-emission (Phase 2): strips <plan>["tool",…]</plan>
+        # declarations from the prose stream → plan_started/plan_updated
+        # SSE. Counter distinguishes the first declaration from revisions.
+        self._plan_extractor = PlanExtractor()
+        self._plans_emitted = 0
         # Session-wide UI tree id registry. The healer uses this to detect
         # duplicate ids (and rename to ``id__2`` / ``id__3``). Across-turn
         # persistence is deferred until session UI state hydration ships
@@ -236,6 +316,22 @@ class ChatAgent:
             )
         else:
             self._ui_allowlist = resolve_allowlist()
+        # Catalog-version negotiation (RFC-001 §3.4). Only sessions that
+        # declared "v2" at create time may see data-bound components: on a
+        # v1 (or unversioned / voice) session they're pruned from the
+        # allowlist, which simultaneously (a) keeps the "Data-bound
+        # components" prompt subsection out of the system prompt, (b) drops
+        # LLM `show` ops with `show_component_disabled`, and (c) leaves v1
+        # templates rendering exactly as before (no prompt regression).
+        self._catalog_v2 = catalog_version == CATALOG_VERSION_V2
+        if not self._catalog_v2:
+            self._ui_allowlist -= data_bound_names()
+        # Per-turn record of successful post-pipeline tool results, keyed
+        # (tool_name, tool_use_id) — what `show`-op bindings resolve
+        # against. Populated in _cycle_loop after each ungated dispatch;
+        # a fresh agent per turn means the store can never leak stale
+        # results across turns (the UI-freshness invariant, RFC-001 §8).
+        self._binding_store = BindingStore()
         # HITL: chat gates approval pre-dispatch (Pattern B — the turn ends
         # at the gated call; the decision arrives on the dedicated approval
         # endpoint). This flag makes the voice in-handler gate
@@ -250,6 +346,87 @@ class ChatAgent:
         self.handles_state_externally = True
         # function name -> ApprovalConfig for every gated global function.
         self._approval_map = build_approval_map(self.template.flow or {})
+        # Internal AGENT_TURN intent turn (IntentPolicy.internal — e.g.
+        # enrich_product's overlay blurb): every row this turn persists is
+        # visibility=internal (content=None, internal text blocks, no
+        # ui_blocks) and no user_committed fires. The live SSE stream is
+        # unchanged — the widget owns routing. Set per-turn by run_turn.
+        self._internal_turn = False
+        # --- RFC-002: render_ui function tool + forced think-step + plan
+        # enforcement. All template-gated; fleet templates without the flags
+        # behave exactly as before.
+        configurations = self.template.configurations
+        self._render_ui_enabled = (
+            bool(getattr(configurations, "render_ui_tool", None)) and self._catalog_v2
+        )
+        force_after = getattr(configurations, "render_ui_force_after", None)
+        self._render_ui_force_after: Set[str] = set(force_after or ["search_catalog"])
+        # LinkButton URL allowlist (template config) — the other trusted
+        # source is THIS turn's tool results, checked at execute time.
+        self._trusted_link_urls: Set[str] = set(
+            getattr(configurations, "trusted_link_urls", None) or []
+        )
+        self._plan_enforcement = bool(getattr(configurations, "plan_enforcement", None))
+        self._plan_enforcer = PlanEnforcer()
+        self._plan_known_tools: Set[str] = set()
+        # Handler → cycle-loop hand-off (tool handlers cannot yield SSE):
+        # hydrated render_ui ops + companion events (ui_decision,
+        # plan_updated) drain right after the dispatching call completes.
+        self._pending_ui_ops: List[Dict[str, Any]] = []
+        self._pending_tool_sse: List[SSEEvent] = []
+        # Hydrated render_ui ops awaiting persistence — held until the
+        # turn's USER-FACING row (gate rows skip them via include_tool_ops=
+        # False), then cleared, so resume repaints them exactly once.
+        self._unpersisted_tool_ui_ops: List[Dict[str, Any]] = []
+        # The turn's rendered ProductGrid op (first one wins). A SECOND
+        # ProductGrid render this turn merges into it value-level — one
+        # combined product display per turn, never stacked surfaces.
+        self._turn_grid_op: Optional[Dict[str, Any]] = None
+        # First rendered op of a turn anchors the widget's per-turn UI tree
+        # as id="root"; later ops parent under it (ui_state.svelte.ts).
+        self._turn_rendered_root = False
+        self._rui_seq = 0
+        # Forced think-step state: a successful force_after tool arms it;
+        # a VALID render_ui payload (rendered or no_ui) disarms it.
+        self._need_render_ui_think = False
+        self._force_retry_used = False
+        # LLM QuickReplies placement policy (template `quick_replies_mode`;
+        # distinct from `quick_replies`, the static widget-open chicklets):
+        # 'forced_final' bans mid-turn QuickReplies and appends ONE forced
+        # render_ui cycle after the turn's final prose — the chips slot
+        # accepts QuickReplies or no_ui only, so chips always paint (and
+        # persist) BELOW the reply. 'off' removes the component entirely.
+        # Absent/'model_choice' = today's behavior.
+        self._quick_replies_mode: str = (
+            getattr(configurations, "quick_replies_mode", None) or "model_choice"
+        )
+        # Forced final chips-cycle state (all per-turn):
+        # _chips_pending    — the NEXT cycle is (or the current cycle IS)
+        #                     the forced chips cycle; cleared by a resolved
+        #                     outcome (QuickReplies rendered / no_ui) or by
+        #                     the give-up paths.
+        # _chips_attempted  — chips entry happened this turn (one-shot).
+        # _chips_cycles     — forced chips cycles consumed (hard bound: 2 —
+        #                     one shot + one structured-error correction).
+        # _in_chips_cycle   — cycle-scoped marker the render_ui handler
+        #                     reads to apply the chips-slot restriction.
+        self._chips_pending = False
+        self._chips_attempted = False
+        self._chips_cycles = 0
+        self._in_chips_cycle = False
+        self._quick_replies_rendered = False
+        # _turn_prose_streamed — visible prose reached the client this turn.
+        # _suppress_extra_prose — set when a chips-only call was harvested
+        #   AFTER prose already streamed: the reply is delivered, so any
+        #   FURTHER prose the model generates before turn end is duplicate
+        #   sign-off and gets dropped (the old ban's error text bred a
+        #   rephrased duplicate greeting — live 2026-07-31).
+        # _held_chips — rider-harvested quick replies (chips attached to a
+        #   mid-turn render_ui call, or a chips-only call): flushed below
+        #   the final prose at turn end, skipping the forced chips cycle.
+        self._turn_prose_streamed = False
+        self._suppress_extra_prose = False
+        self._held_chips: Optional[List[str]] = None
 
     async def run_turn(
         self,
@@ -257,6 +434,7 @@ class ChatAgent:
         user_content: str,
         history: List[Dict[str, Any]],
         current_node: Optional[str],
+        internal: bool = False,
     ) -> AsyncIterator[SSEEvent]:
         # Per-turn aiohttp session for global HTTP function calls. Created
         # lazily, closed in finally below so the ClientSession's TCP
@@ -273,6 +451,7 @@ class ChatAgent:
         # turn gets a fresh uuid → different key → upstream treats it
         # as a new operation even with identical args.
         self._turn_id = uuid.uuid4().hex
+        self._internal_turn = internal
         try:
             async for event in self._run_turn_inner(
                 user_content=user_content,
@@ -300,17 +479,30 @@ class ChatAgent:
         # Persist user message before the LLM call so a crash mid-stream
         # still leaves the user's input in history. We also write the
         # canonical Anthropic-shape [text] block so the loader has a
-        # single source of truth on the next turn.
-        user_msg = await insert_chat_message(
-            session_id=self.session_id,
-            role=ChatMessageRole.USER,
-            content=user_content,
-            content_blocks=plain_text_blocks(user_content),
-        )
-        yield SSEEvent(
-            event="user_committed",
-            data={"idx": user_msg.idx if user_msg else None, "content": user_content},
-        )
+        # single source of truth on the next turn. Internal turns persist
+        # the instruction as an internal-only block (resume replay skips
+        # the row; the LLM still sees it) and commit nothing to the wire.
+        if self._internal_turn:
+            await insert_chat_message(
+                session_id=self.session_id,
+                role=ChatMessageRole.USER,
+                content=None,
+                content_blocks=[internal_text_block(user_content)],
+            )
+        else:
+            user_msg = await insert_chat_message(
+                session_id=self.session_id,
+                role=ChatMessageRole.USER,
+                content=user_content,
+                content_blocks=plain_text_blocks(user_content),
+            )
+            yield SSEEvent(
+                event="user_committed",
+                data={
+                    "idx": user_msg.idx if user_msg else None,
+                    "content": user_content,
+                },
+            )
 
         # Knowledge base context for this turn. In-memory only — like the
         # client-context blocks it is EPHEMERAL (never persisted to
@@ -374,7 +566,12 @@ class ChatAgent:
         """Build the per-turn tool surface (flow config, wrapped handlers,
         global + MCP functions, retention policy). Shared by ``run_turn``
         and ``run_approval_turn``."""
-        flow_builder = FlowConfigBuilder(disabled_names=CHAT_DISABLED_NAMES, quiet=True)
+        flow_builder = FlowConfigBuilder(
+            disabled_names=CHAT_DISABLED_NAMES,
+            quiet=True,
+            render_ui_mode=self._render_ui_enabled,
+            quick_replies_mode=self._quick_replies_mode,
+        )
         # Wrap before build_flow_config: _build_function_schema captures the
         # handler reference into a closure, so post-build wrapping is a no-op.
         for handler_name, handler_func in flow_builder.handler_map.items():
@@ -441,6 +638,31 @@ class ChatAgent:
                             "function; it will NOT be approval-gated."
                         )
 
+        # RFC-002 engine tools: render_ui (UI as a function call) and
+        # revise_plan (the only path off an enforced plan). Registered as
+        # ordinary global functions so dispatch, persistence (native
+        # function_call/response replay), approval partitioning, and the
+        # step rail all apply with zero special cases. Neither is ever
+        # approval-gated; neither is read_only (so they never fan out —
+        # ordering with sibling calls is meaningful).
+        if self._render_ui_enabled:
+            rui_components = render_ui_components(self._ui_allowlist, self._catalog_v2)
+            if self._quick_replies_mode == "off":
+                # quick_replies='off': the component vanishes from the
+                # schema enum and docs; execute rejects it as unknown.
+                rui_components = [c for c in rui_components if c != "QuickReplies"]
+            if rui_components:
+                global_funcs.append(
+                    build_render_ui_schema(
+                        rui_components,
+                        self._render_ui_handler,
+                        trusted_urls=sorted(self._trusted_link_urls),
+                        quick_replies_mode=self._quick_replies_mode,
+                    )
+                )
+        if self._plan_enforcement:
+            global_funcs.append(build_revise_plan_schema(self._revise_plan_handler))
+
         # Aggregate per-tool context-retention policy across every MCP server
         # the template declares. Used by llm_driver to compact stale
         # tool_result blocks in the messages array before each LLM call —
@@ -474,12 +696,19 @@ class ChatAgent:
         context: LLMContext,
         node: Dict[str, Any],
         prep: _PreparedTools,
+        *,
+        first_cycle_fast: bool = True,
     ) -> AsyncIterator[SSEEvent]:
         """The LLM ↔ tool loop for one turn (shared by ``run_turn`` and the
         continuation of ``run_approval_turn``). ``context`` must already be
         seeded; this loop drives LLM cycles, dispatches ungated tool calls,
         and ends the turn early (``turn_end {awaiting_approval}``) when the
-        LLM calls an approval-gated function."""
+        LLM calls an approval-gated function.
+
+        ``first_cycle_fast`` grades cycle 1 down to minimal thinking (see
+        the override at the stream call). Approval continuations pass False
+        — their "first" cycle follows a freshly-approved tool result, i.e.
+        it's post-tool reasoning, not routing."""
         global_funcs = prep.global_funcs
         node_name = cast(str, node["name"])
 
@@ -490,10 +719,64 @@ class ChatAgent:
         # after a page refresh. Reset per cycle so each persisted row
         # carries only the ops produced by THAT cycle.
         turn_ui_ops: List[Dict[str, Any]] = []
+        # Per-cycle LLM-specific context messages (Gemini thought
+        # signatures). Appended to the in-memory context in stream order
+        # (the driver never mutates context itself) AND persisted on the
+        # cycle's assistant row so signatures survive the stateless-turn
+        # DB round-trip — Vertex Gemini 3 + thinking rejects a replayed
+        # functionCall part that lacks its thought_signature.
+        cycle_context_messages: List[LLMSpecificMessage] = []
+        skip_force_once = False
+        # Set when the forced-final chips path persists the turn's prose row
+        # EARLY (before the chips cycle) — the after-loop turn_end reuses it
+        # as the metrics anchor when no later row is written.
+        early_final_idx: Optional[int] = None
         for cycle in range(1, _MAX_TOOL_CYCLES + 1):
             tool_calls: List[FunctionCallFromLLM] = []
             turn_text: List[str] = []
             turn_ui_ops = []
+            cycle_context_messages = []
+            finish_reason: Optional[str] = None
+            # Snapshot BEFORE the stream: a <plan> extracted mid-stream arms
+            # the enforcer for the NEXT cycle — this flag tells the no-call
+            # branch below whether arming happened during this one.
+            plan_was_constraining = (
+                self._plan_enforcement and self._plan_enforcer.constraining
+            )
+            # Set the moment an ENFORCED plan arms mid-stream: the rest of
+            # this cycle's prose is dropped (see the text branch below).
+            suppress_cycle_prose = False
+
+            # Forced tool choice for THIS cycle (RFC-002): an active enforced
+            # plan constrains to {current step's tool, revise_plan}; else a
+            # pending forced think-step constrains to render_ui (whose
+            # {decision:'no_ui'} payload keeps display the model's judgment);
+            # else a pending final chips cycle constrains to render_ui with
+            # the chips-slot restriction (QuickReplies or no_ui only).
+            # ``skip_force_once`` is the MALFORMED_FUNCTION_CALL fallback —
+            # one unforced retry instead of a bricked turn.
+            allowed: Optional[List[str]] = None
+            self._in_chips_cycle = False
+            if skip_force_once:
+                skip_force_once = False
+            elif self._plan_enforcement and self._plan_enforcer.constraining:
+                allowed = self._plan_enforcer.allowed_names(REVISE_PLAN_TOOL_NAME)
+            elif self._need_render_ui_think and self._render_ui_enabled:
+                allowed = [RENDER_UI_TOOL_NAME]
+            elif self._chips_pending and self._render_ui_enabled:
+                allowed = [RENDER_UI_TOOL_NAME]
+                self._in_chips_cycle = True
+                self._chips_cycles += 1
+            if self._plan_enforcement:
+                # revise_plan is visible ONLY while a plan is active
+                # (Decision 3) — rebuild the cycle's tool schema either way
+                # so a plan finishing mid-turn hides it again.
+                cycle_funcs = (
+                    global_funcs
+                    if self._plan_enforcer.active
+                    else [fn for fn in global_funcs if fn.name != REVISE_PLAN_TOOL_NAME]
+                )
+                context.set_tools(_tools_schema(node, cycle_funcs))
 
             async for kind, payload in llm_driver.stream(
                 self._llm,
@@ -501,9 +784,61 @@ class ChatAgent:
                 log_label=f"chat#{self.session_id[:8]}",
                 tool_context_retention=prep.tool_retention,
                 tool_context_projection=prep.tool_projection,
+                allowed_function_names=allowed,
+                # Cycle-graded thinking (2026-07-30 latency pass): cycle 1
+                # of a fresh turn is ROUTING — greet in prose or pick the
+                # first tool call — which minimal handles as reliably as
+                # medium (probed live: tool selection identical incl. the
+                # answer-from-memory bait, ~1s faster to first token).
+                # Every post-tool cycle keeps the template's level, so
+                # grounding, variant math, and UI authoring reason at full
+                # depth. The chips cycle picks 2-4 labels — minimal too.
+                thinking_level_override=(
+                    "minimal"
+                    if (self._in_chips_cycle or (first_cycle_fast and cycle == 1))
+                    else None
+                ),
             ):
                 if kind == "text":
                     text = cast(str, payload)
+                    # Plan-as-emission (Phase 2): strip any <plan>…</plan>
+                    # declarations FIRST (they never reach prose, context,
+                    # or persistence) and surface them as plan events for
+                    # the widget's skeleton lines.
+                    text, plans = self._plan_extractor.feed(text)
+                    for plan in plans:
+                        yield self._plan_sse(plan)
+                        if self._plan_enforcement:
+                            # Harness-held plan state (RFC-002 Decision 4):
+                            # from the next cycle on, off-plan calls are
+                            # impossible at the API layer. Fails open on
+                            # unknown tool names (plan stays advisory).
+                            self._plan_known_tools = self._known_tool_names(
+                                node, global_funcs
+                            )
+                            self._plan_enforcer.start(plan, self._plan_known_tools)
+                            if self._plan_enforcer.constraining:
+                                suppress_cycle_prose = True
+                    if (
+                        suppress_cycle_prose
+                        or self._in_chips_cycle
+                        or self._suppress_extra_prose
+                    ):
+                        # Post-plan prose in the SAME cycle is pseudo-call
+                        # chatter, not shopper prose — Flash sometimes TYPES
+                        # the call it planned (`path:default_api:...{...}`)
+                        # as text right after the <plan> marker, and the
+                        # prompt forbids narrating the plan anyway. Real
+                        # prose belongs to the cycle that ends the turn.
+                        # Chips-cycle text is likewise junk: the final reply
+                        # already streamed and its bubble is anchored — any
+                        # trailing tokens here would paint after it.
+                        # _suppress_extra_prose: the reply was delivered and
+                        # a banned mid-turn chips call followed it — anything
+                        # the model says now would be a duplicate reply.
+                        continue
+                    if not text:
+                        continue
                     turn_text.append(text)
                     # Strip <ui_stream>…</ui_stream> from the user-facing
                     # prose stream. Each TextOut becomes an
@@ -520,6 +855,14 @@ class ChatAgent:
                             yield SSEEvent(
                                 event="assistant_token", data={"delta": out.value}
                             )
+                        elif self._render_ui_enabled:
+                            # Hard cutover (RFC-002 Phase D): render_ui
+                            # sessions accept UI ONLY via the render_ui
+                            # function call — the dual-read window is
+                            # closed. A text-channel op line drops
+                            # observably (ui_op_dropped telemetry + the
+                            # metrics drops row), never renders.
+                            yield ui_op_dropped_event(out.raw, "text_channel_retired")
                         else:
                             for ev in process_op_line(
                                 out.raw,
@@ -527,6 +870,7 @@ class ChatAgent:
                                 healer=healer,
                                 known_ids=self._known_ui_ids,
                                 allowlist=self._ui_allowlist,
+                                show_resolver=self._show_resolver(),
                             ):
                                 # Capture successful ui_op emissions for the
                                 # widget resume path (persisted on the
@@ -551,9 +895,176 @@ class ChatAgent:
                             "tool_call_id": call.tool_call_id,
                         },
                     )
+                elif kind == "context_message":
+                    # LLM-specific context message (Gemini thought
+                    # signature). Added in stream order — BEFORE the
+                    # assistant tool_calls message this loop appends after
+                    # the stream closes — matching pipecat's pipeline
+                    # ordering; the adapter re-applies it by bookmark.
+                    ctx_msg = cast(LLMSpecificMessage, payload)
+                    context.add_message(ctx_msg)
+                    cycle_context_messages.append(ctx_msg)
+                elif kind == "finish_reason":
+                    finish_reason = cast(str, payload)
+
+            # Release the plan extractor's held tail (a partial "<plan"
+            # prefix is ordinary prose; an unterminated block is dropped) —
+            # it flows through the SAME ui-extractor path as live chunks.
+            plan_tail = self._plan_extractor.flush()
+            if plan_tail and not suppress_cycle_prose and not self._in_chips_cycle:
+                turn_text.append(plan_tail)
+                for out in self._ui_extractor.feed(plan_tail):
+                    if isinstance(out, TextOut):
+                        yield SSEEvent(
+                            event="assistant_token", data={"delta": out.value}
+                        )
 
             assistant_text_chunks.extend(turn_text)
+            if turn_text:
+                self._turn_prose_streamed = True
+            if allowed and not tool_calls:
+                if self._in_chips_cycle:
+                    # The forced chips cycle produced no call. Never retry
+                    # it unforced — an unforced tail cycle would stream a
+                    # SECOND prose bubble after the final reply. Skip chips
+                    # (observable via force_fallback) and end the turn: the
+                    # reply is already on screen and persisted.
+                    self._chips_pending = False
+                    logger.warning(
+                        f"ChatAgent {self.session_id}: final chips cycle "
+                        f"returned no call "
+                        f"(finish_reason={finish_reason}); skipping chips"
+                    )
+                    yield SSEEvent(
+                        event="force_fallback",
+                        data={
+                            "allowed": allowed,
+                            "finish_reason": finish_reason,
+                            "context": "final_quick_replies",
+                        },
+                    )
+                    break
+                # Forced cycle produced no function call — the current-gen
+                # Gemini failure mode is MALFORMED_FUNCTION_CALL / an empty
+                # candidate, not ignoring the constraint. Retry ONCE
+                # unforced (+ telemetry) instead of ending the turn broken.
+                if not self._force_retry_used:
+                    self._force_retry_used = True
+                    skip_force_once = True
+                    logger.warning(
+                        f"ChatAgent {self.session_id}: forced cycle "
+                        f"(allowed={allowed}) returned no call "
+                        f"(finish_reason={finish_reason}); retrying unforced"
+                    )
+                    yield SSEEvent(
+                        event="force_fallback",
+                        data={
+                            "allowed": allowed,
+                            "finish_reason": finish_reason,
+                        },
+                    )
+                    continue
+                logger.error(
+                    f"ChatAgent {self.session_id}: forced cycle failed twice "
+                    f"(finish_reason={finish_reason}); ending turn unforced"
+                )
             if not tool_calls:
+                if (
+                    self._plan_enforcement
+                    and self._plan_enforcer.constraining
+                    and not plan_was_constraining
+                ):
+                    # The plan armed DURING this (unforced) cycle but the
+                    # model made no real call — Flash sometimes TYPES the
+                    # pseudo-call as prose right after declaring a plan.
+                    # Don't end the turn: the next cycle is constrained to
+                    # the plan's first step, where mode=ANY produces a real
+                    # call or trips the MALFORMED fallback above. Bounded:
+                    # that fallback fires at most once, then the turn ends.
+                    logger.warning(
+                        f"ChatAgent {self.session_id}: plan armed with no "
+                        f"call this cycle; continuing into enforced cycle "
+                        f"{cycle + 1}"
+                    )
+                    continue
+                chips_prose = strip_ui_stream_markers(
+                    "".join(assistant_text_chunks)
+                ).strip()
+                if (
+                    self._render_ui_enabled
+                    and self._quick_replies_mode == "forced_final"
+                    and not self._internal_turn
+                    and not self._chips_attempted
+                    and not self._quick_replies_rendered
+                    and chips_prose
+                ):
+                    # Forced final chips cycle (template quick_replies=
+                    # 'forced_final'): the reply is done — persist it NOW as
+                    # its own row and anchor the bubble, so the chips the
+                    # NEXT forced cycle authors paint (live) and persist
+                    # (resume) strictly BELOW it. One extra cycle, decided
+                    # AFTER the prose exists — chips grounded in what was
+                    # actually said, and "when do chips come?" becomes
+                    # deterministic: every eligible turn ends in QuickReplies
+                    # or an explicit no_ui.
+                    self._chips_attempted = True
+                    self._chips_pending = True
+                    prose_blocks = plain_text_blocks(chips_prose)
+                    if cycle_context_messages:
+                        prose_blocks.extend(
+                            gemini_signature_blocks(cycle_context_messages)
+                        )
+                    stored = await insert_chat_message(
+                        session_id=self.session_id,
+                        role=ChatMessageRole.ASSISTANT,
+                        content=chips_prose,
+                        content_blocks=prose_blocks,
+                        ui_blocks=self._row_ui_blocks(turn_ui_ops),
+                    )
+                    early_final_idx = stored.idx if stored else None
+                    yield SSEEvent(
+                        event="assistant_message",
+                        data={"idx": early_final_idx, "content": chips_prose},
+                    )
+                    assistant_text_chunks.clear()
+                    context.add_message(
+                        cast(
+                            LLMContextMessage,
+                            {"role": "assistant", "content": chips_prose},
+                        )
+                    )
+                    if self._held_chips:
+                        # Rider flush (2026-08-03): chips were authored
+                        # mid-turn and harvested — render them below the
+                        # final prose NOW, through the exact validation
+                        # path the chips cycle uses, and end the turn.
+                        # Saves the forced cycle (~2s tail + one LLM call)
+                        # on every turn where the model attached a rider.
+                        async for ev in self._flush_held_chips():
+                            yield ev
+                        if self._quick_replies_rendered:
+                            break
+                        # Flush rejected (bad labels) — fall through to
+                        # the forced cycle rather than ending chipless
+                        # (live 2026-08-03: single-label riders died on
+                        # the old min_length=2 with no fallback).
+                    # No rider — fall back to the forced chips cycle. The
+                    # nudge rides an internal USER row (widget read paths
+                    # filter it; the LLM sees it live and on replay —
+                    # Vertex requires user/model alternation).
+                    context.add_message(
+                        cast(
+                            LLMContextMessage,
+                            {"role": "user", "content": _CHIPS_NUDGE},
+                        )
+                    )
+                    await insert_chat_message(
+                        session_id=self.session_id,
+                        role=ChatMessageRole.USER,
+                        content=None,
+                        content_blocks=[internal_text_block(_CHIPS_NUDGE)],
+                    )
+                    continue
                 break
 
             # Strip <ui_stream> markers before persistence so the LLM
@@ -563,7 +1074,7 @@ class ChatAgent:
             # one") on its next turn, but every widget-facing read path
             # filters it out so it never shows up in the chat bubble.
             visible_text = strip_ui_stream_markers("".join(turn_text))
-            ui_summary = summarize_ui_ops(turn_ui_ops)
+            ui_summary = self._ui_summary(turn_ui_ops)
 
             # In-memory LLM context still gets the augmented text — this
             # branch loops back into another LLM call within the same
@@ -577,21 +1088,47 @@ class ChatAgent:
             # for cross-turn identifier loss — on the next /message the
             # history loader replays tool_use.input verbatim, so the
             # LLM sees its own prior cart_id / checkout_id / etc.
-            assistant_blocks = assistant_turn_to_blocks(visible_text, tool_calls)
+            # Prose on a gate row is ALWAYS demoted to an internal block:
+            # streamed text accumulates in assistant_text_chunks and
+            # persists visibly ONCE on the turn's user-facing row (the
+            # pre-chips prose row or the turn-end row). A visible copy
+            # here made resume replay show the reply twice whenever prose
+            # preceded a tool call (live 2026-07-31: greeting + banned
+            # mid-turn chips shared cycle 1 — the same greeting persisted
+            # on this gate row AND the pre-chips row). The LLM still sees
+            # internal blocks in replayed context; only widget-facing
+            # reads filter them.
+            assistant_blocks = assistant_turn_to_blocks("", tool_calls)
+            if visible_text:
+                assistant_blocks.insert(0, internal_text_block(visible_text))
             if ui_summary and assistant_blocks:
                 # Insert the internal summary block right after the
                 # visible text block so concatenation order on read
                 # matches what the LLM previously saw in-context.
                 insert_at = 1 if assistant_blocks[0].get("type") == "text" else 0
                 assistant_blocks.insert(insert_at, internal_text_block(ui_summary))
+            if cycle_context_messages and assistant_blocks:
+                # Persist this cycle's Gemini thought signatures on the
+                # same row as the tool_use blocks they annotate — the
+                # history loader decodes them back into LLMSpecificMessage
+                # entries adjacent to this assistant message.
+                assistant_blocks.extend(gemini_signature_blocks(cycle_context_messages))
             gate_assistant_idx: Optional[int] = None
             if assistant_blocks:
                 gate_row = await insert_chat_message(
                     session_id=self.session_id,
                     role=ChatMessageRole.ASSISTANT,
-                    content=visible_text or None,
+                    # content stays None: the visible copy of any prose
+                    # belongs to the turn's user-facing row (see the
+                    # internal-demotion comment above).
+                    content=None,
                     content_blocks=assistant_blocks,
-                    ui_blocks=turn_ui_ops or None,
+                    # Tool-rendered ops are HELD off mid-turn gate rows (they
+                    # used to scatter across whichever gate row came next):
+                    # they persist together on the turn's user-facing row —
+                    # which also lets a later same-turn ProductGrid merge
+                    # mutate the pending op before anything hits the DB.
+                    ui_blocks=self._row_ui_blocks(turn_ui_ops, include_tool_ops=False),
                 )
                 gate_assistant_idx = gate_row.idx if gate_row else None
 
@@ -638,19 +1175,167 @@ class ChatAgent:
                 tool_calls, self._approval_map, node
             )
 
+            if self._suppress_extra_prose and any(
+                c.function_name != RENDER_UI_TOOL_NAME for c in tool_calls
+            ):
+                # The turn wasn't over after all — a REAL tool ran after the
+                # banned mid-turn chips attempt, so the model must stay free
+                # to narrate its new results (the suppression exists only to
+                # kill duplicate sign-off prose).
+                self._suppress_extra_prose = False
+
             next_node: Optional[Dict[str, Any]] = None
             tool_result_pairs: List[Tuple[str, Any]] = []
-            for call in ungated_calls:
-                injected_args = inject_tool_args(
-                    tool_name=call.function_name,
-                    args=dict(call.arguments),
-                    state_data=self.agent_state,
-                    chat_session_id=self.session_id,
-                    injections=arg_injection_rules,
-                    turn_id=self._turn_id,
+            # (call, result) in ORIGINAL call order — post-dispatch
+            # bookkeeping (binding store, context messages, reducers) is
+            # order-sensitive and runs identically for both dispatch modes.
+            executed: List[Tuple[FunctionCallFromLLM, Any, Optional[Dict[str, Any]]]]
+            if self._should_fan_out(ungated_calls):
+                results: Dict[str, Tuple[Any, Optional[Dict[str, Any]]]] = {}
+                async for event in self._fan_out_read_only(
+                    ungated_calls, node, global_funcs, arg_injection_rules, results
+                ):
+                    yield event
+                executed = [
+                    (call, *results[call.tool_call_id]) for call in ungated_calls
+                ]
+            else:
+                executed = []
+                # Mutations run SOLO (2026-08-03): in a parallel batch every
+                # call was authored from the SAME pre-batch snapshot, so a
+                # second state mutation is blind to the first — for UCP
+                # carts (full-replace line_items) the second update_cart
+                # silently REVERTS the first. Policy: the first mutating
+                # call executes; every later mutating call in the batch is
+                # deferred with a structured soft error telling the model
+                # to re-issue against the fresh result. Reads still execute
+                # (post-mutation state is fresher, never stale); harness
+                # tools (render_ui / revise_plan) are neutral.
+                _NEUTRAL_TOOLS = {RENDER_UI_TOOL_NAME, REVISE_PLAN_TOOL_NAME}
+                mutated_by: Optional[str] = None
+                for call in ungated_calls:
+                    is_mutation = (
+                        call.function_name not in _NEUTRAL_TOOLS
+                        and not is_read_only(call.function_name, self.template)
+                    )
+                    if is_mutation and mutated_by is not None:
+                        deferred = {
+                            "status": "error",
+                            "soft": True,
+                            "error": (
+                                f"not executed — {mutated_by} already changed "
+                                "state in this step and this call was authored "
+                                "before seeing its result. Review that result "
+                                "and re-issue this call if it is still needed."
+                            ),
+                        }
+                        running_label, done_label = resolve_step_label(
+                            call.function_name
+                        )
+                        yield step_started_event(
+                            step_id=call.tool_call_id,
+                            label=running_label,
+                            turn_id=self._turn_id,
+                        )
+                        executed.append((call, deferred, None))
+                        yield SSEEvent(
+                            event="function_call_completed",
+                            data={
+                                "name": call.function_name,
+                                "tool_call_id": call.tool_call_id,
+                                "result_summary": _summarize_result(deferred),
+                            },
+                        )
+                        yield step_completed_event(
+                            step_id=call.tool_call_id,
+                            status=resolve_step_status(deferred),
+                            label=done_label,
+                            summary=None,
+                            count=None,
+                        )
+                        continue
+                    if is_mutation:
+                        mutated_by = call.function_name
+                    injected_args = inject_tool_args(
+                        tool_name=call.function_name,
+                        args=dict(call.arguments),
+                        state_data=self.agent_state,
+                        chat_session_id=self.session_id,
+                        injections=arg_injection_rules,
+                        turn_id=self._turn_id,
+                    )
+                    # Step-progress layer (widget step lines) — one step per
+                    # tool execution, keyed on tool_call_id so step_completed
+                    # flips the same line in place. Sits ABOVE
+                    # function_call_started/completed (the tool-level wire
+                    # events), which stay unchanged.
+                    running_label, done_label = resolve_step_label(call.function_name)
+                    yield step_started_event(
+                        step_id=call.tool_call_id,
+                        label=running_label,
+                        turn_id=self._turn_id,
+                    )
+                    result_payload, transition_node = await self._dispatch_tool_call(
+                        call, node, global_funcs, injected_args=injected_args
+                    )
+                    result_payload = self._verify_result(
+                        call.function_name, injected_args, result_payload
+                    )
+                    executed.append((call, result_payload, transition_node))
+                    yield SSEEvent(
+                        event="function_call_completed",
+                        data={
+                            "name": call.function_name,
+                            "tool_call_id": call.tool_call_id,
+                            "result_summary": _summarize_result(result_payload),
+                        },
+                    )
+                    step_summary, step_count = summarize_step_result(result_payload)
+                    yield step_completed_event(
+                        step_id=call.tool_call_id,
+                        status=resolve_step_status(result_payload),
+                        label=done_label,
+                        summary=step_summary,
+                        count=step_count,
+                    )
+                    # render_ui / revise_plan side effects (hydrated ui ops,
+                    # ui_decision / plan_updated events) drain immediately
+                    # after the call that produced them — the grid paints
+                    # before the next dispatch, not after the cycle.
+                    for side_event in self._drain_tool_side_effects():
+                        yield side_event
+
+            reducer_rules = (
+                self.template.configurations.state_reducers
+                if self.template.configurations
+                else []
+            )
+            for call, result_payload, transition_node in executed:
+                # RFC-002 bookkeeping. ``success`` = the post-pipeline result
+                # passed verification (deterministic gates own step-complete,
+                # not the model's say-so).
+                call_success = not (
+                    isinstance(result_payload, dict)
+                    and result_payload.get("status") == "error"
                 )
-                result_payload, transition_node = await self._dispatch_tool_call(
-                    call, node, global_funcs, injected_args=injected_args
+                if self._plan_enforcement:
+                    self._plan_enforcer.on_tool_result(call.function_name, call_success)
+                if (
+                    self._render_ui_enabled
+                    and call_success
+                    and call.function_name in self._render_ui_force_after
+                ):
+                    # Forced think-step armed: the NEXT cycle must call
+                    # render_ui (render or an explicit, reasoned no_ui) —
+                    # unless an enforced plan still has earlier steps.
+                    self._need_render_ui_think = True
+                if call.function_name == RENDER_UI_TOOL_NAME and call_success:
+                    self._need_render_ui_think = False
+                # Make this turn's successful post-pipeline result bind-
+                # addressable for `show` ops (error envelopes are skipped
+                # inside record — a bind can never hydrate a failed call).
+                self._binding_store.record(
+                    call.function_name, call.tool_call_id, result_payload
                 )
                 context.add_message(
                     cast(
@@ -666,11 +1351,6 @@ class ChatAgent:
                 # off the tool result into session state (e.g.
                 # update_cart's cart.id → state.data.cart_id). Engine
                 # is commerce-blind; rules live in template JSON.
-                reducer_rules = (
-                    self.template.configurations.state_reducers
-                    if self.template.configurations
-                    else []
-                )
                 self.agent_state = apply_state_reducers(
                     state_data=self.agent_state,
                     tool_name=call.function_name,
@@ -678,16 +1358,13 @@ class ChatAgent:
                     reducers=reducer_rules,
                 )
                 tool_result_pairs.append((call.tool_call_id, result_payload))
-                yield SSEEvent(
-                    event="function_call_completed",
-                    data={
-                        "name": call.function_name,
-                        "tool_call_id": call.tool_call_id,
-                        "result_summary": _summarize_result(result_payload),
-                    },
-                )
                 if transition_node is not None and next_node is None:
                     next_node = transition_node
+            # Belt-and-braces: side effects appended by any dispatch path
+            # that didn't drain inline (fan-out never carries render_ui, but
+            # a future path must not silently swallow a rendered op).
+            for side_event in self._drain_tool_side_effects():
+                yield side_event
 
             # Persist the coalesced tool_result user-row + the updated
             # session state. Both go to Postgres so a crash before the
@@ -781,6 +1458,17 @@ class ChatAgent:
                     },
                 )
                 return
+
+            if self._chips_attempted:
+                # A forced chips cycle just dispatched. Chips are the turn's
+                # LAST frame by design — a resolved outcome (QuickReplies
+                # rendered or an explicit no_ui) ends the turn with no
+                # further LLM cycle. An invalid call got a structured error
+                # response instead: allow exactly ONE corrective forced
+                # cycle, then give up (chips skipped, turn still healthy).
+                if not self._chips_pending or self._chips_cycles >= 2:
+                    self._chips_pending = False
+                    break
         else:
             # Loop ran to completion without ``break`` — every cycle produced
             # a tool call. Bail out rather than burning more LLM calls.
@@ -827,20 +1515,38 @@ class ChatAgent:
         # widget-facing read path filters it out. The SSE wire and the
         # denormalised `content` column both carry visible prose only.
         visible_text = strip_ui_stream_markers("".join(assistant_text_chunks)).strip()
-        ui_summary = summarize_ui_ops(turn_ui_ops)
+        ui_summary = self._ui_summary(turn_ui_ops)
         persisted_blocks: List[Dict[str, Any]] = []
         if visible_text:
-            persisted_blocks.extend(plain_text_blocks(visible_text))
+            # Internal turns (enrich_product's overlay blurb): the prose
+            # streamed live into the overlay but must never replay as a
+            # thread bubble — persist it internal-only so the LLM keeps
+            # the context while resume filters the row out.
+            if self._internal_turn:
+                persisted_blocks.append(internal_text_block(visible_text))
+            else:
+                persisted_blocks.extend(plain_text_blocks(visible_text))
         if ui_summary:
             persisted_blocks.append(internal_text_block(ui_summary))
+        if cycle_context_messages and persisted_blocks:
+            # Final cycle's Gemini thought signatures (text-bookmarked —
+            # the last cycle produced no tool calls). Best-effort memory
+            # for later turns; skipped when there's no row to ride on
+            # (Vertex only enforces signatures on functionCall parts).
+            persisted_blocks.extend(gemini_signature_blocks(cycle_context_messages))
         final_assistant_idx: Optional[int] = None
-        if persisted_blocks:
+        final_ui_blocks = self._row_ui_blocks(turn_ui_ops)
+        if not persisted_blocks and final_ui_blocks:
+            # render_ui-only turn with no prose at all: persist a row anyway
+            # so the resume path can repaint the tool-rendered UI.
+            persisted_blocks = []
+        if persisted_blocks or final_ui_blocks:
             stored = await insert_chat_message(
                 session_id=self.session_id,
                 role=ChatMessageRole.ASSISTANT,
-                content=visible_text or None,
+                content=None if self._internal_turn else (visible_text or None),
                 content_blocks=persisted_blocks,
-                ui_blocks=turn_ui_ops or None,
+                ui_blocks=final_ui_blocks,
             )
             final_assistant_idx = stored.idx if stored else None
             # Only emit a bubble when there's actual visible prose. A
@@ -859,6 +1565,12 @@ class ChatAgent:
         await update_chat_session_after_turn(
             session_id=self.session_id, current_node=node_name or None
         )
+        if early_final_idx is not None:
+            # Forced-final chips path: the prose row (persisted early, its
+            # bubble already anchored via assistant_message) is the turn's
+            # user-facing message — keep it as the metrics/anchor idx even
+            # when a chips-only ui row was written after it.
+            final_assistant_idx = early_final_idx
         # ``assistant_idx`` (additive) keys this turn's metrics row
         # (chat_turn_metrics, migration 032) to the assistant message it
         # produced — including UI-only turns that emit no assistant_message
@@ -957,7 +1669,19 @@ class ChatAgent:
         )
 
         transition_node: Optional[Dict[str, Any]] = None
+        approved_done_label: Optional[str] = None
         if approved:
+            # Step-progress line for the approved execution — the resume
+            # turn brackets its tool run exactly like _cycle_loop does, so
+            # the widget's step list covers HITL resumes too.
+            running_label, approved_done_label = resolve_step_label(
+                approval.function_name
+            )
+            yield step_started_event(
+                step_id=approval.tool_call_id,
+                label=running_label,
+                turn_id=self._turn_id,
+            )
             call = FunctionCallFromLLM(
                 function_name=approval.function_name,
                 tool_call_id=approval.tool_call_id,
@@ -973,6 +1697,14 @@ class ChatAgent:
                     node,
                     prep.global_funcs,
                     injected_args=dict(approval.arguments),
+                )
+                result_payload = self._verify_result(
+                    approval.function_name, dict(approval.arguments), result_payload
+                )
+                # A `show` op in the continued LLM loop may bind to the
+                # approved call's result — record it like _cycle_loop does.
+                self._binding_store.record(
+                    approval.function_name, approval.tool_call_id, result_payload
                 )
                 reducer_rules = (
                     self.template.configurations.state_reducers
@@ -1063,6 +1795,15 @@ class ChatAgent:
                 "result_summary": _summarize_result(result_payload),
             },
         )
+        if approved and approved_done_label is not None:
+            step_summary, step_count = summarize_step_result(result_payload)
+            yield step_completed_event(
+                step_id=approval.tool_call_id,
+                status=resolve_step_status(result_payload),
+                label=approved_done_label,
+                summary=step_summary,
+                count=step_count,
+            )
 
         if transition_node is not None:
             node = transition_node
@@ -1098,7 +1839,9 @@ class ChatAgent:
             )
             return
 
-        async for event in self._cycle_loop(context, node, prep):
+        async for event in self._cycle_loop(
+            context, node, prep, first_cycle_fast=False
+        ):
             yield event
 
     async def _persist_tool_result_row(
@@ -1290,6 +2033,553 @@ class ChatAgent:
             context.add_message(cast(LLMContextMessage, msg))
         context.set_tools(_tools_schema(next_node, global_funcs))
 
+    # ------------------------------------------------------------------
+    # Direct (no-LLM) dispatch surface — used by chat/intent_router.py.
+    #
+    # The intent router executes whitelisted cart tools through the SAME
+    # machinery an LLM turn uses (builder-wrapped handlers running
+    # apply_result_pipeline, inject_tool_args, state reducers, binding
+    # store) without ever constructing an LLM client. These are thin
+    # public seams over the private per-turn internals so the router
+    # doesn't reach into them.
+    # ------------------------------------------------------------------
+
+    @property
+    def binding_store(self) -> BindingStore:
+        """This turn's tool-result binding store (show-op hydration source)."""
+        return self._binding_store
+
+    @property
+    def ui_allowlist(self) -> Set[str]:
+        """The resolved (and catalog-version-pruned) primitive allowlist."""
+        return self._ui_allowlist
+
+    async def prepare_direct_dispatch(
+        self, current_node: Optional[str]
+    ) -> Tuple[_PreparedTools, Dict[str, Any]]:
+        """Build the tool surface + resolve the node for a no-LLM dispatch.
+
+        Same ``_prepare_tools`` the LLM loop uses — one pipeline, so direct
+        intents inherit idempotency keys, transforms, and projections with
+        no second cart-mutation semantics (RFC-001 §8). Caller must have
+        set ``aiohttp_session`` / ``mcp_pool`` first (as ``run_turn`` does).
+        """
+        prep = await self._prepare_tools()
+        node = self._resolve_node(prep.flow_config, current_node)
+        return prep, node
+
+    async def run_direct_tool(
+        self,
+        *,
+        tool_name: str,
+        args: Dict[str, Any],
+        node: Dict[str, Any],
+        prep: _PreparedTools,
+        turn_id: str,
+    ) -> Tuple[FunctionCallFromLLM, Any]:
+        """Execute ONE tool through the existing pipeline, no LLM involved.
+
+        inject_tool_args → dispatch (handler closures run
+        apply_result_pipeline) → binding-store record → state reducers —
+        the exact per-call sequence of ``_cycle_loop``. Returns ``(call,
+        result_payload)``; ``call.arguments`` carries the post-injection
+        args so persistence records exactly what ran (mirroring the
+        approval-gate contract).
+        """
+        arg_injection_rules = (
+            self.template.configurations.tool_arg_injection
+            if self.template.configurations
+            else []
+        )
+        injected_args = inject_tool_args(
+            tool_name=tool_name,
+            args=args,
+            state_data=self.agent_state,
+            chat_session_id=self.session_id,
+            injections=arg_injection_rules,
+            turn_id=turn_id,
+        )
+        call = FunctionCallFromLLM(
+            function_name=tool_name,
+            tool_call_id=f"intent_{uuid.uuid4().hex[:24]}",
+            arguments=injected_args,
+            context=None,
+        )
+        result_payload, _transition = await self._dispatch_tool_call(
+            call, node, prep.global_funcs, injected_args=injected_args
+        )
+        result_payload = self._verify_result(tool_name, injected_args, result_payload)
+        self._binding_store.record(tool_name, call.tool_call_id, result_payload)
+        reducer_rules = (
+            self.template.configurations.state_reducers
+            if self.template.configurations
+            else []
+        )
+        self.agent_state = apply_state_reducers(
+            state_data=self.agent_state,
+            tool_name=tool_name,
+            tool_result=result_payload,
+            reducers=reducer_rules,
+        )
+        return call, result_payload
+
+    def _plan_sse(self, plan: List[str]) -> SSEEvent:
+        """Build the plan_started / plan_updated event for one parsed
+        ``<plan>`` declaration. Labels resolve through the same step-label
+        registry the live step lines use, so a pending skeleton line and
+        the step_started that later claims it render identically."""
+        seq = self._plans_emitted
+        self._plans_emitted += 1
+        steps = []
+        for i, tool in enumerate(plan):
+            running_label, _done = resolve_step_label(tool)
+            steps.append(
+                {"id": f"plan-{seq}-{i}", "tool": tool, "label": running_label}
+            )
+        return plan_event(
+            steps=steps,
+            turn_id=getattr(self, "_turn_id", None),
+            revised=seq > 0,
+        )
+
+    # ------------------------------------------------------------------
+    # RFC-002: render_ui / revise_plan handlers + side-effect drains
+    # ------------------------------------------------------------------
+
+    def _known_tool_names(
+        self, node: Dict[str, Any], global_funcs: List[FlowsFunctionSchema]
+    ) -> Set[str]:
+        """Every function name callable this turn (per-node + globals) —
+        the universe plans are validated against."""
+        names = {fn.name for fn in global_funcs}
+        names.update(
+            fn.name
+            for fn in (node.get("functions") or [])
+            if isinstance(fn, FlowsFunctionSchema)
+        )
+        return names
+
+    def _drain_tool_side_effects(self) -> List[SSEEvent]:
+        """Hand-off from tool handlers (which cannot yield) to the SSE
+        stream: companion events first (ui_decision / plan_updated), then
+        each hydrated op — which also queues for ui_blocks persistence."""
+        events: List[SSEEvent] = []
+        while self._pending_tool_sse:
+            events.append(self._pending_tool_sse.pop(0))
+        while self._pending_ui_ops:
+            op = self._pending_ui_ops.pop(0)
+            self._unpersisted_tool_ui_ops.append(op)
+            events.append(SSEEvent(event="ui_op", data={"op": op}))
+        return events
+
+    async def _flush_held_chips(self) -> AsyncIterator[SSEEvent]:
+        """Render rider-harvested quick replies below the final prose (the
+        chips slot), persisted as their own chips-only row — the forced
+        chips cycle never runs for this turn. Same validation path as a
+        chips-cycle call; any failure degrades to no chips, never a
+        failed turn."""
+        labels = self._held_chips or []
+        self._held_chips = None
+        self._chips_attempted = True
+        try:
+            outcome = execute_render_ui(
+                {"component": "QuickReplies", "quick_replies": labels},
+                store=self._binding_store,
+                allowlist=self._ui_allowlist,
+                components=["QuickReplies"],
+                op_id="root",
+                parent=None,
+                trusted_urls=self._trusted_link_urls,
+                restrict_to={"QuickReplies"},
+                state_values=self.agent_state,
+            )
+        except Exception:  # noqa: BLE001 — chips are decoration
+            logger.exception(f"ChatAgent {self.session_id}: rider chips flush failed")
+            return
+        if outcome.decision != "rendered" or not outcome.ops:
+            logger.warning(
+                f"ChatAgent {self.session_id}: rider chips did not render "
+                f"({outcome.decision}) — turn ends without chips"
+            )
+            return
+        await insert_chat_message(
+            session_id=self.session_id,
+            role=ChatMessageRole.ASSISTANT,
+            content=None,
+            content_blocks=None,
+            ui_blocks=outcome.ops,
+        )
+        self._quick_replies_rendered = True
+        for op in outcome.ops:
+            yield SSEEvent(event="ui_op", data={"op": op})
+
+    def _ui_summary(self, turn_ui_ops: List[Dict[str, Any]]) -> str:
+        """The legacy ``[ui rendered: …]`` marker for this row — or nothing.
+
+        RFC-002 Phase B: render_ui sessions NEVER write the marker. Their
+        UI memory is the render_ui function response (replayed as a native
+        function_call/response pair), and the marker in replayed history is
+        what bred the F1 mimicry bug — the model typing the marker instead
+        of rendering. Fleet text-channel sessions keep it: it's still their
+        only cross-turn record of what the shopper saw."""
+        if self._render_ui_enabled:
+            return ""
+        return summarize_ui_ops(turn_ui_ops)
+
+    def _row_ui_blocks(
+        self, turn_ui_ops: List[Dict[str, Any]], include_tool_ops: bool = True
+    ) -> Optional[List[Dict[str, Any]]]:
+        """ui_blocks for the assistant row being persisted RIGHT NOW:
+        text-channel ops from the current cycle + (unless the caller is a
+        mid-turn gate row) any render_ui-hydrated ops not yet persisted
+        (cleared here — each op persists exactly once, on the turn's
+        user-facing row). Holding tool ops off gate rows keeps them
+        mutable in memory for same-turn ProductGrid merges."""
+        tool_ops: List[Dict[str, Any]] = []
+        if include_tool_ops:
+            tool_ops = self._unpersisted_tool_ui_ops
+            self._unpersisted_tool_ui_ops = []
+        if self._internal_turn:
+            return None
+        merged = [*turn_ui_ops, *tool_ops]
+        return merged or None
+
+    async def _render_ui_handler(
+        self, args: Dict[str, Any], _flow_manager: Any = None
+    ) -> Dict[str, Any]:
+        """The ``render_ui`` tool handler — a thin wrapper over the existing
+        hydration machinery. Returns the compact function response (the
+        model's UI memory); hydrated ops ride ``_pending_ui_ops`` to the
+        cycle loop's drain."""
+        # Turn-level guard (live-observed 2026-07-29): mode=ANY can make
+        # Flash spam DUPLICATE render_ui calls in one response, and replayed
+        # duplicates then breed more (mimicry). Every call still gets a
+        # response (function_call/response pairing is sacred), but past the
+        # cap the response is a hard redirect to prose — deterministic loop
+        # breaker. The forced final chips cycle is exempt (it has its own
+        # 2-cycle bound) — a UI-heavy turn must not lose its chips to calls
+        # it already spent mid-turn.
+        chips_cycle = self._in_chips_cycle
+        self._rui_calls_this_turn = getattr(self, "_rui_calls_this_turn", 0) + 1
+        if self._rui_calls_this_turn > 3 and not chips_cycle:
+            return {
+                "status": "error",
+                "error": (
+                    "render_ui already resolved this turn — do NOT call it "
+                    "again; reply to the shopper in one short line of prose "
+                    "now."
+                ),
+            }
+        if chips_cycle and not self._chips_pending:
+            # Duplicate call inside the SAME forced chips cycle (mode=ANY
+            # spam): the chips slot already resolved — hard stop, and no
+            # second component can ride the tail. ``soft``: the chips DID
+            # render; the step rail must not paint a failure.
+            return {
+                "status": "error",
+                "soft": True,
+                "error": (
+                    "quick replies already resolved — the turn is done; do "
+                    "not call render_ui again."
+                ),
+            }
+        # Rider harvest (2026-08-03 — replaces the mid-turn chips BAN):
+        # chips are an annotation the model may attach to any render_ui
+        # call; the server owns placement. A mid-turn `quick_replies` arg
+        # (with a real component, with component=QuickReplies, or alone)
+        # is HELD and flushed below the turn's final prose — skipping the
+        # forced end-of-turn cycle entirely. The old ban wasted the call,
+        # cost an extra cycle, and its error text derailed the model
+        # (double-greeting family, live 2026-07-31).
+        raw_args = dict(args or {})
+        if self._quick_replies_mode == "forced_final" and not chips_cycle:
+            rider_raw = raw_args.pop("quick_replies", None)
+            rider_labels = _chip_labels(rider_raw)
+            if rider_labels:
+                self._held_chips = rider_labels  # last-wins across the turn
+            if raw_args.get("component") == "QuickReplies" or (
+                raw_args.get("component") is None and rider_raw is not None
+            ):
+                # Chips-only call: nothing else to render. Positive result
+                # (not an error — errors bred rephrased-reply rambles); if
+                # the reply already streamed, trailing prose is duplicate
+                # sign-off and gets suppressed.
+                if self._turn_prose_streamed:
+                    self._suppress_extra_prose = True
+                return {
+                    "status": "ok",
+                    "deferred": True,
+                    "note": (
+                        "follow-ups saved — they will appear under your "
+                        "final reply automatically; do not re-author them"
+                    ),
+                }
+        elif (
+            chips_cycle
+            and raw_args.get("component") is None
+            and raw_args.get("quick_replies")
+        ):
+            # Componentless chips call is the canonical chips-cycle shape
+            # now that QuickReplies left the schema enum.
+            raw_args["component"] = "QuickReplies"
+        components = render_ui_components(self._ui_allowlist, self._catalog_v2)
+        if self._quick_replies_mode == "off":
+            components = [c for c in components if c != "QuickReplies"]
+        if chips_cycle:
+            # Chips are the turn's LAST frame in their OWN thread block —
+            # the SDK splits ui blocks at the final bubble, so the chips op
+            # must anchor a fresh tree (root, no parent), never join the
+            # mid-turn tree that painted above the prose. Persistence
+            # agrees: the chips op rides its own chips-only assistant row.
+            op_id, parent = "root", None
+        elif self._turn_rendered_root:
+            self._rui_seq += 1
+            op_id, parent = f"rui{self._rui_seq}", "root"
+        else:
+            op_id, parent = "root", None
+        # CartView's checkout button is server policy (mirrors the DIRECT
+        # path): label + state-fallback url from the template's intent_tools
+        # block; execute prefers the bound payload's continue_url.
+        intent_tools = getattr(self.template.configurations, "intent_tools", None)
+        state_keys = (
+            (getattr(intent_tools, "state_keys", None) or {}) if intent_tools else {}
+        )
+        labels = (getattr(intent_tools, "labels", None) or {}) if intent_tools else {}
+        fallback_url = self.agent_state.get(
+            state_keys.get("checkout_url", "checkout_url")
+        )
+        outcome = execute_render_ui(
+            raw_args,
+            store=self._binding_store,
+            allowlist=self._ui_allowlist,
+            components=components,
+            op_id=op_id,
+            parent=parent,
+            trusted_urls=self._trusted_link_urls,
+            restrict_to={"QuickReplies"} if chips_cycle else None,
+            cart_checkout={
+                "label": labels.get("checkout"),
+                "url": fallback_url if isinstance(fallback_url, str) else None,
+            },
+            state_values=self.agent_state,
+        )
+        if (
+            outcome.decision == "rendered"
+            and outcome.component == "ProductGrid"
+            and outcome.ops
+        ):
+            new_op = outcome.ops[0]
+            if self._turn_grid_op is None:
+                self._turn_grid_op = new_op
+            else:
+                # SECOND ProductGrid this turn: merge value-level into the
+                # existing grid (works across different searches — hydrated
+                # values need no bind re-resolution), restamp layout from
+                # the combined count, and swap the wire op for a `replace`
+                # on the existing node — the shopper sees ONE combined
+                # display, never stacked product surfaces. The previous op
+                # is still the pending in-memory dict (gate rows hold tool
+                # ops back), so persistence gets the merged grid too.
+                prev = self._turn_grid_op
+                prev_props = dict(prev.get("props") or {})
+                prev_products = [
+                    p for p in (prev_props.get("products") or []) if isinstance(p, dict)
+                ]
+                seen_ids = {p.get("id") for p in prev_products}
+                extra = [
+                    p
+                    for p in ((new_op.get("props") or {}).get("products") or [])
+                    if isinstance(p, dict) and p.get("id") not in seen_ids
+                ]
+                merged_products = (prev_products + extra)[:12]
+                prev_props["products"] = merged_products
+                prev_props["layout"] = (
+                    "grid" if len(merged_products) <= 2 else "carousel"
+                )
+                prev["props"] = prev_props
+                outcome.ops = [
+                    {"op": "replace", "id": prev["id"], "props": prev_props, "v": 2}
+                ]
+                outcome.fn_result = summarize_render(
+                    "ProductGrid", {"props": prev_props}
+                )
+                outcome.fn_result["merged"] = (
+                    "combined with this turn's earlier product display — "
+                    "one display per turn"
+                )
+        if outcome.ops:
+            self._pending_ui_ops.extend(outcome.ops)
+            if op_id == "root":
+                self._turn_rendered_root = True
+        if outcome.decision == "rendered" and outcome.component == "QuickReplies":
+            self._quick_replies_rendered = True
+        if chips_cycle and outcome.decision in ("rendered", "no_ui"):
+            # The chips slot resolved (chips painted or an explicit,
+            # reasoned no-chips) — the cycle loop ends the turn on this.
+            self._chips_pending = False
+        decision_data: Dict[str, Any] = {"decision": outcome.decision}
+        if outcome.component:
+            decision_data["component"] = outcome.component
+        if outcome.reason:
+            decision_data["reason"] = outcome.reason[:200]
+        self._pending_tool_sse.append(SSEEvent(event="ui_decision", data=decision_data))
+        return outcome.fn_result
+
+    async def _revise_plan_handler(
+        self, args: Dict[str, Any], _flow_manager: Any = None
+    ) -> Dict[str, Any]:
+        """``revise_plan`` — the only path off an enforced plan. Replaces
+        the REMAINING steps, queues the plan_updated SSE (honest step
+        rail), and reports the effective remainder back to the model."""
+        if not (self._plan_enforcement and self._plan_enforcer.active):
+            return {"status": "error", "error": "no active plan to revise"}
+        steps = args.get("steps") if isinstance(args, dict) else None
+        if not isinstance(steps, list) or not all(isinstance(s, str) for s in steps):
+            return {
+                "status": "error",
+                "error": "steps must be a list of tool names (may be empty)",
+            }
+        self._plan_enforcer.revise(steps, self._plan_known_tools)
+        remaining = self._plan_enforcer.steps[self._plan_enforcer.cursor :]
+        self._pending_tool_sse.append(self._plan_sse(remaining))
+        return {"status": "ok", "remaining_steps": remaining}
+
+    def _verify_result(
+        self, tool_name: str, injected_args: Dict[str, Any], result_payload: Any
+    ) -> Any:
+        """Run registered deterministic post-condition verifiers (Phase 2).
+
+        A failure converts the result into a structured error envelope
+        BEFORE the binding store / reducers / LLM context see it — the
+        model gets a precise, actionable error; a `show` op can never
+        hydrate off an unverified result. Verifiers are pure code checks
+        registered by flavor modules (see chat/verification.py).
+        """
+        failure = run_tool_verifiers(tool_name, injected_args, result_payload)
+        if failure is None:
+            return result_payload
+        logger.warning(
+            f"ChatAgent {self.session_id}: {tool_name} failed verification — "
+            f"{failure}"
+        )
+        return verification_error_envelope(failure, result_payload)
+
+    def _should_fan_out(self, calls: List[FunctionCallFromLLM]) -> bool:
+        """True when this cycle's ungated batch dispatches CONCURRENTLY:
+        2+ calls, every one annotated ``read_only`` (template overrides >
+        flavor registry > destructive default), and the template hasn't
+        disabled the fan-out (``configurations.parallel_read_only=false``).
+        Mutations never fan out — order is meaningful."""
+        if len(calls) < 2:
+            return False
+        configurations = getattr(self.template, "configurations", None)
+        if getattr(configurations, "parallel_read_only", None) is False:
+            return False
+        return all(is_read_only(c.function_name, self.template) for c in calls)
+
+    async def _fan_out_read_only(
+        self,
+        calls: List[FunctionCallFromLLM],
+        node: Dict[str, Any],
+        global_funcs: List[FlowsFunctionSchema],
+        arg_injection_rules: List[Any],
+        results: Dict[str, Tuple[Any, Optional[Dict[str, Any]]]],
+    ) -> AsyncIterator[SSEEvent]:
+        """Dispatch an all-read-only batch concurrently (Phase 2 fan-out).
+
+        Yields the step/tool wire events — step_started for every call up
+        front (the lines appear together, which is the honest rendering of
+        a parallel batch), then function_call_completed + step_completed in
+        COMPLETION order as each dispatch lands. Verified results are
+        written into ``results`` keyed by tool_call_id; the caller
+        post-processes them in ORIGINAL call order, so binding-store /
+        context / reducer semantics are identical to sequential dispatch.
+
+        Injections are computed sequentially before dispatch (they read
+        agent_state, which read-only calls don't mutate). A dispatch
+        exception cancels the remaining tasks and re-raises — same turn
+        outcome as a sequential failure; the next turn's history repair
+        answers any dangling tool_use rows.
+        """
+        injected: Dict[str, Dict[str, Any]] = {}
+        done_labels: Dict[str, str] = {}
+        for call in calls:
+            injected[call.tool_call_id] = inject_tool_args(
+                tool_name=call.function_name,
+                args=dict(call.arguments),
+                state_data=self.agent_state,
+                chat_session_id=self.session_id,
+                injections=arg_injection_rules,
+                turn_id=self._turn_id,
+            )
+            running_label, done_label = resolve_step_label(call.function_name)
+            done_labels[call.tool_call_id] = done_label
+            yield step_started_event(
+                step_id=call.tool_call_id,
+                label=running_label,
+                turn_id=self._turn_id,
+            )
+
+        tasks: Dict["asyncio.Task[Any]", FunctionCallFromLLM] = {
+            asyncio.create_task(
+                self._dispatch_tool_call(
+                    call, node, global_funcs, injected_args=injected[call.tool_call_id]
+                )
+            ): call
+            for call in calls
+        }
+        pending: Set["asyncio.Task[Any]"] = set(tasks)
+        try:
+            while pending:
+                done, pending = await asyncio.wait(
+                    pending, return_when=asyncio.FIRST_COMPLETED
+                )
+                for task in done:
+                    call = tasks[task]
+                    # A raised dispatch propagates here (and cancels the
+                    # rest via finally) — sequential parity.
+                    result_payload, transition_node = task.result()
+                    result_payload = self._verify_result(
+                        call.function_name,
+                        injected[call.tool_call_id],
+                        result_payload,
+                    )
+                    results[call.tool_call_id] = (result_payload, transition_node)
+                    yield SSEEvent(
+                        event="function_call_completed",
+                        data={
+                            "name": call.function_name,
+                            "tool_call_id": call.tool_call_id,
+                            "result_summary": _summarize_result(result_payload),
+                        },
+                    )
+                    step_summary, step_count = summarize_step_result(result_payload)
+                    yield step_completed_event(
+                        step_id=call.tool_call_id,
+                        status=resolve_step_status(result_payload),
+                        label=done_labels[call.tool_call_id],
+                        summary=step_summary,
+                        count=step_count,
+                    )
+        finally:
+            for task in pending:
+                task.cancel()
+
+    def _show_resolver(self) -> Optional[ShowResolverFn]:
+        """Per-op resolver for catalog-v2 ``show`` ops, or ``None`` when this
+        session didn't negotiate v2 (show ops then drop with telemetry —
+        the allowlist pruning in ``__init__`` already produced the more
+        specific ``show_component_disabled`` reason at parse time)."""
+        if not self._catalog_v2:
+            return None
+        store = self._binding_store
+        allowlist = self._ui_allowlist
+
+        def _resolve(op: Dict[str, Any]):
+            return resolve_show_op(op, store, allowlist)
+
+        return _resolve
+
     async def _dispatch_tool_call(
         self,
         call: FunctionCallFromLLM,
@@ -1339,22 +2629,34 @@ class ChatAgent:
         try:
             raw = await handler_fn(args_for_handler, None)
         except Exception as exc:
-            logger.error(
+            # loguru: no ``exc_info`` kwarg — it would re-format the message
+            # and crash on brace-bearing tool/provider error text.
+            logger.exception(
                 f"ChatAgent {self.session_id}: handler {call.function_name!r} "
-                f"raised: {exc}",
-                exc_info=True,
+                f"raised: {exc}"
             )
             return ({"status": "error", "error": f"{type(exc).__name__}: {exc}"}, None)
 
         # transition_handler returns (result, next_node). Global / HTTP
-        # functions return the response payload directly.
+        # functions return the response payload directly. Registered result
+        # annotators (RFC-003 baseline: matched_via / matched_variant on
+        # search results) run over the normalized payload — additive keys
+        # only, before verification / binding store / LLM context.
         if (
             isinstance(raw, tuple)
             and len(raw) == 2
             and (raw[1] is None or isinstance(raw[1], dict))
         ):
-            return normalize(call.function_name, raw[0]), raw[1]
-        return normalize(call.function_name, raw), None
+            normalized = normalize(call.function_name, raw[0])
+            return (
+                run_result_annotators(call.function_name, args_for_handler, normalized),
+                raw[1],
+            )
+        normalized = normalize(call.function_name, raw)
+        return (
+            run_result_annotators(call.function_name, args_for_handler, normalized),
+            None,
+        )
 
 
 def _tools_schema(

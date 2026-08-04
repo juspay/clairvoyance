@@ -47,6 +47,7 @@ from app.ai.voice.agents.breeze_buddy.template.types import (
 )
 from app.ai.voice.agents.breeze_buddy.template.ui_prompt import (
     render_primitives_section,
+    render_render_ui_section,
 )
 from app.core.logger import logger
 
@@ -61,7 +62,12 @@ DIRECT_MODE_NODE_NAME = "__direct__"
 UI_PRIMITIVES_PLACEHOLDER = "{{ui_primitives_section}}"
 
 
-def _splice_ui_primitives(text: str, ui_allowlist: Optional[Set[str]]) -> str:
+def _splice_ui_primitives(
+    text: str,
+    ui_allowlist: Optional[Set[str]],
+    render_ui_mode: bool = False,
+    quick_replies_mode: Optional[str] = None,
+) -> str:
     """Substitute ``{{ui_primitives_section}}`` with the rendered section.
 
     When ``ui_allowlist`` is ``None`` the placeholder is replaced with an
@@ -74,6 +80,14 @@ def _splice_ui_primitives(text: str, ui_allowlist: Optional[Set[str]]) -> str:
         return text
     if ui_allowlist is None:
         return text.replace(UI_PRIMITIVES_PLACEHOLDER, "")
+    if render_ui_mode:
+        # RFC-002: this session authors UI via the render_ui tool — the
+        # prompt never teaches the <ui_stream> text protocol (the server
+        # still dual-reads text ops during migration).
+        return text.replace(
+            UI_PRIMITIVES_PLACEHOLDER,
+            render_render_ui_section(quick_replies_mode),
+        )
     return text.replace(
         UI_PRIMITIVES_PLACEHOLDER, render_primitives_section(ui_allowlist)
     )
@@ -134,6 +148,8 @@ class FlowConfigBuilder:
         disabled_names: AbstractSet[str] = frozenset(),
         *,
         quiet: bool = False,
+        render_ui_mode: bool = False,
+        quick_replies_mode: Optional[str] = None,
     ):
         """
         Initialize builder with a static handler map.
@@ -167,6 +183,12 @@ class FlowConfigBuilder:
         # Pre-bind so call sites stay terse: ``self._log(...)`` instead
         # of ``(logger.debug if quiet else logger.info)(...)`` per call.
         self._log = logger.debug if quiet else logger.info
+        # RFC-002: swap the spliced UI section for the render_ui contract
+        # (the tool schema self-documents arg shapes).
+        self._render_ui_mode = render_ui_mode
+        # QuickReplies placement policy ('forced_final' appends the
+        # end-of-turn chips contract to the render_ui section).
+        self._quick_replies_mode = quick_replies_mode
 
         self.handler_map = {
             "mute_stt": mute_stt,
@@ -352,7 +374,12 @@ class FlowConfigBuilder:
         # placeholder are untouched; templates with a placeholder but no
         # allowlist (voice / pre-chat) get an empty-string replacement so
         # the same template can serve both channels.
-        system_prompt = _splice_ui_primitives(system_prompt, ui_allowlist)
+        system_prompt = _splice_ui_primitives(
+            system_prompt,
+            ui_allowlist,
+            self._render_ui_mode,
+            self._quick_replies_mode,
+        )
 
         # system_prompt goes into role_messages so pipecat-flows prepends it
         # ahead of task_messages. When a greeting is played, prepare_initial_node
@@ -545,7 +572,12 @@ class FlowConfigBuilder:
         task_messages = [
             {
                 "role": msg.role,
-                "content": _splice_ui_primitives(msg.content, ui_allowlist),
+                "content": _splice_ui_primitives(
+                    msg.content,
+                    ui_allowlist,
+                    self._render_ui_mode,
+                    self._quick_replies_mode,
+                ),
             }
             for msg in node.task_messages
         ]
@@ -554,7 +586,12 @@ class FlowConfigBuilder:
         role_messages = [
             {
                 "role": msg.role,
-                "content": _splice_ui_primitives(msg.content, ui_allowlist),
+                "content": _splice_ui_primitives(
+                    msg.content,
+                    ui_allowlist,
+                    self._render_ui_mode,
+                    self._quick_replies_mode,
+                ),
             }
             for msg in node.role_messages
         ]

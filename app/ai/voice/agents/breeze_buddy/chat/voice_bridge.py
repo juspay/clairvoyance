@@ -36,7 +36,7 @@ from app.ai.voice.agents.breeze_buddy.chat.turn_core import (
     run_chat_approval_turn,
     run_chat_turn,
 )
-from app.ai.voice.agents.breeze_buddy.chat.ui_stream import strip_ui_stream_markers
+from app.ai.voice.agents.breeze_buddy.chat.ui.stream import strip_ui_stream_markers
 from app.core.logger import logger
 from app.database.accessor.breeze_buddy.chat_session import (
     list_chat_messages_for_session,
@@ -86,6 +86,10 @@ _RTVI_APPROVAL_RESOLVED = "function-approval-resolved"
 # state on the voice orb (names match the chat SDK's events for 1:1 reuse).
 _RTVI_FUNCTION_CALL_STARTED = "function-call-started"
 _RTVI_FUNCTION_CALL_COMPLETED = "function-call-completed"
+# Step-progress lines (Phase 2) — same payload shape as the chat SSE
+# events, so the SDK maps them onto the one step-update path.
+_RTVI_STEP_STARTED = "step-started"
+_RTVI_STEP_COMPLETED = "step-completed"
 
 # Agent._emit_rtvi_event(event_type, payload) — swallows its own exceptions.
 EmitRtvi = Callable[[str, Optional[dict]], Awaitable[None]]
@@ -322,9 +326,10 @@ class WidgetVoiceBridge:
                 except AttributeError:
                     pass
         except Exception as exc:  # noqa: BLE001
-            logger.error(
-                f"[voice-bridge] turn failed for session {self.session_id}: {exc}",
-                exc_info=True,
+            # loguru: no ``exc_info`` kwarg — it would re-format the message
+            # and crash on brace-bearing provider error text.
+            logger.exception(
+                f"[voice-bridge] turn failed for session {self.session_id}: {exc}"
             )
             await self._emit_rtvi(
                 _RTVI_ERROR, {"code": "internal", "message": "voice turn failed"}
@@ -396,6 +401,20 @@ class WidgetVoiceBridge:
                 if not filler_fired and not agg.has_emitted:
                     filler_fired = True
                     await self._speak_filler(gen)
+            elif ev.event in ("step_started", "step_completed"):
+                # Step-progress lines during a voice turn — forward the SSE
+                # payload verbatim; the SDK reconciles them into the same
+                # per-turn step list chat uses. The spoken channel keeps its
+                # one-filler-utterance rule (below) — steps are visual-only.
+                data = ev.data if isinstance(ev.data, dict) else {}
+                await self._emit_rtvi(
+                    (
+                        _RTVI_STEP_STARTED
+                        if ev.event == "step_started"
+                        else _RTVI_STEP_COMPLETED
+                    ),
+                    dict(data),
+                )
             elif ev.event == "function_call_completed":
                 # Tool finished — let the widget clear the "executing" state.
                 data = ev.data if isinstance(ev.data, dict) else {}
@@ -461,6 +480,10 @@ class WidgetVoiceBridge:
                 terminal_emitted = True
             # user_committed / node_transition are intentionally not echoed: the
             # user transcript already reaches the widget from STT via pipecat RTVI.
+            # step_started / step_completed (widget step lines) fall through here
+            # too — voice already surfaces tool activity via the orb's
+            # function_call_* RTVI events; a visual step list has no voice analog
+            # in this slice.
         return terminal_emitted
 
     # -- emission helpers ---------------------------------------------------

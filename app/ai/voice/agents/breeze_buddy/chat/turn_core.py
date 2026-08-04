@@ -33,10 +33,20 @@ from app.ai.voice.agents.breeze_buddy.chat.history.block_codec import (
     blocks_to_llm_context_messages,
     repair_dangling_tool_uses,
 )
+from app.ai.voice.agents.breeze_buddy.chat.llm.gemini.adapter_patch import (
+    ensure_chat_gemini_adapter,
+)
 from app.ai.voice.agents.breeze_buddy.chat.sse import SSEEvent
 from app.ai.voice.agents.breeze_buddy.llm import get_llm_service
 from app.ai.voice.agents.breeze_buddy.template.cache import get_template_by_id_cached
 from app.ai.voice.agents.breeze_buddy.template.types import TemplateModel
+from app.ai.voice.agents.breeze_buddy.template.ui_catalog import (
+    CATALOG_VERSION,
+    CATALOG_VERSION_V2,
+    LAZY_GROUPS,
+    is_data_bound,
+    resolve_allowlist,
+)
 from app.core.config.dynamic import CHAT_HISTORY_REPLAY_LIMIT
 from app.core.logger import logger
 from app.database.accessor.breeze_buddy.chat_session import (
@@ -61,6 +71,61 @@ def resolve_llm_configuration(template: TemplateModel) -> Any:
     if configurations is None:
         return None
     return getattr(configurations, "llm_configurations", None)
+
+
+def resolve_session_catalog_version(session_metadata: Any) -> Optional[str]:
+    """Read the session's negotiated UI catalog version (RFC-001 §3.4).
+
+    The widget create handler persists it under the server-owned ``widget``
+    metadata block; anything else (legacy sessions, RBAC chat, voice) has
+    no entry and is treated as v1 by ``ChatAgent``.
+    """
+    if not isinstance(session_metadata, dict):
+        return None
+    widget = session_metadata.get("widget")
+    if not isinstance(widget, dict):
+        return None
+    version = widget.get("catalog_version")
+    return version if isinstance(version, str) else None
+
+
+def negotiate_catalog(
+    template: Any, requested_version: Optional[str]
+) -> "tuple[str, List[str]]":
+    """Catalog-version intersection negotiation (RFC-001 §3.4 Stage B).
+
+    ``(active_version, ui_flavors)`` = the intersection of what the CLIENT
+    supports (``requested_version`` from the create body) and what the
+    TEMPLATE can serve (its resolved allowlist contains at least one
+    data-bound component). Anything short of both sides saying v2 is v1 —
+    a v2 embed on a v1 template gets ``catalog_active='v1'`` and knows not
+    to offer intents, instead of discovering it via per-intent 422s.
+
+    ``ui_flavors`` is the template's enabled lazy flavor groups (e.g.
+    ``['commerce']``) when v2 is active — the embed preloads those chunks.
+
+    Lives next to :func:`resolve_session_catalog_version` (the read side of
+    the same persisted value) so every session surface — widget, demo —
+    negotiates identically.
+    """
+    configurations = getattr(template, "configurations", None)
+    ui_cat = getattr(configurations, "ui_catalog", None) if configurations else None
+    enabled_groups = list(ui_cat.enabled_groups or []) if ui_cat is not None else None
+    if requested_version != CATALOG_VERSION_V2:
+        return CATALOG_VERSION, []
+    allowlist = resolve_allowlist(
+        enabled_groups=enabled_groups,
+        enabled_primitives=(
+            list(ui_cat.enabled_primitives or []) if ui_cat is not None else None
+        ),
+        disabled_primitives=(
+            list(ui_cat.disabled_primitives or []) if ui_cat is not None else None
+        ),
+    )
+    if not any(is_data_bound(name) for name in allowlist):
+        return CATALOG_VERSION, []
+    flavors = [g for g in (enabled_groups or []) if g in LAZY_GROUPS]
+    return CATALOG_VERSION_V2, flavors
 
 
 async def build_render_template_vars(
@@ -95,6 +160,7 @@ async def run_chat_turn(
     user_content: str,
     llm: Optional[Any] = None,
     context_placement: Optional[str] = None,
+    internal: bool = False,
 ) -> AsyncIterator[SSEEvent]:
     """Drive one chat-brain turn for ``session_id`` and yield its SSE events.
 
@@ -107,7 +173,11 @@ async def run_chat_turn(
     ``llm`` — optional pre-built (pooled) LLM service; when ``None`` one is
     resolved from the template. ``context_placement`` — optional per-turn
     client-context render override (the HTTP piggyback carries it; voice
-    passes ``None``).
+    passes ``None``). ``internal`` — internal AGENT_TURN intent turn
+    (``IntentPolicy.internal``): the exchange persists with
+    visibility=internal, no ``user_committed`` fires, and pending HITL
+    approvals are NOT superseded (a background turn is not the shopper
+    moving on).
 
     On a missing / ended session or a missing template, yields a terminal
     ``error`` + ``turn_end`` instead of raising — the HTTP shell already
@@ -147,17 +217,21 @@ async def run_chat_turn(
     # that keep replayed history fully answered; the resolved events ride at
     # the start of this turn's stream so live cards flip without client
     # inference. (HTTP path used to do this inline; now it lives here so the
-    # voice bridge inherits it for free.)
-    superseded = await resolve_dangling_approvals(session_id, only_expired=False)
-    for row in superseded:
-        yield SSEEvent(
-            event="function_approval_resolved",
-            data={
-                "tool_call_id": row.tool_call_id,
-                "status": WIRE_STATUS_SUPERSEDED,
-                "reason": row.reason,
-            },
-        )
+    # voice bridge inherits it for free.) Internal background turns skip
+    # the sweep — they carry no user decision; the still-pending calls
+    # replay this turn as repaired synthetic errors (in-memory only) and
+    # stay claimable on the approval endpoint.
+    if not internal:
+        superseded = await resolve_dangling_approvals(session_id, only_expired=False)
+        for row in superseded:
+            yield SSEEvent(
+                event="function_approval_resolved",
+                data={
+                    "tool_call_id": row.tool_call_id,
+                    "status": WIRE_STATUS_SUPERSEDED,
+                    "reason": row.reason,
+                },
+            )
 
     history_limit = await CHAT_HISTORY_REPLAY_LIMIT()
     history_rows = await list_chat_messages_for_session(session_id, limit=history_limit)
@@ -192,6 +266,10 @@ async def run_chat_turn(
 
     if llm is None:
         llm = await get_llm_service(resolve_llm_configuration(template), pooled=True)
+    # Chat-only adapter swap — voice keeps the stock service (see
+    # ensure_chat_gemini_adapter). Applied to injected instances too;
+    # idempotent and a no-op for non-Gemini services.
+    llm = ensure_chat_gemini_adapter(llm)
 
     agent = ChatAgent(
         session_id=session_id,
@@ -200,11 +278,13 @@ async def run_chat_turn(
         template_vars=template_vars,
         agent_state=agent_state,
         context_placement=context_placement,
+        catalog_version=resolve_session_catalog_version(session.metadata),
     )
     async for event in agent.run_turn(
         user_content=user_content,
         history=history,
         current_node=session.current_node,
+        internal=internal,
     ):
         yield event
 
@@ -278,6 +358,10 @@ async def run_chat_approval_continuation(
     template_vars = await build_render_template_vars(template, persisted_template_vars)
     if llm is None:
         llm = await get_llm_service(resolve_llm_configuration(template), pooled=True)
+    # Chat-only adapter swap — voice keeps the stock service (see
+    # ensure_chat_gemini_adapter). Applied to injected instances too;
+    # idempotent and a no-op for non-Gemini services.
+    llm = ensure_chat_gemini_adapter(llm)
 
     agent = ChatAgent(
         session_id=session_id,
@@ -285,6 +369,7 @@ async def run_chat_approval_continuation(
         llm=llm,
         template_vars=template_vars,
         agent_state=agent_state,
+        catalog_version=resolve_session_catalog_version(session.metadata),
     )
     async for event in agent.run_approval_turn(
         approval=claimed,
@@ -369,4 +454,6 @@ __all__ = [
     "run_chat_approval_continuation",
     "build_render_template_vars",
     "resolve_llm_configuration",
+    "resolve_session_catalog_version",
+    "negotiate_catalog",
 ]

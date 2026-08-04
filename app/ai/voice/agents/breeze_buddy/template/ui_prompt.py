@@ -39,6 +39,7 @@ from pydantic import BaseModel
 from app.ai.voice.agents.breeze_buddy.template.ui_catalog import (
     PRIMITIVE_RENDER_ORDER,
     UI_CATALOG,
+    is_data_bound,
 )
 
 # ---------------------------------------------------------------------------
@@ -444,6 +445,70 @@ _EMPTY_BODY = (
 )
 
 
+# ---------------------------------------------------------------------------
+# Data-bound components subsection (catalog v2, RFC-001)
+#
+# Rendered only when the allowlist contains at least one data_bound
+# component. Deliberately terse — the whole subsection stays ≤ ~40 lines.
+# Data-bound components are EXCLUDED from the main per-primitive entries:
+# the LLM must reach them via `show` ops, never hand-typed `add` props.
+# ---------------------------------------------------------------------------
+
+_DATA_BOUND_HEADER = (
+    "### Data-bound components\n"
+    "\n"
+    "These render from TOOL DATA — NEVER hand-type their data props. Emit ONE "
+    "`show` op; the server fills props from THIS turn's tool results and "
+    "drops the op if a binding cannot be resolved (stale data never renders):\n"
+    '  {"op":"show","id":"<id>","component":"<Name>",'
+    '"bind":{"<prop>":"$tool:<tool_name>#<json-pointer>"},'
+    '"props":{<literal hints>}}\n'
+    "- `bind`: prop → `$tool:<tool_name>#<pointer>` (RFC 6901 pointer into "
+    "that tool's result; optional `@<tool_use_id>` picks one call in a "
+    "multi-call turn).\n"
+    "- A `bind` resolves ONLY against a tool call made in THIS turn — if "
+    "the needed tool has not run this turn, call it first, then emit the "
+    "`show` op.\n"
+    "- `props`: small literal hints only (layout, max_items). A key must not "
+    "appear in both `bind` and `props`.\n"
+    '- Root/parent rules match `add` (root op has id "root", omits parent). '
+    "Emit the op in canonical form — the compact `+` shorthand does not "
+    "apply to `show`."
+)
+
+_DATA_BOUND_EXAMPLE = (
+    'Example: {"op":"show","id":"root","component":"ProductGrid",'
+    '"bind":{"products":"$tool:search_catalog#/products"},'
+    '"props":{"max_items":6,"layout":"carousel"}}'
+)
+
+# Plan-as-emission (Phase 2). Rides the data-bound subsection because
+# both ship on the same v2 chat surface; the parser (chat/plan.py)
+# strips the marker from prose on every session regardless.
+_PLAN_INSTRUCTION = (
+    "Multi-step turns: when you will call 2+ tools, FIRST emit your plan "
+    'as `<plan>["tool_a","tool_b"]</plan>` on its own line — the tool '
+    "names you intend to call, in order. Re-emit a new <plan> to revise. "
+    "The shopper sees it as progress steps; never mention the plan in "
+    "prose. Skip it for single-tool or no-tool turns."
+)
+
+
+def _render_data_bound_section(names: List[str]) -> str:
+    """Render the ``### Data-bound components`` subsection for the
+    allowlisted data-bound components (in curated render order)."""
+    entries: List[str] = []
+    for name in names:
+        model = UI_CATALOG[name]
+        lines = [f"**{name}** — {_purpose_line(model)}"]
+        for fname, fld in model.model_fields.items():
+            lines.append(f"  {_render_top_level_field(fname, fld)}")
+        entries.append("\n".join(lines))
+    return "\n\n".join(
+        [_DATA_BOUND_HEADER, *entries, _DATA_BOUND_EXAMPLE, _PLAN_INSTRUCTION]
+    )
+
+
 @lru_cache(maxsize=64)
 def _render_primitives_section_cached(allowlist_key: frozenset) -> str:
     """Pure render keyed by a hashable allowlist (D1, see
@@ -459,16 +524,94 @@ def _render_primitives_section_cached(allowlist_key: frozenset) -> str:
     """
     allowlist = set(allowlist_key)
     entries: List[str] = []
+    data_bound_names: List[str] = []
     for name in PRIMITIVE_RENDER_ORDER:
         if name not in allowlist:
             continue
         model = UI_CATALOG.get(name)
         if model is None:
             continue
+        # Server-only components (e.g. ProductDetail) are emitted by
+        # direct-intent code paths, never by the LLM — no prompt entry in
+        # ANY section, though they stay in the allowlist for validation.
+        if getattr(model, "server_only", False):
+            continue
+        # render_ui-only components (e.g. LinkButton) are not authorable
+        # via the text channel (parse rejects them), so the text-channel
+        # prompt must not teach them either.
+        if not getattr(model, "text_channel", True):
+            continue
+        # Data-bound components (catalog v2) render in their own `show`-op
+        # subsection below — never as `add`-style entries the LLM would
+        # crib hand-typed props from.
+        if is_data_bound(name):
+            data_bound_names.append(name)
+            continue
         entries.append(_render_entry(name, model))
 
     body = "\n\n".join(entries) if entries else _EMPTY_BODY
+    if data_bound_names:
+        body = f"{body}\n\n{_render_data_bound_section(data_bound_names)}"
     return f"{_HEADER}\n\n{body}\n\n{_FOOTER}"
+
+
+_RENDER_UI_SECTION = (
+    "## Showing UI (render_ui tool)\n"
+    "You show shoppers products, carts, and quick replies ONLY by calling "
+    "the render_ui function — never by writing markup, JSON, op lines, or "
+    "any <ui_stream> text in your reply. Prose is for words; render_ui is "
+    "for UI.\n"
+    "- After a successful catalog search you will be required to call "
+    "render_ui exactly once: render a component, or pass decision='no_ui' "
+    "with a short reason when showing nothing serves the shopper better.\n"
+    "- Bind data, never retype it: bind=[{prop:'products', "
+    "ref:'$tool:search_catalog#/products'}]. The server fills every value "
+    "(price, image, stock) from THIS turn's tool results.\n"
+    "- When the shopper asked for something specific, select with "
+    "items=[{id,...}] — ids from this turn's results, in the order to "
+    "show. If a result carries matched_variant (the shopper named a color/"
+    "size), pass its id as that item's feature_variant so the card leads "
+    "with the right variant.\n"
+    "- For a link-only answer (e.g. 'just give me the checkout link') "
+    "render LinkButton with link={label, url} instead of pasting the URL "
+    "in prose — the url must be the store's checkout URL or one from "
+    "THIS turn's tool results.\n"
+    "- After render_ui succeeds, write at most ONE short line; never "
+    "repeat names or prices the UI already shows. The function response "
+    "tells you exactly what rendered — use its ids for follow-ups "
+    "('the green one').\n"
+)
+
+
+_QUICK_REPLIES_FORCED_FINAL = (
+    "- QuickReplies are decided at the END of your turn — never render "
+    "them mid-turn. After your final reply you will be asked once more to "
+    "call render_ui: respond with QuickReplies (2-4 follow-ups, <=4 words "
+    "each, grounded in what you just said) or decision='no_ui' when none "
+    "would genuinely help. Never suggest a chip that duplicates an action "
+    "already visible on this turn's UI (Add to cart, View, a checkout "
+    "button).\n"
+)
+
+
+def render_render_ui_section(quick_replies_mode: "str | None" = None) -> str:
+    """The compact UI section for render_ui-mode sessions (RFC-002): the
+    tool schema self-documents the arg shapes, so the prompt carries only
+    the behavioral contract — replacing the entire ``<ui_stream>``
+    authoring catalog for this template.
+
+    The plan instruction must ride along: it normally ships inside the
+    data-bound subsection this section REPLACES, and without it the model
+    never emits ``<plan>`` — so plan enforcement (which arms off the
+    extracted marker) would silently stay dormant in render_ui mode.
+
+    ``quick_replies_mode='forced_final'`` appends the end-of-turn chips
+    contract (never mid-turn; the harness runs one forced render_ui cycle
+    after the final reply)."""
+    section = _RENDER_UI_SECTION
+    if quick_replies_mode == "forced_final":
+        section += _QUICK_REPLIES_FORCED_FINAL
+    return section + "- " + _PLAN_INSTRUCTION + "\n"
 
 
 def render_primitives_section(allowlist: Set[str]) -> str:
@@ -492,4 +635,4 @@ def render_primitives_section(allowlist: Set[str]) -> str:
     return _render_primitives_section_cached(frozenset(allowlist))
 
 
-__all__ = ["render_primitives_section"]
+__all__ = ["render_primitives_section", "render_render_ui_section"]

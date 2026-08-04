@@ -96,7 +96,7 @@ def test_tile_example_validates_against_catalog():
     the LLM an invalid shape."""
     # Local import: the chat package must load after the template package
     # (circular-import precaution above), so don't hoist this to module top.
-    from app.ai.voice.agents.breeze_buddy.chat.ui_stream import expand_compact_op
+    from app.ai.voice.agents.breeze_buddy.chat.ui.stream import expand_compact_op
 
     section = render_primitives_section({"Tile"})
     # Pull the JSON after the "Example: " marker for the Tile entry.
@@ -118,7 +118,7 @@ def test_metric_example_validates_against_catalog(name):
     """Each metric primitive's hard-coded compact example must round-trip
     through expand_compact_op -> validate_props, so a malformed example can't
     ship and mis-train the LLM prompt (mirrors the Tile contract test)."""
-    from app.ai.voice.agents.breeze_buddy.chat.ui_stream import expand_compact_op
+    from app.ai.voice.agents.breeze_buddy.chat.ui.stream import expand_compact_op
 
     section = render_primitives_section({name})
     block = section.split(f"**{name}**", 1)[1]
