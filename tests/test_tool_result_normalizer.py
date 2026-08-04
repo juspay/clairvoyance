@@ -1,4 +1,4 @@
-"""Tests for app.ai.voice.agents.breeze_buddy.chat.tool_result_normalizer.
+"""Tests for app.ai.voice.agents.breeze_buddy.chat.tools.result_normalizer.
 
 Self-contained: stdlib + the normalizer module only.  Run with::
 
@@ -11,7 +11,7 @@ precedence) lives in the template's ``tool_response_transforms``.
 
 import json
 
-from app.ai.voice.agents.breeze_buddy.chat.tool_result_normalizer import normalize
+from app.ai.voice.agents.breeze_buddy.chat.tools.result_normalizer import normalize
 
 
 def _wrap(inner) -> dict:

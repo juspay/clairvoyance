@@ -15,6 +15,35 @@ from __future__ import annotations
 from typing import Any, Dict, List
 
 import app.ai.voice.agents.breeze_buddy.chat.agent as agent_module
+from app.ai.voice.agents.breeze_buddy.chat.agent import (
+    approval as agent_approval,
+    context as agent_context,
+    core as agent_core,
+    cycle as agent_cycle,
+    render_ui as agent_render_ui,
+    tooling as agent_tooling,
+)
+from app.ai.voice.agents.breeze_buddy.chat.llm import driver as llm_driver
+
+# agent.py is a package of subsystem modules now — a patched seam must
+# land on every submodule that calls it (autoflake prunes unused
+# imports per module, hence the hasattr guard).
+_AGENT_MODULES = (
+    agent_core,
+    agent_cycle,
+    agent_approval,
+    agent_render_ui,
+    agent_context,
+    agent_tooling,
+)
+
+
+def _patch_agent_attr(monkeypatch, name, value):
+    for _mod in _AGENT_MODULES:
+        if hasattr(_mod, name):
+            monkeypatch.setattr(_mod, name, value)
+
+
 from app.ai.voice.agents.breeze_buddy.chat.agent import ChatAgent
 from app.ai.voice.agents.breeze_buddy.template.types import TemplateModel
 
@@ -69,8 +98,8 @@ def test_resume_seed_has_no_user_message_and_history_is_tail():
 
 
 def test_resume_seed_places_system_block_before_history(monkeypatch):
-    monkeypatch.setattr(
-        agent_module,
+    _patch_agent_attr(
+        monkeypatch,
         "render_client_context",
         lambda *a, **k: ("USER_BLOCK", "SYSTEM_BLOCK"),
     )
@@ -93,8 +122,8 @@ def test_resume_seed_places_system_block_before_history(monkeypatch):
 
 
 def test_normal_seed_still_ends_with_user_message(monkeypatch):
-    monkeypatch.setattr(
-        agent_module,
+    _patch_agent_attr(
+        monkeypatch,
         "render_client_context",
         lambda *a, **k: (None, "SYSTEM_BLOCK"),
     )

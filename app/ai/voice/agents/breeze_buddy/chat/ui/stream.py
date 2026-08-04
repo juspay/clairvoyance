@@ -33,6 +33,8 @@ from pydantic import ValidationError
 
 from app.ai.voice.agents.breeze_buddy.chat.sse import SSEEvent
 from app.ai.voice.agents.breeze_buddy.template.ui_catalog import (
+    UI_CATALOG,
+    is_data_bound,
     is_known_type,
     validate_props,
 )
@@ -48,7 +50,7 @@ _CARRY_MAX = max(len(_OPEN), len(_CLOSE)) - 1
 # emitted WITHOUT the ``<ui_stream>`` wrapper, so it can be recovered into the
 # op path instead of leaking to the user as raw JSON. See ``_is_op_line``.
 _OP_MARKERS: Set[str] = {"+", "~", "-"}
-_OP_VERBS: Set[str] = {"add", "replace", "remove"}
+_OP_VERBS: Set[str] = {"add", "replace", "remove", "show"}
 
 
 def _is_op_line(text: str) -> bool:
@@ -278,7 +280,7 @@ def _tail_marker_prefix(buffer: str, marker: str) -> int:
 # ---------------------------------------------------------------------------
 
 
-_ALLOWED_OPS: Set[str] = {"add", "replace", "remove"}
+_ALLOWED_OPS: Set[str] = {"add", "replace", "remove", "show"}
 
 
 @dataclass
@@ -541,6 +543,12 @@ def parse_op_line(line: str, *, allowlist: Optional[Set[str]] = None) -> OpResul
                 op.pop(k, None)
         return OpResult(op=op)
 
+    if op_kind == "show":
+        # Catalog-v2 data-bound op (RFC-001 §3.1). Validated here, hydrated
+        # by the resolver (chat/ui_binding.py) — NEVER healed: an invalid
+        # show drops with telemetry rather than being repaired.
+        return _parse_show_op(op, op_id, allowlist=allowlist)
+
     # add / replace require either a type (add) or props (replace).
     if op_kind == "add":
         type_name = op.get("type")
@@ -548,6 +556,17 @@ def parse_op_line(line: str, *, allowlist: Optional[Set[str]] = None) -> OpResul
             return OpResult(error="add_missing_type")
         if not is_known_type(type_name):
             return OpResult(error=f"unknown_type:{type_name!r}")
+        # Data-bound components hydrate from tool results via `show` ops
+        # only — a hand-typed `add` would reintroduce the hallucination
+        # surface catalog v2 exists to remove. (Server-hydrated add ops
+        # never pass through this parser; they're built post-parse.)
+        if is_data_bound(type_name):
+            return OpResult(error=f"data_bound_requires_show:{type_name}")
+        # render_ui-only components (e.g. LinkButton) carry trust checks
+        # that live in the function-call path (URL verification) — a
+        # hand-typed text-channel add would bypass them.
+        if not getattr(UI_CATALOG.get(type_name), "text_channel", True):
+            return OpResult(error=f"render_ui_only:{type_name}")
         # Template-level enable check — distinct telemetry from unknown_type.
         if allowlist is not None and type_name not in allowlist:
             return OpResult(error=f"primitive_disabled:{type_name}")
@@ -591,6 +610,55 @@ def parse_op_line(line: str, *, allowlist: Optional[Set[str]] = None) -> OpResul
         # Replace props with the model_dump so downstream callers see
         # normalized values (enum → string, HttpUrl → str, defaults filled).
         op["props"] = validated.model_dump(exclude_none=True, mode="json")
+
+    return OpResult(op=op)
+
+
+def _parse_show_op(
+    op: Dict[str, Any], op_id: str, *, allowlist: Optional[Set[str]]
+) -> OpResult:
+    """Validate one ``show`` op's shape (RFC-001 §3.1); hydration happens
+    later via the resolver.
+
+    Requirements: ``component`` known + allowlisted + data_bound; ``bind``
+    a non-empty dict of well-formed ``$tool:…#…`` refs; ``props`` an
+    optional object of literals; no key present in both ``bind`` and
+    ``props``; parent/root rules identical to ``add``. The returned op is
+    UNHYDRATED — ``op["op"] == "show"`` is the marker the caller routes to
+    :func:`app.ai.voice.agents.breeze_buddy.chat.ui.binding.resolve_show_op`.
+    """
+    # Local import: ui_binding imports OpResult from this module, so the
+    # grammar helper must load lazily here (same cycle-safety pattern as
+    # tool_pipeline's ToolUiTrigger import).
+    from app.ai.voice.agents.breeze_buddy.chat.ui.binding import parse_bind_ref
+
+    component = op.get("component")
+    if not isinstance(component, str) or not component:
+        return OpResult(error="show_missing_component")
+    if not is_known_type(component):
+        return OpResult(error=f"show_unknown_component:{component!r}")
+    if not is_data_bound(component):
+        return OpResult(error=f"show_component_not_data_bound:{component}")
+    if allowlist is not None and component not in allowlist:
+        return OpResult(error=f"show_component_disabled:{component}")
+
+    parent = op.get("parent")
+    if op_id != "root" and (not isinstance(parent, str) or not parent):
+        return OpResult(error="missing_parent")
+
+    bind = op.get("bind")
+    if not isinstance(bind, dict) or not bind:
+        return OpResult(error="show_missing_bind")
+    for prop, ref in bind.items():
+        if not isinstance(ref, str) or parse_bind_ref(ref) is None:
+            return OpResult(error=f"bad_bind_ref:{prop}")
+
+    props = op.get("props") or {}
+    if not isinstance(props, dict):
+        return OpResult(error="props_not_object")
+    collisions = sorted(set(bind) & set(props))
+    if collisions:
+        return OpResult(error=f"bind_props_collision:{','.join(collisions)}")
 
     return OpResult(op=op)
 
@@ -679,6 +747,23 @@ def ui_op_dropped_event(line: str, reason: str) -> SSEEvent:
 
 HealerFn = Callable[[str, Dict[str, Any]], "HealerResult"]
 
+# Resolver for parsed-but-unhydrated `show` ops (catalog v2). Takes the op
+# dict `parse_op_line` returned and yields either the hydrated add op or an
+# error reason (`bind_unresolved:*` / `bind_validation_failed:*`). Injected
+# as a callable — like HealerFn — so this module never imports ui_binding
+# (which imports OpResult from here).
+ShowResolverFn = Callable[[Dict[str, Any]], OpResult]
+
+
+def _is_show_line(line: str) -> bool:
+    """True when ``line`` parses to a ``show`` op. Show ops are validated-
+    or-dropped, never healed — the healer must not touch them."""
+    try:
+        op = json.loads(line)
+    except (json.JSONDecodeError, ValueError):
+        return False
+    return isinstance(op, dict) and op.get("op") == "show"
+
 
 @dataclass
 class HealerResult:
@@ -699,6 +784,7 @@ def process_op_line(
     healer: Optional[HealerFn] = None,
     known_ids: Optional[Set[str]] = None,
     allowlist: Optional[Set[str]] = None,
+    show_resolver: Optional[ShowResolverFn] = None,
 ) -> List[SSEEvent]:
     """Run one raw JSONL line through (healer →) parse → validate → SSE.
 
@@ -716,6 +802,13 @@ def process_op_line(
     targeting types not in the allowlist drop with reason
     ``primitive_disabled:<type>`` — see ``parse_op_line``. When ``None``,
     no template-level filtering applies.
+
+    ``show_resolver`` hydrates catalog-v2 ``show`` ops against this turn's
+    binding store (see :data:`ShowResolverFn`). Show lines BYPASS the healer
+    (validate-or-drop only, RFC-001) and hydrate inline: on success the
+    resolver's ``{"op":"add",…,"v":2}`` op flows through the same anchoring
+    + ``ui_op`` path as any add. ``None`` (v1 sessions, voice) drops show
+    ops with reason ``show_no_resolver`` — v2 emission stays session-gated.
     """
     events: List[SSEEvent] = []
     # A3 — expand the compact wire form to canonical; then A1 — fan a `repeat`
@@ -730,7 +823,8 @@ def process_op_line(
         events.append(ui_op_dropped_event(compact_line, "repeat_items_not_list"))
         return events
     for line in expanded:
-        if healer is not None:
+        is_show = _is_show_line(line)
+        if healer is not None and not is_show:
             result = healer(line, session_state or {})
             # A ``dropped_*`` note is the drop's reason, not a repair —
             # surface it as ``ui_op_dropped`` (below) rather than
@@ -755,6 +849,24 @@ def process_op_line(
             continue
 
         op = parsed.op  # type: ignore[assignment]
+
+        # Catalog-v2 hydration: a parsed `show` op resolves against this
+        # turn's binding store into an ordinary hydrated add op (v:2),
+        # which then flows through the same anchoring + ui_op path below.
+        # A resolution/validation failure drops the whole op — never a
+        # partial or stale render (RFC-001 §8).
+        if op is not None and op.get("op") == "show":
+            if show_resolver is None:
+                events.append(ui_op_dropped_event(line, "show_no_resolver"))
+                continue
+            resolved = show_resolver(op)
+            if resolved.error or resolved.op is None:
+                events.append(
+                    ui_op_dropped_event(line, resolved.error or "bind_unresolved")
+                )
+                continue
+            op = resolved.op
+
         if known_ids is not None and op is not None:
             # Guarantee the conventional `root` container is anchored before any
             # block attaches to it. The widget anchors its per-message tree on
@@ -883,6 +995,7 @@ __all__ = [
     "OpResult",
     "HealerResult",
     "HealerFn",
+    "ShowResolverFn",
     "expand_compact_op",
     "expand_compact_line",
     "expand_repeat_line",

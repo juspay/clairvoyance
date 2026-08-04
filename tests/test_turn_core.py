@@ -51,7 +51,9 @@ def _patch_common(monkeypatch, *, superseded=None, agent_events=None):
         def __init__(self, **kwargs):
             self.kwargs = kwargs
 
-        async def run_turn(self, *, user_content, history, current_node):
+        async def run_turn(
+            self, *, user_content, history, current_node, internal=False
+        ):
             for ev in agent_events or []:
                 yield ev
 

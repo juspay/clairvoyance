@@ -34,11 +34,11 @@ from pipecat.frames.frames import (
 )
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
-from app.ai.voice.agents.breeze_buddy.chat.ui_healer import (
+from app.ai.voice.agents.breeze_buddy.chat.ui.healer import (
     HealerContext,
     make_healer_fn,
 )
-from app.ai.voice.agents.breeze_buddy.chat.ui_stream import (
+from app.ai.voice.agents.breeze_buddy.chat.ui.stream import (
     TextOut,
     UiStreamExtractor,
     process_op_line,
