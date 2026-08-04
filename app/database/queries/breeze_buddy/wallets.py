@@ -99,6 +99,62 @@ def delete_wallet_query(merchant_id: str) -> Tuple[str, List[Any]]:
     return query, [merchant_id]
 
 
+def apply_wallet_delta_query(
+    merchant_id: str,
+    type_: str,
+    credits_delta: Any,
+    amount: Optional[Any] = None,
+    currency: Optional[str] = None,
+    gateway: Optional[str] = None,
+    gateway_ref_id: Optional[str] = None,
+    made_by: Optional[str] = None,
+) -> Tuple[str, List[Any]]:
+    """Generate a single atomic statement that updates a wallet's cached
+    balance AND appends the corresponding ledger row, in one round trip.
+
+    Uses a CTE so the row lock Postgres takes internally for the UPDATE is
+    held for the shortest possible time (no separate SELECT ... FOR UPDATE,
+    no application-level read-modify-write round trip in between). This is
+    the "narrow transaction" pattern -- keeping the critical section as
+    small as physically possible to minimize contention on a single
+    merchant's wallet row under concurrent recharge/deduction calls.
+
+    ``credits_delta`` may be positive (recharge/addition) or negative
+    (deduction) -- the caller decides the sign; this function is agnostic
+    to direction.
+    """
+    query = f"""
+        WITH locked AS (
+            UPDATE {WALLETS_TABLE}
+            SET balance_credits = balance_credits + $1,
+                updated_at = $9
+            WHERE merchant_id = $2
+            RETURNING balance_credits AS new_balance
+        )
+        INSERT INTO {WALLET_TRANSACTIONS_TABLE} (
+            merchant_id, type, credits_delta, credit_balance_after,
+            amount, currency, gateway, gateway_ref_id, made_by, created_at
+        )
+        SELECT $2, $3, $1, locked.new_balance, $4, $5, $6, $7, $8, $9
+        FROM locked
+        RETURNING id, merchant_id, type, credits_delta, credit_balance_after,
+                  amount, currency, gateway, gateway_ref_id, made_by, created_at
+    """
+    now = datetime.now(timezone.utc)
+    values = [
+        credits_delta,
+        merchant_id,
+        type_,
+        amount,
+        currency,
+        gateway,
+        gateway_ref_id,
+        made_by,
+        now,
+    ]
+    return query, values
+
+
 def insert_wallet_transaction_query(
     merchant_id: str,
     type_: str,

@@ -3,6 +3,7 @@ mixins (split from the monolithic agent.py, 2026-08-05). ONE class,
 ONE instance per turn; the mixins are file organization, not
 architecture — all state lives here in ``__init__``."""
 
+import asyncio
 import copy
 import uuid
 from typing import Any, AsyncIterator, Dict, List, Optional, Set
@@ -56,11 +57,63 @@ from app.ai.voice.agents.breeze_buddy.template.ui_catalog import (
     data_bound_names,
     resolve_allowlist,
 )
+from app.core.logger import logger
 from app.core.transport.http_client import create_aiohttp_session
 from app.database.accessor.breeze_buddy.chat_session import (
     insert_chat_message,
 )
 from app.schemas.breeze_buddy.chat import ChatMessageRole
+from app.services.breeze_buddy.wallet import deduct, has_sufficient_credits
+from app.services.breeze_buddy.wallet.exceptions import WalletNotFoundError
+
+_pending_chat_billing_tasks: Set[asyncio.Task[None]] = set()
+
+
+async def _deduct_completed_chat_turn(
+    *, merchant_id: str, session_id: str, message_idx: int
+) -> None:
+    """Record billing after a completed customer-facing chat turn."""
+    try:
+        await deduct(
+            merchant_id=merchant_id,
+            event_type="chat_turn",
+            ref_id=f"{session_id}:{message_idx}",
+        )
+    except asyncio.CancelledError:
+        logger.warning(
+            "deferred chat deduction cancelled for merchant_id=%s "
+            "session_id=%s idx=%s",
+            merchant_id,
+            session_id,
+            message_idx,
+        )
+        raise
+    except Exception:
+        # The customer already has their answer. Billing failures must not
+        # delay or surface as a failed chat turn.
+        logger.error(
+            "deferred chat deduction failed for merchant_id=%s " "session_id=%s idx=%s",
+            merchant_id,
+            session_id,
+            message_idx,
+            exc_info=True,
+        )
+
+
+def _schedule_completed_chat_turn_deduction(
+    *, merchant_id: str, session_id: str, message_idx: int
+) -> None:
+    """Run post-turn billing independently from the SSE stream lifecycle."""
+    task = asyncio.create_task(
+        _deduct_completed_chat_turn(
+            merchant_id=merchant_id,
+            session_id=session_id,
+            message_idx=message_idx,
+        ),
+        name=f"chat-turn-deduct:{session_id}:{message_idx}",
+    )
+    _pending_chat_billing_tasks.add(task)
+    task.add_done_callback(_pending_chat_billing_tasks.discard)
 
 
 class ChatAgent(
@@ -89,11 +142,16 @@ class ChatAgent(
         agent_state: Optional[Dict[str, Any]] = None,
         context_placement: Optional[str] = None,
         catalog_version: Optional[str] = None,
+        merchant_id: Optional[str] = None,
     ) -> None:
         self.session_id = session_id
         self.template = template
         self.template_vars = template_vars or {}
         self._llm = llm
+        # Merchant this session bills to. None means unmetered (no merchant
+        # binding, e.g. reseller-only templates) — credit gate/deduction are
+        # both no-ops in that case.
+        self.merchant_id = merchant_id
         # Generic per-session state dict — the canonical store for any
         # identifiers the template's reducers care about (cart_id,
         # checkout_id, etc.). Loaded from agent_session_state on turn
@@ -362,6 +420,34 @@ class ChatAgent(
             await close_mcp_pool(self.mcp_pool)
             self.mcp_pool = None
 
+    async def _check_sufficient_credits(self) -> bool:
+        """Read-only credit gate. True (proceed) when unmetered, when the
+        wallet has balance, or when the check itself fails transiently
+        (fail open — a billing hiccup must never break chat delivery).
+        False only for a genuine, permanent condition: no wallet exists
+        for this merchant (e.g. deleted) — fail closed.
+        """
+        if self.merchant_id is None:
+            return True
+        try:
+            return await has_sufficient_credits(self.merchant_id)
+        except WalletNotFoundError:
+            logger.warning(
+                "no wallet found for merchant_id=%s session_id=%s; blocking the turn",
+                self.merchant_id,
+                self.session_id,
+            )
+            return False
+        except Exception:
+            logger.warning(
+                "has_sufficient_credits failed for merchant_id=%s "
+                "session_id=%s; failing open and allowing the turn",
+                self.merchant_id,
+                self.session_id,
+                exc_info=True,
+            )
+            return True
+
     async def _run_turn_inner(
         self,
         *,
@@ -378,6 +464,7 @@ class ChatAgent(
         # single source of truth on the next turn. Internal turns persist
         # the instruction as an internal-only block (resume replay skips
         # the row; the LLM still sees it) and commit nothing to the wire.
+        user_msg = None
         if self._internal_turn:
             await insert_chat_message(
                 session_id=self.session_id,
@@ -400,6 +487,24 @@ class ChatAgent(
                 },
             )
 
+            # Credit gate — internal turns are never customer-billable, so
+            # only the customer-facing branch above is gated. Runs after
+            # the user's message is persisted (so a blocked turn still
+            # leaves a record) and before any LLM call.
+            if not await self._check_sufficient_credits():
+                yield SSEEvent(
+                    event="error",
+                    data={
+                        "code": "insufficient_credits",
+                        "message": (
+                            "We're unable to process your request right "
+                            "now. Please contact support if this continues."
+                        ),
+                    },
+                )
+                yield SSEEvent(event="turn_end", data={"session_status": "FAILED"})
+                return
+
         # Knowledge base context for this turn. In-memory only — like the
         # client-context blocks it is EPHEMERAL (never persisted to
         # chat_message), so nothing leaks into replayed history. Chat can
@@ -409,7 +514,21 @@ class ChatAgent(
         context = self._seed_context(
             node, history, user_content, prep.global_funcs, kb_message=kb_message
         )
+        billing_scheduled = False
         async for event in self._cycle_loop(context, node, prep):
+            if (
+                not billing_scheduled
+                and self.merchant_id is not None
+                and user_msg is not None
+                and event.event == "turn_end"
+                and event.data.get("session_status") == "ACTIVE"
+            ):
+                _schedule_completed_chat_turn_deduction(
+                    merchant_id=self.merchant_id,
+                    session_id=self.session_id,
+                    message_idx=user_msg.idx,
+                )
+                billing_scheduled = True
             yield event
 
     @property

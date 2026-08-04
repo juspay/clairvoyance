@@ -18,12 +18,11 @@ from app.database.decoder.breeze_buddy.wallets import (
 )
 from app.database.queries import run_parameterized_query
 from app.database.queries.breeze_buddy.wallets import (
+    apply_wallet_delta_query,
     create_wallet_query,
     delete_wallet_query,
     get_wallet_for_update_query,
     get_wallet_query,
-    insert_wallet_transaction_query,
-    update_wallet_balance_query,
     update_wallet_reseller_id_query,
 )
 from app.schemas.breeze_buddy.wallets import WalletResponse, WalletTransactionResponse
@@ -116,56 +115,48 @@ async def apply_recharge(
 ) -> WalletTransactionResponse:
     """Recharge a merchant's wallet and append a ledger row.
 
-    Locks the wallet row (SELECT ... FOR UPDATE) for the duration of the
-    transaction to prevent lost updates from concurrent recharges/deductions,
-    then inserts an 'addition' row into wallet_transactions and updates the
-    cached balance_credits on wallets.
+    Uses apply_wallet_delta_query's single atomic UPDATE...RETURNING + INSERT
+    CTE statement, so the row lock Postgres takes internally is held for one
+    round trip only (no separate SELECT ... FOR UPDATE followed by
+    application-level arithmetic followed by a second UPDATE). This "narrow
+    transaction" shape minimizes contention on a single merchant's wallet row
+    under concurrent recharge/deduction calls.
 
     The number of credits to add (credits_delta) must already be computed by
-    the caller (see services.wallet.conversion.compute_credits) -- this
+    the caller (see services.breeze_buddy.wallet.conversion.compute_credits) -- this
     accessor has no knowledge of currency conversion. Likewise, gateway and
     gateway_ref_id must be supplied by the caller -- this accessor has no
     knowledge of which payment gateway (or "manual") initiated the recharge,
     so it never needs to change as new gateways are added.
 
     Raises:
-        ValueError: if no wallet exists for merchant_id.
-        Exception: on database errors.
+        ValueError: if no wallet exists for merchant_id or a database
+            connection could not be acquired.
+        Exception: on other database errors.
     """
     try:
+        query, values = apply_wallet_delta_query(
+            merchant_id=merchant_id,
+            type_="addition",
+            credits_delta=credits_delta,
+            amount=amount,
+            currency=currency,
+            gateway=gateway,
+            gateway_ref_id=gateway_ref_id,
+            made_by=made_by,
+        )
         async for conn in get_db_connection():
             async with conn.transaction():
-                wallet_query, wallet_values = get_wallet_for_update_query(merchant_id)
-                wallet_rows = await conn.fetch(wallet_query, *wallet_values)
-                wallet_row = wallet_rows[0] if wallet_rows else None
+                rows = await conn.fetch(query, *values)
 
-                if not wallet_row:
-                    raise ValueError(f"No wallet found for merchant '{merchant_id}'")
+            if not rows:
+                raise ValueError(f"No wallet found for merchant '{merchant_id}'")
 
-                credit_balance_after = wallet_row["balance_credits"] + credits_delta
-
-                txn_query, txn_values = insert_wallet_transaction_query(
-                    merchant_id=merchant_id,
-                    type_="addition",
-                    credits_delta=credits_delta,
-                    credit_balance_after=credit_balance_after,
-                    amount=amount,
-                    currency=currency,
-                    gateway=gateway,
-                    gateway_ref_id=gateway_ref_id,
-                    made_by=made_by,
-                )
-                txn_rows = await conn.fetch(txn_query, *txn_values)
-
-                balance_query, balance_values = update_wallet_balance_query(
-                    merchant_id, credit_balance_after
-                )
-                await conn.fetch(balance_query, *balance_values)
-
-            txn_row = txn_rows[0]
+            txn_row = rows[0]
             logger.info(
                 f"Recharged wallet for merchant {merchant_id}: "
-                f"+{credits_delta} credits (balance now {credit_balance_after})"
+                f"+{credits_delta} credits "
+                f"(balance now {txn_row['credit_balance_after']})"
             )
             return decode_wallet_transaction(txn_row)
         raise ValueError("Failed to acquire database connection")
@@ -173,4 +164,68 @@ async def apply_recharge(
         raise
     except Exception as e:
         logger.error(f"Error recharging wallet for merchant {merchant_id}: {e}")
+        raise
+
+
+async def apply_deduction(
+    merchant_id: str,
+    credits_delta: Decimal,
+    gateway: str,
+    gateway_ref_id: str,
+) -> WalletTransactionResponse:
+    """Deduct credits from a merchant's wallet and append a ledger row.
+
+    ``credits_delta`` must already be negative (the caller decides the
+    sign/amount via services.breeze_buddy.wallet.deduction.BILLING_RULES) -- this
+    accessor has no knowledge of billing rules. gateway is the event_type
+    (e.g. "chat_turn") and gateway_ref_id is the caller-supplied idempotency
+    key (e.g. the chat_message.id of the triggering user turn) -- the
+    existing UNIQUE(gateway, gateway_ref_id) constraint on wallet_transactions
+    gives duplicate-deduction protection for free, the same mechanism that
+    protects recharges against webhook retries.
+
+    Uses the same single atomic UPDATE...RETURNING + INSERT CTE statement as
+    apply_recharge, for the same narrow-transaction/low-contention reasons.
+
+    No balance floor is enforced here -- zero/negative balance blocking is
+    explicitly out of scope for this phase
+    (see services.breeze_buddy.wallet.deduction).
+
+    Raises:
+        ValueError: if no wallet exists for merchant_id or a database
+            connection could not be acquired.
+        Exception: on other database errors (including
+            asyncpg.UniqueViolationError if gateway_ref_id was already used --
+            duplicate deduction attempt).
+    """
+    try:
+        query, values = apply_wallet_delta_query(
+            merchant_id=merchant_id,
+            type_="deduction",
+            credits_delta=credits_delta,
+            amount=None,
+            currency=None,
+            gateway=gateway,
+            gateway_ref_id=gateway_ref_id,
+            made_by=None,
+        )
+        async for conn in get_db_connection():
+            async with conn.transaction():
+                rows = await conn.fetch(query, *values)
+
+            if not rows:
+                raise ValueError(f"No wallet found for merchant '{merchant_id}'")
+
+            txn_row = rows[0]
+            logger.info(
+                f"Deducted wallet for merchant {merchant_id}: "
+                f"{credits_delta} credits "
+                f"(balance now {txn_row['credit_balance_after']})"
+            )
+            return decode_wallet_transaction(txn_row)
+        raise ValueError("Failed to acquire database connection")
+    except ValueError:
+        raise
+    except Exception as e:
+        logger.error(f"Error deducting wallet for merchant {merchant_id}: {e}")
         raise

@@ -10,7 +10,7 @@ wallets.conversion_rate.
 from decimal import Decimal
 from typing import Dict
 
-from app.services.wallet.exceptions import UnsupportedCurrencyError
+from app.services.breeze_buddy.wallet.exceptions import UnsupportedCurrencyError
 
 # How many credits 1 unit of each currency is worth, before applying the
 # merchant-specific conversion_rate multiplier.
