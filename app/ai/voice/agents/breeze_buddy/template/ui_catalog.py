@@ -1039,7 +1039,7 @@ PRIMITIVE_RENDER_ORDER: List[str] = [
 
 
 LAZY_GROUPS: Dict[str, str] = {
-    "commerce": "app.ai.voice.agents.breeze_buddy.assist.commerce.schemas",
+    "commerce": "app.ai.voice.agents.breeze_buddy.assist.commerce",
 }
 
 # Attempted groups — both the successes (``importlib.import_module`` is

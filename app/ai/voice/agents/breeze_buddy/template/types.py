@@ -1296,6 +1296,49 @@ class UiCatalogConfig(BaseModel):
     )
 
 
+class FlavorProtocolConfig(BaseModel):
+    """One protocol dialect of a flavor: which platform connectors serve it
+    and which optional features are on.
+
+    Mirrors the flavor package layout — ``assist/<flavor>/<protocol>/`` is
+    the protocol layer, ``assist/<flavor>/connectors/<name>/`` are the
+    platforms that serve it — so config and code read the same way::
+
+        "flavor": {"ucp": {"connectors": ["shopify"],
+                           "features": {"upsell": true}}}
+
+    The engine treats both fields opaquely: it never knows which protocols,
+    connectors, or features exist. A flavor resolves its own block by name
+    and falls back to its defaults for anything unset.
+    """
+
+    connectors: List[str] = Field(
+        default_factory=list,
+        description=(
+            "Platform connectors to consult for this protocol, by name. "
+            "EMPTY (the default) means every registered connector "
+            "self-selects on the data it is handed — correct when the "
+            "platform is unambiguous from the payload. Name them "
+            "explicitly when a connector would otherwise mis-fire on a "
+            "look-alike gateway (e.g. a non-Shopify store whose product "
+            "URLs are also /products/{handle}, which would cost a dead "
+            "storefront fetch per product view)."
+        ),
+    )
+    features: Dict[str, bool] = Field(
+        default_factory=dict,
+        description=(
+            "Optional flavor features → on/off. OPT-IN by contract: every "
+            "feature is OFF unless turned on here, so enabling a flavor "
+            "never silently starts extra behaviour on an existing "
+            "merchant. Commerce/ucp: 'upsell' streams a complementary "
+            "ProductGrid after a successful add_to_cart (one extra LLM "
+            "call + catalog search per add, run after the cart is already "
+            "on the wire)."
+        ),
+    )
+
+
 class UiIntentsConfig(BaseModel):
     """Per-template overrides for flavor ``ui_intent`` executors
     (RFC-001 §3.3 Stage B) — the no-LLM DIRECT path where the widget
@@ -1792,6 +1835,20 @@ class ConfigurationModel(BaseModel):
             "use (RFC-001 §3.3 Stage B). Absent = each flavor's built-in "
             "defaults (commerce: create_cart/update_cart/get_cart, "
             "cart_id/checkout_url, 'Review and checkout')."
+        ),
+    )
+    flavor: Optional[Dict[str, "FlavorProtocolConfig"]] = Field(
+        None,
+        description=(
+            "Optional. Protocol dialect → which platform connectors serve "
+            "it and which optional features are on, keyed the same way the "
+            "flavor packages are laid out on disk::\n\n"
+            '    "flavor": {"ucp": {"connectors": ["shopify"],\n'
+            '                       "features": {"upsell": true}}}\n\n'
+            "Absent (or a protocol left unset) = connectors self-select on "
+            "the payload and every optional feature is OFF. The engine "
+            "never interprets the keys — a flavor resolves its own "
+            "protocol block by name."
         ),
     )
     tool_execution: Optional["ToolExecutionConfig"] = Field(
