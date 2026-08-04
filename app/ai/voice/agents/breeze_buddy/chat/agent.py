@@ -441,9 +441,10 @@ class ChatAgent:
                             "function; it will NOT be approval-gated."
                         )
 
-        # Aggregate per-tool context-retention policy across every MCP server
-        # the template declares. Used by llm_driver to compact stale
-        # tool_result blocks in the messages array before each LLM call —
+        # Aggregate per-tool context-retention policy from two sources — every
+        # MCP server the template declares (below) AND every global function
+        # that sets it inline (further below). Used by llm_driver to compact
+        # stale tool_result blocks in the messages array before each LLM call —
         # bounds input-token cost as a session accumulates tool calls.
         # Tools not in the map default to ``session`` (no compaction).
         #
@@ -461,6 +462,26 @@ class ChatAgent:
                     tool_retention.update(server.tool_context_retention)
                 if server.tool_context_projection:
                     tool_projection.update(server.tool_context_projection)
+
+        # Bridge: global HTTP/builtin/custom functions declare the SAME per-tool
+        # policy inline via BaseGlobalFunction.context_retention /
+        # .context_projection, keyed by their own function name. Merge them into
+        # the same maps so the tool-agnostic context_compactor treats
+        # global-function results exactly like MCP tool results — no separate
+        # code path. ``flow`` is a raw dict (TemplateModel.flow: Dict[str, Any]);
+        # direct-mode global functions live at ``flow["functions"]``.
+        for fn in self.template.flow.get("functions") or []:
+            if not isinstance(fn, dict):
+                continue
+            fn_name = fn.get("name")
+            if not fn_name:
+                continue
+            fn_retention = fn.get("context_retention")
+            if fn_retention:
+                tool_retention[fn_name] = fn_retention
+            fn_projection = fn.get("context_projection")
+            if fn_projection:
+                tool_projection[fn_name] = fn_projection
 
         return _PreparedTools(
             flow_config=flow_config,
