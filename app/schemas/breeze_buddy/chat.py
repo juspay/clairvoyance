@@ -9,7 +9,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from app.ai.voice.agents.breeze_buddy.template.ui_catalog import ActionUnion, Icon
 
@@ -292,9 +292,19 @@ class ClientContextPatch(BaseModel):
 
 
 class SendChatMessageRequest(BaseModel):
-    """Body of ``POST /session/{id}/message``."""
+    """Body of ``POST /session/{id}/message``.
 
-    content: str = Field(..., min_length=1, description="The user's message text.")
+    Two variants: a plain user turn (``content`` required) or a typed UI
+    intent (``ui_intent`` set, ``content`` may be empty — RFC-001 §3.3).
+    """
+
+    content: str = Field(
+        "",
+        description=(
+            "The user's message text. May be empty ONLY when ``ui_intent`` "
+            "is provided."
+        ),
+    )
     context: Optional[ClientContextPatch] = Field(
         None,
         description=(
@@ -303,6 +313,57 @@ class SendChatMessageRequest(BaseModel):
             "atomically with the message instead of a separate /context call."
         ),
     )
+    ui_intent: Optional[Dict[str, Any]] = Field(
+        None,
+        description=(
+            "Typed component action (catalog v2): {intent, component_id, "
+            "payload, display}. Validated + policy-routed server-side by "
+            "chat/intents/router.py — direct intents execute whitelisted "
+            "tools with no LLM turn; agent_turn intents rewrite into a "
+            "structured user message. The set of intents is supplied by the "
+            "flavor packages the template enables. Kept as an open dict here "
+            "so the schema layer stays decoupled from the router's "
+            "per-intent models (which own the 422-typed validation)."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _require_content_or_intent(self) -> "SendChatMessageRequest":
+        # Preserves the historical min_length=1 contract for plain turns
+        # while allowing the RFC-001 `{"content":"", "ui_intent":{…}}` body.
+        if not self.content and self.ui_intent is None:
+            raise ValueError("content must be non-empty unless ui_intent is set")
+        return self
+
+
+class WidgetIntentRequest(BaseModel):
+    """Body of ``POST /widget/session/{id}/intent`` — the dedicated typed
+    intent route (RFC-001 §3.3 Stage B). The intent fields ride at the top
+    level (no ``content`` wrapper); per-intent payload validation happens in
+    ``chat/intents/router.py``, which owns the typed 422 contract.
+
+    The ``ui_intent`` body variant on ``/message`` is the same thing behind
+    a different door: it lets a surface that has no dedicated intent route
+    (the demo router) send intents over the message endpoint it already
+    has. Both funnel into ``serve_session_intent``; embeds should prefer
+    this route.
+    """
+
+    intent: str = Field(..., min_length=1, max_length=64)
+    component_id: str = Field(..., min_length=1, max_length=128)
+    payload: Dict[str, Any] = Field(default_factory=dict)
+    display: Optional[str] = Field(None, max_length=500)
+
+    def as_ui_intent(self) -> Dict[str, Any]:
+        """The dict shape ``parse_ui_intent`` validates — one wire model."""
+        body: Dict[str, Any] = {
+            "intent": self.intent,
+            "component_id": self.component_id,
+            "payload": self.payload,
+        }
+        if self.display is not None:
+            body["display"] = self.display
+        return body
 
 
 class GetChatSessionResponse(BaseModel):
@@ -421,6 +482,18 @@ class CreateDemoSessionResponse(BaseModel):
     greeting: Optional[GreetingMessage] = None
     demo_token: str = Field(..., description="Bearer token for follow-up calls.")
     message_cap: int = Field(..., description="Max assistant turns before 429.")
+    catalog_active: str = Field(
+        "v1",
+        description=(
+            "Negotiated UI catalog version — 'v2' when the demo template "
+            "enables data-bound components (demo pages always run a "
+            "v2-capable widget build, so the template is the only variable)."
+        ),
+    )
+    ui_flavors: List[str] = Field(
+        default_factory=list,
+        description="Lazy UI flavor groups the demo template enables.",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -449,6 +522,17 @@ class CreateWidgetSessionRequest(BaseModel):
     metadata: Dict[str, Any] = Field(
         default_factory=dict,
         description="Opaque caller context, persisted on chat_session.metadata.",
+    )
+    catalog_version: Optional[str] = Field(
+        None,
+        description=(
+            "UI catalog version the embed supports (RFC-001 §3.4). 'v2' "
+            "enables data-bound components (show-op hydration + typed "
+            "intents) for this session; absent/other = v1 (server prunes "
+            "data-bound components — prompt and wire stay v1-compatible). "
+            "Persisted on chat_session.metadata under the server-owned "
+            "'widget' block."
+        ),
     )
 
 
@@ -487,6 +571,18 @@ class QuickReplyWire(BaseModel):
     )
 
 
+class GreetingTileWire(BaseModel):
+    """One visual quick-tap tile on the greeting screen (2026-08-03).
+
+    Mirrors ``GreetingTileOption`` from the template ``ConfigurationModel``
+    — image-backed sibling of the quick-reply pill. Tapping sends
+    ``prompt`` to the agent; ``label`` is the visible bubble text."""
+
+    label: str = Field(..., description="Tile caption shown to the user.")
+    prompt: str = Field(..., description="Message sent to the agent on tap.")
+    image_url: str = Field(..., description="Tile image URL (merchant CDN).")
+
+
 class CreateWidgetSessionResponse(BaseModel):
     """Body of ``POST /widget/session``.
 
@@ -512,6 +608,14 @@ class CreateWidgetSessionResponse(BaseModel):
             "Empty list when the template defines no quick replies."
         ),
     )
+    greeting_tiles: List[GreetingTileWire] = Field(
+        default_factory=list,
+        description=(
+            "Visual quick-tap tiles from configurations.greeting_tiles — "
+            "shown on the greeting screen below the initial greeting. "
+            "Empty list when the template defines none."
+        ),
+    )
     enable_text_input: bool = Field(
         True,
         description=(
@@ -528,6 +632,26 @@ class CreateWidgetSessionResponse(BaseModel):
             "'voice' is in the template's supported_channels (the same gate "
             "/voice/connect enforces). The embed shows the voice-mode button "
             "only when True; the server stays the enforcement point."
+        ),
+    )
+    catalog_active: str = Field(
+        "v1",
+        description=(
+            "The NEGOTIATED UI catalog version for this session (RFC-001 "
+            "§3.4): the intersection of what the client requested "
+            "(catalog_version in the create body) and what the template's "
+            "ui_catalog config can serve (data-bound components enabled). "
+            "'v2' ⇔ show-op hydration + typed intents are live; the embed "
+            "should eagerly preload the ui_flavors chunks."
+        ),
+    )
+    ui_flavors: List[str] = Field(
+        default_factory=list,
+        description=(
+            "Lazy UI flavor groups the template enables (e.g. ['commerce']) "
+            "— the embed preloads these code-split chunks so the first "
+            "hydrated component renders without a chunk-fetch stall. Empty "
+            "when catalog_active is 'v1'."
         ),
     )
 
@@ -617,6 +741,14 @@ class WidgetSessionStateResponse(BaseModel):
             "Empty list when the template defines no quick replies."
         ),
     )
+    greeting_tiles: List[GreetingTileWire] = Field(
+        default_factory=list,
+        description=(
+            "Visual quick-tap tiles from configurations.greeting_tiles — "
+            "shown on the greeting screen below the initial greeting. "
+            "Empty list when the template defines none."
+        ),
+    )
     enable_text_input: bool = Field(
         True,
         description=(
@@ -632,6 +764,22 @@ class WidgetSessionStateResponse(BaseModel):
             "Whether this merchant's template offers a voice mode — i.e. "
             "'voice' is in the template's supported_channels. Lets the embed "
             "restore the voice-mode button after a reload without re-deriving."
+        ),
+    )
+    catalog_active: str = Field(
+        "v1",
+        description=(
+            "The session's negotiated UI catalog version (persisted at "
+            "create time) — same semantics as the create response's "
+            "catalog_active, re-echoed so a reloaded embed can restore "
+            "intent affordances and preload flavor chunks."
+        ),
+    )
+    ui_flavors: List[str] = Field(
+        default_factory=list,
+        description=(
+            "Lazy UI flavor groups the template enables. Mirrors the create "
+            "response so the resume path preloads the same chunks."
         ),
     )
     template_vars: Dict[str, Any] = Field(default_factory=dict)

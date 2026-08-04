@@ -20,6 +20,7 @@ same session.
 from __future__ import annotations
 
 import uuid
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from fastapi import HTTPException, Request, UploadFile, status
@@ -29,11 +30,20 @@ from app.ai.voice.agents.breeze_buddy.chat.client_context import (
     ClientContextTooLarge,
     compute_context_patch,
 )
+from app.ai.voice.agents.breeze_buddy.chat.turn_core import (
+    negotiate_catalog,
+    resolve_session_catalog_version,
+)
 from app.ai.voice.agents.breeze_buddy.services.daily.daily import (
     daily_completion_function,
     start_daily_session,
 )
 from app.ai.voice.agents.breeze_buddy.template.cache import get_template_by_id_cached
+from app.ai.voice.agents.breeze_buddy.template.ui_catalog import (
+    CATALOG_VERSION,
+    CATALOG_VERSION_V2,
+    LAZY_GROUPS,
+)
 from app.ai.voice.stt import TranscriptionError, transcribe_audio
 from app.api.routers.breeze_buddy.chat.handlers import (
     approve_chat_tool_handler,
@@ -42,6 +52,7 @@ from app.api.routers.breeze_buddy.chat.handlers import (
     end_chat_session_handler,
     load_chat_session_or_404,
     send_chat_message_handler,
+    serve_session_intent,
     validate_template_for_chat,
 )
 from app.api.routers.breeze_buddy.widget_common import (
@@ -91,11 +102,13 @@ from app.schemas.breeze_buddy.chat import (
     CreateChatSessionRequest,
     CreateWidgetSessionRequest,
     CreateWidgetSessionResponse,
+    GreetingTileWire,
     QuickReplyWire,
     SendChatMessageRequest,
     UpdateWidgetContextRequest,
     UpdateWidgetContextResponse,
     WidgetChannel,
+    WidgetIntentRequest,
     WidgetSessionStateResponse,
     WidgetTranscribeResponse,
     WidgetVoiceConnectResponse,
@@ -150,18 +163,29 @@ def _is_redirect_action(action: object) -> bool:
     return getattr(action, "type", None) == "open_url"
 
 
-def _extract_widget_config(
-    template: object,
-) -> tuple[List[QuickReplyWire], bool]:
-    """Extract quick-reply options and enable_text_input flag from a template.
+@dataclass(frozen=True)
+class _WidgetSurface:
+    """The template-derived presentation surface a widget session starts with.
 
-    Returns a ``(quick_replies, enable_text_input)`` tuple. Reads directly
-    from ``configurations.quick_replies`` and ``configurations.enable_text_input``;
-    both default to ``([], True)`` when the template defines neither.
+    A named record rather than a tuple on purpose: this grew from two fields
+    to three (greeting tiles) and is read from both the create and the resume
+    path, so positional unpacking is one field away from silently swapping
+    two values at a call site. Add new surface fields HERE, with a default,
+    and every reader keeps working.
     """
+
+    quick_replies: List[QuickReplyWire] = field(default_factory=list)
+    enable_text_input: bool = True
+    greeting_tiles: List[GreetingTileWire] = field(default_factory=list)
+
+
+def _extract_widget_config(template: object) -> _WidgetSurface:
+    """Read the widget presentation surface off a template's
+    ``configurations``; every field falls back to its neutral default when
+    the template configures none of it."""
     configurations = getattr(template, "configurations", None)
     if configurations is None:
-        return [], True
+        return _WidgetSurface()
     quick_replies: List[QuickReplyWire] = [
         QuickReplyWire(
             label=qr.label,
@@ -180,8 +204,14 @@ def _extract_widget_config(
         )
         for qr in (getattr(configurations, "quick_replies", None) or [])
     ]
-    enable_text_input: bool = getattr(configurations, "enable_text_input", True)
-    return quick_replies, enable_text_input
+    return _WidgetSurface(
+        quick_replies=quick_replies,
+        enable_text_input=getattr(configurations, "enable_text_input", True),
+        greeting_tiles=[
+            GreetingTileWire(label=t.label, prompt=t.prompt, image_url=t.image_url)
+            for t in (getattr(configurations, "greeting_tiles", None) or [])
+        ],
+    )
 
 
 def _template_voice_enabled(template: object) -> bool:
@@ -229,6 +259,12 @@ async def create_widget_session_handler(
     # Chat is the entry channel; voice opt-in is checked at /voice/connect.
     validate_template_for_chat(template)
 
+    # Catalog-version negotiation (RFC-001 §3.4): active = client-requested
+    # ∩ template-capable. The NEGOTIATED version (not the client's raw ask)
+    # is what gets persisted — so a v2 embed on a data-bound-free template
+    # runs a clean v1 session instead of a v2 session that can never emit.
+    catalog_active, ui_flavors = negotiate_catalog(template, body.catalog_version)
+
     synthetic_user = _synthetic_widget_user(cfg.id)
     create_req = CreateChatSessionRequest(
         template_id=cfg.template_id,
@@ -241,6 +277,15 @@ async def create_widget_session_handler(
             "widget": {
                 "widget_config_id": cfg.id,
                 "public_widget_key_prefix": cfg.public_widget_key[:6],
+                # Stored on the server-owned widget block so client metadata
+                # can't spoof it; ChatAgent + the intent router gate every v2
+                # behavior (data-bound prompt section, show-op hydration,
+                # ui_intent bodies) on this persisted value.
+                **(
+                    {"catalog_version": catalog_active}
+                    if catalog_active == CATALOG_VERSION_V2
+                    else {}
+                ),
             },
         },
     )
@@ -254,7 +299,7 @@ async def create_widget_session_handler(
         ttl_minutes=DEFAULT_WIDGET_TOKEN_TTL_MINUTES,
     )
 
-    quick_replies, enable_text_input = _extract_widget_config(template)
+    surface = _extract_widget_config(template)
 
     return CreateWidgetSessionResponse(
         session_id=create_resp.session_id,
@@ -265,9 +310,12 @@ async def create_widget_session_handler(
         greeting=create_resp.greeting,
         widget_token=widget_token,
         ttl_seconds=DEFAULT_WIDGET_TOKEN_TTL_MINUTES * 60,
-        quick_replies=quick_replies,
-        enable_text_input=enable_text_input,
+        quick_replies=surface.quick_replies,
+        greeting_tiles=surface.greeting_tiles,
+        enable_text_input=surface.enable_text_input,
         voice_enabled=_template_voice_enabled(template),
+        catalog_active=catalog_active,
+        ui_flavors=ui_flavors,
     )
 
 
@@ -324,7 +372,73 @@ async def send_widget_message_handler(
             ),
         )
 
+    # Typed UI intent body (RFC-001 §3.3): validate + policy-route BEFORE
+    # any LLM involvement. Alternate door for surfaces without a dedicated
+    # intent route; embeds should POST /intent. Both funnel into
+    # serve_session_intent, so the two stay behaviourally identical.
+    if req.ui_intent is not None:
+        return await serve_session_intent(
+            session, session_id, req.ui_intent, context=req.context
+        )
+
     return await send_chat_message_handler(session_id, req, access_check=None)
+
+
+# ---------------------------------------------------------------------------
+# POST /widget/session/{id}/intent
+# ---------------------------------------------------------------------------
+
+
+async def send_widget_intent_handler(
+    session_id: str,
+    req: WidgetIntentRequest,
+    request: Request,
+    ctx: WidgetSessionContext,
+):
+    """Serve one typed UI intent on the dedicated route (SSE response).
+
+    Same gate order as ``send_widget_message_handler`` (config-active 401 →
+    IP limit → ownership → 410 ENDED → 409 voice-live), then the shared
+    validate + policy-route path. Rides the same "message" rate bucket —
+    an intent is a turn, not a side channel.
+    """
+    cfg = await get_widget_config_by_id(ctx.widget_config_id)
+    if cfg is None or not cfg.active:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Widget configuration not found or inactive",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    await enforce_widget_ip_limit(
+        request=request,
+        bucket="message",
+        limit=cfg.max_messages_per_ip_hour,
+        widget_config_id=cfg.id,
+    )
+
+    session = await get_chat_session_by_id(session_id)
+    if session is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Widget session '{session_id}' not found",
+        )
+    assert_widget_session_ownership(session, ctx)
+    if session.status == ChatSessionStatus.ENDED:
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail=f"Widget session '{session_id}' has ended",
+        )
+
+    # NO channel gate here (unlike /message): DIRECT intents are legal
+    # during a live voice attachment — serve_session_intent 409s only the
+    # AGENT_TURN routes when voice is live.
+    return await serve_session_intent(
+        session,
+        session_id,
+        req.as_ui_intent(),
+        voice_live=session.current_channel != WidgetChannel.CHAT,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -833,10 +947,11 @@ async def voice_connect_handler(
         try:
             session_info = await start_daily_session(lead_id, enable_recording=False)
         except Exception as exc:
-            logger.error(
+            # loguru: no ``exc_info`` kwarg — it would re-format the message
+            # and crash on brace-bearing provider error text.
+            logger.exception(
                 f"widget voice: start_daily_session failed for lead {lead_id}: "
-                f"{exc}",
-                exc_info=True,
+                f"{exc}"
             )
             # Rollback channel back to CHAT so the user can retry.
             try:
@@ -1026,7 +1141,7 @@ async def get_widget_session_state_handler(
     messages: List[ChatMessage] = await list_chat_messages_for_session(session_id)
 
     template = await get_template_by_id_cached(session.template_id)
-    quick_replies, enable_text_input = _extract_widget_config(template)
+    surface = _extract_widget_config(template)
 
     template_vars: Dict[str, Any] = (
         session.metadata.get("template_vars", {})
@@ -1048,15 +1163,31 @@ async def get_widget_session_state_handler(
     # cards after a reload (lazy expiry — the accessor filters expires_at).
     pending_approvals = await list_pending_tool_approvals(session_id)
 
+    # The persisted (negotiated-at-create) catalog version is the truth on
+    # resume; the flavor list is re-derived from the template so a config
+    # change between create and reload is reflected.
+    catalog_active = (
+        resolve_session_catalog_version(session.metadata) or CATALOG_VERSION
+    )
+    ui_flavors: List[str] = []
+    if catalog_active == CATALOG_VERSION_V2:
+        configurations = getattr(template, "configurations", None)
+        ui_cat = getattr(configurations, "ui_catalog", None) if configurations else None
+        enabled_groups = list(ui_cat.enabled_groups or []) if ui_cat is not None else []
+        ui_flavors = [g for g in enabled_groups if g in LAZY_GROUPS]
+
     return WidgetSessionStateResponse(
         session_id=session_id,
         status=session.status,
         current_channel=session.current_channel,
         current_node=session.current_node,
         messages=messages,
-        quick_replies=quick_replies,
-        enable_text_input=enable_text_input,
+        quick_replies=surface.quick_replies,
+        greeting_tiles=surface.greeting_tiles,
+        enable_text_input=surface.enable_text_input,
         voice_enabled=_template_voice_enabled(template),
+        catalog_active=catalog_active,
+        ui_flavors=ui_flavors,
         template_vars=template_vars,
         metadata=session.metadata or {},
         client_context=client_context,

@@ -189,10 +189,11 @@ async def _subscriber_loop() -> None:
             logger.info("cancel_bus: subscriber cancelled (app shutdown)")
             raise
         except Exception as exc:
-            logger.error(
+            # loguru: no ``exc_info`` kwarg — it would re-format the message
+            # and crash on brace-bearing error text.
+            logger.exception(
                 f"cancel_bus: subscriber error ({exc!r}); "
-                f"reconnecting in {backoff:.1f}s",
-                exc_info=True,
+                f"reconnecting in {backoff:.1f}s"
             )
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, 30.0)

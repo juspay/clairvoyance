@@ -247,3 +247,45 @@ def test_validate_props_rejects_empty_kpi_label():
     so the widget never renders a blank metric label."""
     with pytest.raises(ValidationError):
         validate_props("KPI", {"label": "", "value": "42"})
+
+
+# ---------------------------------------------------------------------------
+# Lazy flavor-group loading — fail-open
+# ---------------------------------------------------------------------------
+
+
+def test_lazy_group_with_broken_module_degrades_to_core(monkeypatch):
+    """A flavor group whose module is absent (its layer hasn't shipped yet)
+    or raises on import must leave the catalog untouched and resolve to the
+    core allowlist — never surface the ImportError as a 500 from whichever
+    endpoint happened to touch the group.
+    """
+    import app.ai.voice.agents.breeze_buddy.template.ui_catalog as uc
+
+    monkeypatch.setitem(uc.LAZY_GROUPS, "brokenflavor", "no.such.module.anywhere")
+    monkeypatch.setattr(uc, "_LOADED_LAZY_GROUPS", set())
+
+    uc.ensure_group_loaded("brokenflavor")  # must not raise
+
+    allowlist = resolve_allowlist(enabled_groups=["core", "brokenflavor"])
+    assert allowlist == resolve_allowlist(enabled_groups=["core"])
+
+
+def test_failed_lazy_group_import_is_not_retried(monkeypatch):
+    """Python drops a failed module from sys.modules; without marking the
+    attempt, every request would re-import and re-raise."""
+    import app.ai.voice.agents.breeze_buddy.template.ui_catalog as uc
+
+    attempts = {"n": 0}
+
+    def _explode(_path):
+        attempts["n"] += 1
+        raise RuntimeError("flavor module is broken")
+
+    monkeypatch.setitem(uc.LAZY_GROUPS, "brokenflavor", "no.such.module.anywhere")
+    monkeypatch.setattr(uc, "_LOADED_LAZY_GROUPS", set())
+    monkeypatch.setattr(uc.importlib, "import_module", _explode)
+
+    for _ in range(3):
+        uc.ensure_group_loaded("brokenflavor")
+    assert attempts["n"] == 1
