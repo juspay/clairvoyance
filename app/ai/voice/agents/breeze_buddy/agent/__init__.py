@@ -1344,6 +1344,7 @@ class Agent:
             user_idle_callback_handler,
             self.speech_gate,
             self._transcript_collector,
+            speaker_gate,
         ) = await build_pipeline(
             self.transport,
             stt,
@@ -1380,6 +1381,7 @@ class Agent:
             pipeline,
             self.conversation_id,
             is_daily_mode=self.is_daily_mode,
+            rtvi_ignored_sources=[stt] if speaker_gate is not None else None,
         )
 
         if self.is_daily_mode and hasattr(self.task, "rtvi") and self.task.rtvi:

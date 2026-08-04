@@ -3,6 +3,9 @@
 from app.ai.voice.agents.breeze_buddy.processors.knowledge_retrieval import (
     KnowledgeRetrievalProcessor,
 )
+from app.ai.voice.agents.breeze_buddy.processors.speaker_diarization_gate import (
+    SpeakerDiarizationGateProcessor,
+)
 from app.ai.voice.agents.breeze_buddy.processors.transcript_collector import (
     TranscriptCollectorProcessor,
 )
@@ -18,6 +21,7 @@ from app.ai.voice.agents.breeze_buddy.processors.voice_ui_stream import (
 
 __all__ = [
     "KnowledgeRetrievalProcessor",
+    "SpeakerDiarizationGateProcessor",
     "TranscriptCollectorProcessor",
     "TranscriptionGateProcessor",
     "UserIdleCallbackHandler",

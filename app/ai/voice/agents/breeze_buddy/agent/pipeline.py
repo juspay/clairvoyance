@@ -46,6 +46,7 @@ from app.ai.voice.agents.breeze_buddy.llm import get_llm_service
 from app.ai.voice.agents.breeze_buddy.observability.tracing_setup import setup_tracing
 from app.ai.voice.agents.breeze_buddy.processors import (
     KnowledgeRetrievalProcessor,
+    SpeakerDiarizationGateProcessor,
     TranscriptCollectorProcessor,
     TranscriptionGateProcessor,
     UserIdleCallbackHandler,
@@ -56,6 +57,7 @@ from app.ai.voice.agents.breeze_buddy.template.types import (
     InterruptionConfig,
     InterruptionMode,
     SmartTurnConfig,
+    STTProvider,
     TurnDetectionMode,
 )
 from app.ai.voice.agents.breeze_buddy.template.vad import TELEPHONY_SAMPLE_RATE
@@ -190,6 +192,16 @@ def _wire_user_idle_event(
         await idle_handler.handle_user_idle(aggregator)
 
 
+def _wire_speaker_gate_connection_reset(
+    stt: Any, speaker_gate: SpeakerDiarizationGateProcessor
+) -> None:
+    """Reset Soniox's connection-local speaker lock after every connection."""
+
+    @stt.event_handler("on_connected")
+    def _on_soniox_connected(_stt: Any) -> None:
+        speaker_gate.reset()
+
+
 async def build_pipeline(
     transport: Any,
     stt: Optional[Any],
@@ -207,6 +219,7 @@ async def build_pipeline(
     Optional[UserIdleCallbackHandler],
     Optional[TranscriptionGateProcessor],
     Optional[TranscriptCollectorProcessor],
+    Optional[SpeakerDiarizationGateProcessor],
 ]:
     """Build the processing pipeline.
 
@@ -242,13 +255,15 @@ async def build_pipeline(
             aggregator and the LLM; ignored in stream/realtime modes
 
     Returns:
-        6-tuple of (pipeline, context, context_aggregator, user_idle_callback_handler, transcription_gate, transcript_collector)
+        7-tuple of (pipeline, context, context_aggregator, user_idle_callback_handler,
+        transcription_gate, transcript_collector, speaker_gate)
         - pipeline: the built Pipeline instance
         - context: the LLMContext for the conversation
         - context_aggregator: LLMContextAggregatorPair for managing user/assistant turns
         - user_idle_callback_handler: resets retry count on user activity; None if idle detection is disabled or stream mode
         - transcription_gate: TranscriptionGateProcessor instance wired into the pipeline
         - transcript_collector: TranscriptCollectorProcessor instance (stream mode only, None in agent mode)
+        - speaker_gate: SpeakerDiarizationGateProcessor when Soniox speaker filtering is enabled
     """
     is_stream = mode == "stream"
     # Realtime / speech-to-speech: when create_services returns no STT and no
@@ -322,6 +337,7 @@ async def build_pipeline(
             user_idle_callback_handler,
             None,  # no TranscriptionGateProcessor in realtime mode
             None,  # no TranscriptCollectorProcessor (stream-mode only)
+            None,  # no SpeakerDiarizationGateProcessor in realtime mode
         )
 
     # --- Interruption configuration ---
@@ -470,6 +486,24 @@ async def build_pipeline(
         ),
     )
 
+    # The Soniox speaker gate is optional and runs before the general
+    # transcription gate so non-primary interim frames cannot trigger a turn.
+    speaker_gate: Optional[SpeakerDiarizationGateProcessor] = None
+    soniox_config = (
+        stt_config.soniox
+        if stt_config and stt_config.provider == STTProvider.SONIOX
+        else None
+    )
+    speaker_filter_config = soniox_config.speaker_filter if soniox_config else None
+    if speaker_filter_config and speaker_filter_config.enabled:
+        speaker_gate = SpeakerDiarizationGateProcessor(speaker_filter_config)
+        _wire_speaker_gate_connection_reset(stt, speaker_gate)
+        logger.info(
+            "SpeakerDiarizationGate: enabled (min_words={}, unknown_policy={})",
+            speaker_filter_config.min_words,
+            speaker_filter_config.unknown_speaker_policy.value,
+        )
+
     # TranscriptionGateProcessor is always in the pipeline.
     # It is a transparent passthrough when neither mute nor keyword filter is active.
     keyword_filter_config = getattr(configurations, "keyword_filter", None)
@@ -494,8 +528,8 @@ async def build_pipeline(
         transcript_collector = TranscriptCollectorProcessor()
 
     # Pipeline order:
-    #   agent mode:  input → stt → gate → user_aggregator → llm → tts → output → assistant_aggregator
-    #   stream mode: input → stt → gate → transcript_collector → user_aggregator → tts → output
+    #   agent mode:  input → stt → speaker_gate? → gate → user_aggregator → llm → tts → output → assistant_aggregator
+    #   stream mode: input → stt → speaker_gate? → gate → transcript_collector → user_aggregator → tts → output
     #
     # Collector sits BEFORE user_aggregator because the aggregator swallows
     # TranscriptionFrame (handled internally, not pushed downstream). TTSSpeakFrames
@@ -505,7 +539,10 @@ async def build_pipeline(
     # UserTurnStrategies — no custom response gate needed.
     # Note: RTVIProcessor is added automatically by PipelineTask (pipecat v0.0.102+)
     # when enable_rtvi=True (default). No need to add it to the pipeline manually.
-    pipeline_parts: list[Any] = [transport.input(), stt, transcription_gate]
+    pipeline_parts: list[Any] = [transport.input(), stt]
+    if speaker_gate is not None:
+        pipeline_parts.append(speaker_gate)
+    pipeline_parts.append(transcription_gate)
     if is_stream:
         assert transcript_collector is not None
         pipeline_parts.append(transcript_collector)
@@ -532,6 +569,7 @@ async def build_pipeline(
         user_idle_callback_handler,
         transcription_gate,
         transcript_collector,
+        speaker_gate,
     )
 
 
@@ -539,6 +577,7 @@ async def create_pipeline_task(
     pipeline: Pipeline,
     conversation_id: str,
     is_daily_mode: bool = False,
+    rtvi_ignored_sources: Optional[list[Any]] = None,
 ) -> PipelineTask:
     """Create and configure the pipeline task.
 
@@ -546,6 +585,9 @@ async def create_pipeline_task(
         pipeline: The built pipeline
         conversation_id: Unique conversation identifier
         is_daily_mode: When True, configures RTVIObserver params for real-time event emission
+        rtvi_ignored_sources: Processors whose frames RTVI should ignore. When the
+            Soniox speaker gate is enabled, this includes Soniox so browser
+            transcripts are emitted only after speaker filtering.
 
     Returns:
         Configured PipelineTask
@@ -568,7 +610,7 @@ async def create_pipeline_task(
             function_call_report_level={
                 "*": RTVIFunctionCallReportLevel.FULL,
             },
-            ignored_sources=[],
+            ignored_sources=rtvi_ignored_sources or [],
         )
         if emit_daily_events
         else None
