@@ -55,7 +55,10 @@ from app.ai.voice.agents.breeze_buddy.services.knowledge_base import (
     fetch_kb_context_message,
     resolve_kb_runtime,
 )
-from app.ai.voice.agents.breeze_buddy.template.approval import build_approval_map
+from app.ai.voice.agents.breeze_buddy.template.approval import (
+    build_approval_map,
+    build_client_tool_names,
+)
 from app.ai.voice.agents.breeze_buddy.template.builder import FlowConfigBuilder
 from app.ai.voice.agents.breeze_buddy.template.context import with_context
 from app.ai.voice.agents.breeze_buddy.template.session_state import (
@@ -89,19 +92,27 @@ from app.schemas.breeze_buddy.chat import ChatMessageRole, ToolApproval
 # this ceiling; 20 is headroom, not a target.
 _MAX_TOOL_CYCLES = 20
 
+# TTL for a CLIENT-FULFILLED pending call (client_fulfilled functions carry no
+# ApprovalConfig, so there is no chat_expiry_secs to read). The browser answers
+# in milliseconds; this is just the backstop before the call resolves as timeout.
+_CLIENT_TOOL_EXPIRY_SECS = 60.0
+
 
 def _partition_gated_calls(
     tool_calls: List[Any],
     approval_map: Dict[str, Any],
     node: Dict[str, Any],
 ) -> Tuple[List[Any], List[Any]]:
-    """Split a tool-call batch into (gated, ungated) for HITL.
+    """Split a tool-call batch into (gated, ungated).
 
-    A gated name shadowed by a per-node function in the CURRENT node is
-    treated as UNGATED: in that node the LLM calls the per-node function
-    (which the author did not gate), not the gated global of the same name.
-    Non-shadow nodes are unaffected — a gated global is still gated. This
-    keeps chat consistent with voice, whose wrapper gates only globals.
+    ``approval_map`` maps every gated name to its config (approval-gated AND
+    client-fulfilled — the latter map to None since they carry no
+    ApprovalConfig); only membership is tested here, so the values are unused.
+    Both kinds must PAUSE rather than execute. A gated name shadowed by a
+    per-node function in the CURRENT node is treated as UNGATED: in that node the
+    LLM calls the per-node function (which the author did not gate), not the
+    gated global of the same name. Non-shadow nodes are unaffected. This keeps
+    chat consistent with voice, whose wrapper gates only globals.
     """
     # ``node["functions"]`` holds FlowsFunctionSchema objects in flow mode
     # (FlowConfigBuilder._build_node runs every per-node function through
@@ -250,6 +261,10 @@ class ChatAgent:
         self.handles_state_externally = True
         # function name -> ApprovalConfig for every gated global function.
         self._approval_map = build_approval_map(self.template.flow or {})
+        # Names of CLIENT-FULFILLED functions (client_fulfilled: true). Gated
+        # like approvals (the turn pauses), but resolved by the frontend with
+        # DATA via /tool-result rather than a human decision.
+        self._client_tool_names = build_client_tool_names(self.template.flow or {})
 
     async def run_turn(
         self,
@@ -629,13 +644,21 @@ class ChatAgent:
                 else []
             )
 
-            # HITL partition: approval-gated calls do NOT execute now — the
-            # turn ends after the ungated siblings finish, and each gated
-            # call waits for its decision on the approval endpoint. Node-aware
-            # (see _partition_gated_calls): a per-node function shadows a
-            # same-named gated global, so it stays UNGATED — matching voice.
+            # Partition: approval-gated AND client-fulfilled calls do NOT
+            # execute now — the turn ends after the ungated siblings finish, and
+            # each paused call waits for its resolution (a human decision on the
+            # approval endpoint, or client data on the tool-result endpoint).
+            # Combine both name sets into one gated map (client tools carry no
+            # ApprovalConfig, so they map to None — only membership is checked).
+            # Built here, not in __init__, so MCP approvals merged per turn into
+            # _approval_map are included. Node-aware (see _partition_gated_calls):
+            # a per-node function shadows a same-named gated global → UNGATED.
+            gated_map: Dict[str, Any] = {
+                **self._approval_map,
+                **dict.fromkeys(self._client_tool_names),
+            }
             gated_calls, ungated_calls = _partition_gated_calls(
-                tool_calls, self._approval_map, node
+                tool_calls, gated_map, node
             )
 
             next_node: Optional[Dict[str, Any]] = None
@@ -723,13 +746,21 @@ class ChatAgent:
                 # Order is load-bearing: the ungated results + agent state
                 # are already persisted above (their side effects ran), and
                 # any ungated transition has been applied to ``node_name``.
-                # Now record each gated call as PENDING and end the turn —
-                # the decision arrives on POST .../session/{id}/approval.
+                # Now record each paused call as PENDING and end the turn. A
+                # human-approval call (has an ApprovalConfig) is answered with a
+                # decision on POST .../session/{id}/approval; a CLIENT-FULFILLED
+                # call (client_fulfilled: true, e.g. get_current_screen) is
+                # answered with DATA the frontend captures and POSTs to
+                # .../session/{id}/tool-result. Both reuse the same pending-row +
+                # resume path; only the wire event differs so the widget knows to
+                # auto-capture rather than show an approval card.
                 pending_ids: List[str] = []
+                client_pending_ids: List[str] = []
                 for call in gated_calls:
-                    approval_cfg = self._approval_map[call.function_name]
+                    is_client = call.function_name in self._client_tool_names
+                    approval_cfg = self._approval_map.get(call.function_name)
                     # Inject NOW so the persisted row holds exactly the
-                    # arguments that will run on approval (idempotency hash
+                    # arguments that will run on resolution (idempotency hash
                     # bakes in this turn's id — resume replays it verbatim).
                     injected_args = inject_tool_args(
                         tool_name=call.function_name,
@@ -744,20 +775,40 @@ class ChatAgent:
                         tool_call_id=call.tool_call_id,
                         function_name=call.function_name,
                         arguments=injected_args,
-                        prompt=approval_cfg.prompt,
-                        expiry_secs=approval_cfg.chat_expiry_secs,
+                        prompt=approval_cfg.prompt if approval_cfg else None,
+                        expiry_secs=(
+                            _CLIENT_TOOL_EXPIRY_SECS
+                            if is_client or approval_cfg is None
+                            else approval_cfg.chat_expiry_secs
+                        ),
                     )
                     pending_ids.append(call.tool_call_id)
-                    yield SSEEvent(
-                        event="function_approval_requested",
-                        data={
-                            "tool_call_id": call.tool_call_id,
-                            "name": call.function_name,
-                            "args": injected_args,
-                            "prompt": approval_cfg.prompt,
-                            "expires_at": (row.expires_at.isoformat() if row else None),
-                        },
-                    )
+                    if is_client:
+                        client_pending_ids.append(call.tool_call_id)
+                        yield SSEEvent(
+                            event="client_tool_requested",
+                            data={
+                                "tool_call_id": call.tool_call_id,
+                                "name": call.function_name,
+                                "args": injected_args,
+                                "expires_at": (
+                                    row.expires_at.isoformat() if row else None
+                                ),
+                            },
+                        )
+                    else:
+                        yield SSEEvent(
+                            event="function_approval_requested",
+                            data={
+                                "tool_call_id": call.tool_call_id,
+                                "name": call.function_name,
+                                "args": injected_args,
+                                "prompt": approval_cfg.prompt if approval_cfg else None,
+                                "expires_at": (
+                                    row.expires_at.isoformat() if row else None
+                                ),
+                            },
+                        )
 
                 await update_chat_session_after_turn(
                     session_id=self.session_id, current_node=node_name or None
@@ -771,15 +822,18 @@ class ChatAgent:
                 # ``assistant_idx`` carries the gate-time assistant row so
                 # turn metrics persist (the turn DID consume an LLM call)
                 # and the client has a stable anchor for the partial bubble.
-                yield SSEEvent(
-                    event="turn_end",
-                    data={
-                        "session_status": "ACTIVE",
-                        "assistant_idx": gate_assistant_idx,
-                        "awaiting_approval": True,
-                        "pending_tool_call_ids": pending_ids,
-                    },
-                )
+                # ``awaiting_client_tool`` (additive) lets the widget auto-fulfill
+                # without prompting; existing clients ignore the extra fields.
+                turn_end_data: Dict[str, Any] = {
+                    "session_status": "ACTIVE",
+                    "assistant_idx": gate_assistant_idx,
+                    "awaiting_approval": True,
+                    "pending_tool_call_ids": pending_ids,
+                }
+                if client_pending_ids:
+                    turn_end_data["awaiting_client_tool"] = True
+                    turn_end_data["pending_client_tool_call_ids"] = client_pending_ids
+                yield SSEEvent(event="turn_end", data=turn_end_data)
                 return
         else:
             # Loop ran to completion without ``break`` — every cycle produced
