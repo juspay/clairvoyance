@@ -247,6 +247,23 @@ async def end_conversation(context: TemplateContext, args, transition_to=None):
         # Store errors collected during the call
         context.lead.metaData["errors"] = context.bot.errors
 
+        # Store Pipecat metrics collected during the call (best-effort —
+        # a failure here must NOT abort the DB update / callbacks below).
+        # Seeded with completed generations' metrics (agent-to-agent transfer
+        # merge), then the final generation's collector on top.
+        try:
+            metrics = list(getattr(context.bot, "prior_generation_metrics", []))
+            metrics_collector = getattr(context.bot, "metrics_collector", None)
+            if metrics_collector:
+                metrics.extend(metrics_collector.get_metrics())
+            if metrics:
+                context.lead.metaData["pipecat_metrics"] = metrics
+        except Exception as metrics_error:
+            logger.warning(
+                f"Failed to collect pipecat metrics for call "
+                f"{context.call_sid}: {metrics_error}"
+            )
+
         # Update database first so the span picks up the final outcome from the DB response
         # (fire-and-forget outcome updates from update_outcome handler may not have completed yet)
         # For Daily mode: use lead.id (no telephony call_sid exists)

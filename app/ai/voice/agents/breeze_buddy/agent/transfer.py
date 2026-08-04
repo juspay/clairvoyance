@@ -63,6 +63,12 @@ async def apply_transfer(bot: "Agent", transfer: PendingAgentTransfer) -> None:
             }
         )
 
+    # Same for the outgoing generation's pipecat metrics — build_pipeline
+    # replaces the collector on the next generation, so drain it now.
+    if bot.metrics_collector:
+        bot.prior_generation_metrics.extend(bot.metrics_collector.get_metrics())
+        bot.metrics_collector = None
+
     # 2. Record + persist the transfer (same precedent as IVR selection).
     if bot.lead is not None:
         if bot.lead.metaData is None:

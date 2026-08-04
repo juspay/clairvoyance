@@ -50,6 +50,9 @@ from app.ai.voice.agents.breeze_buddy.processors import (
     TranscriptionGateProcessor,
     UserIdleCallbackHandler,
 )
+from app.ai.voice.agents.breeze_buddy.processors.metrics_collector_processor import (
+    MetricsCollectorProcessor,
+)
 from app.ai.voice.agents.breeze_buddy.stt import get_stt_service
 from app.ai.voice.agents.breeze_buddy.template.types import (
     ConfigurationModel,
@@ -80,14 +83,18 @@ def get_observers() -> list[Any]:
     single greeting-latency event per call — misleading as a "latency"
     signal. See TODO.md §2 for follow-up.
     """
-    if ENVIRONMENT.lower() != "dev":
-        return []
-    return [
-        MetricsLogObserver(),
-        LLMLogObserver(),
-        TranscriptionLogObserver(),
-        TurnTrackingObserver(),
-    ]
+    observers: list[Any] = [MetricsLogObserver()]
+
+    if ENVIRONMENT.lower() == "dev":
+        observers.extend(
+            [
+                LLMLogObserver(),
+                TranscriptionLogObserver(),
+                TurnTrackingObserver(),
+            ]
+        )
+
+    return observers
 
 
 def generate_conversation_id(payload: Optional[dict]) -> str:
@@ -207,6 +214,7 @@ async def build_pipeline(
     Optional[UserIdleCallbackHandler],
     Optional[TranscriptionGateProcessor],
     Optional[TranscriptCollectorProcessor],
+    MetricsCollectorProcessor,
 ]:
     """Build the processing pipeline.
 
@@ -242,15 +250,20 @@ async def build_pipeline(
             aggregator and the LLM; ignored in stream/realtime modes
 
     Returns:
-        6-tuple of (pipeline, context, context_aggregator, user_idle_callback_handler, transcription_gate, transcript_collector)
+        7-tuple of (pipeline, context, context_aggregator, user_idle_callback_handler, transcription_gate, transcript_collector, metrics_collector)
         - pipeline: the built Pipeline instance
         - context: the LLMContext for the conversation
         - context_aggregator: LLMContextAggregatorPair for managing user/assistant turns
         - user_idle_callback_handler: resets retry count on user activity; None if idle detection is disabled or stream mode
         - transcription_gate: TranscriptionGateProcessor instance wired into the pipeline
         - transcript_collector: TranscriptCollectorProcessor instance (stream mode only, None in agent mode)
+        - metrics_collector: MetricsCollectorProcessor for capturing pipecat metrics
     """
     is_stream = mode == "stream"
+
+    # Create the metrics collector processor
+    metrics_collector = MetricsCollectorProcessor()
+
     # Realtime / speech-to-speech: when create_services returns no STT and no
     # TTS but a single LLM, we wire a minimal pipeline. The realtime LLM does
     # its own audio in/out, transcription, and turn detection, so all of BB's
@@ -303,11 +316,12 @@ async def build_pipeline(
         _wire_user_idle_event(user_aggregator, user_idle_callback_handler)
 
         # Pipeline order (realtime):
-        #   input → user_aggregator → realtime_llm → output → assistant_aggregator
+        #   input → user_aggregator → realtime_llm → metrics_collector → output → assistant_aggregator
         pipeline_parts: list[Any] = [
             transport.input(),
             user_aggregator,
             llm,
+            metrics_collector,
             transport.output(),
             context_aggregator.assistant(),
         ]
@@ -322,6 +336,7 @@ async def build_pipeline(
             user_idle_callback_handler,
             None,  # no TranscriptionGateProcessor in realtime mode
             None,  # no TranscriptCollectorProcessor (stream-mode only)
+            metrics_collector,
         )
 
     # --- Interruption configuration ---
@@ -511,7 +526,7 @@ async def build_pipeline(
         pipeline_parts.append(transcript_collector)
     pipeline_parts.append(user_aggregator)
     if is_stream:
-        pipeline_parts.extend([tts, transport.output()])
+        pipeline_parts.extend([tts, metrics_collector, transport.output()])
     else:
         # Generative voice UI (a VoiceUiStreamProcessor tapping LLM text between
         # the LLM and TTS to emit `ui-op` RTVI events) is DEFERRED — the
@@ -522,7 +537,13 @@ async def build_pipeline(
         if kb_processor is not None:
             pipeline_parts.append(kb_processor)
         pipeline_parts.extend(
-            [llm, tts, transport.output(), context_aggregator.assistant()]
+            [
+                llm,
+                tts,
+                metrics_collector,
+                transport.output(),
+                context_aggregator.assistant(),
+            ]
         )
 
     return (
@@ -532,6 +553,7 @@ async def build_pipeline(
         user_idle_callback_handler,
         transcription_gate,
         transcript_collector,
+        metrics_collector,
     )
 
 
