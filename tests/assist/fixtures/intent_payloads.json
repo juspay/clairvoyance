@@ -1,0 +1,89 @@
+{
+  "_readme": [
+    "Contract fixtures: the EXACT ui_intent payload JSON bodies the widget builds",
+    "(RFC-001 §3.3). One list per intent; each entry is a captured emission shape",
+    "(incl. the url / product_id / cart_id optional-field variants).",
+    "Builders live in the loom repo at",
+    "packages/breeze-buddy-assist-widget/src/lib/ui/commerce/helpers.ts.",
+    "This file is mirrored byte-identically in the loom repo at",
+    "packages/client-sdk/src/lib/chat/__fixtures__/intent_payloads.json —",
+    "update BOTH copies (and both repos' contract tests) when an emission changes."
+  ],
+  "view_product": [
+    {
+      "product_id": "gid://shopify/Product/9967507833123",
+      "title": "Ribbed Trail Socks",
+      "url": "https://beyond-bound.example/products/ribbed-trail-socks"
+    },
+    {
+      "product_id": "gid://shopify/Product/9967507833123",
+      "title": "Ribbed Trail Socks"
+    },
+    {
+      "product_id": "gid://shopify/Product/9967507833123",
+      "title": "Ribbed Trail Socks",
+      "url": "https://beyond-bound.example/products/ribbed-trail-socks",
+      "featured_variant_id": "gid://shopify/ProductVariant/11",
+      "variants": [
+        {
+          "id": "gid://shopify/ProductVariant/11",
+          "title": "S",
+          "available": true,
+          "price": {
+            "amount": 934,
+            "currency": "INR"
+          }
+        },
+        {
+          "id": "gid://shopify/ProductVariant/12",
+          "title": "M",
+          "available": false
+        }
+      ]
+    }
+  ],
+  "enrich_product": [
+    {
+      "product_id": "gid://shopify/Product/9967507833123",
+      "title": "Ribbed Trail Socks"
+    },
+    {
+      "product_id": "gid://shopify/Product/9967507833123"
+    }
+  ],
+  "add_to_cart": [
+    {
+      "variant_id": "gid://shopify/ProductVariant/54224673210659",
+      "qty": 1,
+      "product_id": "gid://shopify/Product/9967507833123"
+    }
+  ],
+  "set_qty": [
+    {
+      "line_id": "gid://shopify/CartLine/2a54e56d-9038-4f5e-8d5e-6a4b2d3f9c11",
+      "variant_id": "gid://shopify/ProductVariant/54224673210659",
+      "qty": 2,
+      "cart_id": "gid://shopify/Cart/hWN2h0jP3rDIzW0Yc8jQe9Jw?key=abc123"
+    },
+    {
+      "line_id": "gid://shopify/CartLine/2a54e56d-9038-4f5e-8d5e-6a4b2d3f9c11",
+      "variant_id": "gid://shopify/ProductVariant/54224673210659",
+      "qty": 2
+    }
+  ],
+  "remove_line": [
+    {
+      "line_id": "gid://shopify/CartLine/2a54e56d-9038-4f5e-8d5e-6a4b2d3f9c11",
+      "variant_id": "gid://shopify/ProductVariant/54224673210659",
+      "cart_id": "gid://shopify/Cart/hWN2h0jP3rDIzW0Yc8jQe9Jw?key=abc123"
+    },
+    {
+      "line_id": "gid://shopify/CartLine/2a54e56d-9038-4f5e-8d5e-6a4b2d3f9c11"
+    }
+  ],
+  "checkout": [
+    {
+      "url": "https://beyond-bound.example/cart/c/hWN2h0jP3rDIzW0Yc8jQe9Jw?key=abc123"
+    }
+  ]
+}

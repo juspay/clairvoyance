@@ -205,12 +205,15 @@ class IntentPolicy:
 # per-session gating is the ``enabled_flavors`` check in parse_ui_intent.
 INTENT_POLICY: Dict[str, IntentPolicy] = {}
 
-# Flavor → intents module, the intent-side mirror of
-# ``ui_catalog.LAZY_GROUPS`` (which maps the same flavor names to schema
-# modules). Kept separate so a chat session that never sends a ui_intent
-# loads only the schemas, and vice versa.
+# Flavor → the module whose import registers that flavor's intents. The
+# intent-side mirror of ``ui_catalog.LAZY_GROUPS``, and deliberately the
+# SAME target: a flavor package registers its whole surface (schemas,
+# intents, connectors) in one import, so a template can't end up with half
+# a flavor depending on which endpoint it touched first. Still lazy where
+# it counts — a process that never serves a flavor-enabled template never
+# imports the package at all.
 FLAVOR_INTENT_MODULES: Dict[str, str] = {
-    "commerce": "app.ai.voice.agents.breeze_buddy.assist.commerce.intents",
+    "commerce": "app.ai.voice.agents.breeze_buddy.assist.commerce",
 }
 
 # Attempted flavors — successes AND failures. A failed import must not be

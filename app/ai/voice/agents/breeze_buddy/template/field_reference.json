@@ -447,7 +447,7 @@
       }
     },
     "ui_intents": {
-      "description": "Per-template overrides for the tool names, state keys, labels, and URLs a flavor's DIRECT ui_intent executors use (RFC-001 §3.3 Stage B). Role → value maps; unset roles keep the flavor's defaults (commerce: create_cart/update_cart/get_cart, cart_id/checkout_url, 'Review and checkout'). urls.checkout_page (optional) fixes the CartView checkout button's destination — e.g. the storefront /cart page, which the cart-cookie sync populates — instead of the cart tool's checkout-bound continue_url. Only set roles that DIFFER from the flavor defaults. Fields documented under UiIntentsConfig.",
+      "description": "Per-template overrides for the tool names, state keys, labels, and URLs a flavor's DIRECT ui_intent executors use (RFC-001 §3.3 Stage B). Role → value maps; unset roles keep the flavor's defaults (commerce: create_cart/update_cart/get_cart, cart_id/checkout_url, 'Review and checkout'). urls.checkout_page (optional) fixes the CartView checkout button's destination — e.g. the storefront /cart page, which the cart-cookie sync populates — instead of the cart tool's checkout-bound continue_url. Only set roles that DIFFER from the flavor defaults. Connectors and optional features live on `flavor`, not here. Fields documented under UiIntentsConfig.",
       "example": {
         "urls": {
           "checkout_page": "https://www.thebeyondbound.com/cart"
@@ -475,6 +475,19 @@
           "image_url": "https://cdn.example.com/hiit.jpg"
         }
       ]
+    },
+    "flavor": {
+      "description": "Protocol dialect → which platform connectors serve it and which optional flavor features are on. Keyed exactly the way the flavor packages are laid out on disk (assist/<flavor>/<protocol>/ + assist/<flavor>/connectors/<name>/), so config and code read the same. Absent, or a protocol left unset, means connectors self-select on the payload and every optional feature is OFF. The engine never interprets the keys — a flavor resolves its own protocol block by name. Fields documented under FlavorProtocolConfig.",
+      "example": {
+        "ucp": {
+          "connectors": [
+            "shopify"
+          ],
+          "features": {
+            "upsell": true
+          }
+        }
+      }
     }
   },
   "RenderUiConfig": {
@@ -1144,6 +1157,20 @@
       "interruption": {
         "mode": "enabled",
         "min_words": 2
+      }
+    }
+  },
+  "FlavorProtocolConfig": {
+    "connectors": {
+      "description": "Platform connectors to consult for this protocol, by name. EMPTY (the default) means every registered connector self-selects on the data it is handed — correct when the platform is unambiguous from the payload. Name them explicitly when a connector would otherwise mis-fire on a look-alike gateway: e.g. a non-Shopify store whose product URLs are also /products/{handle} would cost a dead storefront fetch on every product view.",
+      "example": [
+        "shopify"
+      ]
+    },
+    "features": {
+      "description": "Optional flavor features → on/off. OPT-IN by contract: every feature is OFF unless turned on here, so enabling a flavor never silently starts extra behaviour on an existing merchant. Commerce/ucp: 'upsell' streams a complementary ProductGrid after a successful add_to_cart — one extra LLM call plus a catalog search per add, run after the cart component is already on the wire so the shopper never waits on it.",
+      "example": {
+        "upsell": true
       }
     }
   }
