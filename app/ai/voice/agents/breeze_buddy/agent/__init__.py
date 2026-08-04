@@ -74,6 +74,7 @@ from app.ai.voice.agents.breeze_buddy.observability.tracing_setup import (
 from app.ai.voice.agents.breeze_buddy.observers import ObserverManager, build_observers
 from app.ai.voice.agents.breeze_buddy.processors import (
     KnowledgeRetrievalProcessor,
+    MetricsCollectorProcessor,
     TranscriptCollectorProcessor,
 )
 from app.ai.voice.agents.breeze_buddy.processors.voice_ui_stream import (
@@ -215,6 +216,10 @@ class Agent:
         # Stream mode transcript collector (replaces LLMContext for transcription)
         self._transcript_collector: Optional[TranscriptCollectorProcessor] = None
 
+        # Pipecat metrics for the CURRENT generation (build_pipeline replaces it
+        # each generation; stays None for IVR mode, which builds no pipeline)
+        self.metrics_collector: Optional[MetricsCollectorProcessor] = None
+
         # Real-time observers (side-LLMs for voicemail/hallucination detection)
         self._observer_manager: Optional[ObserverManager] = None
 
@@ -249,6 +254,9 @@ class Agent:
         self.generation: int = 1
         # Transcript snapshots from completed generations, merged at final end.
         self.prior_generation_messages: List[Dict[str, Any]] = []
+        # Same for pipecat turn metrics: each generation gets a fresh collector,
+        # so the outgoing one is drained into here before it is discarded.
+        self.prior_generation_metrics: List[Dict[str, Any]] = []
         # Handoff system messages to seed the NEXT generation's initial node.
         self._handoff_messages: List[Dict[str, str]] = []
         # Capture-once recipe for rebuilding the transport on each generation.
@@ -1344,6 +1352,7 @@ class Agent:
             user_idle_callback_handler,
             self.speech_gate,
             self._transcript_collector,
+            self.metrics_collector,
         ) = await build_pipeline(
             self.transport,
             stt,
