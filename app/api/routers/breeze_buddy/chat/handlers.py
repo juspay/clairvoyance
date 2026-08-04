@@ -25,11 +25,22 @@ from app.ai.voice.agents.breeze_buddy.chat.client_context import (
 from app.ai.voice.agents.breeze_buddy.chat.history.block_codec import (
     filter_visible_blocks,
 )
+from app.ai.voice.agents.breeze_buddy.chat.intents.router import (
+    IntentRoute,
+    IntentValidationError,
+    ParsedIntent,
+    agent_turn_content,
+    ensure_flavor_intents,
+    parse_ui_intent,
+    run_direct_intent,
+    template_enabled_flavors,
+)
 from app.ai.voice.agents.breeze_buddy.chat.metrics import TurnMetrics
 from app.ai.voice.agents.breeze_buddy.chat.sse import SSEEvent, format_sse
 from app.ai.voice.agents.breeze_buddy.chat.turn_core import (
     build_render_template_vars,
     resolve_llm_configuration,
+    resolve_session_catalog_version,
     run_chat_approval_continuation,
     run_chat_turn,
 )
@@ -38,6 +49,7 @@ from app.ai.voice.agents.breeze_buddy.template.transformation_function import (
     TEMPLATE_FUNCTION_REGISTRY,
 )
 from app.ai.voice.agents.breeze_buddy.template.types import TemplateModel
+from app.ai.voice.agents.breeze_buddy.template.ui_catalog import CATALOG_VERSION_V2
 from app.api.routers.breeze_buddy.analytics.rbac import apply_hierarchical_filters
 from app.core.logger import logger
 from app.database.accessor.breeze_buddy.chat_session import (
@@ -377,8 +389,14 @@ async def send_chat_message_handler(
     req: SendChatMessageRequest,
     *,
     access_check: Optional[Callable[[ChatSession], None]] = None,
+    internal: bool = False,
 ) -> StreamingResponse:
     """Drive one turn; stream SSE events until ``turn_end``.
+
+    ``internal`` — the turn is an internal AGENT_TURN intent (see
+    ``IntentPolicy.internal``): the exchange persists with
+    visibility=internal and no ``user_committed`` fires. Only
+    ``serve_session_intent`` sets this; the HTTP routes never expose it.
 
     Multi-pod safe: the per-session Redis lock guarantees one driver
     at a time. The lock is acquired before the SSE response opens so
@@ -517,7 +535,176 @@ async def send_chat_message_handler(
                     session_id=session_id,
                     user_content=req.content,
                     context_placement=context_placement,
+                    internal=internal,
                 ),
+            ),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache, no-transform",
+                "X-Accel-Buffering": "no",
+                "Connection": "keep-alive",
+            },
+        )
+        lock_handed_off = True
+        return response
+    finally:
+        if not lock_handed_off:
+            await lock.release()
+
+
+async def serve_session_intent(
+    session: Any,
+    session_id: str,
+    raw_intent: Dict[str, Any],
+    *,
+    context: Any = None,
+    voice_live: bool = False,
+):
+    """Validate + policy-route one raw ``ui_intent`` dict and serve it.
+
+    The shared engine behind every intent surface — the widget's dedicated
+    ``POST /intent`` route, the widget's legacy ``/message`` ``ui_intent``
+    body variant, and the demo router. Unknown intent / flavor not enabled
+    / invalid payload → 422 with a typed error the widget renders
+    in-thread. Intent policies are flavor content, lazy-loaded per the
+    template's enabled UI-catalog groups — a template without a flavor
+    never loads (nor matches) that flavor's intents.
+
+    ``voice_live`` — the session currently has a voice attachment. DIRECT
+    intents still execute (no LLM turn is involved; the mutation lands in
+    history, so the voice brain sees it next turn). AGENT_TURN intents
+    would inject a competing chat turn into a live voice conversation, so
+    they 409 with the typed ``voice_live`` code instead.
+    """
+    template = await get_template_by_id_cached(session.template_id)
+    if template is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=(
+                f"Template '{session.template_id}' for session "
+                f"'{session_id}' no longer exists"
+            ),
+        )
+    flavors = template_enabled_flavors(template)
+    ensure_flavor_intents(flavors)
+    try:
+        parsed = parse_ui_intent(raw_intent, enabled_flavors=flavors)
+    except IntentValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=exc.detail,
+        ) from exc
+    if resolve_session_catalog_version(session.metadata) != CATALOG_VERSION_V2:
+        # v1 sessions never see v2 emission — a stray intent from a
+        # mismatched client fails closed rather than half-rendering.
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "catalog_version_unsupported",
+                "message": (
+                    "ui_intent requires a session created with " "catalog_version 'v2'."
+                ),
+            },
+        )
+    if parsed.policy.route is IntentRoute.CLIENT:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "client_side_intent",
+                "message": (
+                    f"Intent {parsed.intent.intent!r} is handled by the "
+                    "widget itself; no server call is expected."
+                ),
+            },
+        )
+    if parsed.policy.route is IntentRoute.DIRECT:
+        return await send_chat_intent_handler(session_id, parsed, access_check=None)
+    if voice_live:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "voice_live",
+                "message": (
+                    f"Intent {parsed.intent.intent!r} needs an agent turn, "
+                    "which can't run while a voice attachment is live. End "
+                    "voice first, or ask the agent by speaking."
+                ),
+            },
+        )
+    # agent_turn — rewrite into the structured user turn and serve it as
+    # a normal chat turn. Internal policies (enrich_product's overlay
+    # blurb) persist the whole exchange with visibility=internal — the
+    # LLM keeps the context; resume replay never shows it.
+    return await send_chat_message_handler(
+        session_id,
+        SendChatMessageRequest(content=agent_turn_content(parsed), context=context),
+        access_check=None,
+        internal=parsed.policy.internal,
+    )
+
+
+async def send_chat_intent_handler(
+    session_id: str,
+    parsed: ParsedIntent,
+    *,
+    access_check: Optional[Callable[[ChatSession], None]] = None,
+) -> StreamingResponse:
+    """Drive one DIRECT-routed UI intent (RFC-001 §3.3); stream SSE until
+    ``turn_end``. The no-LLM sibling of ``send_chat_message_handler`` —
+    same per-session lock, same SSE scaffolding, same metrics observer;
+    the events come from ``run_direct_intent`` instead of a chat turn.
+    The caller (widget route) has already validated + policy-routed the
+    intent and checked the session's catalog version.
+    """
+    lock = RedisLock(_lock_key(session_id), ttl_seconds=_SESSION_LOCK_TTL_SECONDS)
+    try:
+        await lock.acquire()
+    except LockAcquireError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Another turn is already in flight for this session. "
+                "Wait for the previous /message stream to complete and retry."
+            ),
+        )
+
+    lock_handed_off = False
+    try:
+        fresh = await get_chat_session_by_id(session_id)
+        if fresh is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Chat session '{session_id}' not found",
+            )
+        if access_check is not None:
+            access_check(fresh)
+        if fresh.status == ChatSessionStatus.ENDED:
+            raise HTTPException(
+                status_code=status.HTTP_410_GONE,
+                detail=f"Chat session '{session_id}' has ended",
+            )
+
+        template = await get_template_by_id_cached(fresh.template_id)
+        if template is None:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=(
+                    f"Template '{fresh.template_id}' for chat session "
+                    f"'{session_id}' no longer exists"
+                ),
+            )
+
+        turn_metrics = TurnMetrics(
+            session_id=session_id,
+            template_id=template.id,
+            t0=time.monotonic(),
+        )
+        response = StreamingResponse(
+            _turn_sse_stream(
+                session_id=session_id,
+                lock=lock,
+                turn_metrics=turn_metrics,
+                events=run_direct_intent(session_id=session_id, parsed=parsed),
             ),
             media_type="text/event-stream",
             headers={
@@ -602,9 +789,12 @@ async def _turn_sse_stream(
             # Full exception (incl. SDK / DB internals) goes to logs; the
             # SSE payload is intentionally generic — provider stack traces,
             # internal URLs, and SQL strings should not reach the client.
-            logger.error(
-                f"chat turn stream for session {session_id} crashed: {exc}",
-                exc_info=True,
+            # NOTE: loguru — never pass ``exc_info=True`` (any kwarg makes
+            # loguru re-``.format()`` the message, and provider error text
+            # routinely contains ``{...}`` JSON → KeyError from inside the
+            # logging call, killing this generator mid-stream).
+            logger.exception(
+                f"chat turn stream for session {session_id} crashed: {exc}"
             )
             yield format_sse(
                 SSEEvent(

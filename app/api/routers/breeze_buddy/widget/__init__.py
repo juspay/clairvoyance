@@ -4,6 +4,7 @@ Routes under ``/agent/voice/breeze-buddy/widget``:
 
 - ``POST /widget/session``                              create
 - ``POST /widget/session/{id}/message``                 chat turn (SSE)
+- ``POST /widget/session/{id}/intent``                  typed UI intent (SSE)
 - ``POST /widget/session/{id}/cancel``                  cancel in-flight turn
 - ``POST /widget/session/{id}/context``                 push state/facts (no LLM turn)
 - ``POST /widget/session/{id}/voice/connect``           open voice attachment
@@ -36,6 +37,7 @@ from app.schemas.breeze_buddy.chat import (
     SendChatMessageRequest,
     UpdateWidgetContextRequest,
     UpdateWidgetContextResponse,
+    WidgetIntentRequest,
     WidgetSessionStateResponse,
     WidgetTranscribeResponse,
     WidgetVoiceConnectResponse,
@@ -48,6 +50,7 @@ from .handlers import (
     create_widget_session_handler,
     end_widget_session_handler,
     get_widget_session_state_handler,
+    send_widget_intent_handler,
     send_widget_message_handler,
     transcribe_widget_audio_handler,
     update_widget_context_handler,
@@ -75,6 +78,11 @@ async def widget_get_preflight(session_id: str) -> Response:
 
 @router.options("/session/{session_id}/message")
 async def widget_message_preflight(session_id: str) -> Response:
+    return options_cors_response()
+
+
+@router.options("/session/{session_id}/intent")
+async def widget_intent_preflight(session_id: str) -> Response:
     return options_cors_response()
 
 
@@ -146,6 +154,27 @@ async def send_widget_message(
     ctx: WidgetSessionContext = Depends(require_widget_session),
 ):
     return await send_widget_message_handler(session_id, req, request, ctx)
+
+
+@router.post(
+    "/session/{session_id}/intent",
+    summary="Serve one typed UI intent (SSE) — dedicated catalog-v2 route",
+)
+async def send_widget_intent(
+    session_id: str,
+    req: WidgetIntentRequest,
+    request: Request,
+    ctx: WidgetSessionContext = Depends(require_widget_session),
+):
+    """Typed component action (RFC-001 §3.3 Stage B).
+
+    Direct intents (cart mutations) execute the whitelisted tool pipeline
+    with no LLM call; agent-turn intents stream a normal chat turn. Both
+    respond with the same SSE stream shape as ``/message``. Unlike
+    ``/message``, DIRECT intents are also accepted while a voice
+    attachment is live.
+    """
+    return await send_widget_intent_handler(session_id, req, request, ctx)
 
 
 @router.post(

@@ -138,7 +138,7 @@ def _template_with_quick_replies(options):
 
 def test_handler_message_pill_falls_back_to_label():
     template = _template_with_quick_replies([QuickReplyOption(label="Track my order")])
-    replies, enable_text_input = _extract_widget_config(template)
+    replies, enable_text_input, _tiles = _extract_widget_config(template)
     assert enable_text_input is True
     assert replies[0].value == "Track my order"  # label fallback
     assert replies[0].action is None
@@ -156,7 +156,7 @@ def test_handler_redirect_pill_has_null_value_and_passes_action():
             )
         ]
     )
-    replies, _ = _extract_widget_config(template)
+    replies, _, _tiles = _extract_widget_config(template)
     # Redirect pills don't message the agent — value is always None.
     assert replies[0].value is None
     assert isinstance(replies[0].action, OpenUrlAction)
@@ -164,7 +164,11 @@ def test_handler_redirect_pill_has_null_value_and_passes_action():
 
 
 def test_handler_no_configurations_returns_defaults():
-    assert _extract_widget_config(SimpleNamespace(configurations=None)) == ([], True)
+    assert _extract_widget_config(SimpleNamespace(configurations=None)) == (
+        [],
+        True,
+        [],
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -213,7 +217,7 @@ def test_handler_passes_icon_through_for_message_pill():
             )
         ]
     )
-    replies, _ = _extract_widget_config(template)
+    replies, _, _tiles = _extract_widget_config(template)
     # Icon is presentational — it survives regardless of value/action.
     assert replies[0].value == "Show me what's on sale"
     assert isinstance(replies[0].icon, Icon)
@@ -230,7 +234,7 @@ def test_handler_passes_icon_through_for_redirect_pill():
             )
         ]
     )
-    replies, _ = _extract_widget_config(template)
+    replies, _, _tiles = _extract_widget_config(template)
     assert replies[0].value is None  # redirect pill
     assert isinstance(replies[0].icon, Icon)
     assert replies[0].icon.alt == "My account"
@@ -238,5 +242,5 @@ def test_handler_passes_icon_through_for_redirect_pill():
 
 def test_handler_pill_without_icon_emits_none():
     template = _template_with_quick_replies([QuickReplyOption(label="Track my order")])
-    replies, _ = _extract_widget_config(template)
+    replies, _, _tiles = _extract_widget_config(template)
     assert replies[0].icon is None
