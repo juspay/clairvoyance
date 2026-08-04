@@ -22,6 +22,9 @@ Assistant row blocks::
         {"type": "text", "text": "..."},                         # optional
         {"type": "tool_use", "id": "...", "name": "...",
          "input": {...}},                                        # 0..N
+        {"type": "gemini_thought_signature",                     # 0..N,
+         "signature": "<base64>", "bookmark": {...},             # internal
+         "visibility": "internal"},                              # only
     ]
 
 User row blocks (text turn)::
@@ -42,8 +45,18 @@ import json
 from typing import Any, Dict, List, Optional, Set, cast
 
 from pipecat.frames.frames import FunctionCallFromLLM
-from pipecat.processors.aggregators.llm_context import LLMContextMessage
+from pipecat.processors.aggregators.llm_context import (
+    LLMContextMessage,
+    LLMSpecificMessage,
+)
 
+# Provider-specific sub-codec: this module stays provider-neutral and only
+# ROUTES gemini_thought_signature blocks to their own codec during decode
+# (see gemini_signatures for the why/how). New provider persistence quirks
+# should follow the same pattern rather than growing inline here.
+from app.ai.voice.agents.breeze_buddy.chat.llm.gemini.signatures import (
+    split_signature_blocks,
+)
 from app.core.logger import logger
 
 # A content_block carrying this visibility marker is LLM-context only:
@@ -177,7 +190,16 @@ def blocks_to_llm_context_messages(
             continue
 
         if role == "assistant":
-            out.append(_assistant_row_to_openai(blocks))
+            # Thought-signature blocks decode into LLMSpecificMessage
+            # entries placed immediately BEFORE the assistant message they
+            # annotate — the same stream order the live turn used
+            # (signatures arrive mid-stream, the assistant message is
+            # appended after stream close). The Gemini adapter extracts
+            # them wherever they sit and re-applies by bookmark, but their
+            # relative order against assistant messages must be preserved.
+            sig_messages, plain_blocks = split_signature_blocks(blocks)
+            out.extend(sig_messages)
+            out.append(_assistant_row_to_openai(plain_blocks))
         elif role == "user":
             out.extend(_user_row_to_openai(blocks))
         else:
@@ -256,6 +278,13 @@ def repair_dangling_tool_uses(
     n = len(messages)
     i = 0
     while i < n:
+        # LLM-specific entries (Gemini thought signatures) are opaque to
+        # the repair pass — they carry no tool_use/tool_result semantics.
+        # Pass them through in place.
+        if isinstance(messages[i], LLMSpecificMessage):
+            repaired.append(messages[i])
+            i += 1
+            continue
         msg = cast(Dict[str, Any], messages[i])
         role = msg.get("role")
 

@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from app.ai.voice.agents.breeze_buddy.chat.block_codec import (
+from app.ai.voice.agents.breeze_buddy.chat.history.block_codec import (
     tool_results_to_user_blocks,
 )
 from app.ai.voice.agents.breeze_buddy.template.approval import (

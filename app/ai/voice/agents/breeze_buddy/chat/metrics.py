@@ -76,6 +76,24 @@ class TurnMetrics:
         # line itself — transcript-class content, persisted to the DB beside
         # the session, NEVER echoed into the [CHAT_METRICS] log line.
         self.drops: List[dict] = []
+        # Step-progress / plan exposure (Phase 2 A/B instrumentation):
+        # which turns SHOWED progress affordances and how they resolved.
+        # Join against session outcomes (abandonment, add-to-cart) in the
+        # analytics layer — the metrics line is the per-turn exposure
+        # record.
+        self.steps_started = 0
+        self.steps_completed = 0
+        self.steps_errored = 0
+        self.first_step_ms: Optional[float] = None
+        self.last_step_ms: Optional[float] = None
+        self.plans_emitted = 0
+        self.plan_steps = 0  # declared length of the LAST plan
+        # RFC-002 render_ui observability: every UI decision is an explicit
+        # event now — calls, reasoned no-renders, and forced-cycle fallbacks
+        # (MALFORMED_FUNCTION_CALL retry) are all countable per turn.
+        self.render_ui_calls = 0
+        self.ui_no_ui = 0
+        self.force_fallbacks = 0
         self.status: Optional[str] = None
         # The assistant chat_message.idx this turn produced (from the
         # turn_end event). Keys the persisted chat_turn_metrics row
@@ -136,6 +154,27 @@ class TurnMetrics:
                 self.healer_applied += 1
             elif name == "function_call_started":
                 self.tool_calls += 1
+                if data.get("name") == "render_ui":
+                    self.render_ui_calls += 1
+            elif name == "ui_decision":
+                if data.get("decision") == "no_ui":
+                    self.ui_no_ui += 1
+            elif name == "force_fallback":
+                self.force_fallbacks += 1
+            elif name == "step_started":
+                if self.first_step_ms is None:
+                    self.first_step_ms = self._ms()
+                self.steps_started += 1
+            elif name == "step_completed":
+                self.last_step_ms = self._ms()
+                self.steps_completed += 1
+                if data.get("status") == "error":
+                    self.steps_errored += 1
+            elif name in ("plan_started", "plan_updated"):
+                self.plans_emitted += 1
+                steps_val = data.get("steps")
+                if isinstance(steps_val, list):
+                    self.plan_steps = len(steps_val)
             elif name == "turn_end":
                 self.status = data.get("session_status")
                 idx_val = data.get("assistant_idx")
@@ -161,6 +200,14 @@ class TurnMetrics:
                 f"ui_ops={self.ui_ops} ui_dropped={self.ui_dropped} "
                 f"healer_applied={self.healer_applied} tool_calls={self.tool_calls} "
                 f"prose_chars={self.prose_chars} ui_chars={self.ui_chars} "
+                f"steps_started={self.steps_started} "
+                f"steps_completed={self.steps_completed} "
+                f"steps_errored={self.steps_errored} "
+                f"first_step_ms={self.first_step_ms} "
+                f"last_step_ms={self.last_step_ms} "
+                f"plans_emitted={self.plans_emitted} plan_steps={self.plan_steps} "
+                f"render_ui_calls={self.render_ui_calls} ui_no_ui={self.ui_no_ui} "
+                f"force_fallbacks={self.force_fallbacks} "
                 f"drop_reasons={reasons}"
             )
         except Exception:  # noqa: BLE001

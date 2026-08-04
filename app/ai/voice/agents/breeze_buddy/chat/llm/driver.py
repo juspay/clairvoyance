@@ -6,6 +6,16 @@ each materialized tool call. Provider dispatch is by ``isinstance`` against
 pipecat's three base classes — covers every provider in pipecat 1.1's
 ``services/`` tree (current Buddy usage: Azure, Vertex Gemini, Vertex Claude).
 
+The Gemini streamer lives in ``gemini/stream.py`` (all of chat's
+Gemini-specific machinery rides there); this module keeps the dispatcher
+plus the stock-mirror OpenAI and Anthropic streamers.
+
+The Gemini path additionally yields ``("context_message", LLMSpecificMessage)``
+for thought signatures (Gemini 2.5/3 thinking). The driver never mutates
+``context`` — the caller owns it and must append these messages itself so
+the signatures are echoed back on the next request (Vertex 400s a
+``functionCall`` part that comes back without its ``thought_signature``).
+
 We read ``service._client`` and ``service._settings`` directly: pipecat 1.1
 exposes no public streaming-with-tools entry point. Tested with pipecat 1.1.0
 + pipecat-ai-flows 1.1.0; revisit on upgrade.
@@ -14,7 +24,7 @@ exposes no public streaming-with-tools entry point. Tested with pipecat 1.1.0
 from __future__ import annotations
 
 import json
-from typing import Any, AsyncIterator, Dict, List, Literal, Optional, Tuple, Union
+from typing import Any, AsyncIterator, Dict, List, Optional
 
 from pipecat.frames.frames import FunctionCallFromLLM
 from pipecat.processors.aggregators.llm_context import LLMContext
@@ -22,13 +32,15 @@ from pipecat.services.anthropic.llm import AnthropicLLMService
 from pipecat.services.google.llm import GoogleLLMService
 from pipecat.services.openai.base_llm import BaseOpenAILLMService
 
-from app.ai.voice.agents.breeze_buddy.chat.context_compactor import (
+from app.ai.voice.agents.breeze_buddy.chat.history.compactor import (
     compact_tool_results,
 )
+from app.ai.voice.agents.breeze_buddy.chat.llm.common import (
+    DriverEvent,
+    close_stream,
+)
+from app.ai.voice.agents.breeze_buddy.chat.llm.gemini.stream import stream_gemini
 from app.core.logger import logger
-
-DriverEvent = Tuple[Literal["text", "tool_call"], Union[str, FunctionCallFromLLM]]
-
 
 __all__ = ["DriverEvent", "stream"]
 
@@ -40,14 +52,27 @@ async def stream(
     log_label: str = "chat",
     tool_context_retention: Optional[Dict[str, str]] = None,
     tool_context_projection: Optional[Dict[str, List[str]]] = None,
+    allowed_function_names: Optional[List[str]] = None,
+    thinking_level_override: Optional[str] = None,
 ) -> AsyncIterator[DriverEvent]:
     """Issue one streaming LLM call; yield text deltas + tool calls.
 
     The caller owns ``context`` mutation between turns of the tool-call loop.
     This function only reads it.
 
-    ``tool_context_retention`` is an optional per-tool policy map (currently
-    honoured only by the Anthropic path) that lets the compactor rewrite
+    ``allowed_function_names`` constrains THIS call to the named functions
+    (forced tool choice — RFC-002 forced-think + plan enforcement). Gemini:
+    ``function_calling_config`` mode=ANY + allowed_function_names — the
+    model MUST emit one of the named calls. OpenAI/Anthropic paths do not
+    implement it yet (chat runs Gemini; a set value raises loudly rather
+    than silently un-enforcing).
+
+    The Gemini path also yields ``("finish_reason", str)`` after the stream
+    closes when the last candidate carried a finish reason — the caller's
+    MALFORMED_FUNCTION_CALL fallback (retry once unforced) keys off it.
+
+    ``tool_context_retention`` is an optional per-tool policy map (honoured
+    by the Anthropic AND Gemini paths) that lets the compactor rewrite
     stale ``tool_result`` blocks — bounding input-token cost across long
     sessions. ``None`` or an empty map is a no-op.
 
@@ -55,8 +80,33 @@ async def stream(
     ``last_turn_only`` tool has an entry, its stale results are compacted to an
     identity projection (whitelisted paths only) instead of a bare stub, so the
     LLM keeps durable referents (product url/handle/price, variant ids) at a
-    fraction of the tokens. Honoured only by the Anthropic path.
+    fraction of the tokens. Anthropic compacts the provider-shape messages;
+    Gemini compacts the universal list pre-adaptation (thought signatures
+    and function_call parts are untouched either way).
+
+    ``thinking_level_override`` swaps the thinking level for THIS call only
+    (Gemini path; e.g. the forced final quick-replies cycle runs 'low' — a
+    trivial generation that shouldn't pay medium-thinking latency).
     """
+    if isinstance(llm_service, GoogleLLMService):
+        async for event in stream_gemini(
+            llm_service,
+            context,
+            log_label,
+            tool_context_retention,
+            tool_context_projection,
+            allowed_function_names,
+            thinking_level_override,
+        ):
+            yield event
+        return
+    if allowed_function_names:
+        # Forcing is a RELIABILITY guarantee — degrading it silently would
+        # reintroduce the exact failure class it exists to prevent.
+        raise NotImplementedError(
+            "allowed_function_names forcing is implemented for the Gemini "
+            f"path only (got {type(llm_service).__name__})"
+        )
     if isinstance(llm_service, BaseOpenAILLMService):
         async for event in _stream_openai(llm_service, context, log_label):
             yield event
@@ -69,10 +119,6 @@ async def stream(
             tool_context_retention,
             tool_context_projection,
         ):
-            yield event
-        return
-    if isinstance(llm_service, GoogleLLMService):
-        async for event in _stream_gemini(llm_service, context, log_label):
             yield event
         return
 
@@ -291,7 +337,7 @@ async def _stream_anthropic(
                     cur_tool_block = None
                     cur_args = ""
     finally:
-        await _close_stream(response)
+        await close_stream(response)
 
     # Flush any block dangling at stream end.
     if cur_tool_block is not None:
@@ -321,107 +367,3 @@ def _finalize_anthropic_call(
         arguments=parsed_args,
         context=context,
     )
-
-
-# ---------------------------------------------------------------------------
-# Gemini (Vertex Gemini, Gemini direct)
-# ---------------------------------------------------------------------------
-
-
-async def _stream_gemini(
-    service: GoogleLLMService,
-    context: LLMContext,
-    log_label: str,
-) -> AsyncIterator[DriverEvent]:
-    """Mirror GoogleLLMService._process_context minus frame pushes.
-
-    Gemini chunks are part-shaped, not delta-shaped: each ``part`` is either
-    fully-formed text or a fully-materialized ``function_call`` (no
-    accumulation needed).
-    """
-    import uuid as _uuid
-
-    from google.genai.types import GenerateContentConfig
-
-    adapter = service.get_llm_adapter()
-    invocation_params = adapter.get_llm_invocation_params(
-        context, system_instruction=service._settings.system_instruction
-    )
-
-    # Go through the service builder so model-aware thinking defaults apply
-    # (e.g. Gemini 2.5 Flash thinking_budget=0).
-    generation_params = service._build_generation_params(
-        system_instruction=invocation_params["system_instruction"],
-        tools=invocation_params["tools"] or [],
-        tool_config=service._tool_config,
-    )
-    service._maybe_unset_thinking_budget(generation_params)
-
-    model_name = service._settings.model
-    if not isinstance(model_name, str):
-        raise RuntimeError(
-            f"chat llm_driver: gemini service has no concrete model name (got {model_name!r})"
-        )
-
-    logger.debug(f"[{log_label}] llm_driver: gemini stream model={model_name}")
-
-    # ``generate_content_stream`` returns a plain async generator
-    # (google/genai/models.py: ``base_async_generator``) that wraps the
-    # underlying ``AsyncStream``. Closing it via Python's native
-    # ``aclose()`` cancels the inner ``async for`` and cascades to the
-    # SDK's stream cleanup.
-    response = await service._client.aio.models.generate_content_stream(
-        model=model_name,
-        contents=invocation_params["messages"],
-        config=GenerateContentConfig(**generation_params),
-    )
-    try:
-        async for chunk in response:
-            if not chunk.candidates:
-                continue
-            for candidate in chunk.candidates:
-                if not (candidate.content and candidate.content.parts):
-                    continue
-                for part in candidate.content.parts:
-                    if part.text and not part.thought:
-                        yield ("text", part.text)
-                    elif part.function_call:
-                        fc = part.function_call
-                        if not fc.name:
-                            logger.warning(
-                                f"[{log_label}] llm_driver: gemini function_call "
-                                "with no name; skipping"
-                            )
-                            continue
-                        yield (
-                            "tool_call",
-                            FunctionCallFromLLM(
-                                function_name=fc.name,
-                                tool_call_id=fc.id or str(_uuid.uuid4()),
-                                arguments=fc.args or {},
-                                context=context,
-                            ),
-                        )
-    finally:
-        await _close_stream(response)
-
-
-async def _close_stream(response: Any) -> None:
-    """Best-effort close for SDK stream / async-generator return values.
-
-    - Python async generators (Gemini's ``base_async_generator``) expose
-      ``aclose``; calling it raises ``GeneratorExit`` into the body and
-      cascades to the wrapped SDK stream.
-    - SDK ``AsyncStream`` classes (Anthropic, OpenAI) expose ``close``.
-    - Swallow exceptions: cleanup runs in a ``finally`` and we'd rather
-      lose the close error than mask the real one being unwound.
-    """
-    closer = getattr(response, "aclose", None) or getattr(response, "close", None)
-    if closer is None:
-        return
-    try:
-        result = closer()
-        if hasattr(result, "__await__"):
-            await result
-    except Exception as exc:  # noqa: BLE001
-        logger.debug(f"llm_driver: stream close raised (ignored): {exc}")

@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import json
 
-from app.ai.voice.agents.breeze_buddy.chat.block_codec import (
+from app.ai.voice.agents.breeze_buddy.chat.history.block_codec import (
     repair_dangling_tool_uses,
 )
 

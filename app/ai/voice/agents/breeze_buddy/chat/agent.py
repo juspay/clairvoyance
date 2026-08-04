@@ -18,18 +18,18 @@ from pipecat.frames.frames import FunctionCallFromLLM
 from pipecat.processors.aggregators.llm_context import LLMContext, LLMContextMessage
 from pipecat_flows import FlowsFunctionSchema
 
-from app.ai.voice.agents.breeze_buddy.chat import llm_driver
-from app.ai.voice.agents.breeze_buddy.chat.block_codec import (
-    assistant_turn_to_blocks,
-    internal_text_block,
-    plain_text_blocks,
-    tool_results_to_user_blocks,
-)
 from app.ai.voice.agents.breeze_buddy.chat.client_context import (
     diff_state_patch,
     render_client_context,
 )
 from app.ai.voice.agents.breeze_buddy.chat.disabled import CHAT_DISABLED_NAMES
+from app.ai.voice.agents.breeze_buddy.chat.history.block_codec import (
+    assistant_turn_to_blocks,
+    internal_text_block,
+    plain_text_blocks,
+    tool_results_to_user_blocks,
+)
+from app.ai.voice.agents.breeze_buddy.chat.llm import driver as llm_driver
 from app.ai.voice.agents.breeze_buddy.chat.sse import SSEEvent
 from app.ai.voice.agents.breeze_buddy.chat.tool_result_normalizer import normalize
 from app.ai.voice.agents.breeze_buddy.chat.ui_healer import (

@@ -29,7 +29,7 @@ from app.ai.voice.agents.breeze_buddy.chat.approvals import (
     claim_tool_approval,
     resolve_dangling_approvals,
 )
-from app.ai.voice.agents.breeze_buddy.chat.block_codec import (
+from app.ai.voice.agents.breeze_buddy.chat.history.block_codec import (
     blocks_to_llm_context_messages,
     repair_dangling_tool_uses,
 )
