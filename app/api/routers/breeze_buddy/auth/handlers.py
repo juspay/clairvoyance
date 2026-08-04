@@ -161,11 +161,11 @@ async def generate_s2s_token_handler(request: S2STokenRequest) -> S2STokenRespon
     """
     Generate long-lived token for Server-to-Server (S2S) authentication.
 
-    Allows admin users to generate long-lived JWT tokens (up to 365 days)
-    for automated integrations and S2S communication.
+    Allows admin and alert_system users to generate long-lived JWT tokens
+    (up to 365 days) for automated integrations and S2S communication.
 
     Security restrictions:
-    - Only admin users can generate S2S tokens
+    - Only admin and alert_system users can generate S2S tokens
     - Maximum token lifetime: 365 days
 
     Args:
@@ -176,7 +176,7 @@ async def generate_s2s_token_handler(request: S2STokenRequest) -> S2STokenRespon
 
     Raises:
         HTTPException: 401 if credentials are invalid or account is inactive
-        HTTPException: 403 if user is not an admin
+        HTTPException: 403 if user is not admin or alert_system
     """
     # Authenticate user
     user = await get_user_by_username(request.username)
@@ -203,14 +203,14 @@ async def generate_s2s_token_handler(request: S2STokenRequest) -> S2STokenRespon
             detail="Account is inactive. Please contact administrator.",
         )
 
-    # Security restriction: Only admins can generate S2S tokens
-    if user.role != UserRole.ADMIN:
+    # Security restriction: Only admins and alert_system users can generate S2S tokens
+    if user.role not in (UserRole.ADMIN, UserRole.ALERT_SYSTEM):
         logger.warning(
-            f"S2S token request denied: non-admin user - {request.username} (role: {user.role})"
+            f"S2S token request denied: unauthorized role - {request.username} (role: {user.role})"
         )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only admin users can generate S2S tokens. Please contact your administrator.",
+            detail="Only admin and alert_system users can generate S2S tokens. Please contact your administrator.",
         )
 
     # Generate long-lived token
@@ -242,14 +242,20 @@ async def generate_s2s_token_handler(request: S2STokenRequest) -> S2STokenRespon
                 )
         resolved_merchant_ids = request.merchant_ids
 
-    # If scopes are restricted (not wildcard), downgrade the token role
-    # from ADMIN to RESELLER. RBAC checks short-circuit on role == "admin"
-    # before inspecting reseller_ids/merchant_ids, so an ADMIN-role token
-    # would bypass those restrictions entirely.
+    # If scopes are restricted (not wildcard), downgrade ADMIN tokens to
+    # RESELLER. RBAC checks short-circuit on role == "admin" before inspecting
+    # reseller_ids/merchant_ids, so an ADMIN-role token would bypass those
+    # restrictions entirely. ALERT_SYSTEM is already a constrained integration
+    # role and must be preserved so its S2S token can call /alerts/fire.
     scopes_are_restricted = (
         "*" not in resolved_reseller_ids or "*" not in resolved_merchant_ids
     )
-    token_role = UserRole.RESELLER if scopes_are_restricted else user.role
+    if user.role == UserRole.ALERT_SYSTEM:
+        token_role = UserRole.ALERT_SYSTEM
+    elif scopes_are_restricted:
+        token_role = UserRole.RESELLER
+    else:
+        token_role = user.role
 
     access_token = rbac_token_manager.create_access_token_with_rbac(
         user_id=user.id,

@@ -23,6 +23,7 @@ class UserRole(str, Enum):
     RESELLER = "reseller"
     MERCHANT = "merchant"
     USER = "user"  # Renamed from SHOP
+    ALERT_SYSTEM = "alert_system"
 
 
 class Permission(str, Enum):

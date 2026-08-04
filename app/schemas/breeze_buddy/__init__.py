@@ -1,5 +1,6 @@
 """Breeze Buddy agent schemas."""
 
+from app.schemas.breeze_buddy.alerts import AlertFireRequest, AlertGroup
 from app.schemas.breeze_buddy.analytics import (
     AnalyticsFilters,
     AnalyticsOptions,
@@ -63,6 +64,9 @@ from app.schemas.breeze_buddy.users import (
 )
 
 __all__ = [
+    # Alerts
+    "AlertFireRequest",
+    "AlertGroup",
     # Auth
     "AuthTokenData",
     "LaunchTokenRequest",

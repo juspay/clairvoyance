@@ -2,6 +2,7 @@ from fastapi import APIRouter
 
 # Pod health probes (1-pod-1-call isolation architecture)
 from app.api.routers.breeze_buddy.agent_router.health import router as pod_router
+from app.api.routers.breeze_buddy.alerts import router as alerts_router
 
 # Modern RESTful routers
 from app.api.routers.breeze_buddy.analytics import router as analytics_router
@@ -122,6 +123,9 @@ router.include_router(leads_router, prefix="", tags=["leads"])
 
 # Campaigns (named bulk lead pushes)
 router.include_router(campaigns_router, prefix="", tags=["campaigns"])
+
+# Alerts (voice alert firing for on-call notifications)
+router.include_router(alerts_router, prefix="", tags=["alerts"])
 
 # Telephony (webhook handlers for call providers)
 router.include_router(telephony_router, prefix="", tags=["telephony"])

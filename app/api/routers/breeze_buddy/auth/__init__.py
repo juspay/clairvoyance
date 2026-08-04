@@ -5,7 +5,7 @@ This module provides JWT token-based authentication endpoints for breeze buddy.
 
 Endpoints:
 - POST   /login              - Authenticate user and get JWT token
-- POST   /auth/s2s/token     - Generate long-lived S2S token (admin only)
+- POST   /auth/s2s/token     - Generate long-lived S2S token (admin / alert_system)
 - GET    /auth/me            - Get current user info from token
 - POST   /auth/logout        - Logout (client-side token removal)
 - GET    /logout             - Legacy logout endpoint (deprecated)
@@ -72,11 +72,11 @@ async def generate_s2s_token(request: S2STokenRequest):
     """
     Generate long-lived token for Server-to-Server (S2S) authentication.
 
-    This endpoint allows admin users to generate long-lived JWT tokens
-    (up to 365 days) for automated integrations and S2S communication.
+    This endpoint allows admin and alert_system users to generate long-lived JWT
+    tokens (up to 365 days) for automated integrations and S2S communication.
 
     Requirements:
-    - Only admin users can generate S2S tokens (security restriction)
+    - Only admin and alert_system users can generate S2S tokens
     - Maximum token lifetime: 365 days
     - Token should be stored securely by the caller
 
@@ -85,6 +85,7 @@ async def generate_s2s_token(request: S2STokenRequest):
     - Automated scripts and cron jobs
     - Third-party platform integrations
     - CI/CD pipelines
+    - Voice alert notification systems
 
     Request Body:
         {
@@ -112,7 +113,7 @@ async def generate_s2s_token(request: S2STokenRequest):
 
     Security:
         - Returns 401 if credentials are invalid or account is inactive
-        - Returns 403 if user is not an admin
+        - Returns 403 if user is not admin or alert_system
     """
     return await generate_s2s_token_handler(request)
 
