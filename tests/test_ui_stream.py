@@ -13,7 +13,7 @@ Covers:
 
 from __future__ import annotations
 
-from app.ai.voice.agents.breeze_buddy.chat.ui_stream import (
+from app.ai.voice.agents.breeze_buddy.chat.ui.stream import (
     JsonlOpLine,
     TextOut,
     UiStreamExtractor,
@@ -582,7 +582,7 @@ def test_validator_drop_event_carries_raw_line():
 def test_healer_drop_emits_ui_op_dropped_not_healer_applied():
     """Healer drops must land in the SAME funnel counter as validator drops —
     they were previously invisible in ui_dropped."""
-    from app.ai.voice.agents.breeze_buddy.chat.ui_healer import (
+    from app.ai.voice.agents.breeze_buddy.chat.ui.healer import (
         HealerContext,
         make_healer_fn,
     )
@@ -599,7 +599,7 @@ def test_healer_drop_emits_ui_op_dropped_not_healer_applied():
 
 
 def test_healer_repair_note_still_emits_healer_applied():
-    from app.ai.voice.agents.breeze_buddy.chat.ui_healer import (
+    from app.ai.voice.agents.breeze_buddy.chat.ui.healer import (
         HealerContext,
         make_healer_fn,
     )
@@ -615,7 +615,7 @@ def test_healer_repair_note_still_emits_healer_applied():
 
 def test_turn_metrics_collects_drop_details_but_logs_stay_structural():
     from app.ai.voice.agents.breeze_buddy.chat.metrics import TurnMetrics
-    from app.ai.voice.agents.breeze_buddy.chat.ui_stream import ui_op_dropped_event
+    from app.ai.voice.agents.breeze_buddy.chat.ui.stream import ui_op_dropped_event
 
     line = (
         '{"op":"add","id":"email_btn","type":"Button","parent":"root",'

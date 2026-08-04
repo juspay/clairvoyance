@@ -13,6 +13,8 @@ import json
 
 import pytest
 
+from app.ai.voice.agents.breeze_buddy.template import ui_prompt
+
 # Load the template package before any chat/* module reaches it — same
 # circular-import precaution as the sibling ui_stream / ui_healer tests.
 from app.ai.voice.agents.breeze_buddy.template.ui_catalog import (  # noqa: F401
@@ -21,7 +23,9 @@ from app.ai.voice.agents.breeze_buddy.template.ui_catalog import (  # noqa: F401
     validate_props,
 )
 from app.ai.voice.agents.breeze_buddy.template.ui_prompt import (
+    register_render_ui_flavor_section,
     render_primitives_section,
+    render_render_ui_section,
 )
 
 # ---------------------------------------------------------------------------
@@ -96,7 +100,7 @@ def test_tile_example_validates_against_catalog():
     the LLM an invalid shape."""
     # Local import: the chat package must load after the template package
     # (circular-import precaution above), so don't hoist this to module top.
-    from app.ai.voice.agents.breeze_buddy.chat.ui_stream import expand_compact_op
+    from app.ai.voice.agents.breeze_buddy.chat.ui.stream import expand_compact_op
 
     section = render_primitives_section({"Tile"})
     # Pull the JSON after the "Example: " marker for the Tile entry.
@@ -118,7 +122,7 @@ def test_metric_example_validates_against_catalog(name):
     """Each metric primitive's hard-coded compact example must round-trip
     through expand_compact_op -> validate_props, so a malformed example can't
     ship and mis-train the LLM prompt (mirrors the Tile contract test)."""
-    from app.ai.voice.agents.breeze_buddy.chat.ui_stream import expand_compact_op
+    from app.ai.voice.agents.breeze_buddy.chat.ui.stream import expand_compact_op
 
     section = render_primitives_section({name})
     block = section.split(f"**{name}**", 1)[1]
@@ -196,3 +200,36 @@ def test_unknown_primitive_in_allowlist_is_ignored():
     section = render_primitives_section({"Tile", "NotARealPrimitive"})
     assert "**Tile**" in section
     assert "NotARealPrimitive" not in section
+
+
+# ---------------------------------------------------------------------------
+# render_ui section — flavor registry
+# ---------------------------------------------------------------------------
+
+
+def test_render_ui_section_generic_fallback_is_flavor_neutral():
+    # No registered flavor → the engine's generic contract, which must
+    # not leak any flavor vocabulary (that's the whole segregation).
+    section = render_render_ui_section("forced_final", ["unregistered_group"])
+    assert "## Showing UI (render_ui tool)" in section
+    assert "QuickReplies are decided at the END" in section
+    assert "<plan>" in section  # plan instruction always rides along
+    for commerce_word in ("shopper", "cart", "checkout", "search_catalog"):
+        assert commerce_word not in section
+
+
+def test_registered_flavor_section_replaces_generic_and_fills_chips():
+    register_render_ui_flavor_section(
+        "testflavor",
+        "## Showing UI (render_ui tool)\nTestflavor vocabulary.\n",
+        chip_dedup_examples=" (Test action)",
+    )
+    try:
+        section = render_render_ui_section("forced_final", ["testflavor"])
+        assert "Testflavor vocabulary." in section
+        assert "You show the user UI components" not in section  # replaced
+        assert "this turn's UI (Test action)." in section
+        assert "<plan>" in section
+    finally:
+        ui_prompt._RENDER_UI_FLAVOR_SECTIONS.pop("testflavor", None)
+        ui_prompt._RENDER_UI_CHIP_DEDUP_EXAMPLES.pop("testflavor", None)

@@ -32,13 +32,25 @@ import enum
 import json
 import typing
 from functools import lru_cache
-from typing import Any, Dict, List, Set, Type, TypeGuard, Union, get_args, get_origin
+from typing import (
+    Any,
+    Dict,
+    List,
+    Optional,
+    Set,
+    Type,
+    TypeGuard,
+    Union,
+    get_args,
+    get_origin,
+)
 
 from pydantic import BaseModel
 
 from app.ai.voice.agents.breeze_buddy.template.ui_catalog import (
     PRIMITIVE_RENDER_ORDER,
     UI_CATALOG,
+    is_data_bound,
 )
 
 # ---------------------------------------------------------------------------
@@ -444,6 +456,70 @@ _EMPTY_BODY = (
 )
 
 
+# ---------------------------------------------------------------------------
+# Data-bound components subsection (catalog v2, RFC-001)
+#
+# Rendered only when the allowlist contains at least one data_bound
+# component. Deliberately terse — the whole subsection stays ≤ ~40 lines.
+# Data-bound components are EXCLUDED from the main per-primitive entries:
+# the LLM must reach them via `show` ops, never hand-typed `add` props.
+# ---------------------------------------------------------------------------
+
+_DATA_BOUND_HEADER = (
+    "### Data-bound components\n"
+    "\n"
+    "These render from TOOL DATA — NEVER hand-type their data props. Emit ONE "
+    "`show` op; the server fills props from THIS turn's tool results and "
+    "drops the op if a binding cannot be resolved (stale data never renders):\n"
+    '  {"op":"show","id":"<id>","component":"<Name>",'
+    '"bind":{"<prop>":"$tool:<tool_name>#<json-pointer>"},'
+    '"props":{<literal hints>}}\n'
+    "- `bind`: prop → `$tool:<tool_name>#<pointer>` (RFC 6901 pointer into "
+    "that tool's result; optional `@<tool_use_id>` picks one call in a "
+    "multi-call turn).\n"
+    "- A `bind` resolves ONLY against a tool call made in THIS turn — if "
+    "the needed tool has not run this turn, call it first, then emit the "
+    "`show` op.\n"
+    "- `props`: small literal hints only (layout, max_items). A key must not "
+    "appear in both `bind` and `props`.\n"
+    '- Root/parent rules match `add` (root op has id "root", omits parent). '
+    "Emit the op in canonical form — the compact `+` shorthand does not "
+    "apply to `show`."
+)
+
+_DATA_BOUND_EXAMPLE = (
+    'Example: {"op":"show","id":"root","component":"ProductGrid",'
+    '"bind":{"products":"$tool:search_catalog#/products"},'
+    '"props":{"max_items":6,"layout":"carousel"}}'
+)
+
+# Plan-as-emission (Phase 2). Rides the data-bound subsection because
+# both ship on the same v2 chat surface; the parser (chat/plan.py)
+# strips the marker from prose on every session regardless.
+_PLAN_INSTRUCTION = (
+    "Multi-step turns: when you will call 2+ tools, FIRST emit your plan "
+    'as `<plan>["tool_a","tool_b"]</plan>` on its own line — the tool '
+    "names you intend to call, in order. Re-emit a new <plan> to revise. "
+    "The user sees it as progress steps; never mention the plan in "
+    "prose. Skip it for single-tool or no-tool turns."
+)
+
+
+def _render_data_bound_section(names: List[str]) -> str:
+    """Render the ``### Data-bound components`` subsection for the
+    allowlisted data-bound components (in curated render order)."""
+    entries: List[str] = []
+    for name in names:
+        model = UI_CATALOG[name]
+        lines = [f"**{name}** — {_purpose_line(model)}"]
+        for fname, fld in model.model_fields.items():
+            lines.append(f"  {_render_top_level_field(fname, fld)}")
+        entries.append("\n".join(lines))
+    return "\n\n".join(
+        [_DATA_BOUND_HEADER, *entries, _DATA_BOUND_EXAMPLE, _PLAN_INSTRUCTION]
+    )
+
+
 @lru_cache(maxsize=64)
 def _render_primitives_section_cached(allowlist_key: frozenset) -> str:
     """Pure render keyed by a hashable allowlist (D1, see
@@ -459,16 +535,149 @@ def _render_primitives_section_cached(allowlist_key: frozenset) -> str:
     """
     allowlist = set(allowlist_key)
     entries: List[str] = []
+    data_bound_names: List[str] = []
     for name in PRIMITIVE_RENDER_ORDER:
         if name not in allowlist:
             continue
         model = UI_CATALOG.get(name)
         if model is None:
             continue
+        # Server-only components (e.g. ProductDetail) are emitted by
+        # direct-intent code paths, never by the LLM — no prompt entry in
+        # ANY section, though they stay in the allowlist for validation.
+        if getattr(model, "server_only", False):
+            continue
+        # render_ui-only components (e.g. LinkButton) are not authorable
+        # via the text channel (parse rejects them), so the text-channel
+        # prompt must not teach them either.
+        if not getattr(model, "text_channel", True):
+            continue
+        # Data-bound components (catalog v2) render in their own `show`-op
+        # subsection below — never as `add`-style entries the LLM would
+        # crib hand-typed props from.
+        if is_data_bound(name):
+            data_bound_names.append(name)
+            continue
         entries.append(_render_entry(name, model))
 
     body = "\n\n".join(entries) if entries else _EMPTY_BODY
+    if data_bound_names:
+        body = f"{body}\n\n{_render_data_bound_section(data_bound_names)}"
     return f"{_HEADER}\n\n{body}\n\n{_FOOTER}"
+
+
+# The render_ui section is flavor-composed: this module owns only the
+# flavor-neutral behavioral contract (tool-not-markup, bind-don't-retype,
+# decision='no_ui', one-line-after-render); the product vocabulary that
+# makes it land — "shoppers", carts, checkout links, variant coaching —
+# belongs to the flavor package and is registered here under the flavor's
+# catalog group name. Registration rides the same lazy hook as component
+# schemas: ``ui_catalog.ensure_group_loaded`` imports the flavor's
+# schemas module (which registers its section as a side effect) inside
+# ``resolve_allowlist``, and the chat agent resolves its allowlist in
+# ``__init__`` — before any prompt splice — so an enabled flavor's
+# section is always in place in time.
+_RENDER_UI_FLAVOR_SECTIONS: Dict[str, str] = {}
+_RENDER_UI_CHIP_DEDUP_EXAMPLES: Dict[str, str] = {}
+
+
+def register_render_ui_flavor_section(
+    group: str,
+    section: str,
+    chip_dedup_examples: Optional[str] = None,
+) -> None:
+    """Register a flavor's render_ui prompt section under its catalog
+    group (e.g. ``"commerce"``).
+
+    ``section`` REPLACES the generic ``## Showing UI`` block wholesale
+    for sessions whose template enables the group — flavor sections
+    restate the full contract in their own vocabulary, so concatenating
+    them with the generic text would duplicate the rules.
+    ``chip_dedup_examples`` (e.g. ``" (Add to cart, View)"``) splices
+    into the forced-final chips contract's dedup rule. Process-global,
+    additive, idempotent on re-import — the same registration lifecycle
+    as ``ui_catalog.register_primitives``."""
+    _RENDER_UI_FLAVOR_SECTIONS[group] = section
+    if chip_dedup_examples is not None:
+        _RENDER_UI_CHIP_DEDUP_EXAMPLES[group] = chip_dedup_examples
+
+
+_RENDER_UI_SECTION_GENERIC = (
+    "## Showing UI (render_ui tool)\n"
+    "You show the user UI components ONLY by calling the render_ui "
+    "function — never by writing markup, JSON, op lines, or any "
+    "<ui_stream> text in your reply. Prose is for words; render_ui is "
+    "for UI.\n"
+    "- After certain successful tool calls you will be required to call "
+    "render_ui exactly once: render a component, or pass decision='no_ui' "
+    "with a short reason when showing nothing serves the user better.\n"
+    "- Bind data, never retype it: bind=[{prop:'<prop>', "
+    "ref:'$tool:<tool_name>#/<json_pointer>'}]. The server fills every "
+    "value from THIS turn's tool results.\n"
+    "- For a link-only answer render LinkButton with link={label, url} "
+    "instead of pasting the URL in prose — the url must be one the "
+    "template trusts or one from THIS turn's tool results.\n"
+    "- After render_ui succeeds, write at most ONE short line; never "
+    "repeat what the UI already shows. The function response tells you "
+    "exactly what rendered — use its ids for follow-ups.\n"
+)
+
+
+_QUICK_REPLIES_FORCED_FINAL_TMPL = (
+    "- QuickReplies are decided at the END of your turn — never render "
+    "them mid-turn. After your final reply you will be asked once more to "
+    "call render_ui: respond with QuickReplies (2-4 follow-ups, <=4 words "
+    "each, grounded in what you just said) or decision='no_ui' when none "
+    "would genuinely help. Never suggest a chip that duplicates an action "
+    "already visible on this turn's UI{dedup_examples}.\n"
+)
+
+
+def render_render_ui_section(
+    quick_replies_mode: Optional[str] = None,
+    flavor_groups: Optional[List[str]] = None,
+) -> str:
+    """The compact UI section for render_ui-mode sessions (RFC-002): the
+    tool schema self-documents the arg shapes, so the prompt carries only
+    the behavioral contract — replacing the entire ``<ui_stream>``
+    authoring catalog for this template.
+
+    ``flavor_groups`` is the template's ``ui_catalog.enabled_groups``:
+    the first group with a registered flavor section (see
+    :func:`register_render_ui_flavor_section`) supplies the section body
+    and the chips dedup examples; with none registered the generic
+    contract above renders.
+
+    The plan instruction must ride along: it normally ships inside the
+    data-bound subsection this section REPLACES, and without it the model
+    never emits ``<plan>`` — so plan enforcement (which arms off the
+    extracted marker) would silently stay dormant in render_ui mode.
+
+    ``quick_replies_mode='forced_final'`` appends the end-of-turn chips
+    contract (never mid-turn; the harness runs one forced render_ui cycle
+    after the final reply)."""
+    groups = flavor_groups or []
+    section = next(
+        (
+            _RENDER_UI_FLAVOR_SECTIONS[g]
+            for g in groups
+            if g in _RENDER_UI_FLAVOR_SECTIONS
+        ),
+        _RENDER_UI_SECTION_GENERIC,
+    )
+    if quick_replies_mode == "forced_final":
+        dedup_examples = next(
+            (
+                _RENDER_UI_CHIP_DEDUP_EXAMPLES[g]
+                for g in groups
+                if g in _RENDER_UI_CHIP_DEDUP_EXAMPLES
+            ),
+            "",
+        )
+        section += _QUICK_REPLIES_FORCED_FINAL_TMPL.format(
+            dedup_examples=dedup_examples
+        )
+    return section + "- " + _PLAN_INSTRUCTION + "\n"
 
 
 def render_primitives_section(allowlist: Set[str]) -> str:
@@ -492,4 +701,8 @@ def render_primitives_section(allowlist: Set[str]) -> str:
     return _render_primitives_section_cached(frozenset(allowlist))
 
 
-__all__ = ["render_primitives_section"]
+__all__ = [
+    "register_render_ui_flavor_section",
+    "render_primitives_section",
+    "render_render_ui_section",
+]

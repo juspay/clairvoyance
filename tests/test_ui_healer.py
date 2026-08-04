@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from app.ai.voice.agents.breeze_buddy.chat.ui_healer import (
+from app.ai.voice.agents.breeze_buddy.chat.ui.healer import (
     HealerContext,
     heal_op_line,
 )
