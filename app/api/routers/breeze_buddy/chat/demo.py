@@ -27,13 +27,16 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
+from app.ai.voice.agents.breeze_buddy.chat.turn_core import negotiate_catalog
 from app.ai.voice.agents.breeze_buddy.template.cache import get_template_by_id_cached
+from app.ai.voice.agents.breeze_buddy.template.ui_catalog import CATALOG_VERSION_V2
 from app.api.routers.breeze_buddy.chat.handlers import (
     approve_chat_tool_handler,
     create_chat_session_handler,
     end_chat_session_handler,
     load_chat_session_or_404,
     send_chat_message_handler,
+    serve_session_intent,
     validate_template_for_chat,
 )
 from app.api.security.breeze_buddy.demo_token import (
@@ -209,10 +212,23 @@ async def create_demo_session(
     # mid-create flag flip can't disagree with what's persisted in
     # metadata vs. the JWT.
     cap = await DEMO_MESSAGE_CAP_PER_SESSION()
+    # Demo pages ship the current widget build, so the client side of the
+    # catalog negotiation is implicitly "v2" — the template's capability is
+    # the only variable. Persisting the same server-owned ``widget`` block
+    # the real widget path uses keeps one resolver
+    # (resolve_session_catalog_version) across every surface.
+    catalog_active, ui_flavors = negotiate_catalog(template, CATALOG_VERSION_V2)
     create_req = CreateChatSessionRequest(
         template_id=template_id,
         template_vars=req.template_vars,
-        metadata={"demo": {"slug": req.slug, "cap": cap}},
+        metadata={
+            "demo": {"slug": req.slug, "cap": cap},
+            **(
+                {"widget": {"catalog_version": catalog_active}}
+                if catalog_active == CATALOG_VERSION_V2
+                else {}
+            ),
+        },
     )
     create_resp = await create_chat_session_handler(
         create_req, template, synthetic_user
@@ -229,6 +245,8 @@ async def create_demo_session(
         greeting=create_resp.greeting,
         demo_token=token,
         message_cap=cap,
+        catalog_active=catalog_active,
+        ui_flavors=ui_flavors,
     )
 
 
@@ -298,6 +316,14 @@ async def demo_send_message(
     be redundant.
     """
     await _enforce_demo_turn_budget(request, ctx, session_id)
+
+    # Typed UI intent body (RFC-001 §3.3) — same validate + policy-route
+    # path the widget uses, so demo pages exercise the full intent stack.
+    if req.ui_intent is not None:
+        session = await load_chat_session_or_404(session_id)
+        return await serve_session_intent(
+            session, session_id, req.ui_intent, context=req.context
+        )
 
     return await send_chat_message_handler(session_id, req, access_check=None)
 

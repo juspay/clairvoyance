@@ -73,6 +73,8 @@ from pydantic import (
     model_validator,
 )
 
+from app.core.logger import logger
+
 CATALOG_VERSION: str = "v1"
 
 # Wire value a catalog-v2-capable widget sends at session create (RFC-001
@@ -1040,8 +1042,12 @@ LAZY_GROUPS: Dict[str, str] = {
     "commerce": "app.ai.voice.agents.breeze_buddy.assist.commerce.schemas",
 }
 
-# Fast-path guard only — ``importlib.import_module`` is already idempotent
-# via sys.modules; this just skips the call on the hot path.
+# Attempted groups — both the successes (``importlib.import_module`` is
+# already idempotent via sys.modules; this skips the call on the hot path)
+# and the failures, which must NOT be retried per request: Python drops a
+# failed module from sys.modules, so an unguarded retry re-raises on every
+# call for the life of the process. A broken flavor needs a deploy to fix,
+# not another import.
 _LOADED_LAZY_GROUPS: Set[str] = set()
 
 
@@ -1052,11 +1058,26 @@ def ensure_group_loaded(group: str) -> None:
     process-global and additive-only: loading a flavor never mutates or
     removes existing catalog entries, so per-session gating stays purely
     allowlist-driven.
+
+    Fail-open by contract: a flavor module that is absent (its layer has
+    not shipped yet) or raises on import must not take down the request.
+    The group simply registers nothing, so ``resolve_allowlist`` yields the
+    core primitives and the session degrades to v1 — the same outcome as a
+    template that never enabled the group — instead of surfacing an
+    ImportError as a 500 from whatever endpoint happened to touch it.
     """
     module_path = LAZY_GROUPS.get(group)
     if module_path is None or group in _LOADED_LAZY_GROUPS:
         return
-    importlib.import_module(module_path)
+    try:
+        importlib.import_module(module_path)
+    except Exception:  # noqa: BLE001 — fail-open; a flavor is never load-bearing
+        logger.exception(
+            f"ui_catalog: flavor group {group!r} failed to load from "
+            f"{module_path!r}; its components stay unregistered and sessions "
+            "enabling it degrade to the core catalog"
+        )
+    # Marked either way — see _LOADED_LAZY_GROUPS.
     _LOADED_LAZY_GROUPS.add(group)
 
 

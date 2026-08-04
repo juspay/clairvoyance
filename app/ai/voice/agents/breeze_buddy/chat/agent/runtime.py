@@ -48,19 +48,26 @@ def _chip_labels(raw: Any) -> List[str]:
     return labels[:5]
 
 
-def _partition_gated_calls(
-    tool_calls: List[Any],
+def is_approval_gated(
+    tool_name: str,
     approval_map: Dict[str, Any],
     node: Dict[str, Any],
-) -> Tuple[List[Any], List[Any]]:
-    """Split a tool-call batch into (gated, ungated) for HITL.
+) -> bool:
+    """Whether ``tool_name`` is HITL-gated for a dispatch in ``node``.
 
     A gated name shadowed by a per-node function in the CURRENT node is
-    treated as UNGATED: in that node the LLM calls the per-node function
-    (which the author did not gate), not the gated global of the same name.
-    Non-shadow nodes are unaffected — a gated global is still gated. This
-    keeps chat consistent with voice, whose wrapper gates only globals.
+    treated as UNGATED: in that node the caller reaches the per-node
+    function (which the author did not gate), not the gated global of the
+    same name. Non-shadow nodes are unaffected — a gated global is still
+    gated. This keeps chat consistent with voice, whose wrapper gates only
+    globals.
+
+    The single definition of "is this call gated", shared by the LLM path
+    (:func:`_partition_gated_calls`) and the no-LLM direct/intent path — a
+    tool must not be gated on one surface and free on the other.
     """
+    if tool_name not in approval_map:
+        return False
     # ``node["functions"]`` holds FlowsFunctionSchema objects in flow mode
     # (FlowConfigBuilder._build_node runs every per-node function through
     # _build_function_schema) — NOT plain dicts. Match the idiom used by
@@ -72,15 +79,23 @@ def _partition_gated_calls(
         for fn in (node.get("functions") or [])
         if isinstance(fn, FlowsFunctionSchema)
     }
+    return tool_name not in node_fn_names
+
+
+def _partition_gated_calls(
+    tool_calls: List[Any],
+    approval_map: Dict[str, Any],
+    node: Dict[str, Any],
+) -> Tuple[List[Any], List[Any]]:
+    """Split a tool-call batch into (gated, ungated) for HITL — see
+    :func:`is_approval_gated` for the shadowing rule."""
     gated = [
-        c
-        for c in tool_calls
-        if c.function_name in approval_map and c.function_name not in node_fn_names
+        c for c in tool_calls if is_approval_gated(c.function_name, approval_map, node)
     ]
     ungated = [
         c
         for c in tool_calls
-        if c.function_name not in approval_map or c.function_name in node_fn_names
+        if not is_approval_gated(c.function_name, approval_map, node)
     ]
     return gated, ungated
 

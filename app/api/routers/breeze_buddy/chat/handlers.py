@@ -25,11 +25,22 @@ from app.ai.voice.agents.breeze_buddy.chat.client_context import (
 from app.ai.voice.agents.breeze_buddy.chat.history.block_codec import (
     filter_visible_blocks,
 )
+from app.ai.voice.agents.breeze_buddy.chat.intents.router import (
+    IntentRoute,
+    IntentValidationError,
+    ParsedIntent,
+    agent_turn_content,
+    ensure_flavor_intents,
+    parse_ui_intent,
+    run_direct_intent,
+    template_enabled_flavors,
+)
 from app.ai.voice.agents.breeze_buddy.chat.metrics import TurnMetrics
 from app.ai.voice.agents.breeze_buddy.chat.sse import SSEEvent, format_sse
 from app.ai.voice.agents.breeze_buddy.chat.turn_core import (
     build_render_template_vars,
     resolve_llm_configuration,
+    resolve_session_catalog_version,
     run_chat_approval_continuation,
     run_chat_turn,
 )
@@ -38,6 +49,7 @@ from app.ai.voice.agents.breeze_buddy.template.transformation_function import (
     TEMPLATE_FUNCTION_REGISTRY,
 )
 from app.ai.voice.agents.breeze_buddy.template.types import TemplateModel
+from app.ai.voice.agents.breeze_buddy.template.ui_catalog import CATALOG_VERSION_V2
 from app.api.routers.breeze_buddy.analytics.rbac import apply_hierarchical_filters
 from app.core.logger import logger
 from app.database.accessor.breeze_buddy.chat_session import (
@@ -372,13 +384,72 @@ async def get_chat_session_handler(session: ChatSession) -> GetChatSessionRespon
     )
 
 
+async def apply_piggyback_context(
+    session_id: str, template: Any, context: Any
+) -> Optional[str]:
+    """Persist an optional state/facts patch riding with a message or intent
+    (CLIENT_CONTEXT_UPDATES.md §5.2); returns the requested placement.
+
+    Persisted under the caller's lock BEFORE the turn builds, so the turn
+    re-reads it on THIS turn (vs. the standalone /context endpoint, which
+    lands next turn). Allowlist-gated by the template policy; an
+    unconfigured template silently no-ops. The 413 must surface here,
+    before the SSE stream opens, so this validation stays in the HTTP shell
+    (voice never sends a piggyback context, so run_chat_turn omits it).
+
+    Shared by the message path and the DIRECT-intent path — an intent's
+    piggybacked context has to land before its tools dispatch, or
+    inject_tool_args reads stale identifiers.
+    """
+    if context is None:
+        return None
+    cc_config = (
+        template.configurations.client_context if template.configurations else None
+    )
+    state_row = await get_agent_session_state(session_id)
+    agent_state: Dict[str, Any] = state_row.data if state_row else {}
+    try:
+        state_patch, facts_patch, replace_facts, _, _ = compute_context_patch(
+            agent_state,
+            state=context.state,
+            facts=context.facts,
+            merge=context.merge,
+            config=cc_config,
+        )
+    except ClientContextTooLarge as exc:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=str(exc),
+        ) from exc
+    # Persist via the atomic merge (message-bound, no revision) so a
+    # concurrent standalone /context push isn't clobbered; the turn's own
+    # write excludes the client-context keys. ``facts_patch`` is None only
+    # when the push carried no facts; an empty {} (a merge='replace' facts
+    # clear) IS a real write, so gate on ``is not None``.
+    if state_patch or facts_patch is not None:
+        await merge_client_context(
+            session_id,
+            state_patch=state_patch,
+            facts_patch=facts_patch,
+            revision=None,
+            replace_facts=replace_facts,
+        )
+    return context.placement
+
+
 async def send_chat_message_handler(
     session_id: str,
     req: SendChatMessageRequest,
     *,
     access_check: Optional[Callable[[ChatSession], None]] = None,
+    internal: bool = False,
 ) -> StreamingResponse:
     """Drive one turn; stream SSE events until ``turn_end``.
+
+    ``internal`` — the turn is an internal AGENT_TURN intent (see
+    ``IntentPolicy.internal``): the exchange persists with
+    visibility=internal and no ``user_committed`` fires. Only
+    ``serve_session_intent`` sets this; the HTTP routes never expose it.
 
     Multi-pod safe: the per-session Redis lock guarantees one driver
     at a time. The lock is acquired before the SSE response opens so
@@ -447,52 +518,9 @@ async def send_chat_message_handler(
                 ),
             )
 
-        # Piggyback context patch (CLIENT_CONTEXT_UPDATES.md §5.2): an
-        # optional state/facts update riding with this message. Persisted
-        # under the lock BEFORE the turn builds, so ``run_chat_turn`` re-reads
-        # it on THIS turn (vs. the standalone /context endpoint, which lands
-        # next turn). Allowlist-gated by the template policy; an unconfigured
-        # template silently no-ops. The 413 must surface here, before the SSE
-        # stream opens, so this validation stays in the HTTP shell (voice
-        # never sends a piggyback context, so run_chat_turn omits it).
-        context_placement: Optional[str] = None
-        if req.context is not None:
-            cc_config = (
-                template.configurations.client_context
-                if template.configurations
-                else None
-            )
-            state_row = await get_agent_session_state(session_id)
-            agent_state: Dict[str, Any] = state_row.data if state_row else {}
-            try:
-                state_patch, facts_patch, replace_facts, _, _ = compute_context_patch(
-                    agent_state,
-                    state=req.context.state,
-                    facts=req.context.facts,
-                    merge=req.context.merge,
-                    config=cc_config,
-                )
-            except ClientContextTooLarge as exc:
-                raise HTTPException(
-                    status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                    detail=str(exc),
-                ) from exc
-            # Persist via the atomic merge (message-bound, no revision) so a
-            # concurrent standalone /context push isn't clobbered; the turn's
-            # own write (agent.py) excludes the client-context keys.
-            # ``run_chat_turn`` re-loads agent_state below, so it sees this
-            # patch on THIS turn. ``facts_patch`` is None only when the push
-            # carried no facts; an empty {} (a merge='replace' facts clear) IS
-            # a real write, so gate on ``is not None``.
-            if state_patch or facts_patch is not None:
-                await merge_client_context(
-                    session_id,
-                    state_patch=state_patch,
-                    facts_patch=facts_patch,
-                    revision=None,
-                    replace_facts=replace_facts,
-                )
-            context_placement = req.context.placement
+        context_placement = await apply_piggyback_context(
+            session_id, template, req.context
+        )
 
         # Phase-0 measurement (docs/widget/UI_FAST_RELIABLE_GENERIC_PLAN.md):
         # observe the turn's SSE stream and log one [CHAT_METRICS] line at the
@@ -517,7 +545,197 @@ async def send_chat_message_handler(
                     session_id=session_id,
                     user_content=req.content,
                     context_placement=context_placement,
+                    internal=internal,
                 ),
+            ),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache, no-transform",
+                "X-Accel-Buffering": "no",
+                "Connection": "keep-alive",
+            },
+        )
+        lock_handed_off = True
+        return response
+    finally:
+        if not lock_handed_off:
+            await lock.release()
+
+
+async def serve_session_intent(
+    session: Any,
+    session_id: str,
+    raw_intent: Dict[str, Any],
+    *,
+    context: Any = None,
+    voice_live: bool = False,
+):
+    """Validate + policy-route one raw ``ui_intent`` dict and serve it.
+
+    The shared engine behind every intent surface — the widget's dedicated
+    ``POST /intent`` route, the ``ui_intent`` body variant on ``/message``
+    (the door for surfaces with no intent route of their own, i.e. the demo
+    router), and any future caller. Routing them all through here is what
+    keeps the surfaces from drifting apart. Unknown intent / flavor not
+    enabled / invalid payload → 422 with a typed error the widget renders
+    in-thread. Intent policies are flavor content, lazy-loaded per the
+    template's enabled UI-catalog groups — a template without a flavor
+    never loads (nor matches) that flavor's intents.
+
+    ``voice_live`` — the session currently has a voice attachment. DIRECT
+    intents still execute (no LLM turn is involved; the mutation lands in
+    history, so the voice brain sees it next turn). AGENT_TURN intents
+    would inject a competing chat turn into a live voice conversation, so
+    they 409 with the typed ``voice_live`` code instead.
+    """
+    template = await get_template_by_id_cached(session.template_id)
+    if template is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=(
+                f"Template '{session.template_id}' for session "
+                f"'{session_id}' no longer exists"
+            ),
+        )
+    if resolve_session_catalog_version(session.metadata) != CATALOG_VERSION_V2:
+        # v1 sessions never see v2 emission — a stray intent from a
+        # mismatched client fails closed rather than half-rendering. Checked
+        # BEFORE the flavor load + parse: a session that can never execute an
+        # intent shouldn't pay for a flavor import, and the version mismatch
+        # is the accurate diagnosis to return (parsing first would report
+        # ``unknown_intent`` for a name the client is simply not allowed to
+        # send yet).
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "catalog_version_unsupported",
+                "message": (
+                    "ui_intent requires a session created with " "catalog_version 'v2'."
+                ),
+            },
+        )
+    flavors = template_enabled_flavors(template)
+    ensure_flavor_intents(flavors)
+    try:
+        parsed = parse_ui_intent(raw_intent, enabled_flavors=flavors)
+    except IntentValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=exc.detail,
+        ) from exc
+    if parsed.policy.route is IntentRoute.CLIENT:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "client_side_intent",
+                "message": (
+                    f"Intent {parsed.intent.intent!r} is handled by the "
+                    "widget itself; no server call is expected."
+                ),
+            },
+        )
+    if parsed.policy.route is IntentRoute.DIRECT:
+        return await send_chat_intent_handler(
+            session_id, parsed, context=context, access_check=None
+        )
+    if voice_live:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "voice_live",
+                "message": (
+                    f"Intent {parsed.intent.intent!r} needs an agent turn, "
+                    "which can't run while a voice attachment is live. End "
+                    "voice first, or ask the agent by speaking."
+                ),
+            },
+        )
+    # agent_turn — rewrite into the structured user turn and serve it as
+    # a normal chat turn. Internal policies persist the whole exchange
+    # with visibility=internal — the LLM keeps the context; resume replay
+    # never shows it.
+    return await send_chat_message_handler(
+        session_id,
+        SendChatMessageRequest(content=agent_turn_content(parsed), context=context),
+        access_check=None,
+        internal=parsed.policy.internal,
+    )
+
+
+async def send_chat_intent_handler(
+    session_id: str,
+    parsed: ParsedIntent,
+    *,
+    context: Any = None,
+    access_check: Optional[Callable[[ChatSession], None]] = None,
+) -> StreamingResponse:
+    """Drive one DIRECT-routed UI intent (RFC-001 §3.3); stream SSE until
+    ``turn_end``. The no-LLM sibling of ``send_chat_message_handler`` —
+    same per-session lock, same SSE scaffolding, same metrics observer;
+    the events come from ``run_direct_intent`` instead of a chat turn.
+    The caller (widget route) has already validated + policy-routed the
+    intent and checked the session's catalog version.
+
+    ``context`` — the same optional piggybacked state/facts patch
+    ``/message`` accepts. Applied under the lock BEFORE the intent's tools
+    dispatch, so ``inject_tool_args`` sees the client's latest identifiers
+    rather than the previous turn's.
+    """
+    lock = RedisLock(_lock_key(session_id), ttl_seconds=_SESSION_LOCK_TTL_SECONDS)
+    try:
+        await lock.acquire()
+    except LockAcquireError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Another turn is already in flight for this session. "
+                "Wait for the previous /message stream to complete and retry."
+            ),
+        )
+
+    lock_handed_off = False
+    try:
+        fresh = await get_chat_session_by_id(session_id)
+        if fresh is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Chat session '{session_id}' not found",
+            )
+        if access_check is not None:
+            access_check(fresh)
+        if fresh.status == ChatSessionStatus.ENDED:
+            raise HTTPException(
+                status_code=status.HTTP_410_GONE,
+                detail=f"Chat session '{session_id}' has ended",
+            )
+
+        template = await get_template_by_id_cached(fresh.template_id)
+        if template is None:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=(
+                    f"Template '{fresh.template_id}' for chat session "
+                    f"'{session_id}' no longer exists"
+                ),
+            )
+
+        # Under the lock, before run_direct_intent loads agent_state — the
+        # intent's tools must dispatch against the client's just-pushed
+        # state, not the previous turn's. Raises 413 before the SSE stream
+        # opens, same as the message path.
+        await apply_piggyback_context(session_id, template, context)
+
+        turn_metrics = TurnMetrics(
+            session_id=session_id,
+            template_id=template.id,
+            t0=time.monotonic(),
+        )
+        response = StreamingResponse(
+            _turn_sse_stream(
+                session_id=session_id,
+                lock=lock,
+                turn_metrics=turn_metrics,
+                events=run_direct_intent(session_id=session_id, parsed=parsed),
             ),
             media_type="text/event-stream",
             headers={
@@ -602,9 +820,12 @@ async def _turn_sse_stream(
             # Full exception (incl. SDK / DB internals) goes to logs; the
             # SSE payload is intentionally generic — provider stack traces,
             # internal URLs, and SQL strings should not reach the client.
-            logger.error(
-                f"chat turn stream for session {session_id} crashed: {exc}",
-                exc_info=True,
+            # NOTE: loguru — never pass ``exc_info=True`` (any kwarg makes
+            # loguru re-``.format()`` the message, and provider error text
+            # routinely contains ``{...}`` JSON → KeyError from inside the
+            # logging call, killing this generator mid-stream).
+            logger.exception(
+                f"chat turn stream for session {session_id} crashed: {exc}"
             )
             yield format_sse(
                 SSEEvent(
