@@ -29,6 +29,7 @@ class Alert:
         links: Optional[List[Dict[str, str]]] = None,
         fallback_text: Optional[str] = None,
         include_tags: bool = True,
+        action_status: Optional[str] = None,
     ) -> bool:
         """
         Generic function to send Slack alerts with customizable content.
@@ -41,6 +42,7 @@ class Alert:
             fallback_text: Optional fallback text for notifications (defaults to title)
             include_tags: Whether to include @mention tags (default True).
                 Set to False to suppress tagging and reduce Slack notification noise.
+            action_status: Optional action status string with multiline content
 
         Returns:
             True if sent successfully, False otherwise
@@ -62,19 +64,37 @@ class Alert:
                 }
             ]
 
-            # Add fields section if provided
+            # Add fields section if provided (excluding action_status which is handled separately)
             if fields:
-                # Slack fields are displayed in 2 columns, so we group them
-                field_items = []
-                for field in fields:
-                    field_items.append(
-                        {
-                            "type": "mrkdwn",
-                            "text": f"*{field.get('name', '')}:*\n{field.get('value', '')}",
-                        }
-                    )
+                # Filter out action_status from fields if present
+                filtered_fields = [
+                    f for f in fields if f.get("name") != "Action Status"
+                ]
 
-                blocks.append({"type": "section", "fields": field_items})
+                if filtered_fields:
+                    # Slack fields are displayed in 2 columns, so we group them
+                    field_items = []
+                    for field in filtered_fields:
+                        field_items.append(
+                            {
+                                "type": "mrkdwn",
+                                "text": f"*{field.get('name', '')}:*\n{field.get('value', '')}",
+                            }
+                        )
+
+                    blocks.append({"type": "section", "fields": field_items})
+
+            # Add action status as a separate section if provided (full width below)
+            if action_status:
+                blocks.append(
+                    {
+                        "type": "section",
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": f"*Action Status:*\n{action_status}",
+                        },
+                    }
+                )
 
             # Add custom sections if provided
             if sections:

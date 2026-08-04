@@ -14,6 +14,7 @@ from app.database.queries.breeze_buddy.lead_call_tracker import (
     abort_lead_by_id_query,
     acquire_lock_on_lead_by_id_query,
     append_metadata_field_query,
+    cancel_pending_retries_by_request_id_query,
     defer_lead_next_attempt_and_release_lock_query,
     get_all_lead_call_trackers_query,
     get_lead_based_analytics_query,
@@ -698,6 +699,46 @@ async def handle_lead_abort(
     except Exception as e:
         logger.error(f"Error aborting lead {lead_id}: {e}")
         return None
+
+
+async def cancel_pending_retries_by_request_id(
+    request_id: str,
+    reason: str = "outcome_corrected",
+) -> int:
+    """
+    Cancel all pending retry leads for a given request_id.
+
+    Used when an outcome is corrected to a terminal state (e.g., BUSY -> CONFIRM)
+    to prevent scheduled retries from executing.
+
+    Args:
+        request_id: The order/request ID to cancel retries for
+        reason: Reason for cancellation (stored in meta_data)
+
+    Returns:
+        Number of leads cancelled
+    """
+    logger.info(f"Cancelling pending retries for request_id: {request_id}")
+
+    try:
+        query_text, values = cancel_pending_retries_by_request_id_query(
+            request_id, reason
+        )
+        result = await run_parameterized_query(query_text, values)
+        cancelled_count = get_row_count(result) if result else 0
+
+        if cancelled_count > 0:
+            logger.info(
+                f"Cancelled {cancelled_count} pending retry leads for request_id: {request_id}"
+            )
+
+        return cancelled_count
+
+    except Exception as e:
+        logger.error(
+            f"Error cancelling pending retries for request_id {request_id}: {e}"
+        )
+        return 0
 
 
 async def update_lead_payload(

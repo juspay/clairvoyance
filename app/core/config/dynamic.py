@@ -1,4 +1,5 @@
 import json
+from typing import Any
 
 from app.core.logger import logger
 from app.services.live_config.store import get_config
@@ -550,6 +551,107 @@ async def LANGFUSE_EVALUATORS() -> dict[str, int]:
         if name:
             evaluators[name] = threshold
     return evaluators
+
+
+async def EVALUATOR_ACTIONS() -> dict[str, Any]:
+    """
+    Returns EVALUATOR_ACTIONS from Redis as a dict mapping evaluator names to action configs.
+
+    Format: JSON string stored in Redis
+    {
+        "<VOICEMAIL_EVALUATOR_NAME>": {
+            "action_type": "outcome_update",
+            "action_config": {
+                "outcome": "VOICEMAIL",
+                "allowed_outcome_changes": {"BUSY": ["VOICEMAIL"]},
+                "disallowed_outcome_changes": {"*": ["BUSY"]}
+            },
+            "action_steps": {
+                "update_in_db": true,
+                "send_reporting_webhook": true,
+                "cancel_retries": true
+            }
+        },
+        "<OUTCOME_CORRECTOR_NAME>": {
+            "action_type": "outcome_update",
+            "action_config": {
+                "outcome_key": "$.correct_outcome"
+            },
+            "action_steps": {
+                "update_in_db": true,
+                "cancel_retries": true
+            }
+        }
+    }
+
+    action_config options:
+    - outcome: Direct outcome value (e.g., "VOICEMAIL") - use for simple cases
+    - outcome_key: JSON path to extract from JSON at end of comment (e.g., "$.correct_outcome")
+    - allowed_outcome_changes: (optional) Dict of {current_outcome: [allowed_new_outcomes]}
+      Use "*" as key to allow a target from any current outcome. Deny (disallowed) takes precedence.
+    - disallowed_outcome_changes: (optional) Dict of {current_outcome: [disallowed_new_outcomes]}
+      Use "*" as key to disallow for all current outcomes (e.g., {"*": ["BUSY"]})
+
+    action_steps options:
+    - update_in_db: (default: true) Update the lead's outcome in the database
+    - send_reporting_webhook: (default: true) Send reporting webhook for outcome correction
+    - cancel_retries: (default: true) Cancel any pending retry leads
+
+    Trigger logic: Action triggers when score < threshold (from LANGFUSE_EVALUATORS config)
+    """
+    config_value = await get_config("EVALUATOR_ACTIONS", "", str)
+    if not config_value:
+        return {}
+
+    try:
+        parsed = json.loads(config_value)
+        if not isinstance(parsed, dict):
+            logger.error(
+                f"EVALUATOR_ACTIONS config must be a JSON object, got {type(parsed).__name__}"
+            )
+            return {}
+
+        # Validate and decode each evaluator config entry
+        valid_actions: dict[str, Any] = {}
+        for evaluator_name, config in parsed.items():
+            if not isinstance(config, dict):
+                logger.warning(
+                    f"EVALUATOR_ACTIONS: skipping '{evaluator_name}' — config must be an object, got {type(config).__name__}"
+                )
+                continue
+
+            action_type = config.get("action_type")
+            if not action_type or not isinstance(action_type, str):
+                logger.warning(
+                    f"EVALUATOR_ACTIONS: skipping '{evaluator_name}' — missing or invalid 'action_type'"
+                )
+                continue
+
+            action_config = config.get("action_config")
+            if action_config is not None and not isinstance(action_config, dict):
+                logger.warning(
+                    f"EVALUATOR_ACTIONS: skipping '{evaluator_name}' — 'action_config' must be an object"
+                )
+                continue
+
+            action_steps = config.get("action_steps")
+            if action_steps is not None and not isinstance(action_steps, dict):
+                logger.warning(
+                    f"EVALUATOR_ACTIONS: skipping '{evaluator_name}' — 'action_steps' must be an object"
+                )
+                continue
+
+            valid_actions[evaluator_name] = config
+
+        if len(valid_actions) < len(parsed):
+            logger.info(
+                f"EVALUATOR_ACTIONS: {len(valid_actions)}/{len(parsed)} configs valid"
+            )
+
+        return valid_actions
+    except json.JSONDecodeError as e:
+        logger.error(f"Failed to parse EVALUATOR_ACTIONS config: {e}")
+        return {}
 
 
 # --- Noise Cancellation Configuration ---

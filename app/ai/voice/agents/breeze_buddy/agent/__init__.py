@@ -1185,6 +1185,9 @@ class Agent:
             evaluator_config=(
                 self.configurations.evaluator_config if self.configurations else None
             ),
+            execution_mode=(
+                self.lead.execution_mode.value if self.lead.execution_mode else None
+            ),
         )
         try:
             with trace.use_span(self.root_span, end_on_exit=True):
