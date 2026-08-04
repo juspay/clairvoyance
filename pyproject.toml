@@ -8,7 +8,7 @@ dependencies = [
     "uvicorn==0.34.2",
     "aiohttp>=3.8.4",
     "pytz==2025.2",
-    "python-multipart>=0.0.6",
+    "python-multipart>=0.0.26",
     "websockets>=11.0.3",
     "starlette>=0.27.0",
     "python-dotenv>=1.0.0",
