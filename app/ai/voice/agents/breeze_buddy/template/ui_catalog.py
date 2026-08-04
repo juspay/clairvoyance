@@ -13,6 +13,13 @@ aren't enabled for its template. Server validation drops disabled ops
 with a distinct reason (``primitive_disabled:<type>``) so telemetry can
 separate "LLM hallucinated" from "merchant turned off".
 
+Flavor groups (e.g. ``commerce``) are **lazy**: their schemas live under
+``breeze_buddy/assist/<flavor>/`` and are imported — and self-registered
+via :func:`register_primitives` — only when :func:`resolve_allowlist`
+sees a template that enables that group (see ``LAZY_GROUPS`` +
+:func:`ensure_group_loaded`). A process that never resolves a
+flavor-enabled template never imports the flavor package.
+
 Catalog versions: a single ``v1`` URI ships the whole set. Primitives bump
 together (see SCALE_ROADMAP.md §"Open questions").
 
@@ -28,18 +35,32 @@ Wire format (mirrors A2UI v0.9 / Vercel json-render SpecStream)::
     }}
     {"op":"remove","id":"c2"}
 
-The catalog is fully commerce-agnostic — no Money, no checkout, no
-cart shape. Vertical flavor (product cards, cart lines, FAQ answers,
-appointment slots, …) lives entirely in the template's
-``tool_ui_instructions`` (JIT pattern). Upstream-provided display
-strings (e.g. ``"₹699.95"``) flow through ``Text`` / ``key_value``
-body rows; locale-aware reformatting is the upstream tool's job.
+This module is fully commerce-agnostic — no Money, no checkout, no
+cart shape. Free-form vertical flavor (FAQ answers, appointment slots,
+…) lives in the template's ``tool_ui_instructions`` (JIT pattern);
+typed flavor components (the catalog-v2 commerce set) live in
+``assist/<flavor>/schemas.py`` and lazy-register through the hooks
+below. Upstream-provided display strings (e.g. ``"₹699.95"``) flow
+through ``Text`` / ``key_value`` body rows; locale-aware reformatting
+is the upstream tool's job.
 """
 
 from __future__ import annotations
 
+import importlib
 from enum import Enum
-from typing import Annotated, Any, Dict, List, Literal, Optional, Set, Type, Union
+from typing import (
+    Annotated,
+    Any,
+    ClassVar,
+    Dict,
+    List,
+    Literal,
+    Optional,
+    Set,
+    Type,
+    Union,
+)
 
 from pydantic import (
     AnyUrl,
@@ -53,6 +74,12 @@ from pydantic import (
 )
 
 CATALOG_VERSION: str = "v1"
+
+# Wire value a catalog-v2-capable widget sends at session create (RFC-001
+# §3.4). Sessions without it are v1: the server prunes data-bound components
+# from the allowlist, so neither the prompt section nor `show`-op rendering
+# ever reaches a v1 client.
+CATALOG_VERSION_V2: str = "v2"
 
 
 # ---------------------------------------------------------------------------
@@ -141,9 +168,37 @@ class Icon(BaseModel):
 class _CatalogBase(BaseModel):
     """All primitive schemas inherit this. ``extra='forbid'`` makes Pydantic
     raise on unknown keys; the healer's ``_rule_strip_unknown_props`` rule
-    catches and removes them before validation runs."""
+    catches and removes them before validation runs.
+
+    ``data_bound`` (catalog-v2, RFC-001) marks components whose props are
+    hydrated server-side from tool results via ``show`` ops — the LLM never
+    hand-types their data. False for every free-form primitive; the
+    commerce components override it to True. Class-level metadata only —
+    never a wire field.
+    """
 
     model_config = ConfigDict(extra="forbid")
+
+    data_bound: ClassVar[bool] = False
+
+    # Server-authored components (e.g. ProductDetail): validated by the
+    # allowlist/resolver like any other, but NEVER rendered into the LLM
+    # prompt — only server code (direct intents) emits them.
+    server_only: ClassVar[bool] = False
+
+    # False = NOT authorable via the in-band <ui_stream> text channel
+    # (parse_op_line rejects the add with ``render_ui_only:<type>``) and
+    # never rendered into the text-channel prompt. For components whose
+    # trust checks live in the render_ui function path (e.g. LinkButton's
+    # URL verification) — a hand-typed text op would bypass them.
+    text_channel: ClassVar[bool] = True
+
+    # Name of this component's selection-DIRECTIVE field (e.g. ProductGrid's
+    # ``items``): applied by ``_select_list_props`` over bound lists, then
+    # stripped from the hydrated op — never a render prop. None = the
+    # component has no selection directive (a same-named CONTENT field, like
+    # QuickReplies.items, is untouched).
+    selection_field: ClassVar[Optional[str]] = None
 
 
 # ---------------------------------------------------------------------------
@@ -299,9 +354,12 @@ class QuickReplies(_CatalogBase):
 
     items: List[QuickReplyItem] = Field(
         ...,
-        min_length=2,
+        # min 1, not 2 (2026-08-03): a single decisive follow-up ("Add BB
+        # Bottle to cart") is legitimate — the rider harvest surfaced live
+        # single-chip emissions that the old minimum silently discarded.
+        min_length=1,
         max_length=8,
-        description="2–8 reply options. Shown as pill buttons.",
+        description="1–8 reply options. Shown as pill buttons.",
     )
 
 
@@ -848,6 +906,8 @@ UI_CATALOG: Dict[str, Type[_CatalogBase]] = {
     "PieChart": PieChart,
     # Effects (invisible)
     "SideEffect": SideEffect,
+    # Lazy flavor groups (e.g. commerce) register here at load time via
+    # ``register_primitives`` — see LAZY_GROUPS below.
 }
 
 
@@ -892,6 +952,10 @@ PRIMITIVE_GROUPS: Dict[str, List[str]] = {
         "AreaChart",
         "PieChart",
     ],
+    # Flavor groups (e.g. "commerce" — data-bound, catalog v2 / RFC-001)
+    # are NOT listed here: they live under ``assist/<flavor>/schemas.py``
+    # and self-register via ``register_primitives`` when a template that
+    # enables them is resolved (see LAZY_GROUPS below).
     # Reserved for future expansion — schemas + widget components land
     # behind these group flags so existing templates aren't affected.
     "metrics": [
@@ -915,9 +979,12 @@ PRIMITIVE_GROUPS: Dict[str, List[str]] = {
 
 # Order in which primitives appear in the system-prompt rendering. Listed
 # composite-first so the LLM defaults to Tile for list items, then core
-# building blocks for freeform composition.
+# building blocks for freeform composition. Lazily-registered data-bound
+# flavor components append at the END — position is irrelevant for them
+# (they render in their own "### Data-bound components" prompt subsection;
+# only their relative order matters).
 PRIMITIVE_RENDER_ORDER: List[str] = [
-    # Composite first — preferred for list items
+    # Composite first — preferred for free-form list items
     "Tile",
     # Layout containers
     "Carousel",
@@ -954,6 +1021,70 @@ PRIMITIVE_RENDER_ORDER: List[str] = [
 
 
 # ---------------------------------------------------------------------------
+# Lazy flavor groups
+#
+# Flavor content (commerce today; future verticals tomorrow) lives under
+# ``breeze_buddy/assist/<flavor>/`` and must never load in a process that
+# doesn't use it. Each entry maps a group name to the module that, on
+# import, self-registers its primitives via ``register_primitives``.
+# ``resolve_allowlist`` triggers the load for exactly the lazy groups a
+# template enables — it is the single choke point every session path
+# (ChatAgent init, prompt splice, parse validation) already runs through,
+# and it runs BEFORE ``ui_prompt.render_primitives_section`` computes its
+# lru_cache key, so a cached prompt section can never predate the types
+# its allowlist names.
+# ---------------------------------------------------------------------------
+
+
+LAZY_GROUPS: Dict[str, str] = {
+    "commerce": "app.ai.voice.agents.breeze_buddy.assist.commerce.schemas",
+}
+
+# Fast-path guard only — ``importlib.import_module`` is already idempotent
+# via sys.modules; this just skips the call on the hot path.
+_LOADED_LAZY_GROUPS: Set[str] = set()
+
+
+def ensure_group_loaded(group: str) -> None:
+    """Idempotently import (and thereby register) a lazy flavor group.
+
+    No-op for unknown or already-loaded groups. Registration is
+    process-global and additive-only: loading a flavor never mutates or
+    removes existing catalog entries, so per-session gating stays purely
+    allowlist-driven.
+    """
+    module_path = LAZY_GROUPS.get(group)
+    if module_path is None or group in _LOADED_LAZY_GROUPS:
+        return
+    importlib.import_module(module_path)
+    _LOADED_LAZY_GROUPS.add(group)
+
+
+def register_primitives(
+    group: str,
+    primitives: Dict[str, Type[_CatalogBase]],
+    *,
+    render_order: Optional[List[str]] = None,
+) -> None:
+    """Register a flavor group's primitives into the process-global catalog.
+
+    Called by a flavor's schema module at import time. Idempotent —
+    re-registration overwrites the class mapping (same classes on a
+    re-import) without duplicating group-member or render-order entries.
+    ``render_order`` defaults to the mapping's insertion order; names
+    append at the END of ``PRIMITIVE_RENDER_ORDER`` (see the note there).
+    """
+    members = PRIMITIVE_GROUPS.setdefault(group, [])
+    for name, schema in primitives.items():
+        UI_CATALOG[name] = schema
+        if name not in members:
+            members.append(name)
+    for name in render_order if render_order is not None else list(primitives):
+        if name not in PRIMITIVE_RENDER_ORDER:
+            PRIMITIVE_RENDER_ORDER.append(name)
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
@@ -970,6 +1101,18 @@ def is_known_type(type_name: str) -> bool:
     """True when ``type_name`` is a registered primitive (regardless of
     whether any template has it enabled)."""
     return type_name in UI_CATALOG
+
+
+def is_data_bound(type_name: str) -> bool:
+    """True when ``type_name`` is a registered data-bound component —
+    a `show`-op target hydrated server-side from tool results."""
+    schema = UI_CATALOG.get(type_name)
+    return bool(schema is not None and schema.data_bound)
+
+
+def data_bound_names() -> Set[str]:
+    """All registered data-bound component names (allowlist-agnostic)."""
+    return {name for name, schema in UI_CATALOG.items() if schema.data_bound}
 
 
 def resolve_allowlist(
@@ -992,11 +1135,19 @@ def resolve_allowlist(
     When ``enabled_groups`` is None (the absent-config case), the default
     is ``{"core"}`` — keeps backward compatibility with templates that
     pre-date ``configurations.ui_catalog``.
+
+    Lazy flavor groups (``LAZY_GROUPS``) are imported-and-registered here,
+    exactly when a template enables them — the single trigger point for
+    flavor loading. A one-off ``enabled_primitives`` name belonging to a
+    lazy group that is NOT in ``enabled_groups`` stays unknown (silently
+    ignored, same as any unknown name): flavors are enabled by group.
     """
     if enabled_groups is None and not enabled_primitives:
         enabled_groups = ["core"]
     enabled_groups = enabled_groups or []
     enabled_primitives = enabled_primitives or []
+    for group in enabled_groups:
+        ensure_group_loaded(group)
     # Use a distinct variable name for the set form so pyrefly can keep the
     # parameter's `Optional[List[str]]` type intact (reassigning would shift
     # the binding to `set[str]` and trip downstream type checks).
@@ -1029,11 +1180,17 @@ def validate_props(type_name: str, props: Dict[str, Any]) -> _CatalogBase:
 
 __all__ = [
     "CATALOG_VERSION",
+    "CATALOG_VERSION_V2",
     "UI_CATALOG",
     "PRIMITIVE_GROUPS",
     "PRIMITIVE_RENDER_ORDER",
+    "LAZY_GROUPS",
+    "ensure_group_loaded",
+    "register_primitives",
     "group_for",
     "is_known_type",
+    "is_data_bound",
+    "data_bound_names",
     "resolve_allowlist",
     "validate_props",
     "ToAssistantAction",

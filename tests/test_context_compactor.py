@@ -10,7 +10,7 @@ so the cases here cover both the happy paths and the don't-blow-up paths.
 
 from __future__ import annotations
 
-from app.ai.voice.agents.breeze_buddy.chat.context_compactor import (
+from app.ai.voice.agents.breeze_buddy.chat.history.compactor import (
     compact_tool_results,
 )
 
@@ -350,3 +350,108 @@ def test_projection_non_json_content_falls_back_to_stub():
     )
     # Unparseable content can't be projected → stub keeps it bounded.
     assert "[pruned: search_catalog" in out[1]["content"][0]["content"]
+
+
+# ---------------------------------------------------------------------------
+# Universal-shape variant (Gemini path)
+# ---------------------------------------------------------------------------
+
+from app.ai.voice.agents.breeze_buddy.chat.history.compactor import (  # noqa: E402
+    compact_tool_results_universal,
+)
+
+
+def _universal_exchange(call_id: str, tool: str, result: dict) -> list:
+    return [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": call_id,
+                    "type": "function",
+                    "function": {"name": tool, "arguments": '{"query":"red"}'},
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": call_id,
+            "content": json.dumps(result),
+        },
+    ]
+
+
+def test_universal_compacts_stale_last_turn_only_results():
+    messages = [
+        {"role": "user", "content": "find shoes"},
+        *_universal_exchange("c1", "search_catalog", {"products": [{"id": "p1"}] * 40}),
+        {"role": "user", "content": "more"},
+        *_universal_exchange("c2", "search_catalog", {"products": [{"id": "p2"}]}),
+    ]
+    out = compact_tool_results_universal(
+        messages, retention={"search_catalog": "last_turn_only"}, recent_keep=1
+    )
+    stale = next(m for m in out if m.get("tool_call_id") == "c1")
+    fresh = next(m for m in out if m.get("tool_call_id") == "c2")
+    assert "[pruned: search_catalog(" in stale["content"]
+    assert json.loads(fresh["content"]) == {"products": [{"id": "p2"}]}
+    # Assistant tool_calls entries are untouched (proof the tool ran).
+    assert any(
+        c["id"] == "c1"
+        for m in out
+        if m.get("role") == "assistant"
+        for c in m.get("tool_calls") or []
+    )
+    # Input not mutated.
+    assert "[pruned" not in messages[2]["content"]
+
+
+def test_universal_projection_keeps_identity_paths():
+    result = {
+        "products": [
+            {"id": "p1", "url": "https://s/p1", "description": "x" * 500},
+            {"id": "p2", "url": "https://s/p2", "description": "y" * 500},
+        ]
+    }
+    messages = [
+        *_universal_exchange("c1", "search_catalog", result),
+        *_universal_exchange("c2", "search_catalog", {"products": []}),
+    ]
+    out = compact_tool_results_universal(
+        messages,
+        retention={"search_catalog": "last_turn_only"},
+        recent_keep=1,
+        projection={"search_catalog": ["products[*].id", "products[*].url"]},
+    )
+    stale = json.loads(next(m for m in out if m.get("tool_call_id") == "c1")["content"])
+    assert stale["products"] == [
+        {"id": "p1", "url": "https://s/p1"},
+        {"id": "p2", "url": "https://s/p2"},
+    ]
+    assert "_pruned" in stale
+
+
+def test_universal_passes_non_dict_entries_through():
+    class _Specific:  # stand-in for LLMSpecificMessage
+        pass
+
+    marker = _Specific()
+    messages = [
+        {"role": "user", "content": "hi"},
+        marker,
+        *_universal_exchange("c1", "search_catalog", {"products": []}),
+    ]
+    out = compact_tool_results_universal(
+        messages, retention={"search_catalog": "last_turn_only"}
+    )
+    assert out[1] is marker
+
+
+def test_universal_session_retention_untouched():
+    messages = [
+        *_universal_exchange("c1", "get_cart", {"id": "cart1"}),
+        *_universal_exchange("c2", "get_cart", {"id": "cart1"}),
+    ]
+    out = compact_tool_results_universal(messages, retention={}, recent_keep=1)
+    assert all("[pruned" not in (m.get("content") or "") for m in out)

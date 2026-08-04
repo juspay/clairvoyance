@@ -18,12 +18,12 @@ from app.ai.voice.agents.breeze_buddy.chat.approvals import (
     WIRE_STATUS_BY_DB_STATUS,
     claim_tool_approval,
 )
-from app.ai.voice.agents.breeze_buddy.chat.block_codec import (
-    filter_visible_blocks,
-)
 from app.ai.voice.agents.breeze_buddy.chat.client_context import (
     ClientContextTooLarge,
     compute_context_patch,
+)
+from app.ai.voice.agents.breeze_buddy.chat.history.block_codec import (
+    filter_visible_blocks,
 )
 from app.ai.voice.agents.breeze_buddy.chat.metrics import TurnMetrics
 from app.ai.voice.agents.breeze_buddy.chat.sse import SSEEvent, format_sse

@@ -1,8 +1,17 @@
 """Conversation-context compactor for chat turns.
 
-Walks the Anthropic ``messages`` array right before it's sent to the LLM and
-rewrites stale ``tool_result`` payloads down to a 1-line stub. Goal: keep
-input-token cost bounded as a session accumulates tool calls.
+Two entry points over the same policy engine:
+
+* :func:`compact_tool_results` — walks the ANTHROPIC ``messages`` array
+  right before it's sent to the LLM (the Claude driver path).
+* :func:`compact_tool_results_universal` — walks the UNIVERSAL
+  ``LLMContext`` message list (``role: "tool"`` entries) BEFORE provider
+  adaptation; the Gemini driver path uses this, and any future provider
+  can too.
+
+Both rewrite stale tool-result payloads down to a 1-line stub (or an
+identity projection). Goal: keep input-token cost bounded as a session
+accumulates tool calls.
 
 Behavioral contract
 -------------------
@@ -44,7 +53,7 @@ from typing import Any, Dict, List, Optional
 
 from app.core.logger import logger
 
-__all__ = ["compact_tool_results"]
+__all__ = ["compact_tool_results", "compact_tool_results_universal"]
 
 # Tools whose retention is not explicitly set default to this. ``session``
 # means "keep tool_result content as-is" — preserves backward compatibility
@@ -342,5 +351,96 @@ def compact_tool_results(
             f"[context_compactor] rewrote {n_compacted} stale tool_result "
             f"block(s) to stubs/projections (retention map: "
             f"{ {k: v for k, v in retention.items() if v != _DEFAULT_RETENTION} })"
+        )
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Universal-shape variant (Gemini path — pre-adaptation)
+# ---------------------------------------------------------------------------
+#
+# The universal LLMContext list carries tool exchanges as
+#   assistant: {"role":"assistant","tool_calls":[{"id","function":{"name",
+#               "arguments": <json-str>}}]}
+#   tool:      {"role":"tool","tool_call_id","content": <json-str>}
+# Compacting HERE (before the provider adapter converts to Gemini
+# ``Content`` parts) keeps the engine provider-blind: signatures, text and
+# function_call parts are untouched — only stale tool-RESULT content is
+# rewritten, exactly like the Anthropic variant. Non-dict entries
+# (LLMSpecificMessage — Gemini thought signatures) pass through verbatim.
+
+
+def compact_tool_results_universal(
+    messages: List[Any],
+    retention: Optional[Dict[str, str]] = None,
+    recent_keep: int = 1,
+    projection: Optional[Dict[str, List[str]]] = None,
+) -> List[Any]:
+    """Universal-shape sibling of :func:`compact_tool_results`.
+
+    Same policy semantics (``last_turn_only`` tools, ``recent_keep``
+    newest results always intact, projection keep-lists preferred over
+    stubs). Returns a new list; the input is never mutated.
+    """
+    if not messages:
+        return list(messages)
+    retention = retention or {}
+
+    # tool_call_id → {name, args(JSON str)} off assistant tool_calls.
+    call_index: Dict[str, Dict[str, Any]] = {}
+    for msg in messages:
+        if not isinstance(msg, dict) or msg.get("role") != "assistant":
+            continue
+        for call in msg.get("tool_calls") or []:
+            if not isinstance(call, dict):
+                continue
+            call_id = call.get("id")
+            fn = call.get("function")
+            if isinstance(call_id, str) and isinstance(fn, dict):
+                call_index[call_id] = {
+                    "name": fn.get("name", "?"),
+                    "arguments": fn.get("arguments"),
+                }
+
+    tool_positions: List[int] = [
+        i
+        for i, msg in enumerate(messages)
+        if isinstance(msg, dict) and msg.get("role") == "tool"
+    ]
+    keep_set = set(tool_positions[-recent_keep:]) if recent_keep > 0 else set()
+
+    n_compacted = 0
+    out: List[Any] = []
+    for i, msg in enumerate(messages):
+        if not isinstance(msg, dict) or msg.get("role") != "tool" or i in keep_set:
+            out.append(msg)
+            continue
+        call_meta = call_index.get(msg.get("tool_call_id") or "")
+        tool_name = call_meta["name"] if call_meta else None
+        if not tool_name or retention.get(tool_name, _DEFAULT_RETENTION) != (
+            "last_turn_only"
+        ):
+            out.append(msg)
+            continue
+        keep_paths = (projection or {}).get(tool_name)
+        new_text: Optional[str] = None
+        if keep_paths:
+            new_text = _project_content(msg.get("content"), keep_paths)
+        if new_text is None:
+            raw_args = call_meta.get("arguments") if call_meta else None
+            try:
+                parsed_args = (
+                    json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+                )
+            except (TypeError, ValueError):
+                parsed_args = raw_args
+            new_text = _stub_for(tool_name, parsed_args)
+        out.append({**msg, "content": new_text})
+        n_compacted += 1
+
+    if n_compacted:
+        logger.debug(
+            f"[context_compactor] (universal) rewrote {n_compacted} stale "
+            "tool result message(s) to stubs/projections"
         )
     return out

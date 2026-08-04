@@ -13,7 +13,7 @@ persistence path that emits ``visibility=internal`` text blocks.
 
 from __future__ import annotations
 
-from app.ai.voice.agents.breeze_buddy.chat.block_codec import (
+from app.ai.voice.agents.breeze_buddy.chat.history.block_codec import (
     VISIBILITY_INTERNAL,
     blocks_to_llm_context_messages,
     filter_visible_blocks,

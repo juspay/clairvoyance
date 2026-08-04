@@ -162,7 +162,14 @@ def _deep_merge_defaults(
 # block. Handlers lazily acquire from the pool on first call and reuse on
 # every subsequent call within the same turn, eliminating the per-call
 # connect/initialize/notifications round-trip (~150–300 ms).
-MCPPool = Dict[str, MCPClient]
+#
+# One reserved (non-client) entry may exist: the acquisition lock under
+# ``_POOL_LOCK_KEY`` — see ``_acquire_pooled_client``.
+MCPPool = Dict[str, Any]
+
+# Reserved pool key holding the per-turn acquisition asyncio.Lock. Named
+# so no server label can collide with it.
+_POOL_LOCK_KEY = "__acquire_lock__"
 
 
 async def _acquire_pooled_client(
@@ -172,17 +179,29 @@ async def _acquire_pooled_client(
 ) -> MCPClient:
     """Return a live MCPClient from the pool, opening + stashing on first miss.
 
-    Tool calls within one chat turn execute sequentially (see
-    ``ChatAgent._run_turn_inner``'s ``for call in tool_calls`` loop), so no
-    lock is needed — at most one acquire is in flight per server at a time.
+    Concurrency-safe: the Phase-2 read-only fan-out dispatches several
+    tool calls from one cycle in PARALLEL, so two first-calls against the
+    same server can race here. A per-pool lock (stashed in the pool under
+    the reserved key — created without an intervening await, so the
+    get-or-create itself is race-free on one event loop) serializes the
+    open; concurrent calls on an already-started client are fine (the MCP
+    ClientSession multiplexes requests by JSON-RPC id).
     """
     existing = pool.get(key)
-    if existing is not None:
+    if isinstance(existing, MCPClient):
         return existing
-    client = MCPClient(server_params=server_params)
-    await client.start()
-    pool[key] = client
-    return client
+    lock = pool.get(_POOL_LOCK_KEY)
+    if not isinstance(lock, asyncio.Lock):
+        lock = asyncio.Lock()
+        pool[_POOL_LOCK_KEY] = lock
+    async with lock:
+        existing = pool.get(key)
+        if isinstance(existing, MCPClient):
+            return existing
+        client = MCPClient(server_params=server_params)
+        await client.start()
+        pool[key] = client
+        return client
 
 
 async def close_mcp_pool(pool: Optional[MCPPool]) -> None:
@@ -190,11 +209,15 @@ async def close_mcp_pool(pool: Optional[MCPPool]) -> None:
 
     Errors during close are swallowed (logged at WARNING) so one bad
     connection doesn't prevent the rest from being released — matches the
-    behaviour of an ``async with`` cleanup when the body raises.
+    behaviour of an ``async with`` cleanup when the body raises. The
+    reserved lock entry is skipped (nothing to close) and cleared with
+    the rest.
     """
     if not pool:
         return
     for key, client in list(pool.items()):
+        if not isinstance(client, MCPClient):
+            continue
         try:
             await client.close()
         except Exception as e:
