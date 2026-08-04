@@ -279,6 +279,7 @@ async def run_chat_turn(
         agent_state=agent_state,
         context_placement=context_placement,
         catalog_version=resolve_session_catalog_version(session.metadata),
+        merchant_id=session.merchant_id,
     )
     async for event in agent.run_turn(
         user_content=user_content,
@@ -370,6 +371,7 @@ async def run_chat_approval_continuation(
         template_vars=template_vars,
         agent_state=agent_state,
         catalog_version=resolve_session_catalog_version(session.metadata),
+        merchant_id=session.merchant_id,
     )
     async for event in agent.run_approval_turn(
         approval=claimed,

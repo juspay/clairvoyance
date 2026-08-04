@@ -2,7 +2,7 @@
 Wallet recharge orchestration.
 
 Owns the full recharge operation: fetching the merchant's conversion_rate,
-computing the credits to add via services.wallet.conversion, and persisting
+computing the credits to add via services.breeze_buddy.wallet.conversion, and persisting
 the recharge through the database accessor layer. This mirrors the pattern
 used by services.knowledge_base.ingestion, which similarly owns a full
 operation and calls the accessor layer directly.
@@ -14,8 +14,8 @@ from uuid import uuid4
 
 from app.database.accessor.breeze_buddy import wallets as wallets_accessor
 from app.schemas.breeze_buddy.wallets import WalletTransactionResponse
-from app.services.wallet import conversion
-from app.services.wallet.exceptions import InvalidRechargeAmountError
+from app.services.breeze_buddy.wallet import conversion
+from app.services.breeze_buddy.wallet.exceptions import InvalidRechargeAmountError
 
 
 async def recharge(

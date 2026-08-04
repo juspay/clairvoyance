@@ -12,8 +12,8 @@ from app.schemas.breeze_buddy.wallets import (
     WalletRechargeRequest,
     WalletTransactionResponse,
 )
-from app.services.wallet import recharge
-from app.services.wallet.exceptions import (
+from app.services.breeze_buddy.wallet import recharge
+from app.services.breeze_buddy.wallet.exceptions import (
     InvalidRechargeAmountError,
     UnsupportedCurrencyError,
 )
@@ -35,7 +35,8 @@ async def recharge_wallet_handler(
     """Add credits to a merchant's wallet and record the ledger entry.
 
     Admin-only. The resulting credits are computed by
-    services.wallet.recharge as amount * currency-map * wallet.conversion_rate.
+    services.breeze_buddy.wallet.recharge as amount * currency-map *
+    wallet.conversion_rate.
     """
     _check_recharge_access(current_user)
 
