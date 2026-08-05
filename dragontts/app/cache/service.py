@@ -16,6 +16,7 @@ cache snapshot is served from incrementally-maintained totals.
 from __future__ import annotations
 
 import asyncio
+import json
 import random
 import re
 import time
@@ -37,13 +38,57 @@ from app.core.config import settings
 from app.core.logging import logger
 from app.providers.base import AudioResult, BaseTTSProvider, ProviderError
 from app.providers.registry import ProviderNotConfigured
-from app.schemas.tts import TTSRequest
+from app.schemas.tts import CartesiaVoice, OutputFormat, TTSRequest
 from app.storage.base import CacheRecord, escape_like
 
 
 def _wc(text: str | None) -> int:
     """Word count of a transcript (whitespace tokens, punctuation kept)."""
     return len((text or "").split())
+
+
+def _decode_upload_to_pcm(data: bytes) -> tuple[bytes, int]:
+    """Decode an uploaded clip to mono PCM s16le + its sample rate.
+
+    Accepts WAV (parsed via stdlib ``wave``); raises ``ValueError`` (which the
+    API layer maps to HTTP 400) on anything else — INCLUDING malformed frames
+    that make ``audioop`` raise (``audioop.error`` is NOT a ``ValueError``, so
+    the tomono/lin2lin calls are inside the try too). MP3/ogg are NOT supported
+    (no ffmpeg/pydub). Stereo is down-mixed and non-16-bit widened. Duration is
+    capped to bound memory.
+    """
+    import audioop
+    import wave
+    from io import BytesIO
+
+    MAX_DURATION_S = 120  # reject absurdly long uploads before allocating PCM
+    try:
+        with wave.open(BytesIO(data), "rb") as wf:
+            nchannels = wf.getnchannels()
+            sampwidth = wf.getsampwidth()
+            framerate = wf.getframerate()
+            nframes = wf.getnframes()
+            if (
+                framerate <= 0
+                or framerate > 96000
+                or sampwidth not in (1, 2, 3, 4)
+                or nchannels not in (1, 2)
+                or nframes / framerate > MAX_DURATION_S
+            ):
+                raise ValueError(
+                    f"unsupported WAV: {nchannels}ch {sampwidth}*{framerate}Hz "
+                    f"{nframes} frames"
+                )
+            frames = wf.readframes(nframes)
+        if nchannels > 1:
+            frames = audioop.tomono(frames, sampwidth, 1.0, 1.0)
+        if sampwidth != 2:
+            frames = audioop.lin2lin(frames, sampwidth, 2)
+    except ValueError:
+        raise
+    except Exception as e:  # malformed/not-WAV, OR audioop.error on odd frames
+        raise ValueError(f"upload is not a decodable WAV file: {e}") from e
+    return frames, framerate
 
 
 # Sentinel: caller has NOT pre-fetched the existing record (vs. None = checked,
@@ -1095,6 +1140,78 @@ class CacheService:
             store_encoding,
             store_rate,
         )
+
+    def _request_from_record(self, record: CacheRecord) -> TTSRequest:
+        """Rebuild a TTSRequest from a stored CacheRecord.
+
+        Used by resynth_by_key / replace_audio_by_key so the derived key
+        round-trips (the same provider/model/text/language/params/output_format
+        that originally produced ``record.key`` must re-derive to it).
+        """
+        try:
+            params = json.loads(record.params) if record.params else {}
+        except (ValueError, TypeError):
+            params = {}
+        return TTSRequest(
+            model_id=f"{record.provider}:{record.model}",
+            transcript=record.text or "",
+            voice=CartesiaVoice(id=record.voice_id),
+            language=record.language or "",
+            output_format=OutputFormat(
+                container=record.container,
+                encoding=record.encoding,
+                sample_rate=record.sample_rate,
+            ),
+            params=params,
+        )
+
+    async def resynth_by_key(self, key: str):
+        """Re-synthesize an entry from its stored metadata, replacing the blob.
+
+        Reads the record, rebuilds the request, asserts the key round-trips, and
+        delegates to :meth:`create` (forces a fresh synth with ``replace=True``).
+        Raises ``KeyError`` if the key is absent; ``ValueError`` if the stored
+        fields no longer re-derive to the same key (the API maps that to 400).
+        Returns the same tuple as :meth:`create`.
+        """
+        record = await self._metadata.get(key)
+        if not record:
+            raise KeyError(key)
+        req = self._request_from_record(record)
+        _p, _m, _of, _canon, derived = self._resolve(req)
+        if derived != key:
+            raise ValueError(
+                f"key round-trip mismatch: stored {key!r} vs derived {derived!r}"
+            )
+        return await self.create(req)
+
+    async def replace_audio_by_key(self, key: str, audio: bytes):
+        """Replace an entry's audio blob with a user-supplied recording.
+
+        Decodes the upload (WAV) to mono PCM s16le, converts to the entry's
+        native format, and delegates to :meth:`create` with ``audio_override``
+        (stores under the same key with ``replace=True``). Raises ``KeyError`` /
+        ``ValueError`` like :meth:`resynth_by_key`; ``ValueError`` also covers an
+        undecodable upload. Returns the same tuple as :meth:`create`.
+        """
+        record = await self._metadata.get(key)
+        if not record:
+            raise KeyError(key)
+        native_pcm, native_rate = _decode_upload_to_pcm(audio)  # raises ValueError
+        native = await self._convert_audio(
+            native_pcm,
+            native_encoding="pcm_s16le",
+            native_rate=native_rate,
+            out_encoding=record.encoding,
+            out_rate=record.sample_rate,
+        )
+        req = self._request_from_record(record)
+        _p, _m, _of, _canon, derived = self._resolve(req)
+        if derived != key:
+            raise ValueError(
+                f"key round-trip mismatch: stored {key!r} vs derived {derived!r}"
+            )
+        return await self.create(req, audio_override=native)
 
     async def delete(self, req: TTSRequest):
         """Delete by derived key. Returns (deleted_bool, key).

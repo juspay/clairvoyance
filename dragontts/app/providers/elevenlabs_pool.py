@@ -47,6 +47,10 @@ from websockets import connect
 from app.core.logging import logger
 from app.providers.base import ProviderError
 
+# Models that accept a language_code query param on the multi-context socket.
+# Mirrors pipecat's ELEVENLABS_MULTILINGUAL_MODELS.
+_ELEVENLABS_MULTILINGUAL_MODELS = {"eleven_flash_v2_5", "eleven_turbo_v2_5"}
+
 # Path appended to the WS host. The host is derived from the provider's
 # base_url (https->wss) so the Indian-residency instance streams against
 # wss://api.in.residency.elevenlabs.io rather than the global endpoint.
@@ -200,6 +204,9 @@ class ElevenLabsStreamPool:
         # SSML-on and SSML-off need separate warm sockets (the provider keys the
         # pool by this flag). Appended to the connect URI as a query param.
         enable_ssml_parsing: bool = False,
+        # language_code is a connect-time query param (like model_id/ssml), so
+        # the pool is also keyed by it (see provider._get_pool). None = omit.
+        language: str | None = None,
     ):
         if not api_key:
             raise ValueError("ElevenLabsStreamPool requires an api_key")
@@ -231,6 +238,10 @@ class ElevenLabsStreamPool:
             # Connection-level: the socket parses SSML tags in every utterance
             # sent over it (matches pipecat's connect-URI query param).
             self._uri += "&enable_ssml_parsing=true"
+        if language and model_id in _ELEVENLABS_MULTILINGUAL_MODELS:
+            # Multilingual models (flash_v2_5/turbo_v2_5) take a language_code;
+            # others auto-detect or ignore it. Connect-time, so pool-keyed.
+            self._uri += f"&language_code={quote(language, safe='')}"
         self._headers = {"xi-api-key": api_key}
         self._connect_fn = connect_fn or _default_connect
         self._min_size = min_size

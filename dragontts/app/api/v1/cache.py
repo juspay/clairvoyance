@@ -2,16 +2,81 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+import base64
+import json
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.alerts.summary import send_daily_summary
 from app.audio.format import content_type_for
-from app.schemas.cache import CacheEntryInfo, PaginatedCache
+from app.core.config import settings
+from app.core.logging import logger
+from app.schemas.cache import (
+    ByTextResponse,
+    CacheEntryDetail,
+    CacheEntryInfo,
+    PaginatedCache,
+)
 
 router = APIRouter()
+
+# Bound analytics date ranges so a wide query can't CPU-bomb the single pod.
+# None/None -> last N days (NOT all-time, which would full-scan the tables).
+ANALYTICS_MAX_RANGE_DAYS = settings.analytics_max_range_days
+# Cap entries returned WITH inline audio (each carries a base64 blob), so
+# include_audio=true can't build a multi-hundred-MB JSON response.
+BY_TEXT_AUDIO_LIMIT = 25
+# Cap a user-supplied audio upload (base64 of a WAV recording).
+MAX_AUDIO_UPLOAD_B64_BYTES = 12_000_000  # ~9 MB decoded WAV
+# Supported text-match modes. Anything else used to silently fall through to
+# exact matching; reject it so a typo surfaces as 400 instead of wrong results.
+ALLOWED_MATCH = ("exact", "substring")
+
+
+def _validate_match(match: str) -> str:
+    """Reject unknown match modes (only exact/substring are supported)."""
+    if match not in ALLOWED_MATCH:
+        raise HTTPException(
+            status_code=400, detail=f"match must be one of {ALLOWED_MATCH}"
+        )
+    return match
+
+
+def _bound_range(from_date: str | None, to_date: str | None) -> tuple[str, str]:
+    """Parse + bound an analytics date range to <= ANALYTICS_MAX_RANGE_DAYS.
+
+    Returns (from_iso, to_iso). Unset bounds default to the last N days (not
+    all-time, which would full-scan the tables). Raises HTTPException(400) on
+    bad format, inverted range, or a range wider than the cap.
+    """
+    today = datetime.now(timezone.utc).date()
+
+    def _parse(s: str | None):
+        if s is None:
+            return None
+        try:
+            return datetime.strptime(s, "%Y-%m-%d").date()
+        except ValueError:
+            raise HTTPException(
+                status_code=400, detail=f"invalid date {s!r}; use YYYY-MM-DD"
+            )
+
+    f = _parse(from_date)
+    t = _parse(to_date)
+    n = ANALYTICS_MAX_RANGE_DAYS
+    if f is None and t is None:
+        f, t = today - timedelta(days=n - 1), today
+    elif f is None:
+        f = t - timedelta(days=n - 1)
+    elif t is None:
+        t = min(f + timedelta(days=n - 1), today)
+    if t < f:
+        raise HTTPException(status_code=400, detail="'to' must be on/after 'from'")
+    if (t - f).days + 1 > n:
+        raise HTTPException(status_code=400, detail=f"date range exceeds {n} days")
+    return f.isoformat(), t.isoformat()
 
 
 def _to_info(r) -> CacheEntryInfo:
@@ -28,6 +93,31 @@ def _to_info(r) -> CacheEntryInfo:
         size_bytes=r.size_bytes,
         hit_count=r.hit_count,
         created_at=r.created_at,
+    )
+
+
+def _to_detail(r, audio_b64: str | None = None) -> CacheEntryDetail:
+    try:
+        params = json.loads(r.params) if r.params else {}
+    except (ValueError, TypeError):
+        params = {}
+    return CacheEntryDetail(
+        key=r.key,
+        text=r.text,
+        provider=r.provider,
+        voice_id=r.voice_id,
+        model=r.model,
+        language=r.language,
+        params=params,
+        container=r.container,
+        encoding=r.encoding,
+        sample_rate=r.sample_rate,
+        size_bytes=r.size_bytes,
+        hit_count=r.hit_count,
+        created_at=r.created_at,
+        last_accessed_at=r.last_accessed_at,
+        ttl_expires_at=r.ttl_expires_at,
+        audio_base64=audio_b64,
     )
 
 
@@ -53,6 +143,7 @@ async def list_cache(
     """Paginated entry listing with optional text/date filters. limit is clamped
     to [1, MAX_CACHE_LIST_LIMIT]. q+match filters text; created_after is
     inclusive, created_before is exclusive (both YYYY-MM-DD)."""
+    _validate_match(match)
     metadata = request.app.state.metadata
     limit = max(1, min(limit, MAX_CACHE_LIST_LIMIT))
     offset = max(0, offset)
@@ -83,14 +174,7 @@ async def stats(
     """Cache metrics. Request metrics are date-filterable (?from=&to= YYYY-MM-DD);
     the cache snapshot is the current point-in-time state. All from stored
     rollups/totals — no full-table scan per call."""
-    for label, value in (("from", from_date), ("to", to_date)):
-        if value is not None:
-            try:
-                datetime.strptime(value, "%Y-%m-%d")
-            except ValueError:
-                raise HTTPException(
-                    status_code=400, detail=f"invalid {label}; use YYYY-MM-DD"
-                )
+    from_date, to_date = _bound_range(from_date, to_date)
     metadata = request.app.state.metadata
     registry = request.app.state.registry
     metrics = await metadata.metrics_summary(from_date=from_date, to_date=to_date)
@@ -124,14 +208,7 @@ async def stats_daily(
     words_from_cache_pct derived) plus a per-provider breakdown. ``provider``
     narrows the view to one provider (its totals then reflect that provider
     only). ?from=&to= YYYY-MM-DD (UTC dates)."""
-    for label, value in (("from", from_date), ("to", to_date)):
-        if value is not None:
-            try:
-                datetime.strptime(value, "%Y-%m-%d")
-            except ValueError:
-                raise HTTPException(
-                    status_code=400, detail=f"invalid {label}; use YYYY-MM-DD"
-                )
+    from_date, to_date = _bound_range(from_date, to_date)
     cache = request.app.state.cache
     return await cache.daily_stats(
         from_date=from_date, to_date=to_date, provider=provider
@@ -150,14 +227,7 @@ async def stats_latency(
     ``cache_serve`` (HIT serve), ``ttfb`` (stream first byte), plus a derived
     ``miss_overhead_us`` = total.avg - synth.avg (DragonTTS work beyond the
     provider call). ?from=&to= YYYY-MM-DD (UTC); ?provider= narrows to one."""
-    for label, value in (("from", from_date), ("to", to_date)):
-        if value is not None:
-            try:
-                datetime.strptime(value, "%Y-%m-%d")
-            except ValueError:
-                raise HTTPException(
-                    status_code=400, detail=f"invalid {label}; use YYYY-MM-DD"
-                )
+    from_date, to_date = _bound_range(from_date, to_date)
     metadata = request.app.state.metadata
     providers = await metadata.latency_summary_by_provider(
         from_date=from_date, to_date=to_date, provider=provider
@@ -219,6 +289,7 @@ async def delete_by_text(body: DeleteByTextBody, request: Request):
     provider/voice_id. ``dry_run`` defaults True — previews matched entries +
     keys without deleting; set ``dry_run: false`` to delete. Requires at least
     one filter (text/provider/voice_id) — use /cache/clear to wipe everything."""
+    _validate_match(body.match)
     cache = request.app.state.cache
     try:
         return await cache.delete_by_text(
@@ -263,6 +334,119 @@ async def slack_summary(request: Request):
     cache = request.app.state.cache
     sent = await send_daily_summary(cache, force=True)
     return {"sent": sent}
+
+
+@router.get("/cache/by-text", response_model=ByTextResponse)
+async def cache_by_text(
+    request: Request,
+    text: str = Query(..., description="text to look up"),
+    match: str = Query("exact", description="'exact' (default) or 'substring'"),
+    provider: str | None = None,
+    voice_id: str | None = None,
+    include_audio: bool = Query(False, description="base64-encode each clip's audio"),
+    limit: int = Query(100, ge=1, le=MAX_CACHE_LIST_LIMIT),
+):
+    """Look up every cached entry for a text (all provider/model/voice/param
+    variants). Returns full metadata + parsed params + hash; optionally inline
+    audio (base64) when include_audio=true."""
+    _validate_match(match)
+    metadata = request.app.state.metadata
+    blobs = request.app.state.blobs
+    if include_audio:
+        limit = min(limit, BY_TEXT_AUDIO_LIMIT)
+    records = await metadata.list(
+        provider=provider,
+        voice_id=voice_id,
+        limit=limit,
+        offset=0,
+        q=text,
+        match=match,
+    )
+    entries = []
+    for r in records:
+        audio_b64 = None
+        if include_audio:
+            try:
+                audio_b64 = base64.b64encode(await blobs.get(r.storage_path)).decode(
+                    "ascii"
+                )
+            except Exception as e:  # missing blob — skip audio, keep metadata
+                logger.warning(f"blob read failed for {r.key}: {e}")
+        entries.append(_to_detail(r, audio_b64))
+    return ByTextResponse(entries=entries, count=len(entries))
+
+
+@router.post("/cache/{key}/resynth")
+async def resynth_cache(key: str, request: Request):
+    """Re-synthesize an entry from its stored metadata (same key, fresh audio)."""
+    cache = request.app.state.cache
+    try:
+        key, status, source, size, provider, model, enc, rate = (
+            await cache.resynth_by_key(key)
+        )
+    except KeyError:
+        raise HTTPException(status_code=404, detail="cache key not found")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except (
+        Exception
+    ) as e:  # provider synth/upload failure (ProviderError/httpx) -> 502, not 500
+        raise HTTPException(status_code=502, detail=f"upstream failure: {e}")
+    return {
+        "key": key,
+        "status": status,
+        "source": source,
+        "size_bytes": size,
+        "provider": provider,
+        "model": model,
+        "encoding": enc,
+        "sample_rate": rate,
+    }
+
+
+class ReplaceAudioRequest(BaseModel):
+    """Body for POST /cache/{key}/audio — a user-supplied WAV recording as
+    base64. Mirrors the ``audio_base64`` convention of /tts/create (no multipart
+    dependency)."""
+
+    audio_base64: str = Field(
+        ...,
+        max_length=MAX_AUDIO_UPLOAD_B64_BYTES,
+        description="WAV recording, base64-encoded (<=~9MB)",
+    )
+
+
+@router.post("/cache/{key}/audio")
+async def replace_cache_audio(key: str, body: ReplaceAudioRequest, request: Request):
+    """Replace an entry's audio blob with a user-supplied WAV recording (base64).
+    The upload is decoded + converted to the entry's native format."""
+    cache = request.app.state.cache
+    try:
+        data = base64.b64decode(body.audio_base64)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"invalid audio_base64: {e}")
+    try:
+        key, status, source, size, provider, model, enc, rate = (
+            await cache.replace_audio_by_key(key, data)
+        )
+    except KeyError:
+        raise HTTPException(status_code=404, detail="cache key not found")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except (
+        Exception
+    ) as e:  # provider synth/upload failure (ProviderError/httpx) -> 502, not 500
+        raise HTTPException(status_code=502, detail=f"upstream failure: {e}")
+    return {
+        "key": key,
+        "status": status,
+        "source": source,
+        "size_bytes": size,
+        "provider": provider,
+        "model": model,
+        "encoding": enc,
+        "sample_rate": rate,
+    }
 
 
 @router.get("/cache/{key}")

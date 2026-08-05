@@ -63,6 +63,11 @@ async def tts_bytes(req: TTSRequest, request: Request):
         )
     except (httpx.HTTPStatusError, httpx.RequestError) as e:
         raise _map_upstream_error(provider, e)
+    except Exception as e:  # any other provider/lib error -> 502 with the reason
+        raise HTTPException(
+            status_code=502,
+            detail=f"upstream {provider} error: {type(e).__name__}: {e}",
+        )
 
     return Response(
         content=audio,
@@ -101,6 +106,11 @@ async def tts_stream(req: TTSRequest, request: Request):
         raise HTTPException(
             status_code=502, detail=f"upstream {provider} returned an error: {e}"
         )
+    except Exception as e:  # any other provider/lib error -> 502 with the reason
+        raise HTTPException(
+            status_code=502,
+            detail=f"upstream {provider} error: {type(e).__name__}: {e}",
+        )
 
     try:
         first = await gen.__anext__()
@@ -114,6 +124,12 @@ async def tts_stream(req: TTSRequest, request: Request):
     except (ProviderError, httpx.HTTPStatusError, httpx.RequestError, OSError) as e:
         await gen.aclose()
         raise _map_upstream_error(provider, e)
+    except Exception as e:  # any other provider/lib error -> 502 with the reason
+        await gen.aclose()
+        raise HTTPException(
+            status_code=502,
+            detail=f"upstream {provider} error: {type(e).__name__}: {e}",
+        )
 
     async def body(first_chunk: bytes) -> AsyncGenerator[bytes, None]:
         try:
@@ -186,6 +202,11 @@ async def tts_create(req: TTSRequest, request: Request):
         )
     except (httpx.HTTPStatusError, httpx.RequestError) as e:
         raise _map_upstream_error(provider, e)
+    except Exception as e:  # any other provider/lib error -> 502 with the reason
+        raise HTTPException(
+            status_code=502,
+            detail=f"upstream {provider} error: {type(e).__name__}: {e}",
+        )
 
     return CreateResponse(
         key=key,

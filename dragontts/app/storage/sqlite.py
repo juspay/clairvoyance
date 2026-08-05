@@ -42,6 +42,10 @@ CREATE TABLE IF NOT EXISTS cache_entries (
     ttl_expires_at   TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_provider_voice ON cache_entries(provider, voice_id);
+-- Accelerates GET /cache/by-text exact-text lookups (the dashboard cache browser).
+-- NB: substring (LIKE '%q%') still scans — a B-tree can't serve leading-wildcard
+-- LIKE; add an FTS5 virtual table if substring speed ever matters.
+CREATE INDEX IF NOT EXISTS idx_text ON cache_entries(text);
 
 -- Request metrics rolled up per UTC day (date-filterable via SUM, never a scan
 -- of cache_entries).
