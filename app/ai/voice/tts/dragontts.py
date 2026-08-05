@@ -23,6 +23,7 @@ each path caches in its own format):
 
 from __future__ import annotations
 
+import json
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Optional
@@ -242,7 +243,28 @@ class DragonTTSService(TTSService):
             async with self._client.stream(
                 "POST", f"{self._url}/tts/stream", json=body
             ) as response:
-                response.raise_for_status()
+                if response.status_code >= 400:
+                    # Read the error body WHILE the stream context is open —
+                    # after it closes a streaming response's body is gone, so
+                    # raise_for_status()+e.response.text loses the reason.
+                    # DragonTTS returns {"detail": "upstream <provider> returned
+                    # an error: <reason>"} on a provider failure; surface THAT
+                    # so the real cause (e.g. a Gemini error) reaches the call,
+                    # not a generic "DragonTTS stream failed".
+                    err = await response.aread()
+                    try:
+                        detail = json.loads(err).get(
+                            "detail", err.decode("utf-8", "replace")
+                        )
+                    except Exception:
+                        detail = err.decode("utf-8", "replace")
+                    msg = (
+                        f"DragonTTS /tts/stream HTTP {response.status_code}: "
+                        f"{str(detail)[:300]}"
+                    )
+                    logger.error(msg)
+                    yield ErrorFrame(error=msg)
+                    return
                 async for chunk in response.aiter_bytes():
                     if not chunk:
                         continue
@@ -260,12 +282,6 @@ class DragonTTSService(TTSService):
                     )
             # A trailing odd byte (carry is always 0 or 1 byte here) can't form a
             # complete 16-bit sample, so drop it rather than emit a corrupt frame.
-        except httpx.HTTPStatusError as e:
-            detail = e.response.text[:200]
-            logger.error(f"DragonTTS returned HTTP {e.response.status_code}: {detail}")
-            yield ErrorFrame(
-                error=f"DragonTTS returned HTTP {e.response.status_code}: {detail}"
-            )
         except httpx.RequestError as e:
             logger.error(f"DragonTTS stream request failed: {e}")
             yield ErrorFrame(error=f"DragonTTS stream request failed: {e}")

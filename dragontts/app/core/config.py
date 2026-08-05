@@ -208,6 +208,14 @@ class Settings(BaseSettings):
     # latency_samples rows older than this are pruned by the periodic checkpoint
     # loop, keeping the table bounded.
     metrics_latency_retention_days: int = 14
+    # Max width (days) of any analytics date range (/stats, /stats/daily,
+    # /stats/latency). Bounds the aggregation so a wide "last year" range can't
+    # CPU-bomb the single pod; unset from/to defaults to the last N days (not
+    # all-time, which would full-scan metrics_daily/latency_samples). Raise for
+    # longer cache-hit trend windows — metrics_daily is 1 row/day, so even 90
+    # days is cheap; the real cost is latency_samples p95 sorts, hence the tight
+    # default matching its 14-day retention.
+    analytics_max_range_days: int = 10
 
     # --- Slack daily summary (mirrors clairvoyance's incoming-webhook pattern) ---
     # Off by default: an empty SLACK_WEBHOOK_URL disables the feature (no separate

@@ -29,6 +29,11 @@ from app.core.logging import logger
 from app.providers import elevenlabs_pool
 from app.providers.base import AudioResult, BaseTTSProvider, ProviderError
 
+# Models that accept a language_code (the multilingual flash/turbo variants).
+# v3 and multilingual_v2 auto-detect language; English-only models ignore it.
+# Mirrors pipecat's ELEVENLABS_MULTILINGUAL_MODELS.
+_ELEVENLABS_MULTILINGUAL_MODELS = {"eleven_flash_v2_5", "eleven_turbo_v2_5"}
+
 
 class ElevenLabsProvider(BaseTTSProvider):
     """ElevenLabs text-to-speech adapter.
@@ -66,11 +71,15 @@ class ElevenLabsProvider(BaseTTSProvider):
             else settings.elevenlabs_indian_residency_base_url
         )
         self._client = httpx.AsyncClient(timeout=30.0)
-        # One warm pool per (voice_id, model_id): the WS binds voice (URL path)
-        # and model_id (connect-time query param) for the socket's lifetime, so
-        # differing voice/model need separate sockets. Lazily created on first
-        # streaming miss; warmed eagerly when the model matches a default.
-        self._pools: dict[tuple[str, str], elevenlabs_pool.ElevenLabsStreamPool] = {}
+        # One warm pool per (voice_id, model_id, enable_ssml_parsing, language):
+        # the WS binds voice (URL path) and model_id (connect-time query param)
+        # for the socket's lifetime, and SSML + language are connect-time socket
+        # settings (see _get_pool), so differing values need separate sockets.
+        # Lazily created on first streaming miss; warmed eagerly when the model
+        # matches a default.
+        self._pools: dict[
+            tuple[str, str, bool, str | None], elevenlabs_pool.ElevenLabsStreamPool
+        ] = {}
 
     def _voice_settings(self, params: dict) -> dict:
         # Caller-supplied voice_settings win; otherwise mirror the one-shot
@@ -89,21 +98,32 @@ class ElevenLabsProvider(BaseTTSProvider):
         return {"stability": 0.5, "similarity_boost": 0.75, "speed": speed}
 
     def _get_pool(
-        self, voice_id: str, model_id: str, enable_ssml_parsing: bool = False
+        self,
+        voice_id: str,
+        model_id: str,
+        enable_ssml_parsing: bool = False,
+        language: str | None = None,
     ) -> elevenlabs_pool.ElevenLabsStreamPool | None:
-        """Return the warm pool for (voice, model, ssml), creating it lazily.
+        """Return the warm pool for (voice, model, ssml, language), creating it lazily.
 
         Returns ``None`` when pooling is disabled (pool size 0) or the key is
         missing, so the caller falls back to one-shot synth. NB: ``_pools`` grows
-        with distinct (voice, model, ssml) triples and is only cleared at
-        shutdown — acceptable while the voice catalog stays fixed (re-add an LRU
-        cap if it ever diversifies). SSML is part of the key because it's a
-        connect-time socket setting: an SSML-on socket parses <break/> tags for
-        ALL its utterances, so on/off can't share one socket.
+        with distinct (voice, model, ssml, language) tuples and is only cleared
+        at shutdown — acceptable while the voice catalog stays fixed (re-add an
+        LRU cap if it ever diversifies). SSML and language are part of the key
+        because they're connect-time socket settings: an SSML-on socket parses
+        <break/> tags for ALL its utterances, and language_code pins the socket's
+        language, so differing values can't share one socket.
         """
         if not self.api_key or settings.elevenlabs_stream_pool_size < 1:
             return None
-        key = (voice_id, model_id, enable_ssml_parsing)
+        # Non-multilingual models ignore language on the socket (the pool only
+        # sends language_code for multilingual models), so normalize it out of
+        # the key — otherwise identical requests that differ only by language
+        # each spin up a redundant warm socket (pool fragmentation).
+        if model_id not in _ELEVENLABS_MULTILINGUAL_MODELS:
+            language = None
+        key = (voice_id, model_id, enable_ssml_parsing, language)
         pool = self._pools.get(key)
         if pool is None:
             pool = elevenlabs_pool.ElevenLabsStreamPool(
@@ -118,6 +138,7 @@ class ElevenLabsProvider(BaseTTSProvider):
                     settings.elevenlabs_stream_pool_size + 4,
                 ),
                 enable_ssml_parsing=enable_ssml_parsing,
+                language=language,
             )
             self._pools[key] = pool
         return pool
@@ -132,10 +153,11 @@ class ElevenLabsProvider(BaseTTSProvider):
         defaults = PROVIDER_DEFAULTS.get("elevenlabs", {})
         voice = defaults.get("voice_id", "")
         model = defaults.get("model", "eleven_flash_v2_5")
+        language = defaults.get("language")
         if not voice or not model:
             return
         try:
-            pool = self._get_pool(voice, model)
+            pool = self._get_pool(voice, model, language=language)
             if pool is not None:
                 await pool.start()
         except Exception as e:
@@ -192,14 +214,16 @@ class ElevenLabsProvider(BaseTTSProvider):
             "Content-Type": "application/json",
             "Accept": "audio/raw",
         }
-        # NOTE: language_code is intentionally NOT sent — the ElevenLabs
-        # /v1/text-to-speech/{voice_id} body has no such field (language is
-        # bound to the model), and clairvoyance's reference doesn't send it.
         payload = {
             "text": text,
             "model_id": final_model_id,
             "voice_settings": self._voice_settings(params),
         }
+        # language_code: only the multilingual models (flash_v2_5/turbo_v2_5)
+        # accept it; v3/multilingual_v2 auto-detect, English-only models ignore
+        # it. Send the base subtag ("en"/"hi") — matches pipecat's use_base_code.
+        if final_model_id in _ELEVENLABS_MULTILINGUAL_MODELS and final_language:
+            payload["language_code"] = final_language.split("-")[0]
         if params.get("enable_ssml_parsing"):
             # SSML on: ElevenLabs parses <break time=".."/> etc. into real
             # pauses instead of reading the tags aloud. Default off; only sent
@@ -259,7 +283,8 @@ class ElevenLabsProvider(BaseTTSProvider):
             f"[voice_id={final_voice_id}, model_id={final_model_id}, ssml={ssml}]"
         )
 
-        pool = self._get_pool(final_voice_id, final_model_id, ssml)
+        lang_code = final_language.split("-")[0] if final_language else None
+        pool = self._get_pool(final_voice_id, final_model_id, ssml, lang_code)
         if pool is not None:
             streamed_any = False
             try:
