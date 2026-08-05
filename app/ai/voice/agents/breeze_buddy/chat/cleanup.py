@@ -12,6 +12,9 @@ from datetime import timedelta
 from app.ai.voice.agents.breeze_buddy.chat.approvals import (
     terminate_pending_approvals,
 )
+from app.ai.voice.agents.breeze_buddy.services.conversation_analysis.queue import (
+    enqueue_conversation_evaluation,
+)
 from app.core.config.dynamic import CHAT_SESSION_END_TIMEOUT_SECONDS
 from app.core.logger import logger
 from app.database.accessor.breeze_buddy.chat_session import (
@@ -19,6 +22,7 @@ from app.database.accessor.breeze_buddy.chat_session import (
     list_idle_chat_sessions,
 )
 from app.schemas.breeze_buddy.chat import ChatEndedReason, ChatSessionStatus
+from app.schemas.breeze_buddy.conversation_analysis import ConversationChannel
 from app.services.redis.locks import LockAcquireError, RedisLock
 from app.utils.common import utcnow
 
@@ -82,10 +86,16 @@ async def end_idle_chat_sessions() -> None:
             skipped += 1
             continue
         try:
-            await end_chat_session(
+            ended_row = await end_chat_session(
                 session_id=session_id,
                 ended_reason=ChatEndedReason.IDLE_TIMEOUT,
             )
+            if ended_row:
+                await enqueue_conversation_evaluation(
+                    str(ended_row.id),
+                    ConversationChannel.CHAT,
+                    str(ended_row.template_id),
+                )
             ended += 1
             # Terminal sweep: resolve any approvals left PENDING on the now-
             # ENDED session (chat's analog of voice deny_all). Best-effort —

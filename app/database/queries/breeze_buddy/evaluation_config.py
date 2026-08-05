@@ -4,7 +4,7 @@ import json
 from typing import Any, Dict, List, Tuple
 
 _CONFIG_COLUMNS = (
-    "template_id, evaluation_type::text AS evaluation_type, "
+    "id, template_id, evaluation_type::text AS evaluation_type, "
     "enabled, topics, configuration"
 )
 
@@ -40,7 +40,7 @@ def initialize_evaluation_config_query(template_id: str) -> Tuple[str, List[Any]
 
 def get_enabled_evaluations_query(template_id: str) -> Tuple[str, List[Any]]:
     query = """
-        SELECT evaluation_type::text AS evaluation_type, topics, configuration
+        SELECT id, evaluation_type::text AS evaluation_type, topics, configuration
         FROM evaluation_config
         WHERE template_id = $1::uuid
           AND enabled

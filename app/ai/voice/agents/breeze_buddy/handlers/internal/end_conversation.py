@@ -10,6 +10,9 @@ from app.ai.voice.agents.breeze_buddy.callbacks import (
 from app.ai.voice.agents.breeze_buddy.observability.tracing_setup import (
     update_span_with_evaluation_data,
 )
+from app.ai.voice.agents.breeze_buddy.services.conversation_analysis.queue import (
+    enqueue_conversation_evaluation,
+)
 from app.ai.voice.agents.breeze_buddy.template.context import TemplateContext
 from app.ai.voice.agents.breeze_buddy.utils.hold_transfer import (
     publish_hold_transfer_result,
@@ -20,6 +23,7 @@ from app.core.logger.context import clear_log_context
 from app.database.accessor.breeze_buddy.chat_session import (
     flip_chat_session_to_chat,
 )
+from app.schemas.breeze_buddy.conversation_analysis import ConversationChannel
 
 callback_map = {
     "service_callback": service_callback,
@@ -269,6 +273,7 @@ async def end_conversation(context: TemplateContext, args, transition_to=None):
         # For Daily mode: use lead.id (no telephony call_sid exists)
         # For telephony: use call_sid (how completion_function looks up the lead)
         is_daily_mode = getattr(context.bot, "transport_type", None) == "daily"
+        updated_lead = None
 
         if is_daily_mode and context.lead:
             # Daily mode: update by lead.id
@@ -300,6 +305,13 @@ async def end_conversation(context: TemplateContext, args, transition_to=None):
             logger.info(f"Successfully updated database for call {context.call_sid}")
         else:
             logger.warning("No call_sid or lead found, skipping database update")
+
+        if updated_lead and updated_lead.template_id:
+            await enqueue_conversation_evaluation(
+                str(updated_lead.id),
+                ConversationChannel.VOICE,
+                str(updated_lead.template_id),
+            )
 
         # Update OpenTelemetry span with evaluation data AFTER DB write,
         # so context.lead.outcome reflects the final persisted value.

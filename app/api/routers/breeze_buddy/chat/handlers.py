@@ -44,6 +44,9 @@ from app.ai.voice.agents.breeze_buddy.chat.turn_core import (
     run_chat_approval_continuation,
     run_chat_turn,
 )
+from app.ai.voice.agents.breeze_buddy.services.conversation_analysis.queue import (
+    enqueue_conversation_evaluation,
+)
 from app.ai.voice.agents.breeze_buddy.template.cache import get_template_by_id_cached
 from app.ai.voice.agents.breeze_buddy.template.transformation_function import (
     TEMPLATE_FUNCTION_REGISTRY,
@@ -82,6 +85,7 @@ from app.schemas.breeze_buddy.chat import (
     SendChatMessageRequest,
     ToolApprovalStatus,
 )
+from app.schemas.breeze_buddy.conversation_analysis import ConversationChannel
 from app.services.redis.locks import LockAcquireError, RedisLock
 
 from . import cancel_bus
@@ -1070,6 +1074,13 @@ async def end_chat_session_handler(
         )
     finally:
         await lock.release()
+
+    if ended_row:
+        await enqueue_conversation_evaluation(
+            str(ended_row.id),
+            ConversationChannel.CHAT,
+            str(ended_row.template_id),
+        )
 
     # ``end_chat_session`` returns ``None`` when the row was already ENDED
     # by some other actor (e.g., the idle sweeper raced this call between

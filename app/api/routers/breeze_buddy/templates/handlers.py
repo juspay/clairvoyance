@@ -23,6 +23,9 @@ from app.ai.voice.agents.breeze_buddy.utils.secrets import (
 from app.api.routers.breeze_buddy.numbers.rbac import require_number_in_tenant_scope
 from app.core.logger import logger
 from app.database.accessor import get_telephony_number_by_id, get_template_in_scope
+from app.database.accessor.breeze_buddy.evaluation_config import (
+    initialize_evaluation_config,
+)
 from app.database.accessor.breeze_buddy.template import (
     check_template_usage,
     create_template,
@@ -155,6 +158,15 @@ async def create_template_handler(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to create template",
             )
+
+        if configurations and configurations.get("enable_topic_evaluation") is True:
+            try:
+                await initialize_evaluation_config(str(template.id))
+            except Exception as e:
+                logger.error(
+                    f"Failed to initialize topic evaluation for template "
+                    f"{template.id}: {e}"
+                )
 
         logger.info(
             f"Successfully created template with id: {template.id} containing flow "
@@ -511,6 +523,15 @@ async def replace_template_handler(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to update template",
             )
+
+        if configurations and configurations.get("enable_topic_evaluation") is True:
+            try:
+                await initialize_evaluation_config(str(updated_template.id))
+            except Exception as e:
+                logger.error(
+                    f"Failed to initialize topic evaluation for template "
+                    f"{updated_template.id}: {e}"
+                )
 
         # Cache invalidation is best-effort: the DB write has already
         # committed, so a Redis blip here must not surface as a 500 to a
