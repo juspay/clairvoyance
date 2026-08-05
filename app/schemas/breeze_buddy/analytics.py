@@ -29,6 +29,8 @@ class AnalyticsType(str, Enum):
     ATTEMPTS_TO_CONNECT = "attempts-to-connect"
     CALLS_BY_HOUR = "calls-by-hour"
     CHATS_BY_HOUR = "chats-by-hour"
+    TOPIC_DASHBOARD = "topic-dashboard"
+    TOPIC_CONVERSATIONS = "topic-conversations"
 
     @classmethod
     def _missing_(cls, value: object) -> Optional["AnalyticsType"]:
@@ -126,6 +128,16 @@ class AnalyticsFilters(BaseModel):
     provider: Optional[List[str]] = Field(
         None, description="Filter by calling provider (list of strings)"
     )
+    topic_type: Optional[str] = Field(
+        None,
+        max_length=120,
+        description="Filter conversations by stable per-agent topic type; use __other__ for the virtual Other group",
+    )
+    topic_types: Optional[List[str]] = Field(
+        None,
+        max_length=200,
+        description="Exact underlying stable keys when opening the virtual Other topic group",
+    )
 
 
 class AnalyticsOptions(BaseModel):
@@ -133,6 +145,11 @@ class AnalyticsOptions(BaseModel):
 
     page: int = Field(default=1, ge=1, description="Page number (1-indexed)")
     limit: int = Field(default=50, ge=1, le=1000, description="Items per page")
+    cursor: Optional[str] = Field(
+        None,
+        max_length=512,
+        description="Opaque cursor returned by cursor-paginated analytics",
+    )
     group_by: Optional[str] = Field(
         None,
         description="Group results by field (template, merchant_id, date, etc.)",

@@ -287,6 +287,10 @@
       "description": "When true, this template is eligible to handle inbound calls. Typically paired with ivr_configuration.",
       "example": false
     },
+    "enable_topic_evaluation": {
+      "description": "When true, completed conversations for this template are eligible for topic evaluation.",
+      "example": true
+    },
     "mcp": {
       "description": "MCP (Model Context Protocol) server configuration. Enables dynamic tool discovery at session start — the agent connects to listed MCP servers and receives available tools before the first LLM turn.",
       "example": {

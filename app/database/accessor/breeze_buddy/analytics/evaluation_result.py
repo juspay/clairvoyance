@@ -1,4 +1,4 @@
-"""Database access for topic_result."""
+"""Topic analytics access for evaluation_result."""
 
 import json
 from datetime import date, datetime
@@ -7,7 +7,7 @@ from uuid import UUID
 
 from app.core.logger import logger
 from app.database.queries import run_parameterized_query
-from app.database.queries.breeze_buddy.analytics.topic_result import (
+from app.database.queries.breeze_buddy.analytics.evaluation_result import (
     get_topic_conversations_query,
     get_topic_dashboard_rows_query,
     get_topics_for_source_query,
@@ -19,7 +19,7 @@ def _decode_topics(value: Any) -> List[Dict[str, Any]]:
         try:
             value = json.loads(value)
         except json.JSONDecodeError:
-            logger.error("Corrupt topics JSON in topic_result")
+            logger.error("Corrupt topics JSON in evaluation_result")
             return []
     return [dict(topic) for topic in value or [] if isinstance(topic, dict)]
 

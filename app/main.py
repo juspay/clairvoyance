@@ -26,6 +26,10 @@ from app.ai.voice.agents.breeze_buddy.managers.calls import (
 from app.ai.voice.agents.breeze_buddy.services.agent_router.client import (
     close_smart_router_client,
 )
+from app.ai.voice.agents.breeze_buddy.services.conversation_analysis.worker import (
+    start_analysis_worker,
+    stop_analysis_worker,
+)
 from app.ai.voice.agents.breeze_buddy.tts.dragontts.monitor import (
     monitor_dragontts_health,
 )
@@ -288,6 +292,10 @@ async def lifespan(_app: FastAPI):
             logger.info("Event-driven dispatcher started")
         except Exception as e:
             logger.error(f"Failed to start event-driven dispatcher: {e}", exc_info=True)
+        try:
+            await start_analysis_worker()
+        except Exception as e:
+            logger.error(f"Failed to start conversation analysis worker: {e}")
     else:
         logger.info("Event-driven dispatcher disabled (ENABLE_DISPATCHER=false)")
 
@@ -304,6 +312,10 @@ async def lifespan(_app: FastAPI):
             await stop_promoter()
         except Exception as e:
             logger.error(f"Error stopping dispatcher: {e}", exc_info=True)
+        try:
+            await stop_analysis_worker()
+        except Exception as e:
+            logger.error(f"Error stopping conversation analysis worker: {e}")
 
     # Stop background task scheduler if running
     if _background_scheduler:

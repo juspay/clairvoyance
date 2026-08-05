@@ -9,11 +9,17 @@ from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.api.security.breeze_buddy.rbac_token import get_current_user_with_rbac
 from app.core.logger import logger
+from app.database.accessor.breeze_buddy.analytics.evaluation_result import (
+    get_topics_for_source,
+)
 from app.schemas import (
     AnalyticsRequest,
     AnalyticsResponse,
     AnalyticsType,
     UserInfo,
+)
+from app.schemas.breeze_buddy.conversation_analysis import (
+    ConversationTopicsResponse,
 )
 
 from .handlers import (
@@ -34,8 +40,13 @@ from .handlers import (
     get_outcome_counts,
     get_performance_analytics,
     get_telephony_numbers_analytics,
+    get_topic_conversations_analytics,
+    get_topic_dashboard_analytics,
 )
-from .rbac import apply_hierarchical_filters
+from .rbac import (
+    apply_hierarchical_filters,
+    get_accessible_resellers_and_merchants,
+)
 
 router = APIRouter()
 
@@ -58,6 +69,8 @@ _ANALYTICS_HANDLERS: Dict[AnalyticsType, Callable[..., Awaitable]] = {
     AnalyticsType.ATTEMPTS_TO_CONNECT: get_attempts_to_connect_analytics,
     AnalyticsType.CALLS_BY_HOUR: get_calls_by_hour_analytics,
     AnalyticsType.CHATS_BY_HOUR: get_chats_by_hour_analytics,
+    AnalyticsType.TOPIC_DASHBOARD: get_topic_dashboard_analytics,
+    AnalyticsType.TOPIC_CONVERSATIONS: get_topic_conversations_analytics,
 }
 
 
@@ -139,3 +152,26 @@ async def get_analytics(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error processing analytics request: {str(e)}",
         )
+
+
+@router.get(
+    "/analytics/conversation-topics/{source_id}",
+    response_model=ConversationTopicsResponse,
+)
+async def get_conversation_topics(
+    source_id: str,
+    current_user: UserInfo = Depends(get_current_user_with_rbac),
+) -> ConversationTopicsResponse:
+    """Return extracted topics for a single conversation (voice lead or chat session).
+
+    source_id is the lead_call_tracker.id for voice or chat_session.id (as text) for chat.
+    Returns an empty topics list when no completed analysis exists.
+    """
+    reseller_ids, merchant_ids = get_accessible_resellers_and_merchants(current_user)
+    return ConversationTopicsResponse(
+        topics=await get_topics_for_source(
+            source_id,
+            reseller_ids,
+            merchant_ids,
+        )
+    )
