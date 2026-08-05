@@ -6,18 +6,14 @@ import json
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
+from app.database.vector import vector_literal
+
 KNOWLEDGE_BASE_TABLE = "knowledge_base"
 KB_DOCUMENT_TABLE = "kb_document"
 KB_CHUNK_TABLE = "kb_chunk"
 
 
-def _vector_literal(embedding: List[float]) -> str:
-    """Serialize an embedding for a ``$N::halfvec(768)`` cast parameter.
-
-    Embeddings are passed as pgvector text literals so no asyncpg type codec
-    registration is needed on the pool.
-    """
-    return "[" + ",".join(f"{v:.8f}" for v in embedding) + "]"
+_vector_literal = vector_literal
 
 
 # ---------------------------------------------------------------------------

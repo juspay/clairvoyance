@@ -730,6 +730,52 @@ async def KB_MERCHANT_MAX_CHUNKS() -> int:
     return await get_config("KB_MERCHANT_MAX_CHUNKS", 20000, int)
 
 
+# --- Persistent user memory ---
+async def BUDDY_MEMORY_ENABLED() -> bool:
+    """Global incident-response kill switch for all memory reads and writes."""
+    return await get_config("BUDDY_MEMORY_ENABLED", False, bool)
+
+
+async def BUDDY_MEMORY_BACKEND() -> str:
+    """Global storage backend for every opted-in template."""
+    return await get_config("BUDDY_MEMORY_BACKEND", "pgvector", str)
+
+
+async def BUDDY_MEMORY_IDENTITY_FIELD() -> str:
+    return await get_config("BUDDY_MEMORY_IDENTITY_FIELD", "customer_id", str)
+
+
+async def BUDDY_MEMORY_PHONE_FIELD() -> str:
+    return await get_config("BUDDY_MEMORY_PHONE_FIELD", "customer_mobile_number", str)
+
+
+async def BUDDY_MEMORY_PHONE_DEFAULT_REGION() -> str:
+    """ISO-3166 region for local phone input; empty means E.164-only."""
+    return await get_config("BUDDY_MEMORY_PHONE_DEFAULT_REGION", "", str)
+
+
+async def BUDDY_MEMORY_ALLOW_PHONE_FALLBACK() -> bool:
+    return await get_config("BUDDY_MEMORY_ALLOW_PHONE_FALLBACK", True, bool)
+
+
+async def BUDDY_MEMORY_RETENTION_DAYS() -> int:
+    return await get_config("BUDDY_MEMORY_RETENTION_DAYS", 180, int)
+
+
+async def BUDDY_MEMORY_EMBEDDING_PROVIDER() -> str:
+    return await get_config("BUDDY_MEMORY_EMBEDDING_PROVIDER", "azure_openai", str)
+
+
+async def BUDDY_MEMORY_EMBEDDING_MODEL() -> str:
+    return await get_config(
+        "BUDDY_MEMORY_EMBEDDING_MODEL", "text-embedding-3-large", str
+    )
+
+
+async def MEMORY_MAX_FACTS_PER_USER() -> int:
+    return await get_config("MEMORY_MAX_FACTS_PER_USER", 100, int)
+
+
 # ----------------------------------------------------------------------------
 # DragonTTS caching proxy settings. When ENABLE_REDIS_DYNAMIC_CONFIG is true,
 # the proxy URL and health-probe timeout can be tuned live via Redis
