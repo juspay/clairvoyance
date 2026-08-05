@@ -1,0 +1,1 @@
+"""Breeze Buddy scraping endpoints."""

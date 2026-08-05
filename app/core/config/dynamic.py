@@ -393,6 +393,11 @@ async def GEMINI_TTS_MODEL() -> str:
     return await get_config("GEMINI_TTS_MODEL", "gemini-3.1-flash-tts-preview", str)
 
 
+async def GEMINI_SCRAPER_MODEL() -> str:
+    """Returns the Gemini model used for website scraping."""
+    return await get_config("GEMINI_SCRAPER_MODEL", "gemini-2.5-flash-lite", str)
+
+
 async def BB_VOICE_PROVIDER_DEFAULTS(provider: str) -> dict:
     """Returns merged provider defaults: Redis overrides > hardcoded defaults.
 
