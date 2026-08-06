@@ -16,7 +16,7 @@ from app.api.routers.breeze_buddy.numbers.rbac import (
     number_in_rbac_scope,
     rbac_number_scopes,
 )
-from app.database.accessor.breeze_buddy.analytics import (
+from app.database.accessor.breeze_buddy.analytics.analytics import (
     get_analytics_count_from_db,
     get_attempts_to_connect_from_db,
     get_call_detail_records,

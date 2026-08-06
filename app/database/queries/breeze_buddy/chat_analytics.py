@@ -14,7 +14,10 @@ and ``is_uuid`` from the voice module so the two channels filter consistently.
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
-from app.database.queries.breeze_buddy.analytics import convert_ist_to_utc, is_uuid
+from app.database.queries.breeze_buddy.analytics.analytics import (
+    convert_ist_to_utc,
+    is_uuid,
+)
 
 CHAT_SESSION_TABLE = "chat_session"
 CHAT_MESSAGE_TABLE = "chat_message"

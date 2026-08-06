@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional
 
 from app.core.logger import logger
 from app.database.queries import run_parameterized_query
-from app.database.queries.breeze_buddy.analytics import (
+from app.database.queries.breeze_buddy.analytics.analytics import (
     get_analytics_call_details_grouped_count_query,
     get_analytics_call_details_grouped_query,
     get_analytics_call_details_query,
