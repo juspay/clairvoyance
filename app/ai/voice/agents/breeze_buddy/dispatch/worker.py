@@ -474,7 +474,7 @@ class Worker:
                     return
 
             try:
-                call = call_provider.make_call(
+                call = await call_provider.make_call_async(
                     customer_mobile,
                     number.number,
                     reseller_id=locked.reseller_id,

@@ -35,9 +35,11 @@ Security invariants (enforced here, never trusted from client):
   - No admin / reseller role is ever assigned by these handlers
 """
 
+import asyncio
 import re
 import secrets
 import string
+from typing import Any, Dict
 
 import asyncpg
 from fastapi import HTTPException, status
@@ -51,7 +53,7 @@ from app.core.config.static import (
     SELF_SIGNUP_RESELLER_ID,
 )
 from app.core.logger import logger
-from app.core.security.password import verify_password
+from app.core.security.password import verify_password_async
 from app.core.security.scope import resolve_merchant_ids, resolve_reseller_ids
 from app.database.accessor.breeze_buddy import (
     merchants as merchant_accessors,
@@ -70,7 +72,7 @@ from app.schemas.breeze_buddy.signup import (
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def _verify_google_id_token(id_token: str) -> dict:
+def _verify_google_id_token_blocking(id_token: str) -> Dict[str, Any]:
     """
     Verify a Google id_token and return its claims.
 
@@ -112,6 +114,17 @@ def _verify_google_id_token(id_token: str) -> dict:
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired Google token. Please sign in again.",
         )
+
+
+async def _verify_google_id_token(id_token: str) -> Dict[str, Any]:
+    """
+    Verify a Google id_token off the event loop.
+
+    ``verify_oauth2_token`` fetches Google's public signing certificates over
+    HTTPS with a synchronous client on cache miss (100-800ms). On a single-
+    worker pod that freezes every in-flight call and webhook for that window.
+    """
+    return await asyncio.to_thread(_verify_google_id_token_blocking, id_token)
 
 
 def _derive_username_from_email(email: str) -> str:
@@ -270,7 +283,7 @@ async def google_login_handler(request: GoogleAuthRequest) -> TokenResponse:
     account. If found, returns a JWT. If not found, raises HTTP 404 with
     `detail="no_account"` so the frontend can show the signup form.
     """
-    claims = _verify_google_id_token(request.id_token)
+    claims = await _verify_google_id_token(request.id_token)
     google_email: str = claims.get("email", "")
 
     if not google_email:
@@ -310,7 +323,7 @@ async def google_signup_handler(request: GoogleMerchantSignupRequest) -> TokenRe
     - A merchant entity with reseller_id = SELF_SIGNUP_RESELLER_ID
     - A user account with role = merchant, email = Google email, no password
     """
-    claims = _verify_google_id_token(request.id_token)
+    claims = await _verify_google_id_token(request.id_token)
     google_email: str = claims.get("email", "")
 
     if not google_email:
@@ -411,7 +424,7 @@ async def list_accounts_handler(
     login handler upstream, so no re-auth needed here).
     """
     if id_token:
-        claims = _verify_google_id_token(id_token)
+        claims = await _verify_google_id_token(id_token)
         resolved_email = claims.get("email", "")
         if not resolved_email:
             raise HTTPException(
@@ -475,7 +488,7 @@ async def select_account_handler(
 
     if id_token:
         # Google SSO: verify token and confirm email ownership
-        claims = _verify_google_id_token(id_token)
+        claims = await _verify_google_id_token(id_token)
         google_email = claims.get("email", "")
         if not google_email or google_email != target.email:
             raise HTTPException(
@@ -484,7 +497,7 @@ async def select_account_handler(
             )
     elif password:
         # Password: verify against stored hash
-        if not verify_password(password, target.password_hash):
+        if not await verify_password_async(password, target.password_hash):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Incorrect password.",

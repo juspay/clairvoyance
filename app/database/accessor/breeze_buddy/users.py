@@ -10,7 +10,7 @@ import json
 from typing import List, Optional, Tuple
 
 from app.core.logger import logger
-from app.core.security.password import hash_password
+from app.core.security.password import hash_password_async
 from app.database import get_db_connection
 from app.database.accessor.breeze_buddy.access_grants import (
     ensure_reseller_on_conn,
@@ -139,7 +139,7 @@ async def create_merchant_and_user_atomically(
     DB transaction.  Either both succeed or both are rolled back — no
     orphaned merchant rows if the user insert fails.
     """
-    password_hash = hash_password(password)
+    password_hash = await hash_password_async(password)
 
     merchant_q, merchant_v = create_merchant_query(
         merchant_id=merchant_id,
@@ -205,7 +205,7 @@ async def create_user(
     Returns:
         UserResponse if successful, None otherwise
     """
-    password_hash = hash_password(password)
+    password_hash = await hash_password_async(password)
 
     if reseller_ids is None:
         reseller_ids = []
@@ -362,7 +362,7 @@ async def update_user(
     Returns:
         UserResponse if successful, None if user not found
     """
-    password_hash = hash_password(password) if password else None
+    password_hash = await hash_password_async(password) if password else None
 
     query, values = update_user_query(
         user_id=user_id,

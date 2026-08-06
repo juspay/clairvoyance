@@ -20,7 +20,7 @@ from app.core.config.static import (
     LOOM_APP_URL,
 )
 from app.core.logger import logger
-from app.core.security.password import verify_password
+from app.core.security.password import verify_password_async
 from app.core.security.scope import resolve_merchant_ids, resolve_reseller_ids
 from app.database.accessor.breeze_buddy import merchants as merchant_accessors
 from app.database.accessor.breeze_buddy.users import get_user_by_username
@@ -76,7 +76,7 @@ async def login_handler(
     if user:
         # Verify password first to prevent username enumeration
         # Both is_active and password checks return identical error messages
-        if not verify_password(login_request.password, user.password_hash):
+        if not await verify_password_async(login_request.password, user.password_hash):
             logger.warning(f"Failed login attempt for user: {login_request.username}")
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -187,7 +187,7 @@ async def generate_s2s_token_handler(request: S2STokenRequest) -> S2STokenRespon
         )
 
     # Verify password
-    if not verify_password(request.password, user.password_hash):
+    if not await verify_password_async(request.password, user.password_hash):
         logger.warning(
             f"S2S token request failed: invalid password - {request.username}"
         )
