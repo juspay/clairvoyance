@@ -248,15 +248,11 @@ async def hold_and_consult(
         )
 
         # ── 10. Initiate outbound call (blocking SDK → worker thread) ─────
-        loop = asyncio.get_event_loop()
-        call_result = await loop.run_in_executor(
-            None,
-            lambda: context.telephony_service.make_call(
-                customer_mobile_number=phone_number,
-                telephony_number=telephony_number,
-                reseller_id=outbound_template["reseller_id"],
-                template_name=outbound_template["name"],
-            ),
+        call_result = await context.telephony_service.make_call_async(
+            customer_mobile_number=phone_number,
+            telephony_number=telephony_number,
+            reseller_id=outbound_template["reseller_id"],
+            template_name=outbound_template["name"],
         )
         if not call_result or not call_result.get("sid"):
             subscribe_task.cancel()

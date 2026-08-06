@@ -101,7 +101,16 @@ class ExotelProvider(VoiceCallProvider):
             proxy_url = get_proxy_config()
             proxies = {"https": proxy_url, "http": proxy_url} if proxy_url else None
 
-            resp = requests.post(url, data=payload, proxies=proxies)
+            # Explicit timeout: this call now runs inside a worker thread (via
+            # make_call_async). uvicorn runs under asyncio.run, whose shutdown
+            # calls loop.shutdown_default_executor() -- which on Python 3.11
+            # has no timeout parameter (added in 3.12) and joins all pool
+            # threads unconditionally. A black-holed connection here would
+            # hang pod shutdown until Kubernetes SIGKILLs it. No existing
+            # timeout convention was found for outbound telephony HTTP calls
+            # elsewhere in this codebase (checked static.py and
+            # http_client.py), so this uses the 30s default per the fix plan.
+            resp = requests.post(url, data=payload, proxies=proxies, timeout=30)
             logger.info(f"Exotel API response status: {resp.status_code}")
             logger.info(f"Exotel API response headers: {dict(resp.headers)}")
             logger.info(f"Exotel API response content: {resp.text}")

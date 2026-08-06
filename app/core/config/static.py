@@ -268,6 +268,28 @@ POSTGRES_POOL_SIZE = int(os.getenv("POSTGRES_POOL_SIZE", "5"))
 POSTGRES_MAX_OVERFLOW = int(os.getenv("POSTGRES_MAX_OVERFLOW", "10"))
 POSTGRES_POOL_RECYCLE = int(os.getenv("POSTGRES_POOL_RECYCLE", "3600"))  # 1 hour
 
+# Worker threads available to asyncio.to_thread() for offloaded blocking work
+# (sync telephony SDKs: Plivo recording, provider.make_call, Twilio conference).
+# Python's default is min(32, cpu_count + 4) — only 5 threads on a 1-core pod,
+# which re-creates the queueing problem one layer down at ~30 calls/sec.
+# These threads are I/O-bound, so oversubscribing relative to cores is correct.
+# Threads are created lazily (~37 KB RSS each, +1.7 MB if all 48 go live).
+#
+# Shared pool caveat: this is the loop's DEFAULT executor, used by every
+# asyncio.to_thread()/run_in_executor(None, ...) caller. Note that
+# template/global_function.py wraps sync handlers in asyncio.wait_for --
+# which cancels the await but does NOT stop the worker thread, so a timed-out
+# global function keeps its slot until the handler actually returns. That
+# hazard predates this setting; a 48-slot pool tolerates it far better than
+# the 5-slot Python default it replaces.
+BLOCKING_THREAD_POOL_SIZE = int(os.getenv("BLOCKING_THREAD_POOL_SIZE", "48"))
+if BLOCKING_THREAD_POOL_SIZE < 1:
+    # ThreadPoolExecutor(max_workers=0) raises, which would kill startup with a
+    # stack trace pointing at main.py rather than at the misconfigured env var.
+    raise ValueError(
+        f"BLOCKING_THREAD_POOL_SIZE must be >= 1, got {BLOCKING_THREAD_POOL_SIZE}"
+    )
+
 # Daily voice bot subprocess (per-call child processes; see
 # breeze_buddy/services/daily). Kept next to the API pool settings above so
 # the two are tuned together.

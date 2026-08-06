@@ -2,6 +2,7 @@
 Plivo recording functionality
 """
 
+import asyncio
 from io import BytesIO
 from typing import Optional
 
@@ -18,15 +19,14 @@ from app.core.logger import logger
 from app.core.transport.http_client import get_proxy_config
 
 
-def start_call_recording(call_uuid: str) -> bool:
+def _start_call_recording_blocking(call_uuid: str) -> bool:
     """
-    Start recording an active call via Plivo API.
+    Blocking implementation — DO NOT call this from an ``async def``.
 
-    Args:
-        call_uuid: The Plivo call UUID
-
-    Returns:
-        bool: True if recording started successfully, False otherwise
+    ``plivo.RestClient`` is a synchronous HTTP client. It has no ``await``
+    and cannot have one; while it waits ~166ms for Plivo's API, a single-
+    worker uvicorn process is completely frozen — no other call, callback,
+    or background task can run. Reach it only via ``start_call_recording``.
     """
     try:
         client = plivo.RestClient(PLIVO_AUTH_ID, PLIVO_AUTH_TOKEN)
@@ -46,8 +46,25 @@ def start_call_recording(call_uuid: str) -> bool:
         return True
 
     except Exception as e:
-        logger.error(f"Error starting Plivo recording: {e}", exc_info=True)
+        # logger.opt(exception=...) rather than exc_info=: loguru has no
+        # exc_info kwarg — it would be consumed as a str.format argument,
+        # dropping the traceback and raising KeyError whenever the Plivo
+        # error text contains braces (a JSON body, for instance).
+        logger.opt(exception=e).error(f"Error starting Plivo recording: {e}")
         return False
+
+
+async def start_call_recording(call_uuid: str) -> bool:
+    """
+    Start recording an active call via Plivo API, off the event loop.
+
+    Args:
+        call_uuid: The Plivo call UUID
+
+    Returns:
+        bool: True if recording started successfully, False otherwise
+    """
+    return await asyncio.to_thread(_start_call_recording_blocking, call_uuid)
 
 
 async def download_call_recording(
@@ -92,5 +109,5 @@ async def download_call_recording(
         return audio_file
 
     except Exception as e:
-        logger.error(f"Error downloading Plivo recording: {e}", exc_info=True)
+        logger.opt(exception=e).error(f"Error downloading Plivo recording: {e}")
         return None

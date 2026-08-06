@@ -90,13 +90,19 @@ class TwilioConferenceService:
                 "error": error_message,
             }
 
-    def _get_conference_sid(
+    async def _get_conference_sid(
         self,
         conference_name: str,
         max_retries: int = 20,
         retry_delay: float = 2.0,
     ) -> Optional[str]:
         """Poll for conference SID until it exists or timeout.
+
+        Both halves of this loop used to freeze the event loop: ``time.sleep``
+        for the delay (up to max_retries x retry_delay = 40s by default) and
+        the synchronous Twilio SDK call for each poll. On a single-worker pod
+        that stopped every other call, callback, and dispatch task for the
+        whole window.
 
         Args:
             conference_name: Friendly name of the conference
@@ -112,8 +118,11 @@ class TwilioConferenceService:
 
         for attempt in range(max_retries):
             try:
-                conferences = self.client.conferences.list(
-                    friendly_name=conference_name, status="in-progress", limit=1
+                conferences = await asyncio.to_thread(
+                    self.client.conferences.list,
+                    friendly_name=conference_name,
+                    status="in-progress",
+                    limit=1,
                 )
 
                 if conferences:
@@ -126,13 +135,13 @@ class TwilioConferenceService:
                 logger.debug(
                     f"Conference not found yet (attempt {attempt + 1}/{max_retries})"
                 )
-                time.sleep(retry_delay)
+                await asyncio.sleep(retry_delay)
 
             except Exception as list_error:
                 logger.warning(
                     f"Error checking conference (attempt {attempt + 1}): {list_error}"
                 )
-                time.sleep(retry_delay)
+                await asyncio.sleep(retry_delay)
 
         logger.error(
             f"Conference '{conference_name}' not found after {max_retries} attempts"
@@ -262,9 +271,7 @@ class TwilioConferenceService:
                 }
 
             try:
-                loop = asyncio.get_event_loop()
-                is_present = await loop.run_in_executor(
-                    None,
+                is_present = await asyncio.to_thread(
                     self._is_participant_present,
                     conference_sid,
                     agent_call_sid,
@@ -327,7 +334,9 @@ class TwilioConferenceService:
         try:
             # Stage 1: Add agent to conference
             logger.info("[Stage 1/4] Calling agent and adding to conference...")
-            agent_result = self._add_agent_to_conference(
+            # Blocking Twilio SDK → worker thread.
+            agent_result = await asyncio.to_thread(
+                self._add_agent_to_conference,
                 conference_name,
                 agent_phone_number,
                 telephony_number,
@@ -346,7 +355,7 @@ class TwilioConferenceService:
 
             # Stage 2: Get conference SID
             logger.info("[Stage 2/4] Polling for conference creation...")
-            conference_sid = self._get_conference_sid(
+            conference_sid = await self._get_conference_sid(
                 conference_name,
                 max_retries=max_retries,
                 retry_delay=retry_delay,
@@ -393,9 +402,11 @@ class TwilioConferenceService:
 
             # Stage 4: Transfer customer to conference
             logger.info("[Stage 4/4] Transferring customer to conference...")
-            transfer_result = self._transfer_customer_to_conference(
-                customer_call_sid=customer_call_sid,
-                conference_name=conference_name,
+            # Blocking Twilio SDK → worker thread.
+            transfer_result = await asyncio.to_thread(
+                self._transfer_customer_to_conference,
+                customer_call_sid,
+                conference_name,
             )
 
             if not transfer_result["success"]:

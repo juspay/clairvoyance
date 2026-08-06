@@ -1,4 +1,5 @@
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
@@ -48,6 +49,7 @@ from app.core.config.static import (
     BB_RECONCILE_BACKLOG_INTERVAL_S,
     BB_RECONCILE_CHANNELS_INTERVAL_S,
     BB_RECONCILE_STUCK_PROCESSING_INTERVAL_S,
+    BLOCKING_THREAD_POOL_SIZE,
     BOT_MAX_DRAIN_SECONDS,
     CHAT_SESSION_END_TIMEOUT_LOOP_INTERVAL_SECONDS,
     CORS_ALLOWED_ORIGINS,
@@ -84,6 +86,18 @@ _background_scheduler = None
 async def lifespan(_app: FastAPI):
     """FastAPI lifespan manager that handles startup and shutdown tasks."""
     logger.info(f"Application startup... (POD_ROLE={POD_ROLE})")
+
+    # Size the executor backing asyncio.to_thread() before anything can use it.
+    # See BLOCKING_THREAD_POOL_SIZE in static.py for why the default is wrong.
+    asyncio.get_running_loop().set_default_executor(
+        ThreadPoolExecutor(
+            max_workers=BLOCKING_THREAD_POOL_SIZE,
+            thread_name_prefix="blocking",
+        )
+    )
+    logger.info(
+        f"Blocking-work thread pool sized to {BLOCKING_THREAD_POOL_SIZE} workers"
+    )
 
     # Initialize database and create tables if needed
     try:

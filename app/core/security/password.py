@@ -3,6 +3,7 @@ Password hashing and verification utilities using bcrypt.
 Provides secure password storage and validation for user authentication.
 """
 
+import asyncio
 from typing import Tuple
 
 import bcrypt
@@ -169,3 +170,22 @@ def check_password_hash(hashed_password: str, password: str) -> bool:
         True if password matches, False otherwise
     """
     return verify_password(password, hashed_password)
+
+
+# Async wrappers -- use these from any ``async def`` call site.
+#
+# ``bcrypt.hashpw``/``bcrypt.checkpw`` at BCRYPT_ROUNDS=12 take ~239-240ms on
+# typical hardware -- longer than the 166ms Plivo call that caused the
+# orphan-alert P1 (see app/core/concurrency.py). Each API pod runs a single
+# event loop with a single worker, so calling either synchronously from an
+# ``async def`` freezes every other in-flight call for that duration. bcrypt
+# releases the GIL, so offloading to a thread via ``asyncio.to_thread``
+# genuinely unblocks the loop even on a 1-core pod.
+async def hash_password_async(password: str) -> str:
+    """Hash a password using bcrypt, off the event loop. See module note above."""
+    return await asyncio.to_thread(hash_password, password)
+
+
+async def verify_password_async(plain_password: str, hashed_password: str) -> bool:
+    """Verify a password against a hash, off the event loop. See module note above."""
+    return await asyncio.to_thread(verify_password, plain_password, hashed_password)

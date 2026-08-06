@@ -12,6 +12,7 @@ that monkeypatches the worker's DB/provider collaborators so a full
 
 from __future__ import annotations
 
+import asyncio
 import fnmatch
 from datetime import datetime, time as dtime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
@@ -389,6 +390,11 @@ class CallRecorder:
             raise self._raise_exc
         self.calls.append({"to": to, "from": from_number, **kwargs})
         return {"sid": self._sid} if self._sid else {}
+
+    async def make_call_async(
+        self, to: str, from_number: str, **kwargs: Any
+    ) -> Dict[str, Any]:
+        return await asyncio.to_thread(self.make_call, to, from_number, **kwargs)
 
 
 class DispatchHarness:

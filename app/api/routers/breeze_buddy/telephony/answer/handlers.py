@@ -55,12 +55,15 @@ from app.ai.voice.agents.breeze_buddy.services.telephony.plivo.recording import 
     start_call_recording,
 )
 from app.ai.voice.agents.breeze_buddy.template.types import TTSConfig
+from app.core.concurrency import spawn_background_task
 from app.core.config.dynamic import (
     BB_NOISE_CANCELLATION_ENABLED,
     BB_NOISE_CANCELLATION_LEVEL,
 )
 from app.core.config.static import APP_BASE_URL
 from app.core.logger import logger
+from app.core.logger.context import set_log_context
+from app.core.logger.timing import timed_phase
 from app.database.accessor import (
     get_call_execution_config_by_template_id,
     get_lead_by_call_id,
@@ -126,7 +129,8 @@ async def resolve_call_templates(
             error_status: int              (HTTP status code)
     """
     # Check if lead exists (outbound call)
-    lead = await get_lead_by_call_id(call_sid)
+    with timed_phase("lookup_lead"):
+        lead = await get_lead_by_call_id(call_sid)
     if lead:
         # Outbound call - look up template using template_id from lead (preferred) or fall back to name
         logger.info(f"[Answer] Outbound call detected, lead: {lead.id}")
@@ -154,13 +158,15 @@ async def resolve_call_templates(
         return {"error": "Missing To number", "error_status": 400}
 
     # Look up telephony number by phone number
-    telephony_number = await get_telephony_number_by_number(to_number)
+    with timed_phase("lookup_telephony_number"):
+        telephony_number = await get_telephony_number_by_number(to_number)
     if not telephony_number:
         logger.error(f"[Answer] No telephony number found for: {to_number}")
         return {"error": "Number not configured", "error_status": 404}
 
     # Get all templates for this telephony number
-    templates = await get_all_templates_by_telephony_number_id(telephony_number.id)
+    with timed_phase("fetch_templates"):
+        templates = await get_all_templates_by_telephony_number_id(telephony_number.id)
 
     if not templates:
         logger.error(
@@ -571,12 +577,65 @@ async def _build_provider_response(
     return await make_response(ws_url)
 
 
+# Plivo requires a 200–500ms gap between answering the call and issuing the
+# record API call, so the call is fully connected internally first. We keep
+# the 500ms — it just no longer happens on the answer's critical path.
+_RECORDING_SETTLE_SECONDS = 0.5
+
+
+async def _start_recording_after_delay(call_id: str, tag: str) -> None:
+    """Wait out Plivo's settle window, then start recording in a worker thread."""
+    try:
+        await asyncio.sleep(_RECORDING_SETTLE_SECONDS)
+        with timed_phase("start_recording_background"):
+            recording_started = await start_call_recording(call_id)
+        if not recording_started:
+            logger.error(f"[{tag}] Recording failed to start for call: {call_id}")
+    except Exception as e:
+        # See recording.py for why this is opt(exception=...) and not exc_info=.
+        logger.opt(exception=e).error(
+            f"[{tag}] Failed to start Plivo recording for call: {call_id} - {e}"
+        )
+
+
+def _kickoff_plivo_recording(call_id: str, tag: str) -> None:
+    """
+    Start call recording without making the answer response wait for it.
+
+    Returns instantly. Recording is not needed to build the XML we owe Plivo,
+    so it has no business sitting on the critical path — every millisecond
+    spent here is a millisecond the provider waits before connecting audio,
+    and past its answer-URL timeout it retries, creating a duplicate lead.
+    """
+    spawn_background_task(
+        _start_recording_after_delay(call_id, tag),
+        name=f"plivo-recording:{call_id}",
+    )
+
+
 # ---------------------------------------------------------------------------
 # Main handler
 # ---------------------------------------------------------------------------
 
 
 async def handle_provider_answer(request: Request, provider: str) -> Response:
+    """
+    Unified answer handler for all telephony providers (Exotel, Plivo).
+
+    Thin timing wrapper: ``answer_total`` is the number the telephony provider
+    actually experiences, i.e. how long it waited for our XML/JSON. Plivo's
+    answer-URL timeout is what turns a slow answer into a retry, and a retry
+    into a duplicate lead — so this is the headline metric.
+
+    Returns:
+        - Exotel: JSON ``{"url": "wss://..."}``
+        - Plivo:  XML ``<Stream>``
+    """
+    with timed_phase("answer_total", provider=provider):
+        return await _handle_provider_answer(request, provider)
+
+
+async def _handle_provider_answer(request: Request, provider: str) -> Response:
     """
     Unified answer handler for all telephony providers (Exotel, Plivo).
 
@@ -593,34 +652,37 @@ async def handle_provider_answer(request: Request, provider: str) -> Response:
         params = dict(await request.form())
 
     call_id, from_number, to_number = _extract_call_params(params, provider)
+
+    # Stamp the call identity into the contextvar log scope. Everything
+    # downstream of this line — resolve_call_templates, the policy loop,
+    # create_inbound_lead, and every [PHASE] line — inherits call_id
+    # automatically, because contextvars propagate across await.
+    #
+    # Both call_id and call_sid are stamped with the same value: the voice
+    # agent (agent/__init__.py) stamps call_sid=, not call_id=, so without
+    # both keys a dashboard filter on one field misses everything logged
+    # under the other. call_id is kept because other things on this branch
+    # reference it.
+    set_log_context(
+        call_id=str(call_id or ""),
+        call_sid=str(call_id or ""),
+        provider=provider,
+        flow="answer",
+    )
+
     logger.info(f"[{tag}] call_id={call_id}, from={from_number}, to={to_number}")
 
     if not call_id:
         logger.error(f"[{tag}] Missing call ID")
         return _error_response(provider, "Missing call identifier", 400)
 
-    # Plivo-specific: start recording
+    # Plivo-specific: start recording — fire-and-forget, off the critical path.
     if provider == "plivo":
-        try:
-            # Wait for call to be fully established before starting recording
-            # Plivo requires 200-500ms delay between answer and record API
-            # to ensure the call is fully connected internally
-            logger.info(
-                f"[{tag}] Waiting 500ms before starting recording for call: {call_id}"
-            )
-            await asyncio.sleep(0.5)  # 500ms delay (middle of 200-500ms range)
-
-            recording_started = start_call_recording(call_id)
-            if not recording_started:
-                logger.error(f"[{tag}] Recording failed to start for call: {call_id}")
-        except Exception as e:
-            logger.error(
-                f"[{tag}] Failed to start Plivo recording for call: {call_id} - {e}",
-                exc_info=True,
-            )
+        _kickoff_plivo_recording(call_id, tag)
 
     # Resolve templates
-    result = await resolve_call_templates(call_id, from_number, to_number)
+    with timed_phase("resolve_call_templates"):
+        result = await resolve_call_templates(call_id, from_number, to_number)
 
     if "error" in result:
         logger.error(f"[{tag}] {result['error']}")
@@ -642,29 +704,33 @@ async def handle_provider_answer(request: Request, provider: str) -> Response:
             allowed_templates = []
             last_block_result = None
 
-            for t in templates:
-                # Config is owned by the template (1:1 by template_id) —
-                # no name-based matching.
-                config = (
-                    await get_call_execution_config_by_template_id(str(t.id))
-                    if t.id
-                    else None
-                )
-                if not config:
-                    # No config for this template — allow by default
-                    allowed_templates.append(t)
-                    continue
+            with timed_phase("policy_loop", templates=len(templates)):
+                for t in templates:
+                    with timed_phase("policy_template", template=t.name):
+                        # Config is owned by the template (1:1 by template_id) —
+                        # no name-based matching.
+                        config = (
+                            await get_call_execution_config_by_template_id(str(t.id))
+                            if t.id
+                            else None
+                        )
+                        if not config:
+                            # No config for this template — allow by default
+                            allowed_templates.append(t)
+                            continue
 
-                policy = await check_inbound_policy(
-                    config,
-                    from_number,
-                    skip_rate_limit=is_ivr_mode,
-                )
-                if policy.allowed:
-                    allowed_templates.append(t)
-                else:
-                    last_block_result = policy
-                    logger.info(f"[{tag}] Template {t.name} blocked: {policy.reason}")
+                        policy = await check_inbound_policy(
+                            config,
+                            from_number,
+                            skip_rate_limit=is_ivr_mode,
+                        )
+                        if policy.allowed:
+                            allowed_templates.append(t)
+                        else:
+                            last_block_result = policy
+                            logger.info(
+                                f"[{tag}] Template {t.name} blocked: {policy.reason}"
+                            )
 
             if not allowed_templates:
                 # All templates blocked
@@ -763,12 +829,14 @@ async def handle_provider_answer(request: Request, provider: str) -> Response:
         # Create inbound lead early so it exists even if caller hangs up before
         # the WebSocket connects. This prevents orphan-call webhooks for normal
         # immediate-hangup behaviour.
-        await _create_inbound_lead_in_answer_handler(
-            call_id=call_id,
-            from_number=from_number,
-            templates=result.get("templates", []),
-        )
+        with timed_phase("create_inbound_lead"):
+            await _create_inbound_lead_in_answer_handler(
+                call_id=call_id,
+                from_number=from_number,
+                templates=result.get("templates", []),
+            )
 
-    return await _build_provider_response(
-        provider, result, call_id, from_number, to_number
-    )
+    with timed_phase("build_response"):
+        return await _build_provider_response(
+            provider, result, call_id, from_number, to_number
+        )

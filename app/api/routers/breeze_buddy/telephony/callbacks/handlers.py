@@ -37,6 +37,7 @@ from app.ai.voice.agents.breeze_buddy.utils.warm_transfer import (
 )
 from app.core.config.static import TWILIO_TEMPLATE_WEBSOCKET_URL
 from app.core.logger import logger
+from app.core.logger.context import set_log_context
 from app.database.accessor import get_lead_by_call_id
 
 
@@ -213,6 +214,17 @@ async def handle_callback_details_post(
             call_sid = form.get("call_uuid")
             provider_recording_url = form.get("record_url")
 
+    # call_sid= is stamped alongside call_id= so this trace joins with the
+    # voice agent's log lines (agent/__init__.py stamps call_sid=, not
+    # call_id=). call_id is kept because other things on this branch
+    # reference it.
+    set_log_context(
+        call_id=str(call_sid or ""),
+        call_sid=str(call_sid or ""),
+        provider=provider_lower,
+        flow="recording",
+    )
+
     if provider_recording_url and call_sid:
         # Ensure we have string values (form can return UploadFile)
         call_sid_str = str(call_sid) if not isinstance(call_sid, str) else call_sid
@@ -268,6 +280,22 @@ async def handle_callback_status(request: Request, provider: str) -> Response:
     elif provider.lower() == "plivo":
         call_sid = form.get("CallUUID")
         call_status = form.get("CallStatus")
+
+    # Post-connect half of the trace: the hangup/terminal webhook. Direction is
+    # included because inbound orphan webhooks and outbound duplicate-call
+    # webhooks look identical without it.
+    #
+    # call_sid= is stamped alongside call_id= so this trace joins with the
+    # voice agent's log lines (agent/__init__.py stamps call_sid=, not
+    # call_id=). call_id is kept because other things on this branch
+    # reference it.
+    set_log_context(
+        call_id=str(call_sid or ""),
+        call_sid=str(call_sid or ""),
+        provider=provider.lower(),
+        flow="status",
+        direction=str(form.get("Direction") or ""),
+    )
 
     # Terminal call statuses across all providers:
     # - completed, busy, failed, no-answer: universal (Twilio, Plivo, Exotel)
