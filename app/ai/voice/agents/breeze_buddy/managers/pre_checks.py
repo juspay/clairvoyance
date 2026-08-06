@@ -16,6 +16,10 @@ import aiohttp
 from app.ai.voice.agents.breeze_buddy.handlers.transport.http_requester import (
     HttpRequestExecutor,
 )
+from app.ai.voice.agents.breeze_buddy.services.credential_auth import (
+    resolve_credential_auth,
+    resolve_credential_scope,
+)
 from app.ai.voice.agents.breeze_buddy.template.types import (
     HttpAuthConfig,
     HttpAuthType,
@@ -28,6 +32,7 @@ from app.database.accessor.breeze_buddy.credentials import (
     get_credential_by_id,
 )
 from app.schemas import (
+    Credential,
     LeadCallTracker,
     PreCheckConfig,
     PreCheckDefaultAction,
@@ -186,12 +191,14 @@ def _convert_auth_dict_to_config(
 
     Expected dict structure:
     {
-        "type": "bearer" | "basic" | "api_key",
+        "type": "bearer" | "basic" | "api_key" | "custom",
+        "credential_id": "...",  # server-side credential reference
         "token": "...",           # for bearer
         "username": "...",        # for basic
         "password": "...",        # for basic
         "api_key_name": "...",    # for api_key
-        "api_key_value": "..."    # for api_key
+        "api_key_value": "...",   # for api_key
+        "header_bindings": {"X-Client-Id": "client_id"}  # for custom
     }
     """
     if not auth_dict:
@@ -208,6 +215,7 @@ def _convert_auth_dict_to_config(
             "bearer": HttpAuthType.BEARER,
             "basic": HttpAuthType.BASIC,
             "api_key": HttpAuthType.API_KEY,
+            "custom": HttpAuthType.CUSTOM,
         }
 
         auth_type = type_mapping.get(auth_type_str)
@@ -217,11 +225,13 @@ def _convert_auth_dict_to_config(
 
         return HttpAuthConfig(
             type=auth_type,
+            credential_id=auth_dict.get("credential_id"),
             token=auth_dict.get("token"),
             username=auth_dict.get("username"),
             password=auth_dict.get("password"),
             api_key_name=auth_dict.get("api_key_name"),
             api_key_value=auth_dict.get("api_key_value"),
+            header_bindings=auth_dict.get("header_bindings") or {},
         )
     except Exception as e:
         logger.warning(f"Failed to convert auth dict to HttpAuthConfig: {e}")
@@ -272,6 +282,7 @@ async def run_pre_checks(
 
     results: List[SinglePreCheckResult] = []
     executor = HttpRequestExecutor(session)
+    credential_cache: Dict[str, Credential] = {}
 
     for pre_check in pre_checks:
         if not pre_check.enabled:
@@ -309,8 +320,15 @@ async def run_pre_checks(
             # This is inside try block to handle validation errors gracefully
             http_cfg = pre_check.http_request
 
-            # Convert auth dict to HttpAuthConfig (if present)
-            converted_auth = _convert_auth_dict_to_config(http_cfg.auth)
+            # Convert raw pre-check JSON, then resolve any credential reference.
+            auth_config = _convert_auth_dict_to_config(http_cfg.auth)
+            reseller_id, merchant_id = resolve_credential_scope(template, lead)
+            resolved_auth = await resolve_credential_auth(
+                auth_config,
+                reseller_id=reseller_id,
+                merchant_id=merchant_id,
+                credential_cache=credential_cache,
+            )
 
             # Convert query_params to Dict[str, str]
             converted_query_params = _convert_query_params_to_str_dict(
@@ -322,7 +340,7 @@ async def run_pre_checks(
                 method=HttpMethod(http_cfg.method.upper()),  # Normalize to uppercase
                 headers=http_cfg.headers or {},
                 body=http_cfg.body,
-                auth=converted_auth,
+                auth=resolved_auth,
                 query_params=converted_query_params,
                 timeout=http_cfg.timeout,
                 max_retries=http_cfg.max_retries,

@@ -24,6 +24,7 @@ from .breeze_buddy.call_execution_config import (
 from .breeze_buddy.credentials import (
     create_credential,
     delete_credential,
+    get_active_credential_by_id_for_scope,
     get_all_credentials,
     get_credential_by_id,
     get_credentials_as_template_vars,
@@ -126,6 +127,7 @@ __all__ = [
     "get_credential_by_id",
     "get_credentials_by_merchant",
     "get_all_credentials",
+    "get_active_credential_by_id_for_scope",
     "get_credentials_as_template_vars",
     "update_credential",
     "delete_credential",

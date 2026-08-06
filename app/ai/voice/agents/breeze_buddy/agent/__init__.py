@@ -1418,6 +1418,8 @@ class Agent:
                     mcp_global_functions = await get_mcp_global_functions(
                         mcp_config=mcp_config,
                         template_vars=self.template_vars,
+                        reseller_id=self.template.reseller_id,
+                        merchant_id=self.template.merchant_id,
                         # Thread the bot so a gated MCP tool can reach the
                         # ApprovalManager and block in-process (Pattern C).
                         bot_instance=self,

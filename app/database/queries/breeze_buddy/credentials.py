@@ -11,6 +11,7 @@ CREDENTIALS_TABLE = "credentials"
 def insert_credential_query(
     id: str,
     reseller_id: Optional[str],
+    merchant_id: Optional[str],
     name: str,
     credential_type: str,
     value: str,
@@ -20,14 +21,15 @@ def insert_credential_query(
     """Generate query to insert a credential record."""
     text = f"""
         INSERT INTO "{CREDENTIALS_TABLE}"
-        ("id", "reseller_id", "name", "credential_type", "value",
+        ("id", "reseller_id", "merchant_id", "name", "credential_type", "value",
          "is_encrypted", "description", "is_active", "created_at", "updated_at")
-        VALUES ($1, $2, $3, $4, $5, $6, $7, TRUE, $8, $9)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, TRUE, $9, $10)
         RETURNING *;
     """
     values = [
         id,
         reseller_id,
+        merchant_id,
         name,
         credential_type,
         value,
@@ -45,26 +47,68 @@ def get_credential_by_id_query(credential_id: str) -> Tuple[str, List[Any]]:
     return text, [credential_id]
 
 
+def get_active_credential_by_id_for_scope_query(
+    credential_id: str,
+    reseller_id: str,
+    merchant_id: Optional[str],
+) -> Tuple[str, List[Any]]:
+    """Get an active credential available to the specified reseller and merchant."""
+    text = f"""
+        SELECT * FROM "{CREDENTIALS_TABLE}"
+        WHERE "id" = $1
+          AND "is_active" = TRUE
+          AND (
+              ("reseller_id" IS NULL AND "merchant_id" IS NULL)
+              OR ("reseller_id" = $2 AND "merchant_id" IS NULL)
+              OR ("reseller_id" = $2 AND "merchant_id" = $3)
+          );
+    """
+    return text, [credential_id, reseller_id, merchant_id]
+
+
 def get_credentials_by_merchant_query(
     reseller_id: Optional[str],
+    merchant_id: Optional[str] = None,
 ) -> Tuple[str, List[Any]]:
     """
     Generate query to get credentials for a merchant.
-    If reseller is provided, returns reseller-specific + global credentials.
+    If reseller is provided, returns reseller-shared + global credentials.
+    If merchant is also provided, returns that merchant's credentials as well.
     If reseller is None, returns only global credentials.
     """
+    if reseller_id and merchant_id:
+        text = f"""
+            SELECT * FROM "{CREDENTIALS_TABLE}"
+            WHERE "is_active" = TRUE
+              AND (
+                  ("reseller_id" IS NULL AND "merchant_id" IS NULL)
+                  OR ("reseller_id" = $1 AND "merchant_id" IS NULL)
+                  OR ("reseller_id" = $1 AND "merchant_id" = $2)
+              )
+            ORDER BY
+                CASE WHEN "reseller_id" IS NULL THEN 0
+                     WHEN "merchant_id" IS NULL THEN 1
+                     ELSE 2 END,
+                "name" ASC;
+        """
+        return text, [reseller_id, merchant_id]
     if reseller_id:
         text = f"""
             SELECT * FROM "{CREDENTIALS_TABLE}"
-            WHERE ("reseller_id" = $1 OR "reseller_id" IS NULL)
-            AND "is_active" = TRUE
+            WHERE "is_active" = TRUE
+              AND (
+                  ("reseller_id" IS NULL AND "merchant_id" IS NULL)
+                  OR ("reseller_id" = $1 AND "merchant_id" IS NULL)
+              )
             ORDER BY "reseller_id" NULLS FIRST, "name" ASC;
         """
         return text, [reseller_id]
     else:
         text = f"""
             SELECT * FROM "{CREDENTIALS_TABLE}"
-            WHERE "reseller_id" IS NULL AND "is_active" = TRUE
+            WHERE "reseller_id" IS NULL
+              AND "merchant_id" IS NULL
+              AND "is_active" = TRUE
             ORDER BY "name" ASC;
         """
         return text, []

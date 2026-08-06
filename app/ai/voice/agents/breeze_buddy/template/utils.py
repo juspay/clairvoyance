@@ -1,6 +1,7 @@
 """Helpers shared between template runtime paths."""
 
-from typing import Any, Dict, Optional
+import json
+from typing import Any, Dict, Iterable, Mapping, Optional
 
 from app.ai.voice.agents.breeze_buddy.template.context import TemplateContext
 from app.ai.voice.agents.breeze_buddy.template.types import (
@@ -10,6 +11,41 @@ from app.ai.voice.agents.breeze_buddy.template.types import (
 )
 from app.core.logger import logger
 from app.services.slack.alert import slack_alert
+
+
+def log_legacy_credential_placeholder_usage(
+    template: TemplateModel,
+    credential_vars: Mapping[str, Any],
+    overrides: Iterable[Optional[Mapping[str, Any]]],
+) -> None:
+    """Log template references to credentials loaded through the legacy path."""
+    credential_keys = set(credential_vars)
+    for override in overrides:
+        if override:
+            credential_keys.difference_update(override)
+    if not credential_keys:
+        return
+
+    template_content = json.dumps(template.flow or {}, default=str)
+    if template.configurations:
+        # This string is searched locally and never logged. Reveal SecretStr
+        # values here so legacy MCP auth placeholders can be detected.
+        template_content += template.configurations.model_dump_json(
+            context={"reveal_secrets": True}
+        )
+
+    for credential_key in sorted(credential_keys):
+        if f"{{{credential_key}}}" in template_content:
+            logger.error(
+                "[Deprecated] Legacy credential placeholder used "
+                "template_id={} template_name={} reseller_id={} merchant_id={} "
+                "credential_key={}. Use auth.credential_id for HTTP or MCP auth.",
+                template.id,
+                template.name,
+                template.reseller_id,
+                template.merchant_id,
+                credential_key,
+            )
 
 
 def render_messages_with_vars(messages: list, variables: Dict[str, str]) -> list:

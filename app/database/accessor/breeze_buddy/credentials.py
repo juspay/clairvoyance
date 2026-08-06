@@ -15,6 +15,7 @@ from app.database.decoder.breeze_buddy.credentials import (
 from app.database.queries import run_parameterized_query
 from app.database.queries.breeze_buddy.credentials import (
     delete_credential_query,
+    get_active_credential_by_id_for_scope_query,
     get_all_credentials_query,
     get_credential_by_id_query,
     get_credentials_by_merchant_query,
@@ -91,13 +92,17 @@ def _validate_credential_value(
 
 async def create_credential(
     reseller_id: Optional[str],
+    merchant_id: Optional[str],
     name: str,
     credential_type: CredentialType,
     value: Dict[str, Any],
     description: Optional[str] = None,
 ) -> Optional[Credential]:
     """Create a new credential with optional KMS encryption."""
-    logger.info(f"Creating credential '{name}' for merchant: {reseller_id or 'GLOBAL'}")
+    logger.info(
+        f"Creating credential '{name}' for reseller={reseller_id or 'GLOBAL'} "
+        f"merchant={merchant_id or 'SHARED'}"
+    )
 
     try:
         # Validate value structure matches credential_type
@@ -108,6 +113,7 @@ async def create_credential(
         query_text, values = insert_credential_query(
             id=str(uuid4()),
             reseller_id=reseller_id,
+            merchant_id=merchant_id,
             name=name,
             credential_type=credential_type.value,
             value=stored_value,
@@ -145,20 +151,44 @@ async def get_credential_by_id(
         return None
 
 
+async def get_active_credential_by_id_for_scope(
+    credential_id: str,
+    reseller_id: str,
+    merchant_id: Optional[str],
+) -> Optional[Credential]:
+    """Fetch an active credential for server-side request authentication."""
+    try:
+        query_text, values = get_active_credential_by_id_for_scope_query(
+            credential_id,
+            reseller_id,
+            merchant_id,
+        )
+        result = await run_parameterized_query(query_text, values)
+        return decode_single_credential(result, mask=False)
+    except Exception as e:
+        logger.error(f"Error getting scoped credential by ID: {e}")
+        return None
+
+
 async def get_credentials_by_merchant(
     reseller_id: Optional[str],
+    merchant_id: Optional[str] = None,
     mask: bool = True,
 ) -> List[Credential]:
     """
-    Get credentials for a merchant (includes global credentials).
-    Results ordered: global first, then merchant-specific.
+    Get credentials for a reseller and optional merchant scope.
     """
     try:
-        query_text, values = get_credentials_by_merchant_query(reseller_id)
+        query_text, values = get_credentials_by_merchant_query(
+            reseller_id,
+            merchant_id,
+        )
         result = await run_parameterized_query(query_text, values)
         return decode_credential_list(result, mask=mask)
     except Exception as e:
-        logger.error(f"Error getting credentials for merchant {reseller_id}: {e}")
+        logger.error(
+            f"Error getting credentials for reseller={reseller_id} merchant={merchant_id}: {e}"
+        )
         return []
 
 
@@ -176,17 +206,14 @@ async def get_all_credentials(mask: bool = True) -> List[Credential]:
 async def get_credentials_as_template_vars(
     reseller_id: str,
 ) -> Dict[str, Any]:
-    """
-    Get credentials as a flat dict for template_vars resolution.
-    Merges global + merchant-specific credentials (merchant overrides global).
-    """
+    """Load legacy credential placeholders for a reseller during migration."""
     try:
         query_text, values = get_credentials_by_merchant_query(reseller_id)
         result = await run_parameterized_query(query_text, values)
         return decode_credentials_as_dict(result)
     except Exception as e:
         logger.error(
-            f"Error getting credentials as template vars for merchant {reseller_id}: {e}"
+            f"Error getting legacy template credentials for reseller {reseller_id}: {e}"
         )
         return {}
 

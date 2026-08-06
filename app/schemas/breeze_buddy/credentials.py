@@ -4,7 +4,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class CredentialType(str, Enum):
@@ -23,14 +23,22 @@ class CreateCredentialRequest(BaseModel):
         default=None,
         description="Reseller ID. NULL for global credentials available to all resellers.",
     )
-    name: str = Field(
-        description="Unique name used as the placeholder key (e.g., 'shopify_api_key')"
+    merchant_id: Optional[str] = Field(
+        default=None,
+        description="Merchant ID. NULL makes a reseller credential shared by its merchants.",
     )
+    name: str = Field(description="Unique credential name within its scope.")
     credential_type: CredentialType
     value: Dict[str, Any] = Field(
         description="Credential value. For api_key: {'key': '...'}, bearer_token: {'token': '...'}, basic_auth: {'username': '...', 'password': '...'}, custom: any key-value pairs"
     )
     description: Optional[str] = None
+
+    @model_validator(mode="after")
+    def validate_scope(self) -> "CreateCredentialRequest":
+        if self.merchant_id is not None and self.reseller_id is None:
+            raise ValueError("merchant_id requires reseller_id")
+        return self
 
 
 class UpdateCredentialRequest(BaseModel):
@@ -51,6 +59,7 @@ class Credential(BaseModel):
 
     id: str
     reseller_id: Optional[str] = None
+    merchant_id: Optional[str] = None
     name: str
     credential_type: CredentialType
     value: Optional[Dict[str, Any]] = Field(

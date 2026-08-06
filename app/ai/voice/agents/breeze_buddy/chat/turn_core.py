@@ -37,6 +37,9 @@ from app.ai.voice.agents.breeze_buddy.chat.sse import SSEEvent
 from app.ai.voice.agents.breeze_buddy.llm import get_llm_service
 from app.ai.voice.agents.breeze_buddy.template.cache import get_template_by_id_cached
 from app.ai.voice.agents.breeze_buddy.template.types import TemplateModel
+from app.ai.voice.agents.breeze_buddy.template.utils import (
+    log_legacy_credential_placeholder_usage,
+)
 from app.core.config.dynamic import CHAT_HISTORY_REPLAY_LIMIT
 from app.core.logger import logger
 from app.database.accessor.breeze_buddy.chat_session import (
@@ -73,19 +76,24 @@ async def build_render_template_vars(
     bridge resolve ``{placeholder}`` values identically.
     """
     merged: Dict[str, Any] = {}
+    credentials: Dict[str, Any] = {}
     try:
-        creds = await get_credentials_as_template_vars(template.reseller_id)
-        if creds:
-            merged.update(creds)
+        credentials = await get_credentials_as_template_vars(template.reseller_id)
+        if credentials:
+            merged.update(credentials)
     except Exception as exc:
         logger.warning(
-            f"chat: failed to load credentials for reseller "
-            f"{template.reseller_id}: {exc}"
+            f"chat: failed to load credentials for reseller {template.reseller_id}: {exc}"
         )
     if template.secrets:
         merged.update(template.secrets)
     if persisted:
         merged.update(persisted)
+    log_legacy_credential_placeholder_usage(
+        template,
+        credentials,
+        (template.secrets, persisted),
+    )
     return merged
 
 

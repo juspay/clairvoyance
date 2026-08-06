@@ -21,6 +21,10 @@ from app.ai.voice.agents.breeze_buddy.handlers.transport.utils.computed_fields i
 from app.ai.voice.agents.breeze_buddy.handlers.transport.utils.field_resolver import (
     FieldResolver,
 )
+from app.ai.voice.agents.breeze_buddy.services.credential_auth import (
+    resolve_credential_auth,
+    resolve_credential_scope,
+)
 from app.ai.voice.agents.breeze_buddy.template.context import TemplateContext
 from app.ai.voice.agents.breeze_buddy.template.types import (
     FieldSource,
@@ -395,9 +399,19 @@ class ExternalHTTPHook(Hook):
                     )
 
         logger.debug(
-            f"Resolved fields for HTTP request: {resolved_fields} "
+            f"Resolved HTTP field names: {list(resolved_fields.keys())} "
             f"for function '{function_name}'"
         )
+
+        template = getattr(context.bot, "template", None)
+        reseller_id, merchant_id = resolve_credential_scope(template, context.lead)
+        resolved_auth = await resolve_credential_auth(
+            http_request.auth,
+            reseller_id=reseller_id,
+            merchant_id=merchant_id,
+            credential_cache=context.credential_cache,
+        )
+        http_request = http_request.model_copy(update={"auth": resolved_auth})
 
         # Create executor
         executor = HttpRequestExecutor(session=context.aiohttp_session)

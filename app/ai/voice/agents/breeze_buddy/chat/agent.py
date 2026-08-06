@@ -411,6 +411,8 @@ class ChatAgent:
                 mcp_config,
                 self.template_vars,
                 self.template.id,
+                reseller_id=self.template.reseller_id,
+                merchant_id=self.template.merchant_id,
                 mcp_pool=self.mcp_pool,
             )
             existing_names = {fn.name for fn in global_funcs}

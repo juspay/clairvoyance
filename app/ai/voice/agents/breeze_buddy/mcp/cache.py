@@ -6,10 +6,9 @@ keys per ``(template_id, server-identity-hash)`` so all sessions of the
 same template + same resolved URL share one discovery for the TTL window.
 
 What's cached: only the public tool metadata (name, description, input
-schema). Auth credentials are NOT in the key or in the value — they're
-rebuilt per turn from ``template_vars`` (loaded fresh from the credentials
-table). Credential rotation therefore takes effect on the next turn with
-no cache invalidation.
+schema). Auth credentials are NOT in the key or in the value — they are
+resolved by credential ID at connection time. Credential rotation therefore
+takes effect on the next turn with no cache invalidation.
 
 Best-effort: Redis errors fall through to live discovery so cache outages
 don't break MCP tool availability.
