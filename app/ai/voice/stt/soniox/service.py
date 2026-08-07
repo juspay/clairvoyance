@@ -1,19 +1,25 @@
 """Custom Soniox STT service with extended endpoint detection config.
 
-Extends pipecat's SonioxSTTService to support ``max_endpoint_delay_ms`` which
-controls the maximum delay between end of speech and the returned endpoint when
-using Soniox's native semantic endpoint detection.
+Extends pipecat's SonioxSTTService with:
 
-This is a thin override — once pipecat adds native support for
-``max_endpoint_delay_ms`` this module can be removed.
+- ``max_endpoint_delay_ms`` support: controls the maximum delay between end of
+  speech and the returned endpoint when using Soniox's native semantic
+  endpoint detection. Thin override — removable once pipecat adds native
+  support.
+- WEBRTC-DIAG probes around the websocket send: logs when speech-energy
+  audio is actually handed to Soniox and warns when the base class would drop
+  audio silently (websocket not OPEN). These caught the 24k-audio-labeled-16k
+  sample-rate bug that made Soniox hear slow-motion speech.
 """
 
 from __future__ import annotations
 
 import json
-from typing import Optional
+from typing import AsyncGenerator, Optional
 
+import numpy as np
 from loguru import logger
+from pipecat.frames.frames import Frame
 from pipecat.services.soniox.stt import (
     SonioxContextObject,
     SonioxSTTService,
@@ -32,6 +38,11 @@ class SonioxSTTServiceWithEndpointDelay(SonioxSTTService):
     Allowed values: 500–3000 ms. Default from Soniox: 2000 ms.
     """
 
+    # WEBRTC-DIAG send probe: int16 RMS above this counts as speech.
+    _DIAG_RMS_THRESHOLD = 400
+    # ~0.5s of sub-threshold audio = a quiet gap worth logging after.
+    _DIAG_QUIET_SECS = 0.5
+
     def __init__(
         self,
         *,
@@ -40,6 +51,43 @@ class SonioxSTTServiceWithEndpointDelay(SonioxSTTService):
     ):
         super().__init__(**kwargs)
         self._max_endpoint_delay_ms = max_endpoint_delay_ms
+        self._diag_quiet_secs = 0.0
+        self._diag_drop_logged = False
+
+    async def run_stt(self, audio: bytes) -> AsyncGenerator[Frame | None, None]:
+        """Wrap the base send with WEBRTC-DIAG logging (latency probes).
+
+        Logs (a) when speech energy is actually handed to the Soniox
+        websocket after a quiet gap, and (b) if audio would be silently
+        dropped because the websocket isn't OPEN — the base run_stt drops
+        without logging. Compare the SENT timestamp against the transport's
+        speech-onset log and the interim-transcription observer to locate
+        any delay.
+        """
+        ws_open = self._websocket is not None and self._websocket.state is State.OPEN
+        if not ws_open:
+            if not self._diag_drop_logged:
+                self._diag_drop_logged = True
+                logger.warning(
+                    "WEBRTC-DIAG soniox ws NOT OPEN — dropping audio silently"
+                )
+        else:
+            self._diag_drop_logged = False
+            if audio:
+                samples = np.frombuffer(audio, dtype=np.int16)
+                rms = float(np.sqrt(np.mean(np.square(samples, dtype=np.float64))))
+                frame_secs = len(audio) / 2 / float(self.sample_rate or 16000)
+                if rms >= self._DIAG_RMS_THRESHOLD:
+                    if self._diag_quiet_secs >= self._DIAG_QUIET_SECS:
+                        logger.info(
+                            "WEBRTC-DIAG soniox speech SENT to websocket "
+                            f"(rms={rms:.0f}, after {self._diag_quiet_secs:.1f}s quiet)"
+                        )
+                    self._diag_quiet_secs = 0.0
+                else:
+                    self._diag_quiet_secs += frame_secs
+        async for frame in super().run_stt(audio):
+            yield frame
 
     async def _connect_websocket(self):
         """Override to inject ``max_endpoint_delay_ms`` into the config."""

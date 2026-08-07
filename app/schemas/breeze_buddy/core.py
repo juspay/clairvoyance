@@ -47,6 +47,8 @@ class ExecutionMode(str, Enum):
     DAILY = "DAILY"  # Production Daily (web) calls
     DAILY_TEST = "DAILY_TEST"  # Test Daily (web) calls
     DAILY_STREAM = "DAILY_STREAM"  # Daily STT/TTS-only (no LLM, client-driven)
+    WEBRTC = "WEBRTC"  # Production SmallWebRTC (device/embedded) calls
+    WEBRTC_TEST = "WEBRTC_TEST"  # Test SmallWebRTC calls (loom Test dialog)
     HOLD_TRANSFER = "HOLD_TRANSFER"  # Outbound leg of a hold & consultative transfer
 
 

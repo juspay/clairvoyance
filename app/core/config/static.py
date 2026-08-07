@@ -288,6 +288,39 @@ BB_DAILY_BOT_MAX_LIFETIME_SECS = int(
     os.environ.get("BB_DAILY_BOT_MAX_LIFETIME_SECS", "4500")
 )
 
+# ── SmallWebRTC transport (device/embedded clients) ──────────────────────────
+# ICE servers handed to every SmallWebRTC peer connection, comma-separated.
+# Supported entry forms (parsed by parse_ice_servers in the smallwebrtc router):
+#   stun:host:port
+#   turn:USER:PASS@host:port[?transport=udp]   (also turns:) — creds split out
+#   turn:host:port                             (no credentials)
+# WHY env: this is a per-deployment networking fact, and the field-rollout value
+# will include TURN relay URLs WITH CREDENTIALS (turn:user:pass@host), which must
+# never be hardcoded in the repo. The shipped default is EMPTY (direct host-host,
+# fine for localhost/office Wi-Fi); add STUN and/or a coturn TURN URL when devices
+# ship to symmetric-NAT networks (4G SIMs, strict corp firewalls). Production:
+#   BB_WEBRTC_ICE_SERVERS=stun:<turn-host>:3478,turn:<user>:<pass>@<turn-host>:3478
+BB_WEBRTC_ICE_SERVERS = os.environ.get("BB_WEBRTC_ICE_SERVERS", "")
+# Hard cap on concurrently live SmallWebRTC bots in THIS process; the offer
+# endpoint returns 503 above it.
+# WHY env: webrtc bots run in-process (the aiortc peer connection cannot cross a
+# subprocess boundary), and too many in-process bots stall the event loop — the
+# exact "widget voice crackle" failure that forced Daily bots into subprocesses.
+# This is an ops load-shedding valve: it must be tunable during an incident
+# without a deploy.
+BB_MAX_CONCURRENT_WEBRTC_BOTS = int(
+    os.environ.get("BB_MAX_CONCURRENT_WEBRTC_BOTS", "20")
+)
+# OPTIONAL override for the host used in ESP32 SDP munging. When empty (default),
+# the handler derives the host from the incoming request's Host header — i.e.
+# whatever public address the device actually dialed — which is correct for
+# direct exposure. Set this only when a proxy/LB rewrites Host so the derived
+# value would be wrong.
+# WHY env (and not template/request data): it is the public address of THIS
+# deployment — staging and production differ for the same template, and a client
+# must not be able to point munging at an arbitrary host.
+BB_WEBRTC_ESP32_HOST = os.environ.get("BB_WEBRTC_ESP32_HOST", "")
+
 # KMS Configuration
 SKIP_KMS_DECRYPT = os.getenv("SKIP_KMS_DECRYPT", "false").lower() == "true"
 AWS_REGION = os.getenv("AWS_REGION", "us-east-1")

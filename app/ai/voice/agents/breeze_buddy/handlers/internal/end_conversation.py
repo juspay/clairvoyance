@@ -4,6 +4,10 @@ from typing import Any, Dict
 
 from pipecat.frames.frames import EndFrame
 
+from app.ai.voice.agents.breeze_buddy.agent.transport import (
+    TRANSPORT_TYPE_DAILY,
+    TRANSPORT_TYPE_WEBRTC,
+)
 from app.ai.voice.agents.breeze_buddy.callbacks import (
     service_callback,
 )
@@ -266,12 +270,18 @@ async def end_conversation(context: TemplateContext, args, transition_to=None):
 
         # Update database first so the span picks up the final outcome from the DB response
         # (fire-and-forget outcome updates from update_outcome handler may not have completed yet)
-        # For Daily mode: use lead.id (no telephony call_sid exists)
+        # For RTC modes (Daily / SmallWebRTC): use lead.id — neither has a
+        #   telephony call_sid, so completion keys on the lead primary id.
+        #   (webrtc's call_sid is only a "webrtc-<ts>" logging label that
+        #   matches no lead row; using it here left the lead stuck non-FINISHED.)
         # For telephony: use call_sid (how completion_function looks up the lead)
-        is_daily_mode = getattr(context.bot, "transport_type", None) == "daily"
+        is_rtc_mode = getattr(context.bot, "transport_type", None) in (
+            TRANSPORT_TYPE_DAILY,
+            TRANSPORT_TYPE_WEBRTC,
+        )
 
-        if is_daily_mode and context.lead:
-            # Daily mode: update by lead.id
+        if is_rtc_mode and context.lead:
+            # Daily / SmallWebRTC: update by lead.id
             logger.info(
                 f"Updating database with call completion details for lead {context.lead.id}"
             )
