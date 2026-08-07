@@ -471,7 +471,8 @@ async def OPENAI_TEMPERATURE() -> float:
 
 # --- Google Vertex AI Credentials ---
 async def GOOGLE_VERTEX_CREDENTIALS_JSON() -> str:
-    """Returns GOOGLE_VERTEX_CREDENTIALS_JSON from Redis"""
+    """Return fallback Vertex JSON credentials; ADC takes precedence."""
+
     return await get_config("GOOGLE_VERTEX_CREDENTIALS_JSON", "", str)
 
 

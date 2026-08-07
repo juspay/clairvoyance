@@ -275,9 +275,6 @@ async def get_tts_service(voice_config: TTSConfig):
         )
 
     elif provider == "gemini":
-        if not GOOGLE_CREDENTIALS_JSON:
-            raise ValueError("GOOGLE_CREDENTIALS_JSON is required for Gemini TTS")
-
         return await build_gemini_tts(
             GeminiConfig(
                 voice_id=voice_config.voice_id or "Kore",
@@ -290,9 +287,6 @@ async def get_tts_service(voice_config: TTSConfig):
         )
 
     elif provider == "google":
-        if not GOOGLE_CREDENTIALS_JSON:
-            raise ValueError("GOOGLE_CREDENTIALS_JSON is required for Google TTS")
-
         # Chirp 3 HD: the voice name (e.g. en-IN-Chirp3-HD-Despina) encodes both
         # the model and locale, so there is no model field. Language should match
         # the voice's locale prefix; default to EN_IN.

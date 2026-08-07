@@ -14,12 +14,10 @@ conversation ends with a ``user`` turn.  The original messages
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from typing import Any, Optional
 
 from anthropic import AsyncAnthropicVertex
-from google.oauth2 import service_account
 from pipecat.adapters.services.anthropic_adapter import AnthropicLLMInvocationParams
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.services.anthropic.llm import (
@@ -29,6 +27,7 @@ from pipecat.services.anthropic.llm import (
 
 from app.ai.voice.llm._pools import get_anthropic_vertex_client
 from app.core.logger import logger
+from app.services.gcp.credentials import get_google_credentials
 
 __all__ = ["ClaudeVertexConfig", "build_claude_vertex_llm"]
 
@@ -77,7 +76,7 @@ class ClaudeVertexConfig:
     """Configuration for Claude on Vertex AI.
 
     Uses Anthropic SDK with a Vertex AI endpoint.
-    Authentication is via Google service account credentials.
+    Authentication prefers Google ADC with legacy JSON as fallback.
     """
 
     credentials_json: str
@@ -125,14 +124,14 @@ def build_claude_vertex_llm(
             region=config.region,
         )
     else:
-        creds = service_account.Credentials.from_service_account_info(
-            json.loads(config.credentials_json),
-            scopes=["https://www.googleapis.com/auth/cloud-platform"],
+        auth = get_google_credentials(
+            credentials_json=config.credentials_json,
+            service_name="Claude Vertex LLM",
         )
         vertex_client = AsyncAnthropicVertex(
             region=config.region,
             project_id=config.project_id,
-            credentials=creds,
+            credentials=auth.credentials,
         )
 
     # Build thinking config if enabled

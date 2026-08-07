@@ -27,15 +27,17 @@ Vertex access token on every turn.
 
 from __future__ import annotations
 
-import hashlib
-import json
+import threading
 from typing import Optional
 
 import httpx
 from anthropic import AsyncAnthropicVertex
-from google.oauth2 import service_account
 
 from app.core.logger import logger
+from app.services.gcp.credentials import (
+    get_google_credentials,
+    google_credentials_input_fingerprint,
+)
 
 __all__ = [
     "close_all_pools",
@@ -72,13 +74,7 @@ def get_azure_httpx_client(endpoint: str, api_version: str) -> httpx.AsyncClient
 
 
 _ANTHROPIC_VERTEX_POOLS: dict[tuple[str, str, str], AsyncAnthropicVertex] = {}
-
-
-def _credentials_fingerprint(credentials_json: str) -> str:
-    """Stable short hash so two distinct SAs for the same project/region get
-    distinct cache entries. Hash, not the raw JSON, so the cache key never
-    holds private-key material."""
-    return hashlib.sha256(credentials_json.encode("utf-8")).hexdigest()[:16]
+_ANTHROPIC_VERTEX_POOL_LOCK = threading.Lock()
 
 
 def get_anthropic_vertex_client(
@@ -93,22 +89,36 @@ def get_anthropic_vertex_client(
     connection pool and the Vertex OAuth token cache that the Anthropic SDK
     maintains on each ``AsyncAnthropicVertex`` instance.
     """
-    key = (project_id, region, _credentials_fingerprint(credentials_json))
+    key = (
+        project_id,
+        region,
+        google_credentials_input_fingerprint(credentials_json),
+    )
     client = _ANTHROPIC_VERTEX_POOLS.get(key)
-    if client is None:
-        creds = service_account.Credentials.from_service_account_info(
-            json.loads(credentials_json),
-            scopes=["https://www.googleapis.com/auth/cloud-platform"],
+    if client is not None:
+        return client
+
+    # This function is called through asyncio.to_thread by server-side callers.
+    # Lock the miss path so concurrent first turns do not resolve ADC or create
+    # duplicate clients for the same configuration.
+    with _ANTHROPIC_VERTEX_POOL_LOCK:
+        client = _ANTHROPIC_VERTEX_POOLS.get(key)
+        if client is not None:
+            return client
+
+        auth = get_google_credentials(
+            credentials_json=credentials_json,
+            service_name="Claude Vertex pooled client",
         )
         client = AsyncAnthropicVertex(
             region=region,
             project_id=project_id,
-            credentials=creds,
+            credentials=auth.credentials,
         )
         _ANTHROPIC_VERTEX_POOLS[key] = client
         logger.info(
             f"AsyncAnthropicVertex pool created for project={project_id} "
-            f"region={region} creds_fp={key[2]}"
+            f"region={region} config_fp={key[2]}"
         )
     return client
 

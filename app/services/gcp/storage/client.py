@@ -1,50 +1,35 @@
 """
-GCS Client - Google Cloud Storage client initialization
-Provides reusable GCS client creation with service account authentication
+GCS Client - Google Cloud Storage client initialization.
 """
 
-import json
 from typing import Optional
 
 from google.cloud import storage
-from google.oauth2 import service_account
 
 from app.core.config.static import GCS_CREDENTIALS_JSON
 from app.core.logger import logger
+from app.services.gcp.credentials import get_google_credentials
 
 
 def get_gcs_client() -> Optional[storage.Client]:
     """
-    Initializes and returns a Google Cloud Storage client using service account credentials.
+    Return a GCS client using ADC with legacy JSON credentials as fallback.
 
     Returns:
         Optional[storage.Client]: The GCS client instance or None if initialization fails
     """
     try:
-        # Check if GCS credentials are available
-        if not GCS_CREDENTIALS_JSON:
-            logger.error("GCS_CREDENTIALS_JSON environment variable is not set")
-            return None
-
-        # Parse the JSON credentials
-        try:
-            credentials_dict = json.loads(GCS_CREDENTIALS_JSON)
-        except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse GCS credentials JSON: {e}")
-            return None
-
-        # Create credentials object from service account info
-        credentials = service_account.Credentials.from_service_account_info(
-            credentials_dict
+        auth = get_google_credentials(
+            credentials_json=GCS_CREDENTIALS_JSON,
+            service_name="GCS",
         )
 
         # Create and return the GCS client
-        client = storage.Client(
-            credentials=credentials, project=credentials_dict.get("project_id")
-        )
+        client = storage.Client(credentials=auth.credentials, project=auth.project_id)
 
         logger.info(
-            f"GCS client initialized for project: {credentials_dict.get('project_id')}"
+            f"GCS client initialized using {auth.source}"
+            f"{f' for project: {auth.project_id}' if auth.project_id else ''}"
         )
         return client
 

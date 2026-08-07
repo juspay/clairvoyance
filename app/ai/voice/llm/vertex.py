@@ -12,6 +12,7 @@ from pipecat.services.google.vertex.llm import (
 )
 
 from app.core.logger import logger
+from app.services.gcp.credentials import get_google_auth_input
 
 __all__ = ["VertexConfig", "build_vertex_llm"]
 
@@ -61,11 +62,19 @@ def build_vertex_llm(config: VertexConfig) -> GoogleVertexLLMService:
     if thinking is not None:
         settings_kwargs["thinking"] = thinking
 
-    return GoogleVertexLLMService(
-        credentials=config.credentials_json,
-        project_id=config.project_id,
-        location=config.location,
-        model=config.model,
-        settings=GoogleVertexLLMSettings(**settings_kwargs),
-        function_call_timeout_secs=config.function_call_timeout_secs,
+    auth = get_google_auth_input(
+        credentials_json=config.credentials_json,
+        service_name="Google Vertex LLM",
     )
+
+    def _build(credentials_arg: str | None) -> GoogleVertexLLMService:
+        return GoogleVertexLLMService(
+            credentials=credentials_arg,
+            project_id=config.project_id,
+            location=config.location,
+            model=config.model,
+            settings=GoogleVertexLLMSettings(**settings_kwargs),
+            function_call_timeout_secs=config.function_call_timeout_secs,
+        )
+
+    return _build(auth.value)
