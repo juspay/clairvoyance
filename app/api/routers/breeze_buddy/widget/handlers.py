@@ -46,6 +46,7 @@ from app.ai.voice.agents.breeze_buddy.template.ui_catalog import (
 )
 from app.ai.voice.stt import TranscriptionError, transcribe_audio
 from app.api.routers.breeze_buddy.chat.handlers import (
+    _sanitize_messages_for_widget,
     approve_chat_tool_handler,
     cancel_chat_turn_handler,
     create_chat_session_handler,
@@ -110,6 +111,7 @@ from app.schemas.breeze_buddy.chat import (
     WidgetChannel,
     WidgetIntentRequest,
     WidgetSessionStateResponse,
+    WidgetSurfaceWire,
     WidgetTranscribeResponse,
     WidgetVoiceConnectResponse,
     WidgetVoiceEndResponse,
@@ -214,6 +216,28 @@ def _extract_widget_config(template: object) -> _WidgetSurface:
     )
 
 
+def _surface_wire(
+    surface: _WidgetSurface,
+    template: object,
+    *,
+    catalog_active: str,
+    ui_flavors: List[str],
+) -> WidgetSurfaceWire:
+    """The one-block form of the session's presentation surface.
+
+    Built from exactly the same values the flat response fields carry, so
+    the two can never disagree while both are on the wire.
+    """
+    return WidgetSurfaceWire(
+        quick_replies=surface.quick_replies,
+        greeting_tiles=surface.greeting_tiles,
+        enable_text_input=surface.enable_text_input,
+        voice_enabled=_template_voice_enabled(template),
+        catalog_active=catalog_active,
+        ui_flavors=ui_flavors,
+    )
+
+
 def _template_voice_enabled(template: object) -> bool:
     """Whether the widget should offer a voice mode for this template.
 
@@ -310,12 +334,18 @@ async def create_widget_session_handler(
         greeting=create_resp.greeting,
         widget_token=widget_token,
         ttl_seconds=DEFAULT_WIDGET_TOKEN_TTL_MINUTES * 60,
+        # Flat fields: retained for embeds already in the wild (cached
+        # bundles we don't control the refresh of). New embeds read
+        # ``widget`` — same values, one block.
         quick_replies=surface.quick_replies,
         greeting_tiles=surface.greeting_tiles,
         enable_text_input=surface.enable_text_input,
         voice_enabled=_template_voice_enabled(template),
         catalog_active=catalog_active,
         ui_flavors=ui_flavors,
+        widget=_surface_wire(
+            surface, template, catalog_active=catalog_active, ui_flavors=ui_flavors
+        ),
     )
 
 
@@ -1181,13 +1211,24 @@ async def get_widget_session_state_handler(
         status=session.status,
         current_channel=session.current_channel,
         current_node=session.current_node,
-        messages=messages,
+        # Same sanitize the /chat resume + transcript routes apply. This
+        # route had been serving raw rows, so every LLM-context-only block
+        # the agent persists — chips/answer nudges, rendered-UI summaries,
+        # Gemini thought signatures — shipped verbatim to whoever holds the
+        # widget token, on the one resume endpoint the embed actually calls.
+        # The reference embed reads `content` and ignores `content_blocks`,
+        # so it renders nothing either way; a third-party embed that reads
+        # blocks was drawing the engine's own prompt text as a user bubble.
+        messages=_sanitize_messages_for_widget(messages),
         quick_replies=surface.quick_replies,
         greeting_tiles=surface.greeting_tiles,
         enable_text_input=surface.enable_text_input,
         voice_enabled=_template_voice_enabled(template),
         catalog_active=catalog_active,
         ui_flavors=ui_flavors,
+        widget=_surface_wire(
+            surface, template, catalog_active=catalog_active, ui_flavors=ui_flavors
+        ),
         template_vars=template_vars,
         metadata=session.metadata or {},
         client_context=client_context,

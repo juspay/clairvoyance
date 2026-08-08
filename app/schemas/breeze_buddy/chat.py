@@ -469,73 +469,6 @@ class CreateDemoSessionRequest(BaseModel):
     template_vars: Dict[str, Any] = Field(default_factory=dict)
 
 
-class CreateDemoSessionResponse(BaseModel):
-    """Body of ``POST /chat/demo/session``.
-
-    Mirrors ``CreateChatSessionResponse`` plus the demo-only fields the
-    client needs to drive subsequent ``/message`` SSE calls.
-    """
-
-    session_id: str
-    status: ChatSessionStatus
-    current_node: Optional[str] = None
-    greeting: Optional[GreetingMessage] = None
-    demo_token: str = Field(..., description="Bearer token for follow-up calls.")
-    message_cap: int = Field(..., description="Max assistant turns before 429.")
-    catalog_active: str = Field(
-        "v1",
-        description=(
-            "Negotiated UI catalog version — 'v2' when the demo template "
-            "enables data-bound components (demo pages always run a "
-            "v2-capable widget build, so the template is the only variable)."
-        ),
-    )
-    ui_flavors: List[str] = Field(
-        default_factory=list,
-        description="Lazy UI flavor groups the demo template enables.",
-    )
-
-
-# ---------------------------------------------------------------------------
-# Unified widget-mode schemas (CHAT_MODE.md §14)
-#
-# One conversation, one widget_token, two channels (CHAT ↔ VOICE). The
-# session_id always refers to the canonical chat_session row that owns
-# the conversation; voice is a transient attachment that drains back
-# into the same row at end_conversation.
-# ---------------------------------------------------------------------------
-
-
-class CreateWidgetSessionRequest(BaseModel):
-    """Body of ``POST /widget/session``."""
-
-    public_widget_key: str = Field(
-        ...,
-        min_length=10,
-        description="Opaque per-merchant widget key (server-generated, see widget_config).",
-    )
-    template_vars: Dict[str, Any] = Field(
-        default_factory=dict,
-        description="Render-time variables (customer_name, etc.). "
-        "Same shape as the RBAC chat path's template_vars.",
-    )
-    metadata: Dict[str, Any] = Field(
-        default_factory=dict,
-        description="Opaque caller context, persisted on chat_session.metadata.",
-    )
-    catalog_version: Optional[str] = Field(
-        None,
-        description=(
-            "UI catalog version the embed supports (RFC-001 §3.4). 'v2' "
-            "enables data-bound components (show-op hydration + typed "
-            "intents) for this session; absent/other = v1 (server prunes "
-            "data-bound components — prompt and wire stay v1-compatible). "
-            "Persisted on chat_session.metadata under the server-owned "
-            "'widget' block."
-        ),
-    )
-
-
 class QuickReplyWire(BaseModel):
     """One quick-reply option returned in the widget session-create response.
 
@@ -581,6 +514,130 @@ class GreetingTileWire(BaseModel):
     label: str = Field(..., description="Tile caption shown to the user.")
     prompt: str = Field(..., description="Message sent to the agent on tap.")
     image_url: str = Field(..., description="Tile image URL (merchant CDN).")
+
+
+class WidgetSurfaceWire(BaseModel):
+    """Everything the embed needs to paint its chrome for one session.
+
+    One block instead of six sibling fields hand-copied across the create,
+    resume, and demo responses — a seventh surface field is added HERE and
+    every surface gets it, instead of being forgotten on one of them (which
+    is exactly what happened to the demo response).
+
+    ADDITIVE, not a replacement: the same values keep riding at the top
+    level of each response for now. Embeds in the wild are cached bundles
+    we do not control the refresh of, so the flat fields can only be
+    removed once telemetry says no client reads them. New embeds should
+    read this block.
+    """
+
+    quick_replies: List[QuickReplyWire] = Field(
+        default_factory=list,
+        description="Static quick-reply pills; empty when none configured.",
+    )
+    greeting_tiles: List[GreetingTileWire] = Field(
+        default_factory=list,
+        description="Visual quick-tap tiles for the greeting screen.",
+    )
+    enable_text_input: bool = Field(
+        True, description="False hides the composer (pills/tiles only)."
+    )
+    voice_enabled: bool = Field(
+        False,
+        description=(
+            "Template permits a voice attachment. Advisory — the server "
+            "stays the enforcement point at /voice/connect."
+        ),
+    )
+    catalog_active: str = Field(
+        "v1",
+        description=(
+            "Negotiated UI catalog version for this session: client-requested "
+            "∩ template-capable. 'v2' ⇔ show-op hydration + typed intents."
+        ),
+    )
+    ui_flavors: List[str] = Field(
+        default_factory=list,
+        description=(
+            "Lazy UI flavor groups the template enables — preload these "
+            "code-split chunks. Empty when catalog_active is 'v1'."
+        ),
+    )
+
+
+class CreateDemoSessionResponse(BaseModel):
+    """Body of ``POST /chat/demo/session``.
+
+    Mirrors ``CreateChatSessionResponse`` plus the demo-only fields the
+    client needs to drive subsequent ``/message`` SSE calls.
+    """
+
+    session_id: str
+    status: ChatSessionStatus
+    current_node: Optional[str] = None
+    greeting: Optional[GreetingMessage] = None
+    demo_token: str = Field(..., description="Bearer token for follow-up calls.")
+    message_cap: int = Field(..., description="Max assistant turns before 429.")
+    catalog_active: str = Field(
+        "v1",
+        description=(
+            "Negotiated UI catalog version — 'v2' when the demo template "
+            "enables data-bound components (demo pages always run a "
+            "v2-capable widget build, so the template is the only variable)."
+        ),
+    )
+    ui_flavors: List[str] = Field(
+        default_factory=list,
+        description="Lazy UI flavor groups the demo template enables.",
+    )
+    widget: WidgetSurfaceWire = Field(
+        default_factory=WidgetSurfaceWire,
+        description=(
+            "The session's presentation surface in one block. Preferred over "
+            "the flat sibling fields above, which are retained for embeds "
+            "already in the wild and will be removed once nothing reads them."
+        ),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Unified widget-mode schemas (CHAT_MODE.md §14)
+#
+# One conversation, one widget_token, two channels (CHAT ↔ VOICE). The
+# session_id always refers to the canonical chat_session row that owns
+# the conversation; voice is a transient attachment that drains back
+# into the same row at end_conversation.
+# ---------------------------------------------------------------------------
+
+
+class CreateWidgetSessionRequest(BaseModel):
+    """Body of ``POST /widget/session``."""
+
+    public_widget_key: str = Field(
+        ...,
+        min_length=10,
+        description="Opaque per-merchant widget key (server-generated, see widget_config).",
+    )
+    template_vars: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Render-time variables (customer_name, etc.). "
+        "Same shape as the RBAC chat path's template_vars.",
+    )
+    metadata: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Opaque caller context, persisted on chat_session.metadata.",
+    )
+    catalog_version: Optional[str] = Field(
+        None,
+        description=(
+            "UI catalog version the embed supports (RFC-001 §3.4). 'v2' "
+            "enables data-bound components (show-op hydration + typed "
+            "intents) for this session; absent/other = v1 (server prunes "
+            "data-bound components — prompt and wire stay v1-compatible). "
+            "Persisted on chat_session.metadata under the server-owned "
+            "'widget' block."
+        ),
+    )
 
 
 class CreateWidgetSessionResponse(BaseModel):
@@ -652,6 +709,14 @@ class CreateWidgetSessionResponse(BaseModel):
             "— the embed preloads these code-split chunks so the first "
             "hydrated component renders without a chunk-fetch stall. Empty "
             "when catalog_active is 'v1'."
+        ),
+    )
+    widget: WidgetSurfaceWire = Field(
+        default_factory=WidgetSurfaceWire,
+        description=(
+            "The session's presentation surface in one block. Preferred over "
+            "the flat sibling fields above, which are retained for embeds "
+            "already in the wild and will be removed once nothing reads them."
         ),
     )
 
@@ -780,6 +845,14 @@ class WidgetSessionStateResponse(BaseModel):
         description=(
             "Lazy UI flavor groups the template enables. Mirrors the create "
             "response so the resume path preloads the same chunks."
+        ),
+    )
+    widget: WidgetSurfaceWire = Field(
+        default_factory=WidgetSurfaceWire,
+        description=(
+            "The session's presentation surface in one block. Preferred over "
+            "the flat sibling fields above, which are retained for embeds "
+            "already in the wild and will be removed once nothing reads them."
         ),
     )
     template_vars: Dict[str, Any] = Field(default_factory=dict)

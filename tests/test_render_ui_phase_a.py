@@ -1311,3 +1311,238 @@ async def test_single_label_rider_still_flushes(monkeypatch):
     assert len(ops) == 1 and ops[0]["type"] == "QuickReplies"
     labels = [i.get("label") for i in (ops[0].get("props") or {}).get("items", [])]
     assert labels == ["Add BB Bottle to cart"]
+
+
+# ---------------------------------------------------------------------------
+# Narration is not an answer (2026-08-09)
+#
+# A template may have the model announce work before it calls a tool
+# ("Let me find those for you"). That prose streams ahead of the search,
+# which is the point — but it is NOT a reply, and the turn-completion
+# test used to accept any prose as one. Live consequence: a search that
+# matched nothing ended the turn on the acknowledgement plus four quick
+# replies, with no answer and no products (metrics: prose_chars=41,
+# ui_no_ui=2, render_ui_calls=3).
+# ---------------------------------------------------------------------------
+
+
+def _search_call(query="x", call_id="s-1"):
+    from pipecat.frames.frames import FunctionCallFromLLM
+
+    return (
+        "tool_call",
+        FunctionCallFromLLM(
+            function_name="search_catalog",
+            tool_call_id=call_id,
+            arguments={"catalog": {"query": query}},
+            context=None,
+        ),
+    )
+
+
+async def test_narration_then_silence_gets_one_recovery_cycle(monkeypatch):
+    """Prose + a DATA tool call is narration. If the model then stops
+    without replying, the turn must not end on the announcement — it gets
+    exactly one more unforced cycle to answer."""
+    agent, prep, calls, inserted = _chips_agent(
+        monkeypatch,
+        "forced_final",
+        responses=[
+            # cycle 1: announces, then searches → narration, not a reply
+            [("text", "Let me check our store for those colors."), _search_call()],
+            # cycle 2: model goes quiet without answering
+            [],
+            # cycle 3: nudged — now it actually answers
+            [("text", "We don't carry those, but we do have light grey.")],
+            # cycle 4: forced chips
+            [_rui_call(_chips_args(), call_id="c-1")],
+        ],
+    )
+    events = await _run_chips_turn(agent, prep)
+
+    visible = [m for m in inserted if m.get("role") == "assistant" and m.get("content")]
+    assert visible, "the turn must persist an answer, not end on the announcement"
+    # Announcement and answer are separate rows, in the order they
+    # happened — the announcement rides the row carrying the tool_use it
+    # preceded. Writing either text twice is what taught the model to stop
+    # announcing on turn 2 (measured 3/3 sessions, 2026-08-09).
+    assert len(visible) == 2
+    assert visible[0]["content"] == "Let me check our store for those colors."
+    assert "light grey" in visible[1]["content"]
+    assert "Let me check our store" not in visible[1]["content"]
+
+
+async def test_narration_alone_never_arms_the_chips_cycle(monkeypatch):
+    """Chips follow a REPLY. A turn whose only prose was the announcement
+    must not end as acknowledgement + suggestions."""
+    agent, prep, calls, inserted = _chips_agent(
+        monkeypatch,
+        "forced_final",
+        responses=[
+            [("text", "Let me check our store for those colors."), _search_call()],
+            [],  # silent
+            [],  # silent again after the one nudge — give up, don't loop
+        ],
+    )
+    events = await _run_chips_turn(agent, prep)
+
+    chips = [e for e in events if e.event == "ui_op"]
+    assert not chips, "no reply was produced, so nothing to suggest follow-ups to"
+    # Bounded: the nudge fires once, never in a loop.
+    assert len(calls) == 3
+
+
+async def test_prose_beside_render_ui_is_still_a_reply(monkeypatch):
+    """render_ui presents, it never fetches — so prose in the same cycle
+    is the answer, and must not be mistaken for narration (which would
+    cost every normal turn an extra LLM call)."""
+    agent, prep, calls, inserted = _chips_agent(
+        monkeypatch,
+        "forced_final",
+        responses=[
+            [
+                ("text", "The BB Bottle is Rs 1,189."),
+                _rui_call({"quick_replies": ["Add to cart"]}, call_id="r-1"),
+            ],
+            [],
+        ],
+    )
+    await _run_chips_turn(agent, prep)
+    assert len(calls) == 2, "a normal reply turn must not gain a recovery cycle"
+
+
+async def test_a_tool_less_template_never_triggers_recovery(monkeypatch):
+    """Scaling check: a client with no tools at all (plain conversational
+    UI). Every prose cycle is an answer by construction, so the recovery
+    path is inert — it can never add a cycle for them."""
+    agent, prep, calls, inserted = _chips_agent(
+        monkeypatch,
+        "forced_final",
+        responses=[
+            [("text", "We're open 9 to 6, Monday through Saturday.")],
+            [_rui_call(_chips_args(), call_id="c-2")],
+        ],
+    )
+    await _run_chips_turn(agent, prep)
+    assert len(calls) == 2
+    visible = [m for m in inserted if m.get("role") == "assistant" and m.get("content")]
+    assert visible and "9 to 6" in visible[-1]["content"]
+
+
+# ---------------------------------------------------------------------------
+# Narration is not a reply — the four places that conflated the two.
+#
+# The turn loop asks "has the model replied yet?" in four spots. Each one
+# had been reading a proxy for that fact rather than the fact itself, and
+# each proxy is true for an OPENER, which is prose but not a reply. Every
+# test below fails on the pre-fix code.
+# ---------------------------------------------------------------------------
+
+
+async def test_chips_only_call_after_narration_does_not_kill_the_turn(monkeypatch):
+    """The dead-turn regression.
+
+    A chips-only render_ui is the ONLY way a model can author chips in
+    forced_final (QuickReplies leaves the component enum), and it can land
+    mid-turn — after the opener, before the answer. Suppression armed on
+    'any prose streamed' fired on the opener and then silenced the real
+    answer, which had not been written yet: no reply row, no
+    assistant_message, and the harvested chips discarded with it.
+
+    Suppression must key on a REPLY having been delivered.
+    """
+    agent, prep, calls, inserted = _chips_agent(
+        monkeypatch,
+        "forced_final",
+        responses=[
+            # cycle 1: opener + a DATA tool → narration
+            [("text", "Let me check our store for those."), _search_call()],
+            # cycle 2: chips-only rider, no component — the arming shape
+            [_rui_call({"quick_replies": ["Best Sellers", "Leggings"]}, call_id="r-1")],
+            # cycle 3: the actual answer
+            [("text", "We have it in light grey.")],
+        ],
+    )
+    events = await _run_chips_turn(agent, prep)
+
+    visible = [m for m in inserted if m.get("role") == "assistant" and m.get("content")]
+    assert any(
+        "light grey" in m["content"] for m in visible
+    ), "the answer must survive a mid-turn chips-only call"
+    kinds = [e.event for e in events]
+    assert "assistant_message" in kinds, "the turn must announce its reply"
+    assert "ui_op" in kinds, "harvested chips must still paint, not vanish"
+
+
+async def test_recovery_cycle_can_actually_speak(monkeypatch):
+    """The nudge buys one cycle; suppression would make that cycle mute by
+    construction (it drops text before streaming, accumulation AND
+    persistence). Un-arming is what makes the recovery cycle worth its
+    LLM call."""
+    agent, prep, calls, inserted = _chips_agent(
+        monkeypatch,
+        "forced_final",
+        responses=[
+            [("text", "One moment."), _search_call()],
+            # chips-only call arms suppression under the old rule
+            [_rui_call({"quick_replies": ["Best Sellers"]}, call_id="r-1")],
+            [],  # silent → nudge fires here
+            [("text", "Found three in stock.")],  # the recovered answer
+        ],
+    )
+    await _run_chips_turn(agent, prep)
+
+    visible = [m for m in inserted if m.get("role") == "assistant" and m.get("content")]
+    assert any("Found three" in m["content"] for m in visible)
+
+
+async def test_whitespace_only_cycle_is_not_an_answer(monkeypatch):
+    """``turn_text`` holds every non-empty delta, so a lone newline is a
+    non-empty list carrying no prose. Counting it as a reply skipped the
+    recovery nudge and persisted an empty bubble."""
+    agent, prep, calls, inserted = _chips_agent(
+        monkeypatch,
+        "forced_final",
+        responses=[
+            [("text", "Let me look that up."), _search_call()],
+            [("text", "\n\n")],  # degenerate: no prose at all
+            [("text", "Here are three options.")],  # nudged into replying
+            [_rui_call(_chips_args(), call_id="c-1")],
+        ],
+    )
+    await _run_chips_turn(agent, prep)
+
+    rows = [m for m in inserted if m.get("role") == "assistant"]
+    assert not any(
+        (m.get("content") or "").strip() == "" and m.get("content") is not None
+        for m in rows
+    ), "no assistant row may carry blank content"
+    visible = [m for m in rows if m.get("content")]
+    assert any("three options" in m["content"] for m in visible)
+
+
+async def test_narration_row_is_announced_on_the_wire(monkeypatch):
+    """The narration row persists VISIBLE, so it is a bubble of its own on
+    resume. Without a matching assistant_message the live stream and the
+    resume disagree — one bubble live, two after a reload — and a client
+    that commits its bubble from assistant_message.content drops the
+    narration text entirely."""
+    agent, prep, calls, inserted = _chips_agent(
+        monkeypatch,
+        "model_choice",
+        responses=[
+            [("text", "Let me check our store."), _search_call()],
+            [("text", "We have three in light grey.")],
+        ],
+    )
+    events = await _run_chips_turn(agent, prep)
+
+    announced = [
+        e.data.get("content") for e in events if e.event == "assistant_message"
+    ]
+    visible = [m for m in inserted if m.get("role") == "assistant" and m.get("content")]
+    assert len(visible) == 2, "narration and answer are separate rows"
+    # Every visible row has an assistant_message carrying its text.
+    assert "Let me check our store." in announced
+    assert any("light grey" in (c or "") for c in announced)
+    assert len(announced) == len(visible)

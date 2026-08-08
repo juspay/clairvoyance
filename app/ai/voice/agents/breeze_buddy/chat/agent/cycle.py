@@ -27,6 +27,7 @@ from pipecat.processors.aggregators.llm_context import (
 from pipecat_flows import FlowsFunctionSchema
 
 from app.ai.voice.agents.breeze_buddy.chat.agent.runtime import (  # noqa: F401
+    _ANSWER_NUDGE,
     _CHIPS_NUDGE,
     _MAX_TOOL_CYCLES,
     _chip_labels,
@@ -94,6 +95,13 @@ if TYPE_CHECKING:
     from app.ai.voice.agents.breeze_buddy.chat.agent.core import ChatAgent
 
 
+# render_ui / revise_plan are the engine's own harness tools: they present
+# or re-plan, they never fetch. A cycle that calls only these is not doing
+# work the model is waiting on, so prose beside them is a reply, not an
+# announcement of work to come.
+_HARNESS_TOOLS = frozenset({RENDER_UI_TOOL_NAME, REVISE_PLAN_TOOL_NAME})
+
+
 class CycleLoopMixin:
     async def _cycle_loop(
         self: "ChatAgent",
@@ -117,6 +125,19 @@ class CycleLoopMixin:
         node_name = cast(str, node["name"])
 
         assistant_text_chunks: List[str] = []
+        # Prose splits into two kinds, and only one of them ends a turn.
+        # NARRATION is prose from a cycle that ALSO called tools ("Let me
+        # find those for you") — it streams ahead of the work and is not
+        # an answer to anything. An ANSWER is prose from a cycle that
+        # called nothing: the model had its results and spoke.
+        #
+        # Both club into the single user-facing row below (one bubble per
+        # turn — splitting them into two rows re-introduces the duplicate
+        # reply on resume fixed 2026-07-31). The distinction exists purely
+        # so the turn-completion test below reads intent instead of
+        # inspecting whether ANY text happens to exist.
+        answered = False
+        answer_retried = False
         # ui_ops accumulator (Sprint 1.7) — captures each SpecStream op the
         # LLM emits during this user turn. Persisted alongside the assistant
         # message so the widget resume path can repaint Tiles/Carousels
@@ -323,9 +344,43 @@ class CycleLoopMixin:
                             event="assistant_token", data={"delta": out.value}
                         )
 
-            assistant_text_chunks.extend(turn_text)
-            if turn_text:
+            # No DATA tool in this cycle means the model already had
+            # everything it needed when it spoke — this is the answer.
+            # render_ui / revise_plan don't count: they present or re-plan,
+            # they never fetch, and the normal shape of a reply is prose +
+            # a render_ui in one cycle.
+            cycle_answers = not any(
+                call.function_name not in _HARNESS_TOOLS for call in tool_calls
+            )
+            # Narration belongs to the gate row this cycle is about to
+            # write (below), IN FRONT of the tool_use it preceded — which
+            # is where it actually happened. Accumulating it here too
+            # persisted it TWICE, and the LLM sees both copies on replay:
+            # once correctly pre-tool, once fused to the answer. Turn 2
+            # then mimicked the fused shape and stopped announcing early
+            # (measured 2026-08-09: 3/3 sessions, turn 1 announced, turn 2
+            # did not). Each piece of prose is written exactly once.
+            #
+            # Both flags key off the STRIPPED prose, never raw ``turn_text``
+            # truthiness. ``turn_text`` holds every non-empty delta, so a
+            # lone "\n" or a cycle whose text was entirely <ui_stream>
+            # markers is a non-empty list carrying no prose at all — and
+            # three such shapes are live-observed here: an empty Vertex
+            # candidate (see the MALFORMED branch below), a <plan>-only
+            # cycle when the template has plan_enforcement off, and the
+            # marker-mimicry bug (see ``_ui_summary``). Counting one of
+            # those as "the model answered" skips the recovery nudge below
+            # and lets the turn end with an empty reply.
+            cycle_prose = strip_ui_stream_markers("".join(turn_text)).strip()
+            if cycle_prose:
                 self._turn_prose_streamed = True
+                if cycle_answers:
+                    assistant_text_chunks.extend(turn_text)
+                    answered = True
+                    # Mirrored onto the agent so the render_ui handler can
+                    # read the same fact — a chips-only call must know
+                    # whether a REPLY exists, not merely whether prose does.
+                    self._turn_answered = True
             if allowed and not tool_calls:
                 if self._in_chips_cycle:
                     # The forced chips cycle produced no call. Never retry
@@ -391,6 +446,46 @@ class CycleLoopMixin:
                         f"{cycle + 1}"
                     )
                     continue
+                if (
+                    not answered
+                    and not answer_retried
+                    and not self._internal_turn
+                    and self._turn_prose_streamed
+                ):
+                    # Narration without an answer: the model opened with
+                    # "Let me check…", did its work, and stopped without
+                    # replying (live 2026-08-09 — a search that matched
+                    # nothing; the opener sat in context and it behaved as
+                    # if it had already spoken). Ending here would leave
+                    # the shopper an acknowledgement and no reply. Give it
+                    # exactly one unforced cycle to answer — bounded like
+                    # the MALFORMED-call fallback, so a mute model costs
+                    # one extra cycle, never a loop.
+                    answer_retried = True
+                    # Un-arm prose suppression for the cycle we are about to
+                    # buy. Suppression drops text before it is streamed,
+                    # accumulated OR persisted, so a recovery cycle that ran
+                    # with it still set could not produce a reply by
+                    # construction — it would burn an LLM call and end the
+                    # turn exactly as mute as before.
+                    self._suppress_extra_prose = False
+                    logger.warning(
+                        f"ChatAgent {self.session_id}: turn produced "
+                        "narration but no answer; nudging once"
+                    )
+                    context.add_message(
+                        cast(
+                            LLMContextMessage,
+                            {"role": "user", "content": _ANSWER_NUDGE},
+                        )
+                    )
+                    await insert_chat_message(
+                        session_id=self.session_id,
+                        role=ChatMessageRole.USER,
+                        content=None,
+                        content_blocks=[internal_text_block(_ANSWER_NUDGE)],
+                    )
+                    continue
                 chips_prose = strip_ui_stream_markers(
                     "".join(assistant_text_chunks)
                 ).strip()
@@ -400,6 +495,17 @@ class CycleLoopMixin:
                     and not self._internal_turn
                     and not self._chips_attempted
                     and not self._quick_replies_rendered
+                    # `answered`, not `chips_prose` alone: chips follow a
+                    # REPLY. Keyed on "is there any text" they would fire on
+                    # a turn whose only prose was the opener, ending it with
+                    # an acknowledgement and four suggestions.
+                    and answered
+                    # …and `chips_prose` as well, because this branch
+                    # PERSISTS it as the turn's reply row and emits it as
+                    # assistant_message. `answered` already implies non-empty
+                    # stripped prose; keeping the original guard makes that
+                    # an invariant of this branch rather than a fact one has
+                    # to re-derive from the flag's definition upstream.
                     and chips_prose
                 ):
                     # Forced final chips cycle (template quick_replies=
@@ -454,8 +560,10 @@ class CycleLoopMixin:
                         # the old min_length=2 with no fallback).
                     # No rider — fall back to the forced chips cycle. The
                     # nudge rides an internal USER row (widget read paths
-                    # filter it; the LLM sees it live and on replay —
-                    # Vertex requires user/model alternation).
+                    # filter it — see _sanitize_messages_for_widget, applied
+                    # on both the /chat and /widget resume routes; the LLM
+                    # sees it live and on replay — Vertex requires
+                    # user/model alternation).
                     context.add_message(
                         cast(
                             LLMContextMessage,
@@ -477,7 +585,11 @@ class CycleLoopMixin:
             # block — the LLM keeps the referential memory ("the green
             # one") on its next turn, but every widget-facing read path
             # filters it out so it never shows up in the chat bubble.
-            visible_text = strip_ui_stream_markers("".join(turn_text))
+            # ``.strip()`` matches the turn-end row's twin: without it a
+            # cycle whose only text was whitespace persisted a blank
+            # VISIBLE block and a non-null content column — an empty bubble
+            # on resume for every turn the model led with a stray newline.
+            visible_text = strip_ui_stream_markers("".join(turn_text)).strip()
             ui_summary = self._ui_summary(turn_ui_ops)
 
             # In-memory LLM context still gets the augmented text — this
@@ -504,7 +616,20 @@ class CycleLoopMixin:
             # reads filter them.
             assistant_blocks = assistant_turn_to_blocks("", tool_calls)
             if visible_text:
-                assistant_blocks.insert(0, internal_text_block(visible_text))
+                # Narration (prose ahead of a DATA call) is the shopper's
+                # first bubble and is persisted ONLY here, so it renders on
+                # resume exactly where it streamed — above the component.
+                # Prose beside a harness-only call (render_ui) is part of
+                # the ANSWER, which the turn-end row owns; keep that copy
+                # internal or resume replays the reply twice (2026-07-31).
+                assistant_blocks.insert(
+                    0,
+                    (
+                        internal_text_block(visible_text)
+                        if (cycle_answers or self._internal_turn)
+                        else plain_text_blocks(visible_text)[0]
+                    ),
+                )
             if ui_summary and assistant_blocks:
                 # Insert the internal summary block right after the
                 # visible text block so concatenation order on read
@@ -522,10 +647,15 @@ class CycleLoopMixin:
                 gate_row = await insert_chat_message(
                     session_id=self.session_id,
                     role=ChatMessageRole.ASSISTANT,
-                    # content stays None: the visible copy of any prose
-                    # belongs to the turn's user-facing row (see the
-                    # internal-demotion comment above).
-                    content=None,
+                    # Narration is this row's own bubble, so the
+                    # denormalised column carries it. Answer prose still
+                    # belongs to the turn's user-facing row (None here) —
+                    # see the block-visibility choice above.
+                    content=(
+                        None
+                        if (cycle_answers or self._internal_turn)
+                        else (visible_text or None)
+                    ),
                     content_blocks=assistant_blocks,
                     # Tool-rendered ops are HELD off mid-turn gate rows (they
                     # used to scatter across whichever gate row came next):
@@ -535,6 +665,22 @@ class CycleLoopMixin:
                     ui_blocks=self._row_ui_blocks(turn_ui_ops, include_tool_ops=False),
                 )
                 gate_assistant_idx = gate_row.idx if gate_row else None
+                if visible_text and not (cycle_answers or self._internal_turn):
+                    # This gate row was written VISIBLE — it is the shopper's
+                    # narration bubble, a row of its own. Every other visible
+                    # assistant row on every surface is announced with an
+                    # assistant_message carrying its idx (the early-chips row
+                    # above, the turn-end row, the intent router's row); this
+                    # one was the sole exception, so the live stream and a
+                    # later resume disagreed: one bubble live, two after a
+                    # reload, and a client that commits its bubble from
+                    # assistant_message.content (the documented contract —
+                    # docs/CHAT_MODE.md "Full assistant turn") dropped the
+                    # narration text entirely at turn end.
+                    yield SSEEvent(
+                        event="assistant_message",
+                        data={"idx": gate_assistant_idx, "content": visible_text},
+                    )
 
             # Mirror LLMAssistantContextAggregator: append assistant message
             # carrying tool_calls, then a tool-result per call. Universal
