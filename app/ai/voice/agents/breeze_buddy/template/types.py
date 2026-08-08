@@ -14,6 +14,7 @@ from pydantic import (
     StringConstraints,
     ValidationInfo,
     field_serializer,
+    field_validator,
     model_validator,
 )
 
@@ -1735,6 +1736,147 @@ class AgentTransferConfig(BaseModel):
     )
 
 
+class PhraseEntry(BaseModel):
+    """One pre-written line in the constrained-response line table.
+
+    The constrained gate's LLM emits a 1-indexed ``line`` id (or null for
+    silence) instead of free text, so the bot speaks a PRE-WRITTEN line —
+    instant cached TTS + a tiny model output (finishes during speech even at
+    low tokens/sec). ``text`` is resolved ({placeholder} vars from the lead
+    payload) at commit time. See docs/SCRIPTED_RESPONSES_PLAN.md.
+    """
+
+    text: str = Field(
+        ...,
+        description="Pre-written line the bot speaks when this id is chosen. "
+        "Supports {placeholder} vars resolved from the lead payload at commit "
+        "time. Author static and variable content as separate sentences so the "
+        "static parts cache independently.",
+    )
+    label: Optional[str] = Field(
+        None,
+        description="Short intent label shown to the LLM (e.g. 'ask reason'). "
+        "A clean label improves accuracy on partial transcripts.",
+    )
+    description: Optional[str] = Field(
+        None,
+        description="When to speak this line — the trigger condition shown to "
+        "the LLM (e.g. 'After a low rating, ask why').",
+    )
+
+
+class InterimLLMSendConfig(BaseModel):
+    """Controls speculative classification of Soniox interim transcripts.
+
+    When enabled, each (optionally throttled) interim transcript is sent to the
+    classifier LLM so the answer is computed while the user is still speaking;
+    the latest result is committed on turn-final, hiding LLM TTFT behind speech.
+    """
+
+    enable: bool = Field(
+        False,
+        description="Enable speculative classification of interim transcripts. "
+        "When false, classification runs once on the final transcript only "
+        "(still scripted, just no latency-hiding speculation).",
+    )
+    type: Union[Literal["every"], int] = Field(
+        "every",
+        description="Cadence: 'every' fires on every interim transcript; an "
+        "integer N (ms) fires at most once per N ms using the latest transcript "
+        "(debounce for long turns).",
+    )
+
+    @field_validator("type")
+    @classmethod
+    def _type_positive(cls, v):
+        if isinstance(v, int) and v <= 0:
+            raise ValueError("interval type must be a positive int (ms) or 'every'")
+        return v
+
+
+class ConstrainedOutputConfig(BaseModel):
+    """Opt-in for CONSTRAINED (number/dot/function) output — the speculative turn
+    gate's output mode.
+
+    When enabled, the main LLM emits a bare line id (or '.' or a function call)
+    instead of free text: ~1 output token + pre-written cached TTS. INDEPENDENT
+    of ``enable_interim_llm_send``: on its own it runs ONE constrained call per
+    turn on the final transcript (no speculation); together with
+    ``enable_interim_llm_send`` it also speculates on interims.
+    ``enable_interim_llm_send`` REQUIRES this to be enabled (enforced on push/add).
+    """
+
+    enable: bool = Field(
+        False,
+        description="Use constrained (number/dot/function) output: the main LLM "
+        "emits a bare line id (or '.' or a function call) instead of free text — "
+        "~1 output token + pre-written cached TTS. On its own "
+        "(enable_interim_llm_send off) this is ONE constrained call per turn on "
+        "the final transcript; with enable_interim_llm_send on it also speculates "
+        "on interims.",
+    )
+
+
+class ScriptedFunction(BaseModel):
+    """A callable action the constrained gate may invoke (in addition to, or
+    instead of, speaking a line).
+
+    Mirrors a node function's shape so the gate reuses the SAME generic machinery
+    the normal flow uses: ``properties``/``required`` become the LLM tool schema
+    (the model calls it with real, structured args — any args, no hardcoding),
+    ``hooks`` fire at dispatch for capture via ``expected_fields``/``FieldConfig``
+    (any fields), ``handler`` is the builtin key to run (e.g. end_conversation),
+    and ``line`` is an optional phrase id the gate speaks BEFORE the handler (the
+    closing line). See docs/SCRIPTED_RESPONSES_PLAN.md.
+    """
+
+    name: str = Field(
+        ...,
+        description="Stable identifier the model calls to invoke this function. "
+        "Must be unique within the table.",
+    )
+    handler: str = Field(
+        ...,
+        description="Key in the builtin handler registry (BUILTIN_HANDLERS): "
+        "'end_conversation', 'connect_to_live_agent' (warm transfer), "
+        "'connect_to_agent' (agent-to-agent), 'hold_and_consult', "
+        "'get_current_time', 'query_knowledge_base', 'update_outcome'.",
+    )
+    description: str = Field(
+        ...,
+        description="What this function does, shown to the model so it knows "
+        "when to invoke it.",
+    )
+    properties: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="JSON-schema properties for the function arguments the model "
+        "may pass (e.g. rating, feedback, order_id). Becomes the LLM tool's "
+        "parameter schema — fully generic; the gate never names these fields.",
+    )
+    required: List[str] = Field(
+        default_factory=list,
+        description="Required argument names (a subset of `properties` keys).",
+    )
+    hooks: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="Hooks fired at dispatch for capture/side-effects, as "
+        "serialized HookConfig dicts (same shape as a node function's hooks). "
+        "e.g. update_outcome_in_database with expected_fields declaring which "
+        "args are LLM/STATIC/COMPUTED. Generic — replaces a per-template "
+        "hardcoded outcome. Validated to HookConfig and executed via the shared "
+        "_execute_hooks_async path.",
+    )
+    line: Optional[int] = Field(
+        None,
+        description="1-based phrase id the gate SPEAKS before running the handler "
+        "(the closing line), resolved with {placeholder} vars from the lead "
+        "payload. null = speak nothing before running (e.g. an immediate "
+        "hang-up). The model emits EITHER a line number (conversational turn) OR "
+        "a function call (action turn); the closing line is declarative, not "
+        "emitted, so the model never has to combine text + tool-call.",
+    )
+
+
 class ConfigurationModel(BaseModel):
     # --- Agent session state (generic) ---
     state_reducers: List[StateReducer] = Field(
@@ -2008,6 +2150,63 @@ class ConfigurationModel(BaseModel):
         "Each observer is a side-LLM that checks the transcript after every turn "
         "and can take action (e.g., end_conversation) on detection.",
     )
+    phrases: Optional[List[PhraseEntry]] = Field(
+        None,
+        description="Constrained-response line table (1-indexed). When non-empty "
+        "AND enable_interim_llm_send is on, the gate runs in CONSTRAINED mode: the "
+        "main LLM emits a tiny {line, function, rating, feedback} json_schema "
+        "response — a line id (speak the pre-written line), null (silence), or a "
+        "function. Tiny output + pre-written line => lowest latency (finishes "
+        "during speech even at low tokens/sec; cached TTS). See "
+        "docs/SCRIPTED_RESPONSES_PLAN.md.",
+    )
+    enable_interim_llm_send: Optional[InterimLLMSendConfig] = Field(
+        None,
+        description="Opt-in + speculation cadence for the speculative turn gate: "
+        "when enabled, the MAIN LLM is fired on each interim transcript (cadence-"
+        "capped) and the latest result is committed on turn-final, hiding LLM "
+        "latency behind the user's speech. None/disabled => the normal LLM flow.",
+    )
+    constrained_output: Optional[ConstrainedOutputConfig] = Field(
+        None,
+        description="Opt into constrained (number/dot/function) output — the "
+        "speculative turn gate. INDEPENDENT of enable_interim_llm_send: on its "
+        "own it's one constrained call per turn (no speculation); together with "
+        "enable_interim_llm_send it also speculates on interims. "
+        "enable_interim_llm_send REQUIRES this to be enabled (enforced on push).",
+    )
+    scripted_functions: Optional[List[ScriptedFunction]] = Field(
+        None,
+        description="The gate's dispatch table: callable actions the main LLM may "
+        "request (speak-then-call) — e.g. end the call or warm-transfer. Each maps "
+        "a name to a builtin handler key (BUILTIN_HANDLERS) and an optional "
+        "outcome recorded before the handler runs. Used both as the LLM's tool "
+        "list and the commit-time dispatcher.",
+    )
+
+    def validate_constrained_dependencies(self) -> None:
+        """Push/add-time check (NOT run at load): interim-LLM-send REQUIRES
+        constrained output, and either requires a non-empty phrase table.
+
+        Raises ValueError (-> HTTP 400) on violation. Only called from the
+        create/replace handlers, so legacy templates already in the DB are
+        unaffected — runtime load never invokes it.
+        """
+        constrained = bool(self.constrained_output and self.constrained_output.enable)
+        interim = bool(
+            self.enable_interim_llm_send and self.enable_interim_llm_send.enable
+        )
+        if interim and not constrained:
+            raise ValueError(
+                "enable_interim_llm_send requires constrained_output to be "
+                "enabled (interim speculation runs on top of constrained "
+                "number/dot output)."
+            )
+        if (constrained or interim) and not (self.phrases or []):
+            raise ValueError(
+                "constrained_output / enable_interim_llm_send require a "
+                "non-empty 'phrases' line table."
+            )
 
     @model_validator(mode="after")
     def _warn_deprecated_fields(self, info: ValidationInfo):

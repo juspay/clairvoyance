@@ -83,6 +83,11 @@ async def create_template_handler(
             if "nodes" not in flow or not flow["nodes"]:
                 raise ValueError("nodes must be specified in flow structure")
 
+        # Constrained/interim dependency check (ValueError -> 400 below):
+        # enable_interim_llm_send requires constrained_output + a phrase table.
+        if template_data.configurations:
+            template_data.configurations.validate_constrained_dependencies()
+
         # Check if template already exists
         existing = await get_template_in_scope(
             template_data.reseller_id,
@@ -408,6 +413,11 @@ async def replace_template_handler(
                 raise ValueError("initial_node must be specified in flow structure")
             if "nodes" not in flow or not flow["nodes"]:
                 raise ValueError("nodes must be specified in flow structure")
+
+        # Constrained/interim dependency check (ValueError -> 400 below):
+        # enable_interim_llm_send requires constrained_output + a phrase table.
+        if template_data.configurations:
+            template_data.configurations.validate_constrained_dependencies()
 
         # Validate telephony_number_id if provided. Tenant-scope enforcement
         # applies to NEW or CHANGED pins only: legacy templates that already

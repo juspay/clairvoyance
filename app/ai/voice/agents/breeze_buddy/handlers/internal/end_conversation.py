@@ -140,9 +140,26 @@ async def end_conversation(context: TemplateContext, args, transition_to=None):
             )
 
         else:
-            logger.warning(
-                f"No context found for transcription collection in call {context.call_sid}"
-            )
+            # no_llm/stream/gate modes have no LLMContext (self.context is None)
+            # -- fall back to the TranscriptCollectorProcessor, which captured
+            # every user TranscriptionFrame and every bot TTSSpeakFrame during
+            # the call. Without this a gate-driven clean end (e.g.
+            # negative_feedback -> end_conversation) loses the transcript: the
+            # disconnect and idle-timeout paths pre-populate it, this path does
+            # not.
+            collector = getattr(context.bot, "_transcript_collector", None)
+            if collector is not None:
+                transcription = list(collector.get_transcription())
+                context.lead.metaData["transcription"] = transcription
+                logger.info(
+                    f"Collected {len(transcription)} message(s) from the "
+                    f"transcript collector (no-LLM mode) for call {context.call_sid}"
+                )
+            else:
+                logger.warning(
+                    f"No context found for transcription collection in call "
+                    f"{context.call_sid}"
+                )
 
         # ── Widget voice attachment: flip channel back to CHAT ─────────────
         # In the voice-as-chat architecture the chat brain (run_chat_turn)
