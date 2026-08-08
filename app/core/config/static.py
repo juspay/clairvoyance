@@ -510,6 +510,13 @@ BREEZE_BUDDY_SONIOX_MAX_ENDPOINT_DELAY_MS = int(
     os.environ.get("BREEZE_BUDDY_SONIOX_MAX_ENDPOINT_DELAY_MS", "500")
 )  # Max delay (ms) for Soniox native endpoint detection (500-3000, default 500)
 
+# Local-dev escape hatch for the SSRF egress guard (app/core/security/ssrf.py):
+# when true, egress to private/loopback ranges is permitted. Defaults to false
+# so the secure posture never depends on ENVIRONMENT being set correctly.
+SSRF_ALLOW_PRIVATE_EGRESS = os.environ.get(
+    "SSRF_ALLOW_PRIVATE_EGRESS", "false"
+).lower() in ("1", "true", "yes")
+
 ENABLE_BREEZE_BUDDY_USER_INTERRUPTION = (
     os.environ.get("ENABLE_BREEZE_BUDDY_USER_INTERRUPTION", "false").lower() == "true"
 )

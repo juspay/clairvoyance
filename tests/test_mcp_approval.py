@@ -14,6 +14,9 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional
 
+import pytest
+
+from app.ai.voice.agents.breeze_buddy import mcp as _mcp_module
 from app.ai.voice.agents.breeze_buddy.mcp import (
     _gate_mcp_handler,
     _mcp_approval_timeout_secs,
@@ -29,6 +32,19 @@ from app.ai.voice.agents.breeze_buddy.template.types import (
     StateReducer,
     ToolArgInjection,
 )
+
+
+@pytest.fixture(autouse=True)
+def _bypass_ssrf_egress(monkeypatch):
+    """These tests use placeholder MCP hostnames to exercise approval-map /
+    tool-loading logic. SSRF egress validation (tested separately in
+    tests/test_ssrf_egress.py) would otherwise reject the unresolvable host.
+    """
+
+    async def _ok(url, *args, **kwargs):
+        return ["203.0.113.10"]
+
+    monkeypatch.setattr(_mcp_module, "validate_egress_url", _ok)
 
 
 class _FakeManager:
