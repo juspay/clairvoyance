@@ -4,6 +4,7 @@ Provides secure password storage and validation for user authentication.
 """
 
 import asyncio
+import secrets
 from typing import Tuple
 
 import bcrypt
@@ -36,11 +37,10 @@ class PasswordHasher:
         if not password or not isinstance(password, str):
             raise ValueError("Password must be a non-empty string")
 
-        if len(password) > 72:
-            # bcrypt has a 72-byte password limit
-            logger.warning(
-                "Password exceeds 72 characters, will be truncated by bcrypt"
-            )
+        if len(password.encode("utf-8")) > 72:
+            # bcrypt silently truncates beyond 72 bytes — reject rather than
+            # hash a truncated password (PT-24).
+            raise ValueError("Password exceeds bcrypt's 72-byte limit")
 
         try:
             # Generate salt and hash password
@@ -189,3 +189,11 @@ async def hash_password_async(password: str) -> str:
 async def verify_password_async(plain_password: str, hashed_password: str) -> bool:
     """Verify a password against a hash, off the event loop. See module note above."""
     return await asyncio.to_thread(verify_password, plain_password, hashed_password)
+
+
+# A throwaway bcrypt hash, computed once at import from a random secret. Auth
+# handlers run verify_password against this on the no-such-user branch so an
+# unknown username costs the same bcrypt time as a real wrong-password check,
+# closing the username-enumeration timing oracle (PT-16). It can never match a
+# real password (the plaintext is a discarded random token).
+DUMMY_PASSWORD_HASH = hash_password(secrets.token_urlsafe(32))

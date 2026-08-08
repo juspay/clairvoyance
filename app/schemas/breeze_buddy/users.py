@@ -8,8 +8,12 @@ import re
 from datetime import datetime
 from typing import List, Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
+from app.core.security.password import (
+    MIN_PASSWORD_LENGTH,
+    validate_password_strength,
+)
 from app.schemas.breeze_buddy.auth import UserRole
 
 
@@ -25,7 +29,7 @@ class UserCreate(BaseModel):
     username: str = Field(
         ..., min_length=3, max_length=50, description="Unique username"
     )
-    password: str = Field(..., min_length=8, description="Password")
+    password: str = Field(..., min_length=MIN_PASSWORD_LENGTH, description="Password")
     email: Optional[str] = Field(None, description="Email address")
     role: UserRole = Field(
         ..., description="User role: admin, reseller, merchant, user"
@@ -47,17 +51,40 @@ class UserCreate(BaseModel):
             raise ValueError("ID must not contain spaces")
         return v
 
+    @model_validator(mode="after")
+    def _validate_password_policy(self) -> "UserCreate":
+        validate_password_strength(
+            self.password,
+            disallowed_substrings=[
+                self.username,
+                self.id,
+                (self.email or "").split("@")[0],
+            ],
+        )
+        return self
+
 
 class UserUpdate(BaseModel):
     """User account update request."""
 
-    password: Optional[str] = Field(None, min_length=8, description="New password")
+    password: Optional[str] = Field(
+        None, min_length=MIN_PASSWORD_LENGTH, description="New password"
+    )
     email: Optional[str] = Field(None, description="Email address")
     reseller_ids: Optional[List[str]] = Field(None, description="Updated reseller IDs")
     merchant_ids: Optional[List[str]] = Field(
         None, description="Updated merchant identifiers"
     )
     is_active: Optional[bool] = Field(None, description="Account status")
+
+    @model_validator(mode="after")
+    def _validate_password_policy(self) -> "UserUpdate":
+        if self.password is not None:
+            validate_password_strength(
+                self.password,
+                disallowed_substrings=[(self.email or "").split("@")[0]],
+            )
+        return self
 
 
 class UserResponse(BaseModel):
