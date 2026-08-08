@@ -33,7 +33,7 @@ async def telephony_websocket_handler_v2(
     connects here. Pod release is handled by status callbacks and call
     completion handlers (both call Smart Router's release endpoint).
     """
-    logger.info("Handling v2 websocket for %s", template)
+    logger.info(f"Handling v2 websocket for {template}")
 
     async with create_aiohttp_session() as session:
         try:
@@ -44,22 +44,20 @@ async def telephony_websocket_handler_v2(
         except WebSocketDisconnect:
             logger.warning("WebSocket v2 client disconnected.")
         except Exception as e:
-            error_type = type(e).__name__
-            error_message = str(e)
-            logger.error(
-                "An error occurred in the WebSocket v2 handler - Type: %s, Message: '%s', Args: %s",
-                error_type,
-                error_message,
-                e.args,
-                exc_info=True,
+            # f-string + logger.exception: loguru does not interpolate stdlib
+            # "%s"-style positional args (they logged literally as "Type: %s")
+            # and ignores exc_info=True, so the real traceback was dropped.
+            logger.exception(
+                f"An error occurred in the WebSocket v2 handler - "
+                f"Type: {type(e).__name__}, Message: {e!r}, Args: {e.args}"
             )
             try:
                 if websocket.client_state.name != "DISCONNECTED":
                     await websocket.close(code=1011, reason="Internal Server Error")
             except Exception as close_error:
                 logger.warning(
-                    "Could not close websocket v2 (likely already closed): %s",
-                    close_error,
+                    f"Could not close websocket v2 (likely already closed): "
+                    f"{close_error}"
                 )
         finally:
             logger.info("WebSocket v2 client connection closed.")
