@@ -502,28 +502,6 @@ class ProductDetail(_CatalogBase):
     product: ProductDetailP
 
 
-class LinkButton(_CatalogBase):
-    """Single link CTA — the link-only answer ("just give me the checkout
-    link") without rendering a whole CartView.
-
-    Literal component (like QuickReplies), but the URL is NOT
-    model-trusted: ``execute_render_ui`` rejects any url that is neither
-    in the template's ``trusted_link_urls`` allowlist nor present
-    verbatim in THIS turn's tool results — the model selects links, it
-    never authors them. Clicking fires the widget's ``open_url`` route
-    (Handoff popup semantics, host-page intercept preserved).
-
-    ``text_channel=False``: the trust check lives ONLY in the render_ui
-    function path, so a hand-typed ``<ui_stream>`` add is rejected at
-    parse (``render_ui_only:LinkButton``) — the dual-read window must not
-    be an arbitrary-URL injection surface."""
-
-    text_channel: ClassVar[bool] = False
-
-    label: str = Field(..., min_length=1, max_length=40)
-    url: str = Field(..., min_length=8, max_length=2048, pattern=r"^https://")
-
-
 # ---------------------------------------------------------------------------
 # Registration — runs once, at (lazy) import time. Templates opt in via
 # ``ui_catalog.enabled_groups += ["commerce"]``; the LLM drives these with
@@ -540,7 +518,6 @@ register_primitives(
         "ProductCard": ProductCard,
         "CartView": CartView,
         "ProductDetail": ProductDetail,
-        "LinkButton": LinkButton,
     },
 )
 
@@ -563,6 +540,17 @@ register_commerce_render_ui_prompt()
 # CartView checkout stamping) — see assist/commerce/render_ui.py.
 register_commerce_render_ui_pack()
 
+# On adding a SECOND flavor: these register_* calls are the whole
+# registration surface, and every one now takes the flavor's group as its
+# first argument, so a second flavor is additive — it registers under its
+# own group and the two never see each other's vocabulary (chat/flavors.py).
+#
+# Collapsing them into one declarative FlavorManifest has been considered
+# and deliberately NOT done: it buys no behaviour, and a manifest that must
+# apply transactionally (half a flavor registered is worse than none) is
+# more machinery than five call sites justify. Revisit only if flavor #3
+# makes the boilerplate a real cost.
+
 
 __all__ = [
     "MoneyP",
@@ -577,5 +565,4 @@ __all__ = [
     "CartView",
     "ProductDetailP",
     "ProductDetail",
-    "LinkButton",
 ]

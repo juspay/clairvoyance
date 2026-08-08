@@ -267,12 +267,22 @@ class ToolDispatchMixin:
         ):
             normalized = normalize(call.function_name, raw[0])
             return (
-                run_result_annotators(call.function_name, args_for_handler, normalized),
+                run_result_annotators(
+                    call.function_name,
+                    args_for_handler,
+                    normalized,
+                    self._flavor_scope,
+                ),
                 raw[1],
             )
         normalized = normalize(call.function_name, raw)
         return (
-            run_result_annotators(call.function_name, args_for_handler, normalized),
+            run_result_annotators(
+                call.function_name,
+                args_for_handler,
+                normalized,
+                self._flavor_scope,
+            ),
             None,
         )
 
@@ -290,7 +300,9 @@ class ToolDispatchMixin:
         hydrate off an unverified result. Verifiers are pure code checks
         registered by flavor modules (see chat/verification.py).
         """
-        failure = run_tool_verifiers(tool_name, injected_args, result_payload)
+        failure = run_tool_verifiers(
+            tool_name, injected_args, result_payload, self._flavor_scope
+        )
         if failure is None:
             return result_payload
         logger.warning(
@@ -312,7 +324,10 @@ class ToolDispatchMixin:
         tool_execution = getattr(configurations, "tool_execution", None)
         if getattr(tool_execution, "parallel_read_only", None) is False:
             return False
-        return all(is_read_only(c.function_name, self.template) for c in calls)
+        return all(
+            is_read_only(c.function_name, self.template, self._flavor_scope)
+            for c in calls
+        )
 
     async def _fan_out_read_only(
         self: "ChatAgent",
@@ -349,7 +364,9 @@ class ToolDispatchMixin:
                 injections=arg_injection_rules,
                 turn_id=self._turn_id,
             )
-            running_label, done_label = resolve_step_label(call.function_name)
+            running_label, done_label = resolve_step_label(
+                call.function_name, self._flavor_scope
+            )
             done_labels[call.tool_call_id] = done_label
             yield step_started_event(
                 step_id=call.tool_call_id,
@@ -390,7 +407,9 @@ class ToolDispatchMixin:
                             "result_summary": _summarize_result(result_payload),
                         },
                     )
-                    step_summary, step_count = summarize_step_result(result_payload)
+                    step_summary, step_count = summarize_step_result(
+                        result_payload, self._flavor_scope
+                    )
                     yield step_completed_event(
                         step_id=call.tool_call_id,
                         status=resolve_step_status(result_payload),
@@ -411,8 +430,9 @@ class ToolDispatchMixin:
             return None
         store = self._binding_store
         allowlist = self._ui_allowlist
+        flavor_groups = self._ui_flavor_groups
 
         def _resolve(op: Dict[str, Any]):
-            return resolve_show_op(op, store, allowlist)
+            return resolve_show_op(op, store, allowlist, flavor_groups)
 
         return _resolve

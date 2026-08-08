@@ -1364,12 +1364,24 @@ class UiIntentsConfig(BaseModel):
     MCP exposes differently-named cart tools (or whose reducers persist
     different state keys) run the same DIRECT intent executors without
     code changes.
+
+    ``tools`` is load-bearing beyond the DIRECT path: it is also how the
+    engine decides which tool a flavor's step label, safety annotation and
+    post-condition verifier attach to (see ``chat/flavors.py``). That is
+    the point — a rebound tool keeps the metadata it needs — but it means
+    a role must name a tool that actually does that role's job. Binding
+    ``search`` to a mutating tool, say, marks that tool ``read_only`` and
+    makes it eligible for parallel fan-out.
     """
 
     tools: Dict[str, str] = Field(
         default_factory=dict,
         description="Flavor tool role → actual tool name on this template's "
-        "MCP/function surface.",
+        "MCP/function surface. Binds the role's flavor METADATA too — its "
+        "step label, safety annotation (read_only/idempotent, which drives "
+        "parallel fan-out) and post-condition verifier follow the tool "
+        "named here. Point a role at a tool that does a different job and "
+        "it inherits the wrong safety class and post-conditions.",
     )
     state_keys: Dict[str, str] = Field(
         default_factory=dict,

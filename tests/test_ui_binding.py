@@ -301,7 +301,11 @@ def test_items_selection_runs_before_max_items_cap():
 def test_items_feature_variant_rederives_hero_and_stamps_id():
     """RFC-003 §4 variant continuity: feature_variant re-derives the card
     hero (price) from that variant record and stamps featured_variant_id;
-    an unknown variant id is fail-open (entry untouched)."""
+    an unknown variant id is fail-open (entry untouched).
+
+    The transform is registered by the commerce group, so the op must be
+    resolved with that group in scope — a template without it gets plain
+    id selection (asserted at the end)."""
     payload = {
         "products": [
             {
@@ -317,7 +321,7 @@ def test_items_feature_variant_rederives_hero_and_stamps_id():
     }
     store = _store_with("search_catalog", payload)
     op = _grid_show_op(props={"items": [{"id": "p1", "feature_variant": "v-pink"}]})
-    result = resolve_show_op(op, store)
+    result = resolve_show_op(op, store, None, ["commerce"])
     assert result.error is None
     assert result.op is not None
     entry = result.op["props"]["products"][0]
@@ -325,12 +329,22 @@ def test_items_feature_variant_rederives_hero_and_stamps_id():
     assert entry["price"]["amount"] == 1099.0
     # Unknown variant id → untouched entry, no stamp, original hero.
     op2 = _grid_show_op(props={"items": [{"id": "p1", "feature_variant": "v-nope"}]})
-    result2 = resolve_show_op(op2, store)
+    result2 = resolve_show_op(op2, store, None, ["commerce"])
     assert result2.error is None
     assert result2.op is not None
     entry2 = result2.op["props"]["products"][0]
     assert "featured_variant_id" not in entry2
     assert entry2["price"]["amount"] == 999.0
+    # Out of scope, the selector key is inert: the entry is selected by id
+    # and nothing re-derives it.
+    result3 = resolve_show_op(
+        _grid_show_op(props={"items": [{"id": "p1", "feature_variant": "v-pink"}]}),
+        store,
+    )
+    assert result3.op is not None
+    entry3 = result3.op["props"]["products"][0]
+    assert "featured_variant_id" not in entry3
+    assert entry3["price"]["amount"] == 999.0
 
 
 def test_resolve_unresolved_tool_drops_with_reason():

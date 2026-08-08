@@ -316,7 +316,12 @@ async def _run(
                 "items": selectors,
             },
         }
-        resolved = resolve_show_op(show_op, agent.binding_store, agent.ui_allowlist)
+        resolved = resolve_show_op(
+            show_op,
+            agent.binding_store,
+            agent.ui_allowlist,
+            agent.ui_flavor_groups,
+        )
         if resolved.op is None:
             logger.warning(
                 f"cart_upsell: grid resolve dropped ({resolved.error}) — skipping"

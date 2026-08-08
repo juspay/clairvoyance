@@ -23,6 +23,10 @@ from app.ai.voice.agents.breeze_buddy.chat.agent.runtime import (  # noqa: F401
     _tools_schema,
 )
 from app.ai.voice.agents.breeze_buddy.chat.agent.tooling import ToolDispatchMixin
+from app.ai.voice.agents.breeze_buddy.chat.flavors import (
+    FlavorScope,
+    resolve_flavor_scope,
+)
 from app.ai.voice.agents.breeze_buddy.chat.history.block_codec import (
     internal_text_block,
     plain_text_blocks,
@@ -172,6 +176,15 @@ class ChatAgent(
         self._ui_flavor_groups: List[str] = (
             list(ui_cat.enabled_groups or []) if ui_cat is not None else []
         )
+        # The gate every flavor registry is read through: which groups this
+        # template enabled, and which tool it bound each flavor role to
+        # (``ui_intents.tools``). Resolved once — the registries are
+        # process-global and shared with every other merchant in this
+        # worker, so reading them unscoped is what leaks one template's
+        # vocabulary into another's turn.
+        self._flavor_scope: FlavorScope = resolve_flavor_scope(
+            self.template, self._ui_flavor_groups
+        )
         # Catalog-version negotiation (RFC-001 §3.4). Only sessions that
         # declared "v2" at create time may see data-bound components: on a
         # v1 (or unversioned / voice) session they're pruned from the
@@ -223,7 +236,14 @@ class ChatAgent(
         force_after = getattr(render_ui_cfg, "force_after", None)
         if force_after is None:
             _pack = resolve_render_ui_flavor_pack(self._ui_flavor_groups)
-            force_after = _pack.default_force_after if _pack else None
+            # A pack names its own ROLES here, so the think-step still
+            # fires on a template that rebound the role to another tool.
+            # Template-provided force_after stays literal — the author
+            # wrote the tool names they meant.
+            force_after = [
+                self._flavor_scope.tool_for(name)
+                for name in (_pack.default_force_after if _pack else None) or []
+            ]
         self._render_ui_force_after: Set[str] = set(force_after or [])
         # LinkButton URL allowlist (template config) — the other trusted
         # source is THIS turn's tool results, checked at execute time.
@@ -392,3 +412,15 @@ class ChatAgent(
     def ui_allowlist(self) -> Set[str]:
         """The resolved (and catalog-version-pruned) primitive allowlist."""
         return self._ui_allowlist
+
+    @property
+    def ui_flavor_groups(self) -> List[str]:
+        """This template's enabled flavor groups — the scope key every
+        flavor registry is read through (see ``chat/flavors.py``)."""
+        return self._ui_flavor_groups
+
+    @property
+    def flavor_scope(self) -> FlavorScope:
+        """This turn's resolved flavor scope: which registered vocabulary
+        applies, and which tool each flavor role is bound to."""
+        return self._flavor_scope

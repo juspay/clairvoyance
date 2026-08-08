@@ -24,7 +24,7 @@ from app.ai.voice.agents.breeze_buddy.template.types import UiCatalogConfig
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
-COMMERCE = {"ProductGrid", "ProductCard", "CartView", "ProductDetail", "LinkButton"}
+COMMERCE = {"ProductGrid", "ProductCard", "CartView", "ProductDetail"}
 
 # Runs a full core-only session surface (ChatAgent init → allowlist →
 # prompt section render) and asserts no assist module was imported; then

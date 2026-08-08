@@ -527,7 +527,7 @@
   },
   "UiIntentsConfig": {
     "tools": {
-      "description": "Flavor tool role -> actual tool name on this template's MCP/function surface (commerce roles: create_cart, update_cart, get_cart, get_product, search).",
+      "description": "Flavor tool role -> actual tool name on this template's MCP/function surface (commerce roles: create_cart, update_cart, get_cart, get_product, search). Also binds the role's flavor metadata: step label, safety annotation (read_only/idempotent, which drives parallel fan-out) and post-condition verifier follow the tool named here, so a role must name a tool that does that role's job.",
       "example": {
         "create_cart": "shopify_cart_create"
       }

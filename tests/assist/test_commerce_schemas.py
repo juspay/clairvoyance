@@ -34,13 +34,12 @@ from app.ai.voice.agents.breeze_buddy.template.ui_prompt import (
 # be idempotent).
 ensure_group_loaded("commerce")
 
-COMMERCE = {"ProductCard", "ProductGrid", "CartView", "ProductDetail", "LinkButton"}
-# The subset the LLM is prompted with — ProductDetail is server_only,
+COMMERCE = {"ProductCard", "ProductGrid", "CartView", "ProductDetail"}
+# The subset the LLM is prompted with — ProductDetail is server_only and
 # ProductCard was retired to server_only 2026-07-30 (a ProductGrid of one
-# IS a card now that layout is count-derived), and LinkButton is
-# render_ui-only (text_channel=False): all registered + allowlisted, but
-# never rendered into the text-channel prompt sections.
-PROMPTED = COMMERCE - {"ProductDetail", "ProductCard", "LinkButton"}
+# IS a card now that layout is count-derived): registered + allowlisted,
+# but never rendered into the text-channel prompt sections.
+PROMPTED = COMMERCE - {"ProductDetail", "ProductCard"}
 
 
 # ---------------------------------------------------------------------------
@@ -60,9 +59,9 @@ def test_commerce_group_lists_exactly_the_registered_components():
 
 
 def test_data_bound_flags():
-    # LinkButton is the literal exception: commerce group, but its props
-    # are model-authored (URL trust-checked in render_ui, not bound).
-    assert data_bound_names() == COMMERCE - {"LinkButton"}
+    # Every commerce primitive is data-bound; LinkButton (the literal,
+    # model-authored one) now lives in core.
+    assert data_bound_names() == COMMERCE
     assert is_data_bound("ProductGrid")
     assert not is_data_bound("LinkButton")
     assert not is_data_bound("Tile")

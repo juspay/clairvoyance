@@ -46,6 +46,8 @@ def _patch_agent_attr(monkeypatch, name, value):
             monkeypatch.setattr(_mod, name, value)
 
 
+from types import SimpleNamespace  # isort: skip
+
 from app.ai.voice.agents.breeze_buddy.chat.agent import ChatAgent, _PreparedTools
 from app.ai.voice.agents.breeze_buddy.template.types import TemplateModel
 
@@ -57,8 +59,24 @@ _PREP = _PreparedTools(
 
 
 def _make_agent() -> ChatAgent:
+    # Enables the "probe" group so the summarizer registered in
+    # test_registered_flavor_summarizer_feeds_step_completed is in scope.
     template = TemplateModel.model_construct(
-        id="tpl-1", name="t", flow={}, configurations=None
+        id="tpl-1",
+        name="t",
+        flow={},
+        configurations=SimpleNamespace(
+            state_reducers=[],
+            tool_arg_injection=[],
+            client_context=None,
+            ui_catalog=SimpleNamespace(
+                enabled_groups=["core", "probe"],
+                enabled_primitives=None,
+                disabled_primitives=None,
+            ),
+            ui_intents=None,
+            tool_execution=None,
+        ),
     )
     agent = ChatAgent(
         session_id="sess-1",
@@ -174,11 +192,13 @@ async def test_registered_flavor_summarizer_feeds_step_completed(monkeypatch):
             return f"{len(rows)} rows", len(rows)
         return None, None
 
-    step_labels.register_step_summarizer(_rows_summarizer)
+    # Registered under the group this test's template enables — a
+    # summarizer is only ever consulted for sessions in its own flavor.
+    step_labels.register_step_summarizer("probe", _rows_summarizer)
     try:
         events = await _run_turn(monkeypatch, "fetch_report", {"rows": [{}, {}]})
         completed = next(ev for ev in events if ev.event == "step_completed")
         assert completed.data["summary"] == "2 rows"
         assert completed.data["count"] == 2
     finally:
-        step_labels._STEP_SUMMARIZERS.remove(_rows_summarizer)
+        step_labels._STEP_SUMMARIZERS["probe"].remove(_rows_summarizer)
