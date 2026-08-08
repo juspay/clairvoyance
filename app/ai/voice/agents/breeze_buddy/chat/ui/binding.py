@@ -28,6 +28,7 @@ from typing import (
     Dict,
     List,
     Optional,
+    Sequence,
     Set,
     Tuple,
     Union,
@@ -175,26 +176,43 @@ class BindingStore:
 # transform only recombines fields the entry itself carries. Registered by
 # flavor packages at lazy load (same lifecycle as the other flavor
 # registries); the engine knows only the mechanism.
-_SELECTOR_TRANSFORMS: Dict[str, Callable[[Dict[str, Any], str], Dict[str, Any]]] = {}
+SelectorTransformFn = Callable[[Dict[str, Any], str], Dict[str, Any]]
+
+# group → selector key → transform. Group-keyed for the same reason the
+# other flavor registries are (see ``chat/flavors.py``): these keys splice
+# into the LLM-facing ``render_ui`` schema, so an ungated registry would
+# advertise a commerce selector to every merchant sharing the process.
+_SELECTOR_TRANSFORMS: Dict[str, Dict[str, SelectorTransformFn]] = {}
 
 
 def register_selector_transform(
-    key: str, transform: Callable[[Dict[str, Any], str], Dict[str, Any]]
+    group: str, key: str, transform: SelectorTransformFn
 ) -> None:
     """Register a flavor's per-entry selector transform for ``key``.
 
     Idempotent on re-import (same-key overwrite)."""
-    _SELECTOR_TRANSFORMS[key] = transform
+    _SELECTOR_TRANSFORMS.setdefault(group, {})[key] = transform
 
 
-def selector_extension_keys() -> List[str]:
-    """The registered extra selector keys (beyond ``id``) — the render_ui
-    schema and arg parsing accept exactly these."""
-    return list(_SELECTOR_TRANSFORMS)
+def selector_extension_keys(
+    flavor_groups: Optional[Sequence[str]] = None,
+) -> List[str]:
+    """The extra selector keys (beyond ``id``) registered by the enabled
+    flavor groups — the render_ui schema and arg parsing accept exactly
+    these. No groups, no extensions."""
+    keys: List[str] = []
+    for group in flavor_groups or ():
+        for key in _SELECTOR_TRANSFORMS.get(group, {}):
+            if key not in keys:
+                keys.append(key)
+    return keys
 
 
 def _select_list_props(
-    hydrated: Dict[str, Any], schema: Any, bound_keys: Set[str]
+    hydrated: Dict[str, Any],
+    schema: Any,
+    bound_keys: Set[str],
+    flavor_groups: Optional[Sequence[str]] = None,
 ) -> None:
     """Model-directed selection over bound lists (runs BEFORE capping).
 
@@ -227,6 +245,10 @@ def _select_list_props(
             selectors.append(entry)
     if not selectors:
         return
+    transforms: Dict[str, SelectorTransformFn] = {}
+    for group in flavor_groups or ():
+        for sel_key, transform in _SELECTOR_TRANSFORMS.get(group, {}).items():
+            transforms.setdefault(sel_key, transform)
     for key in bound_keys:
         value = hydrated.get(key)
         if not isinstance(value, list):
@@ -240,7 +262,7 @@ def _select_list_props(
             entry = by_id.get(sel["id"])
             if entry is None:
                 continue
-            for sel_key, transform in _SELECTOR_TRANSFORMS.items():
+            for sel_key, transform in transforms.items():
                 sel_value = sel.get(sel_key)
                 if isinstance(sel_value, str) and sel_value:
                     entry = transform(entry, sel_value)
@@ -296,6 +318,7 @@ def resolve_show_op(
     op: Dict[str, Any],
     store: BindingStore,
     allowlist: Optional[Set[str]] = None,
+    flavor_groups: Optional[Sequence[str]] = None,
 ) -> OpResult:
     """Hydrate one parsed ``show`` op against this turn's binding store.
 
@@ -349,7 +372,7 @@ def resolve_show_op(
         hydrated[prop] = value
         bound_keys.add(prop)
 
-    _select_list_props(hydrated, schema, bound_keys)
+    _select_list_props(hydrated, schema, bound_keys, flavor_groups)
     _cap_list_props(hydrated, schema, bound_keys)
 
     try:

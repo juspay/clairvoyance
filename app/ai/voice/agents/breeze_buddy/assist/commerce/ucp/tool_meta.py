@@ -21,6 +21,17 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
+from app.ai.voice.agents.breeze_buddy.assist.commerce.ucp.roles import (
+    ROLE_CREATE_CART,
+    ROLE_GET_CART,
+    ROLE_GET_PRODUCT,
+    ROLE_SEARCH,
+    ROLE_UPDATE_CART,
+)
+from app.ai.voice.agents.breeze_buddy.assist.commerce.ucp.step_labels import (
+    COMMERCE_GROUP,
+)
+from app.ai.voice.agents.breeze_buddy.chat.flavors import role_key
 from app.ai.voice.agents.breeze_buddy.chat.steps.verification import (
     register_tool_verifier,
 )
@@ -106,18 +117,26 @@ def register_commerce_tool_meta() -> None:
     Idempotent — same values / same function objects on re-import.
     """
     register_tool_annotations(
+        COMMERCE_GROUP,
         {
-            "search_catalog": "read_only",
+            role_key(ROLE_SEARCH): "read_only",
+            # Not a rebindable role — keyed by its literal tool name.
             "lookup_catalog": "read_only",
-            "get_product": "read_only",
-            "get_cart": "read_only",
-            "create_cart": "idempotent",
-            "update_cart": "idempotent",
-        }
+            role_key(ROLE_GET_PRODUCT): "read_only",
+            role_key(ROLE_GET_CART): "read_only",
+            role_key(ROLE_CREATE_CART): "idempotent",
+            role_key(ROLE_UPDATE_CART): "idempotent",
+        },
     )
-    register_tool_verifier("search_catalog", _verify_search_catalog)
-    register_tool_verifier("create_cart", _verify_cart_mutation)
-    register_tool_verifier("update_cart", _verify_cart_mutation)
+    register_tool_verifier(
+        COMMERCE_GROUP, role_key(ROLE_SEARCH), _verify_search_catalog
+    )
+    register_tool_verifier(
+        COMMERCE_GROUP, role_key(ROLE_CREATE_CART), _verify_cart_mutation
+    )
+    register_tool_verifier(
+        COMMERCE_GROUP, role_key(ROLE_UPDATE_CART), _verify_cart_mutation
+    )
     # Baseline search annotation (RFC-003 baseline mode): matched_via /
     # matched_variant stamped from THIS turn's live results — lazy import
     # keeps the annotator's regex tables out of non-commerce processes.
@@ -125,7 +144,9 @@ def register_commerce_tool_meta() -> None:
         annotate_search_result,
     )
 
-    register_result_annotator("search_catalog", annotate_search_result)
+    register_result_annotator(
+        COMMERCE_GROUP, role_key(ROLE_SEARCH), annotate_search_result
+    )
 
 
 __all__ = ["register_commerce_tool_meta"]

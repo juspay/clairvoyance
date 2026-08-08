@@ -168,7 +168,7 @@ class ApprovalTurnMixin:
             # turn brackets its tool run exactly like _cycle_loop does, so
             # the widget's step list covers HITL resumes too.
             running_label, approved_done_label = resolve_step_label(
-                approval.function_name
+                approval.function_name, self._flavor_scope
             )
             yield step_started_event(
                 step_id=approval.tool_call_id,
@@ -289,7 +289,9 @@ class ApprovalTurnMixin:
             },
         )
         if approved and approved_done_label is not None:
-            step_summary, step_count = summarize_step_result(result_payload)
+            step_summary, step_count = summarize_step_result(
+                result_payload, self._flavor_scope
+            )
             yield step_completed_event(
                 step_id=approval.tool_call_id,
                 status=resolve_step_status(result_payload),

@@ -23,6 +23,17 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
+from app.ai.voice.agents.breeze_buddy.assist.commerce.ucp.roles import (
+    ROLE_SEARCH,
+    resolve_role_map,
+)
+from app.ai.voice.agents.breeze_buddy.assist.commerce.ucp.step_labels import (
+    COMMERCE_GROUP,
+)
+from app.ai.voice.agents.breeze_buddy.chat.flavors import (
+    register_flavor_roles,
+    role_key,
+)
 from app.ai.voice.agents.breeze_buddy.chat.ui.binding import (
     BindingStore,
     parse_bind_ref,
@@ -262,7 +273,10 @@ COMMERCE_RENDER_UI_PACK = RenderUiFlavorPack(
     link_description=_LINK_DESC,
     bind_example=_BIND_EXAMPLE,
     link_untrusted_fallback_hint=_LINK_FALLBACK_HINT,
-    default_force_after=["search_catalog"],
+    # A ROLE, not a tool name: the engine binds it through the template
+    # (see roles.py), so the think-step still fires for a merchant whose
+    # gateway calls the search tool something else.
+    default_force_after=[role_key(ROLE_SEARCH)],
     summarize=_summarize_commerce,
     finalize_hydrated=_finalize_commerce,
     merge_repeat_render=_merge_repeat_grid,
@@ -275,8 +289,13 @@ def register_commerce_render_ui_pack() -> None:
 
     Idempotent (same-key overwrite) — safe on re-import.
     """
-    register_render_ui_flavor_pack("commerce", COMMERCE_RENDER_UI_PACK)
-    register_selector_transform("feature_variant", _feature_variant_entry)
+    register_render_ui_flavor_pack(COMMERCE_GROUP, COMMERCE_RENDER_UI_PACK)
+    register_selector_transform(
+        COMMERCE_GROUP, "feature_variant", _feature_variant_entry
+    )
+    # How this flavor's roles bind to tool names on a given template — the
+    # table every other registration above is keyed against.
+    register_flavor_roles(COMMERCE_GROUP, resolve_role_map)
 
 
 __all__ = [

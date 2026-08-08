@@ -665,7 +665,12 @@ async def run_direct_intent(
         ui_events: List[SSEEvent] = []
         if parsed.policy.show_op is not None:
             show_op = parsed.policy.show_op(final_tool, final_result, agent)
-            resolved = resolve_show_op(show_op, agent.binding_store, agent.ui_allowlist)
+            resolved = resolve_show_op(
+                show_op,
+                agent.binding_store,
+                agent.ui_allowlist,
+                agent.ui_flavor_groups,
+            )
             if resolved.op is not None:
                 hydrated_ops.append(resolved.op)
                 ui_events.append(ui_op_event(resolved.op))

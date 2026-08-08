@@ -365,6 +365,33 @@ class QuickReplies(_CatalogBase):
     )
 
 
+class LinkButton(_CatalogBase):
+    """Single link CTA — the link-only answer ("just give me the checkout
+    link") without rendering a whole component around it.
+
+    Literal component (like QuickReplies), but the URL is NOT
+    model-trusted: ``execute_render_ui`` rejects any url that is neither
+    in the template's ``render_ui.trusted_link_urls`` allowlist nor
+    present verbatim in THIS turn's tool results — the model selects
+    links, it never authors them. Clicking fires the widget's ``open_url``
+    route (Handoff popup semantics, host-page intercept preserved).
+
+    Core, not flavor-owned: the trust rule, the config key and the three
+    engine call sites that special-case it are all engine-side, so the
+    schema belongs here too. A flavor may still supply its own wording
+    for the LLM-facing ``link`` arg through its render_ui pack.
+
+    ``text_channel=False``: the trust check lives ONLY in the render_ui
+    function path, so a hand-typed ``<ui_stream>`` add is rejected at
+    parse (``render_ui_only:LinkButton``) — the dual-read window must not
+    be an arbitrary-URL injection surface."""
+
+    text_channel: ClassVar[bool] = False
+
+    label: str = Field(..., min_length=1, max_length=40)
+    url: str = Field(..., min_length=8, max_length=2048, pattern=r"^https://")
+
+
 # ---------------------------------------------------------------------------
 # Data primitives (group: core)
 # ---------------------------------------------------------------------------
@@ -889,6 +916,7 @@ UI_CATALOG: Dict[str, Type[_CatalogBase]] = {
     "Button": Button,
     "Buttons": Buttons,
     "QuickReplies": QuickReplies,
+    "LinkButton": LinkButton,
     # Data (core)
     "Table": Table,
     # Typed (core)
@@ -938,6 +966,7 @@ PRIMITIVE_GROUPS: Dict[str, List[str]] = {
         "Button",
         "Buttons",
         "QuickReplies",
+        "LinkButton",
         "Table",
         "Message",
         "Handoff",
@@ -979,6 +1008,16 @@ PRIMITIVE_GROUPS: Dict[str, List[str]] = {
 }
 
 
+# Reverse index: primitive name → owning group. Seeded from the static
+# groups above and extended by ``register_primitives``, which uses it to
+# reject a name two groups both claim. Keeping it here (rather than
+# scanning ``PRIMITIVE_GROUPS`` per lookup) makes ``group_for`` O(1) — it
+# runs per rendered node.
+_GROUP_OF: Dict[str, str] = {
+    name: group for group, members in PRIMITIVE_GROUPS.items() for name in members
+}
+
+
 # Order in which primitives appear in the system-prompt rendering. Listed
 # composite-first so the LLM defaults to Tile for list items, then core
 # building blocks for freeform composition. Lazily-registered data-bound
@@ -1002,6 +1041,7 @@ PRIMITIVE_RENDER_ORDER: List[str] = [
     "Button",
     "Buttons",
     "QuickReplies",
+    "LinkButton",
     "Handoff",
     # Data
     "Table",
@@ -1094,10 +1134,25 @@ def register_primitives(
     re-import) without duplicating group-member or render-order entries.
     ``render_order`` defaults to the mapping's insertion order; names
     append at the END of ``PRIMITIVE_RENDER_ORDER`` (see the note there).
+
+    A name already owned by a DIFFERENT group raises. ``UI_CATALOG`` is a
+    flat process-global map while the allowlist is per-template, so a
+    second group claiming an existing name would silently hand its schema
+    to every template that enabled the first — the kind of packaging bug
+    that surfaces as one merchant's component validating against
+    another's fields. Two groups wanting the same concept means promoting
+    it to ``core``, not registering it twice.
     """
     members = PRIMITIVE_GROUPS.setdefault(group, [])
     for name, schema in primitives.items():
+        owner = _GROUP_OF.get(name)
+        if owner is not None and owner != group:
+            raise ValueError(
+                f"UI primitive {name!r} is already registered by group "
+                f"{owner!r}; group {group!r} cannot claim it"
+            )
         UI_CATALOG[name] = schema
+        _GROUP_OF[name] = group
         if name not in members:
             members.append(name)
     for name in render_order if render_order is not None else list(primitives):
@@ -1112,10 +1167,7 @@ def register_primitives(
 
 def group_for(type_name: str) -> Optional[str]:
     """Return the group name a primitive belongs to, or None if unknown."""
-    for group_name, members in PRIMITIVE_GROUPS.items():
-        if type_name in members:
-            return group_name
-    return None
+    return _GROUP_OF.get(type_name)
 
 
 def is_known_type(type_name: str) -> bool:

@@ -32,6 +32,9 @@ from typing import Any, Callable, Dict, List, Optional, Set
 
 from pipecat_flows import FlowsFunctionSchema
 
+from app.ai.voice.agents.breeze_buddy.chat.client_context import (
+    strip_client_context_keys,
+)
 from app.ai.voice.agents.breeze_buddy.chat.ui.binding import (
     BindingStore,
     parse_bind_ref,
@@ -267,13 +270,16 @@ def build_render_ui_schema(
                 or _ITEMS_DESC_GENERIC,
                 "items": {
                     "type": "object",
-                    # Extra selector keys come from the flavor-registered
-                    # transforms (commerce: feature_variant) — the schema
-                    # advertises exactly what the selection engine honors.
+                    # Extra selector keys come from the transforms
+                    # registered by THIS session's flavor groups (commerce:
+                    # feature_variant) — the schema advertises exactly what
+                    # the selection engine will honor for this template,
+                    # and nothing another template's flavor registered.
                     "properties": {
                         "id": {"type": "string"},
                         **{
-                            key: {"type": "string"} for key in selector_extension_keys()
+                            key: {"type": "string"}
+                            for key in selector_extension_keys(flavor_groups)
                         },
                     },
                     "required": ["id"],
@@ -351,23 +357,59 @@ def _payload_contains_url(payload: Any, url: str, depth: int = _URL_SCAN_DEPTH) 
     return False
 
 
+def _tool_sourced_state(
+    state_values: Optional[Dict[str, Any]], template: Any
+) -> Dict[str, Any]:
+    """``state_values`` minus everything the STOREFRONT can write.
+
+    The state scan below treats a URL as trusted because
+    ``agent_session_state`` is reducer-built over tool payloads. That is
+    true of most of it, but two parts are shopper-controlled: the
+    ``_client_context`` facts namespace, and any top-level key the
+    template listed in ``client_context.state_allowlist`` (the push
+    validates key NAMES, never values). Left in, a compromised storefront
+    page could write an arbitrary URL into state and have the assistant
+    render it as a trusted CTA — defeating ``trusted_link_urls``.
+
+    ⚠️ Removal is by KEY, and a state key is a single slot: if a template
+    ever allowlists a key that its reducers ALSO write real tool URLs
+    into, the genuine value is dropped along with the untrusted one and
+    the link is refused. No template does that today (none configures
+    ``client_context`` at all). The provenance-tracking fix — reducers
+    writing into a trusted sub-namespace — is the correct answer if that
+    day comes; this is the cheap one that closes the hole.
+    """
+    if not state_values:
+        return {}
+    scannable = strip_client_context_keys(state_values)
+    configurations = getattr(template, "configurations", None)
+    client_context = getattr(configurations, "client_context", None)
+    allowlist = getattr(client_context, "state_allowlist", None) or ()
+    if not allowlist:
+        return scannable
+    return {k: v for k, v in scannable.items() if k not in set(allowlist)}
+
+
 def url_is_trusted(
     url: str,
     store: BindingStore,
     trusted_urls: Optional[Set[str]],
     state_values: Optional[Dict[str, Any]] = None,
+    template: Any = None,
 ) -> bool:
     """LinkButton trust rule: exact match against the template's
     ``trusted_link_urls`` allowlist, verbatim presence in THIS turn's
-    tool results, OR verbatim presence in reducer state — the model
-    selects links, it never authors them. State qualifies because
-    ``agent_session_state`` is written only by the template's reducers
-    over tool payloads (e.g. ``policy_links`` captured from an earlier
-    cart call), so a state-sourced URL has the same tool provenance as a
-    this-turn one."""
+    tool results, OR verbatim presence in the TOOL-SOURCED part of
+    reducer state — the model selects links, it never authors them.
+
+    State qualifies only after :func:`_tool_sourced_state` removes the
+    storefront-writable keys: a reducer-captured URL (e.g. ``policy_links``
+    from an earlier cart call) has real tool provenance, a browser-pushed
+    one has none."""
     if trusted_urls and url in trusted_urls:
         return True
-    if state_values and _payload_contains_url(state_values, url):
+    scannable = _tool_sourced_state(state_values, template)
+    if scannable and _payload_contains_url(scannable, url):
         return True
     return any(_payload_contains_url(payload, url) for payload in store.payloads())
 
@@ -488,7 +530,7 @@ def execute_render_ui(
     items = args.get("items")
     if isinstance(items, list) and items:
         selectors: List[Dict[str, Any]] = []
-        extension_keys = selector_extension_keys()
+        extension_keys = selector_extension_keys(flavor_groups)
         for entry in items:
             if isinstance(entry, str) and entry:
                 selectors.append({"id": entry})
@@ -540,7 +582,7 @@ def execute_render_ui(
                 component=component,
             )
         url = link["url"]
-        if not url_is_trusted(url, store, trusted_urls, state_values):
+        if not url_is_trusted(url, store, trusted_urls, state_values, template):
             pack = _resolve_pack(flavor_groups)
             hint = (
                 "use one of: " + ", ".join(sorted(trusted_urls))
@@ -610,7 +652,7 @@ def execute_render_ui(
         }
         if parent:
             op["parent"] = parent
-        result = resolve_show_op(op, store, allowlist)
+        result = resolve_show_op(op, store, allowlist, flavor_groups)
         if result.op is None:
             return RenderUiOutcome(
                 fn_result={

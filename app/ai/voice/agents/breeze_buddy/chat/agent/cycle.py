@@ -620,7 +620,9 @@ class CycleLoopMixin:
                 for call in ungated_calls:
                     is_mutation = (
                         call.function_name not in _NEUTRAL_TOOLS
-                        and not is_read_only(call.function_name, self.template)
+                        and not is_read_only(
+                            call.function_name, self.template, self._flavor_scope
+                        )
                     )
                     if is_mutation and mutated_by is not None:
                         deferred = {
@@ -634,7 +636,7 @@ class CycleLoopMixin:
                             ),
                         }
                         running_label, done_label = resolve_step_label(
-                            call.function_name
+                            call.function_name, self._flavor_scope
                         )
                         yield step_started_event(
                             step_id=call.tool_call_id,
@@ -673,7 +675,9 @@ class CycleLoopMixin:
                     # flips the same line in place. Sits ABOVE
                     # function_call_started/completed (the tool-level wire
                     # events), which stay unchanged.
-                    running_label, done_label = resolve_step_label(call.function_name)
+                    running_label, done_label = resolve_step_label(
+                        call.function_name, self._flavor_scope
+                    )
                     yield step_started_event(
                         step_id=call.tool_call_id,
                         label=running_label,
@@ -694,7 +698,9 @@ class CycleLoopMixin:
                             "result_summary": _summarize_result(result_payload),
                         },
                     )
-                    step_summary, step_count = summarize_step_result(result_payload)
+                    step_summary, step_count = summarize_step_result(
+                        result_payload, self._flavor_scope
+                    )
                     yield step_completed_event(
                         step_id=call.tool_call_id,
                         status=resolve_step_status(result_payload),
@@ -995,7 +1001,7 @@ class CycleLoopMixin:
         self._plans_emitted += 1
         steps = []
         for i, tool in enumerate(plan):
-            running_label, _done = resolve_step_label(tool)
+            running_label, _done = resolve_step_label(tool, self._flavor_scope)
             steps.append(
                 {"id": f"plan-{seq}-{i}", "tool": tool, "label": running_label}
             )

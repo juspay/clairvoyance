@@ -1,6 +1,8 @@
 """RFC-002 Phase A unit tests: render_ui tool, plan enforcer, baseline
 search annotation, and the metrics counters."""
 
+from types import SimpleNamespace
+
 from app.ai.voice.agents.breeze_buddy.assist.commerce.ucp.annotator import (
     annotate_search_result,
 )
@@ -172,6 +174,92 @@ def test_link_button_accepts_url_from_reducer_state():
     )
     assert out.decision == "rendered"
     assert out.ops[0]["props"]["url"] == "https://shop.example/policies/refunds"
+
+
+def _link_args(url: str) -> dict:
+    return {"component": "LinkButton", "link": {"label": "Tap", "url": url}}
+
+
+def test_link_button_ignores_storefront_pushed_context_state():
+    """The ``_client_context`` namespace is written by storefront JS over
+    /widget/session/{id}/context — key-allowlisted, values unvalidated. A
+    URL that is ONLY there has no tool provenance, so it must not satisfy
+    the trust rule; otherwise a compromised page could have the assistant
+    render an attacker link as a trusted CTA."""
+    evil = "https://evil.example/pay"
+    out = execute_render_ui(
+        _link_args(evil),
+        store=_store(),
+        allowlist=ALLOW,
+        components=COMPS,
+        op_id="root",
+        trusted_urls=set(),
+        state_values={"_client_context": {"page_url": evil}},
+    )
+    assert out.decision == "error"
+    assert "untrusted url" in out.fn_result["error"]
+
+
+def test_link_button_ignores_client_allowlisted_state_keys():
+    """Same for the top-level keys a template lets the storefront push
+    (``client_context.state_allowlist``) — the push validates key NAMES,
+    never values."""
+    evil = "https://evil.example/pay"
+    template = SimpleNamespace(
+        configurations=SimpleNamespace(
+            client_context=SimpleNamespace(state_allowlist=["cart_id"])
+        )
+    )
+    out = execute_render_ui(
+        _link_args(evil),
+        store=_store(),
+        allowlist=ALLOW,
+        components=COMPS,
+        op_id="root",
+        trusted_urls=set(),
+        state_values={"cart_id": evil},
+        template=template,
+    )
+    assert out.decision == "error"
+
+
+def test_link_button_still_accepts_reducer_state_on_a_context_template():
+    """The strip is by key: a template that allowlists SOME keys keeps
+    trusting the reducer-written ones it did not allowlist."""
+    url = "https://shop.example/policies/refunds"
+    template = SimpleNamespace(
+        configurations=SimpleNamespace(
+            client_context=SimpleNamespace(state_allowlist=["cart_id"])
+        )
+    )
+    out = execute_render_ui(
+        _link_args(url),
+        store=_store(),
+        allowlist=ALLOW,
+        components=COMPS,
+        op_id="root",
+        trusted_urls=set(),
+        state_values={"cart_id": "c1", "policy_links": [{"url": url}]},
+        template=template,
+    )
+    assert out.decision == "rendered"
+    assert out.ops[0]["props"]["url"] == url
+
+
+def test_link_button_trusted_urls_win_over_the_state_strip():
+    """The static allowlist is checked first and is unaffected — the
+    commerce pilot's links come from there."""
+    url = "https://shop.example/cart"
+    out = execute_render_ui(
+        _link_args(url),
+        store=_store(),
+        allowlist=ALLOW,
+        components=COMPS,
+        op_id="root",
+        trusted_urls={url},
+        state_values={"_client_context": {"page_url": url}},
+    )
+    assert out.decision == "rendered"
 
 
 def test_link_button_rejects_untrusted_url():

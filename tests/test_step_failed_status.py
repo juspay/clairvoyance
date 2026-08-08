@@ -12,6 +12,7 @@ a plan past a failed step while the widget paints it red.
 
 from __future__ import annotations
 
+from app.ai.voice.agents.breeze_buddy.chat.flavors import resolve_flavor_scope
 from app.ai.voice.agents.breeze_buddy.chat.steps.enforcer import PlanEnforcer
 from app.ai.voice.agents.breeze_buddy.chat.steps.verification import (
     register_tool_verifier,
@@ -36,14 +37,17 @@ def test_verifier_skips_failed_result():
         calls["n"] += 1
         return "should never run on a failed result"
 
-    register_tool_verifier("probe_failed_skip", _verifier)
+    register_tool_verifier("probe", "probe_failed_skip", _verifier)
+    scope = resolve_flavor_scope(None, ["probe"])
     # A failed backend body must skip verification entirely — the tool
     # already failed; there is nothing to post-condition.
-    assert run_tool_verifiers("probe_failed_skip", {}, {"status": "failed"}) is None
+    assert (
+        run_tool_verifiers("probe_failed_skip", {}, {"status": "failed"}, scope) is None
+    )
     assert calls["n"] == 0
     # A successful result still runs the verifier.
     assert (
-        run_tool_verifiers("probe_failed_skip", {}, {"ok": True})
+        run_tool_verifiers("probe_failed_skip", {}, {"ok": True}, scope)
         == "should never run on a failed result"
     )
     assert calls["n"] == 1

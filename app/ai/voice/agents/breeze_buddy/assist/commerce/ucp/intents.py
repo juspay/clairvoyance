@@ -43,6 +43,14 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from app.ai.voice.agents.breeze_buddy.assist.commerce.ucp.media import (
     resolve_product_media,
 )
+from app.ai.voice.agents.breeze_buddy.assist.commerce.ucp.roles import (
+    DEFAULT_TOOLS,
+    ROLE_CREATE_CART,
+    ROLE_GET_CART,
+    ROLE_GET_PRODUCT,
+    ROLE_SEARCH,
+    ROLE_UPDATE_CART,
+)
 from app.ai.voice.agents.breeze_buddy.assist.commerce.ucp.upsell import run_cart_upsell
 from app.ai.voice.agents.breeze_buddy.chat.intents.router import (
     IntentPolicy,
@@ -71,11 +79,14 @@ from app.core.logger import logger
 # state_keys.checkout_url, labels.checkout).
 # ---------------------------------------------------------------------------
 
-_TOOL_CREATE_CART = "create_cart"
-_TOOL_UPDATE_CART = "update_cart"
-_TOOL_GET_CART = "get_cart"
-_TOOL_GET_PRODUCT = "get_product"
-_TOOL_SEARCH = "search_catalog"
+# The role names and their default tool bindings are declared once in
+# ``roles.py`` — the same table the engine resolves flavor registries
+# through, so the driver and the metadata can never drift apart.
+_TOOL_CREATE_CART = DEFAULT_TOOLS[ROLE_CREATE_CART]
+_TOOL_UPDATE_CART = DEFAULT_TOOLS[ROLE_UPDATE_CART]
+_TOOL_GET_CART = DEFAULT_TOOLS[ROLE_GET_CART]
+_TOOL_GET_PRODUCT = DEFAULT_TOOLS[ROLE_GET_PRODUCT]
+_TOOL_SEARCH = DEFAULT_TOOLS[ROLE_SEARCH]
 _STATE_CART_ID = "cart_id"
 _STATE_CHECKOUT_URL = "checkout_url"
 _CHECKOUT_LABEL = "Review and checkout"

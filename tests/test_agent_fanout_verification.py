@@ -56,6 +56,7 @@ def _patch_agent_attr(monkeypatch, name, value):
 
 
 from app.ai.voice.agents.breeze_buddy.chat.agent import ChatAgent, _PreparedTools
+from app.ai.voice.agents.breeze_buddy.chat.flavors import resolve_flavor_scope
 from app.ai.voice.agents.breeze_buddy.chat.steps import (
     verification as verification_module,
 )
@@ -75,6 +76,17 @@ import app.ai.voice.agents.breeze_buddy.assist.commerce.ucp.schemas  # noqa: F40
 
 _NODE: Dict[str, Any] = {"name": "start", "functions": []}
 
+# Every commerce annotation / verifier is registered under the "commerce"
+# catalog group and keyed by ROLE, so a session only sees them if its
+# template enabled the group (chat/flavors.py). These tests exercise the
+# commerce tool surface, so they run as a commerce-enabled session.
+_COMMERCE_UI_CATALOG = SimpleNamespace(
+    enabled_groups=["core", "commerce"],
+    enabled_primitives=None,
+    disabled_primitives=None,
+)
+_COMMERCE_SCOPE = resolve_flavor_scope(None, ["commerce"])
+
 _PREP = _PreparedTools(
     flow_config={}, global_funcs=[], tool_retention=None, tool_projection=None
 )
@@ -85,7 +97,7 @@ def _configurations(**overrides: Any) -> SimpleNamespace:
         state_reducers=[],
         tool_arg_injection=[],
         client_context=None,
-        ui_catalog=None,
+        ui_catalog=_COMMERCE_UI_CATALOG,
         ui_intents=None,
         tool_execution=None,
     )
@@ -95,7 +107,12 @@ def _configurations(**overrides: Any) -> SimpleNamespace:
 
 def _make_agent(configurations: Any = None) -> ChatAgent:
     template = TemplateModel.model_construct(
-        id="tpl-1", name="t", flow={}, configurations=configurations
+        id="tpl-1",
+        name="t",
+        flow={},
+        configurations=(
+            configurations if configurations is not None else _configurations()
+        ),
     )
     agent = ChatAgent(
         session_id="sess-1",
@@ -191,10 +208,14 @@ async def _run_cycle(
 
 def test_annotation_precedence():
     # Flavor registry (loaded via the commerce import above).
-    assert resolve_tool_annotation("search_catalog") == "read_only"
-    assert resolve_tool_annotation("update_cart") == "idempotent"
+    assert (
+        resolve_tool_annotation("search_catalog", None, _COMMERCE_SCOPE) == "read_only"
+    )
+    assert resolve_tool_annotation("update_cart", None, _COMMERCE_SCOPE) == "idempotent"
     # Unknown tool → destructive (never accidentally parallel).
-    assert resolve_tool_annotation("mystery_tool") == "destructive"
+    assert (
+        resolve_tool_annotation("mystery_tool", None, _COMMERCE_SCOPE) == "destructive"
+    )
     # Template override beats the registry.
     template = SimpleNamespace(
         configurations=SimpleNamespace(
@@ -203,22 +224,27 @@ def test_annotation_precedence():
             )
         )
     )
-    assert resolve_tool_annotation("search_catalog", template) == "destructive"
-    assert resolve_tool_annotation("my_read", template) == "read_only"
+    assert (
+        resolve_tool_annotation("search_catalog", template, _COMMERCE_SCOPE)
+        == "destructive"
+    )
+    assert resolve_tool_annotation("my_read", template, _COMMERCE_SCOPE) == "read_only"
     # Invalid override value falls through to the registry/default.
     bad = SimpleNamespace(
         configurations=SimpleNamespace(
             tool_execution=SimpleNamespace(annotations={"search_catalog": "fast"})
         )
     )
-    assert resolve_tool_annotation("search_catalog", bad) == "read_only"
+    assert (
+        resolve_tool_annotation("search_catalog", bad, _COMMERCE_SCOPE) == "read_only"
+    )
 
 
 def test_conflicting_registration_raises():
-    register_tool_annotations({"annot_probe": "read_only"})
-    register_tool_annotations({"annot_probe": "read_only"})  # idempotent
+    register_tool_annotations("probe", {"annot_probe": "read_only"})
+    register_tool_annotations("probe", {"annot_probe": "read_only"})  # idempotent
     try:
-        register_tool_annotations({"annot_probe": "destructive"})
+        register_tool_annotations("probe", {"annot_probe": "destructive"})
     except ValueError:
         pass
     else:  # pragma: no cover
@@ -355,10 +381,12 @@ def test_raising_verifier_fails_open(monkeypatch):
     def _boom(_args, _result):
         raise RuntimeError("bad verifier")
 
-    register_tool_verifier("failopen_tool", _boom)
-    assert run_tool_verifiers("failopen_tool", {}, {"ok": True}) is None
+    register_tool_verifier("commerce", "failopen_tool", _boom)
+    assert (
+        run_tool_verifiers("failopen_tool", {}, {"ok": True}, _COMMERCE_SCOPE) is None
+    )
     # Cleanup so other tests never see the probe verifier.
-    verification_module._VERIFIERS.pop("failopen_tool", None)
+    verification_module._VERIFIERS["commerce"].pop("failopen_tool", None)
 
 
 def test_error_envelopes_skip_verification():
@@ -368,6 +396,7 @@ def test_error_envelopes_skip_verification():
             "update_cart",
             {"cart": {"line_items": [{"item": {"id": "v9"}, "quantity": 2}]}},
             {"status": "error", "error": "upstream 500"},
+            _COMMERCE_SCOPE,
         )
         is None
     )

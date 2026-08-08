@@ -17,18 +17,32 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional, Tuple
 
+from app.ai.voice.agents.breeze_buddy.assist.commerce.ucp.roles import (
+    ROLE_CREATE_CART,
+    ROLE_GET_CART,
+    ROLE_GET_PRODUCT,
+    ROLE_SEARCH,
+    ROLE_UPDATE_CART,
+)
+from app.ai.voice.agents.breeze_buddy.chat.flavors import role_key
 from app.ai.voice.agents.breeze_buddy.chat.steps.labels import (
     register_step_labels,
     register_step_summarizer,
 )
 
+COMMERCE_GROUP = "commerce"
+
+# ``role_key(...)`` entries follow the template's binding, so a merchant
+# whose gateway names the search tool something else still gets
+# "Searching the catalog…" instead of the humanizer. ``lookup_catalog`` is
+# NOT a rebindable role, so it is keyed by its literal name.
 COMMERCE_STEP_LABELS: Dict[str, Tuple[str, str]] = {
-    "search_catalog": ("Searching the catalog", "Searched the catalog"),
+    role_key(ROLE_SEARCH): ("Searching the catalog", "Searched the catalog"),
     "lookup_catalog": ("Looking up products", "Looked up products"),
-    "get_product": ("Checking the product", "Checked the product"),
-    "create_cart": ("Updating your cart", "Updated your cart"),
-    "update_cart": ("Updating your cart", "Updated your cart"),
-    "get_cart": ("Checking your cart", "Checked your cart"),
+    role_key(ROLE_GET_PRODUCT): ("Checking the product", "Checked the product"),
+    role_key(ROLE_CREATE_CART): ("Updating your cart", "Updated your cart"),
+    role_key(ROLE_UPDATE_CART): ("Updating your cart", "Updated your cart"),
+    role_key(ROLE_GET_CART): ("Checking your cart", "Checked your cart"),
 }
 
 
@@ -56,11 +70,12 @@ def register_commerce_step_labels() -> None:
     Idempotent (dict update of the same entries; summarizer dedupe) —
     safe on re-import.
     """
-    register_step_labels(COMMERCE_STEP_LABELS)
-    register_step_summarizer(summarize_commerce_step_result)
+    register_step_labels(COMMERCE_GROUP, COMMERCE_STEP_LABELS)
+    register_step_summarizer(COMMERCE_GROUP, summarize_commerce_step_result)
 
 
 __all__ = [
+    "COMMERCE_GROUP",
     "COMMERCE_STEP_LABELS",
     "register_commerce_step_labels",
     "summarize_commerce_step_result",
