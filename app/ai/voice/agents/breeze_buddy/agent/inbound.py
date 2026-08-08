@@ -160,6 +160,34 @@ async def create_lead_from_template_id(
         or url_params.get("from_number", "unknown")
     )
 
+    # SECURITY: the template_id here is attacker-influenceable on the
+    # unauthenticated media WebSocket (Plivo reads it straight from the URL
+    # query params). Scope it to the number that was actually dialed — a call
+    # may only build the template registered to its own inbound number, never
+    # an arbitrary UUID (PT-02). Fail closed if the dialed number can't be
+    # determined at all: an absent to_number must NOT skip this check, or an
+    # attacker who simply omits it would bypass the scope enforcement entirely.
+    to_number = (
+        start_data.get("to")
+        or call_data.get("to")
+        or custom_params.get("to_number")
+        or url_params.get("to_number")
+    )
+    if not to_number:
+        logger.error(
+            f"Could not determine dialed 'to' number for template_id "
+            f"{template_id}; refusing to build flow"
+        )
+        return None, "Missing 'to' number"
+
+    telephony_number = await get_telephony_number_by_number(to_number)
+    if not telephony_number or template.telephony_number_id != str(telephony_number.id):
+        logger.error(
+            f"Template {template_id} is not associated with dialed number "
+            f"{to_number}; refusing to build flow"
+        )
+        return None, "Template not authorized for this number"
+
     # Create lead with the selected template
     lead_id = str(uuid.uuid4())
     lead = await create_lead_call_tracker(

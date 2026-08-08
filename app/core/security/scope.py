@@ -59,27 +59,33 @@ async def _resolve_user_scopes(
     if not has_merchant_wildcard:
         return merchant_ids if merchant_ids else []
 
-    # Case: Wildcard merchants → walk up the owner chain to find scope
+    # Case: Wildcard merchants → walk up the owner chain to find scope.
+    # A broken owner chain must FAIL CLOSED (return []) — only a positively
+    # confirmed admin owner may yield unrestricted (None). Returning None here
+    # let a wildcard token whose owner is missing/unresolvable mint platform-wide
+    # merchant access (PT-20).
     if not owner_id:
-        # No owner to narrow scope — treat as unrestricted
-        logger.info(
-            f"User {username} has wildcard merchant_ids with no owner_id — granting unrestricted access"
+        logger.warning(
+            f"User {username} has wildcard merchant_ids with no owner_id — "
+            "denying (failing closed)"
         )
-        return None
+        return []
 
     try:
         owner = await get_user_by_id(owner_id)
     except Exception as e:
-        logger.error(f"Failed to resolve owner {owner_id} for user {username}: {e}")
-        return None  # Can't resolve → grant unrestricted rather than lock out
+        logger.error(
+            f"Failed to resolve owner {owner_id} for user {username}: {e} — "
+            "denying (failing closed)"
+        )
+        return []  # Can't resolve → deny rather than grant unrestricted
 
     if not owner:
-        # Owner not in DB (deleted admin/account) — treat as admin-equivalent
-        logger.info(
+        logger.warning(
             f"User {username} has owner_id {owner_id} but owner not found in DB — "
-            "granting unrestricted merchant access"
+            "denying merchant access (failing closed)"
         )
-        return None
+        return []
 
     # Owner is admin → truly unrestricted
     if owner.role == UserRole.ADMIN:
@@ -209,29 +215,31 @@ async def _resolve_reseller_scopes(
     if "*" not in reseller_ids:
         return reseller_ids if reseller_ids else []
 
-    # Wildcard → walk up the owner chain
+    # Wildcard → walk up the owner chain. Fail CLOSED on a broken chain — only a
+    # confirmed admin owner yields unrestricted (None). Returning None on a
+    # missing/unresolvable owner minted platform-wide reseller access (PT-20).
     if not owner_id:
-        # No owner to narrow scope — treat as unrestricted
-        logger.info(
-            f"User {username} has wildcard reseller_ids with no owner_id — granting unrestricted access"
+        logger.warning(
+            f"User {username} has wildcard reseller_ids with no owner_id — "
+            "denying (failing closed)"
         )
-        return None
+        return []
 
     try:
         owner = await get_user_by_id(owner_id)
     except Exception as e:
         logger.error(
-            f"Failed to resolve owner {owner_id} for reseller_ids of user {username}: {e}"
+            f"Failed to resolve owner {owner_id} for reseller_ids of user "
+            f"{username}: {e} — denying (failing closed)"
         )
-        return None  # Can't resolve → grant unrestricted rather than lock out
+        return []  # Can't resolve → deny rather than grant unrestricted
 
     if not owner:
-        # Owner not in DB (deleted admin/account) — treat as admin-equivalent
-        logger.info(
+        logger.warning(
             f"User {username} has owner_id {owner_id} but owner not found in DB — "
-            "granting unrestricted reseller access"
+            "denying reseller access (failing closed)"
         )
-        return None
+        return []
 
     # Owner is admin → truly unrestricted
     if owner.role == UserRole.ADMIN:

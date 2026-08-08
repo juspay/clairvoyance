@@ -363,12 +363,19 @@ async def replace_template_handler(
             if template_data.reseller_id is not None
             else existing_template.reseller_id
         )
-        if reseller_id != existing_template.reseller_id:
+        # Re-validate on ANY move of the (reseller, merchant) ownership — not
+        # just a reseller change — so a caller cannot reassign a template they
+        # own into a foreign merchant's namespace under the same reseller (PT-09).
+        destination_merchant_id = template_data.merchant_id
+        if (
+            reseller_id != existing_template.reseller_id
+            or destination_merchant_id != existing_template.merchant_id
+        ):
             validate_template_access(
                 current_user,
                 reseller_id,
-                template_data.merchant_id,
-                operation="move template to reseller",
+                destination_merchant_id,
+                operation="move template to reseller/merchant",
             )
 
         # If the (reseller, merchant, name) identity changes, it must not
