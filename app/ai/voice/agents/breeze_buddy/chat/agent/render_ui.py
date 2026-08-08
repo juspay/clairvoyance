@@ -106,9 +106,15 @@ class RenderUiHandlerMixin:
             ):
                 # Chips-only call: nothing else to render. Positive result
                 # (not an error — errors bred rephrased-reply rambles); if
-                # the reply already streamed, trailing prose is duplicate
+                # the REPLY already streamed, trailing prose is duplicate
                 # sign-off and gets suppressed.
-                if self._turn_prose_streamed:
+                #
+                # Keyed on _turn_answered, not _turn_prose_streamed: an
+                # opener ("Let me check…") is prose but not a reply, and
+                # suppressing after one silenced the answer that had not
+                # been written yet — the turn then ended with no answer
+                # row, no assistant_message, and these very chips dropped.
+                if self._turn_answered:
                     self._suppress_extra_prose = True
                 return {
                     "status": "ok",

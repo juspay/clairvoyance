@@ -31,6 +31,26 @@ _CHIPS_NUDGE = (
     "duplicate an action already available on UI rendered this turn.)"
 )
 
+# Recovery nudge for a turn that ran tools and then went quiet without
+# ever replying. Deliberately says nothing about WHY the model stopped:
+# templates differ (one may have it announce work before a call, another
+# may not), and engine copy that assumes a template's convention is the
+# same layering inversion the flavor registries exist to prevent. It
+# states only the engine-level fact — no reply has been produced yet —
+# which is true for every template.
+#
+# Same internal-USER-row mechanics as _CHIPS_NUDGE (keeps user/model
+# alternation, invisible to widget reads); fires at most once per turn.
+# "Invisible" rests entirely on the caller sanitizing: every widget-facing
+# read must route through ``_sanitize_messages_for_widget``. Both the
+# /chat resume route and the /widget resume route do — the widget one only
+# since the split was audited, having served raw rows before that.
+_ANSWER_NUDGE = (
+    "(you have not replied to the user yet. Reply now in prose, using "
+    "what the tools returned. If nothing matched, say so plainly and "
+    "offer the closest alternatives you did find.)"
+)
+
 
 def _chip_labels(raw: Any) -> List[str]:
     """Lift a `quick_replies` arg (strings canonical; {'label': …} dicts

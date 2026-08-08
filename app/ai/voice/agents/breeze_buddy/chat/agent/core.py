@@ -303,15 +303,24 @@ class ChatAgent(
         self._in_chips_cycle = False
         self._quick_replies_rendered = False
         # _turn_prose_streamed — visible prose reached the client this turn.
+        # _turn_answered — an ANSWER (prose from a cycle that called no DATA
+        #   tool) reached the client this turn. Strictly narrower than
+        #   _turn_prose_streamed, which narration ("Let me check…") also
+        #   sets. The two are NOT interchangeable: keying a "the reply is
+        #   already delivered" decision on mere prose treats an opener as a
+        #   reply, and every such decision then fires a turn too early.
         # _suppress_extra_prose — set when a chips-only call was harvested
-        #   AFTER prose already streamed: the reply is delivered, so any
-        #   FURTHER prose the model generates before turn end is duplicate
-        #   sign-off and gets dropped (the old ban's error text bred a
-        #   rephrased duplicate greeting — live 2026-07-31).
+        #   AFTER the reply was delivered: any FURTHER prose the model
+        #   generates before turn end is duplicate sign-off and gets
+        #   dropped (the old ban's error text bred a rephrased duplicate
+        #   greeting — live 2026-07-31). Armed off _turn_answered, NOT
+        #   _turn_prose_streamed: armed by narration it silenced the real
+        #   answer that had not been written yet, killing the whole turn.
         # _held_chips — rider-harvested quick replies (chips attached to a
         #   mid-turn render_ui call, or a chips-only call): flushed below
         #   the final prose at turn end, skipping the forced chips cycle.
         self._turn_prose_streamed = False
+        self._turn_answered = False
         self._suppress_extra_prose = False
         self._held_chips: Optional[List[str]] = None
 

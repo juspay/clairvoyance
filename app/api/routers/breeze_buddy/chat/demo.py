@@ -39,6 +39,14 @@ from app.api.routers.breeze_buddy.chat.handlers import (
     serve_session_intent,
     validate_template_for_chat,
 )
+
+# TODO(widget-surface): these three belong in widget_common.py once this
+# lands — a router importing another router's privates is a smell we accept
+# only while this change is unreleased.
+from app.api.routers.breeze_buddy.widget.handlers import (
+    _extract_widget_config,
+    _surface_wire,
+)
 from app.api.security.breeze_buddy.demo_token import (
     DemoSessionContext,
     mint_demo_token,
@@ -247,6 +255,17 @@ async def create_demo_session(
         message_cap=cap,
         catalog_active=catalog_active,
         ui_flavors=ui_flavors,
+        # Demo pages get the SAME surface block as the widget. Before this
+        # block existed the demo response carried only catalog_active +
+        # ui_flavors, so a demo page structurally could not render quick
+        # replies or greeting tiles its template defined — the asymmetry
+        # the one-block shape exists to prevent.
+        widget=_surface_wire(
+            _extract_widget_config(template),
+            template,
+            catalog_active=catalog_active,
+            ui_flavors=ui_flavors,
+        ),
     )
 
 
