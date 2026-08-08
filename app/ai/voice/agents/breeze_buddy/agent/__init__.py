@@ -962,14 +962,18 @@ class Agent:
 
             @user_agg.event_handler("on_user_turn_started")
             async def on_user_turn_started(aggregator, strategy):
-                """Reset idle retry counter."""
+                """Track first user speech (cancels post-greeting idle) + reset idle."""
+                # _user_spoke must be tracked regardless of the idle callback
+                # handler: gate/stream modes have no _user_idle_callback_handler
+                # (no_llm), but still need the post-greeting idle cancelled once
+                # the user speaks -- otherwise it fires spuriously mid-call.
+                if not self._user_spoke:
+                    self._user_spoke = True
+                    if self._post_greeting_task:
+                        self._post_greeting_task.cancel()
+                        self._post_greeting_task = None
+                        logger.debug("Post-greeting timer cancelled - user spoke")
                 if self._user_idle_callback_handler:
-                    if not self._user_spoke:
-                        self._user_spoke = True
-                        if self._post_greeting_task:
-                            self._post_greeting_task.cancel()
-                            self._post_greeting_task = None
-                            logger.debug("Post-greeting timer cancelled - user spoke")
                     self._user_idle_callback_handler.reset_retry_count()
 
             # Subscribe observer manager to pipeline events
@@ -1073,6 +1077,63 @@ class Agent:
         if self._flow_initialized:
             return
         self._flow_initialized = True
+
+        # Gate mode (no flow_manager): the speculative turn gate owns turns.
+        # Render the initial node's task messages as the gate's system prompt,
+        # play the Daily greeting (telephony greets out-of-band in
+        # _setup_telephony_transport), seed the greeting, then return.
+        if self._speculative_processor is not None:
+            if self.is_daily_mode and self.task and self.lead and self.template:
+                greeting_result = await send_initial_greeting_daily(
+                    task=self.task,
+                    lead=self.lead,
+                    template=self.template,
+                    errors=self.errors,
+                )
+                self.greeting_source = greeting_result.source
+                self.greeting_text = greeting_result.text
+            # System prompt = the initial node's rendered task messages. Built
+            # here (not the normal path's initial_node_config) because the gate
+            # returns before flow_manager.initialize. KB full-injection is not
+            # yet supported in gate mode (feedback-collection templates don't).
+            if (
+                self._speculative_system_holder is not None
+                and self.template
+                and self.lead
+                and self.flow_builder
+            ):
+                try:
+                    flow_config, _, _ = build_flow_config(
+                        self.flow_builder, self.template
+                    )
+                    init_cfg = prepare_initial_node(
+                        flow_config=flow_config,
+                        lead_payload=self.lead.payload or {},
+                        configurations=self.configurations,
+                        has_greeting_source=bool(self.greeting_source),
+                        greeting_text=self.greeting_text,
+                        kb_text=None,
+                    )
+                    # The system prompt is role_messages + task_messages (this
+                    # template keeps its instructions in role_messages; using
+                    # only task_messages would leave the gate with no prompt).
+                    sys_msgs = list(init_cfg.get("role_messages", [])) + list(
+                        init_cfg.get("task_messages", [])
+                    )
+                    self._speculative_system_holder["messages"] = sys_msgs
+                    logger.info(f"[GATE] system prompt set ({len(sys_msgs)} messages)")
+                except Exception as e:  # noqa: BLE001
+                    logger.error(f"[GATE] failed to render system prompt: {e}")
+            # The greeting is played out-of-band, so the gate never sees it.
+            # Seed it as the first assistant turn so the LLM knows the call has
+            # begun — otherwise it may re-greet or freeze on the first ack.
+            if self.greeting_text:
+                self._speculative_processor.seed_history(
+                    "assistant", self.greeting_text
+                )
+                logger.info(f"[GATE] seeded greeting ({len(self.greeting_text)} chars)")
+            logger.info("[GATE] client connected — gate owns turns")
+            return
 
         if (
             not self.flow_builder
@@ -1315,11 +1376,111 @@ class Agent:
         # mode="stream" (no LLM processor, no assistant aggregator, transcript
         # collector inserted, no user idle). All other wiring is identical.
         is_stream = self.is_stream_mode
-        stt, llm, tts = await create_services(
-            self.configurations, include_llm=not is_stream
+        # Constrained turn gate: when a template opts into ``constrained_output``
+        # the gate owns the turn — the MAIN LLM emits a bare line id (or '.' or a
+        # function call) and the gate speaks the pre-written line / dispatches the
+        # function. ``enable_interim_llm_send`` is an INDEPENDENT modifier: when
+        # also on, the gate additionally fires the LLM on each interim transcript
+        # (cadence-capped) and commits the latest on turn-final, hiding latency
+        # behind speech. On its own (interim off) it's ONE constrained call per
+        # turn on the final transcript. Either flag turns the gate on (the OR
+        # keeps legacy enable_interim_llm_send-only templates working); push/add
+        # validation enforces that interim requires constrained.
+        interim_cfg = (
+            self.configurations.enable_interim_llm_send if self.configurations else None
         )
-        if not is_stream:
+        constrained_cfg = (
+            self.configurations.constrained_output if self.configurations else None
+        )
+        is_speculative = bool(interim_cfg and interim_cfg.enable)
+        is_scripted = bool(
+            (constrained_cfg and constrained_cfg.enable) or is_speculative
+        )
+        no_llm = is_stream or is_scripted
+        logger.info(
+            f"[MODE] is_stream={is_stream} is_gate={is_scripted} no_llm={no_llm} "
+            f"template_id={getattr(self.template, 'id', None)}"
+        )
+        stt, llm, tts = await create_services(
+            self.configurations, include_llm=not no_llm
+        )
+        self._active_llm = llm
+        if not no_llm:
             assert llm is not None, "LLM is required in agent mode"
+
+        # Gate mode: build the constrained speculative turn gate (main LLM is
+        # the brain). Non-gate templates leave these None and run the normal
+        # flow unchanged. Constrained mode requires a non-empty phrase table;
+        # without it the gate is not built (falls through to normal flow).
+        self._speculative_processor = None
+        self._speculative_system_holder: Optional[Dict[str, Any]] = None
+        if is_scripted:
+            from app.ai.voice.agents.breeze_buddy.llm.speculative_constrained import (
+                build_constrained_complete_fn,
+                build_constrained_dispatch_fn,
+            )
+            from app.ai.voice.agents.breeze_buddy.processors.speculative_turn_gate import (
+                SpeculativeTurnGate,
+            )
+
+            assert self.configurations is not None
+            cadence_ms = (
+                interim_cfg.type
+                if (interim_cfg and isinstance(interim_cfg.type, int))
+                else None
+            )
+            scripted_fns = self.configurations.scripted_functions or []
+            phrases = self.configurations.phrases or []
+            if not phrases:
+                logger.warning(
+                    "[GATE] enable_interim_llm_send is on but phrases is empty — "
+                    "constrained gate needs a line table; falling back to normal flow"
+                )
+            else:
+                from app.ai.voice.agents.breeze_buddy.llm import get_llm_service
+
+                # System prompt (rendered role + task messages) is populated
+                # lazily in _handle_client_connected once the initial node is
+                # prepared. The closure captures the local holder (not the
+                # Optional attribute) so _handle_client_connected can mutate it
+                # and complete_fn sees updates.
+                holder: Dict[str, Any] = {"messages": []}
+                self._speculative_system_holder = holder
+
+                def _system_messages() -> List[Dict[str, str]]:
+                    return holder["messages"]
+
+                def _template_vars() -> Dict[str, Any]:
+                    return self.template_vars or {}
+
+                llm_cfg = self.configurations.llm_configurations
+                # Provider-agnostic pipecat LLM service (Azure/Gemini/Claude/
+                # OpenAI). NOT in the frame chain (no_llm above); complete_fn
+                # calls get_chat_completions directly with the constrained
+                # number/dot prompt + the template's real function tools.
+                gate_llm = await get_llm_service(llm_cfg)
+                self._active_llm = gate_llm
+                complete_fn = build_constrained_complete_fn(
+                    gate_llm,
+                    _system_messages,
+                    phrases,
+                    scripted_fns,
+                    _template_vars,
+                )
+                dispatch_fn = build_constrained_dispatch_fn(self, scripted_fns)
+                self._speculative_processor = SpeculativeTurnGate(
+                    complete_fn,
+                    dispatch_fn,
+                    cadence_ms=cadence_ms,
+                    speculate_on_interims=is_speculative,
+                )
+                _model = llm_cfg.model if (llm_cfg and llm_cfg.model) else "default"
+                logger.info(
+                    f"[GATE] constrained mode (number/dot + tool-call): "
+                    f"phrases={len(phrases)} functions={len(scripted_fns)} "
+                    f"cadence_ms={cadence_ms} speculate_on_interims={is_speculative} "
+                    f"llm={_model}"
+                )
 
         # Knowledge base runtime resolution (fail-open). Stream mode goes
         # through the chat brain, which has its own KB hooks; realtime LLMs
@@ -1331,7 +1492,7 @@ class Agent:
         self._kb_processor = None
         self._kb_text_task = None
         is_realtime_llm = stt is None and tts is None and llm is not None
-        if not is_stream:
+        if not no_llm:
             self.kb_runtime = await resolve_kb_runtime(self.configurations)
         if self.kb_runtime:
             if self.kb_runtime.mode == "auto_retrieve" and not is_realtime_llm:
@@ -1360,11 +1521,10 @@ class Agent:
             tts,
             self.vad_analyzer,
             self.configurations,
-            on_user_idle_timeout=(
-                None if is_stream else self._handle_user_idle_timeout
-            ),
+            on_user_idle_timeout=(None if no_llm else self._handle_user_idle_timeout),
             mode="stream" if is_stream else "agent",
             kb_processor=self._kb_processor,
+            speculative_processor=self._speculative_processor,
         )
         self._context_aggregator = context_aggregator
 
@@ -1373,7 +1533,7 @@ class Agent:
         # client-driven bot TTS text). The aggregator writes user turns into
         # the LLMContext, but nothing writes bot TTS text — using the context
         # would lose the bot side of the transcript.
-        if not is_stream:
+        if not no_llm:
             self.context = context
             self._user_idle_callback_handler = user_idle_callback_handler
             self.default_interruption_config = (
@@ -1391,6 +1551,10 @@ class Agent:
             is_daily_mode=self.is_daily_mode,
         )
 
+        # Scripted mode: the processor needs the task to inject TTSSpeakFrames.
+        if self._speculative_processor is not None:
+            self._speculative_processor.set_task(self.task)
+
         if self.is_daily_mode and hasattr(self.task, "rtvi") and self.task.rtvi:
             self._rtvi_processor = self.task.rtvi
             # HITL approval channel (Pattern C — the in-handler gate that
@@ -1401,7 +1565,7 @@ class Agent:
             # non-widget daily agent-mode calls get an ApprovalManager.
             # RTVI requires ENABLE_BREEZE_BUDDY_DAILY_EVENTS=true; without it
             # approval_manager stays None and gated calls are denied.
-            if not is_stream:
+            if not no_llm:
                 self.approval_manager = ApprovalManager(emit=self._emit_rtvi_event)
                 if self._user_idle_callback_handler:
                     # While an approval card is showing, the user is silently
@@ -1414,7 +1578,7 @@ class Agent:
 
         # Flow manager is agent-mode only (stream mode has no LLM to drive
         # node transitions or function calls).
-        if not is_stream:
+        if not no_llm:
             if not self.template:
                 logger.error("Template is not set, cannot setup flow manager")
                 return
@@ -1457,7 +1621,7 @@ class Agent:
             f"observers_count={len(observers_config) if observers_config else 0}, "
             f"is_stream={is_stream}"
         )
-        if observers_config and not is_stream:
+        if observers_config and not no_llm:
             try:
                 observer_instances = await build_observers(
                     configs=observers_config,

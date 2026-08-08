@@ -46,6 +46,7 @@ from app.ai.voice.agents.breeze_buddy.llm import get_llm_service
 from app.ai.voice.agents.breeze_buddy.observability.tracing_setup import setup_tracing
 from app.ai.voice.agents.breeze_buddy.processors import (
     KnowledgeRetrievalProcessor,
+    SpeculativeTurnGate,
     TranscriptCollectorProcessor,
     TranscriptionGateProcessor,
     UserIdleCallbackHandler,
@@ -207,6 +208,7 @@ async def build_pipeline(
     on_user_idle_timeout: Optional[Callable[[int], Any]] = None,
     mode: Literal["agent", "stream"] = "agent",
     kb_processor: Optional[KnowledgeRetrievalProcessor] = None,
+    speculative_processor: Optional[SpeculativeTurnGate] = None,
 ) -> tuple[
     Pipeline,
     LLMContext,
@@ -272,6 +274,13 @@ async def build_pipeline(
     # TimeoutStrategy) is irrelevant or duplicative and is skipped.
     is_realtime = stt is None and tts is None and llm is not None and not is_stream
 
+    # Scripted mode: a non-empty phrase table drives turns via the speculative
+    # processor instead of an LLM. Pipeline shape mirrors stream mode (no LLM,
+    # transcript collector captures both sides) with the processor inserted
+    # after the gate so it sees Soniox interims/finals before the aggregator.
+    is_scripted = speculative_processor is not None
+    no_llm = is_stream or is_scripted
+
     # TODO: Add a breeze-buddy-specific context summarizer.
     # Pipecat does not provide built-in summarization; implement one under
     # app/ai/voice/agents/breeze_buddy/ to manage long conversation contexts.
@@ -285,7 +294,7 @@ async def build_pipeline(
     user_idle_enabled = (
         user_idle_config is not None
         and getattr(user_idle_config, "enabled", False)
-        and not is_stream
+        and not no_llm
     )
     user_idle_timeout = (
         float(user_idle_config.timeout)
@@ -505,7 +514,7 @@ async def build_pipeline(
     # Stream mode: insert TranscriptCollectorProcessor to capture user + bot
     # TTS text for DB storage (no LLMContext to pull from at end-of-conversation).
     transcript_collector: Optional[TranscriptCollectorProcessor] = None
-    if is_stream:
+    if no_llm:
         transcript_collector = TranscriptCollectorProcessor()
 
     # Pipeline order:
@@ -521,11 +530,13 @@ async def build_pipeline(
     # Note: RTVIProcessor is added automatically by PipelineTask (pipecat v0.0.102+)
     # when enable_rtvi=True (default). No need to add it to the pipeline manually.
     pipeline_parts: list[Any] = [transport.input(), stt, transcription_gate]
-    if is_stream:
+    if is_scripted:
+        pipeline_parts.append(speculative_processor)
+    if no_llm:
         assert transcript_collector is not None
         pipeline_parts.append(transcript_collector)
     pipeline_parts.append(user_aggregator)
-    if is_stream:
+    if no_llm:
         pipeline_parts.extend([tts, metrics_collector, transport.output()])
     else:
         # Generative voice UI (a VoiceUiStreamProcessor tapping LLM text between
@@ -546,6 +557,12 @@ async def build_pipeline(
             ]
         )
 
+    logger.info(
+        "[MODE] pipeline: "
+        + " -> ".join(
+            type(p).__name__ if p is not None else "None" for p in pipeline_parts
+        )
+    )
     return (
         Pipeline(pipeline_parts),
         context,
