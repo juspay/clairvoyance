@@ -510,6 +510,15 @@ BREEZE_BUDDY_SONIOX_MAX_ENDPOINT_DELAY_MS = int(
     os.environ.get("BREEZE_BUDDY_SONIOX_MAX_ENDPOINT_DELAY_MS", "500")
 )  # Max delay (ms) for Soniox native endpoint detection (500-3000, default 500)
 
+# Template `custom` global functions execute author-supplied python_code. An
+# in-process interpreter sandbox is NOT a security boundary, so this feature is
+# OFF by default and must be explicitly enabled per-deployment (and only when
+# template authorship is trusted). When disabled, custom python_code functions
+# are skipped at flow-build time and never compiled or executed.
+ENABLE_CUSTOM_PYTHON_FUNCTIONS = (
+    os.environ.get("ENABLE_CUSTOM_PYTHON_FUNCTIONS", "false").lower() == "true"
+)
+
 # Local-dev escape hatch for the SSRF egress guard (app/core/security/ssrf.py):
 # when true, egress to private/loopback ranges is permitted. Defaults to false
 # so the secure posture never depends on ENVIRONMENT being set correctly.
